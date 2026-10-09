@@ -5075,6 +5075,11 @@
       "type": "boolean",
       "title": "Run Pipeline",
       "default": true
+     },
+     "deliver": {
+      "type": "boolean",
+      "title": "Deliver",
+      "default": true
      }
     },
     "type": "object",

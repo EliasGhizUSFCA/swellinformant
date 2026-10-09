@@ -174,7 +174,8 @@ On first start, the `backend` container:
 * reports healthy.
 
 Then `worker`, `beat` and `frontend` start, and beat immediately queues a full pipeline
-run. Within about 30 seconds the map shows forecasts and swell events. No manual
+run. On an empty database the services are healthy after about 30 seconds (once the
+images are built), and the map shows forecasts and swell events about 15 seconds later. No manual
 database or seeding step is needed. To re-run them by hand:
 
 ```bash
@@ -216,7 +217,11 @@ the API process; this is used by the tests.
 ```bash
 psql postgres -c "CREATE ROLE swell LOGIN PASSWORD 'swell' CREATEDB"
 createdb -O swell swell
+createdb -O swell swell_test      # for the backend tests
 ```
+
+A non-superuser database owner can create the `btree_gist` extension, since it is a
+trusted extension in PostgreSQL 13+.
 
 ## F. Running the application
 
@@ -365,11 +370,11 @@ cd frontend && npx playwright install chromium && cd ..   # once
 dependencies installed. If Chromium is installed somewhere else, set
 `PLAYWRIGHT_CHROMIUM_PATH=/path/to/chrome`.
 
-**Regenerate frontend API types** after changing backend schemas:
+**Regenerate frontend API types** after changing backend schemas. This writes
+`frontend/types/openapi.json` and `openapi.d.ts`, including the dev routes:
 
 ```bash
-cd backend && python -c "import json; from app.main import app; print(json.dumps(app.openapi()))" > ../frontend/types/openapi.json
-cd ../frontend && npm run gen:api
+./scripts/export-openapi.sh
 ```
 
 ## I. Debugging

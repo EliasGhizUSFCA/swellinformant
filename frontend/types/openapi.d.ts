@@ -1833,6 +1833,11 @@ export interface components {
              * @default true
              */
             run_pipeline: boolean;
+            /**
+             * Deliver
+             * @default true
+             */
+            deliver: boolean;
         };
         /**
          * SkillLevel
