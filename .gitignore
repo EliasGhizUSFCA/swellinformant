@@ -34,7 +34,7 @@ next-env.d.ts
 # Local data
 /tmp/
 *.log
-.next-e2e/
+.next-*/                 # alternate build dirs (NEXT_DIST_DIR), e.g. .next-e2e/
 
 # Redis local dumps
 dump.rdb
