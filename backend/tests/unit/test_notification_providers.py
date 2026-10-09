@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from app.core.config import Settings
-from app.core.logging import redact
+from app.core.logging import RedactingFilter, install_redaction, redact
 from app.models.enums import MatchStatus, NotificationChannel, NotificationKind, QualityLabel
 from app.services.http import PermanentProviderError, TransientProviderError
 from app.services.notifications import providers as prov
@@ -310,6 +310,26 @@ def test_log_redaction() -> None:
     out = redact(line)
     for secret in ("abc.def", "hunter2", "XYZ", "kai@example.com", "+14155550123"):
         assert secret not in out
+
+
+def test_install_redaction_on_foreign_handlers() -> None:
+    """Celery's own handlers get the filter too (worker logs must be scrubbed as well)."""
+    import logging
+
+    logger = logging.getLogger("test.redaction")
+    handler = logging.StreamHandler()
+    logger.addHandler(handler)
+    try:
+        install_redaction(logger)
+        install_redaction(logger)  # idempotent
+        assert sum(isinstance(f, RedactingFilter) for f in handler.filters) == 1
+        record = logger.makeRecord(
+            "test.redaction", logging.INFO, __file__, 1, "token=%s for a@b.co", ("abc123",), None
+        )
+        assert handler.filter(record)
+        assert "abc123" not in record.getMessage() and "a@b.co" not in record.getMessage()
+    finally:
+        logger.removeHandler(handler)
 
 
 def test_twilio_signature_roundtrip() -> None:

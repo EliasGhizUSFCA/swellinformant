@@ -21,7 +21,11 @@ SmsProviderName = Literal["console", "twilio", "disabled"]
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", "../.env"), env_file_encoding="utf-8", extra="ignore"
+        env_file=(".env", "../.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        # `KEY=` (blank, as in .env.example or `${KEY:-}` in compose) means "use the default".
+        env_ignore_empty=True,
     )
 
     # ------------------------------------------------------------------ general
@@ -33,7 +37,6 @@ class Settings(BaseSettings):
     # Public URL of the API (used for webhook signature validation). No trailing slash.
     api_base_url: str = "http://localhost:8000"
     secret_key: str = Field(default="dev-insecure-secret-change-me", min_length=16)
-    demo_mode: bool = True
     enable_dev_endpoints: bool = False
 
     # ------------------------------------------------------------------ infrastructure
@@ -42,6 +45,8 @@ class Settings(BaseSettings):
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
     celery_task_always_eager: bool = False
+    # Queue one full pipeline run when celery beat starts (instead of waiting an interval).
+    beat_run_on_start: bool = True
     db_pool_size: int = 5
     db_max_overflow: int = 10
 
@@ -179,6 +184,11 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def demo_mode(self) -> bool:
+        """True when any configured provider serves synthetic data (shown as a UI ribbon)."""
+        return "demo" in self.forecast_provider_list or self.flight_provider == "demo"
 
     @property
     def forecast_provider_list(self) -> list[str]:

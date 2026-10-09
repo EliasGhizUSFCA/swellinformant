@@ -1,0 +1,182 @@
+# Swell Travel Agent — full local stack.
+#
+#   cp .env.example .env      # optional; every value has a working demo default
+#   docker compose up --build
+#
+# Web app http://localhost:3000 · API http://localhost:8000 (docs at /docs)
+# Optional local SMTP inbox: docker compose --profile mail up --build  (UI http://localhost:8025)
+
+x-backend-env: &backend-env
+  # Values from .env override these defaults; infrastructure URLs point at the compose services.
+  APP_ENV: ${APP_ENV:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+  API_BASE_URL: ${API_BASE_URL:-http://localhost:8000}
+  SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
+  ENABLE_DEV_ENDPOINTS: ${ENABLE_DEV_ENDPOINTS:-false}
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-swell}:${POSTGRES_PASSWORD:-swell}@postgres:5432/${POSTGRES_DB:-swell}
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  BEAT_RUN_ON_START: ${BEAT_RUN_ON_START:-true}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-demo}
+  FORECAST_DAYS: ${FORECAST_DAYS:-16}
+  FORECAST_REFRESH_MINUTES: ${FORECAST_REFRESH_MINUTES:-180}
+  OPEN_METEO_API_KEY: ${OPEN_METEO_API_KEY:-}
+  WINDY_API_KEY: ${WINDY_API_KEY:-}
+  DEMO_NATURAL_SWELLS: ${DEMO_NATURAL_SWELLS:-true}
+  DETECTION_LEAD_MIN_DAYS: ${DETECTION_LEAD_MIN_DAYS:-5}
+  DETECTION_LEAD_MAX_DAYS: ${DETECTION_LEAD_MAX_DAYS:-10}
+  FLIGHT_PROVIDER: ${FLIGHT_PROVIDER:-demo}
+  DUFFEL_ACCESS_TOKEN: ${DUFFEL_ACCESS_TOKEN:-}
+  AMADEUS_CLIENT_ID: ${AMADEUS_CLIENT_ID:-}
+  AMADEUS_CLIENT_SECRET: ${AMADEUS_CLIENT_SECRET:-}
+  AMADEUS_BASE_URL: ${AMADEUS_BASE_URL:-https://api.amadeus.com}
+  FLIGHT_DAILY_QUOTA: ${FLIGHT_DAILY_QUOTA:-300}
+  FX_RATES_USD_JSON: ${FX_RATES_USD_JSON:-}
+  EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+  EMAIL_FROM: ${EMAIL_FROM:-Swell Travel Agent <alerts@localhost>}
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+  SMTP_HOST: ${SMTP_HOST:-mailpit}
+  SMTP_PORT: ${SMTP_PORT:-1025}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
+  SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
+  SMS_PROVIDER: ${SMS_PROVIDER:-console}
+  TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+  TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+  TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+  TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
+  MAX_ALERTS_PER_USER_PER_DAY: ${MAX_ALERTS_PER_USER_PER_DAY:-10}
+  OUTBOX_DIR: /tmp/swell-outbox
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  image: swell-travel-agent/backend:local
+  environment: *backend-env
+  volumes:
+    # Console email/SMS providers write here; shared so the API's /api/dev/outbox can read it.
+    - outbox:/tmp/swell-outbox
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-swell}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-swell}
+      POSTGRES_DB: ${POSTGRES_DB:-swell}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # API. On start it applies migrations and loads the 50-spot reference data (idempotent).
+  backend:
+    <<: *backend
+    command: ["api"]
+    environment:
+      <<: *backend-env
+      RUN_MIGRATIONS: "true"
+      API_WORKERS: ${API_WORKERS:-2}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=4).status == 200 else 1)"
+      interval: 10s
+      timeout: 6s
+      retries: 30
+      start_period: 20s
+
+  # Celery worker: runs the forecast → detection → matching → flights → alerts → delivery jobs.
+  worker:
+    <<: *backend
+    command: ["worker"]
+    environment:
+      <<: *backend-env
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+
+  # Celery beat: the job scheduler (starts once the schema exists).
+  beat:
+    <<: *backend
+    command: ["beat"]
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The Next.js server proxies /api/* to this URL (resolved inside the compose network).
+        BACKEND_URL: http://backend:8000
+        NEXT_PUBLIC_MAP_TILE_URL: ${NEXT_PUBLIC_MAP_TILE_URL:-}
+    image: swell-travel-agent/frontend:local
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+
+  # Optional local inbox for EMAIL_PROVIDER=smtp (SMTP 1025, web UI 8025).
+  mailpit:
+    image: axllent/mailpit:v1.27
+    profiles: ["mail"]
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  outbox:

@@ -41,16 +41,29 @@ class RedactingFilter(logging.Filter):
         return True
 
 
-def configure_logging() -> None:
+def install_redaction(logger: logging.Logger) -> None:
+    """Attach the redacting filter to every handler of ``logger`` (idempotent)."""
+    for handler in logger.handlers:
+        if not any(isinstance(f, RedactingFilter) for f in handler.filters):
+            handler.addFilter(RedactingFilter())
+
+
+def configure_logging(add_handler: bool = True) -> None:
+    """Configure the root logger.
+
+    Celery installs its own root handlers (and redirects stdout into logging), so worker and
+    beat processes call this with ``add_handler=False``: the redaction filter is attached to
+    Celery's handlers instead of adding a second stdout handler that would duplicate lines.
+    """
     settings = get_settings()
     root = logging.getLogger()
     root.setLevel(settings.log_level.upper())
-    if not any(getattr(h, "_swell", False) for h in root.handlers):
+    if add_handler and not any(getattr(h, "_swell", False) for h in root.handlers):
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
-        handler.addFilter(RedactingFilter())
         handler._swell = True  # type: ignore[attr-defined]
         root.addHandler(handler)
+    install_redaction(root)
     # httpx logs full request URLs (which can contain API keys) at INFO.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)

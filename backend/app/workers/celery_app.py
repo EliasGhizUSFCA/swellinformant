@@ -10,14 +10,20 @@ and serialised by a Redis lock, so a redelivered task is harmless.
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_process_init
+from celery.signals import (
+    after_setup_logger,
+    after_setup_task_logger,
+    beat_init,
+    worker_process_init,
+)
 
 from app.core.config import get_settings
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, install_redaction
 
 settings = get_settings()
 
@@ -79,12 +85,31 @@ celery_app.conf.update(
 )
 
 
+@after_setup_logger.connect
+def _redact_celery_logs(logger: logging.Logger, **_: object) -> None:
+    configure_logging(add_handler=False)
+
+
+@after_setup_task_logger.connect
+def _redact_task_logs(logger: logging.Logger, **_: object) -> None:
+    install_redaction(logger)
+
+
+@beat_init.connect
+def _kick_off_pipeline(**_: object) -> None:
+    """Interval schedules first fire one interval after beat starts; on a fresh stack that
+    would mean hours without forecasts. Queue one acquisition (which chains through every
+    stage) as soon as the scheduler starts. The job lock makes a duplicate run harmless."""
+    if get_settings().beat_run_on_start:
+        celery_app.send_task("forecasts.acquire")
+
+
 @worker_process_init.connect
 def _init_worker(**_: object) -> None:
     """Each forked worker process opens its own database and Redis connections."""
     from app.core.database import reset_engine
     from app.core.redis import reset_redis
 
-    configure_logging()
+    configure_logging(add_handler=False)
     reset_engine()
     reset_redis()

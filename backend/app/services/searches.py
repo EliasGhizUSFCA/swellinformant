@@ -154,25 +154,25 @@ def update_search(db: Session, search: SavedSearch, data: SearchIn) -> SavedSear
     return search
 
 
+def _withdraw_queued_alerts(db: Session, search: SavedSearch, reason: str) -> None:
+    """Alerts queued but not yet sent for this search are skipped (kept for history)."""
+    match_ids = select(OpportunityMatch.id).where(OpportunityMatch.search_id == search.id)
+    db.execute(
+        update(Notification)
+        .where(
+            Notification.match_id.in_(match_ids),
+            Notification.status == NotificationStatus.QUEUED,
+        )
+        .values(status=NotificationStatus.SKIPPED, last_error=reason, updated_at=utcnow())
+    )
+
+
 def set_paused(db: Session, search: SavedSearch, paused: bool) -> SavedSearch:
     now = utcnow()
     search.status = SearchStatus.PAUSED if paused else SearchStatus.ACTIVE
     search.paused_at = now if paused else None
     if paused:
-        # Alerts queued but not yet sent for this search are withdrawn.
-        match_ids = select(OpportunityMatch.id).where(OpportunityMatch.search_id == search.id)
-        db.execute(
-            update(Notification)
-            .where(
-                Notification.match_id.in_(match_ids),
-                Notification.status == NotificationStatus.QUEUED,
-            )
-            .values(
-                status=NotificationStatus.SKIPPED,
-                last_error="search paused before delivery",
-                updated_at=now,
-            )
-        )
+        _withdraw_queued_alerts(db, search, "search paused before delivery")
     db.commit()
     return search
 
@@ -186,6 +186,9 @@ def duplicate_search(db: Session, user: User, search: SavedSearch) -> SavedSearc
 
 
 def delete_search(db: Session, search: SavedSearch) -> None:
+    # Matches cascade away and notifications keep their history with match_id = NULL, so
+    # withdraw anything still queued first.
+    _withdraw_queued_alerts(db, search, "search deleted before delivery")
     db.delete(search)
     db.commit()
 

@@ -20,8 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
-from app.models import Notification, NotificationPreference, User
-from app.models.enums import NotificationChannel, NotificationStatus
+from app.models import Notification, NotificationPreference, OpportunityMatch, User
+from app.models.enums import NotificationChannel, NotificationStatus, SearchStatus
 from app.services.http import PermanentProviderError, TransientProviderError
 from app.services.notifications.providers import (
     EmailMessageData,
@@ -125,6 +125,11 @@ def send_one(
         return _skip(n, "account inactive or deleted", stats)
     if prefs.all_paused:
         return _skip(n, "notifications paused by user", stats)
+    match = db.get(OpportunityMatch, n.match_id) if n.match_id else None
+    if match is None:
+        return _skip(n, "opportunity or search was deleted", stats)
+    if match.search.status != SearchStatus.ACTIVE:
+        return _skip(n, "search paused before delivery", stats)
     n.attempts += 1
     try:
         if n.channel == NotificationChannel.EMAIL:

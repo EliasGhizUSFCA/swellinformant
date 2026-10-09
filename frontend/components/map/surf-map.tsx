@@ -9,9 +9,9 @@ import { colorForScore } from "@/lib/quality";
 import type { SpotSummary } from "@/types/api";
 
 const TILE_URL =
-  process.env.NEXT_PUBLIC_MAP_TILE_URL ?? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+  process.env.NEXT_PUBLIC_MAP_TILE_URL || "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
 const ATTRIBUTION =
-  process.env.NEXT_PUBLIC_MAP_ATTRIBUTION ??
+  process.env.NEXT_PUBLIC_MAP_ATTRIBUTION ||
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
 
 function FlyTo({ spot }: { spot?: SpotSummary }) {

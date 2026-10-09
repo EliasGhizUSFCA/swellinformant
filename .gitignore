@@ -35,3 +35,6 @@ next-env.d.ts
 /tmp/
 *.log
 .next-e2e/
+
+# Redis local dumps
+dump.rdb

@@ -19,6 +19,7 @@ from app.models import (
     Notification,
     NotificationPreference,
     OpportunityMatch,
+    SavedSearch,
     SpotAirport,
     SurfQualityPrediction,
     SurfSpot,
@@ -30,6 +31,7 @@ from app.models.enums import (
     MatchStatus,
     NotificationKind,
     NotificationStatus,
+    SearchStatus,
     SwellEventStatus,
 )
 from app.schemas.searches import SearchIn
@@ -168,6 +170,43 @@ def test_pausing_withdraws_queued_alerts(db: Session, few_spots: list[str]) -> N
     assert all(
         n.status == NotificationStatus.SKIPPED for n in db.scalars(select(Notification)).all()
     )
+
+
+def test_deleting_search_withdraws_queued_alerts(db: Session, few_spots: list[str]) -> None:
+    user = make_user(db)
+    search = make_search(db, user)
+    run_pipeline(db, deliver=False)
+    simulate_without_delivery(db)
+    queued_ids = db.scalars(
+        select(Notification.id).where(Notification.status == NotificationStatus.QUEUED)
+    ).all()
+    assert queued_ids
+    searches.delete_search(db, search)
+    db.expire_all()
+    stats = deliver_pending(db)
+    assert stats.sent == 0
+    rows = db.scalars(select(Notification).where(Notification.id.in_(queued_ids))).all()
+    assert rows and all(n.status == NotificationStatus.SKIPPED and n.match_id is None for n in rows)
+
+
+def test_delivery_skips_alerts_whose_search_was_paused_after_claim_window(
+    db: Session, few_spots: list[str]
+) -> None:
+    """Send-time guard: a queued alert whose search is no longer active is never sent,
+    even if it was not withdrawn when the search changed (e.g. a concurrent writer)."""
+    user = make_user(db)
+    search = make_search(db, user)
+    run_pipeline(db, deliver=False)
+    simulate_without_delivery(db)
+    assert db.scalar(select(func.count()).where(Notification.status == NotificationStatus.QUEUED))
+    # Pause without the withdrawal step, as a racing request would.
+    db.execute(
+        update(SavedSearch).where(SavedSearch.id == search.id).values(status=SearchStatus.PAUSED)
+    )
+    db.commit()
+    db.expire_all()
+    stats = deliver_pending(db)
+    assert stats.sent == 0 and stats.skipped >= 1
 
 
 def simulate_without_delivery(db: Session):  # type: ignore[no-untyped-def]

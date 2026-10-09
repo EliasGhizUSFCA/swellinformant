@@ -6,9 +6,9 @@ publishes model-run metadata. The free tier is for non-commercial use; set
 OPEN_METEO_API_KEY to use the commercial ``customer-*`` hosts.
 
 Requests per batch of spots (FORECAST_BATCH_SIZE, default 10):
-  1. marine  /v1/marine   models=ncep_gfswave025   wave + swell partitions
-  2. gfs     /v1/gfs      models=gfs_global          10 m wind, gusts, MSL pressure
-  3. marine  /v1/marine   (default model)            sea_level_height_msl (tide proxy)
+  1. marine /v1/marine  models=OPEN_METEO_WAVE_MODEL (ncep_gfswave025)  waves + swell partitions
+  2. gfs    /v1/gfs     models=OPEN_METEO_ATMOS_MODEL (gfs_seamless)  10 m wind, gusts, pressure
+  3. marine /v1/marine  (default model)  sea_level_height_msl (tide proxy)
 
 Variables marked optional are dropped automatically if the API rejects them, and the
 sea-level request is best effort — tides are a minor scoring component.
