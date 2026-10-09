@@ -37,6 +37,7 @@ describe("CARTO key", () => {
     expect(cartoKeyMissing(`${CARTO_VOYAGER_URL}?key=`)).toBe(true);
     expect(cartoKeyMissing(`${CARTO_VOYAGER_URL}?key=abc`)).toBe(false);
     expect(cartoKeyMissing(DEFAULT_TILE_URL)).toBe(false);
+    expect(cartoKeyMissing("https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png")).toBe(true);
   });
 });
 

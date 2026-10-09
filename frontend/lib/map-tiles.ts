@@ -25,7 +25,7 @@ export interface TileConfig {
   maxZoom: number;
 }
 
-const isCartoUrl = (url: string) => /\.basemaps\.cartocdn\.com\//i.test(url);
+const isCartoUrl = (url: string) => /(^|[/.])basemaps\.cartocdn\.com\//i.test(url);
 
 export function tileConfig(url?: string, attribution?: string, cartoKey?: string): TileConfig {
   const key = cartoKey?.trim();

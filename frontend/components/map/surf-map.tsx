@@ -14,7 +14,8 @@ const TILES = tileConfig(
   process.env.NEXT_PUBLIC_MAP_ATTRIBUTION,
   process.env.NEXT_PUBLIC_CARTO_API_KEY,
 );
-// Shown when tiles keep failing and none has loaded (blocked network, bad URL or key).
+// Shown when tiles keep failing and none has loaded (blocked network or wrong URL). A missing
+// CARTO key cannot be detected here: CARTO returns HTTP 200 "API KEY REQUIRED" images.
 const FAILED_TILES_BEFORE_NOTICE = 4;
 
 function FlyTo({ spot }: { spot?: SpotSummary }) {
