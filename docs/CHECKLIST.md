@@ -12,7 +12,7 @@ limitations.
 | 4 | 50 surf spots | `data/surf_spots/spots.json` (50 spots, 153 airports), validated on seed |
 | 5 | Accounts | All of: register, verify email, login/logout, reset/change password, profile, saved airports, notification preferences, phone verification, delete account. Backend ownership checks on every resource |
 | 6 | Saved searches | 6-step wizard, flexible/fixed dates, spots/regions/all, surf/wind/period/direction filters, travel constraints, edit/pause/resume/duplicate/delete |
-| 7 | Forecast acquisition | Open-Meteo (NOAA GFS + GFS-Wave) and Windy adapters (mock-tested), demo provider (default), batching, model-run metadata, idempotent runs, staleness, retention |
+| 7 | Forecast acquisition | Open-Meteo (NOAA GFS + GFS-Wave) adapter verified live; Windy adapter (mock-tested), demo provider (default), batching, model-run metadata, idempotent runs, staleness, retention |
 | 8 | Quality engine | Score, labels, breaking-height estimate, confidence, explanations. See SURF_SCORING.md |
 | 9 | Swell detection | Daylight clustering, multi-day events, update in place / merge / downgrade / pass, overlap exclusion constraint |
 | 10 | Flight search | Duffel and Amadeus adapters (mock-tested), demo provider, shared cache, quotas, travel windows, filters, revalidation |
@@ -69,7 +69,8 @@ notification, dashboard card, pause, no new notifications.
 
 ## Open items / known gaps
 
-* Live provider calls (Open-Meteo, Windy, Duffel, Amadeus, Resend, SendGrid, Twilio)
-  were not executed: outbound access to those APIs is blocked in the build environment.
+* Live provider calls for Windy, Duffel, Amadeus, Resend, SendGrid and Twilio were not
+  executed: outbound access to those APIs is blocked in the build environment.
+  Open-Meteo has been verified live.
 * No observed-surf calibration. Heights and scores are uncalibrated estimates.
 * Not implemented: booking, social login / 2FA, push notifications, an admin UI.

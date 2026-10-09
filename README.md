@@ -447,13 +447,16 @@ Checklist:
 * Both are labelled DEMO / MOCK in the UI, the API (`is_demo`, `is_mock`) and every alert.
 * The `simulate-swell` tool works only with the demo forecast provider.
 
+**Verified live:** Open-Meteo (NOAA GFS + GFS-Wave). On 2026-10-09 a Docker Compose run
+on macOS (Apple silicon) ingested the 12 UTC model run for all 50 spots (19,200 hourly
+records, 0 errors). Scoring and detection then ran on it.
+
 **Implemented but not verified against the real services** (outbound network to these
 APIs was blocked in the build environment). Each adapter is unit-tested against
 documented response shapes with mocked HTTP. Expect to adjust details on first live use.
 
 | Service | Needs |
 |---------|-------|
-| Open-Meteo | nothing, or `OPEN_METEO_API_KEY` |
 | Windy | `WINDY_API_KEY` |
 | Duffel | `DUFFEL_ACCESS_TOKEN` |
 | Amadeus Enterprise | `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET` |
