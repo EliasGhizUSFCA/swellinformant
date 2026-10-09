@@ -78,6 +78,14 @@ explicit UI and alert labelling. The app never fabricates fares for a live provi
 live provider fails or returns nothing, the opportunity becomes "surf only" with the reason
 shown.
 
+## Map tiles
+
+| Provider | Setting | Notes |
+|----------|---------|-------|
+| OpenStreetMap standard tiles | default (`NEXT_PUBLIC_MAP_TILE_URL` empty) | No key. The [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/) applies: visible attribution, a valid Referer (the app's referrer policy sends its origin), light use only. A high-traffic deployment should use a commercial tile provider or host its own tiles |
+| CARTO Voyager | `NEXT_PUBLIC_CARTO_API_KEY=…`, or the URL `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=YOUR_KEY` | By October 2026 CARTO serves "API KEY REQUIRED" placeholder tiles to key-less raster requests. Free keys (about 5M tiles/month non-commercial) come from carto.com/basemaps/apikey. The key is visible in the browser by design; restrict it to your domain |
+| Any other XYZ raster provider | `NEXT_PUBLIC_MAP_TILE_URL` + `NEXT_PUBLIC_MAP_ATTRIBUTION` | The tile host is added to the CSP automatically (`frontend/lib/map-tiles.ts`) |
+
 ## Notifications
 
 | Provider | Setting | Status |

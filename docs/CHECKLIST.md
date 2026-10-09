@@ -66,6 +66,10 @@ notification, dashboard card, pause, no new notifications.
 * `.env.example` inline comments became values under Docker Compose.
 * CLI JSON output was mixed with log lines. Logs now go to stderr.
 * A plain-text 5xx from the proxy showed a JSON parse error in the UI.
+* The map used key-less CARTO tiles, which CARTO now answers with "API KEY REQUIRED"
+  placeholders (found on a real Mac). It now defaults to OpenStreetMap, derives its CSP
+  host from the tile URL, passes all map settings into the Docker build, shows a notice
+  when tiles fail, and no longer paints over the sticky header.
 
 ## Open items / known gaps
 
