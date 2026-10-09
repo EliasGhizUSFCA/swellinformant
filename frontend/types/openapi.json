@@ -1,0 +1,6142 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "Swell Travel Agent API",
+  "description": "Surf-forecast-driven travel discovery. All state-changing requests need the session cookie and an `X-CSRF-Token` header matching the `sta_csrf` cookie (GET `/api/auth/csrf` first).",
+  "version": "1.0.0"
+ },
+ "paths": {
+  "/api/health": {
+   "get": {
+    "tags": [
+     "system"
+    ],
+    "summary": "Health",
+    "operationId": "health_api_health_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": {
+          "type": "string"
+         },
+         "type": "object",
+         "title": "Response Health Api Health Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/health/ready": {
+   "get": {
+    "tags": [
+     "system"
+    ],
+    "summary": "Ready",
+    "operationId": "ready_api_health_ready_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/system/status": {
+   "get": {
+    "tags": [
+     "system"
+    ],
+    "summary": "System Status",
+    "operationId": "system_status_api_system_status_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response System Status Api System Status Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/csrf": {
+   "get": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Csrf",
+    "description": "Issue the CSRF cookie (call once before the first POST).",
+    "operationId": "csrf_api_auth_csrf_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": {
+          "type": "string"
+         },
+         "type": "object",
+         "title": "Response Csrf Api Auth Csrf Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/register": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Register",
+    "operationId": "register_api_auth_register_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RegisterIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AuthOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/login": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Login",
+    "operationId": "login_api_auth_login_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LoginIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AuthOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/logout": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Logout",
+    "operationId": "logout_api_auth_logout_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/me": {
+   "get": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Me",
+    "operationId": "me_api_auth_me_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/UserOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/verify-email": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Verify Email",
+    "operationId": "verify_email_api_auth_verify_email_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TokenIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/resend-verification": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Resend Verification",
+    "operationId": "resend_verification_api_auth_resend_verification_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/forgot-password": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Forgot Password",
+    "operationId": "forgot_password_api_auth_forgot_password_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ForgotPasswordIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/reset-password": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Reset Password",
+    "operationId": "reset_password_api_auth_reset_password_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ResetPasswordIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/change-password": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Change Password",
+    "operationId": "change_password_api_auth_change_password_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ChangePasswordIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/users/me/profile": {
+   "patch": {
+    "tags": [
+     "account"
+    ],
+    "summary": "Update Profile",
+    "operationId": "update_profile_api_users_me_profile_patch",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ProfileIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/UserOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/users/me/notification-preferences": {
+   "patch": {
+    "tags": [
+     "account"
+    ],
+    "summary": "Update Notification Prefs",
+    "operationId": "update_notification_prefs_api_users_me_notification_preferences_patch",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/NotificationPrefsIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/UserOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/users/me/phone/start": {
+   "post": {
+    "tags": [
+     "account"
+    ],
+    "summary": "Start Phone",
+    "operationId": "start_phone_api_users_me_phone_start_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PhoneStartIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/users/me/phone/confirm": {
+   "post": {
+    "tags": [
+     "account"
+    ],
+    "summary": "Confirm Phone",
+    "operationId": "confirm_phone_api_users_me_phone_confirm_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PhoneConfirmIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/UserOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/users/me/sms/opt-out": {
+   "post": {
+    "tags": [
+     "account"
+    ],
+    "summary": "Sms Opt Out",
+    "operationId": "sms_opt_out_api_users_me_sms_opt_out_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/UserOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/users/me/airports": {
+   "get": {
+    "tags": [
+     "account"
+    ],
+    "summary": "List Airports",
+    "operationId": "list_airports_api_users_me_airports_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/UserAirportOut"
+         },
+         "type": "array",
+         "title": "Response List Airports Api Users Me Airports Get"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "account"
+    ],
+    "summary": "Add Airport",
+    "operationId": "add_airport_api_users_me_airports_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/UserAirportIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/UserAirportOut"
+         },
+         "type": "array",
+         "title": "Response Add Airport Api Users Me Airports Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/users/me/airports/{airport_id}": {
+   "delete": {
+    "tags": [
+     "account"
+    ],
+    "summary": "Remove Airport",
+    "operationId": "remove_airport_api_users_me_airports__airport_id__delete",
+    "parameters": [
+     {
+      "name": "airport_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Airport Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/UserAirportOut"
+         },
+         "title": "Response Remove Airport Api Users Me Airports  Airport Id  Delete"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/users/me": {
+   "delete": {
+    "tags": [
+     "account"
+    ],
+    "summary": "Delete Account",
+    "operationId": "delete_account_api_users_me_delete",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/DeleteAccountIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "List Spots",
+    "operationId": "list_spots_api_spots_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/SpotSummary"
+         },
+         "type": "array",
+         "title": "Response List Spots Api Spots Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Get Spot",
+    "operationId": "get_spot_api_spots__slug__get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SpotDetail"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}/forecast": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Get Forecast",
+    "operationId": "get_forecast_api_spots__slug__forecast_get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     },
+     {
+      "name": "days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 16,
+       "minimum": 1,
+       "default": 10,
+       "title": "Days"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SpotForecastOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}/events": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Spot Events",
+    "operationId": "spot_events_api_spots__slug__events_get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/EventOut"
+         },
+         "title": "Response Spot Events Api Spots  Slug  Events Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}/opportunities": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Spot Opportunities",
+    "description": "The signed-in user's travel opportunities for this spot (empty when signed out).",
+    "operationId": "spot_opportunities_api_spots__slug__opportunities_get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/MatchSummary"
+         },
+         "title": "Response Spot Opportunities Api Spots  Slug  Opportunities Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/events": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "List Events",
+    "operationId": "list_events_api_events_get",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 1,
+       "default": 20,
+       "title": "Limit"
+      }
+     },
+     {
+      "name": "min_score",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 100,
+       "minimum": 0,
+       "default": 0,
+       "title": "Min Score"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/EventOut"
+         },
+         "title": "Response List Events Api Events Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/events/{event_id}": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Get Event",
+    "operationId": "get_event_api_events__event_id__get",
+    "parameters": [
+     {
+      "name": "event_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Event Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/EventOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/airports": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Search Airports",
+    "operationId": "search_airports_api_airports_get",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 60,
+       "default": "",
+       "title": "Q"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 200,
+       "minimum": 1,
+       "default": 20,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/AirportOut"
+         },
+         "title": "Response Search Airports Api Airports Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/regions": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Regions",
+    "operationId": "regions_api_regions_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/RegionOut"
+         },
+         "type": "array",
+         "title": "Response Regions Api Regions Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/searches": {
+   "get": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "List Searches",
+    "operationId": "list_searches_api_searches_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/SearchOut"
+         },
+         "type": "array",
+         "title": "Response List Searches Api Searches Get"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Create",
+    "operationId": "create_api_searches_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SearchIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/searches/{search_id}": {
+   "get": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Get",
+    "operationId": "get_api_searches__search_id__get",
+    "parameters": [
+     {
+      "name": "search_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Search Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Update",
+    "operationId": "update_api_searches__search_id__put",
+    "parameters": [
+     {
+      "name": "search_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Search Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SearchIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Delete",
+    "operationId": "delete_api_searches__search_id__delete",
+    "parameters": [
+     {
+      "name": "search_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Search Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/searches/{search_id}/pause": {
+   "post": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Pause",
+    "operationId": "pause_api_searches__search_id__pause_post",
+    "parameters": [
+     {
+      "name": "search_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Search Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/searches/{search_id}/resume": {
+   "post": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Resume",
+    "operationId": "resume_api_searches__search_id__resume_post",
+    "parameters": [
+     {
+      "name": "search_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Search Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/searches/{search_id}/duplicate": {
+   "post": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Duplicate",
+    "operationId": "duplicate_api_searches__search_id__duplicate_post",
+    "parameters": [
+     {
+      "name": "search_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Search Id"
+      }
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/searches/{search_id}/matches": {
+   "get": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Matches",
+    "operationId": "matches_api_searches__search_id__matches_get",
+    "parameters": [
+     {
+      "name": "search_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Search Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/MatchSummary"
+         },
+         "title": "Response Matches Api Searches  Search Id  Matches Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/opportunities": {
+   "get": {
+    "tags": [
+     "opportunities"
+    ],
+    "summary": "List Opportunities",
+    "operationId": "list_opportunities_api_opportunities_get",
+    "parameters": [
+     {
+      "name": "status",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/MatchStatus"
+         }
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "name": "include_past",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": false,
+       "title": "Include Past"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 200,
+       "minimum": 1,
+       "default": 50,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/MatchSummary"
+         },
+         "title": "Response List Opportunities Api Opportunities Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/opportunities/{match_id}": {
+   "get": {
+    "tags": [
+     "opportunities"
+    ],
+    "summary": "Get Opportunity",
+    "operationId": "get_opportunity_api_opportunities__match_id__get",
+    "parameters": [
+     {
+      "name": "match_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Match Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MatchDetail"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/opportunities/{match_id}/refresh-flights": {
+   "post": {
+    "tags": [
+     "opportunities"
+    ],
+    "summary": "Refresh Flights",
+    "operationId": "refresh_flights_api_opportunities__match_id__refresh_flights_post",
+    "parameters": [
+     {
+      "name": "match_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Match Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MatchDetail"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/opportunities/{match_id}/dismiss": {
+   "post": {
+    "tags": [
+     "opportunities"
+    ],
+    "summary": "Dismiss",
+    "operationId": "dismiss_api_opportunities__match_id__dismiss_post",
+    "parameters": [
+     {
+      "name": "match_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Match Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MatchSummary"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/notifications": {
+   "get": {
+    "tags": [
+     "notifications"
+    ],
+    "summary": "History",
+    "operationId": "history_api_notifications_get",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 200,
+       "minimum": 1,
+       "default": 50,
+       "title": "Limit"
+      }
+     },
+     {
+      "name": "offset",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "minimum": 0,
+       "default": 0,
+       "title": "Offset"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/NotificationPage"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/notifications/unsubscribe": {
+   "post": {
+    "tags": [
+     "notifications"
+    ],
+    "summary": "Unsubscribe",
+    "description": "Disable email alerts using the secret token from an alert email.\n\nSupports RFC 8058 one-click (form POST with ``List-Unsubscribe=One-Click`` and the\ntoken in the URL) and the web page (JSON body ``{\"token\": \"...\"}``). No session\nneeded: possession of the per-user token is the authorisation.",
+    "operationId": "unsubscribe_api_notifications_unsubscribe_post",
+    "parameters": [
+     {
+      "name": "token",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 100
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Token"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/webhooks/twilio/sms": {
+   "post": {
+    "tags": [
+     "webhooks"
+    ],
+    "summary": "Twilio Sms",
+    "operationId": "twilio_sms_api_webhooks_twilio_sms_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/dev/simulate-swell": {
+   "post": {
+    "tags": [
+     "developer tools"
+    ],
+    "summary": "Simulate",
+    "operationId": "simulate_api_dev_simulate_swell_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SimulateIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Simulate Api Dev Simulate Swell Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/dev/run-pipeline": {
+   "post": {
+    "tags": [
+     "developer tools"
+    ],
+    "summary": "Pipeline",
+    "operationId": "pipeline_api_dev_run_pipeline_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Pipeline Api Dev Run Pipeline Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/dev/outbox": {
+   "get": {
+    "tags": [
+     "developer tools"
+    ],
+    "summary": "Outbox",
+    "description": "Messages captured by the console email/SMS adapters (demo only).",
+    "operationId": "outbox_api_dev_outbox_get",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 200,
+       "minimum": 1,
+       "default": 20,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "additionalProperties": true
+         },
+         "title": "Response Outbox Api Dev Outbox Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "AirportOut": {
+    "properties": {
+     "iata": {
+      "type": "string",
+      "title": "Iata"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "city": {
+      "type": "string",
+      "title": "City"
+     },
+     "country": {
+      "type": "string",
+      "title": "Country"
+     },
+     "country_code": {
+      "type": "string",
+      "title": "Country Code"
+     },
+     "latitude": {
+      "type": "number",
+      "title": "Latitude"
+     },
+     "longitude": {
+      "type": "number",
+      "title": "Longitude"
+     },
+     "timezone": {
+      "type": "string",
+      "title": "Timezone"
+     }
+    },
+    "type": "object",
+    "required": [
+     "iata",
+     "name",
+     "city",
+     "country",
+     "country_code",
+     "latitude",
+     "longitude",
+     "timezone"
+    ],
+    "title": "AirportOut"
+   },
+   "AuthOut": {
+    "properties": {
+     "user": {
+      "$ref": "#/components/schemas/UserOut"
+     },
+     "csrf_token": {
+      "type": "string",
+      "title": "Csrf Token"
+     }
+    },
+    "type": "object",
+    "required": [
+     "user",
+     "csrf_token"
+    ],
+    "title": "AuthOut"
+   },
+   "BreakType": {
+    "type": "string",
+    "enum": [
+     "reef",
+     "point",
+     "beach",
+     "rivermouth",
+     "slab"
+    ],
+    "title": "BreakType"
+   },
+   "CabinClass": {
+    "type": "string",
+    "enum": [
+     "economy",
+     "premium_economy",
+     "business",
+     "first"
+    ],
+    "title": "CabinClass"
+   },
+   "ChangePasswordIn": {
+    "properties": {
+     "current_password": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Current Password"
+     },
+     "new_password": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "New Password"
+     },
+     "confirm_password": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Confirm Password"
+     }
+    },
+    "type": "object",
+    "required": [
+     "current_password",
+     "new_password",
+     "confirm_password"
+    ],
+    "title": "ChangePasswordIn"
+   },
+   "Conditions": {
+    "properties": {
+     "valid_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Valid Time"
+     },
+     "score": {
+      "type": "integer",
+      "title": "Score"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "breaking_height_min_ft": {
+      "type": "number",
+      "title": "Breaking Height Min Ft"
+     },
+     "breaking_height_max_ft": {
+      "type": "number",
+      "title": "Breaking Height Max Ft"
+     },
+     "swell_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Swell Height M"
+     },
+     "swell_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Swell Period S"
+     },
+     "swell_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Swell Direction Deg"
+     },
+     "wind_speed_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Speed Kmh"
+     },
+     "wind_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Direction Deg"
+     },
+     "wind_relation": {
+      "type": "string",
+      "title": "Wind Relation"
+     },
+     "confidence": {
+      "type": "integer",
+      "title": "Confidence"
+     },
+     "confidence_label": {
+      "type": "string",
+      "title": "Confidence Label"
+     },
+     "is_daylight": {
+      "type": "boolean",
+      "title": "Is Daylight"
+     }
+    },
+    "type": "object",
+    "required": [
+     "valid_time",
+     "score",
+     "label",
+     "breaking_height_min_ft",
+     "breaking_height_max_ft",
+     "swell_height_m",
+     "swell_period_s",
+     "swell_direction_deg",
+     "wind_speed_kmh",
+     "wind_direction_deg",
+     "wind_relation",
+     "confidence",
+     "confidence_label",
+     "is_daylight"
+    ],
+    "title": "Conditions"
+   },
+   "DailySummary": {
+    "properties": {
+     "date": {
+      "type": "string",
+      "format": "date",
+      "title": "Date"
+     },
+     "best_score": {
+      "type": "integer",
+      "title": "Best Score"
+     },
+     "best_label": {
+      "type": "string",
+      "title": "Best Label"
+     },
+     "best_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Time"
+     },
+     "height_min_ft": {
+      "type": "number",
+      "title": "Height Min Ft"
+     },
+     "height_max_ft": {
+      "type": "number",
+      "title": "Height Max Ft"
+     },
+     "avg_wind_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Avg Wind Kmh"
+     },
+     "good_hours": {
+      "type": "integer",
+      "title": "Good Hours"
+     },
+     "confidence": {
+      "type": "integer",
+      "title": "Confidence"
+     }
+    },
+    "type": "object",
+    "required": [
+     "date",
+     "best_score",
+     "best_label",
+     "best_time",
+     "height_min_ft",
+     "height_max_ft",
+     "avg_wind_kmh",
+     "good_hours",
+     "confidence"
+    ],
+    "title": "DailySummary"
+   },
+   "DateMode": {
+    "type": "string",
+    "enum": [
+     "fixed",
+     "flexible"
+    ],
+    "title": "DateMode"
+   },
+   "DeleteAccountIn": {
+    "properties": {
+     "password": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Password"
+     },
+     "confirm": {
+      "type": "string",
+      "const": "DELETE",
+      "title": "Confirm"
+     }
+    },
+    "type": "object",
+    "required": [
+     "password",
+     "confirm"
+    ],
+    "title": "DeleteAccountIn"
+   },
+   "DestinationMode": {
+    "type": "string",
+    "enum": [
+     "all",
+     "regions",
+     "spots"
+    ],
+    "title": "DestinationMode"
+   },
+   "DestinationsIn": {
+    "properties": {
+     "spot_slugs": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "maxItems": 60,
+      "title": "Spot Slugs"
+     },
+     "countries": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "maxItems": 60,
+      "title": "Countries"
+     },
+     "region_groups": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "maxItems": 20,
+      "title": "Region Groups"
+     }
+    },
+    "type": "object",
+    "title": "DestinationsIn"
+   },
+   "EventOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "spot": {
+      "$ref": "#/components/schemas/SpotMini"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "start_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Start Time"
+     },
+     "end_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "End Time"
+     },
+     "peak_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Peak Time"
+     },
+     "peak_score": {
+      "type": "integer",
+      "title": "Peak Score"
+     },
+     "avg_score": {
+      "type": "number",
+      "title": "Avg Score"
+     },
+     "peak_label": {
+      "type": "string",
+      "title": "Peak Label"
+     },
+     "peak_breaking_height_min_ft": {
+      "type": "number",
+      "title": "Peak Breaking Height Min Ft"
+     },
+     "peak_breaking_height_max_ft": {
+      "type": "number",
+      "title": "Peak Breaking Height Max Ft"
+     },
+     "peak_swell_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Peak Swell Height M"
+     },
+     "peak_swell_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Peak Swell Period S"
+     },
+     "peak_swell_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Peak Swell Direction Deg"
+     },
+     "peak_wind_speed_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Peak Wind Speed Kmh"
+     },
+     "peak_wind_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Peak Wind Direction Deg"
+     },
+     "peak_wind_relation": {
+      "type": "string",
+      "title": "Peak Wind Relation"
+     },
+     "qualifying_hours": {
+      "type": "integer",
+      "title": "Qualifying Hours"
+     },
+     "confidence": {
+      "type": "integer",
+      "title": "Confidence"
+     },
+     "confidence_label": {
+      "type": "string",
+      "title": "Confidence Label"
+     },
+     "lead_days": {
+      "type": "number",
+      "title": "Lead Days"
+     },
+     "version": {
+      "type": "integer",
+      "title": "Version"
+     },
+     "first_detected_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "First Detected At"
+     },
+     "last_updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Last Updated At"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo"
+     },
+     "source_code": {
+      "type": "string",
+      "title": "Source Code"
+     },
+     "history": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "History",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "spot",
+     "status",
+     "start_time",
+     "end_time",
+     "peak_time",
+     "peak_score",
+     "avg_score",
+     "peak_label",
+     "peak_breaking_height_min_ft",
+     "peak_breaking_height_max_ft",
+     "peak_swell_height_m",
+     "peak_swell_period_s",
+     "peak_swell_direction_deg",
+     "peak_wind_speed_kmh",
+     "peak_wind_direction_deg",
+     "peak_wind_relation",
+     "qualifying_hours",
+     "confidence",
+     "confidence_label",
+     "lead_days",
+     "version",
+     "first_detected_at",
+     "last_updated_at",
+     "is_demo",
+     "source_code"
+    ],
+    "title": "EventOut"
+   },
+   "ForecastPoint": {
+    "properties": {
+     "valid_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Valid Time"
+     },
+     "is_daylight": {
+      "type": "boolean",
+      "title": "Is Daylight"
+     },
+     "sig_wave_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sig Wave Height M"
+     },
+     "primary_swell_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Primary Swell Height M"
+     },
+     "primary_swell_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Primary Swell Period S"
+     },
+     "primary_swell_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Primary Swell Direction Deg"
+     },
+     "secondary_swell_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Secondary Swell Height M"
+     },
+     "secondary_swell_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Secondary Swell Period S"
+     },
+     "secondary_swell_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Secondary Swell Direction Deg"
+     },
+     "wind_wave_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Wave Height M"
+     },
+     "wind_wave_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Wave Period S"
+     },
+     "wind_speed_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Speed Kmh"
+     },
+     "wind_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Direction Deg"
+     },
+     "wind_gust_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Gust Kmh"
+     },
+     "pressure_msl_hpa": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pressure Msl Hpa"
+     },
+     "sea_level_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sea Level M"
+     },
+     "wave_power_kw_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Power Kw M"
+     },
+     "breaking_height_min_ft": {
+      "type": "number",
+      "title": "Breaking Height Min Ft"
+     },
+     "breaking_height_max_ft": {
+      "type": "number",
+      "title": "Breaking Height Max Ft"
+     },
+     "score": {
+      "type": "integer",
+      "title": "Score"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "confidence": {
+      "type": "integer",
+      "title": "Confidence"
+     },
+     "confidence_label": {
+      "type": "string",
+      "title": "Confidence Label"
+     },
+     "wind_relation": {
+      "type": "string",
+      "title": "Wind Relation"
+     },
+     "explanation": {
+      "type": "string",
+      "title": "Explanation"
+     },
+     "components": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Components"
+     }
+    },
+    "type": "object",
+    "required": [
+     "valid_time",
+     "is_daylight",
+     "sig_wave_height_m",
+     "primary_swell_height_m",
+     "primary_swell_period_s",
+     "primary_swell_direction_deg",
+     "secondary_swell_height_m",
+     "secondary_swell_period_s",
+     "secondary_swell_direction_deg",
+     "wind_wave_height_m",
+     "wind_wave_period_s",
+     "wind_speed_kmh",
+     "wind_direction_deg",
+     "wind_gust_kmh",
+     "pressure_msl_hpa",
+     "sea_level_m",
+     "wave_power_kw_m",
+     "breaking_height_min_ft",
+     "breaking_height_max_ft",
+     "score",
+     "label",
+     "confidence",
+     "confidence_label",
+     "wind_relation",
+     "explanation",
+     "components"
+    ],
+    "title": "ForecastPoint"
+   },
+   "ForecastRunOut": {
+    "properties": {
+     "run_key": {
+      "type": "string",
+      "title": "Run Key"
+     },
+     "issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Issued At"
+     },
+     "completed_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Completed At"
+     },
+     "wave_model_run_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model Run At"
+     },
+     "atmosphere_model_run_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Atmosphere Model Run At"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     }
+    },
+    "type": "object",
+    "required": [
+     "run_key",
+     "issued_at",
+     "completed_at",
+     "wave_model_run_at",
+     "atmosphere_model_run_at",
+     "status"
+    ],
+    "title": "ForecastRunOut"
+   },
+   "ForecastSourceOut": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo"
+     },
+     "attribution": {
+      "type": "string",
+      "title": "Attribution"
+     },
+     "wave_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model"
+     },
+     "atmosphere_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Atmosphere Model"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "is_demo",
+     "attribution",
+     "wave_model",
+     "atmosphere_model"
+    ],
+    "title": "ForecastSourceOut"
+   },
+   "ForgotPasswordIn": {
+    "properties": {
+     "email": {
+      "type": "string",
+      "format": "email",
+      "title": "Email"
+     }
+    },
+    "type": "object",
+    "required": [
+     "email"
+    ],
+    "title": "ForgotPasswordIn"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "type": "array",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "title": "HTTPValidationError"
+   },
+   "LinkOut": {
+    "properties": {
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "url": {
+      "type": "string",
+      "title": "Url"
+     }
+    },
+    "type": "object",
+    "required": [
+     "label",
+     "url"
+    ],
+    "title": "LinkOut"
+   },
+   "LoginIn": {
+    "properties": {
+     "email": {
+      "type": "string",
+      "format": "email",
+      "title": "Email"
+     },
+     "password": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Password"
+     }
+    },
+    "type": "object",
+    "required": [
+     "email",
+     "password"
+    ],
+    "title": "LoginIn"
+   },
+   "MatchCounts": {
+    "properties": {
+     "total": {
+      "type": "integer",
+      "title": "Total",
+      "default": 0
+     },
+     "flight_found": {
+      "type": "integer",
+      "title": "Flight Found",
+      "default": 0
+     },
+     "surf_only": {
+      "type": "integer",
+      "title": "Surf Only",
+      "default": 0
+     },
+     "pending_flights": {
+      "type": "integer",
+      "title": "Pending Flights",
+      "default": 0
+     },
+     "expired": {
+      "type": "integer",
+      "title": "Expired",
+      "default": 0
+     }
+    },
+    "type": "object",
+    "title": "MatchCounts"
+   },
+   "MatchDetail": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "search_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Search Id"
+     },
+     "search_name": {
+      "type": "string",
+      "title": "Search Name"
+     },
+     "search_status": {
+      "type": "string",
+      "title": "Search Status"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "status_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Status Reason"
+     },
+     "spot": {
+      "$ref": "#/components/schemas/SpotMini"
+     },
+     "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Event Id"
+     },
+     "event_status": {
+      "type": "string",
+      "title": "Event Status"
+     },
+     "window_start": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Window Start"
+     },
+     "window_end": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Window End"
+     },
+     "qualifying_hours": {
+      "type": "integer",
+      "title": "Qualifying Hours"
+     },
+     "peak_score": {
+      "type": "integer",
+      "title": "Peak Score"
+     },
+     "avg_score": {
+      "type": "number",
+      "title": "Avg Score"
+     },
+     "peak_label": {
+      "type": "string",
+      "title": "Peak Label"
+     },
+     "breaking_height_min_ft": {
+      "type": "number",
+      "title": "Breaking Height Min Ft"
+     },
+     "breaking_height_max_ft": {
+      "type": "number",
+      "title": "Breaking Height Max Ft"
+     },
+     "confidence": {
+      "type": "integer",
+      "title": "Confidence"
+     },
+     "confidence_label": {
+      "type": "string",
+      "title": "Confidence Label"
+     },
+     "destination_iata": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Destination Iata"
+     },
+     "transfer_minutes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Transfer Minutes"
+     },
+     "origin_iata": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Origin Iata"
+     },
+     "recommended_arrival_date": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Recommended Arrival Date"
+     },
+     "recommended_departure_date": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Recommended Departure Date"
+     },
+     "best_price": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Price"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "overall_score": {
+      "type": "integer",
+      "title": "Overall Score"
+     },
+     "scores": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Scores"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo"
+     },
+     "has_mock_flights": {
+      "type": "boolean",
+      "title": "Has Mock Flights"
+     },
+     "flight_checked_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Flight Checked At"
+     },
+     "notification_count": {
+      "type": "integer",
+      "title": "Notification Count"
+     },
+     "lead_days": {
+      "type": "number",
+      "title": "Lead Days"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Updated At"
+     },
+     "event": {
+      "$ref": "#/components/schemas/EventOut"
+     },
+     "spot_airports": {
+      "items": {
+       "$ref": "#/components/schemas/SpotAirportOut"
+      },
+      "type": "array",
+      "title": "Spot Airports"
+     },
+     "accessibility_notes": {
+      "type": "string",
+      "title": "Accessibility Notes"
+     },
+     "daily": {
+      "items": {
+       "$ref": "#/components/schemas/DailySummary"
+      },
+      "type": "array",
+      "title": "Daily"
+     },
+     "offers": {
+      "items": {
+       "$ref": "#/components/schemas/OfferOut"
+      },
+      "type": "array",
+      "title": "Offers"
+     },
+     "travel_window": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/TravelWindowOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "inspection_links": {
+      "items": {
+       "$ref": "#/components/schemas/LinkOut"
+      },
+      "type": "array",
+      "title": "Inspection Links"
+     },
+     "limitations": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Limitations"
+     },
+     "flight_search_error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Flight Search Error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "search_id",
+     "search_name",
+     "search_status",
+     "status",
+     "status_reason",
+     "spot",
+     "event_id",
+     "event_status",
+     "window_start",
+     "window_end",
+     "qualifying_hours",
+     "peak_score",
+     "avg_score",
+     "peak_label",
+     "breaking_height_min_ft",
+     "breaking_height_max_ft",
+     "confidence",
+     "confidence_label",
+     "destination_iata",
+     "transfer_minutes",
+     "origin_iata",
+     "recommended_arrival_date",
+     "recommended_departure_date",
+     "best_price",
+     "currency",
+     "overall_score",
+     "scores",
+     "is_demo",
+     "has_mock_flights",
+     "flight_checked_at",
+     "notification_count",
+     "lead_days",
+     "created_at",
+     "updated_at",
+     "event",
+     "spot_airports",
+     "accessibility_notes",
+     "daily",
+     "offers",
+     "travel_window",
+     "inspection_links",
+     "limitations",
+     "flight_search_error"
+    ],
+    "title": "MatchDetail"
+   },
+   "MatchStatus": {
+    "type": "string",
+    "enum": [
+     "pending_flights",
+     "flight_found",
+     "surf_only",
+     "expired",
+     "dismissed"
+    ],
+    "title": "MatchStatus"
+   },
+   "MatchSummary": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "search_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Search Id"
+     },
+     "search_name": {
+      "type": "string",
+      "title": "Search Name"
+     },
+     "search_status": {
+      "type": "string",
+      "title": "Search Status"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "status_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Status Reason"
+     },
+     "spot": {
+      "$ref": "#/components/schemas/SpotMini"
+     },
+     "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Event Id"
+     },
+     "event_status": {
+      "type": "string",
+      "title": "Event Status"
+     },
+     "window_start": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Window Start"
+     },
+     "window_end": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Window End"
+     },
+     "qualifying_hours": {
+      "type": "integer",
+      "title": "Qualifying Hours"
+     },
+     "peak_score": {
+      "type": "integer",
+      "title": "Peak Score"
+     },
+     "avg_score": {
+      "type": "number",
+      "title": "Avg Score"
+     },
+     "peak_label": {
+      "type": "string",
+      "title": "Peak Label"
+     },
+     "breaking_height_min_ft": {
+      "type": "number",
+      "title": "Breaking Height Min Ft"
+     },
+     "breaking_height_max_ft": {
+      "type": "number",
+      "title": "Breaking Height Max Ft"
+     },
+     "confidence": {
+      "type": "integer",
+      "title": "Confidence"
+     },
+     "confidence_label": {
+      "type": "string",
+      "title": "Confidence Label"
+     },
+     "destination_iata": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Destination Iata"
+     },
+     "transfer_minutes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Transfer Minutes"
+     },
+     "origin_iata": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Origin Iata"
+     },
+     "recommended_arrival_date": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Recommended Arrival Date"
+     },
+     "recommended_departure_date": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Recommended Departure Date"
+     },
+     "best_price": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Price"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "overall_score": {
+      "type": "integer",
+      "title": "Overall Score"
+     },
+     "scores": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Scores"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo"
+     },
+     "has_mock_flights": {
+      "type": "boolean",
+      "title": "Has Mock Flights"
+     },
+     "flight_checked_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Flight Checked At"
+     },
+     "notification_count": {
+      "type": "integer",
+      "title": "Notification Count"
+     },
+     "lead_days": {
+      "type": "number",
+      "title": "Lead Days"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Updated At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "search_id",
+     "search_name",
+     "search_status",
+     "status",
+     "status_reason",
+     "spot",
+     "event_id",
+     "event_status",
+     "window_start",
+     "window_end",
+     "qualifying_hours",
+     "peak_score",
+     "avg_score",
+     "peak_label",
+     "breaking_height_min_ft",
+     "breaking_height_max_ft",
+     "confidence",
+     "confidence_label",
+     "destination_iata",
+     "transfer_minutes",
+     "origin_iata",
+     "recommended_arrival_date",
+     "recommended_departure_date",
+     "best_price",
+     "currency",
+     "overall_score",
+     "scores",
+     "is_demo",
+     "has_mock_flights",
+     "flight_checked_at",
+     "notification_count",
+     "lead_days",
+     "created_at",
+     "updated_at"
+    ],
+    "title": "MatchSummary"
+   },
+   "Message": {
+    "properties": {
+     "message": {
+      "type": "string",
+      "title": "Message"
+     }
+    },
+    "type": "object",
+    "required": [
+     "message"
+    ],
+    "title": "Message"
+   },
+   "NotificationChannelPref": {
+    "type": "string",
+    "enum": [
+     "email",
+     "sms",
+     "both",
+     "dashboard"
+    ],
+    "title": "NotificationChannelPref"
+   },
+   "NotificationOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "channel": {
+      "type": "string",
+      "title": "Channel"
+     },
+     "kind": {
+      "type": "string",
+      "title": "Kind"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "subject": {
+      "type": "string",
+      "title": "Subject"
+     },
+     "recipient_masked": {
+      "type": "string",
+      "title": "Recipient Masked"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "sent_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sent At"
+     },
+     "attempts": {
+      "type": "integer",
+      "title": "Attempts"
+     },
+     "last_error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Error"
+     },
+     "match_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Match Id"
+     },
+     "match_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Match Status"
+     },
+     "event_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Event Status"
+     },
+     "spot_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Spot Name"
+     },
+     "spot_slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Spot Slug"
+     },
+     "price": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Price"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "peak_label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Peak Label"
+     },
+     "window_label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Window Label"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "channel",
+     "kind",
+     "status",
+     "subject",
+     "recipient_masked",
+     "created_at",
+     "sent_at",
+     "attempts",
+     "last_error",
+     "match_id",
+     "match_status",
+     "event_status",
+     "spot_name",
+     "spot_slug",
+     "price",
+     "currency",
+     "peak_label",
+     "window_label",
+     "is_demo"
+    ],
+    "title": "NotificationOut"
+   },
+   "NotificationPage": {
+    "properties": {
+     "total": {
+      "type": "integer",
+      "title": "Total"
+     },
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/NotificationOut"
+      },
+      "type": "array",
+      "title": "Items"
+     }
+    },
+    "type": "object",
+    "required": [
+     "total",
+     "items"
+    ],
+    "title": "NotificationPage"
+   },
+   "NotificationPrefsIn": {
+    "properties": {
+     "email_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Email Enabled"
+     },
+     "sms_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sms Enabled"
+     },
+     "all_paused": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "All Paused"
+     },
+     "max_alerts_per_day": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 100.0,
+        "minimum": 1.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Alerts Per Day"
+     }
+    },
+    "type": "object",
+    "title": "NotificationPrefsIn"
+   },
+   "NotificationPrefsOut": {
+    "properties": {
+     "email_enabled": {
+      "type": "boolean",
+      "title": "Email Enabled"
+     },
+     "sms_enabled": {
+      "type": "boolean",
+      "title": "Sms Enabled"
+     },
+     "all_paused": {
+      "type": "boolean",
+      "title": "All Paused"
+     },
+     "phone_number": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Phone Number"
+     },
+     "phone_verified": {
+      "type": "boolean",
+      "title": "Phone Verified"
+     },
+     "sms_ready": {
+      "type": "boolean",
+      "title": "Sms Ready"
+     },
+     "sms_opted_out": {
+      "type": "boolean",
+      "title": "Sms Opted Out"
+     },
+     "max_alerts_per_day": {
+      "type": "integer",
+      "title": "Max Alerts Per Day"
+     },
+     "sms_service_available": {
+      "type": "boolean",
+      "title": "Sms Service Available"
+     }
+    },
+    "type": "object",
+    "required": [
+     "email_enabled",
+     "sms_enabled",
+     "all_paused",
+     "phone_number",
+     "phone_verified",
+     "sms_ready",
+     "sms_opted_out",
+     "max_alerts_per_day",
+     "sms_service_available"
+    ],
+    "title": "NotificationPrefsOut"
+   },
+   "OfferOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "rank": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rank"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "provider_label": {
+      "type": "string",
+      "title": "Provider Label"
+     },
+     "is_mock": {
+      "type": "boolean",
+      "title": "Is Mock"
+     },
+     "total_price": {
+      "type": "string",
+      "title": "Total Price"
+     },
+     "price_per_traveler": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Price Per Traveler"
+     },
+     "currency": {
+      "type": "string",
+      "title": "Currency"
+     },
+     "price_converted": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Price Converted"
+     },
+     "airlines": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Airlines"
+     },
+     "airline_names": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Airline Names"
+     },
+     "origin": {
+      "type": "string",
+      "title": "Origin"
+     },
+     "destination": {
+      "type": "string",
+      "title": "Destination"
+     },
+     "origin_timezone": {
+      "type": "string",
+      "title": "Origin Timezone"
+     },
+     "destination_timezone": {
+      "type": "string",
+      "title": "Destination Timezone"
+     },
+     "outbound": {
+      "$ref": "#/components/schemas/SliceOut"
+     },
+     "inbound": {
+      "$ref": "#/components/schemas/SliceOut"
+     },
+     "total_duration_minutes": {
+      "type": "integer",
+      "title": "Total Duration Minutes"
+     },
+     "baggage": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Baggage"
+     },
+     "quoted_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Quoted At"
+     },
+     "last_validated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Validated At"
+     },
+     "validation_status": {
+      "type": "string",
+      "title": "Validation Status"
+     },
+     "offer_expires_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Offer Expires At"
+     },
+     "links": {
+      "items": {
+       "$ref": "#/components/schemas/LinkOut"
+      },
+      "type": "array",
+      "title": "Links"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "provider",
+     "provider_label",
+     "is_mock",
+     "total_price",
+     "price_per_traveler",
+     "currency",
+     "airlines",
+     "airline_names",
+     "origin",
+     "destination",
+     "origin_timezone",
+     "destination_timezone",
+     "outbound",
+     "inbound",
+     "total_duration_minutes",
+     "baggage",
+     "quoted_at",
+     "last_validated_at",
+     "validation_status",
+     "offer_expires_at",
+     "links"
+    ],
+    "title": "OfferOut"
+   },
+   "PhoneConfirmIn": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "maxLength": 10,
+      "minLength": 4,
+      "title": "Code"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code"
+    ],
+    "title": "PhoneConfirmIn"
+   },
+   "PhoneStartIn": {
+    "properties": {
+     "phone_number": {
+      "type": "string",
+      "maxLength": 24,
+      "minLength": 7,
+      "title": "Phone Number"
+     }
+    },
+    "type": "object",
+    "required": [
+     "phone_number"
+    ],
+    "title": "PhoneStartIn"
+   },
+   "ProfileIn": {
+    "properties": {
+     "full_name": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 120,
+        "minLength": 1
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Full Name"
+     },
+     "home_airport": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Home Airport"
+     },
+     "home_city": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 120
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Home City"
+     },
+     "preferred_wave_min_ft": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 80.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Preferred Wave Min Ft"
+     },
+     "preferred_wave_max_ft": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 80.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Preferred Wave Max Ft"
+     },
+     "preferred_break_type": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/BreakType"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "experience_level": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SkillLevel"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "units": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "ft",
+         "m"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Units"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     }
+    },
+    "type": "object",
+    "title": "ProfileIn"
+   },
+   "ProfileOut": {
+    "properties": {
+     "home_airport": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Home Airport"
+     },
+     "home_city": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Home City"
+     },
+     "preferred_wave_min_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Preferred Wave Min Ft"
+     },
+     "preferred_wave_max_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Preferred Wave Max Ft"
+     },
+     "preferred_break_type": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/BreakType"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "experience_level": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SkillLevel"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "units": {
+      "type": "string",
+      "title": "Units"
+     },
+     "currency": {
+      "type": "string",
+      "title": "Currency"
+     }
+    },
+    "type": "object",
+    "required": [
+     "home_airport",
+     "home_city",
+     "preferred_wave_min_ft",
+     "preferred_wave_max_ft",
+     "preferred_break_type",
+     "experience_level",
+     "units",
+     "currency"
+    ],
+    "title": "ProfileOut"
+   },
+   "QualityLabel": {
+    "type": "string",
+    "enum": [
+     "poor",
+     "fair",
+     "good",
+     "very_good",
+     "excellent",
+     "exceptional"
+    ],
+    "title": "QualityLabel"
+   },
+   "RankingPriority": {
+    "type": "string",
+    "enum": [
+     "balanced",
+     "best_waves",
+     "cheapest",
+     "shortest"
+    ],
+    "title": "RankingPriority"
+   },
+   "RegionOut": {
+    "properties": {
+     "region_group": {
+      "type": "string",
+      "title": "Region Group"
+     },
+     "spot_count": {
+      "type": "integer",
+      "title": "Spot Count"
+     },
+     "countries": {
+      "items": {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Countries"
+     }
+    },
+    "type": "object",
+    "required": [
+     "region_group",
+     "spot_count",
+     "countries"
+    ],
+    "title": "RegionOut"
+   },
+   "RegisterIn": {
+    "properties": {
+     "password": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Password"
+     },
+     "confirm_password": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Confirm Password"
+     },
+     "full_name": {
+      "type": "string",
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Full Name"
+     },
+     "email": {
+      "type": "string",
+      "format": "email",
+      "title": "Email"
+     }
+    },
+    "type": "object",
+    "required": [
+     "password",
+     "confirm_password",
+     "full_name",
+     "email"
+    ],
+    "title": "RegisterIn"
+   },
+   "ResetPasswordIn": {
+    "properties": {
+     "password": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Password"
+     },
+     "confirm_password": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Confirm Password"
+     },
+     "token": {
+      "type": "string",
+      "maxLength": 200,
+      "minLength": 10,
+      "title": "Token"
+     }
+    },
+    "type": "object",
+    "required": [
+     "password",
+     "confirm_password",
+     "token"
+    ],
+    "title": "ResetPasswordIn"
+   },
+   "SearchIn": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Name"
+     },
+     "date_mode": {
+      "$ref": "#/components/schemas/DateMode",
+      "default": "flexible"
+     },
+     "date_start": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date Start"
+     },
+     "date_end": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date End"
+     },
+     "horizon_days": {
+      "type": "integer",
+      "maximum": 365.0,
+      "minimum": 1.0,
+      "title": "Horizon Days",
+      "default": 30
+     },
+     "units": {
+      "type": "string",
+      "pattern": "^(ft|m)$",
+      "title": "Units",
+      "default": "ft"
+     },
+     "wave_min": {
+      "type": "number",
+      "maximum": 100.0,
+      "minimum": 0.0,
+      "title": "Wave Min"
+     },
+     "wave_max": {
+      "type": "number",
+      "maximum": 100.0,
+      "exclusiveMinimum": 0.0,
+      "title": "Wave Max"
+     },
+     "wave_preferred": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 100.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Preferred"
+     },
+     "min_quality": {
+      "$ref": "#/components/schemas/QualityLabel",
+      "default": "good"
+     },
+     "min_period_s": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 25.0,
+        "minimum": 4.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Min Period S"
+     },
+     "max_wind_kmh": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 100.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Wind Kmh"
+     },
+     "wind_requirement": {
+      "$ref": "#/components/schemas/WindRequirement",
+      "default": "any"
+     },
+     "swell_direction_min": {
+      "anyOf": [
+       {
+        "type": "number",
+        "exclusiveMaximum": 360.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Swell Direction Min"
+     },
+     "swell_direction_max": {
+      "anyOf": [
+       {
+        "type": "number",
+        "exclusiveMaximum": 360.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Swell Direction Max"
+     },
+     "min_consistency": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 100.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Min Consistency"
+     },
+     "break_types": {
+      "items": {
+       "$ref": "#/components/schemas/BreakType"
+      },
+      "type": "array",
+      "title": "Break Types"
+     },
+     "min_window_hours": {
+      "type": "integer",
+      "maximum": 240.0,
+      "minimum": 1.0,
+      "title": "Min Window Hours",
+      "default": 4
+     },
+     "destination_mode": {
+      "$ref": "#/components/schemas/DestinationMode",
+      "default": "all"
+     },
+     "destinations": {
+      "$ref": "#/components/schemas/DestinationsIn"
+     },
+     "max_transfer_minutes": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 2880.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Transfer Minutes"
+     },
+     "origins": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "maxItems": 5,
+      "minItems": 1,
+      "title": "Origins"
+     },
+     "max_origin_ground_km": {
+      "type": "integer",
+      "maximum": 500.0,
+      "minimum": 0.0,
+      "title": "Max Origin Ground Km",
+      "default": 0
+     },
+     "notification_channel": {
+      "$ref": "#/components/schemas/NotificationChannelPref",
+      "default": "email"
+     },
+     "notify_surf_only": {
+      "type": "boolean",
+      "title": "Notify Surf Only",
+      "default": false
+     },
+     "notify_on_updates": {
+      "type": "boolean",
+      "title": "Notify On Updates",
+      "default": true
+     },
+     "priority": {
+      "$ref": "#/components/schemas/RankingPriority",
+      "default": "balanced"
+     },
+     "travel": {
+      "$ref": "#/components/schemas/TravelIn"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "wave_min",
+     "wave_max",
+     "origins",
+     "travel"
+    ],
+    "title": "SearchIn"
+   },
+   "SearchOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "status": {
+      "$ref": "#/components/schemas/SearchStatus"
+     },
+     "date_mode": {
+      "$ref": "#/components/schemas/DateMode"
+     },
+     "date_start": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date Start"
+     },
+     "date_end": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date End"
+     },
+     "horizon_days": {
+      "type": "integer",
+      "title": "Horizon Days"
+     },
+     "units": {
+      "type": "string",
+      "title": "Units"
+     },
+     "wave_min": {
+      "type": "number",
+      "title": "Wave Min"
+     },
+     "wave_max": {
+      "type": "number",
+      "title": "Wave Max"
+     },
+     "wave_preferred": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Preferred"
+     },
+     "wave_min_ft": {
+      "type": "number",
+      "title": "Wave Min Ft"
+     },
+     "wave_max_ft": {
+      "type": "number",
+      "title": "Wave Max Ft"
+     },
+     "min_quality": {
+      "$ref": "#/components/schemas/QualityLabel"
+     },
+     "min_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Min Period S"
+     },
+     "max_wind_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Wind Kmh"
+     },
+     "wind_requirement": {
+      "$ref": "#/components/schemas/WindRequirement"
+     },
+     "swell_direction_min": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Swell Direction Min"
+     },
+     "swell_direction_max": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Swell Direction Max"
+     },
+     "min_consistency": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Min Consistency"
+     },
+     "break_types": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Break Types"
+     },
+     "min_window_hours": {
+      "type": "integer",
+      "title": "Min Window Hours"
+     },
+     "destination_mode": {
+      "$ref": "#/components/schemas/DestinationMode"
+     },
+     "destinations": {
+      "$ref": "#/components/schemas/DestinationsIn"
+     },
+     "max_transfer_minutes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Transfer Minutes"
+     },
+     "origins": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Origins"
+     },
+     "max_origin_ground_km": {
+      "type": "integer",
+      "title": "Max Origin Ground Km"
+     },
+     "notification_channel": {
+      "$ref": "#/components/schemas/NotificationChannelPref"
+     },
+     "notify_surf_only": {
+      "type": "boolean",
+      "title": "Notify Surf Only"
+     },
+     "notify_on_updates": {
+      "type": "boolean",
+      "title": "Notify On Updates"
+     },
+     "priority": {
+      "$ref": "#/components/schemas/RankingPriority"
+     },
+     "travel": {
+      "$ref": "#/components/schemas/TravelOut"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Updated At"
+     },
+     "paused_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Paused At"
+     },
+     "last_evaluated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Evaluated At"
+     },
+     "match_counts": {
+      "$ref": "#/components/schemas/MatchCounts"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "name",
+     "status",
+     "date_mode",
+     "date_start",
+     "date_end",
+     "horizon_days",
+     "units",
+     "wave_min",
+     "wave_max",
+     "wave_preferred",
+     "wave_min_ft",
+     "wave_max_ft",
+     "min_quality",
+     "min_period_s",
+     "max_wind_kmh",
+     "wind_requirement",
+     "swell_direction_min",
+     "swell_direction_max",
+     "min_consistency",
+     "break_types",
+     "min_window_hours",
+     "destination_mode",
+     "destinations",
+     "max_transfer_minutes",
+     "origins",
+     "max_origin_ground_km",
+     "notification_channel",
+     "notify_surf_only",
+     "notify_on_updates",
+     "priority",
+     "travel",
+     "created_at",
+     "updated_at",
+     "paused_at",
+     "last_evaluated_at",
+     "match_counts"
+    ],
+    "title": "SearchOut"
+   },
+   "SearchStatus": {
+    "type": "string",
+    "enum": [
+     "active",
+     "paused"
+    ],
+    "title": "SearchStatus"
+   },
+   "SegmentOut": {
+    "properties": {
+     "origin": {
+      "type": "string",
+      "title": "Origin"
+     },
+     "destination": {
+      "type": "string",
+      "title": "Destination"
+     },
+     "departure_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Departure At"
+     },
+     "arrival_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Arrival At"
+     },
+     "departure_local": {
+      "type": "string",
+      "title": "Departure Local"
+     },
+     "arrival_local": {
+      "type": "string",
+      "title": "Arrival Local"
+     },
+     "marketing_carrier": {
+      "type": "string",
+      "title": "Marketing Carrier"
+     },
+     "carrier_name": {
+      "type": "string",
+      "title": "Carrier Name"
+     },
+     "flight_number": {
+      "type": "string",
+      "title": "Flight Number"
+     },
+     "duration_minutes": {
+      "type": "integer",
+      "title": "Duration Minutes"
+     }
+    },
+    "type": "object",
+    "required": [
+     "origin",
+     "destination",
+     "departure_at",
+     "arrival_at",
+     "departure_local",
+     "arrival_local",
+     "marketing_carrier",
+     "carrier_name",
+     "flight_number",
+     "duration_minutes"
+    ],
+    "title": "SegmentOut"
+   },
+   "SimulateIn": {
+    "properties": {
+     "spot_slug": {
+      "type": "string",
+      "title": "Spot Slug"
+     },
+     "days_ahead": {
+      "type": "number",
+      "maximum": 14.0,
+      "minimum": 1.0,
+      "title": "Days Ahead",
+      "default": 7.0
+     },
+     "duration_hours": {
+      "type": "integer",
+      "maximum": 168.0,
+      "minimum": 12.0,
+      "title": "Duration Hours",
+      "default": 60
+     },
+     "target_breaking_ft": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 80.0,
+        "exclusiveMinimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target Breaking Ft"
+     },
+     "period_s": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 24.0,
+        "minimum": 6.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Period S"
+     },
+     "run_pipeline": {
+      "type": "boolean",
+      "title": "Run Pipeline",
+      "default": true
+     }
+    },
+    "type": "object",
+    "required": [
+     "spot_slug"
+    ],
+    "title": "SimulateIn"
+   },
+   "SkillLevel": {
+    "type": "string",
+    "enum": [
+     "beginner",
+     "intermediate",
+     "advanced",
+     "expert"
+    ],
+    "title": "SkillLevel"
+   },
+   "SliceOut": {
+    "properties": {
+     "origin": {
+      "type": "string",
+      "title": "Origin"
+     },
+     "destination": {
+      "type": "string",
+      "title": "Destination"
+     },
+     "departure_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Departure At"
+     },
+     "arrival_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Arrival At"
+     },
+     "departure_local": {
+      "type": "string",
+      "title": "Departure Local"
+     },
+     "arrival_local": {
+      "type": "string",
+      "title": "Arrival Local"
+     },
+     "duration_minutes": {
+      "type": "integer",
+      "title": "Duration Minutes"
+     },
+     "stops": {
+      "type": "integer",
+      "title": "Stops"
+     },
+     "segments": {
+      "items": {
+       "$ref": "#/components/schemas/SegmentOut"
+      },
+      "type": "array",
+      "title": "Segments"
+     }
+    },
+    "type": "object",
+    "required": [
+     "origin",
+     "destination",
+     "departure_at",
+     "arrival_at",
+     "departure_local",
+     "arrival_local",
+     "duration_minutes",
+     "stops",
+     "segments"
+    ],
+    "title": "SliceOut"
+   },
+   "SpotAirportOut": {
+    "properties": {
+     "airport": {
+      "$ref": "#/components/schemas/AirportOut"
+     },
+     "is_primary": {
+      "type": "boolean",
+      "title": "Is Primary"
+     },
+     "transfer_minutes": {
+      "type": "integer",
+      "title": "Transfer Minutes"
+     },
+     "transfer_mode": {
+      "type": "string",
+      "title": "Transfer Mode"
+     },
+     "notes": {
+      "type": "string",
+      "title": "Notes"
+     }
+    },
+    "type": "object",
+    "required": [
+     "airport",
+     "is_primary",
+     "transfer_minutes",
+     "transfer_mode",
+     "notes"
+    ],
+    "title": "SpotAirportOut"
+   },
+   "SpotDetail": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "slug": {
+      "type": "string",
+      "title": "Slug"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "country": {
+      "type": "string",
+      "title": "Country"
+     },
+     "country_code": {
+      "type": "string",
+      "title": "Country Code"
+     },
+     "region": {
+      "type": "string",
+      "title": "Region"
+     },
+     "region_group": {
+      "type": "string",
+      "title": "Region Group"
+     },
+     "latitude": {
+      "type": "number",
+      "title": "Latitude"
+     },
+     "longitude": {
+      "type": "number",
+      "title": "Longitude"
+     },
+     "timezone": {
+      "type": "string",
+      "title": "Timezone"
+     },
+     "break_type": {
+      "type": "string",
+      "title": "Break Type"
+     },
+     "wave_direction": {
+      "type": "string",
+      "title": "Wave Direction"
+     },
+     "is_big_wave": {
+      "type": "boolean",
+      "title": "Is Big Wave"
+     },
+     "skill_level": {
+      "type": "string",
+      "title": "Skill Level"
+     },
+     "wave_height_min_ft": {
+      "type": "number",
+      "title": "Wave Height Min Ft"
+     },
+     "wave_height_max_ft": {
+      "type": "number",
+      "title": "Wave Height Max Ft"
+     },
+     "best_months": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Best Months"
+     },
+     "primary_airport": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Primary Airport"
+     },
+     "current": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Conditions"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "best_upcoming": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Conditions"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "next_event": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/EventOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "upcoming_event_count": {
+      "type": "integer",
+      "title": "Upcoming Event Count",
+      "default": 0
+     },
+     "forecast_latitude": {
+      "type": "number",
+      "title": "Forecast Latitude"
+     },
+     "forecast_longitude": {
+      "type": "number",
+      "title": "Forecast Longitude"
+     },
+     "swell_window_min": {
+      "type": "number",
+      "title": "Swell Window Min"
+     },
+     "swell_window_max": {
+      "type": "number",
+      "title": "Swell Window Max"
+     },
+     "optimal_swell_direction_min": {
+      "type": "number",
+      "title": "Optimal Swell Direction Min"
+     },
+     "optimal_swell_direction_max": {
+      "type": "number",
+      "title": "Optimal Swell Direction Max"
+     },
+     "offshore_wind_direction": {
+      "type": "number",
+      "title": "Offshore Wind Direction"
+     },
+     "min_swell_period_s": {
+      "type": "number",
+      "title": "Min Swell Period S"
+     },
+     "ideal_swell_period_s": {
+      "type": "number",
+      "title": "Ideal Swell Period S"
+     },
+     "tide_preference": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tide Preference"
+     },
+     "height_factor": {
+      "type": "number",
+      "title": "Height Factor"
+     },
+     "calibrated": {
+      "type": "boolean",
+      "title": "Calibrated"
+     },
+     "seasonality": {
+      "type": "string",
+      "title": "Seasonality"
+     },
+     "accessibility_notes": {
+      "type": "string",
+      "title": "Accessibility Notes"
+     },
+     "hazards": {
+      "type": "string",
+      "title": "Hazards"
+     },
+     "description": {
+      "type": "string",
+      "title": "Description"
+     },
+     "airports": {
+      "items": {
+       "$ref": "#/components/schemas/SpotAirportOut"
+      },
+      "type": "array",
+      "title": "Airports"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "slug",
+     "name",
+     "country",
+     "country_code",
+     "region",
+     "region_group",
+     "latitude",
+     "longitude",
+     "timezone",
+     "break_type",
+     "wave_direction",
+     "is_big_wave",
+     "skill_level",
+     "wave_height_min_ft",
+     "wave_height_max_ft",
+     "best_months",
+     "primary_airport",
+     "forecast_latitude",
+     "forecast_longitude",
+     "swell_window_min",
+     "swell_window_max",
+     "optimal_swell_direction_min",
+     "optimal_swell_direction_max",
+     "offshore_wind_direction",
+     "min_swell_period_s",
+     "ideal_swell_period_s",
+     "tide_preference",
+     "height_factor",
+     "calibrated",
+     "seasonality",
+     "accessibility_notes",
+     "hazards",
+     "description",
+     "airports"
+    ],
+    "title": "SpotDetail"
+   },
+   "SpotForecastOut": {
+    "properties": {
+     "spot_slug": {
+      "type": "string",
+      "title": "Spot Slug"
+     },
+     "timezone": {
+      "type": "string",
+      "title": "Timezone"
+     },
+     "available": {
+      "type": "boolean",
+      "title": "Available"
+     },
+     "message": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Message"
+     },
+     "source": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ForecastSourceOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "run": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ForecastRunOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
+     },
+     "breaking_height_method": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Height Method"
+     },
+     "calibrated": {
+      "type": "boolean",
+      "title": "Calibrated",
+      "default": false
+     },
+     "points": {
+      "items": {
+       "$ref": "#/components/schemas/ForecastPoint"
+      },
+      "type": "array",
+      "title": "Points",
+      "default": []
+     },
+     "daily": {
+      "items": {
+       "$ref": "#/components/schemas/DailySummary"
+      },
+      "type": "array",
+      "title": "Daily",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "spot_slug",
+     "timezone",
+     "available"
+    ],
+    "title": "SpotForecastOut"
+   },
+   "SpotMini": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "slug": {
+      "type": "string",
+      "title": "Slug"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "country": {
+      "type": "string",
+      "title": "Country"
+     },
+     "country_code": {
+      "type": "string",
+      "title": "Country Code"
+     },
+     "region": {
+      "type": "string",
+      "title": "Region"
+     },
+     "region_group": {
+      "type": "string",
+      "title": "Region Group"
+     },
+     "latitude": {
+      "type": "number",
+      "title": "Latitude"
+     },
+     "longitude": {
+      "type": "number",
+      "title": "Longitude"
+     },
+     "timezone": {
+      "type": "string",
+      "title": "Timezone"
+     },
+     "break_type": {
+      "type": "string",
+      "title": "Break Type"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "slug",
+     "name",
+     "country",
+     "country_code",
+     "region",
+     "region_group",
+     "latitude",
+     "longitude",
+     "timezone",
+     "break_type"
+    ],
+    "title": "SpotMini"
+   },
+   "SpotSummary": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "slug": {
+      "type": "string",
+      "title": "Slug"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "country": {
+      "type": "string",
+      "title": "Country"
+     },
+     "country_code": {
+      "type": "string",
+      "title": "Country Code"
+     },
+     "region": {
+      "type": "string",
+      "title": "Region"
+     },
+     "region_group": {
+      "type": "string",
+      "title": "Region Group"
+     },
+     "latitude": {
+      "type": "number",
+      "title": "Latitude"
+     },
+     "longitude": {
+      "type": "number",
+      "title": "Longitude"
+     },
+     "timezone": {
+      "type": "string",
+      "title": "Timezone"
+     },
+     "break_type": {
+      "type": "string",
+      "title": "Break Type"
+     },
+     "wave_direction": {
+      "type": "string",
+      "title": "Wave Direction"
+     },
+     "is_big_wave": {
+      "type": "boolean",
+      "title": "Is Big Wave"
+     },
+     "skill_level": {
+      "type": "string",
+      "title": "Skill Level"
+     },
+     "wave_height_min_ft": {
+      "type": "number",
+      "title": "Wave Height Min Ft"
+     },
+     "wave_height_max_ft": {
+      "type": "number",
+      "title": "Wave Height Max Ft"
+     },
+     "best_months": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Best Months"
+     },
+     "primary_airport": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Primary Airport"
+     },
+     "current": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Conditions"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "best_upcoming": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Conditions"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "next_event": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/EventOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "upcoming_event_count": {
+      "type": "integer",
+      "title": "Upcoming Event Count",
+      "default": 0
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "slug",
+     "name",
+     "country",
+     "country_code",
+     "region",
+     "region_group",
+     "latitude",
+     "longitude",
+     "timezone",
+     "break_type",
+     "wave_direction",
+     "is_big_wave",
+     "skill_level",
+     "wave_height_min_ft",
+     "wave_height_max_ft",
+     "best_months",
+     "primary_airport"
+    ],
+    "title": "SpotSummary"
+   },
+   "TokenIn": {
+    "properties": {
+     "token": {
+      "type": "string",
+      "maxLength": 200,
+      "minLength": 10,
+      "title": "Token"
+     }
+    },
+    "type": "object",
+    "required": [
+     "token"
+    ],
+    "title": "TokenIn"
+   },
+   "TravelIn": {
+    "properties": {
+     "max_price": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 100000.0,
+        "exclusiveMinimum": 0.0
+       },
+       {
+        "type": "string"
+       }
+      ],
+      "title": "Max Price"
+     },
+     "currency": {
+      "type": "string",
+      "title": "Currency",
+      "default": "USD"
+     },
+     "direct_only": {
+      "type": "boolean",
+      "title": "Direct Only",
+      "default": false
+     },
+     "max_layovers": {
+      "type": "integer",
+      "maximum": 3.0,
+      "minimum": 0.0,
+      "title": "Max Layovers",
+      "default": 2
+     },
+     "max_flight_hours": {
+      "type": "number",
+      "maximum": 60.0,
+      "minimum": 1.0,
+      "title": "Max Flight Hours",
+      "default": 30
+     },
+     "min_days_at_destination": {
+      "type": "integer",
+      "maximum": 60.0,
+      "minimum": 1.0,
+      "title": "Min Days At Destination",
+      "default": 3
+     },
+     "max_trip_days": {
+      "type": "integer",
+      "maximum": 90.0,
+      "minimum": 1.0,
+      "title": "Max Trip Days",
+      "default": 14
+     },
+     "travelers": {
+      "type": "integer",
+      "maximum": 9.0,
+      "minimum": 1.0,
+      "title": "Travelers",
+      "default": 1
+     },
+     "preferred_airlines": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "maxItems": 10,
+      "title": "Preferred Airlines"
+     },
+     "cabin_class": {
+      "$ref": "#/components/schemas/CabinClass",
+      "default": "economy"
+     },
+     "arrival_buffer_days": {
+      "type": "integer",
+      "maximum": 14.0,
+      "minimum": 0.0,
+      "title": "Arrival Buffer Days",
+      "default": 2
+     },
+     "departure_buffer_days": {
+      "type": "integer",
+      "maximum": 14.0,
+      "minimum": 0.0,
+      "title": "Departure Buffer Days",
+      "default": 1
+     }
+    },
+    "type": "object",
+    "required": [
+     "max_price"
+    ],
+    "title": "TravelIn"
+   },
+   "TravelOut": {
+    "properties": {
+     "max_price": {
+      "type": "string",
+      "title": "Max Price"
+     },
+     "currency": {
+      "type": "string",
+      "title": "Currency",
+      "default": "USD"
+     },
+     "direct_only": {
+      "type": "boolean",
+      "title": "Direct Only",
+      "default": false
+     },
+     "max_layovers": {
+      "type": "integer",
+      "maximum": 3.0,
+      "minimum": 0.0,
+      "title": "Max Layovers",
+      "default": 2
+     },
+     "max_flight_hours": {
+      "type": "number",
+      "maximum": 60.0,
+      "minimum": 1.0,
+      "title": "Max Flight Hours",
+      "default": 30
+     },
+     "min_days_at_destination": {
+      "type": "integer",
+      "maximum": 60.0,
+      "minimum": 1.0,
+      "title": "Min Days At Destination",
+      "default": 3
+     },
+     "max_trip_days": {
+      "type": "integer",
+      "maximum": 90.0,
+      "minimum": 1.0,
+      "title": "Max Trip Days",
+      "default": 14
+     },
+     "travelers": {
+      "type": "integer",
+      "maximum": 9.0,
+      "minimum": 1.0,
+      "title": "Travelers",
+      "default": 1
+     },
+     "preferred_airlines": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "maxItems": 10,
+      "title": "Preferred Airlines"
+     },
+     "cabin_class": {
+      "$ref": "#/components/schemas/CabinClass",
+      "default": "economy"
+     },
+     "arrival_buffer_days": {
+      "type": "integer",
+      "maximum": 14.0,
+      "minimum": 0.0,
+      "title": "Arrival Buffer Days",
+      "default": 2
+     },
+     "departure_buffer_days": {
+      "type": "integer",
+      "maximum": 14.0,
+      "minimum": 0.0,
+      "title": "Departure Buffer Days",
+      "default": 1
+     }
+    },
+    "type": "object",
+    "required": [
+     "max_price"
+    ],
+    "title": "TravelOut"
+   },
+   "TravelWindowOut": {
+    "properties": {
+     "arrive_after": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Arrive After"
+     },
+     "arrive_by": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Arrive By"
+     },
+     "depart_after": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Depart After"
+     },
+     "depart_before": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Depart Before"
+     },
+     "destination_timezone": {
+      "type": "string",
+      "title": "Destination Timezone"
+     },
+     "nights": {
+      "type": "integer",
+      "title": "Nights"
+     }
+    },
+    "type": "object",
+    "required": [
+     "arrive_after",
+     "arrive_by",
+     "depart_after",
+     "depart_before",
+     "destination_timezone",
+     "nights"
+    ],
+    "title": "TravelWindowOut"
+   },
+   "UserAirportIn": {
+    "properties": {
+     "airport_iata": {
+      "type": "string",
+      "title": "Airport Iata"
+     },
+     "label": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 60
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label"
+     },
+     "is_home": {
+      "type": "boolean",
+      "title": "Is Home",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "airport_iata"
+    ],
+    "title": "UserAirportIn"
+   },
+   "UserAirportOut": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "airport_iata": {
+      "type": "string",
+      "title": "Airport Iata"
+     },
+     "label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label"
+     },
+     "is_home": {
+      "type": "boolean",
+      "title": "Is Home"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "city": {
+      "type": "string",
+      "title": "City"
+     },
+     "country": {
+      "type": "string",
+      "title": "Country"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "airport_iata",
+     "label",
+     "is_home",
+     "name",
+     "city",
+     "country"
+    ],
+    "title": "UserAirportOut"
+   },
+   "UserOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "email": {
+      "type": "string",
+      "title": "Email"
+     },
+     "full_name": {
+      "type": "string",
+      "title": "Full Name"
+     },
+     "email_verified": {
+      "type": "boolean",
+      "title": "Email Verified"
+     },
+     "is_admin": {
+      "type": "boolean",
+      "title": "Is Admin"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "profile": {
+      "$ref": "#/components/schemas/ProfileOut"
+     },
+     "notification_preferences": {
+      "$ref": "#/components/schemas/NotificationPrefsOut"
+     },
+     "airports": {
+      "items": {
+       "$ref": "#/components/schemas/UserAirportOut"
+      },
+      "type": "array",
+      "title": "Airports"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "email",
+     "full_name",
+     "email_verified",
+     "is_admin",
+     "created_at",
+     "profile",
+     "notification_preferences",
+     "airports"
+    ],
+    "title": "UserOut"
+   },
+   "ValidationError": {
+    "properties": {
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "type": "array",
+      "title": "Location"
+     },
+     "msg": {
+      "type": "string",
+      "title": "Message"
+     },
+     "type": {
+      "type": "string",
+      "title": "Error Type"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "ctx": {
+      "type": "object",
+      "title": "Context"
+     }
+    },
+    "type": "object",
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError"
+   },
+   "WindRequirement": {
+    "type": "string",
+    "enum": [
+     "any",
+     "not_onshore",
+     "offshore"
+    ],
+    "title": "WindRequirement"
+   }
+  }
+ }
+}

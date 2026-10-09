@@ -106,9 +106,10 @@ class _Pulse:
 
 
 class DemoSeriesGenerator:
-    def __init__(self, spot: SpotParams, run_key: str) -> None:
+    def __init__(self, spot: SpotParams, run_key: str, natural_swells: bool = True) -> None:
         self.spot = spot
         self.run_key = run_key
+        self.natural_swells = natural_swells
         seed = random.Random(f"{spot.slug}:static")
         self.tide_amp = seed.uniform(0.4, 1.4)
         self.tide_phase = seed.uniform(0, 2 * math.pi)
@@ -192,7 +193,11 @@ class DemoSeriesGenerator:
         epoch_h = (start - datetime(1970, 1, 1, tzinfo=UTC)).total_seconds() / 3600.0
         k0 = math.floor((epoch_h - 96) / SLOT_HOURS)
         k1 = math.floor((epoch_h + hours + 96) / SLOT_HOURS)
-        pulses = [p for k in range(k0, k1 + 1) if (p := self._pulse_for_slot(k, start))]
+        pulses = (
+            [p for k in range(k0, k1 + 1) if (p := self._pulse_for_slot(k, start))]
+            if self.natural_swells
+            else []
+        )
         mine = [o for o in (overrides or []) if o.spot_slug == self.spot.slug]
         for o in mine:
             period = o.period_s or self.spot.ideal_swell_period_s + 1
@@ -289,10 +294,12 @@ class DemoForecastProvider(ForecastProvider):
         forecast_days: int = 16,
         overrides: list[SwellOverride] | None = None,
         run_key: str | None = None,
+        natural_swells: bool = True,
     ) -> None:
         self.forecast_days = forecast_days
         self.overrides = overrides or []
         self.run_key_override = run_key
+        self.natural_swells = natural_swells
 
     def source_info(self) -> SourceInfo:
         return SourceInfo(
@@ -324,7 +331,7 @@ class DemoForecastProvider(ForecastProvider):
             if p.params is None:
                 result.errors[p.spot_id] = "spot parameters missing"
                 continue
-            gen = DemoSeriesGenerator(p.params, run.run_key)
+            gen = DemoSeriesGenerator(p.params, run.run_key, self.natural_swells)
             result.records[p.spot_id] = gen.generate(
                 run.issued_at, self.forecast_days * 24, self.overrides
             )

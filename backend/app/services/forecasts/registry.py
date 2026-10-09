@@ -31,5 +31,7 @@ def build_provider(
     if name == "windy":
         return WindyProvider(settings)
     if name == "demo":
-        return DemoForecastProvider(settings.forecast_days, overrides=overrides)
+        return DemoForecastProvider(
+            settings.forecast_days, overrides=overrides, natural_swells=settings.demo_natural_swells
+        )
     raise ValueError(f"Unknown forecast provider {name!r}")

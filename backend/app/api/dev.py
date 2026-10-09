@@ -32,6 +32,8 @@ class SimulateIn(BaseModel):
     target_breaking_ft: float | None = Field(None, gt=0, le=80)
     period_s: float | None = Field(None, ge=6, le=24)
     run_pipeline: bool = True
+    # False stops after alert generation so callers can observe QUEUED notifications.
+    deliver: bool = True
 
 
 @router.post("/simulate-swell")
@@ -54,7 +56,7 @@ def simulate(
     )
     result: dict[str, Any] = {"simulation": outcome.as_dict(), "swell_start": start.isoformat()}
     if body.run_pipeline:
-        result["pipeline"] = run_pipeline(db, acquire=False)
+        result["pipeline"] = run_pipeline(db, acquire=False, deliver=body.deliver)
     return result
 
 

@@ -284,7 +284,10 @@ def simulate_swell(
         target_breaking_ft=target_breaking_ft,
     )
     overrides = [*active_demo_overrides(db, now), override]
-    provider = DemoForecastProvider(get_settings().forecast_days, overrides=overrides)
+    settings = get_settings()
+    provider = DemoForecastProvider(
+        settings.forecast_days, overrides=overrides, natural_swells=settings.demo_natural_swells
+    )
     issued = now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
     info = RunInfo(
         run_key=f"demo-sim:{now:%Y%m%d%H%M%S%f}",

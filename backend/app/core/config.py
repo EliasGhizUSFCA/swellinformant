@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     open_meteo_wave_model: str = "ncep_gfswave025"
     open_meteo_atmos_model: str = "gfs_seamless"
     windy_api_key: str | None = None
+    # Demo provider only: false = calm background seas, so only simulated swells create
+    # events (used by the end-to-end tests for deterministic results).
+    demo_natural_swells: bool = True
 
     # ------------------------------------------------------------------ detection
     detection_lead_min_days: float = 5.0
