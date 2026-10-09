@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swell-travel-agent"
+version = "1.0.0"
+description = "Swell Travel Agent — surf forecast driven travel discovery and alerts"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.8,<3",
+    "pydantic-settings>=2.4",
+    "email-validator>=2.2",
+    "sqlalchemy>=2.0.30,<2.2",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.2",
+    "celery>=5.4,<6",
+    "redis>=5.0",
+    "httpx>=0.27",
+    "pandas>=2.2",
+    "numpy>=2.0",
+    "argon2-cffi>=23.1",
+    "python-multipart>=0.0.9",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: tests that need PostgreSQL (and sometimes Redis)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:celery.*",
+    "ignore::DeprecationWarning:kombu.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM"]
+ignore = [
+    "S101",  # assert is fine in tests
+    "B008",  # FastAPI Depends() in defaults is idiomatic
+    "S311",  # random is used for the demo providers only, never for security
+]
+
+[tool.ruff.lint.isort]
+known-third-party = ["alembic"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S107", "S108", "E501"]
+"alembic/**" = ["E501"]
+"app/services/notifications/templates.py" = ["E501"]  # inline-styled email HTML
+
+[tool.mypy]
+python_version = "3.12"
+plugins = []
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true
