@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local data
+/tmp/
+*.log
+.next-e2e/
+
+# Redis local dumps
+dump.rdb
+
+# celery beat local state
+celerybeat-schedule*

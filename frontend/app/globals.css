@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Design tokens: an ocean / travel palette (ink navy, deep ocean, seafoam, sand, coral). */
+:root {
+  --radius: 0.85rem;
+  --background: #f6fafb;
+  --foreground: #0b2233;
+  --card: #ffffff;
+  --card-foreground: #0b2233;
+  --popover: #ffffff;
+  --popover-foreground: #0b2233;
+  --primary: #0e7490;
+  --primary-foreground: #ffffff;
+  --secondary: #e7f3f5;
+  --secondary-foreground: #0b3a4d;
+  --muted: #eef4f6;
+  --muted-foreground: #587080;
+  --accent: #e3f2f4;
+  --accent-foreground: #0b2233;
+  --destructive: #d93a3a;
+  --destructive-foreground: #ffffff;
+  --border: #d9e6eb;
+  --input: #cddde4;
+  --ring: #0e7490;
+  --ink: #06263a;
+  --ocean: #0e7490;
+  --seafoam: #2bb3a3;
+  --sand: #f6efe2;
+  --coral: #f26b5b;
+  --q-poor: #94a3b8;
+  --q-fair: #e5a213;
+  --q-good: #22a55a;
+  --q-very-good: #13a39a;
+  --q-excellent: #0277c2;
+  --q-exceptional: #7c3aed;
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Fraunces Variable", ui-serif, Georgia, serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ink: var(--ink);
+  --color-ocean: var(--ocean);
+  --color-seafoam: var(--seafoam);
+  --color-sand: var(--sand);
+  --color-coral: var(--coral);
+  --color-q-poor: var(--q-poor);
+  --color-q-fair: var(--q-fair);
+  --color-q-good: var(--q-good);
+  --color-q-very-good: var(--q-very-good);
+  --color-q-excellent: var(--q-excellent);
+  --color-q-exceptional: var(--q-exceptional);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: "cv11", "ss01";
+  }
+  h1,
+  h2,
+  h3 {
+    @apply tracking-tight;
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+    font-optical-sizing: auto;
+  }
+  .bg-ocean-gradient {
+    background-image: radial-gradient(1200px 600px at 10% -10%, rgba(43, 179, 163, 0.35), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(14, 116, 144, 0.45), transparent 60%),
+      linear-gradient(160deg, #06263a 0%, #0b3a52 45%, #0e5a73 100%);
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+}
+
+/* Animated wave layers used on the landing hero. */
+@keyframes swell-drift {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.wave-layer {
+  animation: swell-drift 18s linear infinite;
+}
+.wave-layer-slow {
+  animation: swell-drift 32s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wave-layer,
+  .wave-layer-slow {
+    animation: none;
+  }
+}
+
+/* Leaflet tweaks */
+.leaflet-container {
+  font-family: var(--font-sans);
+  background: #dceef2;
+}
+.leaflet-popup-content-wrapper {
+  border-radius: 12px;
+}
