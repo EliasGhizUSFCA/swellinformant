@@ -38,3 +38,6 @@ next-env.d.ts
 
 # Redis local dumps
 dump.rdb
+
+# celery beat local state
+celerybeat-schedule*

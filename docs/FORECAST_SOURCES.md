@@ -83,7 +83,7 @@ shown.
 | Provider | Setting | Status |
 |----------|---------|--------|
 | Console (writes to `OUTBOX_DIR/outbox.jsonl` + log line) | `EMAIL_PROVIDER=console`, `SMS_PROVIDER=console` | Default; fully tested |
-| SMTP (e.g. local Mailpit, Postmark SMTP, SES SMTP) | `EMAIL_PROVIDER=smtp` + `SMTP_*` | Implemented; unit-tested with a fake SMTP server |
+| SMTP (e.g. local Mailpit, Postmark SMTP, SES SMTP) | `EMAIL_PROVIDER=smtp` + `SMTP_*` | Implemented; unit-tested with a fake SMTP server and verified end to end against Mailpit in Docker Compose |
 | Resend | `EMAIL_PROVIDER=resend` + `RESEND_API_KEY` | Implemented; mock-tested only |
 | SendGrid | `EMAIL_PROVIDER=sendgrid` + `SENDGRID_API_KEY` | Implemented; mock-tested only |
 | Twilio SMS | `SMS_PROVIDER=twilio` + `TWILIO_*` | Implemented (send + signature-verified inbound STOP/START webhook); mock-tested only |

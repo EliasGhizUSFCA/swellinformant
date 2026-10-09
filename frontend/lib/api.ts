@@ -72,16 +72,21 @@ export async function api<T>(path: string, { method = "GET", body, signal }: Req
   });
   if (res.status === 204) return undefined as T;
   const text = await res.text();
-  const data = text ? (JSON.parse(text) as unknown) : undefined;
+  let data: unknown;
+  try {
+    data = text ? (JSON.parse(text) as unknown) : undefined;
+  } catch {
+    data = undefined; // e.g. the proxy's plain-text error page when the API is down
+  }
   if (!res.ok) {
     const err = (data as ApiErrorBody | undefined)?.error;
-    throw new ApiError(
-      res.status,
-      err?.code ?? "http_error",
-      err?.message ?? `Request failed (${res.status})`,
-      err?.details ?? [],
-    );
+    const fallback =
+      res.status >= 500
+        ? "The service is temporarily unavailable. Please try again in a moment."
+        : `Request failed (${res.status})`;
+    throw new ApiError(res.status, err?.code ?? "http_error", err?.message ?? fallback, err?.details ?? []);
   }
+  if (text && data === undefined) throw new ApiError(res.status, "bad_response", "Unexpected response from the server.", []);
   return data as T;
 }
 

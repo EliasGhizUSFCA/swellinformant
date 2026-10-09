@@ -59,7 +59,7 @@ def configure_logging(add_handler: bool = True) -> None:
     root = logging.getLogger()
     root.setLevel(settings.log_level.upper())
     if add_handler and not any(getattr(h, "_swell", False) for h in root.handlers):
-        handler = logging.StreamHandler(sys.stdout)
+        handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
         handler._swell = True  # type: ignore[attr-defined]
         root.addHandler(handler)

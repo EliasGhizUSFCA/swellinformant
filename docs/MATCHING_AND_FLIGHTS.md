@@ -173,5 +173,5 @@ opportunity still exists and its search is active.
   `NOTIFICATION_MAX_ATTEMPTS`. Permanent errors (invalid number, unsubscribed) fail
   immediately with the reason stored.
 * Email carries a one-click unsubscribe link (`List-Unsubscribe` header + footer link).
-* SMS honours Twilio STOP via the status/inbound webhook (`/api/webhooks/twilio`,
+* SMS honours Twilio STOP via the inbound-message webhook (`/api/webhooks/twilio/sms`,
   signature-verified).
