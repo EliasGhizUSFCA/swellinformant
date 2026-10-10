@@ -20,12 +20,17 @@ router = APIRouter(prefix="/api", tags=["system"])
 
 JOB_NAMES = [
     "forecasts.acquire",
+    "forecasts.blend",
+    "forecasts.acquire_ensemble",
     "quality.predict",
     "detection.detect",
     "matching.match",
     "flights.discover",
     "alerts.generate",
     "notifications.deliver",
+    "observations.ingest",
+    "verification.collect_point_forecasts",
+    "verification.run",
     "maintenance.cleanup",
 ]
 

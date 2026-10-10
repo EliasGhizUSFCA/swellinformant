@@ -1,4 +1,4 @@
-"""Run jobs A→G in order, synchronously.
+"""Run jobs A→G in order, synchronously (A: acquisition, then multi-model blending).
 
 Used by the developer "run pipeline" endpoint, the CLI and tests. The Celery workers run
 the same service functions as separate chained tasks.
@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.services.flights.service import discover_flights
+from app.services.forecasts.blend import build_blend
 from app.services.forecasts.ingestion import acquire_all
 from app.services.matching.service import match_all
 from app.services.notifications.alerts import generate_alerts
@@ -41,6 +42,7 @@ def run_pipeline(
             "acquisition",
             lambda: [o.as_dict() for o in acquire_all(db, now=now, force=force_acquire)],
         )
+    stage("blending", lambda: build_blend(db, now).as_dict())
     stage("predictions", lambda: compute_pending_predictions(db))
     stage("detection", lambda: detect_events(db, now).as_dict())
     stage("matching", lambda: match_all(db, now).as_dict())

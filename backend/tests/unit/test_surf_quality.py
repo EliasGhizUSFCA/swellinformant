@@ -2,19 +2,17 @@ import pytest
 
 from app.models.enums import ConfidenceLabel, QualityLabel
 from app.services.surf_quality.breaking import (
-    METHOD_APPROX,
+    METHOD_APPROX_V1,
     METHOD_CALIBRATED,
+    METHOD_PHYSICAL,
     estimate_breaking_height,
+    estimate_breaking_height_v1,
     exposure_factor,
     komar_gaughan_m,
 )
-from app.services.surf_quality.confidence import (
-    completeness,
-    confidence_label,
-    confidence_score,
-    run_agreement,
-)
+from app.services.surf_quality.confidence import completeness, confidence_label, run_agreement
 from app.services.surf_quality.models import SeaState, SpotParams
+from app.services.surf_quality.nearshore import SETS_RATIO
 from app.services.surf_quality.scoring import (
     evaluate,
     label_for_score,
@@ -71,8 +69,19 @@ class TestBreakingHeight:
         )
         offshore_ft = 2.0 / 0.3048
         assert est.mid_ft != pytest.approx(offshore_ft, rel=0.05)
-        assert est.method == METHOD_APPROX and not est.calibrated
+        assert est.method == METHOD_PHYSICAL and not est.calibrated
         assert est.min_ft < est.max_ft
+        # typical (significant breaking height) to sets (1.27 x)
+        assert est.max_ft == pytest.approx(est.mid_ft * SETS_RATIO, abs=0.5)
+        assert "shore normal estimated" in est.assumptions
+
+    def test_v2_close_to_v1_for_a_well_aligned_groundswell(self) -> None:
+        s = sea(primary_swell_height_m=2.0, primary_swell_period_s=16.0)
+        v1 = estimate_breaking_height_v1(s, JBAY)
+        v2 = estimate_breaking_height(s, JBAY)
+        assert v1.method == METHOD_APPROX_V1
+        # Same Komar-Gaughan core; v2 only loses the small spreading/refraction factor.
+        assert v2.mid_ft == pytest.approx(v1.mid_ft, rel=0.03)
 
     def test_blocked_swell_direction_produces_tiny_surf(self) -> None:
         assert exposure_factor(215, JBAY) == pytest.approx(1.0)
@@ -85,12 +94,15 @@ class TestBreakingHeight:
         calibrated = SpotParams(
             **{
                 **JBAY.__dict__,
-                "calibration": {"a": 3.0, "b": 1.0, "c": 0.0, "n_observations": 400},
+                "calibration": {"a": 3.0, "b": 1.0, "c": 0.0, "d": 0.0, "n_observations": 400},
             }
         )
         est = estimate_breaking_height(sea(primary_swell_height_m=2.0), calibrated)
         assert est.method == METHOD_CALIBRATED and est.calibrated
         assert est.mid_ft == pytest.approx(6.0)
+        # the directional exponent (default 0.4) can only reduce a well-aligned swell
+        with_dir = SpotParams(**{**JBAY.__dict__, "calibration": {"a": 3.0, "b": 1.0, "c": 0.0}})
+        assert estimate_breaking_height(sea(primary_swell_height_m=2.0), with_dir).mid_ft < 6.0
 
     def test_falls_back_to_bulk_parameters(self) -> None:
         est = estimate_breaking_height(
@@ -176,19 +188,10 @@ class TestScore:
 
 
 class TestConfidence:
-    def test_decays_with_lead_time(self) -> None:
-        values = [confidence_score(h, 1.0) for h in (0, 72, 168, 240, 336)]
-        assert values == sorted(values, reverse=True)
-        assert confidence_label(confidence_score(24, 1.0, 1.0)) == ConfidenceLabel.HIGH
-        assert confidence_label(confidence_score(168, 1.0, 0.9)) == ConfidenceLabel.MODERATE
-
-    def test_staleness_incompleteness_and_disagreement_reduce_confidence(self) -> None:
-        base = confidence_score(48, 1.0, 1.0)
-        assert confidence_score(48, 1.0, 1.0, stale=True) < base
-        assert confidence_score(48, 0.4, 1.0) < base
-        assert confidence_score(48, 1.0, 0.2) < base
-
-    def test_helpers(self) -> None:
+    def test_labels_and_helpers(self) -> None:
+        assert confidence_label(83) == ConfidenceLabel.HIGH
+        assert confidence_label(47) == ConfidenceLabel.MODERATE
+        assert confidence_label(30) == ConfidenceLabel.LOW
         assert completeness({"primary_swell_height_m": 1, "wind_speed_kmh": 3}) == pytest.approx(
             0.4
         )

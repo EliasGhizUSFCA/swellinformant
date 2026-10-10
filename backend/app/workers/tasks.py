@@ -29,7 +29,8 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 NEXT_STAGE = {
-    "forecasts.acquire": "quality.predict",
+    "forecasts.acquire": "forecasts.blend",
+    "forecasts.blend": "quality.predict",
     "quality.predict": "detection.detect",
     "detection.detect": "matching.match",
     "matching.match": "flights.discover",
@@ -115,6 +116,14 @@ def acquire_forecasts(self: Task) -> dict[str, Any]:
         task_id=self.request.id,
         lock_ttl=3600,
     )
+
+
+@celery_app.task(name="forecasts.blend", bind=True)
+def blend_forecasts(self: Task) -> dict[str, Any]:
+    """Combine the newest run of each independent model family (FORECAST_BLEND_ENABLED)."""
+    from app.services.forecasts.blend import build_blend
+
+    return run_job("forecasts.blend", lambda db: build_blend(db).as_dict(), task_id=self.request.id)
 
 
 @celery_app.task(name="quality.predict", bind=True)

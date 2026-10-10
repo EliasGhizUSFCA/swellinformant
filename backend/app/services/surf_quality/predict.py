@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import select
@@ -13,22 +13,34 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
-from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, WaveForecast
-from app.models.enums import ForecastRunStatus
-from app.services.surf_quality.confidence import (
-    completeness,
-    confidence_label,
-    confidence_score,
-    run_agreement,
+from app.models import (
+    ForecastComparison,
+    ForecastEnsembleStat,
+    ForecastRun,
+    ForecastSource,
+    SurfQualityPrediction,
+    SurfSpot,
+    WaveForecast,
 )
+from app.models.enums import ForecastRunStatus
+from app.services.surf_quality.confidence import completeness, confidence_label, run_agreement
 from app.services.surf_quality.models import SeaState, SpotParams
 from app.services.surf_quality.scoring import ALGORITHM_VERSION, evaluate
 from app.services.surf_quality.sun import is_daylight
+from app.services.surf_quality.uncertainty import (
+    EnsembleInfo,
+    breaking_uncertainty,
+    confidence_index,
+)
 
 logger = logging.getLogger(__name__)
 
 INSERT_CHUNK = 2000
 MIN_TIDAL_RANGE_M = 0.15
+# An ensemble row is used for a forecast hour only if it is this close in time, and only
+# from an ensemble run issued within ENSEMBLE_RUN_WINDOW of the forecast run.
+ENSEMBLE_MAX_GAP = timedelta(hours=3)
+ENSEMBLE_RUN_WINDOW = timedelta(hours=24)
 
 
 def tide_stages(times: list[datetime], levels: list[float | None]) -> list[float | None]:
@@ -61,6 +73,75 @@ def _previous_run(db: Session, run: ForecastRun) -> ForecastRun | None:
     )
 
 
+def _ensemble_index(
+    db: Session, run: ForecastRun
+) -> dict[int, list[tuple[datetime, EnsembleInfo]]]:
+    """Ensemble rows per spot from the newest ensemble run close to this run's issue time."""
+    ens_run = db.scalar(
+        select(ForecastRun)
+        .join(ForecastSource, ForecastSource.id == ForecastRun.source_id)
+        .where(
+            ForecastSource.kind == "ensemble",
+            ForecastRun.status.in_((ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)),
+            ForecastRun.issued_at <= run.issued_at + ENSEMBLE_RUN_WINDOW,
+            ForecastRun.issued_at >= run.issued_at - ENSEMBLE_RUN_WINDOW,
+        )
+        .order_by(ForecastRun.issued_at.desc(), ForecastRun.id.desc())
+        .limit(1)
+    )
+    out: dict[int, list[tuple[datetime, EnsembleInfo]]] = defaultdict(list)
+    if ens_run is None:
+        return out
+    for row in db.scalars(
+        select(ForecastEnsembleStat)
+        .where(ForecastEnsembleStat.run_id == ens_run.id)
+        .order_by(ForecastEnsembleStat.spot_id, ForecastEnsembleStat.valid_time)
+    ):
+        out[row.spot_id].append(
+            (
+                row.valid_time,
+                EnsembleInfo(
+                    hs_mean_m=row.hs_mean_m,
+                    hs_spread_m=row.hs_spread_m,
+                    tp_mean_s=row.tp_mean_s,
+                    tp_spread_s=row.tp_spread_s,
+                    members=row.members,
+                ),
+            )
+        )
+    return out
+
+
+def _nearest_ensemble(
+    rows: list[tuple[datetime, EnsembleInfo]], t: datetime
+) -> EnsembleInfo | None:
+    best: tuple[timedelta, EnsembleInfo] | None = None
+    for vt, info in rows:
+        gap = abs(vt - t)
+        if gap <= ENSEMBLE_MAX_GAP and (best is None or gap < best[0]):
+            best = (gap, info)
+    return best[1] if best else None
+
+
+def _between_model_sigma(db: Session, run: ForecastRun) -> dict[tuple[int, datetime], float]:
+    """σ_ln(Hs) between independent model families, from the blend's comparisons.
+
+    With two families σ ≈ |ln(Hs_a / Hs_b)| / 2 (their standard deviation); with more,
+    half the largest pairwise log ratio is a lower bound, which is the conservative use.
+    """
+    out: dict[tuple[int, datetime], float] = {}
+    for spot_id, valid_time, ratio in db.execute(
+        select(
+            ForecastComparison.spot_id,
+            ForecastComparison.valid_time,
+            ForecastComparison.hs_log_ratio_max,
+        ).where(ForecastComparison.blend_run_id == run.id)
+    ):
+        if ratio is not None:
+            out[(spot_id, valid_time)] = ratio / 2.0
+    return out
+
+
 def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -> int:
     run = db.get(ForecastRun, run_id)
     if run is None or run.status not in (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL):
@@ -80,6 +161,8 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
         ):
             prev_heights[(spot_id, valid_time)] = h
 
+    ensembles = _ensemble_index(db, run)
+    between = _between_model_sigma(db, run)
     spots = {s.id: s for s in db.scalars(select(SurfSpot)).all()}
     by_spot: dict[int, list[WaveForecast]] = defaultdict(list)
     for row in db.scalars(
@@ -110,10 +193,19 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
                     "wind_direction_deg",
                 )
             }
+            # Diagnostic only (see confidence.py): how much this hour changed since the
+            # previous run of the same source.
             agreement = run_agreement(
                 f.primary_swell_height_m, prev_heights.get((spot_id, f.valid_time))
             )
-            conf = confidence_score(lead_hours, completeness(values), agreement, stale)
+            unc = breaking_uncertainty(
+                result.breaking.mid_ft,
+                lead_hours,
+                ensemble=_nearest_ensemble(ensembles.get(spot_id, []), f.valid_time),
+                between_model_sigma=between.get((spot_id, f.valid_time)),
+                calibration=params.calibration,
+            )
+            conf = confidence_index(unc.sigma_forecast, completeness(values), stale)
             rows.append(
                 {
                     "forecast_id": f.id,
@@ -124,12 +216,23 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
                     "breaking_height_min_ft": result.breaking.min_ft,
                     "breaking_height_max_ft": result.breaking.max_ft,
                     "breaking_height_method": result.breaking.method,
+                    "breaking_height_mid_ft": result.breaking.mid_ft,
+                    "breaking_p10_ft": unc.p10_ft,
+                    "breaking_p90_ft": unc.p90_ft,
+                    "uncertainty_kind": unc.kind,
+                    "ml_model_version": None,
                     "score": result.score,
                     "label": result.label,
                     "components": {
                         **result.components,
-                        "agreement": agreement,
+                        "run_agreement": agreement,
                         "tide_stage": stage,
+                        "uncertainty": unc.as_dict(),
+                        "breaking": {
+                            "partitions": result.breaking.partitions,
+                            "assumptions": result.breaking.assumptions,
+                            "depth_limited": result.breaking.depth_limited,
+                        },
                     },
                     "wind_relation": result.wind_relation,
                     "confidence": conf,
@@ -156,6 +259,30 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
     return len(rows)
 
 
+def outdated_authoritative_runs(db: Session) -> list[int]:
+    """Runs currently shown to users whose predictions predate ALGORITHM_VERSION.
+
+    After an algorithm upgrade the live forecast is rescored at once instead of waiting
+    for the next model cycle. Older runs keep the version they were issued with (the
+    prediction archive is the record of what was forecast).
+    """
+    from app.services.forecasts.queries import latest_runs_by_spot
+
+    run_ids = sorted({r.id for r in latest_runs_by_spot(db).values()})
+    if not run_ids:
+        return []
+    return list(
+        db.scalars(
+            select(SurfQualityPrediction.run_id)
+            .where(
+                SurfQualityPrediction.run_id.in_(run_ids),
+                SurfQualityPrediction.algorithm_version != ALGORITHM_VERSION,
+            )
+            .distinct()
+        ).all()
+    )
+
+
 def compute_pending_predictions(db: Session) -> dict[str, int]:
     pending = db.scalars(
         select(ForecastRun.id)
@@ -168,4 +295,15 @@ def compute_pending_predictions(db: Session) -> dict[str, int]:
     total = 0
     for run_id in pending:
         total += compute_predictions_for_run(db, run_id)
-    return {"runs": len(pending), "predictions": total}
+    rescored = outdated_authoritative_runs(db)
+    for run_id in rescored:
+        total += compute_predictions_for_run(db, run_id, force=True)
+    from app.services.forecasts.archive import archive_authoritative
+
+    archived = archive_authoritative(db)
+    return {
+        "runs": len(pending),
+        "rescored_runs": len(rescored),
+        "predictions": total,
+        "archived": archived["archived"],
+    }

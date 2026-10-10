@@ -15,6 +15,15 @@ from app.models.enums import ForecastRunStatus
 from app.services.forecasts.registry import configured_source_codes
 
 USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
+BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: cycle)
+
+
+def authoritative_source_codes() -> list[str]:
+    """Configured sources in priority order, preceded by the blend when blending is on."""
+    codes = configured_source_codes()
+    if get_settings().forecast_blend_enabled and BLEND_CODE not in codes:
+        return [BLEND_CODE, *codes]
+    return codes
 
 
 def is_stale(run: ForecastRun, now: datetime | None = None) -> bool:
@@ -23,7 +32,7 @@ def is_stale(run: ForecastRun, now: datetime | None = None) -> bool:
 
 
 def candidate_runs(db: Session, require_predictions: bool = True) -> list[ForecastRun]:
-    codes = configured_source_codes()
+    codes = authoritative_source_codes()
     stmt = (
         select(ForecastRun)
         .join(ForecastSource, ForecastSource.id == ForecastRun.source_id)
@@ -45,8 +54,21 @@ def latest_runs_by_spot(
     the newest model run. A partial run only covers the spots listed in its details.
     """
     now = now or utcnow()
-    codes = configured_source_codes()
+    codes = authoritative_source_codes()
     runs = candidate_runs(db, require_predictions)
+    # A blend is only current while every member is still its source's newest usable run;
+    # otherwise a newer raw run exists and the blend has not been rebuilt yet.
+    newest: dict[int, int] = {}
+    for r in runs:
+        if r.source.code != BLEND_CODE and r.source_id not in newest:
+            newest[r.source_id] = r.id
+    newest_ids = set(newest.values())
+    runs = [
+        r
+        for r in runs
+        if r.source.code != BLEND_CODE
+        or all(m.get("run_id") in newest_ids for m in r.details.get("members", []))
+    ]
     runs.sort(
         key=lambda r: (
             is_stale(r, now),

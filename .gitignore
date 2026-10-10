@@ -42,3 +42,6 @@ dump.rdb
 
 # celery beat local state
 celerybeat-schedule*
+
+# Agent worktrees created by Claude Code workflows
+.claude/worktrees/

@@ -1,19 +1,18 @@
-"""Forecast confidence (0–100), kept strictly separate from predicted surf quality.
+"""Forecast confidence labels and data-quality diagnostics.
 
-Confidence answers "how much should I trust this forecast?" — not "how good will it be?".
-Factors (multiplicative, documented in docs/SURF_SCORING.md):
+Confidence answers "how much should I trust this forecast?" — never "how good will the
+surf be?". The 0–100 index itself is computed in ``uncertainty.confidence_index`` from
+the forecast-dependent spread (ensemble spread, lead time, model disagreement), data
+completeness and staleness; it is an index, not a probability.
 
-* lead time: 25 + 75·exp(-lead_days / 9). Skill of global wave models decays with lead
-  time; ~0.5 at 7 days is a conservative reading of published GFS-Wave verification.
-* data completeness: 0.6 + 0.4·(fraction of key variables present)
-* run-to-run agreement with the previous model run for the same valid time:
-  0.7 + 0.3·agreement, or 0.9 when no previous run exists yet
-* staleness: ×0.8 if the model run is older than FORECAST_STALE_HOURS
+``run_agreement`` compares a valid time with the previous model run. It is stored as a
+diagnostic ("forecast changed since the last run") but no longer feeds the confidence
+index: in the research sample run-to-run change predicted forecast error much more
+weakly than ensemble spread (correlation about 0.3 against 0.5–0.6) and added nothing
+once spread was included.
 """
 
 from __future__ import annotations
-
-import math
 
 from app.models.enums import ConfidenceLabel
 
@@ -36,21 +35,6 @@ def run_agreement(current_h: float | None, previous_h: float | None) -> float | 
         return None
     diff = abs(current_h - previous_h) / max(current_h, previous_h, 0.5)
     return max(0.0, min(1.0, 1.0 - diff))
-
-
-def confidence_score(
-    lead_hours: float,
-    data_completeness: float,
-    agreement: float | None = None,
-    stale: bool = False,
-) -> int:
-    lead_days = max(0.0, lead_hours) / 24.0
-    value = 25.0 + 75.0 * math.exp(-lead_days / 9.0)
-    value *= 0.6 + 0.4 * max(0.0, min(1.0, data_completeness))
-    value *= 0.9 if agreement is None else 0.7 + 0.3 * agreement
-    if stale:
-        value *= 0.8
-    return int(round(max(0.0, min(100.0, value))))
 
 
 def confidence_label(value: float) -> ConfidenceLabel:

@@ -67,7 +67,11 @@ class UserWindow:
 def step_meets(pred: Any, fc: Any, c: SearchCriteria) -> bool:
     if pred.score < c.min_score:
         return False
-    mid = (pred.breaking_height_min_ft + pred.breaking_height_max_ft) / 2.0
+    # The significant breaking height (typical larger waves); predictions made before
+    # algorithm 2.0 have no stored mid, so fall back to the centre of their range.
+    mid = getattr(pred, "breaking_height_mid_ft", None)
+    if mid is None:
+        mid = (pred.breaking_height_min_ft + pred.breaking_height_max_ft) / 2.0
     if not (c.wave_min_ft <= mid <= c.wave_max_ft):
         return False
     period = fc.primary_swell_period_s or fc.wave_period_s
