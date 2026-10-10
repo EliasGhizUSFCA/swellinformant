@@ -1,46 +1,98 @@
-# Surf quality, breaking height, confidence and swell events
+# Surf quality, breaking height, uncertainty, confidence and swell events
 
 Source: `backend/app/services/surf_quality/` and `backend/app/services/swell_detection/`.
-Algorithm version: `ALGORITHM_VERSION = "1.0.0"` (stored on every prediction row, so a
-changed algorithm never silently mixes with old scores).
+Algorithm version: `ALGORITHM_VERSION = "2.0.0"` (stored on every prediction row, so a
+changed algorithm never silently mixes with old scores; the live run is rescored after an
+upgrade while the prediction archive keeps what was originally issued).
 
-> **Calibration status.** All weights, thresholds and per-spot factors below are a reasoned
-> first version. None has been fitted to observed surf. Treat scores as a transparent,
-> reproducible ranking signal, not ground truth. The schema supports per-spot calibration
-> (`surf_spots.calibration` JSONB), and the code uses it automatically once coefficients exist.
+> **Calibration status.** The nearshore model, the uncertainty model, the score weights and
+> every per-spot parameter are a reasoned, documented first version. None has been fitted to
+> observed surf at these 50 spots: no open surf-observation dataset exists for them (see
+> `docs/surf-forecast-model-research.md`, sections 8 and 9). Breaking heights are labelled
+> estimates, forecast ranges are labelled "not yet verified", and the score is a transparent
+> ranking signal, not ground truth. The schema supports per-spot calibration
+> (`surf_spots.calibration`) and nearshore observations (`nearshore_observations`).
 
-## 1. Inputs per forecast timestep (hourly)
+## 1. Inputs per forecast timestep
 
-From the forecast provider (Open-Meteo GFS-Wave + GFS, Windy, or the demo generator):
+The authoritative forecast per spot is either the multi-model blend or the highest-priority
+configured source (see `docs/FORECAST_SOURCES.md`). Per valid time it provides:
 
 | Group | Variables |
 |-------|-----------|
-| Combined sea | significant wave height, mean period, mean direction |
-| Swell partitions | primary + secondary swell height / period / direction |
+| Combined sea | significant wave height (Hs), period (with its definition: `tp`, `tm01`, `tm02`, `tm10`), direction |
+| Swell partitions | up to three swell partitions (height / peak period / direction FROM); WAVEWATCH III ranks them by height |
 | Wind sea | wind-wave height / period / direction |
 | Wind (10 m) | speed (km/h), direction (from), gusts |
-| Sea level | sea-surface height incl. tide (Open-Meteo `sea_level_height_msl`), when available |
+| Sea level | sea-surface height incl. tide, when available |
 
 From the spot (`data/surf_spots/spots.json`): swell window, optimal swell direction range,
 offshore wind direction, minimum and ideal period, working wave-height range, tide
-preference, `height_factor`, and the coordinates used for the forecast (a point just
-offshore, not the beach itself).
+preference and `height_factor`. From its physical profile (`spot_physical_profiles`): shore
+normal, depths, focusing prior, shadow table and the provenance of each value.
 
-## 2. Estimated breaking (face) height
+## 2. Estimated breaking (face) height — `linear_wave_v2`
 
-Offshore significant wave height is **not** the size of the surf. `breaking.py`:
+Offshore significant wave height is **not** the size of the surf. `nearshore.py`, per
+partition i (swells 1–3 and wind sea):
 
-1. **Calibrated model** (only if the spot's `calibration` JSON has `a`, `b`, `c`):
-   `Hb_ft = a · H0^b · T^c × exposure(direction)`.
-2. **Approximate model** otherwise, labelled `komar_gaughan_v1_uncalibrated` in the UI/API:
-   * For each partition: Komar & Gaughan (1972) `Hb = 0.39 · g^0.2 · (T · H0²)^0.4` (metres).
-   * × exposure: `sqrt(cos(distance outside the optimal window))`. A further Gaussian
-     falloff (σ = 15°) applies once the direction leaves the swell window (blocked by
-     headlands or islands).
-   * Wind sea × 0.7 (short-period energy breaks weaker than its Hs suggests).
-   * Partitions combine by energy: `Hb = sqrt(Σ Hb_i²)`.
-   * × `height_factor` (heuristic per spot, e.g. > 1 for Nazaré's canyon focusing).
-   * Reported range 0.8–1.3 × the central estimate, rounded to ½ ft.
+1. **Deep-water equivalent.** If the depth h at the wave-model extraction point is known and
+   shallower than half the deep-water wavelength: `H0 = H / Ks`, `Ks = sqrt(Cg0 / Cg(h))`,
+   with the wavenumber from Fenton & McKee (1990) refined by Newton iterations on
+   `ω² = g·k·tanh(k·h)`. Unknown depth (all spots today) → deep water assumed (up to ~9 %
+   error for long swell over a 50–200 m deep grid point; documented assumption).
+2. **Directional factor** `R = Σ D(θ)·max(cos(θ − β), 0)·T(θ)·Δθ`: a wrapped-Gaussian
+   spreading D (σ = 10° for T ≥ 13 s, 15° for 9–13 s, 30° for wind sea and shorter swell —
+   assumptions, since GFS-Wave publishes no spread), the shore normal β and the energy
+   transmission T(θ) from the spot's shadow table, or a smooth taper outside its swell
+   window (`exp(−2·(d/15°)²)`). The cosine carries refraction: straight-contour refraction
+   plus breaking gives `Hb ∝ (H0²·T·cos α0)^(2/5)` (checked within 1 % to 60° in tests).
+3. **Breaker height** `Hb_i = 0.39·g^0.2·(T·H0²·R)^0.4·Kf(T)` (Komar & Gaughan 1972), with
+   a focusing prior `Kf(T) = Kf_ref·(1 + κ·max(0, T − T*)/T*)`.
+4. **Energy-flux combination** `Hb = (Σ Hb_i^2.5)^0.4` (the flux physics behind the
+   formula; version 1's root-sum-square and ×0.7 wind-sea factor are gone).
+5. **Depth limit** `Hb ≤ γ·d` only for a spot with a documented controlling depth d.
+
+Reported heights: **typical** = Hb (the significant breaking face, trough to crest) and
+**sets** = 1.27·Hb (Rayleigh H1/10; an upper bound in the surf zone). The API returns both,
+plus the central estimate, the method and its assumptions. A spectral form
+(`spectral_breaking_height`, for spots near a GFS-Wave station spectrum) is implemented and
+tested but not yet fed by station-spectrum ingestion.
+
+**Physical profiles.** Every spot has one. Unless curated values exist
+(`data/surf_spots/physical_profiles.json`, optional), it is derived: β = centre of the
+optimal swell window, Kf_ref = `height_factor`, κ = 0, depths unknown, no shadow table, and
+each of these is flagged `estimated` or `unknown` in `data_quality`. No bathymetry is
+invented.
+
+**Calibrated model** (only when `surf_spots.calibration` has `a`, `b`, `c`):
+`Hb_ft = a·H0^b·T^c·R^d` (d defaults to 0.4).
+
+Version 1 (`komar_gaughan_v1_uncalibrated`) is kept in `breaking.py` for backtest
+comparison only.
+
+## 2a. Forecast uncertainty of the breaking height
+
+`uncertainty.py` treats the breaking height as log-normal around Hb:
+
+```
+σ_ln(Hb)² = (0.8·σ_ln(Hs))² + (0.4·σ_T/T)² + σ_m²        (Hb ∝ H0^0.8·T^0.4)
+σ_ln(Hs)² = σ_f² + σ0²
+```
+
+* σ_f, the forecast-dependent part: 1.05 × GEFS-Wave spread/mean when an ensemble row
+  exists for the hour (`ensemble_heuristic`); otherwise the lead-time table
+  0.080/0.192/0.276/0.352/0.430 at days 1/3/5/7/10 (`heuristic`); never less than the
+  spread between independent models in the blend. Both are measured against the model's
+  own analysis — a lower bound on real error.
+* σ0 = 0.15: assumed model-versus-reality floor.
+* σ_T/T: ensemble period spread/mean, else 0.08 (assumed).
+* σ_m = 0.30: the uncalibrated offshore-to-surf translation.
+
+The **80 % range** `Hb·exp(∓1.2816·σ)` is shown as "80% range … not yet verified". The label
+`calibrated` is reserved for ranges that passed a coverage check on held-out observations;
+nothing sets it yet. Probabilities such as P(score ≥ threshold) are deliberately **not**
+shown: under an unverified error model they would look more precise than they are.
 
 ## 3. Quality score (0–100)
 
@@ -93,18 +145,24 @@ Sunrise and sunset come from the NOAA solar position approximation (±2 min), ex
 
 ## 5. Forecast confidence (0–100), separate from quality
 
-Confidence answers *"how much should I trust this?"*, not *"how good is it?"*.
+Confidence answers *"how much should I trust this offshore forecast?"*, not *"how good is
+it?"*. It is an index, not a probability:
 
 ```
-confidence = (25 + 75·exp(−lead_days / 9))
-           × (0.6 + 0.4 · completeness)          # share of key variables present
-           × (0.7 + 0.3 · run_agreement)         # vs. previous model run; 0.9 if none
+confidence = 100·exp(−σ_f / 0.4)              # σ_f from §2a: ensemble spread, lead table,
+                                               # or between-model disagreement
+           × (0.6 + 0.4 · completeness)        # share of key variables present
            × (0.8 if the model run is stale)
 ```
 
-Labels: High ≥ 70, Moderate ≥ 45, Low below that. At 7 days a complete, consistent
-forecast scores about 60 (Moderate). This is deliberately conservative: global wave
-models lose skill with lead time, and swell arrival timing and size shift between runs.
+Labels: High ≥ 70, Moderate ≥ 45, Low below. Without an ensemble a complete forecast is High
+for about two days, Moderate to about day six and Low beyond — matching the published loss
+of wave-forecast skill between days 4 and 10. With GEFS-Wave the index varies with the
+situation (spread varies about fivefold at a fixed lead).
+
+Run-to-run change is stored as a diagnostic (`components.run_agreement`) but is not a
+confidence factor: it predicted error much more weakly than ensemble spread in the research
+analysis. Nearshore translation is reported separately as uncalibrated.
 
 ## 6. Swell events (`swell_detection/`)
 
@@ -135,9 +193,13 @@ concurrent workers.
 
 ## 7. Calibrating later
 
-Setting `surf_spots.calibration` to `{"a": …, "b": …, "c": …}` (extra keys such as sample
-count or fit date are allowed and ignored) switches that spot to the calibrated
-breaking-height model, and the UI stops showing the "uncalibrated" note. A realistic calibration source is buoy
-data paired with surf observations or reports. The scoring weights live in one place
-(`WEIGHTS`, `LABEL_THRESHOLDS` in `scoring.py`). Every prediction is stamped with the
-algorithm version.
+Calibration needs observed surf, which does not exist yet for these spots. The design
+(research document, section 12): collect nearshore observations (`nearshore_observations`:
+face-height band with an explicit convention, time, spot, source), then fit
+`ln H_obs = ln a + b·ln H0 + c·ln T + d·ln R` per spot with shrinkage toward the physical
+exponents (b = 0.8, c = 0.4, d = 0.4) and store `{"a", "b", "c", "d", "sigma_ln",
+"validated": true, "n_observations": …}` in `surf_spots.calibration` only after the intervals
+pass a coverage check on held-out observations. Offshore-Hs post-processing with ML is a
+separate, buoy-verified step (`docs/ml-pipeline.md`).
+
+The scoring weights live in one place (`WEIGHTS`, `LABEL_THRESHOLDS` in `scoring.py`).
