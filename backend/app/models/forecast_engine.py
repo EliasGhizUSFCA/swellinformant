@@ -163,7 +163,10 @@ class PredictionArchive(Base):
 
     __tablename__ = "prediction_archive"
     __table_args__ = (
-        UniqueConstraint("source_code", "spot_id", "issued_at", "valid_time"),
+        # One row per run, spot and valid time (two runs may share an issue hour).
+        UniqueConstraint(
+            "source_code", "run_key", "spot_id", "valid_time", name="uq_prediction_archive_key"
+        ),
         Index("ix_prediction_archive_spot_valid", "spot_id", "valid_time"),
         Index("ix_prediction_archive_issued", "issued_at"),
         CheckConstraint("lead_hours >= -6", name="lead"),

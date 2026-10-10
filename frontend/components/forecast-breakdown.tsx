@@ -1,5 +1,6 @@
 import { Bot, Waves, Wind } from "lucide-react";
 
+import { uncertaintyLabel } from "@/components/charts/forecast-charts";
 import { ConfidenceBadge, DemoBadge, QualityBadge } from "@/components/quality";
 import { compass, formatDateTime, heightRange, kmh, metres, seconds, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
@@ -71,15 +72,24 @@ export function ForecastBreakdown({ c, tz, units }: { c: Conditions; tz: string;
         </div>
         <div className="mt-1 font-display text-2xl font-semibold" data-testid="breaking-height">
           {heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, units)}
-          <span className="ml-1 align-middle text-xs font-normal text-muted-foreground">est. breaking faces</span>
+          <span className="ml-1 align-middle text-xs font-normal text-muted-foreground">est. breaking faces, typical–sets</span>
         </div>
+        {c.breaking_p10_ft != null && c.breaking_p90_ft != null && (
+          <div className="mt-0.5 text-xs text-muted-foreground" data-testid="uncertainty-range">
+            80% range {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)} · {uncertaintyLabel(c.uncertainty_kind)}
+          </div>
+        )}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <QualityBadge label={c.label} score={c.score} />
           <ConfidenceBadge label={c.confidence_label} value={c.confidence} />
           <span className="text-xs text-muted-foreground">{WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation} wind</span>
         </div>
         {c.explanation && <p className="mt-2 text-sm text-muted-foreground">{c.explanation}</p>}
-        <p className="mt-2 text-[11px] text-muted-foreground">Method: {methodLabel(c.method)}</p>
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Method: {methodLabel(c.method)}
+          {c.method !== "calibrated_power_law" && " — not yet calibrated against surf observations at this break"}
+          {c.ml_model_version ? ` · offshore input corrected by ${c.ml_model_version}` : ""}
+        </p>
       </section>
 
       <p className="text-[11px] leading-relaxed text-muted-foreground">

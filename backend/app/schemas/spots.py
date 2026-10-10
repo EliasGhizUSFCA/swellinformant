@@ -62,6 +62,14 @@ class Conditions(BaseModel):
     method: str | None = None
     algorithm_version: str | None = None
     explanation: str | None = None
+    # Our prediction's central estimate (significant breaking height) and its forecast
+    # uncertainty. ``uncertainty_kind`` says how the range was obtained: "heuristic" and
+    # "ensemble_heuristic" are stated assumptions, not calibrated probabilities.
+    breaking_height_mid_ft: float | None = None
+    breaking_p10_ft: float | None = None
+    breaking_p90_ft: float | None = None
+    uncertainty_kind: str | None = None
+    ml_model_version: str | None = None
 
 
 class MapSpotOut(BaseModel):
@@ -140,6 +148,17 @@ class SpotSummary(SpotMini):
     upcoming_event_count: int = 0
 
 
+class PhysicalProfileOut(BaseModel):
+    shore_normal_deg: float
+    forecast_point_depth_m: float | None
+    controlling_depth_m: float | None
+    focusing_ref: float
+    focusing_kappa: float
+    has_shadow_table: bool
+    data_quality: dict[str, str]
+    notes: str
+
+
 class SpotDetail(SpotSummary):
     forecast_latitude: float
     forecast_longitude: float
@@ -158,20 +177,28 @@ class SpotDetail(SpotSummary):
     hazards: str
     description: str
     airports: list[SpotAirportOut]
+    physical_profile: PhysicalProfileOut | None = None
 
 
 class ForecastPoint(BaseModel):
     valid_time: datetime
     is_daylight: bool
     sig_wave_height_m: float | None
+    wave_period_s: float | None = None
+    wave_period_kind: str | None = None
+    wave_direction_deg: float | None = None
     primary_swell_height_m: float | None
     primary_swell_period_s: float | None
     primary_swell_direction_deg: float | None
     secondary_swell_height_m: float | None
     secondary_swell_period_s: float | None
     secondary_swell_direction_deg: float | None
+    tertiary_swell_height_m: float | None = None
+    tertiary_swell_period_s: float | None = None
+    tertiary_swell_direction_deg: float | None = None
     wind_wave_height_m: float | None
     wind_wave_period_s: float | None
+    wind_wave_direction_deg: float | None = None
     wind_speed_kmh: float | None
     wind_direction_deg: float | None
     wind_gust_kmh: float | None
@@ -180,6 +207,13 @@ class ForecastPoint(BaseModel):
     wave_power_kw_m: float | None
     breaking_height_min_ft: float
     breaking_height_max_ft: float
+    breaking_height_mid_ft: float | None = None
+    breaking_p10_ft: float | None = None
+    breaking_p90_ft: float | None = None
+    uncertainty_kind: str | None = None
+    breaking_height_method: str | None = None
+    algorithm_version: str | None = None
+    ml_model_version: str | None = None
     score: int
     label: str
     confidence: int
@@ -219,6 +253,47 @@ class ForecastRunOut(BaseModel):
     status: str
 
 
+class ModelPoint(BaseModel):
+    valid_time: datetime
+    hs_m: float | None
+    tp_s: float | None
+    direction_deg: float | None
+    wind_kmh: float | None
+    wind_direction_deg: float | None
+
+
+class ModelSeries(BaseModel):
+    """Raw output of one numerical model (or our blend) at this spot, 3-hourly."""
+
+    source_code: str
+    name: str
+    family: str
+    kind: str
+    # "authoritative" (drives our prediction), "member" (blended in), "cross_check"
+    # (same model family as a member, compared only) or "reference" (shown only).
+    role: str
+    is_demo: bool
+    run_issued_at: datetime
+    period_kind: str | None
+    points: list[ModelPoint]
+
+
+class EnsemblePoint(BaseModel):
+    valid_time: datetime
+    hs_mean_m: float | None
+    hs_spread_m: float | None
+    members: int | None
+
+
+class BlendInfo(BaseModel):
+    method: str
+    members: list[dict[str, Any]]
+    cross_checks: list[dict[str, Any]]
+    flagged_hours: int
+    flags: dict[str, int]
+    skill: Any
+
+
 class SpotForecastOut(BaseModel):
     spot_slug: str
     timezone: str
@@ -228,9 +303,13 @@ class SpotForecastOut(BaseModel):
     run: ForecastRunOut | None = None
     stale: bool = False
     breaking_height_method: str | None = None
+    algorithm_version: str | None = None
     calibrated: bool = False
     points: list[ForecastPoint] = []
     daily: list[DailySummary] = []
+    models: list[ModelSeries] = []
+    ensemble: list[EnsemblePoint] = []
+    blend: BlendInfo | None = None
 
 
 class RegionOut(BaseModel):

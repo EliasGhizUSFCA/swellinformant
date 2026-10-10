@@ -972,6 +972,27 @@ export interface components {
             /** Csrf Token */
             csrf_token: string;
         };
+        /** BlendInfo */
+        BlendInfo: {
+            /** Method */
+            method: string;
+            /** Members */
+            members: {
+                [key: string]: unknown;
+            }[];
+            /** Cross Checks */
+            cross_checks: {
+                [key: string]: unknown;
+            }[];
+            /** Flagged Hours */
+            flagged_hours: number;
+            /** Flags */
+            flags: {
+                [key: string]: number;
+            };
+            /** Skill */
+            skill: unknown;
+        };
         /**
          * BreakType
          * @enum {string}
@@ -1050,6 +1071,16 @@ export interface components {
             algorithm_version?: string | null;
             /** Explanation */
             explanation?: string | null;
+            /** Breaking Height Mid Ft */
+            breaking_height_mid_ft?: number | null;
+            /** Breaking P10 Ft */
+            breaking_p10_ft?: number | null;
+            /** Breaking P90 Ft */
+            breaking_p90_ft?: number | null;
+            /** Uncertainty Kind */
+            uncertainty_kind?: string | null;
+            /** Ml Model Version */
+            ml_model_version?: string | null;
         };
         /** DailySummary */
         DailySummary: {
@@ -1125,6 +1156,20 @@ export interface components {
             delivered_at: string | null;
             /** Error */
             error: string | null;
+        };
+        /** EnsemblePoint */
+        EnsemblePoint: {
+            /**
+             * Valid Time
+             * Format: date-time
+             */
+            valid_time: string;
+            /** Hs Mean M */
+            hs_mean_m: number | null;
+            /** Hs Spread M */
+            hs_spread_m: number | null;
+            /** Members */
+            members: number | null;
         };
         /** EventOut */
         EventOut: {
@@ -1216,6 +1261,12 @@ export interface components {
             is_daylight: boolean;
             /** Sig Wave Height M */
             sig_wave_height_m: number | null;
+            /** Wave Period S */
+            wave_period_s?: number | null;
+            /** Wave Period Kind */
+            wave_period_kind?: string | null;
+            /** Wave Direction Deg */
+            wave_direction_deg?: number | null;
             /** Primary Swell Height M */
             primary_swell_height_m: number | null;
             /** Primary Swell Period S */
@@ -1228,10 +1279,18 @@ export interface components {
             secondary_swell_period_s: number | null;
             /** Secondary Swell Direction Deg */
             secondary_swell_direction_deg: number | null;
+            /** Tertiary Swell Height M */
+            tertiary_swell_height_m?: number | null;
+            /** Tertiary Swell Period S */
+            tertiary_swell_period_s?: number | null;
+            /** Tertiary Swell Direction Deg */
+            tertiary_swell_direction_deg?: number | null;
             /** Wind Wave Height M */
             wind_wave_height_m: number | null;
             /** Wind Wave Period S */
             wind_wave_period_s: number | null;
+            /** Wind Wave Direction Deg */
+            wind_wave_direction_deg?: number | null;
             /** Wind Speed Kmh */
             wind_speed_kmh: number | null;
             /** Wind Direction Deg */
@@ -1248,6 +1307,20 @@ export interface components {
             breaking_height_min_ft: number;
             /** Breaking Height Max Ft */
             breaking_height_max_ft: number;
+            /** Breaking Height Mid Ft */
+            breaking_height_mid_ft?: number | null;
+            /** Breaking P10 Ft */
+            breaking_p10_ft?: number | null;
+            /** Breaking P90 Ft */
+            breaking_p90_ft?: number | null;
+            /** Uncertainty Kind */
+            uncertainty_kind?: string | null;
+            /** Breaking Height Method */
+            breaking_height_method?: string | null;
+            /** Algorithm Version */
+            algorithm_version?: string | null;
+            /** Ml Model Version */
+            ml_model_version?: string | null;
             /** Score */
             score: number;
             /** Label */
@@ -1600,6 +1673,51 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** ModelPoint */
+        ModelPoint: {
+            /**
+             * Valid Time
+             * Format: date-time
+             */
+            valid_time: string;
+            /** Hs M */
+            hs_m: number | null;
+            /** Tp S */
+            tp_s: number | null;
+            /** Direction Deg */
+            direction_deg: number | null;
+            /** Wind Kmh */
+            wind_kmh: number | null;
+            /** Wind Direction Deg */
+            wind_direction_deg: number | null;
+        };
+        /**
+         * ModelSeries
+         * @description Raw output of one numerical model (or our blend) at this spot, 3-hourly.
+         */
+        ModelSeries: {
+            /** Source Code */
+            source_code: string;
+            /** Name */
+            name: string;
+            /** Family */
+            family: string;
+            /** Kind */
+            kind: string;
+            /** Role */
+            role: string;
+            /** Is Demo */
+            is_demo: boolean;
+            /**
+             * Run Issued At
+             * Format: date-time
+             */
+            run_issued_at: string;
+            /** Period Kind */
+            period_kind: string | null;
+            /** Points */
+            points: components["schemas"]["ModelPoint"][];
+        };
         /**
          * NotificationChannelPref
          * @enum {string}
@@ -1761,6 +1879,27 @@ export interface components {
         PhoneStartIn: {
             /** Phone Number */
             phone_number: string;
+        };
+        /** PhysicalProfileOut */
+        PhysicalProfileOut: {
+            /** Shore Normal Deg */
+            shore_normal_deg: number;
+            /** Forecast Point Depth M */
+            forecast_point_depth_m: number | null;
+            /** Controlling Depth M */
+            controlling_depth_m: number | null;
+            /** Focusing Ref */
+            focusing_ref: number;
+            /** Focusing Kappa */
+            focusing_kappa: number;
+            /** Has Shadow Table */
+            has_shadow_table: boolean;
+            /** Data Quality */
+            data_quality: {
+                [key: string]: string;
+            };
+            /** Notes */
+            notes: string;
         };
         /** ProfileIn */
         ProfileIn: {
@@ -2180,6 +2319,7 @@ export interface components {
             description: string;
             /** Airports */
             airports: components["schemas"]["SpotAirportOut"][];
+            physical_profile?: components["schemas"]["PhysicalProfileOut"] | null;
         };
         /** SpotForecastOut */
         SpotForecastOut: {
@@ -2200,6 +2340,8 @@ export interface components {
             stale: boolean;
             /** Breaking Height Method */
             breaking_height_method?: string | null;
+            /** Algorithm Version */
+            algorithm_version?: string | null;
             /**
              * Calibrated
              * @default false
@@ -2215,6 +2357,17 @@ export interface components {
              * @default []
              */
             daily: components["schemas"]["DailySummary"][];
+            /**
+             * Models
+             * @default []
+             */
+            models: components["schemas"]["ModelSeries"][];
+            /**
+             * Ensemble
+             * @default []
+             */
+            ensemble: components["schemas"]["EnsemblePoint"][];
+            blend?: components["schemas"]["BlendInfo"] | null;
         };
         /** SpotMini */
         SpotMini: {

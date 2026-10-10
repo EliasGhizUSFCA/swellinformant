@@ -368,11 +368,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_prediction_archive")),
         sa.UniqueConstraint(
-            "source_code",
-            "spot_id",
-            "issued_at",
-            "valid_time",
-            name=op.f("uq_prediction_archive_source_code_spot_id_issued_at_valid_time"),
+            "source_code", "run_key", "spot_id", "valid_time", name="uq_prediction_archive_key"
         ),
     )
     op.create_index(

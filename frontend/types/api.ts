@@ -28,6 +28,11 @@ export type ForecastPoint = S["ForecastPoint"];
 export type DailySummary = S["DailySummary"];
 export type MapSnapshot = S["MapSnapshotOut"];
 export type MapSpot = S["MapSpotOut"];
+export type ModelSeries = S["ModelSeries"];
+export type ModelPoint = S["ModelPoint"];
+export type EnsemblePoint = S["EnsemblePoint"];
+export type BlendInfo = S["BlendInfo"];
+export type PhysicalProfile = S["PhysicalProfileOut"];
 
 export type SearchInput = S["SearchIn"];
 export type Search = S["SearchOut"];

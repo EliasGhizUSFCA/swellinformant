@@ -2279,6 +2279,54 @@
     ],
     "title": "AuthOut"
    },
+   "BlendInfo": {
+    "properties": {
+     "method": {
+      "type": "string",
+      "title": "Method"
+     },
+     "members": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Members"
+     },
+     "cross_checks": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Cross Checks"
+     },
+     "flagged_hours": {
+      "type": "integer",
+      "title": "Flagged Hours"
+     },
+     "flags": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Flags"
+     },
+     "skill": {
+      "title": "Skill"
+     }
+    },
+    "type": "object",
+    "required": [
+     "method",
+     "members",
+     "cross_checks",
+     "flagged_hours",
+     "flags",
+     "skill"
+    ],
+    "title": "BlendInfo"
+   },
    "BreakType": {
     "type": "string",
     "enum": [
@@ -2505,6 +2553,61 @@
        }
       ],
       "title": "Explanation"
+     },
+     "breaking_height_mid_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Height Mid Ft"
+     },
+     "breaking_p10_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking P10 Ft"
+     },
+     "breaking_p90_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking P90 Ft"
+     },
+     "uncertainty_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Uncertainty Kind"
+     },
+     "ml_model_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ml Model Version"
      }
     },
     "type": "object",
@@ -2734,6 +2837,56 @@
     "title": "EmailDeliveryOut",
     "description": "What happened to an account email, in provider terms. ``captured`` means a\ndevelopment inbox kept it (nothing was delivered to a real mailbox)."
    },
+   "EnsemblePoint": {
+    "properties": {
+     "valid_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Valid Time"
+     },
+     "hs_mean_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs Mean M"
+     },
+     "hs_spread_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs Spread M"
+     },
+     "members": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Members"
+     }
+    },
+    "type": "object",
+    "required": [
+     "valid_time",
+     "hs_mean_m",
+     "hs_spread_m",
+     "members"
+    ],
+    "title": "EnsemblePoint"
+   },
    "EventOut": {
     "properties": {
      "id": {
@@ -2943,6 +3096,39 @@
       ],
       "title": "Sig Wave Height M"
      },
+     "wave_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Period S"
+     },
+     "wave_period_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Period Kind"
+     },
+     "wave_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Direction Deg"
+     },
      "primary_swell_height_m": {
       "anyOf": [
        {
@@ -3009,6 +3195,39 @@
       ],
       "title": "Secondary Swell Direction Deg"
      },
+     "tertiary_swell_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tertiary Swell Height M"
+     },
+     "tertiary_swell_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tertiary Swell Period S"
+     },
+     "tertiary_swell_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tertiary Swell Direction Deg"
+     },
      "wind_wave_height_m": {
       "anyOf": [
        {
@@ -3030,6 +3249,17 @@
        }
       ],
       "title": "Wind Wave Period S"
+     },
+     "wind_wave_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Wave Direction Deg"
      },
      "wind_speed_kmh": {
       "anyOf": [
@@ -3104,6 +3334,83 @@
      "breaking_height_max_ft": {
       "type": "number",
       "title": "Breaking Height Max Ft"
+     },
+     "breaking_height_mid_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Height Mid Ft"
+     },
+     "breaking_p10_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking P10 Ft"
+     },
+     "breaking_p90_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking P90 Ft"
+     },
+     "uncertainty_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Uncertainty Kind"
+     },
+     "breaking_height_method": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Height Method"
+     },
+     "algorithm_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Algorithm Version"
+     },
+     "ml_model_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ml Model Version"
      },
      "score": {
       "type": "integer",
@@ -4094,6 +4401,145 @@
     ],
     "title": "Message"
    },
+   "ModelPoint": {
+    "properties": {
+     "valid_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Valid Time"
+     },
+     "hs_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs M"
+     },
+     "tp_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tp S"
+     },
+     "direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Direction Deg"
+     },
+     "wind_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Kmh"
+     },
+     "wind_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Direction Deg"
+     }
+    },
+    "type": "object",
+    "required": [
+     "valid_time",
+     "hs_m",
+     "tp_s",
+     "direction_deg",
+     "wind_kmh",
+     "wind_direction_deg"
+    ],
+    "title": "ModelPoint"
+   },
+   "ModelSeries": {
+    "properties": {
+     "source_code": {
+      "type": "string",
+      "title": "Source Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "family": {
+      "type": "string",
+      "title": "Family"
+     },
+     "kind": {
+      "type": "string",
+      "title": "Kind"
+     },
+     "role": {
+      "type": "string",
+      "title": "Role"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo"
+     },
+     "run_issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Run Issued At"
+     },
+     "period_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Period Kind"
+     },
+     "points": {
+      "items": {
+       "$ref": "#/components/schemas/ModelPoint"
+      },
+      "type": "array",
+      "title": "Points"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source_code",
+     "name",
+     "family",
+     "kind",
+     "role",
+     "is_demo",
+     "run_issued_at",
+     "period_kind",
+     "points"
+    ],
+    "title": "ModelSeries",
+    "description": "Raw output of one numerical model (or our blend) at this spot, 3-hourly."
+   },
    "NotificationChannelPref": {
     "type": "string",
     "enum": [
@@ -4657,6 +5103,71 @@
      "phone_number"
     ],
     "title": "PhoneStartIn"
+   },
+   "PhysicalProfileOut": {
+    "properties": {
+     "shore_normal_deg": {
+      "type": "number",
+      "title": "Shore Normal Deg"
+     },
+     "forecast_point_depth_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Point Depth M"
+     },
+     "controlling_depth_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Controlling Depth M"
+     },
+     "focusing_ref": {
+      "type": "number",
+      "title": "Focusing Ref"
+     },
+     "focusing_kappa": {
+      "type": "number",
+      "title": "Focusing Kappa"
+     },
+     "has_shadow_table": {
+      "type": "boolean",
+      "title": "Has Shadow Table"
+     },
+     "data_quality": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object",
+      "title": "Data Quality"
+     },
+     "notes": {
+      "type": "string",
+      "title": "Notes"
+     }
+    },
+    "type": "object",
+    "required": [
+     "shore_normal_deg",
+     "forecast_point_depth_m",
+     "controlling_depth_m",
+     "focusing_ref",
+     "focusing_kappa",
+     "has_shadow_table",
+     "data_quality",
+     "notes"
+    ],
+    "title": "PhysicalProfileOut"
    },
    "ProfileIn": {
     "properties": {
@@ -5904,6 +6415,16 @@
       },
       "type": "array",
       "title": "Airports"
+     },
+     "physical_profile": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/PhysicalProfileOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -6007,6 +6528,17 @@
       ],
       "title": "Breaking Height Method"
      },
+     "algorithm_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Algorithm Version"
+     },
      "calibrated": {
       "type": "boolean",
       "title": "Calibrated",
@@ -6027,6 +6559,32 @@
       "type": "array",
       "title": "Daily",
       "default": []
+     },
+     "models": {
+      "items": {
+       "$ref": "#/components/schemas/ModelSeries"
+      },
+      "type": "array",
+      "title": "Models",
+      "default": []
+     },
+     "ensemble": {
+      "items": {
+       "$ref": "#/components/schemas/EnsemblePoint"
+      },
+      "type": "array",
+      "title": "Ensemble",
+      "default": []
+     },
+     "blend": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/BlendInfo"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",

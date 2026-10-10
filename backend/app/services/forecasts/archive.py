@@ -92,7 +92,7 @@ def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str,
         stmt = (
             insert(PredictionArchive)
             .on_conflict_do_nothing(
-                index_elements=["source_code", "spot_id", "issued_at", "valid_time"]
+                index_elements=["source_code", "run_key", "spot_id", "valid_time"]
             )
             .returning(PredictionArchive.id)
         )

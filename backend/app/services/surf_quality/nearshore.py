@@ -40,7 +40,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
+
+import numpy as np
 
 from app.services.geo import window_distance
 
@@ -119,10 +122,6 @@ def komar_gaughan_m(h0_m: float, period_s: float) -> float:
 
 
 # --------------------------------------------------------------------------- directions
-def _wrap180(deg: float) -> float:
-    return (deg + 180.0) % 360.0 - 180.0
-
-
 def spreading_sigma_deg(period_s: float, wind_sea: bool, override: float | None = None) -> float:
     """Directional spread (1σ) assumed for a partition."""
     if override is not None:
@@ -180,21 +179,81 @@ class Profile:
         )
 
 
-def directional_factor(direction_deg: float, sigma_deg: float, profile: Profile) -> float:
-    """R = Σ D(θ) · max(cos(θ − β), 0) · T(θ) · Δθ over a wrapped-Gaussian spread."""
-    total_w = 0.0
-    acc = 0.0
+# The directional factor is evaluated for every partition of every forecast hour, so the
+# profile's angular response g(θ) = max(cos(θ − β), 0) · T(θ) is tabulated once per
+# profile on a fine grid and convolved with a cached Gaussian kernel.
+RESPONSE_STEP_DEG = 0.5
+_GRID = np.arange(0.0, 360.0, RESPONSE_STEP_DEG)
+_RESPONSE_CACHE: dict[tuple[Any, ...], np.ndarray] = {}
+_RESPONSE_CACHE_MAX = 4096
+
+
+def angular_response(profile: Profile) -> np.ndarray:
+    key = (
+        profile.shore_normal_deg,
+        profile.swell_window_min,
+        profile.swell_window_max,
+        profile.shadow_table,
+    )
+    g = _RESPONSE_CACHE.get(key)
+    if g is None:
+        incidence = np.cos(np.radians(_GRID - profile.shore_normal_deg))
+        transmission = np.array([profile.transmission(float(t)) for t in _GRID])
+        g = np.where(incidence > 0, incidence * transmission, 0.0)
+        if len(_RESPONSE_CACHE) >= _RESPONSE_CACHE_MAX:
+            _RESPONSE_CACHE.clear()
+        _RESPONSE_CACHE[key] = g
+    return g
+
+
+@lru_cache(maxsize=512)
+def _spreading_kernel(sigma_deg: float) -> tuple[np.ndarray, np.ndarray]:
+    """Offsets (degrees) and normalised weights of a Gaussian truncated at ±4σ."""
     half = min(180.0, 4.0 * sigma_deg)
     steps = int(2 * half / DIRECTION_STEP_DEG)
-    for s in range(steps + 1):
-        offset = -half + s * DIRECTION_STEP_DEG
-        w = math.exp(-0.5 * (offset / sigma_deg) ** 2)
-        theta = direction_deg + offset
-        incidence = math.cos(math.radians(_wrap180(theta - profile.shore_normal_deg)))
-        total_w += w
-        if incidence > 0:
-            acc += w * incidence * profile.transmission(theta)
-    return acc / total_w if total_w else 0.0
+    offsets = -half + np.arange(steps + 1) * DIRECTION_STEP_DEG
+    weights = np.exp(-0.5 * (offsets / sigma_deg) ** 2)
+    return offsets, weights / weights.sum()
+
+
+_FACTOR_CACHE: dict[tuple[Any, ...], float] = {}
+_FACTOR_CACHE_MAX = 200_000
+
+
+def directional_factor(direction_deg: float, sigma_deg: float, profile: Profile) -> float:
+    """R = Σ D(θ) · max(cos(θ − β), 0) · T(θ) · Δθ over a wrapped-Gaussian spread.
+
+    Memoised at RESPONSE_STEP_DEG resolution of the mean direction (the response is
+    smooth on that scale; forecast directions are not more precise than that).
+    """
+    key = (
+        profile.shore_normal_deg,
+        profile.swell_window_min,
+        profile.swell_window_max,
+        profile.shadow_table,
+        round((direction_deg % 360.0) / RESPONSE_STEP_DEG),
+        float(sigma_deg),
+    )
+    cached = _FACTOR_CACHE.get(key)
+    if cached is not None:
+        return cached
+    value = _directional_factor(key[4] * RESPONSE_STEP_DEG, float(sigma_deg), profile)
+    if len(_FACTOR_CACHE) >= _FACTOR_CACHE_MAX:
+        _FACTOR_CACHE.clear()
+    _FACTOR_CACHE[key] = value
+    return value
+
+
+def _directional_factor(direction_deg: float, sigma_deg: float, profile: Profile) -> float:
+    offsets, weights = _spreading_kernel(sigma_deg)
+    g = angular_response(profile)
+    # Linear interpolation on the uniform circular grid (np.interp(period=) re-sorts).
+    x = ((direction_deg + offsets) % 360.0) / RESPONSE_STEP_DEG
+    i0 = np.floor(x).astype(np.intp)
+    frac = x - i0
+    i0 %= g.size
+    values = g[i0] * (1.0 - frac) + g[(i0 + 1) % g.size] * frac
+    return float(np.dot(weights, values))
 
 
 # --------------------------------------------------------------------------- breaking
