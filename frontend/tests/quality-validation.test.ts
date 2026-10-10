@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError, readCookie } from "@/lib/api";
-import { colorForScore, labelForScore, QUALITY_COLORS } from "@/lib/quality";
+import { colorForScore, labelForScore, NO_FORECAST_COLOR, QUALITY_COLORS } from "@/lib/quality";
 import { defaultWizardState, registerSchema, safeNext, toSearchInput, validateStep } from "@/lib/validation";
 
 describe("quality scale (mirrors backend thresholds)", () => {
@@ -20,7 +20,13 @@ describe("quality scale (mirrors backend thresholds)", () => {
 
   it("colours by label", () => {
     expect(colorForScore(96)).toBe(QUALITY_COLORS.exceptional);
-    expect(colorForScore(null)).toBe("#cbd5e1");
+    expect(colorForScore(null)).toBe(NO_FORECAST_COLOR);
+    // Spec legend: blue poor, yellow fair, green good, orange excellent, purple exceptional.
+    expect(colorForScore(10)).toBe("#2563eb");
+    expect(colorForScore(45)).toBe("#eab308");
+    expect(colorForScore(60)).toBe("#16a34a");
+    expect(colorForScore(88)).toBe("#c2410c");
+    expect(colorForScore(99)).toBe("#7c3aed");
   });
 });
 
