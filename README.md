@@ -279,6 +279,7 @@ docker compose down -v               # stop and delete all data
 | Email: Resend | `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM` on a verified domain | resend.com → API keys | console |
 | Email: SendGrid | `EMAIL_PROVIDER=sendgrid`, `SENDGRID_API_KEY`, `EMAIL_FROM` (verified sender) | app.sendgrid.com → Settings → API keys | console |
 | SMS: Twilio | `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` or `TWILIO_MESSAGING_SERVICE_SID` | console.twilio.com | `SMS_PROVIDER=console` (default) or `disabled` |
+| Map tiles | `NEXT_PUBLIC_CARTO_API_KEY`, or `NEXT_PUBLIC_MAP_TILE_URL` + `NEXT_PUBLIC_MAP_ATTRIBUTION`; optional `MAP_TILE_HOSTS`. Build time: run `docker compose build frontend` after changing | Default: OpenStreetMap, no key (OSM tile usage policy applies). A free key from carto.com/basemaps/apikey switches to CARTO Voyager | OpenStreetMap (default) |
 
 Inbound STOP/START: set your Twilio number's "A message comes in" webhook to
 `POST ${API_BASE_URL}/api/webhooks/twilio/sms`. Requests are verified with
@@ -393,7 +394,8 @@ dependencies installed. If Chromium is installed somewhere else, set
 | Background jobs not executing | `docker compose ps` should show `worker` healthy and `beat` up. `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate `celery … worker` and `celery … beat` processes |
 | No verification / alert email | Console mode writes to the outbox (see the walkthrough). Real providers log `PermanentProviderError` with the provider's reason. Check `/notifications` for the status and last error |
 | Pages show "The service is temporarily unavailable" / `/api/*` returns 500 | The Next.js server can't reach the backend: check `docker compose ps backend`. If the backend is up, `BACKEND_URL` is wrong. It is baked in at build time: rebuild the frontend after changing it (`docker compose build frontend`) |
-| Map tiles blank | Tile host blocked by the network or CSP. Set `NEXT_PUBLIC_MAP_TILE_URL` and `MAP_TILE_HOSTS`, then rebuild the frontend |
+| Map shows "API KEY REQUIRED" tiles | CARTO raster basemaps now require a key; builds before this fix used key-less CARTO. Pull the latest code and rebuild the frontend (`docker compose build frontend && docker compose up -d`): it defaults to OpenStreetMap. For CARTO, set `NEXT_PUBLIC_CARTO_API_KEY`. The build prints a warning for a CARTO URL without `?key=` |
+| Map is grey with markers, "Map tiles couldn't load" | The tile server is unreachable (network, firewall, content blocker) or the URL is wrong. Open a tile URL from the browser's Network tab to see the error. The configured tile host is allowed by the CSP automatically; add others with `MAP_TILE_HOSTS` |
 
 ## J. Deployment
 
