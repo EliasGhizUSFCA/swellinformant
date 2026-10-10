@@ -25,6 +25,13 @@ dependencies = [
     "python-multipart>=0.0.9",
     "tzdata>=2024.1",
     "cryptography>=43",
+    # GRIB2 decoding for direct NOAA / ECMWF ingestion (eccodeslib ships the C library)
+    "eccodes>=2.41",
+    # Parquet reader for AODN cloud-optimised buoy data
+    "pyarrow>=17",
+    # Baselines and gradient boosting for forecast post-processing
+    "scikit-learn>=1.5",
+    "joblib>=1.4",
 ]
 
 [project.optional-dependencies]

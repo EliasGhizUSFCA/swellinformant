@@ -8,7 +8,25 @@ from app.models.forecast import (
     SwellEvent,
     WaveForecast,
 )
+from app.models.forecast_engine import (
+    ForecastComparison,
+    ForecastEnsembleStat,
+    PredictionArchive,
+    SpotPhysicalProfile,
+)
 from app.models.messaging import EmailMessage
+from app.models.ml import (
+    ForecastAccuracyMetric,
+    MLExperiment,
+    MLModelVersion,
+    PredictionValidation,
+)
+from app.models.observations import (
+    BuoyObservation,
+    BuoyStation,
+    NearshoreObservation,
+    PointForecast,
+)
 from app.models.opportunity import (
     BackgroundJobLog,
     Notification,
@@ -29,19 +47,31 @@ from app.models.user import (
 __all__ = [
     "Airport",
     "BackgroundJobLog",
+    "BuoyObservation",
+    "BuoyStation",
     "EmailMessage",
     "FlightOffer",
     "FlightSearch",
+    "ForecastAccuracyMetric",
+    "ForecastComparison",
+    "ForecastEnsembleStat",
     "ForecastRun",
     "ForecastSource",
+    "MLExperiment",
+    "MLModelVersion",
+    "NearshoreObservation",
     "Notification",
     "NotificationPreference",
     "OpportunityMatch",
     "OpportunityOffer",
+    "PointForecast",
+    "PredictionArchive",
+    "PredictionValidation",
     "SavedSearch",
     "SearchDestination",
     "SearchOrigin",
     "SpotAirport",
+    "SpotPhysicalProfile",
     "SurfQualityPrediction",
     "SurfSpot",
     "SwellEvent",

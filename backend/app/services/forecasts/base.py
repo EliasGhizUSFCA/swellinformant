@@ -18,6 +18,9 @@ FORECAST_FIELDS = (
     "secondary_swell_height_m",
     "secondary_swell_period_s",
     "secondary_swell_direction_deg",
+    "tertiary_swell_height_m",
+    "tertiary_swell_period_s",
+    "tertiary_swell_direction_deg",
     "wind_wave_height_m",
     "wind_wave_period_s",
     "wind_wave_direction_deg",
@@ -44,6 +47,9 @@ class SpotPoint:
 class ForecastRecord:
     valid_time: datetime
     values: dict[str, float | None] = field(default_factory=dict)
+    # Meaning of values["wave_period_s"]: "tp", "tm01", "tm02" or "tm10" (None = unknown).
+    period_kind: str | None = None
+    extra: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -73,6 +79,10 @@ class SourceInfo:
     is_demo: bool
     attribution: str
     license_notes: str
+    # Dependency family (sources sharing model physics or forcing) and kind; see
+    # app.services.forecasts.families.
+    family: str = "unknown"
+    kind: str = "deterministic"
 
 
 class ForecastProvider(ABC):

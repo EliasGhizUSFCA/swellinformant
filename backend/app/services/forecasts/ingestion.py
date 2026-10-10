@@ -68,6 +68,8 @@ def ensure_source(db: Session, provider: ForecastProvider, priority: int = 100) 
     source.is_demo = info.is_demo
     source.attribution = info.attribution
     source.license_notes = info.license_notes
+    source.family = info.family
+    source.kind = info.kind
     source.priority = priority
     source.is_enabled = True
     db.flush()
@@ -112,7 +114,9 @@ def store_records(db: Session, run: ForecastRun, records: dict[int, list[Any]]) 
                     "issued_at": run.issued_at,
                     **values,
                     "wave_power_kw_m": _wave_power(values),
+                    "wave_period_kind": getattr(rec, "period_kind", None),
                     "missing_fields": [k for k in FORECAST_FIELDS if values[k] is None],
+                    "extra": getattr(rec, "extra", None) or {},
                 }
             )
     stmt = insert(WaveForecast).on_conflict_do_nothing(

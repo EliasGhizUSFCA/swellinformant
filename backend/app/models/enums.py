@@ -197,6 +197,13 @@ class JobStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class MLModelStatus(StrEnum):
+    CANDIDATE = "candidate"  # trained and evaluated, not serving
+    ACTIVE = "active"  # passed the deployment criteria and is applied to forecasts
+    REJECTED = "rejected"  # failed the deployment criteria on held-out data
+    RETIRED = "retired"  # was active, since replaced or deactivated
+
+
 QUALITY_ORDER: list[QualityLabel] = [
     QualityLabel.POOR,
     QualityLabel.FAIR,
