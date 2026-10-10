@@ -1,10 +1,11 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { ApiError, get } from "@/lib/api";
 import type {
   Airport,
+  MapSnapshot,
   MatchDetail,
   MatchSummary,
   NotificationPage,
@@ -37,6 +38,7 @@ export const qk = {
   regions: ["regions"] as const,
   status: ["system-status"] as const,
   verification: ["verification-status"] as const,
+  mapConditions: (at: string | null) => ["map-conditions", at] as const,
 };
 
 /** The signed-in user, or `null` when signed out (never throws for 401). */
@@ -145,4 +147,15 @@ export const useVerificationStatus = (enabled: boolean) =>
       const s = q.state.data?.last_email?.status;
       return s === "queued" || s === "sending" ? 2000 : false;
     },
+  });
+
+/** All spots at one forecast hour (cached predictions). Keeps the previous hour on screen
+ * while the next loads so scrubbing the time control never blanks the map. */
+export const useMapConditions = (at: string | null) =>
+  useQuery({
+    queryKey: qk.mapConditions(at),
+    queryFn: ({ signal }) =>
+      get<MapSnapshot>(at ? `/api/map/conditions?at=${encodeURIComponent(at)}` : "/api/map/conditions", signal),
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60_000,
   });

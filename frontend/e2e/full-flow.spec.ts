@@ -107,8 +107,12 @@ test.describe.serial("swell → flight → alert lifecycle", () => {
     // 11. A new qualifying swell while paused generates no new notifications
     const second = await apiPost(page, "/api/dev/simulate-swell", {
       spot_slug: "jeffreys-bay",
-      days_ahead: 9.6, // > 1 full daylight period after the first swell ends → a new event
-      duration_hours: 18,
+      // A separate event needs ≥ 9 consecutive non-qualifying daylight hours between swells.
+      // Simulated swells have ~8 h Gaussian tails, so start this one 3 days after the first
+      // ends (5.8 d + 48 h): a full clean daylight period lies between them at any time of
+      // day. 30 h duration guarantees it covers daylight wherever it starts.
+      days_ahead: 10.8,
+      duration_hours: 30,
     });
     expect(second.pipeline.detection.created).toBeGreaterThan(0); // a separate, new swell event
     const events = (await apiGet(page.request, "/api/spots/jeffreys-bay/events")) as unknown[];

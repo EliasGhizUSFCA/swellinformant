@@ -20,6 +20,8 @@ from app.schemas.spots import (
     ForecastPoint,
     ForecastRunOut,
     ForecastSourceOut,
+    MapSnapshotOut,
+    MapSpotOut,
     SpotAirportOut,
     SpotDetail,
     SpotForecastOut,
@@ -82,8 +84,19 @@ def event_out(
     )
 
 
-def _conditions(p: SurfQualityPrediction, f: WaveForecast) -> Conditions:
+def _conditions(
+    p: SurfQualityPrediction, f: WaveForecast, run: ForecastRun | None = None
+) -> Conditions:
+    source = run.source if run is not None else None
     return Conditions(
+        sig_wave_height_m=f.sig_wave_height_m,
+        source_code=source.code if source else None,
+        source_name=source.name if source else None,
+        is_demo=bool(source.is_demo) if source else False,
+        run_issued_at=run.issued_at if run is not None else None,
+        method=p.breaking_height_method,
+        algorithm_version=p.algorithm_version,
+        explanation=p.explanation,
         valid_time=p.valid_time,
         score=p.score,
         label=p.label.value,
@@ -149,9 +162,9 @@ def spot_summaries(
             if runs.get(p.spot_id) is None or runs[p.spot_id].id != p.run_id:
                 continue
             if p.spot_id not in current and p.valid_time >= now - timedelta(minutes=30):
-                current[p.spot_id] = _conditions(p, f)
+                current[p.spot_id] = _conditions(p, f, runs[p.spot_id])
             if p.is_daylight and (p.spot_id not in best or p.score > best[p.spot_id].score):
-                best[p.spot_id] = _conditions(p, f)
+                best[p.spot_id] = _conditions(p, f, runs[p.spot_id])
 
     events: dict[int, list[SwellEvent]] = defaultdict(list)
     for e in db.scalars(
@@ -351,3 +364,80 @@ def upcoming_events(
 def event_counts(db: Session) -> dict[str, int]:
     rows = db.execute(select(SwellEvent.status, func.count()).group_by(SwellEvent.status)).all()
     return {str(status.value): int(n) for status, n in rows}
+
+
+MAP_STEP_HOURS = 3
+
+
+def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) -> MapSnapshotOut:
+    """Conditions at every active spot for one forecast hour (nearest stored timestep within
+    ±90 min), read from the latest predictions already in the database. Never fetches model
+    data, so scrubbing the map's time control is cheap."""
+    now = now or utcnow()
+    spots = db.scalars(select(SurfSpot).where(SurfSpot.is_active).order_by(SurfSpot.name)).all()
+    runs = latest_runs_by_spot(db, now)
+    run_ids = {r.id for r in runs.values()}
+    range_start = range_end = None
+    if run_ids:
+        lo, hi = db.execute(
+            select(
+                func.min(SurfQualityPrediction.valid_time),
+                func.max(SurfQualityPrediction.valid_time),
+            ).where(SurfQualityPrediction.run_id.in_(run_ids))
+        ).one()
+        floor = (now - timedelta(hours=MAP_STEP_HOURS)).replace(minute=0, second=0, microsecond=0)
+        range_start = max(lo, floor).replace(minute=0, second=0, microsecond=0) if lo else None
+        range_end = hi
+    target = at or now
+    if range_start and range_end:
+        target = min(max(target, range_start), range_end)
+    target = target.replace(minute=0, second=0, microsecond=0)
+
+    conditions: dict[int, Conditions] = {}
+    if run_ids:
+        window = timedelta(minutes=90)
+        rows = db.execute(
+            select(SurfQualityPrediction, WaveForecast)
+            .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
+            .where(
+                SurfQualityPrediction.run_id.in_(run_ids),
+                SurfQualityPrediction.valid_time >= target - window,
+                SurfQualityPrediction.valid_time <= target + window,
+            )
+        ).all()
+        best_gap: dict[int, float] = {}
+        for p, f in rows:
+            run = runs.get(p.spot_id)
+            if run is None or run.id != p.run_id:
+                continue
+            gap = abs((p.valid_time - target).total_seconds())
+            if gap < best_gap.get(p.spot_id, float("inf")):
+                best_gap[p.spot_id] = gap
+                conditions[p.spot_id] = _conditions(p, f, run)
+
+    covering: dict[int, int] = defaultdict(int)
+    upcoming: dict[int, int] = defaultdict(int)
+    for e in db.scalars(
+        select(SwellEvent).where(
+            SwellEvent.status == SwellEventStatus.ACTIVE, SwellEvent.end_time >= now
+        )
+    ).all():
+        upcoming[e.spot_id] += 1
+        if e.start_time <= target <= e.end_time:
+            covering[e.spot_id] += 1
+    return MapSnapshotOut(
+        requested_at=at,
+        valid_time=target if run_ids else None,
+        range_start=range_start,
+        range_end=range_end,
+        step_hours=MAP_STEP_HOURS,
+        spots=[
+            MapSpotOut(
+                slug=s.slug,
+                conditions=conditions.get(s.id),
+                event_at_time=covering.get(s.id, 0) > 0,
+                upcoming_event_count=upcoming.get(s.id, 0),
+            )
+            for s in spots
+        ],
+    )

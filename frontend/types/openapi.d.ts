@@ -407,6 +407,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/map/conditions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Map Conditions
+         * @description All spots at one forecast hour, from cached predictions (public data, cacheable).
+         */
+        get: operations["map_conditions_api_map_conditions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/spots": {
         parameters: {
             query?: never;
@@ -971,7 +991,14 @@ export interface components {
             /** Confirm Password */
             confirm_password: string;
         };
-        /** Conditions */
+        /**
+         * Conditions
+         * @description One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:
+         *
+         *     * raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and
+         *       wind fields), and
+         *     * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``).
+         */
         Conditions: {
             /**
              * Valid Time
@@ -1004,6 +1031,25 @@ export interface components {
             confidence_label: string;
             /** Is Daylight */
             is_daylight: boolean;
+            /** Sig Wave Height M */
+            sig_wave_height_m?: number | null;
+            /** Source Code */
+            source_code?: string | null;
+            /** Source Name */
+            source_name?: string | null;
+            /**
+             * Is Demo
+             * @default false
+             */
+            is_demo: boolean;
+            /** Run Issued At */
+            run_issued_at?: string | null;
+            /** Method */
+            method?: string | null;
+            /** Algorithm Version */
+            algorithm_version?: string | null;
+            /** Explanation */
+            explanation?: string | null;
         };
         /** DailySummary */
         DailySummary: {
@@ -1281,6 +1327,34 @@ export interface components {
             email: string;
             /** Password */
             password: string;
+        };
+        /**
+         * MapSnapshotOut
+         * @description Every monitored spot at one forecast time, from cached predictions only.
+         */
+        MapSnapshotOut: {
+            /** Requested At */
+            requested_at: string | null;
+            /** Valid Time */
+            valid_time: string | null;
+            /** Range Start */
+            range_start: string | null;
+            /** Range End */
+            range_end: string | null;
+            /** Step Hours */
+            step_hours: number;
+            /** Spots */
+            spots: components["schemas"]["MapSpotOut"][];
+        };
+        /** MapSpotOut */
+        MapSpotOut: {
+            /** Slug */
+            slug: string;
+            conditions: components["schemas"]["Conditions"] | null;
+            /** Event At Time */
+            event_at_time: boolean;
+            /** Upcoming Event Count */
+            upcoming_event_count: number;
         };
         /** MatchCounts */
         MatchCounts: {
@@ -3109,6 +3183,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    map_conditions_api_map_conditions_get: {
+        parameters: {
+            query?: {
+                /** @description Forecast time (ISO 8601); default now */
+                at?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapSnapshotOut"];
                 };
             };
             /** @description Validation Error */

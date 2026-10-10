@@ -26,6 +26,8 @@ export type SwellEvent = S["EventOut"];
 export type SpotForecast = S["SpotForecastOut"];
 export type ForecastPoint = S["ForecastPoint"];
 export type DailySummary = S["DailySummary"];
+export type MapSnapshot = S["MapSnapshotOut"];
+export type MapSpot = S["MapSpotOut"];
 
 export type SearchInput = S["SearchIn"];
 export type Search = S["SearchOut"];

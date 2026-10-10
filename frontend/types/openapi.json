@@ -812,6 +812,59 @@
     }
    }
   },
+  "/api/map/conditions": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Map Conditions",
+    "description": "All spots at one forecast hour, from cached predictions (public data, cacheable).",
+    "operationId": "map_conditions_api_map_conditions_get",
+    "parameters": [
+     {
+      "name": "at",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date-time"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast time (ISO 8601); default now",
+       "title": "At"
+      },
+      "description": "Forecast time (ISO 8601); default now"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MapSnapshotOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/spots": {
    "get": {
     "tags": [
@@ -2369,6 +2422,89 @@
      "is_daylight": {
       "type": "boolean",
       "title": "Is Daylight"
+     },
+     "sig_wave_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sig Wave Height M"
+     },
+     "source_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Code"
+     },
+     "source_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Name"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo",
+      "default": false
+     },
+     "run_issued_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Issued At"
+     },
+     "method": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Method"
+     },
+     "algorithm_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Algorithm Version"
+     },
+     "explanation": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Explanation"
      }
     },
     "type": "object",
@@ -2388,7 +2524,8 @@
      "confidence_label",
      "is_daylight"
     ],
-    "title": "Conditions"
+    "title": "Conditions",
+    "description": "One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:\n\n* raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and\n  wind fields), and\n* our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``)."
    },
    "DailySummary": {
     "properties": {
@@ -3209,6 +3346,114 @@
      "password"
     ],
     "title": "LoginIn"
+   },
+   "MapSnapshotOut": {
+    "properties": {
+     "requested_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Requested At"
+     },
+     "valid_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Valid Time"
+     },
+     "range_start": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Range Start"
+     },
+     "range_end": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Range End"
+     },
+     "step_hours": {
+      "type": "integer",
+      "title": "Step Hours"
+     },
+     "spots": {
+      "items": {
+       "$ref": "#/components/schemas/MapSpotOut"
+      },
+      "type": "array",
+      "title": "Spots"
+     }
+    },
+    "type": "object",
+    "required": [
+     "requested_at",
+     "valid_time",
+     "range_start",
+     "range_end",
+     "step_hours",
+     "spots"
+    ],
+    "title": "MapSnapshotOut",
+    "description": "Every monitored spot at one forecast time, from cached predictions only."
+   },
+   "MapSpotOut": {
+    "properties": {
+     "slug": {
+      "type": "string",
+      "title": "Slug"
+     },
+     "conditions": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Conditions"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "event_at_time": {
+      "type": "boolean",
+      "title": "Event At Time"
+     },
+     "upcoming_event_count": {
+      "type": "integer",
+      "title": "Upcoming Event Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "slug",
+     "conditions",
+     "event_at_time",
+     "upcoming_event_count"
+    ],
+    "title": "MapSpotOut"
    },
    "MatchCounts": {
     "properties": {

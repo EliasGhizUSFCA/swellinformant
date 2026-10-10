@@ -1,15 +1,15 @@
 import { Plane, Sparkles, Waves } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { asQuality, colorForScore, MATCH_STATUS, QUALITY_COLORS, QUALITY_LABELS } from "@/lib/quality";
+import { asQuality, colorForScore, MATCH_STATUS, QUALITY_COLORS, QUALITY_LABELS, QUALITY_TEXT } from "@/lib/quality";
 import { cn } from "@/lib/utils";
 
 export function QualityBadge({ label, score, className }: { label: string; score?: number; className?: string }) {
   const q = asQuality(label);
   return (
     <span
-      className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold text-white", className)}
-      style={{ backgroundColor: QUALITY_COLORS[q] }}
+      className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold", className)}
+      style={{ backgroundColor: QUALITY_COLORS[q], color: QUALITY_TEXT[q] }}
     >
       {QUALITY_LABELS[q]}
       {score != null && <span className="font-medium opacity-85">{score}</span>}

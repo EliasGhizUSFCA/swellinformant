@@ -31,6 +31,13 @@ class SpotAirportOut(BaseModel):
 
 
 class Conditions(BaseModel):
+    """One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:
+
+    * raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and
+      wind fields), and
+    * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``).
+    """
+
     valid_time: datetime
     score: int
     label: str
@@ -45,6 +52,34 @@ class Conditions(BaseModel):
     confidence: int
     confidence_label: str
     is_daylight: bool
+    # Raw model: combined significant wave height of the sea state (offshore point).
+    sig_wave_height_m: float | None = None
+    # Provenance
+    source_code: str | None = None
+    source_name: str | None = None
+    is_demo: bool = False
+    run_issued_at: datetime | None = None
+    method: str | None = None
+    algorithm_version: str | None = None
+    explanation: str | None = None
+
+
+class MapSpotOut(BaseModel):
+    slug: str
+    conditions: Conditions | None
+    event_at_time: bool  # an active swell event covers the selected time
+    upcoming_event_count: int
+
+
+class MapSnapshotOut(BaseModel):
+    """Every monitored spot at one forecast time, from cached predictions only."""
+
+    requested_at: datetime | None
+    valid_time: datetime | None
+    range_start: datetime | None
+    range_end: datetime | None
+    step_hours: int
+    spots: list[MapSpotOut]
 
 
 class SpotMini(BaseModel):
