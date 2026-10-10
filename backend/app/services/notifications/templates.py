@@ -70,27 +70,60 @@ def alert_subject(s: dict[str, Any]) -> str:
     return f"{demo}{prefix} — {s['spot_name']} — {label} Surf Forecast"
 
 
+def fmt_utc(value: str | None) -> str:
+    if not value:
+        return "—"
+    return f"{datetime.fromisoformat(value).astimezone(ZoneInfo('UTC')):%Y-%m-%d %H:%M} UTC"
+
+
+def _buffers(s: dict[str, Any]) -> str:
+    a, d = s.get("arrival_buffer_days"), s.get("departure_buffer_days")
+    if a is None or d is None:
+        return "—"
+    return f"arrive {a} day(s) before the swell, leave {d} day(s) after"
+
+
 def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
+    swell = (
+        f"{s['swell_height_m']} m @ {s['swell_period_s']} s from {s['swell_direction']}"
+        if s.get("swell_height_m") is not None
+        else "—"
+    )
     rows = [
         ("Destination", f"{s['spot_name']}, {s['country']}"),
+        ("Swell dates", s["window_label"]),
         (
-            "Expected surf",
-            f"{s['height_min_ft']:g}–{s['height_max_ft']:g} ft (estimated breaking faces)",
+            "Predicted breaking waves (our estimate)",
+            f"{s['height_min_ft']:g}–{s['height_max_ft']:g} ft faces",
         ),
-        ("Swell", f"{s['swell_height_m']} m @ {s['swell_period_s']} s from {s['swell_direction']}"),
-        ("Wind", f"{s['wind_relation']}, {s['wind_speed_kmh']} km/h from {s['wind_direction']}"),
+        ("Offshore swell (raw model forecast)", swell),
+        (
+            "Wind",
+            f"{s['wind_relation']}, {s.get('wind_speed_kmh', '—')} km/h from {s['wind_direction']}",
+        ),
         (
             "Predicted quality",
             f"{LABELS.get(s['peak_label'], s['peak_label'])} ({s['peak_score']}/100)",
         ),
-        ("Surf window", s["window_label"]),
         ("Forecast confidence", f"{s['confidence_label'].title()} ({s['confidence']}/100)"),
+        (
+            "Forecast updated",
+            fmt_utc(s.get("forecast_issued"))
+            + (f" · {s['forecast_source']}" if s.get("forecast_source") else ""),
+        ),
     ]
     if s.get("price") is not None:
         rows += [
-            ("Recommended arrival", fmt_date(s.get("arrival_date"))),
-            ("Recommended departure", fmt_date(s.get("departure_date"))),
-            ("Round-trip flight", f"{fmt_money(s['price'], s['currency'])} per traveller"),
+            (
+                "Suggested travel dates",
+                f"{fmt_date(s.get('arrival_date'))} – {fmt_date(s.get('departure_date'))}",
+            ),
+            ("Travel buffers", _buffers(s)),
+            (
+                "Round-trip flight",
+                f"{fmt_money(s['price'], s['currency'])} per traveller"
+                + (" (MOCK FARE — not a real price)" if s.get("is_mock_flight") else ""),
+            ),
             ("Departure airport", s.get("origin") or "—"),
             ("Destination airport", s.get("destination") or "—"),
             ("Airline", s.get("airline") or "—"),
@@ -101,7 +134,14 @@ def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
             ("Price checked", s.get("price_checked_label") or "at search time"),
         ]
     else:
-        rows.append(("Flights", "No flight within your budget and schedule has been found yet."))
+        rows += [
+            (
+                "Suggested travel dates",
+                f"{fmt_date(s.get('arrival_date'))} – {fmt_date(s.get('departure_date'))}",
+            ),
+            ("Travel buffers", _buffers(s)),
+            ("Flights", "No flight within your budget and schedule has been found yet."),
+        ]
     return rows
 
 
@@ -145,8 +185,16 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
         f"Detailed surf forecast: {links['forecast']}",
     ]
     if links.get("flights"):
-        lines.append(f"Inspect flights: {links['flights']}")
-    lines += ["", DISCLAIMER, "", f"Unsubscribe from email alerts: {links['unsubscribe']}"]
+        lines.append(f"Flight offers: {links['flights']}")
+    if links.get("dashboard"):
+        lines.append(f"Your dashboard: {links['dashboard']}")
+    lines += [
+        "",
+        DISCLAIMER,
+        "",
+        f"Manage alerts: {links.get('manage', links['unsubscribe'])}",
+        f"Unsubscribe from email alerts: {links['unsubscribe']}",
+    ]
     text = "\n".join(lines)
 
     row_html = "".join(
@@ -163,7 +211,7 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
     flights_btn = (
         f'<a href="{escape(links["flights"])}" style="display:inline-block;margin:4px 8px 4px 0;'
         f"padding:10px 16px;border-radius:8px;border:1px solid #0e7490;color:#0e7490;"
-        f'text-decoration:none">Inspect flights</a>'
+        f'text-decoration:none">Flight offers</a>'
         if links.get("flights")
         else ""
     )
@@ -180,7 +228,7 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
 <a href="{escape(links["forecast"])}" style="display:inline-block;margin:4px 8px 4px 0;padding:10px 16px;border-radius:8px;border:1px solid #0e7490;color:#0e7490;text-decoration:none">Full forecast</a>
 {flights_btn}
 <p style="font-size:12px;color:#6b7f8c;margin-top:20px">{escape(DISCLAIMER)}</p>
-<p style="font-size:12px;color:#6b7f8c"><a href="{escape(links["unsubscribe"])}" style="color:#6b7f8c">Unsubscribe from email alerts</a></p>
+<p style="font-size:12px;color:#6b7f8c"><a href="{escape(links.get("dashboard", links["opportunity"]))}" style="color:#6b7f8c">Dashboard</a> · <a href="{escape(links.get("manage", links["unsubscribe"]))}" style="color:#6b7f8c">Manage alerts</a> · <a href="{escape(links["unsubscribe"])}" style="color:#6b7f8c">Unsubscribe from email alerts</a></p>
 </td></tr></table></td></tr></table></body></html>"""
     return subject, text, html
 
@@ -202,17 +250,18 @@ def render_alert_sms(s: dict[str, Any], link: str) -> str:
     return f"{base} {link} Reply STOP to opt out."
 
 
-def render_verification_email(name: str, link: str) -> tuple[str, str, str]:
+def render_verification_email(name: str, link: str, ttl_hours: int = 48) -> tuple[str, str, str]:
     app = get_settings().app_name
     subject = f"Verify your email for {app}"
+    expiry = f"This link expires in {ttl_hours} hours and works once."
     text = (
         f"Hi {name},\n\nConfirm your email address to start receiving swell alerts:\n{link}\n\n"
-        "This link expires in 48 hours. If you didn't create an account, ignore this email."
+        f"{expiry} If you didn't create an account, ignore this email."
     )
     html = (
         f"<p>Hi {escape(name)},</p><p>Confirm your email address to start receiving swell alerts:</p>"
         f'<p><a href="{escape(link)}">Verify my email</a></p>'
-        "<p style='color:#6b7f8c;font-size:12px'>This link expires in 48 hours. If you didn't "
+        f"<p style='color:#6b7f8c;font-size:12px'>{escape(expiry)} If you didn't "
         "create an account, ignore this email.</p>"
     )
     return subject, text, html
@@ -229,5 +278,21 @@ def render_password_reset_email(name: str, link: str, minutes: int) -> tuple[str
         f'(valid for {minutes} minutes):</p><p><a href="{escape(link)}">Reset password</a></p>'
         "<p style='color:#6b7f8c;font-size:12px'>If you didn't request a reset, you can ignore "
         "this email; your password is unchanged.</p>"
+    )
+    return subject, text, html
+
+
+def render_test_email(name: str, provider: str, app_url: str) -> tuple[str, str, str]:
+    """Developer test message: proves the provider path works. Contains no real data."""
+    subject = f"[TEST] {get_settings().app_name} email delivery check"
+    text = (
+        f"Hi {name},\n\nThis is a TEST email sent from the developer tools via the "
+        f"'{provider}' email provider. It contains no forecast or flight data.\n\n"
+        f"If you can read this in your inbox, delivery works. App: {app_url}"
+    )
+    html = (
+        f"<p>Hi {escape(name)},</p><p>This is a <strong>TEST</strong> email sent from the developer "
+        f"tools via the <code>{escape(provider)}</code> email provider. It contains no forecast or "
+        "flight data.</p><p>If you can read this in your inbox, delivery works.</p>"
     )
     return subject, text, html

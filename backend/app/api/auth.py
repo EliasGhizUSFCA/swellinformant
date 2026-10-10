@@ -17,18 +17,23 @@ from app.auth.sessions import (
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.ratelimit import client_ip, hit, rate_limit
+from app.models.enums import EmailPurpose
 from app.schemas.auth import (
     AuthOut,
     ChangePasswordIn,
+    EmailDeliveryOut,
     ForgotPasswordIn,
     LoginIn,
     RegisterIn,
     ResetPasswordIn,
     TokenIn,
     UserOut,
+    VerificationStatusOut,
+    VerifyOut,
 )
 from app.schemas.common import Message
 from app.services import accounts
+from app.services.notifications.transactional import latest_account_email
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -84,11 +89,17 @@ def me(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)) -> 
 
 
 @router.post(
-    "/verify-email", response_model=Message, dependencies=[Depends(rate_limit("verify", 30, 900))]
+    "/verify-email", response_model=VerifyOut, dependencies=[Depends(rate_limit("verify", 30, 900))]
 )
-def verify_email(body: TokenIn, db: Session = Depends(get_db)) -> Message:
-    accounts.verify_email(db, body.token)
-    return Message(message="Email verified. You'll now receive swell alerts by email.")
+def verify_email(body: TokenIn, db: Session = Depends(get_db)) -> VerifyOut:
+    """Works without a session: the link is usually opened in whatever browser the email
+    client launches."""
+    _, outcome = accounts.verify_email(db, body.token)
+    if outcome == accounts.VerifyOutcome.ALREADY_VERIFIED:
+        return VerifyOut(message="Your email address is already verified.", outcome=outcome)
+    return VerifyOut(
+        message="Email verified. You'll now receive swell alerts by email.", outcome=outcome
+    )
 
 
 @router.post("/resend-verification", response_model=Message)
@@ -99,6 +110,53 @@ def resend_verification(
     if auth.user.email_verified_at is None:
         accounts.send_verification(db, auth.user)
     return Message(message="If your email still needs verifying, a new link is on its way.")
+
+
+@router.post(
+    "/resend-verification-public",
+    response_model=Message,
+    dependencies=[Depends(rate_limit("resend-verification-public", 10, 900))],
+)
+def resend_verification_public(
+    body: ForgotPasswordIn, request: Request, db: Session = Depends(get_db)
+) -> Message:
+    """For people who are signed out (e.g. on another device). Same response whether or
+    not the address is registered or already verified."""
+    hit(
+        "resend-verification-email",
+        f"{accounts.normalize_email(body.email)}:{client_ip(request)}",
+        3,
+        3600,
+    )
+    accounts.resend_verification_by_email(db, body.email)
+    return Message(
+        message="If that address has an account waiting for verification, a new link is on its way."
+    )
+
+
+@router.get("/verification-status", response_model=VerificationStatusOut)
+def verification_status(
+    auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)
+) -> VerificationStatusOut:
+    s = get_settings()
+    row = latest_account_email(db, auth.user, EmailPurpose.VERIFY_EMAIL)
+    return VerificationStatusOut(
+        email_verified=auth.user.email_verified_at is not None,
+        delivery_mode="capture" if s.email_capture_only else "live",
+        provider=s.email_provider,
+        dev_inbox_url=s.dev_inbox_url if s.email_provider == "mailpit" else None,
+        captured_at=s.captured_email_location,
+        last_email=EmailDeliveryOut(
+            status=row.status.value,
+            provider=row.provider,
+            created_at=row.created_at,
+            sent_at=row.sent_at,
+            delivered_at=row.delivered_at,
+            error=row.last_error,
+        )
+        if row
+        else None,
+    )
 
 
 @router.post(

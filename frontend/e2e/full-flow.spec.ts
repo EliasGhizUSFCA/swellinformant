@@ -86,7 +86,7 @@ test.describe.serial("swell → flight → alert lifecycle", () => {
     expect(history.items[0].kind).toBe("new_opportunity");
     await apiPost(page, "/api/dev/run-pipeline");
     history = await apiGet(page.request, "/api/notifications");
-    expect(history.items[0].status).toBe("sent");
+    expect(history.items[0].status).toBe("captured"); // dev provider: captured, never "delivered"
 
     // 9. The opportunity appears on the dashboard and its detail page shows the flight
     await page.goto("/dashboard");

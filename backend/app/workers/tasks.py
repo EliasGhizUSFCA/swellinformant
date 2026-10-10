@@ -216,6 +216,38 @@ def deliver_sms(to: str, body: str) -> str | None:
     return build_sms_provider().send(to, body).message_id
 
 
+ACCOUNT_EMAIL_MAX_RETRIES = 5
+
+
+@celery_app.task(
+    name="notifications.send_account_email", bind=True, max_retries=ACCOUNT_EMAIL_MAX_RETRIES
+)
+def send_account_email(self: Task, message_id: str, text: str, html: str | None) -> str | None:
+    """Deliver a recorded account email; transient failures retry with backoff, and the
+    record ends FAILED (with the provider's reason) once retries are exhausted."""
+    from app.services.notifications.transactional import deliver_account_email
+
+    if self.request.is_eager:
+        # Eager mode (tests, single-process dev): Celery's retry() would re-raise into the
+        # caller (e.g. the registration request), so retry in-process without waiting.
+        for attempt in range(ACCOUNT_EMAIL_MAX_RETRIES + 1):
+            try:
+                status = deliver_account_email(
+                    message_id, text, html, final_attempt=attempt == ACCOUNT_EMAIL_MAX_RETRIES
+                )
+            except TransientProviderError:
+                continue
+            return status.value if status else None
+        return None
+    final = self.request.retries >= ACCOUNT_EMAIL_MAX_RETRIES
+    try:
+        status = deliver_account_email(message_id, text, html, final_attempt=final)
+    except TransientProviderError as exc:
+        raise self.retry(exc=exc, countdown=min(600, 30 * 2**self.request.retries)) from exc
+    return status.value if status else None
+
+
+# Legacy task kept so messages queued by older versions are still delivered.
 @celery_app.task(
     name="notifications.send_email",
     autoretry_for=(TransientProviderError,),

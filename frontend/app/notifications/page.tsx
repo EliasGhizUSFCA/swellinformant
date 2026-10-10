@@ -12,15 +12,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNotifications } from "@/hooks/queries";
+import { deliveryStatus } from "@/lib/delivery";
 import { formatDateTime, formatMoney, titleCase } from "@/lib/format";
 
-const STATUS_VARIANT: Record<string, "good" | "danger" | "info" | "muted" | "warn"> = {
-  sent: "good",
-  failed: "danger",
-  queued: "info",
-  sending: "info",
-  skipped: "muted",
-};
 const PAGE = 25;
 
 function History() {
@@ -69,10 +63,20 @@ function History() {
                   {titleCase(n.channel)}
                   <div className="text-xs text-muted-foreground">{n.recipient_masked}</div>
                 </td>
-                <td className="px-4 py-3">
-                  <Badge variant={STATUS_VARIANT[n.status] ?? "muted"}>{n.status}</Badge>
-                  {n.sent_at && <div className="mt-1 text-xs text-muted-foreground">{formatDateTime(n.sent_at, tz)}</div>}
-                  {n.last_error && n.status !== "sent" && <div className="mt-1 max-w-[200px] text-xs text-destructive">{n.last_error}</div>}
+                <td className="px-4 py-3" data-testid="delivery-cell">
+                  <Badge variant={deliveryStatus(n.status).variant} title={deliveryStatus(n.status).help}>
+                    {deliveryStatus(n.status).label}
+                  </Badge>
+                  <div className="mt-1 max-w-[220px] text-xs text-muted-foreground">{deliveryStatus(n.status).help}</div>
+                  {n.sent_at && (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {n.status === "captured" ? "Captured" : "Handed to"} {n.provider ?? "provider"} · {formatDateTime(n.sent_at, tz)}
+                    </div>
+                  )}
+                  {n.delivered_at && <div className="mt-1 text-xs text-emerald-700">Delivered {formatDateTime(n.delivered_at, tz)}</div>}
+                  {n.last_error && !["accepted", "captured", "delivered"].includes(n.status) && (
+                    <div className={`mt-1 max-w-[220px] text-xs ${n.status === "suppressed" ? "text-amber-800" : "text-destructive"}`}>{n.last_error}</div>
+                  )}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">{n.price ? formatMoney(n.price, n.currency) : "—"}</td>
                 <td className="px-4 py-3">

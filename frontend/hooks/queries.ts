@@ -16,6 +16,7 @@ import type {
   SwellEvent,
   SystemStatus,
   User,
+  VerificationStatus,
 } from "@/types/api";
 
 export const qk = {
@@ -35,6 +36,7 @@ export const qk = {
   airports: (q: string) => ["airports", q] as const,
   regions: ["regions"] as const,
   status: ["system-status"] as const,
+  verification: ["verification-status"] as const,
 };
 
 /** The signed-in user, or `null` when signed out (never throws for 401). */
@@ -132,3 +134,15 @@ export const useRegions = () =>
 
 export const useSystemStatus = () =>
   useQuery({ queryKey: qk.status, queryFn: ({ signal }) => get<SystemStatus>("/api/system/status", signal), staleTime: 60_000 });
+
+/** What happened to the latest verification email; polls while it is still in flight. */
+export const useVerificationStatus = (enabled: boolean) =>
+  useQuery({
+    queryKey: qk.verification,
+    queryFn: ({ signal }) => get<VerificationStatus>("/api/auth/verification-status", signal),
+    enabled,
+    refetchInterval: (q) => {
+      const s = q.state.data?.last_email?.status;
+      return s === "queued" || s === "sending" ? 2000 : false;
+    },
+  });

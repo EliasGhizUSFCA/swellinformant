@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     sim.add_argument("--days-ahead", type=float, default=7.0)
     sim.add_argument("--hours", type=int, default=60)
     sub.add_parser("check-config")
+    admin = sub.add_parser("make-admin", help="grant admin (developer tools) to an account")
+    admin.add_argument("email")
     args = parser.parse_args(argv)
 
     if args.cmd in ("migrate", "init-db"):
@@ -84,6 +86,18 @@ def main(argv: list[str] | None = None) -> int:
                     simulate_swell(db, spot, start=start, duration_hours=args.hours).as_dict()
                 )
             )
+    if args.cmd == "make-admin":
+        from app.models import User
+        from app.services.accounts import normalize_email
+
+        with SessionLocal() as db:
+            user = db.scalar(select(User).where(User.email == normalize_email(args.email)))
+            if user is None:
+                print(f"no account for {args.email}", file=sys.stderr)
+                return 1
+            user.is_admin = True
+            db.commit()
+            print(json.dumps({"admin": True, "user_id": str(user.id)}))
     if args.cmd == "check-config":
         missing = get_settings().missing_live_credentials()
         print(json.dumps({"missing": missing}))

@@ -294,6 +294,8 @@ def notification_out(n: Notification) -> NotificationOut:
         recipient_masked=mask_recipient(n.recipient),
         created_at=n.created_at,
         sent_at=n.sent_at,
+        delivered_at=n.delivered_at,
+        provider=n.provider,
         attempts=n.attempts,
         last_error=n.last_error,
         match_id=n.match_id,

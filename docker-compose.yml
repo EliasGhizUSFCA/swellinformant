@@ -4,14 +4,16 @@
 #   docker compose up --build
 #
 # Web app http://localhost:3000 · API http://localhost:8000 (docs at /docs)
-# Optional local SMTP inbox: docker compose --profile mail up --build  (UI http://localhost:8025)
+# Development inbox (Mailpit): every email the app sends is captured at http://localhost:8025
 
 x-backend-env: &backend-env
   # Values from .env override these defaults; infrastructure URLs point at the compose services.
   APP_ENV: ${APP_ENV:-development}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
-  API_BASE_URL: ${API_BASE_URL:-http://localhost:8000}
+  # Links in emails. Default to the published ports so a changed FRONTEND_PORT/BACKEND_PORT
+  # never produces dead verification or alert links.
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:${FRONTEND_PORT:-3000}}
+  API_BASE_URL: ${API_BASE_URL:-http://localhost:${BACKEND_PORT:-8000}}
   SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
   ENABLE_DEV_ENDPOINTS: ${ENABLE_DEV_ENDPOINTS:-false}
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-swell}:${POSTGRES_PASSWORD:-swell}@postgres:5432/${POSTGRES_DB:-swell}
@@ -19,7 +21,7 @@ x-backend-env: &backend-env
   CELERY_BROKER_URL: redis://redis:6379/1
   CELERY_RESULT_BACKEND: redis://redis:6379/2
   BEAT_RUN_ON_START: ${BEAT_RUN_ON_START:-true}
-  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000}}
   COOKIE_SECURE: ${COOKIE_SECURE:-false}
   RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
   FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-demo}
@@ -37,7 +39,12 @@ x-backend-env: &backend-env
   AMADEUS_BASE_URL: ${AMADEUS_BASE_URL:-https://api.amadeus.com}
   FLIGHT_DAILY_QUOTA: ${FLIGHT_DAILY_QUOTA:-300}
   FX_RATES_USD_JSON: ${FX_RATES_USD_JSON:-}
-  EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+  # mailpit = capture every email in the local dev inbox (http://localhost:8025). Set
+  # smtp / resend / sendgrid in .env for real delivery.
+  EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mailpit}
+  DEV_INBOX_URL: ${DEV_INBOX_URL:-http://localhost:${MAILPIT_UI_PORT:-8025}}
+  RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
+  SENDGRID_WEBHOOK_PUBLIC_KEY: ${SENDGRID_WEBHOOK_PUBLIC_KEY:-}
   EMAIL_FROM: ${EMAIL_FROM:-Swell Travel Agent <alerts@localhost>}
   RESEND_API_KEY: ${RESEND_API_KEY:-}
   SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
@@ -172,14 +179,14 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  # Optional local inbox for EMAIL_PROVIDER=smtp (SMTP 1025, web UI 8025).
+  # Development inbox: captures all mail sent with EMAIL_PROVIDER=mailpit (the compose
+  # default). Web UI http://localhost:8025, SMTP on 1025. Harmless when using real delivery.
   mailpit:
     image: axllent/mailpit:v1.27
-    profiles: ["mail"]
     ports:
-      - "8025:8025"
-      - "1025:1025"
-    restart: unless-stopped
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+    restart: unless-stopped  # the image ships its own health check
 
 volumes:
   pgdata:

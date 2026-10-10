@@ -16,10 +16,14 @@ from sqlalchemy.orm import Session
 from app.auth.deps import get_current_user
 from app.core.config import get_settings
 from app.core.database import get_db, utcnow
-from app.core.errors import AppError, NotFound
-from app.models import SurfSpot, User
+from app.core.errors import AppError, Forbidden, NotFound
+from app.core.ratelimit import hit
+from app.models import EmailMessage, SurfSpot, User
+from app.models.enums import EmailPurpose
 from app.services.forecasts.ingestion import simulate_swell
 from app.services.notifications.providers import read_outbox
+from app.services.notifications.templates import render_test_email
+from app.services.notifications.transactional import queue_account_email
 from app.services.pipeline import run_pipeline
 
 router = APIRouter(prefix="/api/dev", tags=["developer tools"])
@@ -71,3 +75,63 @@ def outbox(
 ) -> list[dict[str, object]]:
     """Messages captured by the console email/SMS adapters (demo only)."""
     return read_outbox(limit=limit)
+
+
+def _email_status(row: EmailMessage) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "purpose": row.purpose.value,
+        "status": row.status.value,
+        "provider": row.provider,
+        "provider_message_id": row.provider_message_id,
+        "attempts": row.attempts,
+        "error": row.last_error,
+        "created_at": row.created_at.isoformat(),
+        "sent_at": row.sent_at.isoformat() if row.sent_at else None,
+        "delivered_at": row.delivered_at.isoformat() if row.delivered_at else None,
+        "events": row.events,
+        "meaning": {
+            "queued": "waiting for the worker",
+            "sending": "worker is talking to the provider",
+            "accepted": "provider accepted it; delivery not yet confirmed",
+            "captured": "captured by the development inbox; not delivered to a real mailbox",
+            "delivered": "provider confirmed delivery (webhook)",
+            "bounced": "provider reported a bounce",
+            "complained": "recipient marked it as spam",
+            "rejected": "provider refused or dropped it",
+            "failed": "could not be handed to the provider",
+        }[row.status.value],
+    }
+
+
+@router.post("/test-email")
+def send_test_email(
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """Send a test message to the signed-in developer's own verified address.
+
+    Restricted to admins (``python -m app.cli make-admin EMAIL``), only to their own
+    verified address (never an arbitrary recipient, so it cannot be used as a relay),
+    and rate-limited."""
+    if not user.is_admin:
+        raise Forbidden("Only admin accounts can send test emails.")
+    if user.email_verified_at is None:
+        raise AppError("Verify your email address first.", code="email_not_verified")
+    hit("dev-test-email", str(user.id), 5, 3600)
+    s = get_settings()
+    subject, text, html = render_test_email(user.full_name, s.email_provider, s.app_base_url)
+    row = queue_account_email(db, user, EmailPurpose.TEST, subject, text, html)
+    db.refresh(row)
+    return _email_status(row)
+
+
+@router.get("/test-email/{message_id}")
+def test_email_status(
+    message_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    row = db.scalar(
+        select(EmailMessage).where(EmailMessage.id == message_id, EmailMessage.user_id == user.id)
+    )
+    if row is None:
+        raise NotFound("No such test email.")
+    return _email_status(row)

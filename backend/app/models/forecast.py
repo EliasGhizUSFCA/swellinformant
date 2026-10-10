@@ -239,3 +239,6 @@ class SwellEvent(Base):
     )
 
     spot: Mapped[SurfSpot] = relationship(lazy="joined")
+    latest_run: Mapped[ForecastRun | None] = relationship(
+        foreign_keys=[latest_run_id], lazy="select"
+    )

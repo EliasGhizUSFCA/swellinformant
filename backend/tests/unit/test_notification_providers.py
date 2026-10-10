@@ -199,19 +199,38 @@ class TestTemplates:
     def test_subject_and_body(self) -> None:
         subject, text, html = render_alert_email(SNAP, LINKS)
         assert subject == "Swell Alert — Jeffreys Bay — Excellent Surf Forecast"
+        snap = {
+            **SNAP,
+            "arrival_buffer_days": 2,
+            "departure_buffer_days": 1,
+            "forecast_issued": "2026-07-03T06:00:00+00:00",
+            "forecast_source": "NOAA GFS-Wave",
+        }
+        links = {
+            **LINKS,
+            "dashboard": "https://app/dashboard",
+            "manage": "https://app/settings#alerts",
+        }
+        subject, text, html = render_alert_email(snap, links)
         for expected in (
-            "Expected surf: 6–9 ft",
-            "Swell: 2.4 m @ 16 s from SW",
-            "Round-trip flight: $780",
-            "Recommended arrival: Jul 10",
-            "Recommended departure: Jul 15",
+            "Swell dates:",
+            "Predicted breaking waves (our estimate): 6–9 ft faces",
+            "Offshore swell (raw model forecast): 2.4 m @ 16 s from SW",
+            "Round-trip flight: $780 per traveller",
+            "Suggested travel dates: Jul 10 – Jul 15",
+            "Travel buffers: arrive 2 day(s) before the swell, leave 1 day(s) after",
             "Departure airport: SFO",
             "Destination airport: PLZ",
             "Forecast confidence: Moderate",
+            "Forecast updated: 2026-07-03 06:00 UTC · NOAA GFS-Wave",
+            "Price checked:",
+            "Flight offers: https://flights",
+            "Your dashboard: https://app/dashboard",
+            "Manage alerts: https://app/settings#alerts",
             "Unsubscribe",
         ):
             assert expected in text, expected
-        assert "https://app/u?t=1" in html
+        assert "https://app/u?t=1" in html and "https://app/settings#alerts" in html
 
     def test_demo_and_mock_are_labelled(self) -> None:
         demo = {**SNAP, "is_demo_forecast": True, "is_mock_flight": True}

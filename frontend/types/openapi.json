@@ -229,6 +229,7 @@
      "auth"
     ],
     "summary": "Verify Email",
+    "description": "Works without a session: the link is usually opened in whatever browser the email\nclient launches.",
     "operationId": "verify_email_api_auth_verify_email_post",
     "requestBody": {
      "content": {
@@ -246,7 +247,7 @@
       "content": {
        "application/json": {
         "schema": {
-         "$ref": "#/components/schemas/Message"
+         "$ref": "#/components/schemas/VerifyOut"
         }
        }
       }
@@ -278,6 +279,69 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/resend-verification-public": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Resend Verification Public",
+    "description": "For people who are signed out (e.g. on another device). Same response whether or\nnot the address is registered or already verified.",
+    "operationId": "resend_verification_public_api_auth_resend_verification_public_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ForgotPasswordIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/verification-status": {
+   "get": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Verification Status",
+    "operationId": "verification_status_api_auth_verification_status_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/VerificationStatusOut"
         }
        }
       }
@@ -1859,6 +1923,56 @@
     }
    }
   },
+  "/api/webhooks/resend": {
+   "post": {
+    "tags": [
+     "webhooks"
+    ],
+    "summary": "Resend Webhook",
+    "operationId": "resend_webhook_api_webhooks_resend_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": {
+          "type": "integer"
+         },
+         "type": "object",
+         "title": "Response Resend Webhook Api Webhooks Resend Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/webhooks/sendgrid": {
+   "post": {
+    "tags": [
+     "webhooks"
+    ],
+    "summary": "Sendgrid Webhook",
+    "operationId": "sendgrid_webhook_api_webhooks_sendgrid_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": {
+          "type": "integer"
+         },
+         "type": "object",
+         "title": "Response Sendgrid Webhook Api Webhooks Sendgrid Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/dev/simulate-swell": {
    "post": {
     "tags": [
@@ -1959,6 +2073,74 @@
           "additionalProperties": true
          },
          "title": "Response Outbox Api Dev Outbox Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/dev/test-email": {
+   "post": {
+    "tags": [
+     "developer tools"
+    ],
+    "summary": "Send Test Email",
+    "description": "Send a test message to the signed-in developer's own verified address.\n\nRestricted to admins (``python -m app.cli make-admin EMAIL``), only to their own\nverified address (never an arbitrary recipient, so it cannot be used as a relay),\nand rate-limited.",
+    "operationId": "send_test_email_api_dev_test_email_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Send Test Email Api Dev Test Email Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/dev/test-email/{message_id}": {
+   "get": {
+    "tags": [
+     "developer tools"
+    ],
+    "summary": "Test Email Status",
+    "operationId": "test_email_status_api_dev_test_email__message_id__get",
+    "parameters": [
+     {
+      "name": "message_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Message Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Test Email Status Api Dev Test Email  Message Id  Get"
         }
        }
       }
@@ -2344,6 +2526,76 @@
     },
     "type": "object",
     "title": "DestinationsIn"
+   },
+   "EmailDeliveryOut": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "sent_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sent At"
+     },
+     "delivered_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Delivered At"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "status",
+     "provider",
+     "created_at",
+     "sent_at",
+     "delivered_at",
+     "error"
+    ],
+    "title": "EmailDeliveryOut",
+    "description": "What happened to an account email, in provider terms. ``captured`` means a\ndevelopment inbox kept it (nothing was delivered to a real mailbox)."
    },
    "EventOut": {
     "properties": {
@@ -3650,6 +3902,29 @@
        }
       ],
       "title": "Sent At"
+     },
+     "delivered_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Delivered At"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
      },
      "attempts": {
       "type": "integer",
@@ -6132,6 +6407,82 @@
      "type"
     ],
     "title": "ValidationError"
+   },
+   "VerificationStatusOut": {
+    "properties": {
+     "email_verified": {
+      "type": "boolean",
+      "title": "Email Verified"
+     },
+     "delivery_mode": {
+      "type": "string",
+      "title": "Delivery Mode"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "dev_inbox_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dev Inbox Url"
+     },
+     "captured_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Captured At"
+     },
+     "last_email": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/EmailDeliveryOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "type": "object",
+    "required": [
+     "email_verified",
+     "delivery_mode",
+     "provider",
+     "dev_inbox_url",
+     "captured_at",
+     "last_email"
+    ],
+    "title": "VerificationStatusOut"
+   },
+   "VerifyOut": {
+    "properties": {
+     "message": {
+      "type": "string",
+      "title": "Message"
+     },
+     "outcome": {
+      "type": "string",
+      "title": "Outcome"
+     }
+    },
+    "type": "object",
+    "required": [
+     "message",
+     "outcome"
+    ],
+    "title": "VerifyOut"
    },
    "WindRequirement": {
     "type": "string",

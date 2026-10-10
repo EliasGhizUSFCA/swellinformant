@@ -152,7 +152,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Verify Email */
+        /**
+         * Verify Email
+         * @description Works without a session: the link is usually opened in whatever browser the email
+         *     client launches.
+         */
         post: operations["verify_email_api_auth_verify_email_post"];
         delete?: never;
         options?: never;
@@ -171,6 +175,44 @@ export interface paths {
         put?: never;
         /** Resend Verification */
         post: operations["resend_verification_api_auth_resend_verification_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/resend-verification-public": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resend Verification Public
+         * @description For people who are signed out (e.g. on another device). Same response whether or
+         *     not the address is registered or already verified.
+         */
+        post: operations["resend_verification_public_api_auth_resend_verification_public_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/verification-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Verification Status */
+        get: operations["verification_status_api_auth_verification_status_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -752,6 +794,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/webhooks/resend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resend Webhook */
+        post: operations["resend_webhook_api_webhooks_resend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/webhooks/sendgrid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sendgrid Webhook */
+        post: operations["sendgrid_webhook_api_webhooks_sendgrid_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dev/simulate-swell": {
         parameters: {
             query?: never;
@@ -798,6 +874,47 @@ export interface paths {
          * @description Messages captured by the console email/SMS adapters (demo only).
          */
         get: operations["outbox_api_dev_outbox_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dev/test-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Test Email
+         * @description Send a test message to the signed-in developer's own verified address.
+         *
+         *     Restricted to admins (``python -m app.cli make-admin EMAIL``), only to their own
+         *     verified address (never an arbitrary recipient, so it cannot be used as a relay),
+         *     and rate-limited.
+         */
+        post: operations["send_test_email_api_dev_test_email_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dev/test-email/{message_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Test Email Status */
+        get: operations["test_email_status_api_dev_test_email__message_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -940,6 +1057,28 @@ export interface components {
             countries?: string[];
             /** Region Groups */
             region_groups?: string[];
+        };
+        /**
+         * EmailDeliveryOut
+         * @description What happened to an account email, in provider terms. ``captured`` means a
+         *     development inbox kept it (nothing was delivered to a real mailbox).
+         */
+        EmailDeliveryOut: {
+            /** Status */
+            status: string;
+            /** Provider */
+            provider: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Sent At */
+            sent_at: string | null;
+            /** Delivered At */
+            delivered_at: string | null;
+            /** Error */
+            error: string | null;
         };
         /** EventOut */
         EventOut: {
@@ -1416,6 +1555,10 @@ export interface components {
             created_at: string;
             /** Sent At */
             sent_at: string | null;
+            /** Delivered At */
+            delivered_at?: string | null;
+            /** Provider */
+            provider?: string | null;
             /** Attempts */
             attempts: number;
             /** Last Error */
@@ -2278,6 +2421,27 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /** VerificationStatusOut */
+        VerificationStatusOut: {
+            /** Email Verified */
+            email_verified: boolean;
+            /** Delivery Mode */
+            delivery_mode: string;
+            /** Provider */
+            provider: string;
+            /** Dev Inbox Url */
+            dev_inbox_url: string | null;
+            /** Captured At */
+            captured_at: string | null;
+            last_email: components["schemas"]["EmailDeliveryOut"] | null;
+        };
+        /** VerifyOut */
+        VerifyOut: {
+            /** Message */
+            message: string;
+            /** Outcome */
+            outcome: string;
+        };
         /**
          * WindRequirement
          * @enum {string}
@@ -2503,7 +2667,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Message"];
+                    "application/json": components["schemas"]["VerifyOut"];
                 };
             };
             /** @description Validation Error */
@@ -2533,6 +2697,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Message"];
+                };
+            };
+        };
+    };
+    resend_verification_public_api_auth_resend_verification_public_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForgotPasswordIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verification_status_api_auth_verification_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationStatusOut"];
                 };
             };
         };
@@ -3649,6 +3866,50 @@ export interface operations {
             };
         };
     };
+    resend_webhook_api_webhooks_resend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+        };
+    };
+    sendgrid_webhook_api_webhooks_sendgrid_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+        };
+    };
     simulate_api_dev_simulate_swell_post: {
         parameters: {
             query?: never;
@@ -3726,6 +3987,61 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_test_email_api_dev_test_email_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    test_email_status_api_dev_test_email__message_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

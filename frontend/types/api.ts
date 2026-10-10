@@ -37,6 +37,8 @@ export type Offer = S["OfferOut"];
 export type FlightSlice = S["SliceOut"];
 export type NotificationItem = S["NotificationOut"];
 export type NotificationPage = S["NotificationPage"];
+export type VerificationStatus = S["VerificationStatusOut"];
+export type VerifyResult = S["VerifyOut"];
 
 export type QualityLabel = "poor" | "fair" | "good" | "very_good" | "excellent" | "exceptional";
 
@@ -46,6 +48,9 @@ export interface SystemStatus {
     forecast_providers: string[];
     flight_provider: string;
     email_provider: string;
+    email_delivery: "capture" | "live";
+    dev_inbox_url: string | null;
+    captured_email_location: string | null;
     sms_provider: string;
     dev_tools: boolean;
   };

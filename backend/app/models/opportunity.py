@@ -178,7 +178,11 @@ class Notification(TimestampMixin, Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     provider: Mapped[str | None] = mapped_column(String(20))
     provider_message_id: Mapped[str | None] = mapped_column(String(255))
+    # When the provider accepted (or a dev inbox captured) the message.
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Confirmed by a provider delivery webhook; never inferred from acceptance.
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    events: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
 
     match: Mapped[OpportunityMatch | None] = relationship(lazy="select")
 

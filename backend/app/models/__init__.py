@@ -8,6 +8,7 @@ from app.models.forecast import (
     SwellEvent,
     WaveForecast,
 )
+from app.models.messaging import EmailMessage
 from app.models.opportunity import (
     BackgroundJobLog,
     Notification,
@@ -28,6 +29,7 @@ from app.models.user import (
 __all__ = [
     "Airport",
     "BackgroundJobLog",
+    "EmailMessage",
     "FlightOffer",
     "FlightSearch",
     "ForecastRun",

@@ -15,7 +15,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ForecastProviderName = Literal["open_meteo", "windy", "demo"]
 FlightProviderName = Literal["duffel", "amadeus", "demo"]
-EmailProviderName = Literal["console", "smtp", "resend", "sendgrid"]
+EmailProviderName = Literal["console", "mailpit", "smtp", "resend", "sendgrid"]
+# Providers that capture mail locally for development: nothing reaches a real mailbox.
+CAPTURE_EMAIL_PROVIDERS = frozenset({"console", "mailpit"})
 SmsProviderName = Literal["console", "twilio", "disabled"]
 
 
@@ -111,8 +113,16 @@ class Settings(BaseSettings):
     fx_rates_usd_json: str | None = None
 
     # ------------------------------------------------------------------ notifications
+    # console: OUTBOX_DIR file; mailpit: local SMTP inbox (web UI at DEV_INBOX_URL);
+    # smtp / resend / sendgrid: real delivery.
     email_provider: EmailProviderName = "console"
     email_from: str = "Swell Travel Agent <alerts@localhost>"
+    # Where developers read captured mail (shown in the UI for capture providers only).
+    dev_inbox_url: str | None = None
+    # Delivery webhooks (optional): Resend signs with Svix ("whsec_..."), SendGrid's Event
+    # Webhook with an ECDSA key (base64 DER public key from the SendGrid settings page).
+    resend_webhook_secret: str | None = None
+    sendgrid_webhook_public_key: str | None = None
     resend_api_key: str | None = None
     sendgrid_api_key: str | None = None
     smtp_host: str = "localhost"
@@ -159,6 +169,11 @@ class Settings(BaseSettings):
                 raise ValueError("ENABLE_DEV_ENDPOINTS must be false in production")
             if not self.cookie_secure:
                 raise ValueError("COOKIE_SECURE must be true in production (HTTPS)")
+            if self.email_capture_only:
+                raise ValueError(
+                    f"EMAIL_PROVIDER={self.email_provider} only captures mail locally; "
+                    "use smtp, resend or sendgrid in production"
+                )
         providers = self.forecast_provider_list
         if "demo" in providers and len(providers) > 1:
             raise ValueError(
@@ -201,6 +216,20 @@ class Settings(BaseSettings):
             return {}
         data = json.loads(self.fx_rates_usd_json)
         return {str(k).upper(): float(v) for k, v in data.items()}
+
+    @property
+    def email_capture_only(self) -> bool:
+        """True when email is captured locally (development) rather than delivered."""
+        return self.email_provider in CAPTURE_EMAIL_PROVIDERS
+
+    @property
+    def captured_email_location(self) -> str | None:
+        """Where a developer finds captured mail, or None for real delivery."""
+        if self.email_provider == "mailpit":
+            return self.dev_inbox_url or f"Mailpit at {self.smtp_host}"
+        if self.email_provider == "console":
+            return f"{self.outbox_dir}/outbox.jsonl"
+        return None
 
     def missing_live_credentials(self) -> list[str]:
         """Names of env vars that are required by the configured live providers but unset."""
