@@ -147,6 +147,24 @@ class TestEstimate:
             "shadowing from the swell window (no shadow table)"
         ]
 
+    def test_spectral_form_reduces_to_partition_form_for_a_delta_spectrum(self) -> None:
+        """X = Hs² · Tp for a narrow spectrum at normal incidence (research unit test)."""
+        import numpy as np
+
+        hs, tp = 2.0, 14.0
+        freqs = np.array([1 / 16, 1 / 14, 1 / 12])
+        dirs = np.arange(0.0, 360.0, 10.0)
+        df = np.full(3, 0.01)
+        dtheta = 2 * math.pi / dirs.size
+        energy = np.zeros((3, dirs.size))
+        energy[1, 27] = (hs / 4) ** 2 / (df[1] * dtheta)  # all energy at Tp from 270° (= β)
+        hb = ns.spectral_breaking_height(energy, freqs, dirs, PROFILE, df=df, dtheta_rad=dtheta)
+        assert hb == pytest.approx(ns.komar_gaughan_m(hs, tp), rel=1e-9)
+        # energy from behind the coast contributes nothing
+        energy_back = np.zeros_like(energy)
+        energy_back[1, 9] = energy[1, 27]
+        assert ns.spectral_breaking_height(energy_back, freqs, dirs, PROFILE, df=df) == 0.0
+
     def test_inversion_round_trip(self) -> None:
         h0 = ns.deep_water_height_for_breaking(3.0, 15.0, 265.0, PROFILE)
         got = ns.estimate([ns.Partition("s", h0, 15.0, 265.0)], PROFILE).breaking_m
@@ -156,8 +174,8 @@ class TestEstimate:
 class TestUncertainty:
     def test_lead_table_interpolation(self) -> None:
         assert lead_sigma(0) == LEAD_TABLE[0][1]
-        assert lead_sigma(72) == pytest.approx(0.168)
-        assert lead_sigma(96) == pytest.approx((0.168 + 0.232) / 2)
+        assert lead_sigma(72) == pytest.approx(0.192)
+        assert lead_sigma(96) == pytest.approx((0.192 + 0.276) / 2)
         values = [lead_sigma(h) for h in range(0, 16 * 24, 6)]
         assert values == sorted(values)
         assert lead_sigma(10_000) <= 0.8
@@ -171,13 +189,13 @@ class TestUncertainty:
         assert d1.kind == "heuristic" and d1.source == "lead_table"
         # an uncalibrated translation dominates at short leads
         assert d1.sigma_translation == SIGMA_TRANSLATION_UNCALIBRATED
-        assert d1.sigma_offshore == pytest.approx(math.hypot(0.074, SIGMA_FLOOR))
+        assert d1.sigma_offshore == pytest.approx(math.hypot(0.080, SIGMA_FLOOR))
 
     def test_ensemble_spread_and_disagreement(self) -> None:
         calm = breaking_uncertainty(6.0, 168, ensemble=EnsembleInfo(2.0, 0.1))
         stormy = breaking_uncertainty(6.0, 168, ensemble=EnsembleInfo(2.0, 0.8))
         assert calm.kind == stormy.kind == "ensemble_heuristic"
-        assert calm.sigma_forecast == pytest.approx(0.05)
+        assert calm.sigma_forecast == pytest.approx(1.05 * 0.05)
         assert stormy.p90_ft > calm.p90_ft
         disagree = breaking_uncertainty(6.0, 24, between_model_sigma=0.4)
         assert disagree.source == "model_disagreement" and disagree.sigma_forecast == 0.4
@@ -192,8 +210,10 @@ class TestUncertainty:
 
     def test_confidence_index(self) -> None:
         day1 = confidence_index(lead_sigma(24), 1.0, False)
+        day5 = confidence_index(lead_sigma(120), 1.0, False)
         day7 = confidence_index(lead_sigma(168), 1.0, False)
-        assert day1 > 70 > day7 >= 45
+        # high for ~2 days, moderate to ~day 6, low beyond (skill is lost between days 4-10)
+        assert day1 >= 70 > day5 >= 45 > day7
         assert confidence_index(lead_sigma(24), 1.0, True) < day1
         assert confidence_index(lead_sigma(24), 0.4, False) < day1
         assert 0 <= confidence_index(5.0, 0.0, True) <= 100

@@ -7,11 +7,13 @@ The breaking-height forecast is treated as log-normal around the central estimat
 The exponents 0.8 and 0.4 come from Komar–Gaughan scaling (Hb ∝ H0^0.8 · T^0.4).
 
 * **Offshore part** σ_ln(Hs)² = σ_f² + σ0², where σ_f is the forecast-dependent spread:
-  - GEFS-Wave ensemble spread / mean when an ensemble row exists for that hour
-    (``ensemble_heuristic``). In the 51-cycle analysis-verification in the research notes
-    the RMS relative spread matched the log error at every lead (0.09/0.17/0.24/0.31/0.38
-    vs 0.07/0.17/0.23/0.31/0.39 at days 1/3/5/7/10), so k = 1;
-  - otherwise the lead-time table σ_L (``heuristic``), from the same analysis;
+  - k · GEFS-Wave ensemble spread / mean when an ensemble row exists for that hour
+    (``ensemble_heuristic``), with k = 1.05: in the 51-cycle GEFS analysis-verification
+    (docs/surf-forecast-model-research.md, section 12) the unfiltered log error exceeds
+    the relative spread by 6–13 % on days 3–10;
+  - otherwise the lead-time table σ_L (``heuristic``) from the same analysis, unfiltered
+    (flat seas included): 0.080/0.192/0.276/0.352/0.430 at days 1/3/5/7/10. Both are
+    measured against the model's own analysis, so they are a lower bound on real error;
   - and never less than the spread between independent model families when several
     were blended.
   σ0 = 0.15 is a prior floor for model-versus-reality error, labelled heuristic: the
@@ -36,14 +38,17 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-# (lead days, σ_ln of Hs) — GEFS-Wave ensemble-mean log error vs its own analysis.
+# (lead days, σ_ln of Hs) — GEFS-Wave ensemble-mean log error vs its own analysis,
+# unfiltered (a lower bound on the error against observations).
 LEAD_TABLE: tuple[tuple[float, float], ...] = (
-    (1.0, 0.074),
-    (3.0, 0.168),
-    (5.0, 0.232),
-    (7.0, 0.305),
-    (10.0, 0.387),
+    (1.0, 0.080),
+    (3.0, 0.192),
+    (5.0, 0.276),
+    (7.0, 0.352),
+    (10.0, 0.430),
 )
+# Unfiltered log error / relative ensemble spread (1.0–1.1 in the research analysis).
+SPREAD_SCALE = 1.05
 SIGMA_FLOOR = 0.15
 SIGMA_PERIOD_REL = 0.08
 SIGMA_TRANSLATION_UNCALIBRATED = 0.30
@@ -119,7 +124,7 @@ def breaking_uncertainty(
     mean = ensemble.hs_mean_m if ensemble else None
     spread = ensemble.hs_spread_m if ensemble else None
     if mean is not None and spread is not None and mean > 0.05:
-        sigma_f = spread / mean
+        sigma_f = SPREAD_SCALE * spread / mean
         source = "ensemble_spread"
     if between_model_sigma is not None and between_model_sigma > sigma_f:
         sigma_f = between_model_sigma

@@ -343,6 +343,41 @@ def estimate(partitions: list[Partition], profile: Profile) -> NearshoreEstimate
     return NearshoreEstimate(hb, hb * SETS_RATIO, parts, depth_limited, assumptions)
 
 
+def spectral_breaking_height(
+    energy: np.ndarray,
+    frequencies_hz: np.ndarray,
+    directions_from_deg: np.ndarray,
+    profile: Profile,
+    *,
+    df: np.ndarray | None = None,
+    dtheta_rad: float | None = None,
+) -> float:
+    """Breaking height (m) from a 2-D spectrum E(f, θ) (m²/Hz/rad), directions FROM.
+
+    X = 16 · Σ_f Σ_θ E(f, θ) · f⁻¹ · max(cos(θ − β), 0) · T(θ) · Δf · Δθ, then
+    Hb = 0.39 · g^0.2 · X^0.4 · Kf(Tp). For a narrow spectrum at normal incidence X equals
+    Hs² · Tp, so this reduces to the partition form; it handles spreading, multiple
+    swells and shadowing in one sum. WW3 ``.spec`` directions are "going-to" in radians:
+    convert them to FROM degrees before calling. (Research notes, nearshore section; not
+    yet wired to station-spectrum ingestion.)
+    """
+    f = np.asarray(frequencies_hz, dtype=float)
+    theta = np.asarray(directions_from_deg, dtype=float) % 360.0
+    e = np.asarray(energy, dtype=float)
+    if e.shape != (f.size, theta.size):
+        raise ValueError("energy must have shape (n_frequencies, n_directions)")
+    if df is None:
+        df = np.gradient(f) if f.size > 1 else np.ones(1)
+    if dtheta_rad is None:
+        dtheta_rad = 2 * math.pi / theta.size
+    response = np.interp(theta, _GRID, angular_response(profile), period=360.0)
+    x = 16.0 * float(np.sum(e * (1.0 / f)[:, None] * response[None, :] * df[:, None]) * dtheta_rad)
+    if x <= 0:
+        return 0.0
+    peak_period = 1.0 / f[int(np.argmax(e.sum(axis=1)))]
+    return KOMAR_GAUGHAN * G**0.2 * x**0.4 * profile.focusing(peak_period)
+
+
 def deep_water_height_for_breaking(
     target_breaking_m: float, period_s: float, direction_deg: float, profile: Profile
 ) -> float:
