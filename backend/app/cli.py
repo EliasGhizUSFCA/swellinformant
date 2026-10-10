@@ -6,15 +6,24 @@ python -m app.cli seed             # (re)load airports and surf spots from data/
 python -m app.cli pipeline         # run jobs A→G once, synchronously
 python -m app.cli simulate-swell SLUG [--days-ahead 7] [--hours 60]
 python -m app.cli check-config     # list missing credentials for configured live providers
+
+Command groups provided by feature packages (``python -m app.cli GROUP --help``):
+  obs     observation stations and buoy data      (app.services.observations.cli)
+  verify  forecast verification and backtests     (app.services.verification.cli)
+  ml      ML experiments and the model registry   (app.services.ml.cli)
+  engine  ensemble, blending and spot profiles     (app.services.forecasts.cli)
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.util
 import json
 import sys
 from datetime import timedelta
 from pathlib import Path
+from types import ModuleType
 
 from sqlalchemy import select
 
@@ -31,10 +40,37 @@ def migrate() -> None:
     command.upgrade(cfg, "head")
 
 
+# Each module exposes ``register(subparsers) -> None`` (adding one parser named after the
+# group) and ``run(args) -> int``.
+PLUGIN_GROUPS = {
+    "obs": "app.services.observations.cli",
+    "verify": "app.services.verification.cli",
+    "ml": "app.services.ml.cli",
+    "engine": "app.services.forecasts.cli",
+}
+
+
+def _plugins() -> dict[str, ModuleType]:
+    found: dict[str, ModuleType] = {}
+    for group, module in PLUGIN_GROUPS.items():
+        try:
+            spec = importlib.util.find_spec(module)
+        except ModuleNotFoundError as exc:
+            if exc.name and module.startswith(exc.name):
+                continue  # the feature package is not installed
+            raise
+        if spec is not None:
+            found[group] = importlib.import_module(module)
+    return found
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    plugins = _plugins()
+    for plugin in plugins.values():
+        plugin.register(sub)
     sub.add_parser("migrate")
     seed_p = sub.add_parser("seed")
     seed_p.add_argument("--data-dir", default=None)
@@ -50,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
     admin = sub.add_parser("make-admin", help="grant admin (developer tools) to an account")
     admin.add_argument("email")
     args = parser.parse_args(argv)
+    if args.cmd in plugins:
+        return int(plugins[args.cmd].run(args))
 
     if args.cmd in ("migrate", "init-db"):
         migrate()

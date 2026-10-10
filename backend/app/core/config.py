@@ -78,6 +78,50 @@ class Settings(BaseSettings):
     open_meteo_api_key: str | None = None
     open_meteo_wave_model: str = "ncep_gfswave025"
     open_meteo_atmos_model: str = "gfs_seamless"
+
+    # NOAA open data on AWS (direct GRIB2 by byte range; no key needed).
+    # Bandwidth: roughly 10-15 MB per forecast step for all spots (see docs/FORECAST_SOURCES.md).
+    noaa_gfs_base_url: str = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
+    noaa_gefs_base_url: str = "https://noaa-gefs-pds.s3.amazonaws.com"
+    noaa_step_hours: int = Field(default=3, ge=1, le=6)
+    noaa_max_lead_hours: int = Field(default=240, ge=24, le=384)
+    noaa_availability_lag_hours: float = 5.0
+    # GEFS-Wave ensemble mean/spread (uncertainty); its own job, off by default.
+    gefs_enabled: bool = False
+    gefs_step_hours: int = Field(default=6, ge=3, le=12)
+    gefs_max_lead_hours: int = Field(default=240, ge=24, le=384)
+    gefs_availability_lag_hours: float = 7.5
+    # ECMWF open data (CC BY 4.0, attribution required).
+    ecmwf_base_url: str = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
+    ecmwf_max_lead_hours: int = Field(default=240, ge=24, le=360)
+    ecmwf_availability_lag_hours: float = 8.0
+    # Shared by the GRIB ingesters.
+    grib_download_workers: int = Field(default=6, ge=1, le=16)
+    grib_max_cell_distance_km: float = 60.0
+
+    # ------------------------------------------------------------------ blending
+    # Combine the latest run of each configured source into one forecast (see
+    # app.services.forecasts.blend). Off = use the highest-priority source only.
+    forecast_blend_enabled: bool = True
+
+    # ------------------------------------------------------------------ observations
+    # Comma separated: aodn, metoffice, ndbc (NDBC needs www.ndbc.noaa.gov reachable).
+    observation_providers: str = "aodn,metoffice,ndbc"
+    observations_enabled: bool = False
+    observation_lookback_hours: int = Field(default=48, ge=1, le=24 * 31)
+    aodn_base_url: str = "https://aodn-cloud-optimised.s3.ap-southeast-2.amazonaws.com"
+    metoffice_base_url: str = (
+        "https://met-office-marine-observations-data.s3.eu-west-2.amazonaws.com"
+    )
+    ndbc_base_url: str = "https://www.ndbc.noaa.gov"
+
+    # ------------------------------------------------------------------ verification & ML
+    verification_enabled: bool = False
+    # Forecast sources archived at observation stations for verification.
+    point_forecast_sources: str = "gfswave_bulletin"
+    ml_artifact_dir: str = "/tmp/swell-ml"  # noqa: S108  (use a persistent volume in production)
+    # Apply ACTIVE ML corrections (only models that passed the deployment criteria).
+    ml_corrections_enabled: bool = True
     windy_api_key: str | None = None
     # Demo provider only: false = calm background seas, so only simulated swells create
     # events (used by the end-to-end tests for deterministic results).
@@ -154,6 +198,9 @@ class Settings(BaseSettings):
     retention_flight_days: int = 30
     retention_job_log_days: int = 30
     retention_notification_days: int = 365
+    # The prediction archive and verification pairs are kept much longer than forecast
+    # runs: they are the only record of what was forecast at each lead time.
+    retention_archive_days: int = 730
 
     @field_validator("app_base_url", "api_base_url")
     @classmethod
@@ -180,7 +227,7 @@ class Settings(BaseSettings):
                 "FORECAST_PROVIDERS cannot mix 'demo' with live providers: synthetic data "
                 "must never be blended into real forecasts"
             )
-        unknown = set(providers) - {"open_meteo", "windy", "demo"}
+        unknown = set(providers) - {"open_meteo", "windy", "demo", "noaa_gfs", "ecmwf_ifs"}
         if unknown:
             raise ValueError(f"Unknown FORECAST_PROVIDERS entries: {sorted(unknown)}")
         if self.detection_lead_min_days > self.detection_lead_max_days:
@@ -209,6 +256,14 @@ class Settings(BaseSettings):
     def forecast_provider_list(self) -> list[str]:
         names = [p.strip() for p in self.forecast_providers.split(",") if p.strip()]
         return names or ["demo"]
+
+    @property
+    def observation_provider_list(self) -> list[str]:
+        return [p.strip() for p in self.observation_providers.split(",") if p.strip()]
+
+    @property
+    def point_forecast_source_list(self) -> list[str]:
+        return [p.strip() for p in self.point_forecast_sources.split(",") if p.strip()]
 
     @property
     def fx_rates_usd(self) -> dict[str, float]:

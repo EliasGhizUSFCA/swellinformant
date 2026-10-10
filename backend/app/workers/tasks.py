@@ -186,6 +186,46 @@ def cleanup_task(self: Task) -> dict[str, Any]:
     return run_job("maintenance.cleanup", cleanup, task_id=self.request.id, chain=False)
 
 
+@celery_app.task(
+    name="forecasts.acquire_ensemble",
+    bind=True,
+    autoretry_for=(TransientProviderError,),
+    retry_backoff=120,
+    max_retries=2,
+)
+def acquire_ensemble_task(self: Task) -> dict[str, Any]:
+    """GEFS-Wave ensemble mean/spread for forecast uncertainty (GEFS_ENABLED)."""
+    from app.services.forecasts.ensemble import acquire_ensemble
+
+    return run_job(
+        "forecasts.acquire_ensemble", acquire_ensemble, task_id=self.request.id, lock_ttl=3600
+    )
+
+
+@celery_app.task(name="observations.ingest", bind=True)
+def ingest_observations(self: Task) -> dict[str, Any]:
+    """Buoy observations for verification and training (OBSERVATIONS_ENABLED)."""
+    from app.services.observations.ingest import ingest_all
+
+    return run_job("observations.ingest", ingest_all, task_id=self.request.id, lock_ttl=1800)
+
+
+@celery_app.task(name="verification.collect_point_forecasts", bind=True)
+def collect_point_forecasts(self: Task) -> dict[str, Any]:
+    """Archive model forecasts at observation stations (VERIFICATION_ENABLED)."""
+    from app.services.verification.point_forecasts import collect_recent
+
+    return run_job("verification.collect_point_forecasts", collect_recent, task_id=self.request.id)
+
+
+@celery_app.task(name="verification.run", bind=True)
+def run_verification_task(self: Task) -> dict[str, Any]:
+    """Pair forecasts with observations and refresh the accuracy metrics."""
+    from app.services.verification.jobs import run_verification
+
+    return run_job("verification.run", run_verification, task_id=self.request.id, lock_ttl=3600)
+
+
 @celery_app.task(name="forecasts.check_staleness", bind=True)
 def check_staleness(self: Task) -> dict[str, Any]:
     from app.services.forecasts.queries import forecast_status

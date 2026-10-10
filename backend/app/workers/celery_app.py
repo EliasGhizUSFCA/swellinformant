@@ -27,6 +27,33 @@ from app.core.logging import configure_logging, install_redaction
 
 settings = get_settings()
 
+
+def _optional_schedule() -> dict[str, dict[str, object]]:
+    """Jobs that only run when their feature flag is on (they download extra data)."""
+    jobs: dict[str, dict[str, object]] = {}
+    if settings.gefs_enabled:
+        # GEFS-Wave 00/06/12/18Z output is complete ~7 h after the cycle.
+        jobs["ensemble-acquisition"] = {
+            "task": "forecasts.acquire_ensemble",
+            "schedule": crontab(hour="1,7,13,19", minute=40),
+        }
+    if settings.observations_enabled:
+        jobs["observation-ingest"] = {
+            "task": "observations.ingest",
+            "schedule": timedelta(hours=1),
+        }
+    if settings.verification_enabled:
+        jobs["point-forecast-archive"] = {
+            "task": "verification.collect_point_forecasts",
+            "schedule": crontab(hour="0,6,12,18", minute=50),
+        }
+        jobs["verification"] = {
+            "task": "verification.run",
+            "schedule": crontab(hour=4, minute=10),
+        }
+    return jobs
+
+
 celery_app = Celery(
     "swell_travel_agent",
     broker=settings.broker_url,
@@ -81,6 +108,7 @@ celery_app.conf.update(
             "task": "maintenance.cleanup",
             "schedule": crontab(hour=3, minute=30),
         },
+        **_optional_schedule(),
     },
 )
 
