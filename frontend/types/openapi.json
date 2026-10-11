@@ -2311,6 +2311,87 @@
     }
    }
   },
+  "/api/map/fields": {
+   "get": {
+    "tags": [
+     "map"
+    ],
+    "summary": "Fields Index",
+    "description": "Which global fields exist for the current model run, and their valid times.",
+    "operationId": "fields_index_api_map_fields_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FieldIndexOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/map/fields/{variable}": {
+   "get": {
+    "tags": [
+     "map"
+    ],
+    "summary": "Field Data",
+    "description": "One field as zlib-compressed uint8 bytes; decoding parameters in X-Field-Meta.",
+    "operationId": "field_data_api_map_fields__variable__get",
+    "parameters": [
+     {
+      "name": "variable",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^(hs|tp|wave_dir|wind_u|wind_v|pressure)$",
+       "title": "Variable"
+      }
+     },
+     {
+      "name": "at",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date-time"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Valid time (ISO 8601); default now",
+       "title": "At"
+      },
+      "description": "Valid time (ISO 8601); default now"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/octet-stream": {}
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/dev/simulate-swell": {
    "post": {
     "tags": [
@@ -3011,6 +3092,47 @@
        }
       ],
       "title": "Ml Model Version"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Confidence Reasons",
+      "default": []
+     },
+     "lead_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lead Hours"
      }
     },
     "type": "object",
@@ -3563,6 +3685,141 @@
     ],
     "title": "ExperimentSummary"
    },
+   "FieldIndexOut": {
+    "properties": {
+     "available": {
+      "type": "boolean",
+      "title": "Available"
+     },
+     "message": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Message"
+     },
+     "source": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/FieldSourceOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Key"
+     },
+     "cycle_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle Time"
+     },
+     "valid_times": {
+      "items": {
+       "type": "string",
+       "format": "date-time"
+      },
+      "type": "array",
+      "title": "Valid Times",
+      "default": []
+     },
+     "variables": {
+      "items": {
+       "$ref": "#/components/schemas/FieldVariableOut"
+      },
+      "type": "array",
+      "title": "Variables",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "available"
+    ],
+    "title": "FieldIndexOut"
+   },
+   "FieldSourceOut": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "attribution": {
+      "type": "string",
+      "title": "Attribution"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "attribution",
+     "is_demo"
+    ],
+    "title": "FieldSourceOut"
+   },
+   "FieldVariableOut": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "unit": {
+      "type": "string",
+      "title": "Unit"
+     },
+     "display_min": {
+      "type": "number",
+      "title": "Display Min"
+     },
+     "display_max": {
+      "type": "number",
+      "title": "Display Max"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "label",
+     "unit",
+     "display_min",
+     "display_max"
+    ],
+    "title": "FieldVariableOut"
+   },
    "ForecastPoint": {
     "properties": {
      "valid_time": {
@@ -3929,6 +4186,47 @@
       "additionalProperties": true,
       "type": "object",
       "title": "Components"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Confidence Reasons",
+      "default": []
+     },
+     "lead_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lead Hours"
      }
     },
     "type": "object",
@@ -6359,6 +6657,174 @@
     ],
     "title": "RegisterIn"
    },
+   "ResearchOut": {
+    "properties": {
+     "research_class": {
+      "type": "string",
+      "title": "Research Class"
+     },
+     "summary": {
+      "type": "string",
+      "title": "Summary"
+     },
+     "gaps": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Gaps"
+     },
+     "variables": {
+      "items": {
+       "$ref": "#/components/schemas/ResearchVariableOut"
+      },
+      "type": "array",
+      "title": "Variables"
+     },
+     "sources": {
+      "items": {
+       "$ref": "#/components/schemas/ResearchSourceOut"
+      },
+      "type": "array",
+      "title": "Sources"
+     },
+     "methodology_version": {
+      "type": "string",
+      "title": "Methodology Version"
+     },
+     "assessed_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Assessed At"
+     },
+     "research_updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Updated At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "research_class",
+     "summary",
+     "gaps",
+     "variables",
+     "sources",
+     "methodology_version",
+     "assessed_at",
+     "research_updated_at"
+    ],
+    "title": "ResearchOut",
+    "description": "How well the spot's ideal conditions are understood (not forecast confidence)."
+   },
+   "ResearchSourceOut": {
+    "properties": {
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Url"
+     },
+     "publisher": {
+      "type": "string",
+      "title": "Publisher"
+     },
+     "source_type": {
+      "type": "string",
+      "title": "Source Type"
+     },
+     "published_year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published Year"
+     },
+     "accessed_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Accessed At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "title",
+     "url",
+     "publisher",
+     "source_type",
+     "published_year",
+     "accessed_at"
+    ],
+    "title": "ResearchSourceOut"
+   },
+   "ResearchVariableOut": {
+    "properties": {
+     "variable": {
+      "type": "string",
+      "title": "Variable"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "research_class": {
+      "type": "string",
+      "title": "Research Class"
+     },
+     "summary": {
+      "type": "string",
+      "title": "Summary"
+     },
+     "gaps": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Gaps"
+     },
+     "source_count": {
+      "type": "integer",
+      "title": "Source Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "variable",
+     "label",
+     "research_class",
+     "summary",
+     "gaps",
+     "source_count"
+    ],
+    "title": "ResearchVariableOut"
+   },
    "ResetPasswordIn": {
     "properties": {
      "password": {
@@ -7279,6 +7745,17 @@
       "title": "Upcoming Event Count",
       "default": 0
      },
+     "research_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Class"
+     },
      "forecast_latitude": {
       "type": "number",
       "title": "Forecast Latitude"
@@ -7361,6 +7838,16 @@
       "anyOf": [
        {
         "$ref": "#/components/schemas/PhysicalProfileOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "research": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ResearchOut"
        },
        {
         "type": "null"
@@ -7717,6 +8204,17 @@
       "type": "integer",
       "title": "Upcoming Event Count",
       "default": 0
+     },
+     "research_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Class"
      }
     },
     "type": "object",

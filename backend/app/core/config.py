@@ -130,6 +130,13 @@ class Settings(BaseSettings):
     ml_artifact_dir: str = "/tmp/swell-ml"  # noqa: S108  (use a persistent volume in production)
     # Apply ACTIVE ML corrections (only models that passed the deployment criteria).
     ml_corrections_enabled: bool = True
+    # Map ocean layers (downsampled GFS-Wave + GFS global grids). None = automatic: on
+    # when "noaa_gfs" is a forecast provider (the grids are extracted from files that
+    # provider downloads anyway); True also fetches them in other modes; False = off.
+    map_fields_enabled: bool | None = None
+    map_field_resolution_deg: float = Field(default=0.5, ge=0.25, le=2.0)
+    map_field_max_lead_hours: int = Field(default=240, ge=24, le=384)
+    map_field_step_hours: int = Field(default=3, ge=1, le=12)
     windy_api_key: str | None = None
     # Demo provider only: false = calm background seas, so only simulated swells create
     # events (used by the end-to-end tests for deterministic results).

@@ -7,6 +7,9 @@
 * ``forecast_ensemble_stats`` store ensemble mean / spread (GEFS-Wave) per spot and hour.
 * ``forecast_comparisons`` record, for each blended hour, what every source said, the
   weights used and any disagreement flags.
+* ``map_fields`` hold downsampled global grids (wave height, period, direction, 10 m wind,
+  pressure) per model run and valid time for the map's ocean layers: quantised to one byte
+  per cell and deflate-compressed.
 * ``prediction_archive`` is the verification record: what we predicted, from which model
   run and at which lead time. It is exempt from the forecast-run retention policy (it has
   its own, much longer one) because forecast-time values cannot be reconstructed later.
@@ -25,6 +28,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -203,6 +207,65 @@ class PredictionArchive(Base):
     method: Mapped[str | None] = mapped_column(String(40))
     algorithm_version: Mapped[str | None] = mapped_column(String(16))
     ml_model_version: Mapped[str | None] = mapped_column(String(60))
+    # The two confidence assessments as issued (kept so they can be checked later).
+    forecast_confidence_class: Mapped[str | None] = mapped_column(String(12))
+    local_confidence_class: Mapped[str | None] = mapped_column(String(12))
+    research_class: Mapped[str | None] = mapped_column(String(12))
+    confidence_method: Mapped[str | None] = mapped_column(String(32))
+    confidence_inputs: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     archived_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
+# Map field variables (map_fields.variable) and their unit.
+MAP_FIELD_VARIABLES = {
+    "hs": "m",  # significant wave height (offshore)
+    "tp": "s",  # peak wave period
+    "wave_dir": "deg",  # peak wave direction, degrees FROM
+    "wind_u": "m/s",  # 10 m wind, eastward component
+    "wind_v": "m/s",  # 10 m wind, northward component
+    "pressure": "hPa",  # mean sea-level pressure
+}
+
+
+class MapField(Base):
+    """One downsampled global field of one model run at one valid time.
+
+    ``data`` is zlib (RFC 1950) compressed uint8, ``nx * ny`` cells, row-major: row 0 is
+    the northernmost latitude ``lat0``, row j is ``lat0 - j * dlat``; column i is
+    ``lon0 + i * dlon`` (``lon0`` = -180, wrapping). value = offset + scale * byte, and
+    byte 255 means no data (land, ice or missing).
+    """
+
+    __tablename__ = "map_fields"
+    __table_args__ = (
+        UniqueConstraint("run_id", "valid_time", "variable", name="uq_map_fields_key"),
+        Index("ix_map_fields_variable_valid", "variable", "valid_time"),
+        CheckConstraint(
+            "variable IN (" + ", ".join(f"'{v}'" for v in MAP_FIELD_VARIABLES) + ")",
+            name="variable",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("forecast_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    source_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    run_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    cycle_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    variable: Mapped[str] = mapped_column(String(16), nullable=False)
+    nx: Mapped[int] = mapped_column(Integer, nullable=False)
+    ny: Mapped[int] = mapped_column(Integer, nullable=False)
+    lat0: Mapped[float] = mapped_column(Float, nullable=False)
+    lon0: Mapped[float] = mapped_column(Float, nullable=False)
+    dlat: Mapped[float] = mapped_column(Float, nullable=False)
+    dlon: Mapped[float] = mapped_column(Float, nullable=False)
+    scale: Mapped[float] = mapped_column(Float, nullable=False)
+    offset: Mapped[float] = mapped_column(Float, nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )

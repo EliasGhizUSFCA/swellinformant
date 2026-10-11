@@ -70,6 +70,14 @@ class Conditions(BaseModel):
     breaking_p90_ft: float | None = None
     uncertainty_kind: str | None = None
     ml_model_version: str | None = None
+    # Forecast confidence (the offshore forecast) and local confidence (the breaking
+    # prediction at this break, which also depends on how well the spot is researched):
+    # separate classes "high" | "moderate" | "low", plus short plain-language reasons.
+    # These are documented classifications, not calibrated probabilities.
+    forecast_confidence_class: str | None = None
+    local_confidence_class: str | None = None
+    confidence_reasons: list[str] = []
+    lead_hours: float | None = None
 
 
 class MapSpotOut(BaseModel):
@@ -146,6 +154,9 @@ class SpotSummary(SpotMini):
     best_upcoming: Conditions | None = None
     next_event: EventOut | None = None
     upcoming_event_count: int = 0
+    # Overall research confidence of the spot ("high" | "moderate" | "low"); None when no
+    # assessment exists yet.
+    research_class: str | None = None
 
 
 class PhysicalProfileOut(BaseModel):
@@ -157,6 +168,37 @@ class PhysicalProfileOut(BaseModel):
     has_shadow_table: bool
     data_quality: dict[str, str]
     notes: str
+
+
+class ResearchSourceOut(BaseModel):
+    title: str
+    url: str | None
+    publisher: str
+    source_type: str
+    published_year: int | None
+    accessed_at: datetime | None
+
+
+class ResearchVariableOut(BaseModel):
+    variable: str  # one of models.research.RESEARCH_VARIABLES
+    label: str  # e.g. "Swell direction"
+    research_class: str  # "high" | "moderate" | "low"
+    summary: str  # one short sentence
+    gaps: list[str]  # what is missing or conflicting, in plain language
+    source_count: int
+
+
+class ResearchOut(BaseModel):
+    """How well the spot's ideal conditions are understood (not forecast confidence)."""
+
+    research_class: str
+    summary: str
+    gaps: list[str]
+    variables: list[ResearchVariableOut]
+    sources: list[ResearchSourceOut]
+    methodology_version: str
+    assessed_at: datetime
+    research_updated_at: datetime | None
 
 
 class SpotDetail(SpotSummary):
@@ -178,6 +220,7 @@ class SpotDetail(SpotSummary):
     description: str
     airports: list[SpotAirportOut]
     physical_profile: PhysicalProfileOut | None = None
+    research: ResearchOut | None = None
 
 
 class ForecastPoint(BaseModel):
@@ -221,6 +264,14 @@ class ForecastPoint(BaseModel):
     wind_relation: str
     explanation: str
     components: dict[str, Any]
+    # Forecast confidence (the offshore forecast) and local confidence (the breaking
+    # prediction at this break, which also depends on how well the spot is researched):
+    # separate classes "high" | "moderate" | "low", plus short plain-language reasons.
+    # These are documented classifications, not calibrated probabilities.
+    forecast_confidence_class: str | None = None
+    local_confidence_class: str | None = None
+    confidence_reasons: list[str] = []
+    lead_hours: float | None = None
 
 
 class DailySummary(BaseModel):

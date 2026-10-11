@@ -899,6 +899,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/map/fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fields Index
+         * @description Which global fields exist for the current model run, and their valid times.
+         */
+        get: operations["fields_index_api_map_fields_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/map/fields/{variable}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Field Data
+         * @description One field as zlib-compressed uint8 bytes; decoding parameters in X-Field-Meta.
+         */
+        get: operations["field_data_api_map_fields__variable__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dev/simulate-swell": {
         parameters: {
             query?: never;
@@ -1151,6 +1191,17 @@ export interface components {
             uncertainty_kind?: string | null;
             /** Ml Model Version */
             ml_model_version?: string | null;
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: string | null;
+            /** Local Confidence Class */
+            local_confidence_class?: string | null;
+            /**
+             * Confidence Reasons
+             * @default []
+             */
+            confidence_reasons: string[];
+            /** Lead Hours */
+            lead_hours?: number | null;
         };
         /** DailyStat */
         DailyStat: {
@@ -1356,6 +1407,52 @@ export interface components {
             /** Conclusion */
             conclusion: string;
         };
+        /** FieldIndexOut */
+        FieldIndexOut: {
+            /** Available */
+            available: boolean;
+            /** Message */
+            message?: string | null;
+            source?: components["schemas"]["FieldSourceOut"] | null;
+            /** Run Key */
+            run_key?: string | null;
+            /** Cycle Time */
+            cycle_time?: string | null;
+            /**
+             * Valid Times
+             * @default []
+             */
+            valid_times: string[];
+            /**
+             * Variables
+             * @default []
+             */
+            variables: components["schemas"]["FieldVariableOut"][];
+        };
+        /** FieldSourceOut */
+        FieldSourceOut: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Attribution */
+            attribution: string;
+            /** Is Demo */
+            is_demo: boolean;
+        };
+        /** FieldVariableOut */
+        FieldVariableOut: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /** Unit */
+            unit: string;
+            /** Display Min */
+            display_min: number;
+            /** Display Max */
+            display_max: number;
+        };
         /** ForecastPoint */
         ForecastPoint: {
             /**
@@ -1443,6 +1540,17 @@ export interface components {
             components: {
                 [key: string]: unknown;
             };
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: string | null;
+            /** Local Confidence Class */
+            local_confidence_class?: string | null;
+            /**
+             * Confidence Reasons
+             * @default []
+             */
+            confidence_reasons: string[];
+            /** Lead Hours */
+            lead_hours?: number | null;
         };
         /** ForecastRunOut */
         ForecastRunOut: {
@@ -2225,6 +2333,61 @@ export interface components {
              */
             email: string;
         };
+        /**
+         * ResearchOut
+         * @description How well the spot's ideal conditions are understood (not forecast confidence).
+         */
+        ResearchOut: {
+            /** Research Class */
+            research_class: string;
+            /** Summary */
+            summary: string;
+            /** Gaps */
+            gaps: string[];
+            /** Variables */
+            variables: components["schemas"]["ResearchVariableOut"][];
+            /** Sources */
+            sources: components["schemas"]["ResearchSourceOut"][];
+            /** Methodology Version */
+            methodology_version: string;
+            /**
+             * Assessed At
+             * Format: date-time
+             */
+            assessed_at: string;
+            /** Research Updated At */
+            research_updated_at: string | null;
+        };
+        /** ResearchSourceOut */
+        ResearchSourceOut: {
+            /** Title */
+            title: string;
+            /** Url */
+            url: string | null;
+            /** Publisher */
+            publisher: string;
+            /** Source Type */
+            source_type: string;
+            /** Published Year */
+            published_year: number | null;
+            /** Accessed At */
+            accessed_at: string | null;
+        };
+        /** ResearchVariableOut */
+        ResearchVariableOut: {
+            /** Variable */
+            variable: string;
+            /** Label */
+            label: string;
+            /** Research Class */
+            research_class: string;
+            /** Summary */
+            summary: string;
+            /** Gaps */
+            gaps: string[];
+            /** Source Count */
+            source_count: number;
+        };
         /** ResetPasswordIn */
         ResetPasswordIn: {
             /** Password */
@@ -2556,6 +2719,8 @@ export interface components {
              * @default 0
              */
             upcoming_event_count: number;
+            /** Research Class */
+            research_class?: string | null;
             /** Forecast Latitude */
             forecast_latitude: number;
             /** Forecast Longitude */
@@ -2591,6 +2756,7 @@ export interface components {
             /** Airports */
             airports: components["schemas"]["SpotAirportOut"][];
             physical_profile?: components["schemas"]["PhysicalProfileOut"] | null;
+            research?: components["schemas"]["ResearchOut"] | null;
         };
         /** SpotForecastOut */
         SpotForecastOut: {
@@ -2711,6 +2877,8 @@ export interface components {
              * @default 0
              */
             upcoming_event_count: number;
+            /** Research Class */
+            research_class?: string | null;
         };
         /** StationSummary */
         StationSummary: {
@@ -4542,6 +4710,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PairsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fields_index_api_map_fields_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldIndexOut"];
+                };
+            };
+        };
+    };
+    field_data_api_map_fields__variable__get: {
+        parameters: {
+            query?: {
+                /** @description Valid time (ISO 8601); default now */
+                at?: string | null;
+            };
+            header?: never;
+            path: {
+                variable: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
                 };
             };
             /** @description Validation Error */

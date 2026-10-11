@@ -201,6 +201,25 @@ class SurfQualityPrediction(Base):
     )
     explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
     algorithm_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Forecast confidence (offshore forecast: lead time, ensemble, model agreement, run
+    # consistency, verification, completeness) and local confidence (the breaking
+    # prediction at this break, which also depends on spot research) are separate
+    # assessments; ``confidence`` / ``confidence_label`` above are the forecast index.
+    forecast_confidence_class: Mapped[str | None] = mapped_column(String(12))
+    local_confidence_class: Mapped[str | None] = mapped_column(String(12))
+    confidence_method: Mapped[str | None] = mapped_column(String(32))
+    # Everything the classification used, plus short reasons for the UI.
+    confidence_inputs: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lead_hours: Mapped[float | None] = mapped_column(Float)
+    research_assessment_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey(
+            "spot_research_assessments.id",
+            ondelete="SET NULL",
+            name="fk_predictions_research_assessment",
+        ),
+    )
 
     forecast: Mapped[WaveForecast] = relationship(lazy="joined")
 
