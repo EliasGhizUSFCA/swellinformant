@@ -423,6 +423,12 @@ It writes the rows with `scope='global'`, `scope_key='backtest'`.
     * 667 Hm0 pairs;
     * 667 mean-direction pairs at K5;
     * no direction pairs at AODN, which reports no mean direction.
+
+    The one-off load put the bulletin's partition-1 direction into `direction_deg`. The
+    repository's collector (`verification/point_forecasts.py`) stores it in
+    `swell1_direction_deg` and leaves `tp_s` and `direction_deg` NULL, because the
+    bulletin has no total-sea peak period or direction. With the repository code these
+    direction pairs are therefore not produced (see the review re-check below).
   * **Backtest** of raw GFS-Wave against H1/3 (3 folds):
 
     | lead | RMSE | bias | HH | CC |
@@ -438,16 +444,39 @@ It writes the rows with `scope='global'`, `scope_key='backtest'`.
     accuracy claim.
   * **Hm0 training** at K5 was refused (8 days of data cannot hold a split with a
     13-day gap).
+* **Review re-check on 2026-10-11** (own scratch database, the two review branches
+  merged: the repository's AODN, Met Office and bulletin collectors filled the tables).
+  * 2026 inputs: 00Z bulletins 2026-03-01 to 2026-10-10 at 56006 and 64045 (442 files,
+    0 missing, 0 malformed), AODN Cape Naturaliste realtime (650 H1/3 records since
+    2026-02-20) and Met Office K5 (199 hourly Hm0 records).
+  * `verify pair --full`: 11,801 Hs pairs (9,369 H1/3, 2,432 Hm0) and no `tp` or `dir`
+    pairs, as explained above.
+  * `verify backtest --hs-kind h_third --folds 3` at Cape Naturaliste alone: 6,480 pairs,
+    RMSE 0.377 m [0.342, 0.414] at 24 h and 1.115 m at 240 h, bias about -0.2 m.
+  * `ml train --hs-kind h_third`: test 2026-08-29 onward, 1,230 pairs, raw 0.796 m; RF
+    0.648 m passed (a)-(f), ridge failed (c), GBT failed (d); nothing was activated.
+  * Spectral Hm0, which the builder did not have: AODN delayed-mode QC'd Cape Naturaliste
+    02 (12,716 records, 2021-03-22 to 2021-12-31) against 284 00Z bulletins of 2021.
+    The backtest gave 40,296 pairs with RMSE 0.441 m [0.407, 0.471] at 24 h, 0.622 m at
+    120 h and 1.170 m at 240 h, and bias -0.27 m at 24 h. `ml train` (test period
+    2021-11-05 to 2021-12-31, 9,162 pairs, raw RMSE 0.467 m): ridge 0.441 m (-5.4 %) passed
+    every criterion and could be activated; RF and GBT (0.511 and 0.513 m) were rejected.
+    This is one buoy, one test season and a margin just above the 5 % threshold, so it
+    is evidence that the pipeline works end to end on real QC'd data, not a claim that
+    the correction is generally useful.
 * **Mock only.**
-  * The point-forecast and observation collectors that fill the input tables in
-    production were not exercised here.
+  * The point-forecast and observation collectors were not exercised in the builder's
+    live check (they were in the review re-check above).
   * NDBC and CDIP observations were never seen live; those hosts are blocked in the
     build environment.
 
 ## Limitations
 
 * **Offshore Hs only.** The correction targets offshore Hm0 at buoy positions. Tp and
-  direction are verified but not corrected.
+  direction are paired only for sources that store a total-sea peak period (`tp_s` with
+  period kind `tp`) and a direction with a declared kind. The GFS-Wave bulletins, the
+  only point-forecast source collected so far, have neither (partition 1 is a height
+  rank, not the total sea), so today only Hs is verified.
 * **Buoys only.** Corrections apply only at spots paired with a training buoy
   (`metadata.paired_spots`) and need the observation features at the cycle time, unless
   a model was trained with `--no-obs-features`. Transfer to unpaired spots is

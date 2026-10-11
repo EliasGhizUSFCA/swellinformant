@@ -107,6 +107,7 @@ def run(args: argparse.Namespace) -> int:
                 from app.services.ml.dataset import build_dataset, load_dataset
                 from app.services.ml.models import train_candidates
 
+                registry.validate_model_name(args.name)  # before the (slow) training
                 if args.dataset:
                     ds = load_dataset(args.dataset)
                 else:

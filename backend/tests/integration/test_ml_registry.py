@@ -381,6 +381,7 @@ def test_evaluate_uses_the_trained_height_definition(
     out = registry.evaluate_version(db, version.id)
     assert seen["hs_kinds"] == ("h_third",)
     assert out["since_test_period"]["rows"] == 0
+    assert "matching h_third observation" in out["since_test_period"]["note"]
 
 
 # ------------------------------------------------------------------------------ end to end
@@ -550,3 +551,6 @@ def test_end_to_end_pure_noise_is_rejected(
     assert cli_main(["ml", "activate", str(versions[0].id)]) == 3
     assert "failed the deployment criteria" in capsys.readouterr().err
     assert cli_main(["ml", "evaluate", "999999"]) == 1
+    # A model name that would leave ML_ARTIFACT_DIR is refused before any training.
+    assert cli_main(["ml", "train", "--name", "../x", "--source", SYNTHETIC_SOURCE]) == 1
+    assert "invalid model name" in capsys.readouterr().err

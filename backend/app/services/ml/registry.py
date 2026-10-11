@@ -894,16 +894,22 @@ def evaluate_version(db: Session, version_id: int) -> dict[str, Any]:
         out["since_test_period"] = {"rows": 0, "note": "no test period recorded"}
         return out
     after = pd.Timestamp(test_end)
+    hs_kinds = tuple(app.get("hs_kinds") or ACTIVATABLE_HS_KINDS)
     ds = build_dataset(
         db,
         sources=app.get("sources") or None,
         station_codes=app.get("station_codes") or None,
         start=after.to_pydatetime(),
-        hs_kinds=tuple(app.get("hs_kinds") or ACTIVATABLE_HS_KINDS),
+        hs_kinds=hs_kinds,
     )
     frame = ds.frame[ds.frame["cycle_time"] > after] if not ds.frame.empty else ds.frame
     if frame.empty:
-        out["since_test_period"] = {"rows": 0, "note": "no forecasts newer than the test period"}
+        out["since_test_period"] = {
+            "rows": 0,
+            "note": "no forecast newer than the test period has a matching "
+            f"{'/'.join(hs_kinds)} observation",
+            "forecasts_read": ds.summary.get("forecasts_read", 0),
+        }
         return out
     scored = add_reference_predictions(frame.reset_index(drop=True), Climatology())
     out["since_test_period"] = {
