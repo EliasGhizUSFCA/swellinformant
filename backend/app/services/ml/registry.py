@@ -31,8 +31,14 @@ VALIDATION RMSE, so the test period is used only to accept or reject.
 
 Artifacts are saved with joblib to ``<ML_ARTIFACT_DIR>/<name>/v<version>.joblib`` and
 their sha256 is stored; loading re-hashes the bytes and refuses a mismatch, and the
-verified bytes are what get deserialised. joblib files are pickles: only load artifacts
-and manifests produced by an environment you trust.
+verified bytes are what get deserialised. Artifacts are only ever read from inside
+``ML_ARTIFACT_DIR`` (a registry row pointing elsewhere is refused), and model names must
+be plain identifiers (``MODEL_NAME_RE``) because they become directory names. joblib files
+are pickles: only load artifacts and manifests produced by an environment you trust.
+
+Applicability lists the spots paired with a training station only through a relation in
+``TRANSFERABLE_RELATIONS`` (offshore references); spots paired as upstream or nearshore
+references are recorded in ``applicability.excluded_spots`` and never corrected.
 """
 
 from __future__ import annotations
@@ -44,6 +50,7 @@ import logging
 import math
 import os
 import platform
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -82,6 +89,15 @@ LINEAR_TIE_TOLERANCE = 0.01
 MIN_TEST_PAIRS = 300
 # Observed height definition a version must have been trained on to be activated.
 ACTIVATABLE_HS_KINDS = ["spectral_hm0"]
+# Model names become a directory under ML_ARTIFACT_DIR: no separators, no leading dot.
+MODEL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
+# Station-to-spot relations (buoy_stations.metadata.paired_spots[].relation, see
+# docs/observations.md) across which an offshore Hs correction may be transferred. An
+# ``upstream_regional`` buoy is hundreds of km away in other water (timing and size
+# context only) and a ``nearshore_reference`` buoy already sees shoaled, refracted waves,
+# so a correction learned there is not applied at the spot. Entries without a relation
+# (plain slugs) are taken as offshore references.
+TRANSFERABLE_RELATIONS = ("offshore_reference", "historical_reference")
 
 
 class RegistryError(RuntimeError):
@@ -253,9 +269,41 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def validate_model_name(name: str) -> str:
+    """``name`` if it is a plain identifier usable as a directory name, else RegistryError."""
+    if not isinstance(name, str) or not MODEL_NAME_RE.fullmatch(name):
+        raise RegistryError(
+            f"invalid model name {name!r}: use letters, digits, '_', '.' or '-' (max 80), "
+            "starting with a letter or digit"
+        )
+    return name
+
+
+def artifact_root() -> Path:
+    """The only directory artifacts are loaded from (ML_ARTIFACT_DIR, resolved)."""
+    return Path(get_settings().ml_artifact_dir).resolve()
+
+
 def artifact_path(name: str, version: int, root: str | Path | None = None) -> Path:
     base = Path(root or get_settings().ml_artifact_dir)
-    return base / name / f"v{version}.joblib"
+    return base / validate_model_name(name) / f"v{version}.joblib"
+
+
+def registered_artifact(version: MLModelVersion) -> Path:
+    """The version's artifact path, refused unless it lies inside :func:`artifact_root`.
+
+    The sha256 check protects the bytes; this protects the location: a registry row
+    (or an imported record) can never make the application read a file elsewhere.
+    """
+    if not version.artifact_path:
+        raise ArtifactIntegrityError(f"{version.label} has no artifact")
+    path = Path(version.artifact_path).resolve()
+    root = artifact_root()
+    if not path.is_relative_to(root):
+        raise ArtifactIntegrityError(
+            f"{version.label}: artifact {path} is outside ML_ARTIFACT_DIR ({root}); refused"
+        )
+    return path
 
 
 def _environment() -> dict[str, str]:
@@ -306,9 +354,7 @@ def read_verified(path: str | Path, expected_sha256: str | None) -> bytes:
 
 def load_artifact(version: MLModelVersion) -> TrainedCorrection:
     """Load a version's model after verifying the file's sha256 against the registry."""
-    if not version.artifact_path:
-        raise ArtifactIntegrityError(f"{version.label} has no artifact")
-    data = read_verified(version.artifact_path, version.artifact_sha256)
+    data = read_verified(registered_artifact(version), version.artifact_sha256)
     payload = joblib.load(io.BytesIO(data))
     if not isinstance(payload, dict) or payload.get("format") != ARTIFACT_FORMAT:
         raise ArtifactIntegrityError(f"{version.label}: unexpected artifact format")
@@ -339,16 +385,28 @@ def list_versions(db: Session, name: str | None = None) -> list[MLModelVersion]:
     return list(db.scalars(stmt))
 
 
-def paired_spots(db: Session, station_codes: list[str]) -> list[str]:
-    """Spot slugs listed in buoy_stations.metadata.paired_spots (strings or {"slug"})."""
+def paired_spots(
+    db: Session, station_codes: list[str], *, excluded: dict[str, str] | None = None
+) -> list[str]:
+    """Spot slugs listed in buoy_stations.metadata.paired_spots (strings or {"slug"})
+    whose relation is in :data:`TRANSFERABLE_RELATIONS`. Pairings with another relation
+    are left out and, when ``excluded`` is given, recorded there (slug -> relation)."""
     slugs: set[str] = set()
     for meta in db.scalars(
         select(BuoyStation.metadata_).where(BuoyStation.code.in_(station_codes))
     ):
         for item in (meta or {}).get("paired_spots") or []:
             slug = item.get("slug") if isinstance(item, dict) else item
-            if isinstance(slug, str) and slug:
+            relation = item.get("relation") if isinstance(item, dict) else None
+            if not isinstance(slug, str) or not slug:
+                continue
+            if relation is None or relation in TRANSFERABLE_RELATIONS:
                 slugs.add(slug)
+            elif excluded is not None:
+                excluded[slug] = str(relation)
+    if excluded is not None:
+        for slug in slugs:
+            excluded.pop(slug, None)  # transferable through another training station
     return sorted(slugs)
 
 
@@ -558,11 +616,16 @@ def record_training_run(
         )
         for c in report.candidates
     }
+    validate_model_name(name)
     training = _training_info(report)
     stations = training["stations"]
+    excluded_spots: dict[str, str] = {}
     applicability = {
         "station_codes": stations,
-        "spot_slugs": paired_spots(db, stations),
+        "spot_slugs": paired_spots(db, stations, excluded=excluded_spots),
+        # Paired with a training station, but not as an offshore reference (see
+        # TRANSFERABLE_RELATIONS): the correction is not applied there.
+        "excluded_spots": excluded_spots,
         "lead_min_h": float(report.split.development["lead_hours"].min()),
         "lead_max_h": float(report.split.development["lead_hours"].max()),
         "sources": training["sources"],
@@ -698,7 +761,7 @@ def export_manifest(db: Session, version_id: int, directory: str | Path) -> Path
     version = db.get(MLModelVersion, version_id)
     if version is None:
         raise LookupError(f"no model version {version_id}")
-    data = read_verified(version.artifact_path or "", version.artifact_sha256)
+    data = read_verified(registered_artifact(version), version.artifact_sha256)
     out = Path(directory)
     out.mkdir(parents=True, exist_ok=True)
     stem = f"{version.name}-v{version.version}"
@@ -732,7 +795,12 @@ def import_manifest(
     if manifest.get("format") != MANIFEST_FORMAT:
         raise RegistryError(f"{manifest_path}: not a {MANIFEST_FORMAT} manifest")
     record, art = manifest["model"], manifest["artifact"]
-    data = read_verified(manifest_path.parent / art["file"], art["sha256"])
+    validate_model_name(record["name"])
+    file_name = str(art["file"])
+    # The artifact must sit next to the manifest: a bare file name, no path parts.
+    if Path(file_name).name != file_name or file_name in ("", ".", ".."):
+        raise RegistryError(f"{manifest_path}: artifact file {file_name!r} is not a bare name")
+    data = read_verified(manifest_path.parent / file_name, art["sha256"])
     existing = db.scalar(
         select(MLModelVersion).where(
             MLModelVersion.name == record["name"],
@@ -831,6 +899,7 @@ def evaluate_version(db: Session, version_id: int) -> dict[str, Any]:
         sources=app.get("sources") or None,
         station_codes=app.get("station_codes") or None,
         start=after.to_pydatetime(),
+        hs_kinds=tuple(app.get("hs_kinds") or ACTIVATABLE_HS_KINDS),
     )
     frame = ds.frame[ds.frame["cycle_time"] > after] if not ds.frame.empty else ds.frame
     if frame.empty:

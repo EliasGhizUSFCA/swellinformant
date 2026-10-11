@@ -236,6 +236,153 @@ def test_manifest_round_trip(
         registry.import_manifest(db, bad_format)
 
 
+def test_artifacts_are_only_loaded_from_the_artifact_dir(
+    db: Session, artifact_dir: Path, small_model: TrainedCorrection, tmp_path: Path
+) -> None:
+    """A registry row pointing outside ML_ARTIFACT_DIR is refused even when the file's
+    sha256 matches: the checksum protects the bytes, this protects the location."""
+    version = _register(db, small_model)
+    outside = tmp_path / "elsewhere" / "v1.joblib"
+    outside.parent.mkdir()
+    outside.write_bytes(Path(version.artifact_path or "").read_bytes())
+    version.artifact_path = str(outside)
+    db.commit()
+    with pytest.raises(registry.ArtifactIntegrityError, match="outside ML_ARTIFACT_DIR"):
+        registry.load_artifact(version)
+    with pytest.raises(registry.ArtifactIntegrityError):
+        registry.export_manifest(db, version.id, tmp_path / "export")
+    # "../" inside the recorded path does not escape either.
+    version.artifact_path = str(
+        artifact_dir / "synthetic_hs" / ".." / ".." / "elsewhere" / "v1.joblib"
+    )
+    db.commit()
+    with pytest.raises(registry.ArtifactIntegrityError, match="outside ML_ARTIFACT_DIR"):
+        registry.load_artifact(version)
+
+
+@pytest.mark.parametrize("name", ["../escape", "a/b", ".hidden", "", "x" * 81])
+def test_model_names_cannot_leave_the_artifact_dir(
+    db: Session, artifact_dir: Path, small_model: TrainedCorrection, name: str
+) -> None:
+    with pytest.raises(registry.RegistryError, match="invalid model name"):
+        _register(db, small_model, name=name)
+    db.rollback()
+    assert not any(p.suffix == ".joblib" for p in artifact_dir.parent.rglob("*.joblib"))
+
+
+def test_manifest_paths_are_validated(
+    db: Session, artifact_dir: Path, small_model: TrainedCorrection, tmp_path: Path
+) -> None:
+    original = _register(db, small_model)
+    manifest_path = registry.export_manifest(db, original.id, tmp_path / "export")
+    manifest = json.loads(manifest_path.read_text())
+    secret = tmp_path / "secret.bin"
+    secret.write_bytes(b"not for import")
+    for field, value in (
+        ("file", str(secret)),  # absolute path
+        ("file", "../secret.bin"),  # traversal
+    ):
+        bad = json.loads(json.dumps(manifest))
+        bad["artifact"][field] = value
+        bad["artifact"]["sha256"] = registry.sha256_bytes(secret.read_bytes())
+        path = tmp_path / "export" / "bad.manifest.json"
+        path.write_text(json.dumps(bad))
+        with pytest.raises(registry.RegistryError, match="not a bare name"):
+            registry.import_manifest(db, path)
+    bad = json.loads(json.dumps(manifest))
+    bad["model"]["name"] = "../../outside"
+    path = tmp_path / "export" / "bad-name.manifest.json"
+    path.write_text(json.dumps(bad))
+    with pytest.raises(registry.RegistryError, match="invalid model name"):
+        registry.import_manifest(db, path)
+
+
+def test_unloadable_active_artifact_falls_back_to_raw(
+    db: Session, artifact_dir: Path, small_model: TrainedCorrection
+) -> None:
+    """A verified file that cannot be unpickled (e.g. after a scikit-learn upgrade) must
+    leave forecasts raw instead of crashing the prediction and verification jobs."""
+    version = _register(db, small_model)
+    path = Path(version.artifact_path or "")
+    path.write_bytes(b"\x80\x04this is not a joblib pickle")
+    version.artifact_sha256 = registry.sha256_bytes(path.read_bytes())  # checksum matches
+    version.status = MLModelStatus.ACTIVE
+    db.commit()
+    clear_correction_cache()
+    assert load_active_correction(db, "synthetic_hs") is None
+    summary = compute_accuracy_metrics(db, now=datetime(2026, 1, 1, tzinfo=UTC), n_boot=10)
+    assert summary["corrected_model"] is None  # raw metrics still computed
+
+
+def test_applicability_skips_upstream_and_nearshore_pairings(db: Session) -> None:
+    """Only offshore-reference pairings receive a correction learned at the buoy."""
+    from app.models import BuoyStation
+
+    db.add_all(
+        [
+            BuoyStation(
+                code="synthetic:offshore",
+                provider="synthetic",
+                name="SYNTHETIC offshore buoy",
+                latitude=0.0,
+                longitude=0.0,
+                metadata_={
+                    "paired_spots": [
+                        {"slug": "spot-a", "relation": "offshore_reference"},
+                        {"slug": "spot-b", "relation": "upstream_regional"},
+                        {"slug": "spot-c", "relation": "nearshore_reference"},
+                        "spot-d",
+                    ]
+                },
+            ),
+            BuoyStation(
+                code="synthetic:other",
+                provider="synthetic",
+                name="SYNTHETIC second buoy",
+                latitude=1.0,
+                longitude=1.0,
+                metadata_={
+                    "paired_spots": [{"slug": "spot-c", "relation": "historical_reference"}]
+                },
+            ),
+        ]
+    )
+    db.commit()
+    excluded: dict[str, str] = {}
+    assert registry.paired_spots(db, ["synthetic:offshore"], excluded=excluded) == [
+        "spot-a",
+        "spot-d",
+    ]
+    assert excluded == {"spot-b": "upstream_regional", "spot-c": "nearshore_reference"}
+    excluded = {}
+    both = registry.paired_spots(db, ["synthetic:offshore", "synthetic:other"], excluded=excluded)
+    assert both == ["spot-a", "spot-c", "spot-d"] and excluded == {"spot-b": "upstream_regional"}
+
+
+def test_evaluate_uses_the_trained_height_definition(
+    db: Session,
+    artifact_dir: Path,
+    small_model: TrainedCorrection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.ml import dataset as ml_dataset
+
+    version = _register(db, small_model, hs_kinds=("h_third",))
+    version.training = {"test_period": {"cycle_end": "2025-01-01T00:00:00+00:00"}}
+    db.commit()
+    seen: dict[str, Any] = {}
+    real = ml_dataset.build_dataset
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ml_dataset, "build_dataset", spy)
+    out = registry.evaluate_version(db, version.id)
+    assert seen["hs_kinds"] == ("h_third",)
+    assert out["since_test_period"]["rows"] == 0
+
+
 # ------------------------------------------------------------------------------ end to end
 def test_end_to_end_synthetic_bias_is_corrected_and_deployable(
     db: Session, artifact_dir: Path, capsys: pytest.CaptureFixture[str], tmp_path: Path

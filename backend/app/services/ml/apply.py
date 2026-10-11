@@ -17,7 +17,8 @@ Rules enforced here:
 ``load_active_correction`` caches the loaded model per process and per name; every call
 runs one cheap query for the active version id and sha256 and reloads only when they
 changed (activation, deactivation or a new version), so workers pick up a change on
-their next call. Artifacts that fail the sha256 check are never applied.
+their next call. Artifacts that fail the sha256 check, lie outside ML_ARTIFACT_DIR or
+cannot be unpickled are never applied (the forecast stays raw and the error is logged).
 
 The prediction job builds the features from a ``wave_forecasts`` row with
 :func:`app.services.ml.features.features_from_wave_forecast` (re-exported here as
@@ -198,6 +199,14 @@ def load_active_correction(db: Session, name: str = DEFAULT_MODEL_NAME) -> Corre
         correction = _build(version)
     except ArtifactIntegrityError:
         logger.exception("Active model %s failed verification; not applied", version.label)
+        with _lock:
+            _cache.pop(name, None)
+        return None
+    except Exception:
+        # A verified file can still fail to unpickle (e.g. scikit-learn upgraded since
+        # training) or hold an unusable model. Forecasts then stay raw; the prediction and
+        # verification jobs must not fail because of it.
+        logger.exception("Active model %s could not be loaded; not applied", version.label)
         with _lock:
             _cache.pop(name, None)
         return None

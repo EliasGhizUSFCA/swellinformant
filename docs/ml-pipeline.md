@@ -270,7 +270,12 @@ silently change the height definition. Such versions are kept for evaluation.
 **Applicability** (`ml_model_versions.applicability`):
 
 * the training station codes;
-* the spot slugs paired with them (`buoy_stations.metadata.paired_spots`);
+* the spot slugs paired with them (`buoy_stations.metadata.paired_spots`) through an
+  offshore relation (`offshore_reference` or `historical_reference`, see
+  docs/observations.md). Spots paired as `upstream_regional` (a buoy hundreds of km
+  away, timing and size context only) or `nearshore_reference` (a shallow buoy that
+  already sees shoaled, refracted waves) are listed in `excluded_spots` and never
+  corrected: model error learned there does not describe the spot's offshore point;
 * the trained lead range;
 * the sources, families and target height kind.
 
@@ -289,9 +294,15 @@ silently change the height definition. Such versions are kept for evaluation.
 * **`ml_model_versions`**: one row per candidate. The version number increments per name.
 * **Artifacts.** Each is saved with joblib to `ML_ARTIFACT_DIR/<name>/v<version>.joblib`
   (written atomically) and its sha256 is recorded. Loading re-hashes the bytes and
-  refuses a mismatch. Activation refuses an artifact that fails verification, and so
-  does `load_active_correction`. joblib files are pickles: only load artifacts from an
-  environment you trust.
+  refuses a mismatch. Artifacts are only read from inside `ML_ARTIFACT_DIR`: a registry
+  row whose `artifact_path` points elsewhere is refused even when the checksum matches.
+  Model names must be plain identifiers (letters, digits, `_`, `.`, `-`; they become a
+  directory name), and an imported manifest must name its artifact by a bare file name
+  next to the manifest. Activation refuses an artifact that fails verification. If the
+  active artifact cannot be loaded at all (checksum, location, or an unpickling error
+  after a library upgrade), `load_active_correction` logs it and returns None, so
+  forecasts stay raw and the jobs keep running. joblib files are pickles: only load
+  artifacts from an environment you trust.
 * **Moving a model between environments.**
   * `ml export-manifest ID DIR` writes the verified artifact and a JSON manifest (the
     registry record, the experiment and the package versions).
