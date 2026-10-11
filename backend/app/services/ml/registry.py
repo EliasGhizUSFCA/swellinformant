@@ -9,7 +9,9 @@ in ``ml_model_versions.decision``). A candidate must:
     RMSE(candidate) - RMSE(raw) that lies entirely below 0 (whole forecast cycles are
     resampled, because errors within a cycle are correlated);
 (c) not worsen RMSE in any lead bucket with at least ``BUCKET_MIN_N`` (50) pairs by more
-    than ``MAX_BUCKET_DEGRADATION`` (3 %);
+    than ``MAX_BUCKET_DEGRADATION`` (3 %). The forecast leads that lie in no bucket
+    (the buckets leave gaps, e.g. 31-41 h and beyond 252 h, where the correction is
+    still applied) form one extra group, ``OTHER_LEADS_GROUP``, checked the same way;
 (d) beat or tie (within ``LINEAR_TIE_TOLERANCE``, 1 %) the ridge baseline's test RMSE,
     unless it is the ridge baseline (research notes, ML section: ship ML only if it
     beats the linear correction);
@@ -85,6 +87,8 @@ BOOTSTRAP_CONFIDENCE = 0.90
 BOOTSTRAP_N = 1000
 MAX_BUCKET_DEGRADATION = 0.03
 BUCKET_MIN_N = 50
+# Criterion (c) pseudo-bucket: forecast leads (>= 3 h) that fall in no lead bucket.
+OTHER_LEADS_GROUP = "other_leads"
 LINEAR_TIE_TOLERANCE = 0.01
 MIN_TEST_PAIRS = 300
 # Observed height definition a version must have been trained on to be activated.
@@ -173,15 +177,20 @@ def evaluate_deployment(
     )
     buckets: dict[str, Any] = {}
     worst = -math.inf
-    for bucket in vm.LEAD_BUCKETS_H:
-        mask = vm.in_lead_bucket(ld, bucket)
+    # The six buckets do not tile the lead range (e.g. 31-41 h, 79-107 h and > 252 h lie
+    # in none), yet the correction is applied at every trained lead. The leads outside
+    # all buckets are therefore checked as one more group, so no applied lead escapes (c).
+    groups = [(str(b), vm.in_lead_bucket(ld, b)) for b in vm.LEAD_BUCKETS_H]
+    outside = vm.in_lead_bucket(ld, vm.ALL_LEADS_BUCKET) & (vm.lead_bucket_array(ld) == 0)
+    groups.append((OTHER_LEADS_GROUP, outside))
+    for label, mask in groups:
         nb = int(mask.sum())
         if nb < BUCKET_MIN_N:
-            buckets[str(bucket)] = {"n": nb, "checked": False}
+            buckets[label] = {"n": nb, "checked": False}
             continue
         rc, rr = vm.rmse(p[mask], o[mask]), vm.rmse(r[mask], o[mask])
         change = rc / rr - 1.0 if rr > 0 else math.nan
-        buckets[str(bucket)] = {"n": nb, "checked": True, "rmse_change": vm.finite_or_none(change)}
+        buckets[label] = {"n": nb, "checked": True, "rmse_change": vm.finite_or_none(change)}
         if math.isfinite(change):
             worst = max(worst, change)
     checked = [b for b in buckets.values() if b["checked"]]

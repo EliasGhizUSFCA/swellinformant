@@ -76,6 +76,9 @@ writes `prediction_validation`, `forecast_accuracy_metrics`, `ml_experiments` an
   forecasts or used as training targets.
 * The same definition is used by the metrics job, the backtest, the training scores and
   deployment criterion (c).
+* The buckets leave gaps. For the archived bulletin leads (hourly to 120 h, then 3-hourly
+  to 384 h), 132 of the 206 leads lie in no bucket; they appear only in "all", and
+  criterion (c) checks them as one extra group.
 
 ## Metrics (`verification/metrics.py`)
 
@@ -247,7 +250,7 @@ its threshold, its value and pass/fail in `ml_model_versions.decision`.
 |---|---|---|---|
 | a | Hs RMSE (m, after the back-transform) at least 5 % below raw over all test pairs | `MIN_RMSE_REDUCTION = 0.05` | a smaller gain is within run-to-run noise and not worth the risk |
 | b | the 90 % cycle-block-bootstrap CI of RMSE(candidate) − RMSE(raw) lies entirely below 0 | `BOOTSTRAP_CONFIDENCE = 0.90` | the gain must hold across forecast cycles, not come from one lucky storm |
-| c | no lead bucket with n ≥ 50 worse than raw by more than 3 % | `MAX_BUCKET_DEGRADATION`, `BUCKET_MIN_N` | users read forecasts at every lead; a better average must not hide a worse day 7 |
+| c | no lead bucket with n ≥ 50 worse than raw by more than 3 %; the leads in no bucket (3–17, 31–41, 55–65, 79–107, 133–155, 181–227 and > 252 h, where the correction is still applied) are checked as one more group, `other_leads` | `MAX_BUCKET_DEGRADATION`, `BUCKET_MIN_N`, `OTHER_LEADS_GROUP` | users read forecasts at every lead; a better average must not hide a worse day 7 |
 | d | beats or ties (within 1 %) the ridge baseline, unless it is the ridge baseline | `LINEAR_TIE_TOLERANCE` | complexity must pay for itself |
 | e | at least 300 test pairs | `MIN_TEST_PAIRS` | fewer pairs give no meaningful verdict |
 | f | HH not above raw | — | an extra guard, stricter than (a)–(e): RMSE rewards damped forecasts, HH does not |

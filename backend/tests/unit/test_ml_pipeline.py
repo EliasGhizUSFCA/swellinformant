@@ -40,6 +40,7 @@ from app.services.ml.models import (
 from app.services.ml.registry import (
     BUCKET_MIN_N,
     MIN_TEST_PAIRS,
+    OTHER_LEADS_GROUP,
     evaluate_deployment,
 )
 from tests.synthetic_waves import frames_for_assembly, make_case
@@ -491,6 +492,22 @@ def test_criterion_c_no_lead_bucket_may_worsen() -> None:
     assert _criteria(decision)["c"]
     buckets = next(c for c in decision["criteria"] if c["id"] == "c")["value"]["buckets"]
     assert buckets["120"] == {"n": BUCKET_MIN_N - 1, "checked": False}
+
+
+def test_criterion_c_also_checks_leads_outside_every_bucket() -> None:
+    """SYNTHETIC: the buckets leave gaps (79-107 h, > 252 h ...) where the correction is
+    still applied; worsening only those leads must fail (c) as well."""
+    s = _scenario()
+    pred = s["raw"] / 1.3
+    gap = s["lead"] == 168.0
+    s["lead"][gap] = 300.0  # beyond the last bucket (228-252 h)
+    pred[gap] = s["raw"][gap] * 1.2
+    decision = _decide(s, pred, linear=pred)
+    crit = _criteria(decision)
+    assert crit["a"] and not crit["c"]
+    buckets = next(c for c in decision["criteria"] if c["id"] == "c")["value"]["buckets"]
+    assert buckets[OTHER_LEADS_GROUP]["checked"] and buckets[OTHER_LEADS_GROUP]["n"] == 120
+    assert buckets[OTHER_LEADS_GROUP]["rmse_change"] > 0.03
 
 
 def test_criterion_d_must_beat_or_tie_the_linear_baseline() -> None:
