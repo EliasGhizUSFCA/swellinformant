@@ -30,6 +30,10 @@ export function pointToConditions(p: ForecastPoint, fc: SpotForecast): Condition
     method: p.breaking_height_method ?? null,
     algorithm_version: p.algorithm_version ?? null,
     explanation: p.explanation,
+    forecast_confidence_class: p.forecast_confidence_class ?? null,
+    local_confidence_class: p.local_confidence_class ?? null,
+    confidence_reasons: p.confidence_reasons ?? [],
+    lead_hours: p.lead_hours ?? null,
   };
 }
 
