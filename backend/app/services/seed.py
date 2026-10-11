@@ -2,7 +2,8 @@
 
 Run with ``python -m app.cli seed``. Re-running updates rows in place (upsert by IATA
 code / slug), so the curated JSON files are the single source of truth and new spots can
-be added without schema changes.
+be added without schema changes. The last step loads the optional research evidence file
+and assesses research confidence (app.services.research).
 """
 
 from __future__ import annotations
@@ -217,6 +218,11 @@ def seed_reference_data(db: Session, data_dir: str | Path | None = None) -> dict
             link.notes = a.get("notes", "")
         db.flush()
     profiles = seed_physical_profiles(db, directory)
+    # Research evidence (optional research_evidence.json) and research confidence of every
+    # spot; imported here because the research package builds on this module.
+    from app.services.research.assess import seed_research
+
+    research = seed_research(db, directory)
     db.commit()
     logger.info("Seeded %d airports, %d new spots, %d updated", len(airports_raw), created, updated)
     return {
@@ -224,6 +230,7 @@ def seed_reference_data(db: Session, data_dir: str | Path | None = None) -> dict
         "spots_created": created,
         "spots_updated": updated,
         **profiles,
+        **research,
     }
 
 

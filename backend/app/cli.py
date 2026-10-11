@@ -47,6 +47,7 @@ PLUGIN_GROUPS = {
     "verify": "app.services.verification.cli",
     "ml": "app.services.ml.cli",
     "engine": "app.services.forecasts.cli",
+    "research": "app.services.research.cli",
 }
 
 

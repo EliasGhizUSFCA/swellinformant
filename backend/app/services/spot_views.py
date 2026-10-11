@@ -44,6 +44,7 @@ from app.schemas.spots import (
 )
 from app.services.forecasts.queries import USABLE, is_stale, latest_runs_by_spot
 from app.services.forecasts.registry import configured_source_codes
+from app.services.research.views import research_classes, research_out
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.scoring import label_for_score
 
@@ -189,6 +190,7 @@ def spot_summaries(
     ).all():
         events[e.spot_id].append(e)
 
+    research = research_classes(db)  # one query for all spots
     out: list[SpotSummary] = []
     for s in spots:
         upcoming = events.get(s.id, [])
@@ -199,6 +201,7 @@ def spot_summaries(
                 best_upcoming=best.get(s.id),
                 next_event=event_out(upcoming[0], now) if upcoming else None,
                 upcoming_event_count=len(upcoming),
+                research_class=research.get(s.id),
             )
         )
     return out
@@ -207,8 +210,11 @@ def spot_summaries(
 def spot_detail(db: Session, spot: SurfSpot, now: datetime | None = None) -> SpotDetail:
     summary = next((s for s in spot_summaries(db, now) if s.id == spot.id), None)
     base = summary.model_dump() if summary else _summary_fields(spot)
+    research = research_out(db, spot.id)
+    base["research_class"] = research.research_class if research else None
     return SpotDetail(
         **base,
+        research=research,
         forecast_latitude=spot.forecast_latitude,
         forecast_longitude=spot.forecast_longitude,
         swell_window_min=spot.swell_window_min,
