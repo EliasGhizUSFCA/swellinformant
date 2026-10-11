@@ -238,6 +238,7 @@ quality scale is not rare enough.
 | `next build` with a custom `distDir` rewrites `tsconfig.json` | Next.js adds the dist dir to `include` | the e2e runner's change is reverted before committing |
 | An inline comment in `.gitignore` broke the rule | `.gitignore` has no inline comments | comment moved to its own line |
 | The 15-step e2e scenario failed only in a full-suite run | other specs leave simulated Jeffreys Bay swells in the shared e2e database, so the scenario's new search matched one as soon as it was activated (eager Celery ran the whole alert chain inside the request) | the scenario uses a spot no other spec simulates swells at |
+| pytest exited 139 (segfault) after every test had passed, when a GRIB test ran before the database tests | the `eccodeslib` and `psycopg-binary` wheels bundle different OpenLDAP builds; loading ecCodes first crashes libldap's destructor at exit (`python -c "import eccodes, psycopg"` reproduces it). An earlier "exit 0" was the exit code of `tail` in a pipe | every ecCodes import goes through `grib.load_eccodes()`, which loads psycopg first via `importlib` (an import sorter had silently reordered plain imports); exit codes are read without pipes |
 | Playwright could not find its browser | the pinned Playwright expects a newer headless shell than the one installed | `PLAYWRIGHT_CHROMIUM_PATH=/opt/pw-browsers/chromium` (supported by `playwright.config.ts`) |
 
 ## 8. How to re-run the checks
