@@ -161,3 +161,51 @@ operator step after a shadow evaluation on gridded inputs.
 **Consequences.** User-facing forecasts are uncorrected. The criteria are unchanged; the
 gate added here is "validated on the inputs it will receive", which the next training run
 (gridded GFS-Wave archived at the buoys) is designed to satisfy.
+
+## ADR-014 Research confidence and forecast confidence are separate assessments
+
+**Context.** Two different questions get called "confidence": how well a break's ideal
+conditions are documented (research confidence, a property of the spot that changes when
+evidence is added) and how trustworthy an upcoming prediction is (a property of each forecast
+hour that changes with every model run). A single number would hide which one is weak: a
+famous, well-documented break can have an untrustworthy 9-day forecast, and an excellent
+2-day forecast says little about a break nobody has documented.
+**Decision.** Three separate classifications, stored separately and shown separately, none of
+them a calibrated probability: research confidence (`spot_research_assessments`, methodology
+research-v1, docs/research-confidence.md); forecast confidence of the offshore forecast and
+local confidence of the breaking-wave estimate (`surf_quality_predictions`, methodology
+forecast-v1, docs/forecast-confidence.md). The only link is documented: local confidence =
+min(forecast confidence, research basis) with research basis = min(swell direction, swell
+size, max(bathymetry, local behaviour)); without an assessment it is Low. Forecast confidence
+never reads research, research never reads forecasts. Every prediction records the
+assessment it used (`research_assessment_id`) and the archive records the classes as issued
+(`forecast_confidence_class`, `local_confidence_class`, `research_class`, `confidence_inputs`).
+The 0-100 index (`confidence`) is kept unchanged as the starting point of forecast confidence.
+**Alternatives.** One blended score (hides the weak part, cannot be evaluated); weighting
+research into the index (would make a well-documented break look like a better forecast).
+**Consequences.** The UI shows up to three classes and must label each; until research
+evidence is loaded every spot has Low research and therefore Low local confidence, even where
+forecast confidence is High.
+
+## ADR-015 Per-source staleness
+
+**Context.** One `FORECAST_STALE_HOURS` (18 h) applied to every source. ECMWF open data runs
+two long cycles a day, published about 8 h after the cycle and fetched by the next 3-hourly
+acquisition, so the newest ECMWF run is routinely 20-23 h old just before the next one
+arrives. It counted as stale for several hours every day, and the blend silently fell back to
+NOAA only (measured on the 2026-10-11 live data: at 08:30 UTC ECMWF was 20.5 h old and no
+blend was built; over 2026-10-10 20:00 to 2026-10-11 14:00 the old rule kept ECMWF for 11 of
+19 hours, the new one for 18).
+**Decision.** A run is stale once it is older than cycle interval + publication lag
+(`*_AVAILABILITY_LAG_HOURS`) + acquisition interval (`FORECAST_REFRESH_MINUTES`) + a 2 h
+margin of its source: NOAA GFS 16 h, GEFS-Wave 18.5 h, ECMWF 25 h with the default settings
+(`queries.stale_after_hours`). Sources without a known cycle (demo, Open-Meteo, Windy) keep
+`FORECAST_STALE_HOURS`. A blend is stale when any member is stale by its own rule. Every
+caller uses `queries.is_stale`: blend member selection, the authoritative-run choice, the
+index's stale factor, forecast confidence (at scoring and, for runs that went stale later, at
+read time), the API's `stale` flag, the staleness check task and alerts (twice the
+stale-after age).
+**Alternatives.** Raising the global limit to 25 h (would hide a missed GFS cycle for a day);
+per-source settings (more configuration for values that follow from the cycle and lag).
+**Consequences.** ECMWF stays in the blend through its whole cycle; a GFS run now counts as
+stale after 16 h instead of 18 h, i.e. as soon as one cycle has been missed.
