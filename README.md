@@ -415,6 +415,14 @@ python -m app.cli ml export-manifest VERSION_ID DIR        # move a model betwee
 python -m app.cli ml import-manifest DIR/manifest.json
 ```
 
+**Result so far** ([`docs/ml-evaluation.md`](docs/ml-evaluation.md)): against QC'd
+spectral Hm0 at three Western Australian buoys (2021), raw GFS-Wave has RMSE 0.40 m at
+24 h and 1.01 m at 240 h, biased low by about 0.23 m. A ridge correction cut held-out
+RMSE at Cape Naturaliste by 8 % and passed every deployment criterion; it is shipped in
+`backend/ml_models/` as a candidate but **not active by default**, because at the spots
+its inputs (gridded GFS-Wave) differ from the station bulletins it was validated on.
+Random forest and gradient boosting were rejected.
+
 A correction is applied only at spots paired with its training buoys, only within its
 trained lead range and only to the model family it was trained on (in multi-model mode it
 corrects that member before blending; [`docs/decisions.md`](docs/decisions.md) ADR-012);

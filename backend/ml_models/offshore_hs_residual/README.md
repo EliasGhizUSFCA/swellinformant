@@ -8,6 +8,11 @@ Naturaliste buoy (bulletin 56006) against delayed-mode QC'd spectral Hm0, 2021-0
 raw 0.360 m). It passed every deployment criterion; see docs/ml-evaluation.md for the
 numbers, the decision per criterion and the caveats.
 
+**Not active by default.** At the surf spots its inputs come from gridded GFS-Wave, not
+the station bulletin it was trained on; a live check found 18 % of the corrected hours
+outside the factor range seen on its test set (docs/ml-evaluation.md section 10). Activate
+it only after a shadow check on gridded forecasts.
+
 * `offshore_hs_residual-v4.manifest.json`: registry record, experiment, package versions.
 * `offshore_hs_residual-v4.joblib`: the artifact (sha256 in the manifest).
 

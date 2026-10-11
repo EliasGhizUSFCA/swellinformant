@@ -33,6 +33,12 @@ regions other than south-west Western Australia.
   observation features) also passed but is not activated, because its observation inputs
   (cycle-time Hm0) do not exist in real time. All RF and GBT versions were rejected. The
   evidence is one buoy and one eight-week test period; see the caveats.
+* **In the application: shipped as a candidate, not active by default** (section 10). A
+  live transfer check on the 2026-10-11 GFS run showed that, at the surf spots' own
+  gridded forecast points, 18 % of the corrected hours got factors below the range the
+  model produced on its held-out test (5th percentile 0.79 vs 0.98 at the buoy), i.e. the
+  model would run on inputs it was not validated on. Activation is an explicit operator
+  step after a shadow check on gridded forecasts.
 
 ## 1. Data inventory
 
@@ -601,9 +607,10 @@ the choice.
   its inputs would come from `wave_forecasts` (GFS-Wave at each spot's own forecast
   point, 52-54 km from the buoy, with `primary_swell_*` from the GRIB SWELL1 partition),
   whereas it was trained on the station bulletin (partition 1 as listed, which can be the
-  wind sea). That transfer is untested. In this branch no forecast-pipeline code calls
-  the correction yet (only the verification job loads it), so activating it does not
-  change user-facing forecasts until a caller is wired.
+  wind sea). That transfer is not validated; the live check in section 10 shows the
+  inputs at the spots fall partly outside the validated range. The forecast pipeline
+  applies an ACTIVE correction through `ml/hook.py` (ADR-012); the exported version is
+  not active by default.
 * **One season, one model version, one short test period.** Nine months of 2021 (GFS
   v16 before the v16.3.0 upgrade of 2022-11-29). The held-out test covers 2021-11-05 to
   2021-12-31 only (late spring / early summer, mean observed Hm0 1.85-2.08 m); the
@@ -681,3 +688,44 @@ leads 0-2 h; it is a one-off query, not a command.
 * **Mock only:** the new `--aodn-dataset` filter and `--bulletin-id` proxy option are
   covered by integration tests with mocked HTTP; they were also used live for this study.
 * **Not available here:** NDBC, CDIP and CO-OPS (blocked in this sandbox) were not used.
+
+## 10. Deployment in the application
+
+**Decision: the passing correction (P2 v4) is shipped as a registered candidate in
+`backend/ml_models/offshore_hs_residual/`, not active by default.** Forecasts shown to users
+stay uncorrected until an operator activates it. This does not change the deployment
+criteria (it passed them); it is about where the model would be applied versus where it
+was validated.
+
+*Live transfer check (2026-10-11).* The manifest was imported into the scratch database
+holding the live run `noaa-gfs:2026101100` (gridded GFS-Wave at every spot's forecast
+point), activated, and the run's predictions recomputed through the pipeline hook
+(`ml/hook.py`):
+
+| | Held-out test at the buoy (bulletin inputs) | Spots, gridded inputs (live) |
+|---|---|---|
+| rows corrected | 14,658 | 201 (67 of 81 hours at each of the 3 paired spots; none elsewhere) |
+| factor 5 / 50 / 95 % | 0.98 / 1.08 / 1.24 | 0.79 / 1.06 / 1.09 |
+| factors below 0.98 | about 5 % | 36 of 201 (18 %), minimum 0.60 |
+
+The median agrees with the buoy result (the raw model is biased low), but a fifth of the
+corrected hours would cut offshore Hs by 2-40 %, outside the behaviour that was tested.
+The cause is the input shift between the bulletin (partition 1 as listed, at the buoy)
+and the gridded fields at the spots 52-54 km away.
+
+*Why not activate anyway.* The improvement is 8 % on one buoy over eight weeks of 2021,
+on a GFS-Wave version that has since been upgraded, with a weekly-block bootstrap interval
+that touches zero and one rolling fold 17-25 % worse than raw. Applying it to inputs
+outside the validated range could make the surf estimate worse at the only three spots
+it covers. The conservative choice is the raw forecast.
+
+*What would justify activation.* Train and test on the same inputs the spots use: gridded
+GFS-Wave sampled at the buoy (`forecasts.noaa.sample_gfs_points`) archived as point
+forecasts, verified against delayed-mode Hm0 once 2022+ files are published, on the
+current model version, with a winter season in the test period. Then:
+
+```bash
+python -m app.cli ml import-manifest ml_models/offshore_hs_residual/offshore_hs_residual-v4.manifest.json
+python -m app.cli ml activate <id printed by the import>    # explicit operator step
+python -m app.cli ml deactivate offshore_hs_residual       # back to raw at any time
+```

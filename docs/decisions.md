@@ -147,3 +147,17 @@ breaking heights (no observations to validate against).
 observations arrive in real time; models meant for production are trained with
 `--no-obs-features` unless the paired buoy has a real-time Hm0 feed. A blend built before a
 correction was activated is not rebuilt; the next upstream run uses it.
+
+## ADR-013 The first passing correction ships inactive
+
+**Context.** The backtest's ridge correction (P2 v4) passed every ADR-008 criterion on a
+held-out 2021 test at Cape Naturaliste (RMSE -8.1 %). It was trained on GFS-Wave station
+bulletins; at the surf spots the pipeline would feed it gridded GFS-Wave values.
+**Decision.** Ship it as a registered candidate (`backend/ml_models/`), not active by
+default. A live transfer check through `ml/hook.py` gave 18 % of corrected hours factors
+below the range seen on the test set (5th percentile 0.79 vs 0.98), so in production it
+would run partly outside the validated input distribution. Activation stays an explicit
+operator step after a shadow evaluation on gridded inputs.
+**Consequences.** User-facing forecasts are uncorrected. The criteria are unchanged; the
+gate added here is "validated on the inputs it will receive", which the next training run
+(gridded GFS-Wave archived at the buoys) is designed to satisfy.
