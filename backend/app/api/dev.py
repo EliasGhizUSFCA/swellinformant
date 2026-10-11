@@ -65,8 +65,13 @@ def simulate(
 
 
 @router.post("/run-pipeline")
-def pipeline(_: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    return run_pipeline(db)
+def pipeline(
+    acquire: bool = Query(True, description="Fetch forecasts first (false: use what is stored)"),
+    deliver: bool = Query(True, description="False stops after alert generation (QUEUED)"),
+    _: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return run_pipeline(db, acquire=acquire, deliver=deliver)
 
 
 @router.get("/outbox")
