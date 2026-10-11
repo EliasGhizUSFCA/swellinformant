@@ -6,6 +6,7 @@ Curated seed data for Swell Travel Agent: 50 well-known surf breaks and a table 
 |---|---|
 | `spots.json` | Array of 50 surf spots, each with its physical setup, swell/wind/tide preferences, seasonality, access notes and 1-3 nearby airports. |
 | `airports.json` | Array of 153 airport reference rows: every airport referenced by a spot, plus major departure hubs worldwide so users can pick a home airport. |
+| `research_evidence.json` | *Optional.* Published sources consulted per spot and what each says about the spot's ideal conditions; drives research confidence (see "Research evidence" below). |
 
 **This is a hand-picked list of famous, travel-worthy waves. It is not an objective "best 50" ranking.** Inclusion and order say nothing about quality.
 
@@ -61,3 +62,14 @@ Pipeline, Mavericks, Jaws (Wikipedia figure used; mondo.surf lists a point about
 **Forecast points** were checked against a 1 km global land mask (GLOBE data via the `global-land-mask` package). All 50 points are over water, at least 10 km from any land, and 14-22 km from their break. Some breaks sit in partly enclosed water, where a coarse wave model may still be affected by nearby land or islands: Rincon (Santa Barbara Channel), Keramas (Badung Strait), Desert Point (Lombok Strait), Thurso East (Pentland Firth approaches) and Pavones (Golfo Dulce mouth).
 
 **Airports:** coordinates are standard published reference positions taken from domain knowledge, not individually re-verified. Two secondary airports have limited or intermittent scheduled service: Wick (WIC) and Limón (LIO). Domestic flights to Bocas del Toro mostly leave from Panama City's Albrook airport (PAC) rather than Tocumen (PTY).
+
+## Research evidence
+
+`research_evidence.json` (optional) records, per spot, the published sources that were actually consulted and what each one says about the profile above: swell direction, swell size, swell period, wind, tide, bottom shape, season and how the wave breaks. The app turns it into **research confidence** (High / Moderate / Low per variable and overall, with plain-language gaps): how well each break's ideal conditions are documented. It is separate from forecast confidence and is not a probability. The rules, the reasoning behind them and the full file format are in [`docs/research-confidence.md`](../../docs/research-confidence.md).
+
+- **Without the file** every spot is assessed Low with a gap for every variable ("Limited information is available about ..."), because the values in `spots.json` above come from domain knowledge and spot checks, not from recorded sources.
+- It is assembled from web research in which every page was re-opened and every excerpt copied verbatim (at most 300 characters). Sources are never invented, never cited from memory, and never taken from Surfline or Windy.
+- Each source has a `source_type` (survey data, peer-reviewed, official, guidebook, encyclopedia, surf-forecast-site spot guide, magazine or community) that sets its tier, a publisher (pages of one publisher or one website count as one independent source), the year it was published (if known) and the date it was accessed.
+- A claim's normalised `value` uses the conventions of this file: directions in degrees the swell or wind comes **from**, windows clockwise and possibly wrapping through north; sizes as **breaking face height in feet** (never offshore significant wave height or Hawaiian scale); periods in seconds; months 1-12. The app re-checks agreement with the profile in code.
+- Load it with `python -m app.cli research load` (also part of `seed` / `init-db`). The loader lists every problem at once and writes nothing while there is one; reloading an unchanged file changes nothing. `python -m app.cli research show <slug>` prints a spot's result.
+
