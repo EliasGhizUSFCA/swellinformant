@@ -30,6 +30,7 @@ from app.services.forecasts.base import (
     SpotPoint,
 )
 from app.services.forecasts.ingestion import acquire_from_provider
+from app.services.spot_views import spot_forecast
 from app.services.surf_quality.predict import compute_pending_predictions
 
 NOW = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
@@ -61,7 +62,7 @@ class FakeProvider(ForecastProvider):
 
     def source_info(self) -> SourceInfo:
         return SourceInfo(
-            self.code, self.code, "test", "w", "a", False, "synthetic", "test", self.family
+            self.code, self.code, "test", "w", "a", False, f"{self.code} data", "test", self.family
         )
 
     def current_run(self, now: datetime) -> RunInfo:
@@ -180,6 +181,12 @@ def test_blend_combines_independent_families(db: Session, two_families: list[str
     )
     assert pred is not None
     assert pred.components["uncertainty"]["source"] == "model_disagreement"
+    # Every member's attribution (licence requirement) is shown with the blend, not the
+    # cross-check's.
+    shown = spot_forecast(db, db.get(SurfSpot, spot), now=NOW).source  # type: ignore[arg-type]
+    assert shown is not None and shown.code == "blend"
+    assert "t_gfs data" in shown.attribution and "t_ecmwf data" in shown.attribution
+    assert "t_gfs_copy" not in shown.attribution
     assert pred.components["uncertainty"]["sigma_forecast"] == pytest.approx(
         math.log(1.5) / 2, abs=1e-3
     )

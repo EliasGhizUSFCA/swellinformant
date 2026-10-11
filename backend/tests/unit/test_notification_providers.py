@@ -215,7 +215,7 @@ class TestTemplates:
         for expected in (
             "Swell dates:",
             "Predicted breaking waves (our estimate): 6–9 ft faces",
-            "Offshore swell (raw model forecast): 2.4 m @ 16 s from SW",
+            "Main offshore waves (raw model forecast): 2.4 m @ 16 s from SW",
             "Round-trip flight: $780 per traveller",
             "Suggested travel dates: Jul 10 – Jul 15",
             "Travel buffers: arrive 2 day(s) before the swell, leave 1 day(s) after",

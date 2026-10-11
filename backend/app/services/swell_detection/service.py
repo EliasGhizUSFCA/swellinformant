@@ -63,6 +63,24 @@ def load_steps(db: Session, spot_id: int, run_id: int, since: datetime) -> list[
     ]
 
 
+def dominant_component(
+    pred: SurfQualityPrediction, fc: WaveForecast
+) -> tuple[float | None, float | None, float | None]:
+    """Height, period and direction of the offshore component that drives the surf.
+
+    That is the partition with the largest predicted breaking height in the prediction's
+    nearshore breakdown, which may be the wind sea: WW3 ranks only the swells by height, so
+    "primary swell" can be a 0.2 m remnant under a 2 m wind sea. Without a breakdown, the
+    bulk sea state (Hs, Tp, peak direction) is used.
+    """
+    breakdown = (pred.components or {}).get("breaking") or {}
+    parts = [p for p in breakdown.get("partitions") or [] if (p.get("breaking_m") or 0) > 0]
+    if parts:
+        best = max(parts, key=lambda p: p["breaking_m"])
+        return best.get("height_m"), best.get("period_s"), best.get("direction_deg")
+    return fc.sig_wave_height_m, fc.wave_period_s, fc.wave_direction_deg
+
+
 def _apply_cluster(event: SwellEvent, cluster: Cluster, run: ForecastRun, keep_start: bool) -> None:
     peak_pred, peak_fc = cluster.peak.payload
     preds = [s.payload[0] for s in cluster.steps]
@@ -75,13 +93,11 @@ def _apply_cluster(event: SwellEvent, cluster: Cluster, run: ForecastRun, keep_s
     event.peak_label = QualityLabel(label_for_score(peak_pred.score))
     event.peak_breaking_height_min_ft = peak_pred.breaking_height_min_ft
     event.peak_breaking_height_max_ft = peak_pred.breaking_height_max_ft
-    event.peak_swell_height_m = peak_fc.primary_swell_height_m or peak_fc.sig_wave_height_m
-    event.peak_swell_period_s = peak_fc.primary_swell_period_s or peak_fc.wave_period_s
-    event.peak_swell_direction_deg = (
-        peak_fc.primary_swell_direction_deg
-        if peak_fc.primary_swell_direction_deg is not None
-        else peak_fc.wave_direction_deg
-    )
+    (
+        event.peak_swell_height_m,
+        event.peak_swell_period_s,
+        event.peak_swell_direction_deg,
+    ) = dominant_component(peak_pred, peak_fc)
     event.peak_wind_speed_kmh = peak_fc.wind_speed_kmh
     event.peak_wind_direction_deg = peak_fc.wind_direction_deg
     event.peak_wind_relation = peak_pred.wind_relation

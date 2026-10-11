@@ -482,6 +482,21 @@ def blend_info(db: Session, run: ForecastRun, spot: SurfSpot) -> BlendInfo | Non
     )
 
 
+def source_attribution(db: Session, run: ForecastRun) -> str:
+    """The attribution to show for a run. A blend repeats every member's attribution,
+    because the members' licences (e.g. ECMWF's CC BY 4.0) require it wherever their data
+    is shown, including in a combination."""
+    if run.source.kind != "blend":
+        return run.source.attribution
+    codes = [m.get("code") for m in run.details.get("members", []) if m.get("code")]
+    by_code = {
+        s.code: s.attribution
+        for s in db.scalars(select(ForecastSource).where(ForecastSource.code.in_(codes))).all()
+    }
+    parts = [run.source.attribution] + [by_code[c] for c in codes if by_code.get(c)]
+    return " ".join(dict.fromkeys(parts))
+
+
 def spot_forecast(
     db: Session, spot: SurfSpot, days: int = 10, now: datetime | None = None
 ) -> SpotForecastOut:
@@ -509,7 +524,7 @@ def spot_forecast(
             code=source.code,
             name=source.name,
             is_demo=source.is_demo,
-            attribution=source.attribution,
+            attribution=source_attribution(db, run),
             wave_model=source.wave_model,
             atmosphere_model=source.atmosphere_model,
         ),

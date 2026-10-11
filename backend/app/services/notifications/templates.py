@@ -96,7 +96,7 @@ def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
             "Predicted breaking waves (our estimate)",
             f"{s['height_min_ft']:g}–{s['height_max_ft']:g} ft faces",
         ),
-        ("Offshore swell (raw model forecast)", swell),
+        ("Main offshore waves (raw model forecast)", swell),
         (
             "Wind",
             f"{s['wind_relation']}, {s.get('wind_speed_kmh', '—')} km/h from {s['wind_direction']}",
