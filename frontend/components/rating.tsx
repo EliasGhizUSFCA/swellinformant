@@ -63,7 +63,8 @@ const FACTOR_LABEL: Record<RatingFactor["key"], string> = {
 /**
  * The factor details behind a rating: the API's explanation, each component's fit (when the
  * response includes them, otherwise the ``factors`` read from the response by
- * lib/rating.ratingFactors), which factors capped the score, the 0–100 score and the method.
+ * lib/rating.ratingFactors, toned only where the API judged them), which factors capped the
+ * score, the 0–100 score and the method.
  */
 export function WhyThisRating({
   score,
@@ -87,7 +88,7 @@ export function WhyThisRating({
     <Disclosure summary="Why this rating?" className={className} contentClassName="space-y-2 rounded-lg bg-card/70 p-2.5 text-xs text-muted-foreground" data-testid="why-rating">
       {explanation && <p className="text-ink">{explanation}</p>}
       {fits.length > 0 && (
-        <ul className="space-y-1" aria-label="Rating factors">
+        <ul className="space-y-1" aria-label="Rating factors" data-testid="rating-fits">
           {fits.map((f) => (
             <li key={f.key} className="grid grid-cols-[7.5rem_1fr_4.5rem] items-center gap-2">
               <span>{f.label}</span>
@@ -106,7 +107,8 @@ export function WhyThisRating({
               <span className="w-28 shrink-0">{FACTOR_LABEL[f.key]}</span>
               <span className="text-ink">{f.phrase}</span>
               {f.phrase.includes("groundswell") && <InfoPopover term="groundswell" />}
-              <span className={cn("ml-auto font-medium", TONE_TEXT[f.tone])}>{TONE_WORD[f.tone]}</span>
+              {/* A tone only where the API gives this factor's fit; never guessed here. */}
+              {f.tone && <span className={cn("ml-auto font-medium", TONE_TEXT[f.tone])}>{TONE_WORD[f.tone]}</span>}
             </li>
           ))}
         </ul>

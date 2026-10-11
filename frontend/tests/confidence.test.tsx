@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { ConfidenceBadge, ForecastConfidence, LocalConfidence, ResearchConfidence } from "@/components/confidence";
 import { ConfidenceBadge as LegacyConfidenceBadge } from "@/components/quality";
-import { asConfidenceClass, confidenceLabel, FORECAST_CONFIDENCE_MEANING, leadTimeText, legacyIndexText, safeExternalUrl } from "@/lib/confidence";
+import { asConfidenceClass, confidenceLabel, FORECAST_CONFIDENCE_MEANING, leadTimeText, legacyIndexText, pickLocalReason, safeExternalUrl } from "@/lib/confidence";
 import type { Research } from "@/types/api";
 
 // SYNTHETIC test data: invented reasons, sources and URLs that exist only to exercise the
@@ -147,6 +147,18 @@ describe("LocalConfidence", () => {
     expect(screen.getByTestId("local-confidence-reason")).toHaveTextContent("Synthetic: this break's preferred tide is not documented in the research.");
   });
 
+  it("does not take a forecast reason that merely mentions the spot", () => {
+    render(
+      <LocalConfidence
+        value="low"
+        forecastValue="moderate"
+        reasons={["Synthetic: not yet checked against buoys near this spot.", "Synthetic: how this break responds to swell is not well documented yet."]}
+      />,
+    );
+    expect(screen.getByTestId("local-confidence-reason")).toHaveTextContent("Synthetic: how this break responds to swell is not well documented yet.");
+    expect(pickLocalReason(["Synthetic: not yet checked against buoys near this spot."])).toBeNull();
+  });
+
   it("does not invent a reason when none is about the break", () => {
     render(<LocalConfidence value="moderate" forecastValue="high" reasons={["Synthetic: models agree."]} />);
     expect(screen.queryByTestId("local-confidence-reason")).toBeNull();
@@ -205,6 +217,12 @@ describe("ResearchConfidence", () => {
     const items = within(screen.getByTestId("research-gaps")).getAllByRole("listitem");
     expect(items.map((i) => i.textContent)).toEqual(gaps);
     expect(items[0]).toBeVisible();
+  });
+
+  it("labels the assessment date as such when the research date is unknown", () => {
+    render(<ResearchConfidence research={research({ research_updated_at: null })} />);
+    expect(screen.getByTestId("research-updated")).toHaveTextContent("Assessed Oct 1, 2026");
+    expect(screen.getByTestId("research-updated")).not.toHaveTextContent("Research updated");
   });
 
   it("renders a missing assessment as Not assessed yet", () => {

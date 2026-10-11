@@ -13,6 +13,12 @@
  *   strong-wind penalty starts there);
  * * fit components (0–1): ≥ 0.75 favourable, ≥ 0.4 workable, else limiting — the same cut-offs
  *   the backend uses for its explanation text.
+ *
+ * A factor's tone (favourable / workable / limiting) is only ever the backend's own judgement:
+ * its component fit, or the cut-off words of its explanation text. The period and wind
+ * phrases above describe the conditions; whether they helped or held back the score depends on
+ * the spot (its own period range and offshore direction), so without the API's fit the tone
+ * stays null rather than guessed.
  */
 import { asQuality, QUALITY_LABELS } from "@/lib/quality";
 
@@ -21,7 +27,10 @@ export type FactorTone = "good" | "ok" | "bad";
 export interface RatingFactor {
   key: "period" | "direction" | "wind" | "size" | "tide";
   phrase: string;
-  tone: FactorTone;
+  /** The backend's fit for this factor; null when the response does not say. */
+  tone: FactorTone | null;
+  /** Named in the one-line reason (size and tide only when they work against the rating). */
+  inReason: boolean;
 }
 
 export interface ReasonInput {
@@ -35,6 +44,8 @@ export interface ReasonInput {
   /** Predicted breaking faces (ft) and the spot's working range (ft), when known. */
   breakingMinFt?: number | null;
   breakingMaxFt?: number | null;
+  /** The central breaking estimate (ft): the height the score's size fit is computed from. */
+  breakingMidFt?: number | null;
   spotMinFt?: number | null;
   spotMaxFt?: number | null;
 }
@@ -68,11 +79,16 @@ function fitTone(v: number): FactorTone {
   return v >= 0.75 ? "good" : v >= 0.4 ? "ok" : "bad";
 }
 
-function periodFactor(periodS: number | null | undefined): RatingFactor | null {
+function componentTone(components: ReasonInput["components"], key: string): FactorTone | null {
+  const fit = num(components?.[key]);
+  return fit != null ? fitTone(fit) : null;
+}
+
+function periodFactor(periodS: number | null | undefined, components: ReasonInput["components"]): RatingFactor | null {
   if (periodS == null || !Number.isFinite(periodS)) return null;
-  if (periodS >= GROUNDSWELL_PERIOD_S) return { key: "period", phrase: "long-period groundswell", tone: "good" };
-  if (periodS >= MID_PERIOD_S) return { key: "period", phrase: "mid-period swell", tone: "ok" };
-  return { key: "period", phrase: "short-period swell", tone: "bad" };
+  const tone = componentTone(components, "swell_period");
+  const phrase = periodS >= GROUNDSWELL_PERIOD_S ? "long-period groundswell" : periodS >= MID_PERIOD_S ? "mid-period swell" : "short-period swell";
+  return { key: "period", phrase, tone, inReason: true };
 }
 
 function directionFactor(components: ReasonInput["components"], explanation: string | null | undefined): RatingFactor | null {
@@ -85,29 +101,25 @@ function directionFactor(components: ReasonInput["components"], explanation: str
   }
   if (tone == null) return null;
   const phrase = tone === "good" ? "favorable direction" : tone === "ok" ? "direction at the edge of the swell window" : "poorly aligned direction";
-  return { key: "direction", phrase, tone };
+  return { key: "direction", phrase, tone, inReason: true };
 }
 
-function windFactor(relation: string | null | undefined, speed: number | null | undefined): RatingFactor | null {
+function windFactor(relation: string | null | undefined, speed: number | null | undefined, components: ReasonInput["components"]): RatingFactor | null {
   if (!relation || relation === "unknown") return null;
-  if (relation === "glassy") return { key: "wind", phrase: "glassy, near-calm conditions", tone: "good" };
-  const light = speed != null && speed < LIGHT_WIND_KMH;
-  const strong = speed != null && speed >= STRONG_WIND_KMH;
-  const size = light ? "light " : strong ? "strong " : "";
-  const name: Record<string, [string, FactorTone, FactorTone]> = {
-    // [phrase, tone when light/moderate, tone when strong]
-    offshore: ["offshore winds", "good", "ok"],
-    "cross-offshore": ["cross-offshore winds", "good", "ok"],
-    "cross-shore": ["cross-shore winds", "ok", "bad"],
-    "cross-onshore": ["cross-onshore winds", "bad", "bad"],
-    onshore: ["onshore winds", "bad", "bad"],
+  const tone = componentTone(components, "wind");
+  // "glassy" means at or below the score's calm threshold, where the wind fit is always 1.
+  if (relation === "glassy") return { key: "wind", phrase: "glassy, near-calm conditions", tone: tone ?? "good", inReason: true };
+  const PHRASE: Record<string, string> = {
+    offshore: "offshore winds",
+    "cross-offshore": "cross-offshore winds",
+    "cross-shore": "cross-shore winds",
+    "cross-onshore": "cross-onshore winds",
+    onshore: "onshore winds",
   };
-  const entry = name[relation];
-  if (!entry) return null;
-  const [phrase, normal, strongTone] = entry;
-  // Light onshore wind only roughens the surface a little: workable rather than limiting.
-  const tone: FactorTone = strong ? strongTone : light && normal === "bad" ? "ok" : normal;
-  return { key: "wind", phrase: `${size}${phrase}`, tone };
+  const phrase = PHRASE[relation];
+  if (!phrase) return null;
+  const size = speed != null && speed < LIGHT_WIND_KMH ? "light " : speed != null && speed >= STRONG_WIND_KMH ? "strong " : "";
+  return { key: "wind", phrase: `${size}${phrase}`, tone, inReason: true };
 }
 
 const SIZE_RE = /approx\. ([\d.]+)–([\d.]+) ft faces vs\. a working range of ([\d.]+)–([\d.]+) ft/;
@@ -125,10 +137,13 @@ function sizeFactor(input: ReasonInput): RatingFactor | null {
     rangeHi ??= Number(m[4]);
   }
   if (lo == null || hi == null || rangeLo == null || rangeHi == null) return null;
-  const mid = (lo + hi) / 2;
-  if (mid < rangeLo) return { key: "size", phrase: "waves below the break's usual size range", tone: "bad" };
-  if (mid > rangeHi) return { key: "size", phrase: "waves above the break's usual size range", tone: "bad" };
-  return { key: "size", phrase: "size within the break's range", tone: "good" };
+  // Compare the height the score uses (the central estimate) when the response has it; the
+  // midpoint of typical and sets overstates it, which could call a fitting size "too big".
+  const mid = input.breakingMidFt ?? (lo + hi) / 2;
+  const tone = componentTone(input.components, "wave_size");
+  if (mid < rangeLo) return { key: "size", phrase: "waves below the break's usual size range", tone, inReason: true };
+  if (mid > rangeHi) return { key: "size", phrase: "waves above the break's usual size range", tone, inReason: true };
+  return { key: "size", phrase: "size within the break's range", tone, inReason: false };
 }
 
 function tideFactor(components: ReasonInput["components"], explanation: string | null | undefined): RatingFactor | null {
@@ -140,15 +155,15 @@ function tideFactor(components: ReasonInput["components"], explanation: string |
     else if (explanation.includes("favourable tide")) tone = "good";
   }
   if (tone == null) return null;
-  return { key: "tide", phrase: tone === "good" ? "favorable tide" : tone === "ok" ? "workable tide" : "unfavorable tide", tone };
+  return { key: "tide", phrase: tone === "good" ? "favorable tide" : tone === "ok" ? "workable tide" : "unfavorable tide", tone, inReason: tone === "bad" };
 }
 
 /** Every factor the response supports, in reading order (period, direction, wind, size, tide). */
 export function ratingFactors(input: ReasonInput): RatingFactor[] {
   return [
-    periodFactor(input.periodS),
+    periodFactor(input.periodS, input.components),
     directionFactor(input.components, input.explanation),
-    windFactor(input.windRelation, input.windSpeedKmh),
+    windFactor(input.windRelation, input.windSpeedKmh, input.components),
     sizeFactor(input),
     tideFactor(input.components, input.explanation),
   ].filter((f): f is RatingFactor => f != null);
@@ -165,12 +180,15 @@ function sentence(parts: string[]): string {
 
 /**
  * One line such as "Long-period groundswell, favorable direction, and light offshore winds."
- * Period, direction and wind are always named when known; size and tide only when they
- * limit the rating, so the line stays short. Null when the response has none of these.
+ * Period, direction and wind are always named when known; size only when it is outside the
+ * break's working range and tide only when the API calls it unfavourable, so the line stays
+ * short. Null when the response has none of these.
  */
 export function ratingReason(input: ReasonInput): string | null {
-  const factors = ratingFactors(input).filter((f) => (f.key === "size" || f.key === "tide" ? f.tone === "bad" : true));
-  const parts = factors.slice(0, 4).map((f) => f.phrase);
+  const parts = ratingFactors(input)
+    .filter((f) => f.inReason)
+    .slice(0, 4)
+    .map((f) => f.phrase);
   return parts.length ? sentence(parts) : null;
 }
 

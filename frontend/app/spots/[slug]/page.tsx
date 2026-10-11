@@ -28,7 +28,7 @@ import { nearestPointIndex, pointToConditions } from "@/lib/forecast";
 import { compass, formatDateTime, heightRange, kmh, metres, relativeTime, seconds, titleCase, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors, ratingReason } from "@/lib/rating";
-import type { SpotDetail, SpotForecast } from "@/types/api";
+import type { ForecastPoint, SpotDetail, SpotForecast } from "@/types/api";
 
 const SurfMap = dynamic(() => import("@/components/map/surf-map"), { ssr: false, loading: () => <Skeleton className="h-56" /> });
 
@@ -53,16 +53,22 @@ const FLAG_LABEL: Record<string, string> = {
 /**
  * The page's summary: the best surf in the next week (rating, our breaking-wave estimate,
  * swell, wind, forecast confidence) and, separately, how well the break itself is researched.
+ * ``points`` (the spot forecast, when loaded) supplies the score components of the best hour,
+ * which the summary itself does not carry, so "Why this rating?" can show the API's own fits.
  */
-function SurfOutlook({ s, units }: { s: SpotDetail; units: Units }) {
+function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points: readonly ForecastPoint[] }) {
   const c = s.best_upcoming;
+  const at = c ? new Date(c.valid_time).getTime() : NaN;
+  const components = points.find((p) => new Date(p.valid_time).getTime() === at)?.components ?? null;
   const factorInput = c && {
+    components,
     periodS: c.swell_period_s,
     windRelation: c.wind_relation,
     windSpeedKmh: c.wind_speed_kmh,
     explanation: c.explanation,
     breakingMinFt: c.breaking_height_min_ft,
     breakingMaxFt: c.breaking_height_max_ft,
+    breakingMidFt: c.breaking_height_mid_ft,
     spotMinFt: s.wave_height_min_ft,
     spotMaxFt: s.wave_height_max_ft,
   };
@@ -86,15 +92,15 @@ function SurfOutlook({ s, units }: { s: SpotDetail; units: Units }) {
                 <span className="text-xs text-muted-foreground">
                   est. breaking faces <InfoPopover term="breakingHeight" />
                 </span>
-                {c.breaking_p10_ft != null && c.breaking_p90_ft != null && (
-                  <span className="text-xs text-muted-foreground">
-                    · 80% range {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)} <InfoPopover term="range80" />
-                  </span>
-                )}
               </div>
+              {c.breaking_p10_ft != null && c.breaking_p90_ft != null && (
+                <div className="text-xs text-muted-foreground">
+                  80% range {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)} <InfoPopover term="range80" />
+                </div>
+              )}
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
                 <span className="flex items-center gap-1.5">
-                  <Waves className="size-3.5" /> {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} from {compass(c.swell_direction_deg)} (offshore)
+                  <Waves className="size-3.5" /> Offshore swell {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} from {compass(c.swell_direction_deg)}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <Wind className="size-3.5" /> {kmh(c.wind_speed_kmh)} from {compass(c.wind_direction_deg)} ·{" "}
@@ -106,6 +112,7 @@ function SurfOutlook({ s, units }: { s: SpotDetail; units: Units }) {
                 className="mt-2"
                 score={c.score}
                 explanation={c.explanation}
+                components={components}
                 factors={ratingFactors(factorInput)}
                 method={<>Method: {methodLabel(c.method)}{c.algorithm_version ? ` (v${c.algorithm_version})` : ""}</>}
               />
@@ -120,7 +127,8 @@ function SurfOutlook({ s, units }: { s: SpotDetail; units: Units }) {
             </p>
           )}
         </div>
-        <div className="min-w-0 md:border-l md:pl-8">
+        {/* A separate assessment of the break itself: kept visibly apart from the forecast. */}
+        <div className="min-w-0 border-t pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-8">
           <div className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">About this break</div>
           <ResearchConfidence research={s.research} />
         </div>
@@ -318,7 +326,7 @@ export default function SpotPage() {
         </Alert>
       )}
 
-      <SurfOutlook s={s} units={units} />
+      <SurfOutlook s={s} units={units} points={points} />
 
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div className="min-w-0 space-y-6">

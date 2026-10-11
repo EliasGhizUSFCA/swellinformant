@@ -210,7 +210,9 @@ export function ResearchConfidence({
     );
   }
   const c = asConfidenceClass(research.research_class);
-  const updated = dateOnly(research.research_updated_at ?? research.assessed_at);
+  // research_updated_at is the newest source access date; without it only the assessment
+  // date is known, which is labelled as such (it is not when the research changed).
+  const updated = research.research_updated_at ? `Research updated ${dateOnly(research.research_updated_at)}` : research.assessed_at ? `Assessed ${dateOnly(research.assessed_at)}` : null;
   return (
     <div className={cn("space-y-1.5", className)} data-testid={testId} data-confidence={c ?? "none"}>
       <div className="flex items-center gap-1.5">
@@ -302,7 +304,7 @@ export function ResearchConfidence({
       </Disclosure>
       {updated && (
         <p className="text-[11px] text-muted-foreground" data-testid="research-updated">
-          Research updated {updated}
+          {updated}
         </p>
       )}
     </div>

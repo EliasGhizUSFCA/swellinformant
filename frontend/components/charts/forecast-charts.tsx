@@ -303,7 +303,8 @@ export function DailyStrip({
         })}
       </div>
       <p className="mt-1.5 text-[11px] text-muted-foreground">
-        Heights: our breaking-wave estimate, range over the day.{withConfidence ? " The small badge is each day's forecast confidence." : ""}
+        Daylight hours only: heights are our breaking-wave estimate (lowest to highest), the rating is the day&apos;s best hour.
+        {withConfidence ? " The small badge is each day's forecast confidence." : ""}
       </p>
     </div>
   );

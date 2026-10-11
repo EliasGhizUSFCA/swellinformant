@@ -48,7 +48,15 @@ describe("one-line reason", () => {
       "Short-period swell, direction at the edge of the swell window, onshore winds, and waves below the break's usual size range.",
     );
     const factors = ratingFactors({ periodS: 7, windRelation: "onshore", windSpeedKmh: 30, explanation });
-    expect(factors.find((f) => f.key === "tide")).toEqual({ key: "tide", phrase: "unfavorable tide", tone: "bad" });
+    expect(factors.find((f) => f.key === "tide")).toEqual({ key: "tide", phrase: "unfavorable tide", tone: "bad", inReason: true });
+  });
+
+  it("compares the score's own size estimate, not the midpoint of typical and sets", () => {
+    // Typical 5.5 ft, sets 7 ft, central estimate 5.6 ft against a 3–6 ft range: the size fits.
+    const input = { periodS: 14, windRelation: "offshore", windSpeedKmh: 8, breakingMinFt: 5.5, breakingMaxFt: 7, spotMinFt: 3, spotMaxFt: 6 };
+    expect(ratingReason({ ...input, breakingMidFt: 5.6 })).toBe("Long-period groundswell and light offshore winds.");
+    // Without the central estimate the midpoint (6.25 ft) is the only clue left.
+    expect(ratingReason(input)).toBe("Long-period groundswell, light offshore winds, and waves above the break's usual size range.");
   });
 
   it("uses the spot's working range when given", () => {
@@ -108,14 +116,25 @@ describe("rating components", () => {
     render(<WhyThisRating score={81} explanation="Synthetic explanation." factors={factors} />);
     fireEvent.click(screen.getByRole("button", { name: "Why this rating?" }));
     const items = within(screen.getByTestId("rating-factors")).getAllByRole("listitem");
+    // Direction and tide carry the backend's own words; period and wind have no fit in this
+    // response, so they are described without a favourable / limiting verdict.
     expect(items.map((li) => li.textContent)).toEqual([
-      "Swell periodlong-period groundswellFavorable",
+      "Swell periodlong-period groundswell",
       "Swell directionfavorable directionFavorable",
-      "Windlight offshore windsFavorable",
+      "Windlight offshore winds",
       "Tideunfavorable tideLimiting",
     ]);
     // Technical term, explained on demand.
     expect(within(items[0]!).getByRole("button", { name: "Learn more: Groundswell" })).toBeInTheDocument();
+  });
+
+  it("never contradicts the API's fit (synthetic values shaped like a live demo hour)", () => {
+    // 12.6 km/h onshore: the backend's wind fit is 0.555 (workable), so no "Limiting" here.
+    const input = { periodS: 8.5, windRelation: "onshore", windSpeedKmh: 12.6 };
+    expect(ratingFactors(input).find((f) => f.key === "wind")).toEqual({ key: "wind", phrase: "onshore winds", tone: null, inReason: true });
+    const withFits = ratingFactors({ ...input, components: { wind: 0.555, swell_period: 0.067 } });
+    expect(withFits.find((f) => f.key === "wind")?.tone).toBe("ok");
+    expect(withFits.find((f) => f.key === "period")?.tone).toBe("bad");
   });
 
   it("prefers the API's component fits over derived factors", () => {

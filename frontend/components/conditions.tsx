@@ -32,6 +32,7 @@ export function ConditionsSummary({
     explanation: c.explanation,
     breakingMinFt: c.breaking_height_min_ft,
     breakingMaxFt: c.breaking_height_max_ft,
+    breakingMidFt: c.breaking_height_mid_ft,
     spotMinFt: spotRange?.minFt,
     spotMaxFt: spotRange?.maxFt,
   });

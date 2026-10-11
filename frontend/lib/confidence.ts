@@ -71,11 +71,13 @@ export function leadTimeText(leadHours: number | null | undefined): string | nul
 
 /**
  * The reason that explains a local (at-the-break) class, chosen from the API's own reasons:
- * the first one that talks about the break or its research. Null when none does, so nothing
- * is invented.
+ * the last one that talks about the break or its research (the API lists the forecast reasons
+ * first and the research-based one after them). Words such as "spot" are left out on purpose:
+ * forecast reasons use them too ("not yet checked against buoys near this spot"). Null when no
+ * reason qualifies, so nothing is invented or misattributed.
  */
 export function pickLocalReason(reasons: readonly string[] | null | undefined): string | null {
-  const r = (reasons ?? []).find((x) => /\b(break|spot|research|bathymetry|nearshore|local)\b/i.test(x));
+  const r = [...(reasons ?? [])].reverse().find((x) => /\b(break|research|researched|bathymetry|nearshore)\b/i.test(x));
   return r ?? null;
 }
 

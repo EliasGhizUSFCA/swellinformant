@@ -17,7 +17,7 @@ export const GLOSSARY = {
   },
   breakingHeight: {
     title: "Breaking wave height (our estimate)",
-    body: "Our estimate of the wave faces (trough to crest) where the waves break at this spot, worked out from the offshore swell, its period and direction and the break's exposure. “Typical” is the average breaking wave; “sets” are the bigger ones (about 1.27 × typical). It is a model estimate, not a measurement.",
+    body: "Our estimate of the wave faces (trough to crest) where the waves break at this spot, worked out from the offshore swell, its period and direction and the break's exposure. “Typical” is the significant breaking height (roughly the average of the bigger third of waves); “sets” are the bigger waves (about 1.27 × typical). It is a model estimate, not a measurement.",
   },
   range80: {
     title: "80% range",
