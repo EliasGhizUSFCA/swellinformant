@@ -2,8 +2,10 @@
 
   obs seed-stations [--catalog PATH]            load data/observation_stations.json
   obs ingest [--provider P] [--since ISO --until ISO] [--station CODE ...]
+             [--aodn-dataset delayed_qc|realtime]
   obs list                                      stations with observation / forecast counts
   obs collect-forecasts --start ISO --end ISO [--cycles 0,12] [--station CODE ...]
+                        [--bulletin-id ID  (one --station; proxy bulletin, diagnostics only)]
 
 ``obs ingest`` runs regardless of OBSERVATIONS_ENABLED (an operator asked for it); without
 ``--since`` it ingests the last OBSERVATION_LOOKBACK_HOURS. Times without a zone are UTC.
@@ -51,12 +53,26 @@ def register(subparsers: Any) -> None:
     ingest.add_argument("--since", type=_iso, default=None)
     ingest.add_argument("--until", type=_iso, default=None)
     ingest.add_argument("--station", action="append", default=None, help="station code")
+    ingest.add_argument(
+        "--aodn-dataset",
+        action="append",
+        choices=("delayed_qc", "realtime"),
+        default=None,
+        help="AODN only: read just this dataset (repeatable; default both). Use delayed_qc "
+        "for a backfill that must contain quality-controlled data only",
+    )
     sub.add_parser("list", help="list stations")
     collect = sub.add_parser("collect-forecasts", help="archive GFS-Wave station bulletins")
     collect.add_argument("--start", type=_iso, required=True)
     collect.add_argument("--end", type=_iso, required=True)
     collect.add_argument("--cycles", type=_cycles, default=(0, 12))
     collect.add_argument("--station", action="append", default=None, help="station code")
+    collect.add_argument(
+        "--bulletin-id",
+        default=None,
+        help="archive this bulletin for the one --station instead of its catalog bulletin; "
+        "stored as source gfswave_bulletin_proxy (diagnostics only) unless it is the catalog id",
+    )
 
 
 def _print(data: Any) -> None:
@@ -81,7 +97,19 @@ def run(args: argparse.Namespace) -> int:
             if args.start >= args.end:
                 print("--start must be before --end", file=sys.stderr)
                 return 2
-            _print(collect_range(db, args.start, args.end, args.cycles, args.station))
+            try:
+                out = collect_range(
+                    db,
+                    args.start,
+                    args.end,
+                    args.cycles,
+                    args.station,
+                    bulletin_override=args.bulletin_id,
+                )
+            except ValueError as exc:
+                print(f"obs collect-forecasts: {exc}", file=sys.stderr)
+                return 2
+            _print(out)
             return 0
     return 2
 
@@ -97,11 +125,20 @@ def _ingest(db: Any, args: argparse.Namespace) -> int:
         print("--since must be before --until", file=sys.stderr)
         return 2
     providers = [args.provider] if args.provider else settings.observation_provider_list
+    datasets = None
+    if args.aodn_dataset:
+        if providers != ["aodn"]:
+            print("--aodn-dataset needs --provider aodn", file=sys.stderr)
+            return 2
+        from app.services.observations.aodn import DELAYED, REALTIME
+
+        names = {"delayed_qc": DELAYED, "realtime": REALTIME}
+        datasets = [names[d] for d in dict.fromkeys(args.aodn_dataset)]
     out: dict[str, Any] = {}
     failures = 0
     for name in providers:
         try:
-            out[name] = ingest_range(db, name, since, until, args.station)
+            out[name] = ingest_range(db, name, since, until, args.station, datasets=datasets)
         except (ProviderError, ValueError) as exc:
             db.rollback()
             failures += 1

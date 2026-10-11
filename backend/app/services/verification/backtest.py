@@ -7,8 +7,9 @@ model is scored on every fold's test block against two references: persistence (
 observation at or before the cycle time, <= 1 h old) and climatology (the monthly mean
 of the station's observations in that fold's TRAINING rows only). Each row of the
 resulting table is one lead bucket (app.services.verification.metrics) with n, bias,
-RMSE, SI, HH, CC and MSE skill vs persistence and climatology; RMSE and skill scores
-carry cycle-block bootstrap confidence intervals (whole forecast cycles resampled).
+MAE, RMSE, SI, HH, CC and MSE skill vs persistence and climatology; bias, RMSE and the
+skill scores carry cycle-block bootstrap confidence intervals (whole forecast cycles
+resampled).
 
 Results are written to ``forecast_accuracy_metrics`` with ``scope='global'``,
 ``scope_key='backtest'`` (or ``'backtest:<hash>'`` for a station subset) and one row
@@ -107,6 +108,7 @@ def bucket_row(
         "cycles": int(sub["cycle_time"].nunique()),
         **{k: vm.finite_or_none(v) for k, v in scores.items() if k != "n"},
         "rmse_ci": _ci(vm.rmse_ci(m, o, blocks, **kwargs)) if len(sub) else [None, None],
+        "bias_ci": _ci(vm.bias_ci(m, o, blocks, **kwargs)) if len(sub) else [None, None],
     }
     for ref in REFERENCES:
         if pred_col == f"pred_{ref}":
@@ -224,6 +226,7 @@ def _write(db: Session, result: BacktestResult, station_codes: Sequence[str] | N
                 "cycles": r["cycles"],
                 "nrmse": r.get("nrmse"),
                 "rmse_ci": r["rmse_ci"],
+                "bias_ci": r.get("bias_ci"),
                 "skill_vs_persistence_ci": r.get("skill_vs_persistence_ci"),
                 "skill_vs_climatology_ci": r.get("skill_vs_climatology_ci"),
                 "n_persistence": r.get("n_persistence"),

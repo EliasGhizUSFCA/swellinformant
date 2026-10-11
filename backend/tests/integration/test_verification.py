@@ -271,6 +271,8 @@ def test_backtest_and_cli(
     pooled = by_bucket[vm.ALL_LEADS_BUCKET]
     assert pooled["n"] > 0 and pooled["bias"] > 0
     assert pooled["rmse_ci"][0] <= pooled["rmse"] <= pooled["rmse_ci"][1]
+    assert pooled["bias_ci"][0] <= pooled["bias"] <= pooled["bias_ci"][1]
+    assert pooled["mae"] is not None and pooled["mae"] <= pooled["rmse"]
     assert pooled["skill_vs_persistence"] is not None
     assert by_bucket[168]["n"] == 0  # synthetic leads stop at 120 h
     assert result.metrics_written > 0

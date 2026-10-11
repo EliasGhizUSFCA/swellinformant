@@ -27,6 +27,16 @@ direction and no wind, so ``tp_s``, ``direction_deg`` and the wind columns stay 
 ``model_latitude/longitude`` come from the header and ``distance_km`` is the distance from
 the station to that model point. Leads are hourly to 120 h and 3-hourly after that, up to
 ``FORECAST_DAYS`` days.
+
+Proxy bulletins (source ``gfswave_bulletin_proxy``): an operator can archive a bulletin
+other than the station's own catalog ``bulletin_id`` (``collect_range(...,
+bulletin_override=ID)``, CLI ``--bulletin-id``), typically the nearest output point of a
+station that has none within the catalog's ``max_bulletin_distance_km``. Such a point can
+sit tens of km away in other depth and exposure, so its error against the buoy mixes
+model error with the change in sea state between the two places. The rows are therefore
+stored under their own source code: they are never pooled with the like-for-like
+``gfswave_bulletin`` statistics or training sets, and the scheduled collector never
+fetches them. They serve diagnostics only.
 """
 
 from __future__ import annotations
@@ -60,6 +70,8 @@ from app.services.observations.stations import bulletin_stations
 logger = logging.getLogger(__name__)
 
 SOURCE_CODE = "gfswave_bulletin"
+# Bulletin that is not the station's own (see the module docstring): diagnostics only.
+PROXY_SOURCE_CODE = "gfswave_bulletin_proxy"
 FAMILY = "ncep_gfs"
 DEFAULT_CYCLES = (0, 12)
 MAX_WORKERS = 8
@@ -247,7 +259,10 @@ def keep_lead(lead_hours: float, max_lead_hours: float) -> bool:
 
 
 def point_forecast_rows(
-    bulletin: Bulletin, station: BuoyStation, max_lead_hours: float
+    bulletin: Bulletin,
+    station: BuoyStation,
+    max_lead_hours: float,
+    source_code: str = SOURCE_CODE,
 ) -> list[dict[str, Any]]:
     distance = round(
         haversine_km(station.latitude, station.longitude, bulletin.latitude, bulletin.longitude), 2
@@ -260,7 +275,7 @@ def point_forecast_rows(
         rows.append(
             {
                 "station_id": station.id,
-                "source_code": SOURCE_CODE,
+                "source_code": source_code,
                 "family": FAMILY,
                 "cycle_time": bulletin.cycle_time,
                 "valid_time": r.valid_time,
@@ -360,18 +375,41 @@ def collect_range(
     client: httpx.Client | None = None,
     settings: Settings | None = None,
     backoff_seconds: float = 1.0,
+    bulletin_override: str | None = None,
 ) -> dict[str, Any]:
     """Archive GFS-Wave bulletins for every (station with a bulletin id, cycle) in range.
 
     Idempotent: (station, cycle) pairs already stored are skipped and inserts ignore the
     unique constraint. Missing files (not published, or before the archive starts) are
     counted, not fatal; other failures are counted with their first messages.
+
+    ``bulletin_override`` archives that bulletin for exactly one station (``stations``
+    must name it) instead of the station's catalog ``bulletin_id``. Unless it is the
+    catalog id, the rows are stored as :data:`PROXY_SOURCE_CODE` (see the module
+    docstring), so a proxy point is never mixed with like-for-like pairs.
     """
     settings = settings or get_settings()
-    station_rows = bulletin_stations(db, stations)
+    source_code = SOURCE_CODE
+    if bulletin_override is None:
+        station_rows = bulletin_stations(db, stations)
+        targets = [(s, str(s.metadata_["bulletin_id"])) for s in station_rows]
+    else:
+        if not _BULLETIN_ID_RE.fullmatch(bulletin_override):
+            raise ValueError(f"invalid GFS-Wave bulletin id {bulletin_override!r}")
+        if not stations or len(set(stations)) != 1:
+            raise ValueError("a bulletin override needs exactly one station code")
+        station_rows = list(
+            db.scalars(select(BuoyStation).where(BuoyStation.code == stations[0])).all()
+        )
+        if not station_rows:
+            raise ValueError(f"unknown station {stations[0]!r}")
+        own = (station_rows[0].metadata_ or {}).get("bulletin_id")
+        if own != bulletin_override:
+            source_code = PROXY_SOURCE_CODE
+        targets = [(station_rows[0], bulletin_override)]
     cycle_list = cycles_between(start, end, cycles)
     result: dict[str, Any] = {
-        "source": SOURCE_CODE,
+        "source": source_code,
         "start": start.isoformat(),
         "end": end.isoformat(),
         "cycles": len(cycle_list),
@@ -386,14 +424,16 @@ def collect_range(
         "malformed_cells": 0,
         "error_samples": [],
     }
-    if not station_rows or not cycle_list:
+    if bulletin_override is not None:
+        result["bulletin_id"] = bulletin_override
+    if not targets or not cycle_list:
         return result
     stored = {
         (row[0], row[1])
         for row in db.execute(
             select(PointForecast.station_id, PointForecast.cycle_time)
             .where(
-                PointForecast.source_code == SOURCE_CODE,
+                PointForecast.source_code == source_code,
                 PointForecast.cycle_time >= cycle_list[0],
                 PointForecast.cycle_time <= cycle_list[-1],
             )
@@ -403,14 +443,12 @@ def collect_range(
     by_code = {s.code: s for s in station_rows}
     jobs = []
     for cycle in cycle_list:
-        for s in station_rows:
+        for s, bulletin_id in targets:
             if (s.id, cycle) in stored:
                 result["already_stored"] += 1
                 continue
             try:
-                url = bulletin_url(
-                    settings.noaa_gfs_base_url, str(s.metadata_["bulletin_id"]), cycle
-                )
+                url = bulletin_url(settings.noaa_gfs_base_url, bulletin_id, cycle)
             except ValueError as exc:
                 result["errors"] += 1
                 result["error_samples"].append(f"{s.code} {cycle:%Y%m%d%H}: {exc}")
@@ -432,7 +470,7 @@ def collect_range(
                     lambda job: _fetch(http, job[0], job[1], job[2], backoff_seconds), batch
                 )
                 for item in fetched:
-                    _store(db, item, by_code, max_lead, result, per_station)
+                    _store(db, item, by_code, max_lead, result, per_station, source_code)
     finally:
         if own_client:
             http.close()
@@ -448,6 +486,7 @@ def _store(
     max_lead: float,
     result: dict[str, Any],
     per_station: dict[str, int],
+    source_code: str = SOURCE_CODE,
 ) -> None:
     if item.missing:
         result["missing"] += 1
@@ -471,7 +510,7 @@ def _store(
             f"{item.station_code} {item.cycle:%Y%m%d%H}: {bulletin.malformed} malformed "
             "row(s)/cell(s) skipped"
         )
-    rows = point_forecast_rows(bulletin, station, max_lead)
+    rows = point_forecast_rows(bulletin, station, max_lead, source_code)
     if not rows:
         return
     stmt = (
