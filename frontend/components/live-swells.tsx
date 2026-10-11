@@ -14,7 +14,7 @@ export function LiveSwells() {
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold tracking-wide text-white/90">Swells on the radar</h2>
         <span className="flex items-center gap-1.5 text-xs text-white/60">
-          <span className="size-1.5 animate-pulse rounded-full bg-seafoam" /> live from the forecast pipeline
+          <span className="size-1.5 animate-pulse rounded-full bg-seafoam" /> live forecast
         </span>
       </div>
       {isLoading && (

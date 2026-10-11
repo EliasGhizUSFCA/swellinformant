@@ -68,7 +68,7 @@ function SearchRow({ s, units }: { s: Search; units: Units }) {
             </Badge>
           </div>
           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
-            <span>{heightRange(s.wave_min_ft, s.wave_max_ft, units)}</span>
+            <span>{heightRange(s.wave_min_ft, s.wave_max_ft, units)} breaking</span>
             <span>{QUALITY_LABELS[asQuality(s.min_quality)]}+</span>
             <span>{destinationSummary(s)}</span>
             <span>from {s.origins.join(", ")}</span>
@@ -140,7 +140,7 @@ function Searches({ user }: { user: User }) {
       <PageHeader
         eyebrow="Searches"
         title="Your swell searches"
-        description="Each search is evaluated automatically against every new forecast run."
+        description="Checked automatically against every new forecast."
         actions={
           <Button asChild>
             <Link href="/searches/new">

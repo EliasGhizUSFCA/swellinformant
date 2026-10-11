@@ -4,6 +4,7 @@ import { Pencil } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
+import { ConfidenceBadge } from "@/components/confidence";
 import { AppShell } from "@/components/layout/app-shell";
 import { OpportunityCard } from "@/components/opportunity-card";
 import { EmptyState, PageHeader, SectionTitle } from "@/components/page-header";
@@ -14,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSearch, useSearchMatches } from "@/hooks/queries";
+import { hasField } from "@/lib/confidence";
 import { formatCalendarDate, formatMoney, formatRange, heightRange, titleCase, type Units } from "@/lib/format";
 import { asQuality, QUALITY_LABELS } from "@/lib/quality";
 import type { User } from "@/types/api";
@@ -28,7 +30,7 @@ function Detail({ user, id }: { user: User; id: string }) {
   const current = (matches.data ?? []).filter((m) => ["flight_found", "surf_only", "pending_flights"].includes(m.status));
   const history = (matches.data ?? []).filter((m) => !["flight_found", "surf_only", "pending_flights"].includes(m.status));
   const rows: Array<[string, React.ReactNode]> = [
-    ["Waves", `${heightRange(s.wave_min_ft, s.wave_max_ft, units)} · ${QUALITY_LABELS[asQuality(s.min_quality)]}+`],
+    ["Waves", `${heightRange(s.wave_min_ft, s.wave_max_ft, units)} breaking · ${QUALITY_LABELS[asQuality(s.min_quality)]}+`],
     ["Wind", titleCase(s.wind_requirement)],
     ["Destinations", s.destination_mode === "all" ? "All spots" : s.destination_mode === "regions" ? [...(s.destinations.region_groups ?? []), ...(s.destinations.countries ?? [])].join(", ") : (s.destinations.spot_slugs ?? []).join(", ")],
     ["Dates", s.date_mode === "fixed" ? `${formatCalendarDate(s.date_start)} – ${formatCalendarDate(s.date_end)}` : `Flexible, next ${s.horizon_days} days`],
@@ -55,7 +57,7 @@ function Detail({ user, id }: { user: User; id: string }) {
           <SectionTitle>Current matches</SectionTitle>
           {matches.isLoading && <Skeleton className="h-32" />}
           {!matches.isLoading && current.length === 0 && (
-            <EmptyState title="No current matches" description="We'll add them here when a swell meets these criteria 5–10 days out." />
+            <EmptyState title="No current matches" description="Matching swells appear here 5–10 days out." />
           )}
           <div className="space-y-3">
             {current.map((m) => (
@@ -67,8 +69,8 @@ function Detail({ user, id }: { user: User; id: string }) {
             {history.length === 0 ? (
               <p className="text-sm text-muted-foreground">No past or expired matches.</p>
             ) : (
-              <div className="overflow-hidden rounded-2xl border bg-card">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto rounded-2xl border bg-card">
+                <table className="w-full min-w-[520px] text-sm">
                   <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
                     <tr>
                       <th className="px-4 py-2 font-medium">Spot</th>
@@ -87,7 +89,10 @@ function Detail({ user, id }: { user: User; id: string }) {
                         </td>
                         <td className="px-4 py-2">{formatRange(m.window_start, m.window_end, m.spot.timezone)}</td>
                         <td className="px-4 py-2">
-                          <QualityBadge label={m.peak_label} />
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <QualityBadge label={m.peak_label} />
+                            {hasField(m, "forecast_confidence_class") && <ConfidenceBadge value={m.forecast_confidence_class} />}
+                          </div>
                         </td>
                         <td className="px-4 py-2">
                           <MatchStatusBadge status={m.status} />
