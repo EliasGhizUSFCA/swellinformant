@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from app.services.forecasts.grib import (
+    GribError,
     GribFetcher,
     GridField,
     NotPublishedError,
@@ -158,3 +159,40 @@ def test_point_sampler_caches_per_geometry_and_mask() -> None:
     assert a is not None and b is not None and (b.j, b.i) == (0, 0) != (a.j, a.i)
     assert sampler.sample(grid, a) == 1.0
     assert sampler.sample(grid, None) is None
+
+
+def test_points_in_the_last_half_column_of_a_global_grid_wrap_to_column_0() -> None:
+    # Review finding: GridField.contains() rejected fractional column indexes in
+    # (ni - 0.5, ni) even on a grid that wraps, so on the NOAA/GEFS grids (first longitude
+    # 0E) every point between 0.125W and 0 (0.25 deg grids) got no cell at all.
+    grid = _grid(np.ones((5, 360)), lat0=52.0)  # 1 deg, global from 0E
+    assert grid.is_global_in_longitude
+    for lon in (-0.3, -0.01, 359.7):
+        assert grid.contains(50.0, lon)
+        choice = nearest_valid_cell(grid, 50.0, lon, max_distance_km=60)
+        assert choice is not None and (choice.j, choice.i) == (2, 0), lon
+        assert choice.longitude == 0.0
+        assert choice.distance_km == pytest.approx(haversine_km(50.0, lon, 50.0, 0.0))
+    # Grids starting at -180 (ECMWF; decoded lon0 = 180): 179.8E wraps to the -180 column.
+    ecmwf = GridField("swh", np.ones((5, 360)), 52.0, 180.0, -1.0, 1.0)
+    choice = nearest_valid_cell(ecmwf, 50.0, 179.8, max_distance_km=60)
+    assert choice is not None and choice.i == 0 and choice.longitude == -180.0
+    # A grid that is not global still ends half a cell beyond its outer columns.
+    regional = _grid(np.ones((5, 5)), lat0=52.0, lon0=350.0)  # 10W..6W
+    assert regional.contains(50.0, -10.4) and not regional.contains(50.0, -10.6)
+    assert regional.contains(50.0, -5.6) and not regional.contains(50.0, -5.4)
+
+
+def test_decode_message_raises_grib_error_for_a_damaged_data_section() -> None:
+    good = _grib_message(np.ones((3, 4)), 10.0, 350.0, 1.0)
+    # Header intact, the rest zeroed: ecCodes parses the message but codes_get_values
+    # raises its own KeyValueNotFoundError, which used to escape every caller's isolation.
+    damaged = good[:60] + bytes(len(good) - 64) + b"7777"
+    with pytest.raises(GribError, match="cannot decode GRIB message"):
+        decode_message(damaged)
+
+
+def test_parse_ncep_idx_rejects_a_malformed_offset() -> None:
+    text = "1:0:d=2026101100:HTSGW:surface:anl:\n2:12x:d=2026101100:PERPW:surface:anl:\n"
+    with pytest.raises(GribError, match="invalid NCEP index line 2"):
+        parse_ncep_idx(text)

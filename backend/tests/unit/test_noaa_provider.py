@@ -222,6 +222,26 @@ def test_wind_comes_from_the_nearest_sea_cell() -> None:
     assert wind_cell == {"lat": 22.0, "lon": -158.0, "distance_km": 38.2, "grid": "pgrb2.0p25"}
 
 
+def test_wind_cell_just_west_of_the_prime_meridian() -> None:
+    # Review finding: on a global grid starting at 0E, a break between 0.25W (half a cell
+    # of the synthetic 0.5 deg atmosphere grid) and 0 got no wind cell at all.
+    meridian = SpotPoint(6, "meridian-test", 50.70, -0.10, 50.60, -0.10)  # synthetic point
+    world = SyntheticGfs()
+    world.add_atmos(CYCLE, 0)
+    world.add_wave(CYCLE, "global.0p16", 0, grid=Grid(52.5, 358.0, 1 / 6, 406, 12))
+    p = provider(world, lead=0)
+    result = p.fetch([meridian], RUN)
+    values = result.records[6][0].values
+    assert values["wind_speed_kmh"] == 18.0 and values["sig_wave_height_m"] == 2.0
+    assert p.last_cells[6]["wind_cell"] == {
+        "lat": 50.5,
+        "lon": 0.0,
+        "distance_km": 23.3,
+        "grid": "pgrb2.0p25",
+    }
+    assert not any("no GFS sea cell" in w for w in result.warnings)
+
+
 @pytest.mark.parametrize(
     ("u", "v", "from_deg"),
     [(-3.0, -4.0, 36.9), (-3.0, 4.0, 143.1), (3.0, 4.0, 216.9), (3.0, -4.0, 323.1)],
@@ -304,7 +324,13 @@ def test_missing_steps_leave_gaps_with_warnings() -> None:
     p = provider(world)
     result = p.fetch([HAWAII, SOUTH], RUN)
 
-    assert result.errors == {}
+    # Review finding: the gaps used to leave result.errors empty, so a run with missing
+    # hours was stored as SUCCESS. Each affected spot is now "incomplete" (run PARTIAL).
+    assert result.errors == {
+        1: "incomplete: waves missing at 1 of 3 forecast hours f012; "
+        "wind/pressure missing at 1 of 3 forecast hours f024",
+        2: "incomplete: wind/pressure missing at 1 of 3 forecast hours f024",
+    }
     hawaii = {r.valid_time: r.values for r in result.records[1]}
     assert sorted(hawaii) == [CYCLE, CYCLE + timedelta(hours=24)]  # f012 is a gap
     south = {r.valid_time: r.values for r in result.records[2]}
@@ -329,6 +355,29 @@ def test_a_record_from_the_wrong_step_is_refused() -> None:
     result = provider(world).fetch([HAWAII], RUN)
     assert len(result.records[1]) == 2
     assert any("f012 wave global.0p16" in w and "date/time/step" in w for w in result.warnings)
+
+
+def test_damaged_index_or_message_is_a_gap_not_a_crash() -> None:
+    # Review finding: a malformed .idx offset (ValueError) or a damaged GRIB data section
+    # (ecCodes KeyValueNotFoundError) escaped read_step and aborted the whole fetch.
+    world = SyntheticGfs()
+    world.add_cycle(CYCLE, HOURS, grids=("global.0p16",))
+    idx = httpx.URL(PATHS.wave(CYCLE, "global.0p16", 12)).path + ".idx"
+    world.files[idx] = world.files[idx].replace(b"\n5:", b"\n5:x", 1)
+    atmos = httpx.URL(PATHS.atmos(CYCLE, 24)).path
+    lines = world.files[atmos + ".idx"].decode().splitlines()
+    offsets = [int(line.split(":")[1]) for line in lines]
+    n = next(k for k, line in enumerate(lines) if ":UGRD:10 m above ground:" in line)
+    start, end = offsets[n], offsets[n + 1]
+    blob = world.files[atmos]  # header kept, rest of the U10 message zeroed (same length)
+    world.files[atmos] = blob[: start + 60] + bytes(end - start - 64) + b"7777" + blob[end:]
+    result = provider(world).fetch([HAWAII], RUN)
+    by_hour = {r.valid_time: r.values for r in result.records[1]}
+    assert sorted(by_hour) == [CYCLE, CYCLE + timedelta(hours=24)]  # f012 is a wave gap
+    assert by_hour[CYCLE + timedelta(hours=24)]["wind_speed_kmh"] is None  # and f024 wind
+    assert any(w.startswith("f012 wave global.0p16:") and "line 5" in w for w in result.warnings)
+    assert any(w.startswith("f024 atmosphere:") and "GRIB" in w for w in result.warnings)
+    assert result.errors[1].startswith("incomplete: ")
 
 
 def test_missing_partitions_are_none_not_zero() -> None:

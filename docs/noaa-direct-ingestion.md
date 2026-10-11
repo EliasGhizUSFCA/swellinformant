@@ -199,9 +199,9 @@ index and range GETs made by `fetch`, with each retried request counted once. Th
 |--------------|--------|
 | Transient HTTP failure (timeout, 429, 5xx) | Retried 4 times with exponential backoff and jitter (`request_with_retries`). If every attempt fails, that file is a failed file for that step. |
 | File not published (HTTP 403/404) | Failed file for that step. In `current_run` it means "not complete yet", and the previous cycle is tried. |
-| Wave file of a step fails | That hour is a gap for the spots on that grid. The warnings list it, e.g. `f012 wave global.0p16: ... not published (HTTP 404)`, plus `N of M forecast hours incomplete: ...`. |
-| Atmosphere file of a step fails | That hour keeps its wave values with NULL wind fields, plus a warning. |
-| `.idx` lacks HTSGW, LAND, UGRD or VGRD | Failed file. If another field is missing, its column is NULL and a warning is added. |
+| Wave file of a step fails | That hour is a gap for the spots on that grid. The warnings list it, e.g. `f012 wave global.0p16: ... not published (HTTP 404)`, plus `N of M forecast hours incomplete: ...`. Each affected spot keeps its other hours and gets the error `incomplete: waves missing at ...`, so the run is `PARTIAL`, not `SUCCESS`. |
+| Atmosphere file of a step fails | That hour keeps its wave values with NULL wind fields, plus a warning; the spots get `incomplete: wind/pressure missing at ...` (run `PARTIAL`). |
+| `.idx` lacks HTSGW, LAND, UGRD or VGRD, or is malformed; a GRIB message cannot be decoded | Failed file. If another field is missing, its column is NULL and a warning is added. |
 | Record from another cycle or step, or mixed grid geometries | Failed file (`holds date/time/step ...`). |
 | Decoded latitude range differs from the expected one | Warning (`file layout changed?`). Sampling still uses the decoded geometry. |
 | Spot without a valid wave cell within the distance limit | Error for that spot, no records, run `PARTIAL`. |

@@ -61,9 +61,11 @@ project scrapes websites, bypasses anti-bot systems or calls private endpoints.
   with `GEFS_AVAILABILITY_LAG_HOURS` (7.5 h).
 * **Failure isolation.** Transient errors (timeouts, 429, 5xx, ECMWF 503 SlowDown) retry
   with exponential backoff; ECMWF requests are paced and capped at 4 in flight. A missing
-  step is a gap with a warning, a spot without a valid cell is an error for that spot
-  (run `PARTIAL`), and a run where nothing could be read fails without replacing the last
-  good data. Celery also retries the whole job.
+  step is a gap with a warning and marks the spots it affects `incomplete`, a spot without
+  a valid cell is an error for that spot (either makes the run `PARTIAL`), and a run where
+  nothing could be read fails without replacing the last good data. A `FAILED` run is
+  fetched again on the next schedule (the acquisition jobs record provider failures as
+  outcomes instead of raising them, so Celery's `autoretry_for` does not fire for them).
 * **Staleness.** A spot's latest run older than `FORECAST_STALE_HOURS` (18) is flagged:
   the UI warns, confidence is multiplied by 0.8, and alerts are not generated from it.
 * **Retention.** Forecast runs older than `RETENTION_FORECAST_DAYS` are deleted nightly

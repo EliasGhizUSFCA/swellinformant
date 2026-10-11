@@ -515,27 +515,41 @@ class GfsPointReader:
             raise GribError(f"{short}.idx lacks {', '.join(missing)}")
         if missing:
             warnings.append(f"f{fhour:03d}: atmosphere index lacks {', '.join(missing)}")
-        present = [k for k in keys if k in found]
+        present = [k for k in keys if k in found]  # LAND (when needed) first, then U10
         blobs = fetcher.ranges(url, [found[k] for k in present])
-        fields = {k: _decode(blob, k) for k, blob in zip(present, blobs, strict=True)}
-        u10 = fields[U10]
-        self._check_valid_time(u10, fhour, url)
-        for key, data in fields.items():
-            self._same_geometry(u10, data, key, short)
-        if LAND in fields:
-            self._set_land_mask(fields[LAND])
-        out: dict[Hashable, dict[str, float | None]] = {}
-        for p in self.points:
-            cell = self._wind_cell(u10, p)
-            raw = {k: self._sampler.sample(fields[k], cell) for k in ATMOS_FIELDS if k in fields}
-            out[p.key] = _atmos_values(raw)
-        return out
+        raw: dict[Hashable, dict[str, float | None]] = {p.key: {} for p in self.points}
+        reference: tuple[tuple[float, float, float, float, int, int], str] | None = None
+        land: tuple[np.ndarray, tuple[float, float, float, float, int, int]] | None = None
+        cells: dict[Hashable, CellChoice | None] | None = None
+        # Decode and sample one field at a time: a decoded pgrb2.0p25 field is 8.3 MB as
+        # float64. Cells are chosen on U10 and applied by (j, i) to the other fields.
+        for key, blob in zip(present, blobs, strict=True):
+            data = _decode(blob, key)
+            if reference is None:
+                reference = (data.geometry_key(), key)
+            elif data.geometry_key() != reference[0]:
+                raise GribError(f"{key} in {short} is on a different grid than {reference[1]}")
+            if key == LAND:
+                land = (~np.isnan(data.values) & (data.values < 0.5), data.geometry_key())
+                continue
+            if key == U10:
+                self._check_valid_time(data, fhour, url)
+                if land is not None:  # this file's LAND matches its checked U10 record
+                    self._set_land_mask(*land)
+                cells = {p.key: self._wind_cell(data, p) for p in self.points}
+            assert cells is not None  # U10 precedes the other fields in ``present``
+            for p in self.points:
+                raw[p.key][key] = self._sampler.sample(data, cells[p.key])
+        return {k: _atmos_values(v) for k, v in raw.items()}
 
-    def _set_land_mask(self, land: GridField) -> None:
+    def _set_land_mask(
+        self, sea: np.ndarray, geometry: tuple[float, float, float, float, int, int]
+    ) -> None:
+        """Keep the first land-sea mask (True = sea, i.e. LAND < 0.5) and its grid."""
         with self._lock:
             if self._sea is None:
-                self._sea = ~np.isnan(land.values) & (land.values < 0.5)
-                self._sea_geometry = land.geometry_key()
+                self._sea = sea
+                self._sea_geometry = geometry
 
     def _wind_cell(self, grid: GridField, p: SamplePoint) -> CellChoice | None:
         """Nearest GFS sea cell (LAND < 0.5) to the wind point (for a spot: the break)."""
@@ -679,10 +693,12 @@ class NoaaGfsProvider(ForecastProvider):
 
     ``fetch`` reads f000 to ``min(noaa_max_lead_hours, forecast_days * 24, 384)`` every
     ``noaa_step_hours`` (see :func:`forecast_hours`), with ``grib_download_workers``
-    threads sharing one HTTP client. A forecast hour whose file fails after retries leaves
-    a gap and a warning; a spot without a usable wave cell is an error for that spot. A
-    spot without a GFS sea cell near the break keeps its wave records with empty wind
-    fields and a warning (as the Open-Meteo provider does when wind is unavailable).
+    threads sharing one HTTP client. A forecast hour whose file fails after retries (or
+    whose wave cell is masked) leaves a gap and a warning, and every spot it affects keeps
+    its other hours but gets an ``incomplete: ...`` error, so the run is PARTIAL rather than
+    SUCCESS; a spot without a usable wave cell is an error for that spot. A spot without a
+    GFS sea cell near the break keeps its wave records with empty wind fields and a warning
+    (as the Open-Meteo provider does when wind is unavailable).
 
     The cells chosen for each spot (wave grid, wave cell, wind cell, distances) are put in
     the ``extra`` of the spot's FIRST record only, i.e. ``wave_forecasts.extra`` of its
@@ -854,6 +870,23 @@ class NoaaGfsProvider(ForecastProvider):
                 )
             records[0].extra = cells.as_dict()
             result.records[spot.spot_id] = records
+            # Hours that are gaps for this spot make it "incomplete" (run PARTIAL), as in the
+            # ECMWF provider: a run with missing hours must not be reported as a success.
+            no_wave = [s.fhour for s in steps if spot.spot_id not in s.values]
+            no_wind = (
+                []
+                if cells.wind_cell is None
+                else [s.fhour for s in steps if spot.spot_id in s.values and not s.wind_ok]
+            )
+            spot_gaps = [
+                f"{label} missing at {len(hours_)} of {len(steps)} forecast hours "
+                + ", ".join(f"f{h:03d}" for h in hours_[:12])
+                + (", ..." if len(hours_) > 12 else "")
+                for label, hours_ in (("waves", no_wave), ("wind/pressure", no_wind))
+                if hours_
+            ]
+            if spot_gaps:
+                result.errors[spot.spot_id] = "incomplete: " + "; ".join(spot_gaps)
 
         gaps = [f"f{s.fhour:03d} {failure}" for s in steps for failure in s.failed]
         incomplete = [f"f{s.fhour:03d}" for s in steps if s.failed]

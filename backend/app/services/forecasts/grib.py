@@ -68,11 +68,18 @@ class IndexEntry:
 
 
 def parse_ncep_idx(text: str) -> list[IndexEntry]:
+    """Records of an NCEP ``.idx``; lines that are not records are skipped.
+
+    A record line (it starts with a record number) whose byte offset is not a whole number
+    raises :class:`GribError`, so a damaged index is a failed file, not a crash.
+    """
     rows: list[tuple[int, int, str, str, str]] = []
-    for line in text.splitlines():
+    for n, line in enumerate(text.splitlines(), start=1):
         parts = line.strip().split(":")
         if len(parts) < 6 or not parts[0].isdigit():
             continue
+        if not parts[1].isdigit():
+            raise GribError(f"invalid NCEP index line {n}: offset {parts[1][:20]!r}")
         rows.append((int(parts[0]), int(parts[1]), parts[3], parts[4], parts[5]))
     entries: list[IndexEntry] = []
     for i, (num, off, var, level, step) in enumerate(rows):
@@ -263,9 +270,16 @@ class GridField:
         return fj, fi
 
     def contains(self, lat: float, lon: float) -> bool:
+        """True if (lat, lon) lies within half a cell of the grid.
+
+        A grid that is global in longitude covers every longitude: a point in the last half
+        column (e.g. 0.1°W on a grid starting at 0°E) belongs to column 0.
+        """
         fj, fi = self.fractional_index(lat, lon)
         nj, ni = self.shape
-        return -0.5 <= fj <= nj - 0.5 and -0.5 <= fi <= ni - 0.5
+        if not -0.5 <= fj <= nj - 0.5:
+            return False
+        return self.is_global_in_longitude or -0.5 <= fi <= ni - 0.5
 
     def value(self, j: int, i: int) -> float | None:
         v = float(self.values[j, i])
@@ -296,6 +310,12 @@ def _key(handle: Any, name: str, default: Any = None) -> Any:
 
 
 def decode_message(message: bytes) -> GridField:
+    """Decode one GRIB message; every ecCodes failure is raised as :class:`GribError`.
+
+    A message whose header parses but whose data section is damaged makes ecCodes raise its
+    own errors (e.g. ``KeyValueNotFoundError`` from ``codes_get_values``); callers isolate
+    failures per file by catching ``GribError``, so those are converted here.
+    """
     eccodes = load_eccodes()
 
     try:
@@ -334,6 +354,10 @@ def decode_message(message: bytes) -> GridField:
             data_date=_key(handle, "dataDate"),
             data_time=_key(handle, "dataTime"),
         )
+    except GribError:
+        raise
+    except Exception as exc:  # eccodes raises many internal error types
+        raise GribError(f"cannot decode GRIB message: {type(exc).__name__}: {exc}") from exc
     finally:
         eccodes.codes_release(handle)
 

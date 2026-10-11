@@ -58,7 +58,7 @@ from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -768,6 +768,9 @@ class GefsWaveEnsembleProvider(ForecastProvider):
         if not spots:
             return result
         cycle = run.wave_model_run_at or run.issued_at
+        # File paths and the message checks use the cycle's UTC date and hour (a naive time
+        # is taken to be UTC already).
+        cycle = cycle.replace(tzinfo=UTC) if cycle.tzinfo is None else cycle.astimezone(UTC)
         picker = CellPicker(spots, self.settings.grib_max_cell_distance_km)
         # The first readable step fixes the cells and runs the partition-order check.
         steps: list[StepValues] = []

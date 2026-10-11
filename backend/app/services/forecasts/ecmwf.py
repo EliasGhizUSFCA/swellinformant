@@ -65,7 +65,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -92,7 +92,6 @@ from app.services.forecasts.grib import (
     PointSampler,
     decode_message,
     load_eccodes,
-    nearest_valid_cell,
     parse_ecmwf_index,
     select_entries,
 )
@@ -233,28 +232,13 @@ def choose_cell(
     valid: np.ndarray | None = None,
     mask_name: str = "values",
 ) -> CellChoice | None:
-    """``PointSampler.cell`` that also handles points just west of a global grid's seam.
+    """``PointSampler.cell`` for the ECMWF grids, which start at longitude -180°.
 
-    ``GridField.contains`` rejects fractional column indexes in ``(ni - 0.5, ni)`` even
-    when the grid wraps (they belong to column 0), so with ECMWF's first longitude of
-    -180° a point in [179.875°, 180°) would get no cell. For such points the search runs
-    on a copy of the grid rolled east by one column, and the index is mapped back.
+    A point in [179.875°, 180°) lies in the last half column and wraps to column 0
+    (-180°): ``grib.GridField.contains`` treats a grid that is global in longitude as
+    covering every longitude, so no special seam handling is needed here.
     """
-    choice = sampler.cell(grid, point_key, lat, lon, valid=valid, mask_name=mask_name)
-    if choice is not None or not grid.is_global_in_longitude or grid.contains(lat, lon):
-        return choice
-    mask = ~np.isnan(grid.values) if valid is None else valid
-    rolled = replace(
-        grid, values=np.roll(grid.values, 1, axis=1), lon0=(grid.lon0 - grid.dlon) % 360.0
-    )
-    found = nearest_valid_cell(
-        rolled, lat, lon, valid=np.roll(mask, 1, axis=1), max_distance_km=sampler.max_distance_km
-    )
-    if found is None:
-        return None
-    return CellChoice(
-        found.j, (found.i - 1) % grid.shape[1], found.latitude, found.longitude, found.distance_km
-    )
+    return sampler.cell(grid, point_key, lat, lon, valid=valid, mask_name=mask_name)
 
 
 def _round(value: float | None, digits: int) -> float | None:
@@ -462,8 +446,10 @@ class EcmwfIfsProvider(ForecastProvider):
     # ------------------------------------------------------------------ data
     @staticmethod
     def _cycle_of(run: RunInfo) -> datetime:
-        if run.wave_model_run_at is not None:
-            return run.wave_model_run_at.astimezone(UTC)
+        when = run.wave_model_run_at
+        if when is not None:
+            # A naive time is UTC already (astimezone would take it as the server's local time).
+            return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
         try:
             stamp = run.run_key.split(":", 1)[1]
             return datetime.strptime(stamp, "%Y%m%d%H").replace(tzinfo=UTC)
@@ -516,30 +502,29 @@ class EcmwfIfsProvider(ForecastProvider):
                     )
         if geometry != state.wave_geometry:
             raise GribError(f"wave grid geometry changed: {geometry} != {state.wave_geometry}")
-        grids: dict[str, GridField] = {"swh": swh}
+        cells = {p.spot_id: state.wave_cells.get(p.spot_id) for p in spots}
+        out: dict[int, dict[str, float | None]] = {
+            spot_id: {"swh": state.sampler.sample(swh, cell)}
+            for spot_id, cell in cells.items()
+            if cell is not None
+        }
+        # Decode and sample one field at a time: a decoded 0.25 deg field is 8.3 MB as
+        # float64, so holding the 12 wave fields of a step at once costs ~100 MB per worker.
         for name, blob in blobs.items():
             if name == "swh" or (name in STATIC_WAVE_PARAMS and state.model_depth):
                 continue
             grid = decode_message(blob)
             if grid.geometry_key() != geometry:
                 raise GribError(f"{name} grid differs from the swh grid")
-            grids[name] = grid
-        if "wmb" in grids:
-            with state.lock:
-                for p in spots:
-                    state.model_depth[p.spot_id] = state.sampler.sample(
-                        grids["wmb"], state.wave_cells.get(p.spot_id)
-                    )
-        out: dict[int, dict[str, float | None]] = {}
-        for p in spots:
-            cell = state.wave_cells.get(p.spot_id)
-            if cell is None:
+            if name in STATIC_WAVE_PARAMS:  # wmb, sampled on the first wave step of the run
+                with state.lock:
+                    for p in spots:
+                        state.model_depth[p.spot_id] = state.sampler.sample(
+                            grid, state.wave_cells.get(p.spot_id)
+                        )
                 continue
-            out[p.spot_id] = {
-                name: state.sampler.sample(grid, cell)
-                for name, grid in grids.items()
-                if name not in STATIC_WAVE_PARAMS
-            }
+            for spot_id, values in out.items():
+                values[name] = state.sampler.sample(grid, cells[spot_id])
         return out
 
     def _set_sea_mask(self, lsm: GridField, spots: list[SpotPoint], state: _RunState) -> None:
@@ -571,9 +556,13 @@ class EcmwfIfsProvider(ForecastProvider):
             self._set_sea_mask(decode_message(blobs[LSM_PARAM]), spots, state)
         if state.sea_geometry is None:
             raise GribError("land-sea mask unavailable, cannot choose sea cells for wind")
-        grids: dict[str, GridField] = {}
+        cells = {
+            p.spot_id: cell for p in spots if (cell := state.wind_cells.get(p.spot_id)) is not None
+        }
+        out: dict[int, dict[str, float | None]] = {spot_id: {} for spot_id in cells}
         window: float | None = None
-        for name in ATMOS_PARAMS:
+        gust_read = False
+        for name in ATMOS_PARAMS:  # decoded and sampled one at a time (8.3 MB each)
             if name not in blobs:
                 continue
             grid = decode_message(blobs[name])
@@ -583,14 +572,10 @@ class EcmwfIfsProvider(ForecastProvider):
                 window = step_window_hours(blobs[name])
                 if not window or window <= 0:
                     continue  # step 0: no window yet, the field is a constant 0
-            grids[name] = grid
-        out: dict[int, dict[str, float | None]] = {}
-        for p in spots:
-            cell = state.wind_cells.get(p.spot_id)
-            if cell is None:
-                continue
-            out[p.spot_id] = {name: grid.value(cell.j, cell.i) for name, grid in grids.items()}
-        return out, (window if "10fg" in grids else None)
+                gust_read = True
+            for spot_id, cell in cells.items():
+                out[spot_id][name] = grid.value(cell.j, cell.i)
+        return out, (window if gust_read else None)
 
     def _fetch_step(
         self,

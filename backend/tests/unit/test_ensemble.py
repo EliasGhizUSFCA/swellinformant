@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -30,6 +30,7 @@ from app.services.http import TransientProviderError
 from tests.unit.gefs_synthetic import (
     BASE_URL,
     CYCLE,
+    GLOBAL_1DEG,
     PARAMS,
     FakeBucket,
     Grid,
@@ -273,6 +274,30 @@ def test_missing_values_pick_nearest_valid_cell_then_break_location() -> None:
     assert res.cells[2] == {"lat": 9.0, "lon": -6.0, "distance_km": 0.0, "basis": "break"}
     assert 3 not in res.rows and "no valid GEFS-Wave cell" in res.errors[3]
     assert res.rows[1][0]["hs_mean_m"] == pytest.approx(2.5, abs=1e-3)
+
+
+def test_spot_just_west_of_the_prime_meridian_gets_a_cell() -> None:
+    # Review finding: on the global grid (first longitude 0E) a point in the last half
+    # column got no cell, so the spot was an error "no valid GEFS-Wave cell".
+    bucket = FakeBucket()
+    publish_cycle(bucket, GLOBAL_1DEG, [0, 12, 24])
+    meridian = SpotPoint(7, "meridian-test", 50.0, -0.3, 50.0, -0.3)  # synthetic point
+    res = make_provider(bucket).fetch_stats([meridian], RUN)
+    assert res.errors == {}
+    assert res.cells[7] == {"lat": 50.0, "lon": 0.0, "distance_km": 21.4, "basis": "forecast_point"}
+    assert [r["hs_mean_m"] for r in res.rows[7]] == pytest.approx([2.5, 2.5, 2.5], abs=1e-3)
+
+
+def test_run_time_in_another_time_zone_reads_the_utc_cycle() -> None:
+    # Review finding: file paths used the RunInfo's own hour, so 12Z given as 14:00+02:00
+    # was read from the (nonexistent) "14" cycle directory.
+    bucket = FakeBucket()
+    publish_cycle(bucket, SMALL, [0, 12, 24])
+    cest = CYCLE.astimezone(timezone(timedelta(hours=2)))
+    res = make_provider(bucket).fetch_stats([SPOT], RunInfo("gefs-wave:2026101012", cest, cest))
+    assert res.steps_failed == {} and len(res.rows[1]) == 3
+    assert res.rows[1][0]["valid_time"] == CYCLE
+    assert all("gefs.20261010/12/" in key for key in bucket.gets())
 
 
 def test_cell_masked_at_a_later_step_is_skipped_and_reported() -> None:

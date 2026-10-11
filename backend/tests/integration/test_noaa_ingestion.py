@@ -16,7 +16,7 @@ from app.models import ForecastRun, ForecastSource, SurfSpot, WaveForecast
 from app.models.enums import ForecastRunStatus
 from app.services.forecasts.ingestion import acquire_from_provider
 from app.services.forecasts.noaa import NoaaGfsProvider
-from tests.synthetic_gfs import SyntheticGfs, noaa_settings
+from tests.synthetic_gfs import PATHS, SyntheticGfs, noaa_settings
 
 pytestmark = pytest.mark.integration
 
@@ -81,3 +81,21 @@ def test_acquire_stores_noaa_gfs_wave_forecasts(db: Session) -> None:
     again = acquire_from_provider(db, provider, now=NOW + timedelta(minutes=30))
     assert again.status == "skipped" and again.run_id == run.id
     assert all(r.method == "HEAD" for r in world.requests[before:])
+
+
+def test_a_missing_forecast_hour_makes_the_run_partial(db: Session) -> None:
+    # Review finding: hours lost to a failed file were only warnings, so the run was SUCCESS.
+    db.execute(text("UPDATE surf_spots SET is_active = (slug = ANY(:keep))"), {"keep": KEEP[:2]})
+    db.commit()
+    world = SyntheticGfs()
+    world.add_cycle(CYCLE, [0, 12, 24])
+    world.fail_url(PATHS.wave(CYCLE, "global.0p16", 12) + ".idx", 404)  # pipeline's f012
+    provider = NoaaGfsProvider(noaa_settings(), client=world.client(), backoff_seconds=0)
+
+    outcome = acquire_from_provider(db, provider, now=NOW)
+
+    assert outcome.status == ForecastRunStatus.PARTIAL.value
+    assert outcome.records == 5 and set(outcome.errors) == {"pipeline"}
+    assert outcome.errors["pipeline"].startswith("incomplete: waves missing at 1 of 3")
+    run = db.get(ForecastRun, outcome.run_id)
+    assert run is not None and run.spot_count == 2

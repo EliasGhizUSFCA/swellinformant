@@ -308,8 +308,8 @@ def test_synthetic_minus_180_grid_wraps_longitude() -> None:
     grid = decode_message(grib(vals))
     assert grid.lon0 == pytest.approx(180.0) and grid.is_global_in_longitude  # GRIB2: 180
     sampler = PointSampler(max_distance_km=100)
-    # 179.7 lies in the last half column, which grib.GridField.contains() rejects even
-    # though the grid wraps; choose_cell() handles that seam.
+    # 179.7 lies in the last half column; the grid wraps, so it belongs to column 0
+    # (grib.GridField.contains treats a global grid as covering every longitude).
     for n, lon in enumerate((179.7, 179.95, -179.7, 180.0, -180.0)):
         cell = choose_cell(sampler, grid, n, -16.0, lon)
         assert cell is not None and (cell.j, cell.i) == ij(-16.0, -180.0), lon
@@ -490,6 +490,88 @@ def test_corrupt_index_is_isolated_to_its_step() -> None:
     result = provider(bucket, steps=[0, 3]).fetch([NAZARE], RUN)
     assert [r.valid_time.hour for r in result.records[NAZARE.spot_id]] == [0]
     assert any(w.startswith("+3h wave: KeyError") for w in result.warnings)
+
+
+def test_damaged_message_is_isolated_to_its_step() -> None:
+    # Review finding: a message whose header parses but whose data section is damaged made
+    # ecCodes raise KeyValueNotFoundError, which _fetch_step did not catch, so one bad
+    # message aborted the whole fetch (and left the run RUNNING).
+    bucket = standard_bucket([0, 3])
+    index = urlparse(file_url(BASE, CYCLE, 3, "wave", "index")).path
+    path = urlparse(file_url(BASE, CYCLE, 3, "wave")).path
+    rows = [json.loads(line) for line in bucket.files[index].decode().splitlines()]
+    swh = next(r for r in rows if r["param"] == "swh")
+    start, length = swh["_offset"], swh["_length"]
+    blob = bucket.files[path]
+    damaged = blob[start : start + 60] + bytes(length - 64) + b"7777"  # same length
+    bucket.files[path] = blob[:start] + damaged + blob[start + length :]
+    result = provider(bucket, steps=[0, 3]).fetch([NAZARE], RUN)
+    assert [r.valid_time.hour for r in result.records[NAZARE.spot_id]] == [0]
+    assert any(w.startswith("+3h wave: GribError: cannot decode") for w in result.warnings)
+    assert result.errors[NAZARE.spot_id].startswith("incomplete:")
+
+
+def _global_message(value: float, d: float) -> bytes:
+    """SYNTHETIC global message on a d-degree grid from -180 (values: ``value`` + noise)."""
+    nj, ni = int(180 / d) + 1, int(360 / d)
+    h = eccodes.codes_grib_new_from_samples("regular_ll_sfc_grib2")
+    try:
+        eccodes.codes_set(h, "Ni", ni)
+        eccodes.codes_set(h, "Nj", nj)
+        eccodes.codes_set(h, "latitudeOfFirstGridPointInDegrees", 90.0)
+        eccodes.codes_set(h, "longitudeOfFirstGridPointInDegrees", -180.0)
+        eccodes.codes_set(h, "latitudeOfLastGridPointInDegrees", -90.0)
+        eccodes.codes_set(h, "longitudeOfLastGridPointInDegrees", 180.0 - d)
+        eccodes.codes_set(h, "iDirectionIncrementInDegrees", d)
+        eccodes.codes_set(h, "jDirectionIncrementInDegrees", d)
+        eccodes.codes_set(h, "jScansPositively", 0)
+        noise = np.random.default_rng(0).random(nj * ni) * 0.01
+        eccodes.codes_set_values(h, value + noise)
+        return bytes(eccodes.codes_get_message(h))
+    finally:
+        eccodes.codes_release(h)
+
+
+def test_wave_fields_are_decoded_one_at_a_time() -> None:
+    # Review finding: _sample_wave kept every decoded wave field of a step alive at once
+    # (12 x 8.3 MB = ~100 MB per worker on the real 0.25 deg grid; measured peak 92 MB).
+    import tracemalloc
+
+    from app.services.forecasts.ecmwf import WAVE_PARAMS, _RunState
+
+    d = 0.5
+    field_mb = (int(180 / d) + 1) * int(360 / d) * 8 / 1e6  # one float64 field: 2.1 MB
+    blobs = {name: _global_message(1.0 + k, d) for k, name in enumerate(WAVE_PARAMS)}
+    p = provider(FakeBucket())
+    state = _RunState(PointSampler(settings().grib_max_cell_distance_km))
+    p._sample_wave(blobs, [NAZARE, PIPELINE], state)  # chooses cells, reads the depth
+    tracemalloc.start()
+    try:
+        out = p._sample_wave(blobs, [NAZARE, PIPELINE], state)
+        peak_mb = tracemalloc.get_traced_memory()[1] / 1e6
+    finally:
+        tracemalloc.stop()
+    assert set(out[NAZARE.spot_id]) == set(WAVE_PARAMS) - {"wmb"}
+    assert out[NAZARE.spot_id]["swh"] == pytest.approx(1.0, abs=0.02)  # swh is the first
+    assert peak_mb < 5 * field_mb, f"peak {peak_mb:.1f} MB for {field_mb:.1f} MB fields"
+
+
+def test_naive_run_time_is_utc_whatever_the_server_time_zone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Review finding: _cycle_of() called astimezone() on a naive time, which takes it as
+    # the server's local time (00Z became 04Z under America/New_York).
+    import time
+
+    naive = CYCLE.replace(tzinfo=None)
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    try:
+        run = RunInfo(run_key="ecmwf-ifs:2026101000", issued_at=naive, wave_model_run_at=naive)
+        assert EcmwfIfsProvider._cycle_of(run) == CYCLE
+    finally:
+        monkeypatch.undo()
+        time.tzset()
 
 
 # --------------------------------------------------------------------------- runs
