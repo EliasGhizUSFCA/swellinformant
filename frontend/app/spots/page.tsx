@@ -51,7 +51,7 @@ export default function SpotsPage() {
                 <Link
                   key={s.slug}
                   href={`/spots/${s.slug}`}
-                  className="flex flex-col rounded-2xl border bg-card p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                  className="flex min-w-0 flex-col rounded-2xl border bg-card p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                   data-testid="spot-card"
                 >
                   <div className="flex items-start justify-between gap-2">

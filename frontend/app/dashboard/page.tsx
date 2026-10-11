@@ -75,7 +75,7 @@ function VerifyBanner({ email }: { email: string }) {
           <p className="text-sm" data-testid="dev-inbox-hint">
             Development mode: emails are captured, not sent.{" "}
             {s.dev_inbox_url ? (
-              <a href={s.dev_inbox_url} target="_blank" rel="noreferrer" className="font-medium text-ocean underline">
+              <a href={s.dev_inbox_url} target="_blank" rel="noopener noreferrer" className="font-medium text-ocean underline">
                 Open the dev inbox
               </a>
             ) : (
@@ -158,7 +158,9 @@ function Dashboard({ user }: { user: User }) {
       </div>
 
       <div className="grid gap-8 lg:grid-cols-[1.6fr_1fr]">
-        <section data-testid="current-opportunities">
+        {/* min-w-0: let the single phone column shrink so long names truncate instead of
+            widening the page. */}
+        <section className="min-w-0" data-testid="current-opportunities">
           <SectionTitle>Your surf trips</SectionTitle>
           {opportunities.isLoading && <Skeleton className="h-36" />}
           {!opportunities.isLoading && opps.length === 0 && (
@@ -198,7 +200,7 @@ function Dashboard({ user }: { user: User }) {
             {events.isLoading && <Skeleton className="h-40" />}
             <div className="grid gap-3 sm:grid-cols-2" data-testid="top-events">
               {(events.data ?? []).map((e, i) => (
-                <div key={e.id} className={i === 0 ? "sm:col-span-2" : undefined}>
+                <div key={e.id} className={i === 0 ? "min-w-0 sm:col-span-2" : "min-w-0"}>
                   <EventCard event={e} units={units} featured={i === 0} />
                 </div>
               ))}
@@ -207,7 +209,7 @@ function Dashboard({ user }: { user: User }) {
           </div>
         </section>
 
-        <aside className="space-y-6">
+        <aside className="min-w-0 space-y-6">
           <Card>
             <CardHeader className="flex-row items-center justify-between">
               <CardTitle>Active searches</CardTitle>

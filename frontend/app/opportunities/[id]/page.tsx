@@ -247,6 +247,9 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                   </span>
                 </Measure>
               </dl>
+              <p className="text-xs text-muted-foreground">
+                Swell event v{e.version}, updated {relativeTime(e.last_updated_at)}.
+              </p>
               {/* Only when the API sends a class for this swell: nothing rather than a guess. */}
               {(hasField(e, "forecast_confidence_class") || hasField(m, "forecast_confidence_class")) && (
                 <ForecastConfidence
@@ -278,9 +281,6 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                     </div>
                   ),
                 )}
-                <p className="text-xs text-muted-foreground">
-                  Swell event v{e.version}, updated {relativeTime(e.last_updated_at)}.
-                </p>
               </Disclosure>
             </CardContent>
           </Card>

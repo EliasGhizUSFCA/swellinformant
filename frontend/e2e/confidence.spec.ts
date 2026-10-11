@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import type { SpotDetail } from "../types/api";
+import type { SpotDetail, SpotForecast } from "../types/api";
 
 import {
   MATCH_ID,
@@ -79,6 +79,10 @@ async function expectNoConfidencePercentage(page: Page) {
   for (const line of body.split("\n")) expect(line).not.toMatch(/confiden[^\n]*\d+\s*%/i);
 }
 
+async function expectNoHorizontalScroll(page: Page) {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+}
+
 async function toggleOpensAndCloses(toggle: Locator, panelText: Locator, how: "click" | "tap") {
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(panelText).toBeHidden();
@@ -155,10 +159,18 @@ for (const [key, sc] of Object.entries(SCENARIOS) as Array<[keyof typeof SCENARI
         }
         await expect(outlook.getByTestId("research-method")).toContainText(`Methodology ${sc.research.methodology_version}`);
       }
-      // "Why this rating?" opens the factor details behind the headline.
+      // "Why this rating?" opens the factor details behind the headline: the API's own
+      // component fits for that hour (from the forecast), mocked here as all favourable.
       const why = outlook.getByRole("button", { name: "Why this rating?" });
-      await toggleOpensAndCloses(why, outlook.getByTestId("rating-factors"), "click");
+      await toggleOpensAndCloses(why, outlook.getByTestId("rating-fits"), "click");
       await why.click();
+      await expect(outlook.getByTestId("rating-fits").getByRole("listitem")).toHaveText([
+        "Swell directionFavorable",
+        "Swell periodFavorable",
+        "Wave sizeFavorable",
+        "WindFavorable",
+        "ConsistencyFavorable",
+      ]);
       await expect(outlook.getByText("Quality score 89 / 100", { exact: false })).toBeVisible();
       await expectNoConfidencePercentage(page);
       await shot(page, `spot-${key}-desktop-expanded`);
@@ -166,20 +178,107 @@ for (const [key, sc] of Object.entries(SCENARIOS) as Array<[keyof typeof SCENARI
   });
 }
 
+const QUALITY: Record<string, string> = {
+  exceptional: "Exceptional",
+  excellent: "Excellent",
+  very_good: "Very Good",
+  good: "Good",
+  fair: "Fair",
+  poor: "Poor",
+};
+const FIT_ORDER: Array<[string, string]> = [
+  ["swell_direction", "Swell direction"],
+  ["swell_period", "Swell period"],
+  ["wave_size", "Wave size"],
+  ["wind", "Wind"],
+  ["tide", "Tide"],
+  ["consistency", "Consistency"],
+];
+const fitWord = (v: number) => (v >= 0.75 ? "Favorable" : v >= 0.4 ? "Workable" : "Limiting");
+
 test.describe("spot detail against the demo backend (no mocks)", () => {
   test.use({ viewport: DESKTOP });
 
   test("labels match the classes the API returns (null → Not assessed yet)", async ({ page }) => {
     await blockTiles(page);
     const api = (await apiGet(page.request, "/api/spots/pipeline")) as SpotDetail;
+    const forecast = (await apiGet(page.request, "/api/spots/pipeline/forecast?days=10")) as SpotForecast;
     await page.goto("/spots/pipeline");
     const outlook = page.getByTestId("surf-outlook");
     await expect(outlook.getByTestId("research-confidence-badge")).toHaveText(`Spot research confidence: ${label(api.research?.research_class ?? null)}`);
-    if (api.best_upcoming) {
-      const fc = (api.best_upcoming.forecast_confidence_class ?? null) as string | null;
+    const best = api.best_upcoming;
+    if (best) {
+      const fc = (best.forecast_confidence_class ?? null) as string | null;
       await expect(outlook.getByTestId("forecast-confidence-badge")).toHaveText(`Forecast confidence: ${label(fc)}`);
+      await expect(outlook.getByTestId("rating-title")).toHaveText(`${QUALITY[best.label]} Surf — ${(best.score / 10).toFixed(1)}/10`);
+      // "Why this rating?" shows the API's own component fits for that hour, word for word.
+      const point = forecast.points.find((p) => Date.parse(p.valid_time) === Date.parse(best.valid_time));
+      if (point) {
+        await outlook.getByRole("button", { name: "Why this rating?" }).click();
+        const expected = FIT_ORDER.filter(([k]) => typeof point.components[k] === "number").map(
+          ([k, name]) => `${name}${fitWord(point.components[k] as number)}`,
+        );
+        await expect(outlook.getByTestId("rating-fits").getByRole("listitem")).toHaveText(expected);
+        await expect(outlook.getByText(`Quality score ${best.score} / 100`, { exact: false })).toBeVisible();
+      }
     }
     await expectNoConfidencePercentage(page);
+    await shot(page, "spot-real-desktop-why-open");
+  });
+});
+
+test.describe("phone layout against the demo backend (no mocks)", () => {
+  test.use({ viewport: MOBILE, hasTouch: true, isMobile: true });
+
+  test("the spot list and a spot page fit the screen", async ({ page }) => {
+    await blockTiles(page);
+    await page.goto("/spots");
+    await expect(page.getByTestId("spot-card")).toHaveCount(50);
+    await expectNoHorizontalScroll(page);
+    await shot(page, "spots-real-mobile");
+    await page.goto("/spots/pipeline");
+    await expect(page.getByTestId("surf-outlook")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await shot(page, "spot-real-mobile");
+  });
+});
+
+test.describe("keyboard and pointer access (synthetic)", () => {
+  test.use({ viewport: DESKTOP });
+
+  test("details and Learn more popovers work from the keyboard and with the mouse", async ({ page }) => {
+    await mockSpot(page, SCENARIOS.lowResearchHighForecast);
+    await page.goto(`/spots/${SPOT_SLUG}`);
+    const outlook = page.getByTestId("surf-outlook");
+
+    // Disclosure: a focusable button; Enter opens, Space closes.
+    const toggle = outlook.getByRole("button", { name: "Confidence details" });
+    await toggle.focus();
+    await expect(toggle).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(outlook.getByText("A rating of how much the forecast may still change", { exact: false })).toBeVisible();
+    await page.keyboard.press("Space");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    // Tab moves on from the toggle to the next control (it is in the tab order).
+    await toggle.focus();
+    await page.keyboard.press("Tab");
+    await expect(toggle).not.toBeFocused();
+
+    // Popover from the keyboard: Enter opens it, Escape closes it and focus returns.
+    const info = outlook.getByRole("button", { name: "Learn more: Spot research confidence" });
+    await info.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("dialog")).toContainText("How well this break's ideal conditions");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(info).toBeFocused();
+
+    // Popover with the mouse: click opens, a click elsewhere closes.
+    await outlook.getByRole("button", { name: "Learn more: 80% range" }).click();
+    await expect(page.getByRole("dialog")).toContainText("not been checked against surf observations");
+    await outlook.getByText("Best surf, next 7 days").click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 });
 
@@ -200,10 +299,16 @@ test.describe("spot detail on a phone (synthetic)", () => {
       "tap",
     );
     await toggleOpensAndCloses(outlook.getByRole("button", { name: "Research details" }), outlook.getByTestId("research-variables"), "tap");
-    // "Learn more" popovers open on tap too.
+    // "Learn more" popovers open on tap too, and a tap elsewhere closes them.
     await outlook.getByRole("button", { name: "Learn more: Spot research confidence" }).tap();
     await expect(page.getByRole("dialog")).toContainText("How well this break's ideal conditions");
+    await page.getByRole("heading", { level: 1 }).tap();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await outlook.getByRole("button", { name: "Learn more: Breaking wave height (our estimate)" }).tap();
+    await expect(page.getByRole("dialog")).toContainText("significant breaking height");
     await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await toggleOpensAndCloses(outlook.getByRole("button", { name: "Why this rating?" }), outlook.getByTestId("rating-fits"), "tap");
     await outlook.getByRole("button", { name: "Confidence details" }).tap();
     await outlook.getByRole("button", { name: "Research details" }).tap();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
@@ -234,6 +339,7 @@ for (const [device, viewport] of [
       const opp = page.getByTestId("opportunity-card");
       await expect(opp.getByTestId("forecast-confidence-badge")).toHaveText("Forecast confidence: Low");
       await expectNoConfidencePercentage(page);
+      await expectNoHorizontalScroll(page);
       await shot(page, `dashboard-${device}`);
     });
 
@@ -248,6 +354,7 @@ for (const [device, viewport] of [
       await toggleOpensAndCloses(scoring, page.getByTestId("match-scoring").getByText("index 61 / 100 (not a probability)"), device === "mobile" ? "tap" : "click");
       await (device === "mobile" ? scoring.tap() : scoring.click());
       await expectNoConfidencePercentage(page);
+      await expectNoHorizontalScroll(page);
       await shot(page, `opportunity-${device}`);
     });
 
@@ -259,6 +366,7 @@ for (const [device, viewport] of [
       await expect(table.getByRole("row")).toHaveCount(2); // header + 1 alert
       await expect(table.getByTestId("forecast-confidence-badge")).toHaveText("Forecast confidence: Not assessed yet");
       await expectNoConfidencePercentage(page);
+      await expectNoHorizontalScroll(page);
       await shot(page, `notifications-${device}`);
     });
   });
