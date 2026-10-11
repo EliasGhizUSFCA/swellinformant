@@ -11,6 +11,9 @@ import { apiGet, apiPost, DEV_INBOX, waitForDevEmail } from "./helpers";
  * (`E2E_MAILPIT=1 ./scripts/run-e2e.sh`), otherwise the console provider's capture file. No
  * real mailbox is involved, so this does not verify external provider delivery.
  */
+// A spot no other spec simulates swells at: the search must exist before its swell does.
+const SPOT = { slug: "supertubos", name: "Supertubos" };
+
 test.describe.serial("upgrade specification: 15-step scenario", () => {
   const email = `scenario-${Date.now()}@example.com`;
   const password = "Scenario-swell-9!";
@@ -63,14 +66,14 @@ test.describe.serial("upgrade specification: 15-step scenario", () => {
     });
 
     await test.step("6. select a surf spot", async () => {
-      await page.locator("path.spot-jeffreys-bay").click({ force: true });
-      await expect(page.getByTestId("panel-spot-name")).toHaveText("Jeffreys Bay (Supertubes)");
+      await page.locator(`path.spot-${SPOT.slug}`).click({ force: true });
+      await expect(page.getByTestId("panel-spot-name")).toHaveText(SPOT.name);
       await expect(page.getByTestId("map-spot-panel").getByTestId("our-prediction")).toBeVisible();
     });
 
     await test.step("7. view its forecast", async () => {
       await page.getByRole("link", { name: /Full forecast & charts/ }).click();
-      await page.waitForURL("**/spots/jeffreys-bay");
+      await page.waitForURL(`**/spots/${SPOT.slug}`);
       await expect(page.getByTestId("quality-chart")).toBeVisible();
       await expect(page.getByTestId("forecast-hour").getByTestId("raw-model")).toBeVisible();
       await expect(page.getByTestId("forecast-hour").getByTestId("uncertainty-range")).toBeVisible();
@@ -81,8 +84,8 @@ test.describe.serial("upgrade specification: 15-step scenario", () => {
       await page.goto("/searches/new");
       await page.getByRole("button", { name: "Continue" }).click();
       await page.getByRole("radio", { name: /Specific spots/ }).click();
-      await page.getByPlaceholder("Filter spots…").fill("Jeffreys");
-      await page.getByRole("checkbox", { name: /Jeffreys Bay/ }).click();
+      await page.getByPlaceholder("Filter spots…").fill(SPOT.name);
+      await page.getByRole("checkbox", { name: new RegExp(SPOT.name) }).click();
       await page.getByRole("button", { name: "Continue" }).click();
       await page.getByRole("button", { name: "Continue" }).click();
       await page.locator("#origins").fill("SFO");
@@ -91,7 +94,7 @@ test.describe.serial("upgrade specification: 15-step scenario", () => {
       await page.locator("#max_flight_hours").fill("40");
       await page.getByRole("button", { name: "Continue" }).click();
       await page.getByRole("button", { name: "Continue" }).click();
-      await page.locator("#name").fill("Scenario J-Bay");
+      await page.locator("#name").fill(`Scenario ${SPOT.name}`);
       await page.getByRole("button", { name: "Activate search" }).click();
       await page.waitForURL(/\/searches\/[0-9a-f-]{36}$/);
       searchId = page.url().split("/").pop()!;
@@ -100,14 +103,14 @@ test.describe.serial("upgrade specification: 15-step scenario", () => {
 
     await test.step("9. insert a clearly labelled simulated qualifying swell", async () => {
       const sim = await apiPost(page, "/api/dev/simulate-swell", {
-        spot_slug: "jeffreys-bay",
+        spot_slug: SPOT.slug,
         days_ahead: 5.8,
         duration_hours: 48,
         run_pipeline: false,
       });
       expect(sim.simulation.status).toBe("success");
       expect(sim.simulation.run_key).toMatch(/^demo-sim:/);
-      const fc = await apiGet(page.request, "/api/spots/jeffreys-bay/forecast?days=10");
+      const fc = await apiGet(page.request, `/api/spots/${SPOT.slug}/forecast?days=10`);
       expect(fc.source.is_demo).toBe(true); // DEMO source, labelled as such everywhere
     });
 
@@ -134,12 +137,12 @@ test.describe.serial("upgrade specification: 15-step scenario", () => {
         best_price: string | number | null;
       }
       const opps = (await apiGet(page.request, "/api/opportunities")) as Opp[];
-      const jbay = opps.find((o) => o.spot.slug === "jeffreys-bay" && o.search_id === searchId);
-      expect(jbay, "opportunity for the new search").toBeTruthy();
-      expect(jbay!.status).toBe("flight_found");
-      expect(jbay!.has_mock_flights).toBe(true); // labelled mock fares from the demo provider
-      expect(Number(jbay!.best_price)).toBeLessThanOrEqual(3000);
-      matchId = jbay!.id;
+      const opp = opps.find((o) => o.spot.slug === SPOT.slug && o.search_id === searchId);
+      expect(opp, "opportunity for the new search").toBeTruthy();
+      expect(opp!.status).toBe("flight_found");
+      expect(opp!.has_mock_flights).toBe(true); // labelled mock fares from the demo provider
+      expect(Number(opp!.best_price)).toBeLessThanOrEqual(3000);
+      matchId = opp!.id;
       const history = await apiGet(page.request, "/api/notifications");
       expect(history.items[0].status).toBe("queued");
       expect(history.items[0].kind).toBe("new_opportunity");
@@ -149,7 +152,7 @@ test.describe.serial("upgrade specification: 15-step scenario", () => {
     await test.step("13. the alert email appears in the development inbox", async () => {
       await apiPost(page, "/api/dev/run-pipeline?acquire=false&deliver=true");
       const msg = await waitForDevEmail(page.request, email, /Opportunity details: /);
-      expect(msg.text).toContain("Jeffreys Bay");
+      expect(msg.text).toContain(SPOT.name);
       expect(msg.text).toContain("MOCK FARE");
       expect(msg.text).toMatch(/Predicted breaking waves \(our estimate\)/);
       alertLink = /Opportunity details: (\S+)/.exec(msg.text)![1]!;
@@ -164,7 +167,7 @@ test.describe.serial("upgrade specification: 15-step scenario", () => {
 
     await test.step("15. it leads to the correct opportunity", async () => {
       expect(page.url()).toContain(`/opportunities/${matchId}`);
-      await expect(page.getByRole("heading", { name: /Jeffreys Bay/ }).first()).toBeVisible();
+      await expect(page.getByRole("heading", { name: new RegExp(SPOT.name) }).first()).toBeVisible();
       await expect(page.getByTestId("offer-card").first()).toBeVisible();
       await expect(page.getByText("MOCK FARES").first()).toBeVisible();
     });

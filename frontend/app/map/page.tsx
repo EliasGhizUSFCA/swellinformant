@@ -312,6 +312,12 @@ function passes(s: SpotSummary, m: MapSpot | undefined, f: Filters, units: Units
   return true;
 }
 
+/** Sort key for the "best at the selected time" list: daylight hours above night ones. */
+function rankKey(c: Conditions | null | undefined): number {
+  if (!c) return -1;
+  return (c.is_daylight ? 1000 : 0) + c.score;
+}
+
 export default function MapPage() {
   const { data: spots = [], isLoading, isError } = useSpots();
   const { data: user } = useMe();
@@ -423,7 +429,8 @@ export default function MapPage() {
                 </div>
                 <ul className="flex-1 space-y-1 overflow-auto" data-testid="top-spots">
                   {[...visible]
-                    .sort((a, b) => (bySlug.get(b.slug)?.conditions?.score ?? -1) - (bySlug.get(a.slug)?.conditions?.score ?? -1))
+                    // Daylight first: a high score at night is not surf anyone can ride.
+                    .sort((a, b) => rankKey(bySlug.get(b.slug)?.conditions) - rankKey(bySlug.get(a.slug)?.conditions))
                     .slice(0, 15)
                     .map((s) => {
                       const c = bySlug.get(s.slug)?.conditions;
@@ -433,6 +440,7 @@ export default function MapPage() {
                             <span className="min-w-0 truncate">
                               {s.name} <span className="text-muted-foreground">· {s.country}</span>
                             </span>
+                            {c && !c.is_daylight && <span className="shrink-0 text-xs text-muted-foreground" data-testid="night-tag">night</span>}
                             {c ? <QualityBadge label={c.label} score={c.score} /> : <span className="text-xs text-muted-foreground">no data</span>}
                           </button>
                         </li>

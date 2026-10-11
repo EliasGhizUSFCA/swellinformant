@@ -17,13 +17,15 @@ export function ConditionsSummary({ c, tz, units, title }: { c: Conditions; tz: 
         <span className="ml-1 align-middle text-xs font-normal text-muted-foreground">est. faces</span>
       </div>
       <div className="mt-1 text-sm text-muted-foreground">
-        {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} {compass(c.swell_direction_deg)} swell
+        {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} {compass(c.swell_direction_deg)} offshore waves
       </div>
       <div className="mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground">
         <Wind className="size-3.5" />
         {kmh(c.wind_speed_kmh)} {compass(c.wind_direction_deg)} · {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
       </div>
-      <div className="mt-2 text-xs text-muted-foreground">{formatDateTime(c.valid_time, tz)} local</div>
+      <div className="mt-2 text-xs text-muted-foreground">
+        {formatDateTime(c.valid_time, tz)} local{c.is_daylight ? "" : " · night (not surfable)"}
+      </div>
     </div>
   );
 }

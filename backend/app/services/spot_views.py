@@ -44,6 +44,7 @@ from app.schemas.spots import (
 )
 from app.services.forecasts.queries import USABLE, is_stale, latest_runs_by_spot
 from app.services.forecasts.registry import configured_source_codes
+from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.scoring import label_for_score
 
 MODEL_SERIES_STEP_HOURS = 3
@@ -104,6 +105,7 @@ def _conditions(
     p: SurfQualityPrediction, f: WaveForecast, run: ForecastRun | None = None
 ) -> Conditions:
     source = run.source if run is not None else None
+    main = dominant_component(p, f)  # the component that drives the surf, not "swell 1"
     return Conditions(
         sig_wave_height_m=f.sig_wave_height_m,
         source_code=source.code if source else None,
@@ -123,17 +125,9 @@ def _conditions(
         label=p.label.value,
         breaking_height_min_ft=p.breaking_height_min_ft,
         breaking_height_max_ft=p.breaking_height_max_ft,
-        swell_height_m=f.primary_swell_height_m
-        if f.primary_swell_height_m is not None
-        else f.sig_wave_height_m,
-        swell_period_s=f.primary_swell_period_s
-        if f.primary_swell_period_s is not None
-        else f.wave_period_s,
-        swell_direction_deg=(
-            f.primary_swell_direction_deg
-            if f.primary_swell_direction_deg is not None
-            else f.wave_direction_deg
-        ),
+        swell_height_m=main[0],
+        swell_period_s=main[1],
+        swell_direction_deg=main[2],
         wind_speed_kmh=f.wind_speed_kmh,
         wind_direction_deg=f.wind_direction_deg,
         wind_relation=p.wind_relation,

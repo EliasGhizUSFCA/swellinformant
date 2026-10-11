@@ -308,11 +308,12 @@ export default function SpotPage() {
               <CardContent className="space-y-2 text-xs text-muted-foreground">
                 <div className="text-sm font-medium text-ink">{fc.source.name}</div>
                 <div>
-                  Wave model {fc.source.wave_model} · run {fc.run.wave_model_run_at ? formatDateTime(fc.run.wave_model_run_at, "UTC") : "—"} UTC
+                  Wave model {fc.source.wave_model}
+                  {fc.run.wave_model_run_at && ` · run ${formatDateTime(fc.run.wave_model_run_at, "UTC")} UTC`}
                 </div>
                 <div>
-                  Wind model {fc.source.atmosphere_model} · run{" "}
-                  {fc.run.atmosphere_model_run_at ? formatDateTime(fc.run.atmosphere_model_run_at, "UTC") : "—"} UTC
+                  Wind model {fc.source.atmosphere_model}
+                  {fc.run.atmosphere_model_run_at && ` · run ${formatDateTime(fc.run.atmosphere_model_run_at, "UTC")} UTC`}
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Clock className="size-3.5" /> Ingested {fc.run.completed_at ? relativeTime(fc.run.completed_at) : "—"}

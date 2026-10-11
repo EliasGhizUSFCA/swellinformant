@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from app.services.swell_detection.service import dominant_component
+from app.services.surf_quality.breaking import dominant_component
 
 
 def _pred(partitions: list[dict[str, Any]] | None) -> Any:

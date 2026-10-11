@@ -77,7 +77,7 @@ test.describe("interactive map", () => {
     await expect(panel.getByTestId("panel-country")).toHaveText("South Africa");
     if (jbay.conditions) {
       await expect(panel.getByTestId("raw-model")).toContainText("Significant wave height (offshore)");
-      await expect(panel.getByTestId("raw-model")).toContainText("Swell direction");
+      await expect(panel.getByTestId("raw-model")).toContainText("Main component direction");
       await expect(panel.getByTestId("our-prediction")).toContainText("est. breaking faces");
       await expect(panel.getByTestId("our-prediction")).toContainText(String(jbay.conditions.score));
     } else {

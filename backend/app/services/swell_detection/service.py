@@ -23,6 +23,7 @@ from app.core.database import utcnow
 from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, SwellEvent, WaveForecast
 from app.models.enums import QualityLabel, SwellEventStatus
 from app.services.forecasts.queries import latest_runs_by_spot
+from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.confidence import confidence_label
 from app.services.surf_quality.scoring import label_for_score
 from app.services.swell_detection.clustering import Cluster, Step, cluster_steps, overlaps
@@ -61,24 +62,6 @@ def load_steps(db: Session, spot_id: int, run_id: int, since: datetime) -> list[
         Step(time=p.valid_time, is_daylight=p.is_daylight, score=p.score, payload=(p, f))
         for p, f in rows
     ]
-
-
-def dominant_component(
-    pred: SurfQualityPrediction, fc: WaveForecast
-) -> tuple[float | None, float | None, float | None]:
-    """Height, period and direction of the offshore component that drives the surf.
-
-    That is the partition with the largest predicted breaking height in the prediction's
-    nearshore breakdown, which may be the wind sea: WW3 ranks only the swells by height, so
-    "primary swell" can be a 0.2 m remnant under a 2 m wind sea. Without a breakdown, the
-    bulk sea state (Hs, Tp, peak direction) is used.
-    """
-    breakdown = (pred.components or {}).get("breaking") or {}
-    parts = [p for p in breakdown.get("partitions") or [] if (p.get("breaking_m") or 0) > 0]
-    if parts:
-        best = max(parts, key=lambda p: p["breaking_m"])
-        return best.get("height_m"), best.get("period_s"), best.get("direction_deg")
-    return fc.sig_wave_height_m, fc.wave_period_s, fc.wave_direction_deg
 
 
 def _apply_cluster(event: SwellEvent, cluster: Cluster, run: ForecastRun, keep_start: bool) -> None:

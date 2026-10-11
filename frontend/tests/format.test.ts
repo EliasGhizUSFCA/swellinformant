@@ -23,6 +23,7 @@ describe("units", () => {
     expect(heightRange(6, 9)).toBe("6–9 ft");
     expect(heightRange(6.2, 8.8)).toBe("6–9 ft");
     expect(heightRange(6.56, 9.84, "m")).toBe("2–3 m");
+    expect(heightRange(1.4, 1.6)).toBe("1.5 ft"); // a collapsed range reads as one value
   });
 });
 

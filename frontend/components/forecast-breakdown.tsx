@@ -51,8 +51,8 @@ export function ForecastBreakdown({ c, tz, units }: { c: Conditions; tz: string;
         </div>
         <dl className="mt-2 text-sm">
           <Row k="Significant wave height (offshore)" v={metres(c.sig_wave_height_m)} />
-          <Row k="Primary swell" v={`${metres(c.swell_height_m)} @ ${seconds(c.swell_period_s)}`} />
-          <Row k="Swell direction" v={dir != null ? `${compass(dir)} (${Math.round(dir)}°)` : "—"} />
+          <Row k="Main component (drives the surf)" v={`${metres(c.swell_height_m)} @ ${seconds(c.swell_period_s)}`} />
+          <Row k="Main component direction" v={dir != null ? `${compass(dir)} (${Math.round(dir)}°)` : "—"} />
           <Row
             k="Wind"
             v={
