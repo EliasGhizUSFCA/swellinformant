@@ -25,7 +25,9 @@ export const SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87b
 const axisStyle = { fontSize: 11, fill: "var(--muted-foreground)" };
 const gridStroke = "var(--border)";
 
+/** "24 h", "5 d"; the verification job stores all leads together as bucket -1. */
 export function leadLabel(hours: number): string {
+  if (hours < 0) return "all leads";
   return hours < 120 ? `${hours} h` : `${Math.round(hours / 24)} d`;
 }
 
@@ -52,7 +54,8 @@ export function LeadMetricChart({
   testId: string;
 }) {
   const versions = [...new Set(rows.map((r) => r.model_version))];
-  const buckets = [...new Set(rows.map((r) => r.lead_bucket_h))].sort((a, b) => a - b);
+  // The all-leads aggregate (bucket -1) belongs in the table, not on a lead-time axis.
+  const buckets = [...new Set(rows.map((r) => r.lead_bucket_h))].filter((b) => b >= 0).sort((a, b) => a - b);
   const data = buckets.map((b) => {
     const row: Record<string, number | string | null> = { bucket: leadLabel(b) };
     for (const v of versions) {

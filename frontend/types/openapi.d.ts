@@ -4486,7 +4486,7 @@ export interface operations {
     accuracy_metrics_api_admin_accuracy_metrics_get: {
         parameters: {
             query?: {
-                variable?: "hs" | "tp" | "dir";
+                variable?: "hs" | "hs_h13" | "tp" | "dir";
                 scope?: ("station" | "region" | "global" | "spot") | null;
                 source?: string | null;
                 window_days?: number | null;
@@ -4520,7 +4520,7 @@ export interface operations {
     accuracy_pairs_api_admin_accuracy_pairs_get: {
         parameters: {
             query?: {
-                variable?: "hs" | "tp" | "dir";
+                variable?: "hs" | "hs_h13" | "tp" | "dir";
                 source?: string | null;
                 model_version?: string;
                 station?: string | null;

@@ -16,7 +16,13 @@ import { useAccuracyMetrics, useAccuracyOverview, useAccuracyPairs } from "@/hoo
 import { relativeTime } from "@/lib/format";
 import type { AccuracyMetric, AccuracyOverview, ModelVersionSummary } from "@/types/api";
 
-const VARIABLES = { hs: { label: "Wave height (Hs)", unit: "m" }, tp: { label: "Peak period", unit: "s" }, dir: { label: "Direction", unit: "°" } } as const;
+// "hs": model Hm0 vs buoy spectral Hm0; "hs_h13": vs buoys that only report H1/3 (never mixed).
+const VARIABLES = {
+  hs: { label: "Wave height (Hm0)", unit: "m" },
+  hs_h13: { label: "Wave height (H1/3 buoys)", unit: "m" },
+  tp: { label: "Peak period", unit: "s" },
+  dir: { label: "Direction", unit: "°" },
+} as const;
 type Variable = keyof typeof VARIABLES;
 const ALL = "__all__";
 
@@ -72,26 +78,48 @@ function MetricsTable({ rows, keyLabel, testId }: { rows: AccuracyMetric[]; keyL
   );
 }
 
+type Criterion = { id?: string; name?: string; passed?: boolean; detail?: string; value?: unknown; threshold?: unknown };
+
+/** Deployment criteria as recorded by the registry: a list of {id, name, passed, detail}. */
 function criteria(m: ModelVersionSummary): { name: string; passed: boolean; detail: string }[] {
-  const raw = (m.decision?.criteria ?? m.decision) as Record<string, unknown>;
-  return Object.entries(raw ?? {})
-    .filter(([, v]) => v && typeof v === "object" && "passed" in (v as object))
-    .map(([name, v]) => {
-      const c = v as { passed: boolean; value?: unknown; threshold?: unknown };
-      const detail = [c.value != null ? `value ${typeof c.value === "number" ? c.value.toFixed(3) : String(c.value)}` : "", c.threshold != null ? `threshold ${String(c.threshold)}` : ""].filter(Boolean).join(", ");
-      return { name, passed: Boolean(c.passed), detail };
-    });
+  const raw = m.decision?.criteria as unknown;
+  const list: [string, Criterion][] = Array.isArray(raw)
+    ? (raw as Criterion[]).map((c, i) => [`${c.id ? `(${c.id}) ` : ""}${c.name ?? `criterion ${i + 1}`}`, c])
+    : Object.entries((raw ?? {}) as Record<string, Criterion>);
+  return list
+    .filter(([, c]) => c && typeof c === "object" && "passed" in c)
+    .map(([name, c]) => ({
+      name,
+      passed: Boolean(c.passed),
+      detail: c.detail ?? (typeof c.value === "number" ? `value ${c.value.toFixed(3)}` : ""),
+    }));
 }
 
 function trainingSummary(m: ModelVersionSummary): string {
   const t = m.training as Record<string, unknown>;
   const parts: string[] = [];
-  const period = (t.period ?? t.train_period) as unknown;
-  if (Array.isArray(period) && period.length === 2) parts.push(`${period[0]} → ${period[1]}`);
-  for (const key of ["rows", "n_rows", "n_train", "train_rows"]) if (typeof t[key] === "number") parts.push(`${t[key]} rows`);
+  const period = t.period as Record<string, string> | string[] | undefined;
+  const day = (v: unknown) => (typeof v === "string" ? v.slice(0, 10) : "?");
+  if (Array.isArray(period) && period.length === 2) parts.push(`${day(period[0])} → ${day(period[1])}`);
+  else if (period && typeof period === "object") {
+    const p = period as Record<string, string>;
+    parts.push(`cycles ${day(p.cycle_start)} → ${day(p.cycle_end)}`);
+  }
+  const rows = t.rows as Record<string, number> | number | undefined;
+  if (typeof rows === "number") parts.push(`${rows.toLocaleString()} rows`);
+  else if (rows && typeof rows === "object")
+    parts.push(Object.entries(rows).map(([k, v]) => `${k} ${Number(v).toLocaleString()}`).join(" / ") + " rows");
   const stations = t.stations;
-  if (Array.isArray(stations)) parts.push(`${stations.length} station${stations.length === 1 ? "" : "s"}`);
+  if (Array.isArray(stations)) parts.push(`stations ${stations.join(", ")}`);
   return parts.join(" · ") || "–";
+}
+
+/** Held-out test RMSE against the raw forecast, when the registry recorded it. */
+function testSummary(m: ModelVersionSummary): string | null {
+  const all = (m.test_metrics as Record<string, Record<string, number>> | undefined)?.all;
+  if (!all || typeof all.rmse !== "number" || typeof all.rmse_raw !== "number") return null;
+  const change = (all.rmse / all.rmse_raw - 1) * 100;
+  return `held-out test: RMSE ${all.rmse.toFixed(3)} m vs raw ${all.rmse_raw.toFixed(3)} m (${change >= 0 ? "+" : ""}${change.toFixed(1)}%), n = ${Number(all.n ?? 0).toLocaleString()}`;
 }
 
 function ModelRegistry({ models }: { models: ModelVersionSummary[] }) {
@@ -112,6 +140,7 @@ function ModelRegistry({ models }: { models: ModelVersionSummary[] }) {
             Training dataset: {m.dataset_version ?? "no fingerprint recorded"} · {trainingSummary(m)}
             {m.experiment_id != null && ` · experiment #${m.experiment_id}`}
           </div>
+          {testSummary(m) && <div className="mt-1 text-xs">{testSummary(m)}</div>}
           {criteria(m).length > 0 && (
             <ul className="mt-2 grid gap-1 text-xs sm:grid-cols-2">
               {criteria(m).map((c) => (

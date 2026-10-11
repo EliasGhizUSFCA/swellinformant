@@ -63,6 +63,16 @@ variables.
 * A documented 0–100 quality score kept separate from height and from forecast confidence.
 * Daylight-only windows from NOAA sunrise and sunset.
 
+**Verification and ML post-processing**
+
+* Buoy observations (AODN, Met Office, NDBC) and the GFS-Wave forecasts issued at those
+  buoys, archived as issued, so accuracy is measured at every lead time without hindsight.
+* Metrics (bias, MAE, RMSE, scatter index, HH, correlation, skill vs persistence and
+  climatology, cycle-block bootstrap CIs) and rolling-origin backtests.
+* An ML correction of offshore Hs with leakage guards, baselines, a model registry and
+  explicit deployment criteria; a model is applied only if it beats the raw forecast on
+  held-out observations.
+
 **Developer tools**
 
 * Accuracy dashboard (`/status/accuracy`, admin accounts): MAE/RMSE/bias by model, station
@@ -370,6 +380,48 @@ only under the OSM tile policy). For more traffic use a tile provider:
   The tile host is added to the Content-Security-Policy automatically; extra hosts go in
   `MAP_TILE_HOSTS`.
 
+### Observations, verification and ML post-processing
+
+Forecast accuracy is measured against buoys, never assumed. Everything here is off by
+default and runs as background jobs once enabled:
+
+```env
+OBSERVATIONS_ENABLED=true          # job observations.ingest: AODN, Met Office, NDBC buoys
+VERIFICATION_ENABLED=true          # jobs verification.collect_point_forecasts + verification.run
+ML_CORRECTIONS_ENABLED=true        # apply an ACTIVE correction (only one that passed the criteria)
+```
+
+* Stations and their paired surf spots: `data/observation_stations.json`
+  ([`docs/observations.md`](docs/observations.md): sources, licences, QC, pairing
+  justifications).
+* Model forecasts at the buoys come from the GFS-Wave station bulletins (archived from
+  2021-03-22), so historical forecasts are what was actually issued at each lead time, not
+  analyses.
+* Metrics, backtests, leakage guards, the deployment criteria and the model registry:
+  [`docs/ml-pipeline.md`](docs/ml-pipeline.md). Results: [`docs/ml-evaluation.md`](docs/ml-evaluation.md).
+
+Command line (from `backend/`, or `docker compose exec backend …`):
+
+```bash
+python -m app.cli obs seed-stations
+python -m app.cli obs ingest --provider aodn --since 2021-03-22T00:00:00Z --until 2022-12-31T00:00:00Z
+python -m app.cli obs collect-forecasts --start 2021-03-22T00:00:00Z --end 2022-12-31T00:00:00Z
+python -m app.cli verify pair
+python -m app.cli verify backtest --source gfswave_bulletin --folds 5
+python -m app.cli ml train --candidates linear,rf,gbt      # registers every candidate with its decision
+python -m app.cli ml list
+python -m app.cli ml activate VERSION_ID                   # refused unless every criterion passed
+python -m app.cli ml export-manifest VERSION_ID DIR        # move a model between environments
+python -m app.cli ml import-manifest DIR/manifest.json
+```
+
+A correction is applied only at spots paired with its training buoys, only within its
+trained lead range and only to the model family it was trained on (in multi-model mode it
+corrects that member before blending; [`docs/decisions.md`](docs/decisions.md) ADR-012);
+predictions record the model version, and the accuracy dashboard
+(`/status/accuracy`) shows every candidate with its held-out decision. The breaking-height model itself is not corrected or validated by any of
+this: there are no nearshore surf observations yet.
+
 ### Switching from demo to live
 
 1. Put the credentials in `.env` (never commit it), for example:
@@ -583,6 +635,7 @@ documented response shapes with mocked HTTP. Expect to adjust details on first l
 | Resend | `RESEND_API_KEY` |
 | SendGrid | `SENDGRID_API_KEY` |
 | Twilio | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
+| NDBC buoys (observations) | nothing (public), but `www.ndbc.noaa.gov` was unreachable from the build environment; parsers are tested against NDBC's documented formats only |
 
 SMTP is verified end to end: the Docker stack delivered a verification email to Mailpit.
 

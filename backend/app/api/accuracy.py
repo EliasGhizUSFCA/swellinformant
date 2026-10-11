@@ -20,7 +20,7 @@ from app.services import accuracy_views
 
 router = APIRouter(prefix="/api/admin/accuracy", tags=["accuracy"])
 
-Variable = Literal["hs", "tp", "dir"]
+Variable = Literal["hs", "hs_h13", "tp", "dir"]
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:

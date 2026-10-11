@@ -2062,6 +2062,7 @@
       "schema": {
        "enum": [
         "hs",
+        "hs_h13",
         "tp",
         "dir"
        ],
@@ -2171,6 +2172,7 @@
       "schema": {
        "enum": [
         "hs",
+        "hs_h13",
         "tp",
         "dir"
        ],

@@ -41,7 +41,23 @@ from app.schemas.accuracy import (
     StationSummary,
 )
 
-UNITS = {"hs": "m", "tp": "s", "dir": "deg"}
+UNITS = {"hs": "m", "hs_h13": "m", "tp": "s", "dir": "deg"}
+# Dashboard variable -> (prediction_validation.variable, observed_kind or None). Model Hm0
+# is compared with spectral Hm0 and, separately, with H1/3 buoys ("hs_h13", the name the
+# verification job uses for those metrics); the two are never mixed.
+PAIR_SELECTION: dict[str, tuple[str, str | None]] = {
+    "hs": ("hs", "spectral_hm0"),
+    "hs_h13": ("hs", "h_third"),
+    "tp": ("tp", None),
+    "dir": ("dir", None),
+}
+
+
+def dashboard_variable(variable: str, observed_kind: str) -> str:
+    """The dashboard variable a stored pair belongs to."""
+    return "hs_h13" if variable == "hs" and observed_kind == "h_third" else variable
+
+
 HISTOGRAM_BINS = 40
 NOTES = [
     "Errors are forecast minus observation of offshore quantities at buoys, not surf "
@@ -76,13 +92,19 @@ def _test_metrics(model: MLModelVersion) -> dict[str, Any]:
 def overview(db: Session) -> AccuracyOverview:
     pair_counts = [
         PairCount(
-            source_code=src, model_version=mv, variable=var, n=n, first_valid=lo, last_valid=hi
+            source_code=src,
+            model_version=mv,
+            variable=dashboard_variable(var, kind),
+            n=n,
+            first_valid=lo,
+            last_valid=hi,
         )
-        for src, mv, var, n, lo, hi in db.execute(
+        for src, mv, var, kind, n, lo, hi in db.execute(
             select(
                 PredictionValidation.source_code,
                 PredictionValidation.model_version,
                 PredictionValidation.variable,
+                PredictionValidation.observed_kind,
                 func.count(),
                 func.min(PredictionValidation.valid_time),
                 func.max(PredictionValidation.valid_time),
@@ -91,9 +113,11 @@ def overview(db: Session) -> AccuracyOverview:
                 PredictionValidation.source_code,
                 PredictionValidation.model_version,
                 PredictionValidation.variable,
+                PredictionValidation.observed_kind,
             )
             .order_by(PredictionValidation.source_code, PredictionValidation.variable)
         ).all()
+        if dashboard_variable(var, kind) in PAIR_SELECTION
     ]
     obs = {
         sid: (n, latest)
@@ -218,10 +242,13 @@ def _pairs_query(
     since: datetime,
 ) -> Select[Any]:
     q = select(PredictionValidation).where(
-        PredictionValidation.variable == variable,
+        PredictionValidation.variable == PAIR_SELECTION[variable][0],
         PredictionValidation.model_version == model_version,
         PredictionValidation.valid_time >= since,
     )
+    kind = PAIR_SELECTION[variable][1]
+    if kind is not None:
+        q = q.where(PredictionValidation.observed_kind == kind)
     if source_code:
         q = q.where(PredictionValidation.source_code == source_code)
     if station:
