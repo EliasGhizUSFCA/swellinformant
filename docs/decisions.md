@@ -24,8 +24,10 @@ values come from the nearest valid sea cell; nothing is interpolated across land
 stays as a configurable source.
 **Alternatives.** Open-Meteo only (one opaque dependency, licence limits); full-file downloads
 (10–550 MB per step); NOMADS grib filter (blocked here, rate-limited).
-**Consequences.** ~10–15 MB per forecast step for all spots, an ecCodes dependency (binary
-wheel), and file-layout risk at the GFSv17 upgrade: paths come from settings.
+**Consequences.** Measured: ~24 MB per GFS/GFS-Wave forecast step for all 50 spots (about
+2 GB per 10-day run at 3-hourly steps), ~14 MB per ECMWF step and ~5 MB per GEFS-Wave
+statistics step; an ecCodes dependency (binary wheel); file-layout risk at the GFS v17
+upgrade, so bucket URLs and GFS path templates come from settings.
 
 ## ADR-003 Source dependency families; no equal averaging
 

@@ -1,0 +1,892 @@
+"""NOAA GFS-Wave (WAVEWATCH III) + GFS atmosphere, read directly from NOAA open data.
+
+Files come from the NOAA Open Data Dissemination (NODD) bucket on AWS
+(``settings.noaa_gfs_base_url``). Only the needed GRIB2 records are downloaded, by HTTP
+``Range`` from the offsets in each file's ``.idx`` (see :mod:`app.services.forecasts.grib`).
+The layout, cadence, record lists and grid geometry below come from the research notes
+(docs/surf-forecast-model-research.md, GFS and GFS-Wave sections) and were re-checked live
+against the 2026-10-10 18Z cycle; docs/noaa-direct-ingestion.md summarises them.
+
+Files per forecast hour FFF (GFS v16 layout):
+
+* waves: ``gfs.YYYYMMDD/HH/wave/gridded/gfswave.tHHz.{grid}.fFFF.grib2``. Records 5-19
+  (HTSGW, PERPW, DIRPW, WVHGT, SWELL 1-3, WVPER, SWPER 1-3, WVDIR, SWDIR 1-3) are
+  contiguous, so each grid costs one index and one range request per step (8.26 MB for
+  global.0p16, 3.59 MB for gsouth.0p25 and 8.64 MB for global.0p25 at f006).
+* atmosphere: ``gfs.YYYYMMDD/HH/atmos/gfs.tHHz.pgrb2.0p25.fFFF``. UGRD/VGRD at 10 m,
+  GUST, PRMSL, plus LAND until the land-sea mask is known (3.5 MB in 3-4 ranges).
+  Record numbers shift between steps (UGRD 10 m is record 585 at f000 and 588 at f006),
+  so records are matched by ``VAR:LEVEL``, never by number or offset.
+
+Both files are published hourly to f120 and 3-hourly to f384 (f121, f122, f124 and f125
+return HTTP 404; checked live for both files).
+
+Wave grids, chosen per spot from the latitude of its forecast point (research notes,
+GFS v16 post script grid IDs):
+
+* ``global.0p16``: native WW3 grid gnh_10m, 1/6 deg, 52.5N to 15S (2160 x 406)
+* ``gsouth.0p25``: native gsh_15m, 1/4 deg, 10.5S to 79.5S (1440 x 277)
+* ``global.0p25``: glo_15mxt, 1/4 deg global, *interpolated* from the native grids, so it
+  is only a fallback for points outside both (e.g. north of 52.5N: Thurso, Mullaghmore).
+
+Conventions (research notes, from WW3 ``ww3_grib.F90`` and the WW3 manual):
+
+* PERPW is the peak period Tp (``period_kind="tp"``); SWPER and WVPER are partition peak
+  periods.
+* DIRPW, SWDIR and WVDIR are nautical degrees FROM in the GRIB files (``ww3_grib`` writes
+  ``MOD(630 - RADE*theta, 360)``), so no +180 is applied. Only the station ``.bull`` and
+  ``.spec`` files use the going-to convention.
+* WW3 orders swell partitions by wave height at each hour. "Primary" is the largest swell
+  partition at that hour, not a swell tracked through time, so partition indices can swap
+  between hours, runs and models. A partition that does not exist is a missing value
+  (None), not zero.
+* HTSGW is the offshore significant wave height of the combined sea state. It is NOT the
+  breaking (surf) height.
+* Wind speed is ``|(u, v)|`` m/s x 3.6 = km/h and its direction FROM is
+  ``(270 - atan2(v, u)) mod 360``. GUST (a boundary-layer mixing diagnostic, not an
+  observed gust) is m/s x 3.6. PRMSL is Pa / 100 = hPa. GFS has no tide, so
+  ``sea_level_m`` is always None.
+
+Point sampling never crosses land. Waves come from the nearest cell with a valid HTSGW
+value (land is masked in the GRIB bitmap) to the spot's forecast point, falling back to
+the break location. Wind comes from the nearest GFS cell with LAND < 0.5 to the break,
+because coastal cells that straddle land bias 10 m winds (research notes: 13 of 50 spot
+coordinates sit on a GFS land cell). Both choices are made once per grid geometry and
+reused for every step.
+
+GFS v17 (proposed for late 2026) is expected to rename directories and files. The bucket
+comes from ``settings.noaa_gfs_base_url`` and the path templates from
+``settings.noaa_gfs_wave_path_template`` / ``noaa_gfs_atmos_path_template`` (defaults:
+``WAVE_PATH_TEMPLATE`` / ``ATMOS_PATH_TEMPLATE``), so a rename is a configuration change.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import threading
+from collections.abc import Hashable, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+
+import httpx
+import numpy as np
+
+from app.core.config import Settings, get_settings
+from app.services.forecasts.base import (
+    FORECAST_FIELDS,
+    FetchResult,
+    ForecastProvider,
+    ForecastRecord,
+    RunInfo,
+    SourceInfo,
+    SpotPoint,
+    nominal_gfs_cycle,
+)
+from app.services.forecasts.grib import (
+    CellChoice,
+    GribError,
+    GribFetcher,
+    GridField,
+    PointSampler,
+    decode_message,
+    parse_ncep_idx,
+    select_entries,
+)
+from app.services.forecasts.registry import NOAA_GFS_CODE
+from app.services.http import (
+    PermanentProviderError,
+    ProviderError,
+    TransientProviderError,
+    request_with_retries,
+)
+
+logger = logging.getLogger(__name__)
+
+HTTP_PROVIDER = "noaa_gfs"  # label for retries, logs and error messages
+USER_AGENT = "SwellTravelAgent/1.0 (forecast ingestion)"
+MS_TO_KMH = 3.6
+
+# Output cadence of both the GFS-Wave gridded and the GFS pgrb2.0p25 files (v16).
+HOURLY_UNTIL_HOUR = 120
+LATE_STEP_HOURS = 3
+MAX_LEAD_HOURS = 384
+CYCLE_HOURS = 6
+# current_run tries the nominal cycle and then up to this many older ones.
+OLDER_CYCLES_TO_TRY = 4
+
+WAVE_PATH_TEMPLATE = "gfs.{ymd}/{hh}/wave/gridded/gfswave.t{hh}z.{grid}.f{fhour:03d}.grib2"
+ATMOS_PATH_TEMPLATE = "gfs.{ymd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{fhour:03d}"
+ATMOS_GRID = "pgrb2.0p25"
+
+
+@dataclass(frozen=True)
+class WaveGrid:
+    """A GFS-Wave output grid and the latitudes it covers (decoded geometry, verified live)."""
+
+    name: str
+    north: float
+    south: float
+    native: bool  # False: interpolated from the native grids
+
+    def covers(self, lat: float) -> bool:
+        return self.south <= lat <= self.north
+
+
+# In order of preference: native grids first. All three are global in longitude.
+WAVE_GRIDS: tuple[WaveGrid, ...] = (
+    WaveGrid("global.0p16", 52.5, -15.0, native=True),
+    WaveGrid("gsouth.0p25", -10.5, -79.5, native=True),
+    WaveGrid("global.0p25", 90.0, -90.0, native=False),
+)
+
+
+def wave_grid_for(lat: float) -> WaveGrid:
+    """The preferred GFS-Wave grid for a point at latitude ``lat``."""
+    for grid in WAVE_GRIDS:
+        if grid.covers(lat):
+            return grid
+    return WAVE_GRIDS[-1]
+
+
+HTSGW = "HTSGW:surface"
+# GFS-Wave index key -> FORECAST_FIELDS name. HTSGW comes first: its bitmap (land, and any
+# cell WW3 masks) decides which cells are valid for every wave field.
+WAVE_FIELDS: dict[str, str] = {
+    HTSGW: "sig_wave_height_m",
+    "PERPW:surface": "wave_period_s",
+    "DIRPW:surface": "wave_direction_deg",
+    "SWELL:1 in sequence": "primary_swell_height_m",
+    "SWPER:1 in sequence": "primary_swell_period_s",
+    "SWDIR:1 in sequence": "primary_swell_direction_deg",
+    "SWELL:2 in sequence": "secondary_swell_height_m",
+    "SWPER:2 in sequence": "secondary_swell_period_s",
+    "SWDIR:2 in sequence": "secondary_swell_direction_deg",
+    "SWELL:3 in sequence": "tertiary_swell_height_m",
+    "SWPER:3 in sequence": "tertiary_swell_period_s",
+    "SWDIR:3 in sequence": "tertiary_swell_direction_deg",
+    "WVHGT:surface": "wind_wave_height_m",
+    "WVPER:surface": "wind_wave_period_s",
+    "WVDIR:surface": "wind_wave_direction_deg",
+}
+U10 = "UGRD:10 m above ground"
+V10 = "VGRD:10 m above ground"
+GUST = "GUST:surface"
+PRMSL = "PRMSL:mean sea level"
+LAND = "LAND:surface"  # land-sea mask: 1 = land, 0 = sea (binary in GFS)
+ATMOS_FIELDS = (U10, V10, GUST, PRMSL)
+
+
+def forecast_hours(max_lead_hours: int, step_hours: int) -> list[int]:
+    """Forecast hours f000..``max_lead_hours`` every ``step_hours``, on the published cadence.
+
+    Beyond f120 only every third hour exists, so a step that lands between published
+    hours moves forward to the next one (1 or 2 h steps become 3-hourly, 4 or 5 h steps
+    6-hourly). Nothing beyond f384 exists.
+    """
+    hours: list[int] = []
+    h, step = 0, max(1, step_hours)
+    while h <= min(max_lead_hours, MAX_LEAD_HOURS):
+        hours.append(h)
+        h += step
+        if h > HOURLY_UNTIL_HOUR and h % LATE_STEP_HOURS:
+            h += LATE_STEP_HOURS - h % LATE_STEP_HOURS
+    return hours
+
+
+def wind_from_uv(u: float, v: float) -> tuple[float, float | None]:
+    """Speed (same unit as u, v) and nautical direction FROM (deg) of a wind vector.
+
+    ``u`` points east and ``v`` north (GRIB convention: the direction the air moves to),
+    so a wind blowing towards the east (u > 0, v = 0) comes FROM 270 deg. A calm wind has
+    no direction.
+    """
+    speed = math.hypot(u, v)
+    if speed == 0.0:
+        return 0.0, None
+    return speed, (270.0 - math.degrees(math.atan2(v, u))) % 360.0
+
+
+def _rounded(value: float | None, digits: int) -> float | None:
+    return None if value is None else round(value, digits)
+
+
+def _direction(value: float | None) -> float | None:
+    # 359.96 rounds to 360.0, which is 0 (and GRIB SWDIR does hold 360.0 values).
+    return None if value is None else round(value % 360.0, 1) % 360.0
+
+
+def _wave_value(name: str, value: float | None) -> float | None:
+    if name.endswith("_direction_deg"):
+        return _direction(value)
+    return _rounded(value, 2 if name.endswith("_period_s") else 3)
+
+
+def _atmos_values(raw: dict[str, float | None]) -> dict[str, float | None]:
+    u, v, gust, prmsl = raw.get(U10), raw.get(V10), raw.get(GUST), raw.get(PRMSL)
+    speed: float | None = None
+    direction: float | None = None
+    if u is not None and v is not None:
+        speed, direction = wind_from_uv(u, v)
+    return {
+        "wind_speed_kmh": _rounded(None if speed is None else speed * MS_TO_KMH, 2),
+        "wind_direction_deg": _direction(direction),
+        "wind_gust_kmh": _rounded(None if gust is None else gust * MS_TO_KMH, 2),
+        "pressure_msl_hpa": _rounded(None if prmsl is None else prmsl / 100.0, 2),
+    }
+
+
+def _unique(items: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
+def _as_utc(when: datetime) -> datetime:
+    """Aware UTC datetime (a naive value is taken to be UTC already)."""
+    return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
+
+
+def _decode(blob: bytes, key: str) -> GridField:
+    """decode_message, with ecCodes failures beyond message parsing also as GribError."""
+    try:
+        return decode_message(blob)
+    except GribError:
+        raise
+    except Exception as exc:  # ecCodes raises many internal error types
+        raise GribError(f"cannot decode {key}: {exc}") from exc
+
+
+# --------------------------------------------------------------------------- locations
+@dataclass(frozen=True)
+class GfsPaths:
+    """Builds file URLs from the bucket URL and the (GFS-version specific) path templates."""
+
+    base_url: str
+    wave_template: str = WAVE_PATH_TEMPLATE
+    atmos_template: str = ATMOS_PATH_TEMPLATE
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> GfsPaths:
+        wave = settings.noaa_gfs_wave_path_template or WAVE_PATH_TEMPLATE
+        atmos = settings.noaa_gfs_atmos_path_template or ATMOS_PATH_TEMPLATE
+        return cls(settings.noaa_gfs_base_url.rstrip("/"), wave, atmos)
+
+    def _format(self, template: str, cycle: datetime, fhour: int, grid: str = "") -> str:
+        c = _as_utc(cycle)
+        path = template.format(ymd=f"{c:%Y%m%d}", hh=f"{c:%H}", grid=grid, fhour=fhour)
+        return f"{self.base_url}/{path}"
+
+    def wave(self, cycle: datetime, grid: str, fhour: int) -> str:
+        return self._format(self.wave_template, cycle, fhour, grid)
+
+    def atmos(self, cycle: datetime, fhour: int) -> str:
+        return self._format(self.atmos_template, cycle, fhour)
+
+    def shorten(self, text: str) -> str:
+        """``text`` (a URL or an error message) without the bucket prefix."""
+        return text.replace(f"{self.base_url}/", "")
+
+
+@dataclass(frozen=True)
+class SamplePoint:
+    """Where to sample: waves near (wave_lat, wave_lon), 10 m wind near (wind_lat, wind_lon).
+
+    For a surf spot the wave point is its offshore ``forecast_latitude/longitude`` and the
+    wind point the break itself; for a buoy both are the buoy position. When no valid wave
+    cell lies within the distance limit of the wave point, the wind point is tried for the
+    waves too (for a spot: the break location).
+    """
+
+    key: Hashable
+    wave_lat: float
+    wave_lon: float
+    wind_lat: float
+    wind_lon: float
+
+    @classmethod
+    def at(cls, key: Hashable, lat: float, lon: float) -> SamplePoint:
+        return cls(key, lat, lon, lat, lon)
+
+    @classmethod
+    def for_spot(cls, spot: SpotPoint) -> SamplePoint:
+        return cls(
+            spot.spot_id,
+            spot.forecast_latitude,
+            spot.forecast_longitude,
+            spot.latitude,
+            spot.longitude,
+        )
+
+
+@dataclass(frozen=True)
+class PointCells:
+    """Grid cells chosen for one point (a cell is None when none is valid close enough)."""
+
+    grid: str
+    wave_cell: CellChoice | None
+    # "wave_point" (for a spot: its forecast point) or "wind_point" (the break, fallback).
+    wave_anchor: str | None
+    wind_cell: CellChoice | None
+
+    def as_dict(self) -> dict[str, object]:
+        wave = None
+        if self.wave_cell is not None:
+            wave = {**self.wave_cell.as_dict(), "anchor": self.wave_anchor}
+        wind = None if self.wind_cell is None else {**self.wind_cell.as_dict(), "grid": ATMOS_GRID}
+        return {"grid": self.grid, "wave_cell": wave, "wind_cell": wind}
+
+
+@dataclass
+class StepSample:
+    """What one forecast hour of one cycle gave at every point."""
+
+    fhour: int
+    valid_time: datetime
+    # Point key -> FORECAST_FIELDS values, for points whose wave grid was read and that have
+    # a valid wave cell. Wind fields are None when the atmosphere file failed.
+    values: dict[Hashable, dict[str, float | None]] = field(default_factory=dict)
+    wind_ok: bool = False
+    files_read: int = 0
+    failed: list[str] = field(default_factory=list)  # files that could not be read, and why
+    # Points whose chosen wave cell held no value at this step (e.g. masked by sea ice).
+    masked: list[Hashable] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    request_count: int = 0  # logical requests (retries of one request are not counted)
+    bytes_downloaded: int = 0
+
+
+# --------------------------------------------------------------------------- reading
+class GfsPointReader:
+    """Reads one GFS / GFS-Wave cycle and samples it at fixed points, one step at a time.
+
+    This is the core of :class:`NoaaGfsProvider` and the building block for verification
+    code (e.g. GFS-Wave gridded forecasts at buoy positions): build one reader per cycle
+    and call :meth:`read_step` for each forecast hour, from any number of threads. Each
+    point's cells are chosen on the first step that decodes its grid (grib.PointSampler)
+    and reused, and the GFS land-sea mask is downloaded only until it is known.
+
+    Assumption: the wave bitmap and the land-sea mask do not change within a cycle. If a
+    later step masks a chosen wave cell (e.g. sea ice), that point has no values at that
+    step (listed in ``StepSample.masked``).
+    """
+
+    def __init__(
+        self,
+        client: httpx.Client,
+        cycle: datetime,
+        points: Sequence[SamplePoint],
+        *,
+        settings: Settings | None = None,
+        paths: GfsPaths | None = None,
+        backoff_seconds: float = 1.0,
+        attempts: int = 4,
+    ) -> None:
+        self.client = client
+        self.settings = settings or get_settings()
+        self.cycle = _as_utc(cycle)
+        if self.cycle.hour % CYCLE_HOURS or self.cycle != self.cycle.replace(
+            minute=0, second=0, microsecond=0
+        ):
+            raise PermanentProviderError(f"{self.cycle:%Y-%m-%d %H:%M}Z is not a GFS cycle time")
+        self.points = list(points)
+        if len({p.key for p in self.points}) != len(self.points):
+            raise ValueError("sample point keys must be unique")
+        self.paths = paths or GfsPaths.from_settings(self.settings)
+        self.backoff_seconds = backoff_seconds
+        self.attempts = attempts
+        self.max_distance_km = self.settings.grib_max_cell_distance_km
+        self.grid_of: dict[Hashable, WaveGrid] = {
+            p.key: wave_grid_for(p.wave_lat) for p in self.points
+        }
+        self._sampler = PointSampler(self.max_distance_km)
+        self._lock = threading.Lock()
+        self._sea: np.ndarray | None = None  # True where the GFS LAND field says sea
+        self._sea_geometry: tuple[float, float, float, float, int, int] | None = None
+        self._wave_cells: dict[Hashable, tuple[CellChoice | None, str | None]] = {}
+        self._wind_cells: dict[Hashable, CellChoice | None] = {}
+        self._checked_grids: set[str] = set()
+
+    @property
+    def grids_used(self) -> list[WaveGrid]:
+        used = set(self.grid_of.values())
+        return [g for g in WAVE_GRIDS if g in used]
+
+    def point_cells(self, key: Hashable) -> PointCells | None:
+        """Cells chosen for ``key``, or None while its wave grid has not been decoded."""
+        with self._lock:
+            if key not in self._wave_cells:
+                return None
+            cell, anchor = self._wave_cells[key]
+            return PointCells(self.grid_of[key].name, cell, anchor, self._wind_cells.get(key))
+
+    def read_steps(self, hours: Sequence[int], workers: int = 1) -> list[StepSample]:
+        """Read several forecast hours (in order), the first alone so later steps reuse its
+        cell choices and land-sea mask instead of computing them concurrently."""
+        if not hours:
+            return []
+        first = self.read_step(hours[0])
+        if len(hours) == 1:
+            return [first]
+        with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="noaa") as pool:
+            return [first, *pool.map(self.read_step, hours[1:])]
+
+    def read_step(self, fhour: int) -> StepSample:
+        """Download and sample one forecast hour; failed files are listed, not raised."""
+        # One fetcher per step: its counters are not shared between threads.
+        fetcher = GribFetcher(
+            self.client,
+            HTTP_PROVIDER,
+            attempts=self.attempts,
+            backoff_seconds=self.backoff_seconds,
+        )
+        step = StepSample(fhour, self.cycle + timedelta(hours=fhour))
+        wind: dict[Hashable, dict[str, float | None]] = {}
+        try:
+            wind = self._read_atmos(fetcher, fhour, step.warnings)
+            step.wind_ok = True
+            step.files_read += 1
+        except (ProviderError, httpx.HTTPError) as exc:
+            step.failed.append(f"atmosphere: {self.paths.shorten(str(exc))}")
+        for grid in self.grids_used:
+            members = [p for p in self.points if self.grid_of[p.key] is grid]
+            try:
+                waves = self._read_wave(fetcher, grid, fhour, members, step.warnings)
+            except (ProviderError, httpx.HTTPError) as exc:
+                step.failed.append(f"wave {grid.name}: {self.paths.shorten(str(exc))}")
+                continue
+            step.files_read += 1
+            for key, values in waves.items():
+                if all(v is None for v in values.values()):
+                    step.masked.append(key)
+                    continue
+                row: dict[str, float | None] = dict.fromkeys(FORECAST_FIELDS)
+                row.update(values)
+                row.update(wind.get(key, {}))
+                step.values[key] = row
+        step.request_count = fetcher.request_count
+        step.bytes_downloaded = fetcher.bytes_downloaded
+        if step.failed:
+            logger.warning("NOAA GFS f%03d incomplete: %s", fhour, "; ".join(step.failed))
+        return step
+
+    # ------------------------------------------------------------------ checks
+    def _check_valid_time(self, data: GridField, fhour: int, url: str) -> None:
+        """Refuse a record that belongs to another cycle or forecast hour than requested."""
+        expected = (int(f"{self.cycle:%Y%m%d}"), self.cycle.hour * 100, float(fhour))
+        actual = (data.data_date, data.data_time, data.step_hours)
+        if any(a is not None and a != e for a, e in zip(actual, expected, strict=True)):
+            raise GribError(
+                f"{self.paths.shorten(url)} holds date/time/step {actual}, expected {expected}"
+            )
+
+    def _check_geometry(self, grid: WaveGrid, data: GridField, warnings: list[str]) -> None:
+        """Warn once per grid if the decoded latitudes differ from the expected coverage."""
+        with self._lock:
+            if grid.name in self._checked_grids:
+                return
+            self._checked_grids.add(grid.name)
+        lats = (data.lat_of(0), data.lat_of(data.shape[0] - 1))
+        north, south = max(lats), min(lats)
+        if abs(north - grid.north) > 0.01 or abs(south - grid.south) > 0.01:
+            warnings.append(
+                f"{grid.name}: decoded latitudes {north:g}..{south:g} differ from the expected "
+                f"{grid.north:g}..{grid.south:g} (file layout changed?)"
+            )
+
+    @staticmethod
+    def _same_geometry(reference: GridField, data: GridField, key: str, url: str) -> None:
+        # Cells are chosen on one field and applied by (j, i) to the others.
+        if data.geometry_key() != reference.geometry_key():
+            raise GribError(f"{key} in {url} is on a different grid than {reference.short_name}")
+
+    # ------------------------------------------------------------------ atmosphere
+    def _read_atmos(
+        self, fetcher: GribFetcher, fhour: int, warnings: list[str]
+    ) -> dict[Hashable, dict[str, float | None]]:
+        url = self.paths.atmos(self.cycle, fhour)
+        short = self.paths.shorten(url)
+        entries = parse_ncep_idx(fetcher.text(url + ".idx"))
+        with self._lock:
+            need_land = self._sea is None
+        keys = ([LAND] if need_land else []) + list(ATMOS_FIELDS)
+        found = select_entries(entries, keys)
+        missing = [k for k in keys if k not in found]
+        if any(k in missing for k in (LAND, U10, V10)):
+            raise GribError(f"{short}.idx lacks {', '.join(missing)}")
+        if missing:
+            warnings.append(f"f{fhour:03d}: atmosphere index lacks {', '.join(missing)}")
+        present = [k for k in keys if k in found]
+        blobs = fetcher.ranges(url, [found[k] for k in present])
+        fields = {k: _decode(blob, k) for k, blob in zip(present, blobs, strict=True)}
+        u10 = fields[U10]
+        self._check_valid_time(u10, fhour, url)
+        for key, data in fields.items():
+            self._same_geometry(u10, data, key, short)
+        if LAND in fields:
+            self._set_land_mask(fields[LAND])
+        out: dict[Hashable, dict[str, float | None]] = {}
+        for p in self.points:
+            cell = self._wind_cell(u10, p)
+            raw = {k: self._sampler.sample(fields[k], cell) for k in ATMOS_FIELDS if k in fields}
+            out[p.key] = _atmos_values(raw)
+        return out
+
+    def _set_land_mask(self, land: GridField) -> None:
+        with self._lock:
+            if self._sea is None:
+                self._sea = ~np.isnan(land.values) & (land.values < 0.5)
+                self._sea_geometry = land.geometry_key()
+
+    def _wind_cell(self, grid: GridField, p: SamplePoint) -> CellChoice | None:
+        """Nearest GFS sea cell (LAND < 0.5) to the wind point (for a spot: the break)."""
+        with self._lock:
+            if self._sea is None or self._sea_geometry != grid.geometry_key():
+                raise GribError("GFS wind grid does not match the land-sea mask grid")
+            cell = self._sampler.cell(
+                grid, ("wind", p.key), p.wind_lat, p.wind_lon, valid=self._sea, mask_name="sea"
+            )
+            self._wind_cells[p.key] = cell
+            return cell
+
+    # ------------------------------------------------------------------ waves
+    def _read_wave(
+        self,
+        fetcher: GribFetcher,
+        grid: WaveGrid,
+        fhour: int,
+        members: list[SamplePoint],
+        warnings: list[str],
+    ) -> dict[Hashable, dict[str, float | None]]:
+        url = self.paths.wave(self.cycle, grid.name, fhour)
+        short = self.paths.shorten(url)
+        entries = parse_ncep_idx(fetcher.text(url + ".idx"))
+        found = select_entries(entries, list(WAVE_FIELDS))
+        if HTSGW not in found:
+            raise GribError(f"{short}.idx has no {HTSGW} record")
+        missing = [k for k in WAVE_FIELDS if k not in found]
+        if missing:
+            warnings.append(f"f{fhour:03d}: {grid.name} index lacks {', '.join(missing)}")
+        present = [k for k in WAVE_FIELDS if k in found]  # HTSGW first
+        blobs = fetcher.ranges(url, [found[k] for k in present])
+        cells: dict[Hashable, CellChoice] = {}
+        out: dict[Hashable, dict[str, float | None]] = {}
+        reference: GridField | None = None
+        # Decode one field at a time: a decoded global.0p25 field is 8 MB as float64.
+        for idx_key, blob in zip(present, blobs, strict=True):
+            data = _decode(blob, idx_key)
+            if reference is None:  # HTSGW
+                reference = data
+                self._check_valid_time(data, fhour, url)
+                self._check_geometry(grid, data, warnings)
+                for p in members:
+                    cell = self._wave_cell(data, p)
+                    if cell is not None:
+                        cells[p.key] = cell
+                        out[p.key] = {}
+            else:
+                self._same_geometry(reference, data, idx_key, short)
+            name = WAVE_FIELDS[idx_key]
+            for key, cell in cells.items():
+                out[key][name] = _wave_value(name, self._sampler.sample(data, cell))
+        return out
+
+    def _wave_cell(self, htsgw: GridField, p: SamplePoint) -> CellChoice | None:
+        """Nearest valid wave cell to the wave point, else to the wind point (the break)."""
+        with self._lock:
+            cell = self._sampler.cell(htsgw, ("wave", p.key), p.wave_lat, p.wave_lon)
+            anchor = "wave_point"
+            if cell is None and (p.wind_lat, p.wind_lon) != (p.wave_lat, p.wave_lon):
+                cell = self._sampler.cell(htsgw, ("wave-fallback", p.key), p.wind_lat, p.wind_lon)
+                anchor = "wind_point"
+            self._wave_cells[p.key] = (cell, anchor if cell is not None else None)
+            return cell
+
+
+@dataclass
+class PointSamples:
+    """Result of :func:`sample_gfs_points` for one cycle and forecast hour."""
+
+    cycle: datetime
+    fhour: int
+    valid_time: datetime
+    values: dict[Hashable, dict[str, float | None]]
+    cells: dict[Hashable, dict[str, object]]
+    failed: list[str]
+    warnings: list[str]
+    request_count: int
+    bytes_downloaded: int
+
+
+def sample_gfs_points(
+    points: Sequence[SamplePoint],
+    cycle: datetime,
+    fhour: int,
+    *,
+    settings: Settings | None = None,
+    client: httpx.Client | None = None,
+    backoff_seconds: float = 1.0,
+) -> PointSamples:
+    """Sample GFS-Wave waves and GFS 10 m wind at arbitrary points for one cycle and step.
+
+    Meant for verification, e.g. collecting the GFS-Wave *gridded* forecast at buoy
+    positions (``SamplePoint.at("ndbc:51201", 21.67, -158.12)``) to pair with observations
+    by valid time. Values use the provider's fields, units and conventions
+    (FORECAST_FIELDS; ``wave_period_s`` is Tp; directions FROM; heights are offshore Hs,
+    not surf height). A point with no valid wave cell within
+    ``settings.grib_max_cell_distance_km`` is absent from ``values`` (its ``cells`` entry
+    shows ``wave_cell: None``). Wind fields are None when the atmosphere file failed (see
+    ``failed``) or no sea cell is close enough. ``fhour`` must be a published hour (hourly
+    to 120, then every 3 h); an unpublished one shows up in ``failed``.
+
+    One call downloads one step of every grid the points need (about 4-24 MB). For many
+    steps of one cycle, use :class:`GfsPointReader` directly so that the cell choices and
+    the land-sea mask are reused.
+    """
+    settings = settings or get_settings()
+    own_client = client is None
+    http = client or httpx.Client(
+        timeout=settings.forecast_http_timeout_seconds, headers={"User-Agent": USER_AGENT}
+    )
+    try:
+        reader = GfsPointReader(
+            http, cycle, points, settings=settings, backoff_seconds=backoff_seconds
+        )
+        step = reader.read_step(fhour)
+    finally:
+        if own_client:
+            http.close()
+    cells: dict[Hashable, dict[str, object]] = {}
+    for p in points:
+        chosen = reader.point_cells(p.key)
+        if chosen is not None:
+            cells[p.key] = chosen.as_dict()
+    return PointSamples(
+        cycle=reader.cycle,
+        fhour=fhour,
+        valid_time=step.valid_time,
+        values=step.values,
+        cells=cells,
+        failed=step.failed,
+        warnings=_unique(step.warnings),
+        request_count=step.request_count,
+        bytes_downloaded=step.bytes_downloaded,
+    )
+
+
+# --------------------------------------------------------------------------- provider
+class NoaaGfsProvider(ForecastProvider):
+    """GFS-Wave + GFS for every spot, read from the NOAA NODD bucket by byte range.
+
+    ``fetch`` reads f000 to ``min(noaa_max_lead_hours, forecast_days * 24, 384)`` every
+    ``noaa_step_hours`` (see :func:`forecast_hours`), with ``grib_download_workers``
+    threads sharing one HTTP client. A forecast hour whose file fails after retries leaves
+    a gap and a warning; a spot without a usable wave cell is an error for that spot. A
+    spot without a GFS sea cell near the break keeps its wave records with empty wind
+    fields and a warning (as the Open-Meteo provider does when wind is unavailable).
+
+    The cells chosen for each spot (wave grid, wave cell, wind cell, distances) are put in
+    the ``extra`` of the spot's FIRST record only, i.e. ``wave_forecasts.extra`` of its
+    earliest valid time, because ingestion stores per-record extras only. They are also
+    kept in :attr:`last_cells` for diagnostics.
+
+    ``request_count`` counts the requests made by ``fetch`` (index and range GETs; a retry
+    of the same request is not counted again); the ``current_run`` probes are not included.
+    """
+
+    code = NOAA_GFS_CODE
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        client: httpx.Client | None = None,
+        backoff_seconds: float = 1.0,
+    ) -> None:
+        self.settings = settings or get_settings()
+        self.client = client or httpx.Client(
+            timeout=self.settings.forecast_http_timeout_seconds,
+            headers={"User-Agent": USER_AGENT},
+        )
+        self.backoff_seconds = backoff_seconds
+        self.paths = GfsPaths.from_settings(self.settings)
+        # Diagnostics of the last fetch.
+        self.last_cells: dict[int, dict[str, object]] = {}
+        self.last_hours: list[int] = []
+        self.last_bytes_downloaded = 0
+        self.last_step_bytes: dict[int, int] = {}
+
+    def source_info(self) -> SourceInfo:
+        return SourceInfo(
+            code=self.code,
+            name="NOAA GFS-Wave + GFS (direct from NOAA open data)",
+            provider="noaa_nodd",
+            # forecast_sources.wave_model holds 60 characters; WAVE_GRIDS has the details.
+            wave_model="GFS-Wave WW3 global.0p16+gsouth.0p25 (global.0p25 fallback)",
+            atmosphere_model="GFS 0.25 deg",
+            is_demo=False,
+            attribution=(
+                "NOAA/NCEP Global Forecast System (GFS) and GFS-Wave (WAVEWATCH III), "
+                "via the NOAA Open Data Dissemination (NODD) program."
+            ),
+            license_notes=(
+                "US government work, not subject to copyright in the US. NODD terms: data "
+                "are open to the public and can be used as desired; NOAA requests "
+                "attribution and that no endorsement by or affiliation with NOAA be "
+                "stated or implied. Values here are sampled, rounded and converted (km/h, "
+                "hPa), so they must not be presented as original, unaltered NOAA data."
+            ),
+            family="ncep_gfs",
+            kind="deterministic",
+        )
+
+    def forecast_hours(self) -> list[int]:
+        s = self.settings
+        return forecast_hours(
+            min(s.noaa_max_lead_hours, s.forecast_days * 24, MAX_LEAD_HOURS), s.noaa_step_hours
+        )
+
+    # ------------------------------------------------------------------ run discovery
+    def _published(self, url: str) -> bool:
+        """True if ``url`` exists. Network failures raise instead of meaning "not yet"."""
+        response = request_with_retries(
+            self.client, "HEAD", url, provider=HTTP_PROVIDER, backoff_seconds=self.backoff_seconds
+        )
+        if response.status_code == 200:
+            return True
+        if response.status_code in (403, 404):  # S3 can answer 403 for a missing key
+            return False
+        raise PermanentProviderError(f"{HTTP_PROVIDER}: HTTP {response.status_code} for {url}")
+
+    def current_run(self, now: datetime) -> RunInfo:
+        """Newest cycle whose last needed step exists for the atmosphere and every wave grid.
+
+        Uploads arrive roughly in step order but not strictly (research notes: 45 of 120
+        hourly .idx files appeared before the previous hour's), and f384 lands about
+        5.2 h after the cycle. A cycle counts as complete when the ``.idx`` of its last
+        needed step is published for the atmosphere file and all of WAVE_GRIDS (the grids
+        in use depend on the spots, which are not known here). A step that is still
+        missing despite this shows up as a gap in ``fetch``. A network failure raises
+        TransientProviderError rather than falling back to an older cycle.
+        """
+        last = self.forecast_hours()[-1]
+        nominal = nominal_gfs_cycle(now, self.settings.noaa_availability_lag_hours)
+        incomplete: list[str] = []
+        for back in range(OLDER_CYCLES_TO_TRY + 1):
+            cycle = nominal - timedelta(hours=CYCLE_HOURS * back)
+            urls = [self.paths.atmos(cycle, last) + ".idx"]
+            urls += [self.paths.wave(cycle, g.name, last) + ".idx" for g in WAVE_GRIDS]
+            missing = next((u for u in urls if not self._published(u)), None)
+            if missing is None:
+                return RunInfo(
+                    run_key=f"noaa-gfs:{cycle:%Y%m%d%H}",
+                    issued_at=cycle,
+                    wave_model_run_at=cycle,
+                    atmosphere_model_run_at=cycle,
+                    metadata_source="noaa-s3-idx",
+                )
+            incomplete.append(f"{cycle:%Y%m%d%H}Z lacks {self.paths.shorten(missing)}")
+        raise TransientProviderError(
+            f"no complete NOAA GFS cycle up to f{last:03d}: " + "; ".join(incomplete)
+        )
+
+    # ------------------------------------------------------------------ data
+    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+        result = FetchResult()
+        self.last_cells, self.last_hours, self.last_bytes_downloaded = {}, [], 0
+        self.last_step_bytes = {}
+        if not spots:
+            return result
+        cycle = run.wave_model_run_at or run.issued_at
+        reader = GfsPointReader(
+            self.client,
+            cycle,
+            [SamplePoint.for_spot(s) for s in spots],
+            settings=self.settings,
+            paths=self.paths,
+            backoff_seconds=self.backoff_seconds,
+        )
+        hours = self.forecast_hours()
+        steps = reader.read_steps(hours, workers=self.settings.grib_download_workers)
+        result.request_count = sum(s.request_count for s in steps)
+        total_bytes = sum(s.bytes_downloaded for s in steps)
+        self.last_hours, self.last_bytes_downloaded = hours, total_bytes
+        self.last_step_bytes = {s.fhour: s.bytes_downloaded for s in steps}
+        if not any(s.files_read for s in steps):
+            first = next((f for s in steps for f in s.failed), "no file attempted")
+            raise TransientProviderError(
+                f"{run.run_key}: no NOAA GFS file could be read for any step ({first})"
+            )
+
+        km = self.settings.grib_max_cell_distance_km
+        spot_warnings: list[str] = []
+        for spot in spots:
+            grid = reader.grid_of[spot.spot_id]
+            cells = reader.point_cells(spot.spot_id)
+            if cells is None:
+                result.errors[spot.spot_id] = (
+                    f"GFS-Wave {grid.name} could not be read for any step (see warnings)"
+                )
+                continue
+            self.last_cells[spot.spot_id] = cells.as_dict()
+            if cells.wave_cell is None:
+                result.errors[spot.spot_id] = (
+                    f"no valid GFS-Wave {grid.name} cell within {km:g} km of the forecast "
+                    f"point ({spot.forecast_latitude:.2f}, {spot.forecast_longitude:.2f}) "
+                    "or the break"
+                )
+                continue
+            records = [
+                ForecastRecord(s.valid_time, s.values[spot.spot_id], period_kind="tp")
+                for s in steps
+                if spot.spot_id in s.values
+            ]
+            masked = [s.fhour for s in steps if spot.spot_id in s.masked]
+            if masked:
+                spot_warnings.append(
+                    f"{spot.slug}: GFS-Wave cell held no value at {len(masked)} step(s) "
+                    f"(first f{masked[0]:03d}); those hours are gaps"
+                )
+            if not records:
+                result.errors[spot.spot_id] = f"no GFS-Wave {grid.name} values for any step"
+                continue
+            if cells.wind_cell is None and any(s.wind_ok for s in steps):
+                spot_warnings.append(
+                    f"{spot.slug}: no GFS sea cell within {km:g} km of the break; wind left empty"
+                )
+            records[0].extra = cells.as_dict()
+            result.records[spot.spot_id] = records
+
+        gaps = [f"f{s.fhour:03d} {failure}" for s in steps for failure in s.failed]
+        incomplete = [f"f{s.fhour:03d}" for s in steps if s.failed]
+        usage = ", ".join(
+            f"{g.name}={sum(1 for v in reader.grid_of.values() if v is g)}"
+            + ("" if g.native else " (interpolated)")
+            for g in reader.grids_used
+        )
+        mb = total_bytes / 1e6
+        # First, because ingestion keeps only the first 50 warnings.
+        result.warnings.append(
+            f"downloaded {mb:.1f} MB in {result.request_count} requests for {len(hours)} "
+            f"forecast hours f000-f{hours[-1]:03d} ({mb / len(hours):.1f} MB per hour)"
+        )
+        result.warnings.append(f"wave grids used (spots): {usage}")
+        if incomplete:
+            result.warnings.append(
+                f"{len(incomplete)} of {len(hours)} forecast hours incomplete: "
+                + ", ".join(incomplete)
+            )
+        if not any(s.wind_ok for s in steps):
+            result.warnings.append("GFS atmosphere could not be read for any step; no wind")
+        result.warnings.extend(_unique([w for s in steps for w in s.warnings]))
+        result.warnings.extend(spot_warnings)
+        result.warnings.extend(gaps)
+        logger.info(
+            "NOAA GFS %s: %d spots, %d errors, %d hours (%d incomplete), %d requests, %.1f MB",
+            run.run_key,
+            len(result.records),
+            len(result.errors),
+            len(hours),
+            len(incomplete),
+            result.request_count,
+            mb,
+        )
+        return result

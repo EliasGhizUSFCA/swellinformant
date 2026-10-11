@@ -80,8 +80,16 @@ class Settings(BaseSettings):
     open_meteo_atmos_model: str = "gfs_seamless"
 
     # NOAA open data on AWS (direct GRIB2 by byte range; no key needed).
-    # Bandwidth: roughly 10-15 MB per forecast step for all spots (see docs/FORECAST_SOURCES.md).
+    # Bandwidth (measured): ~24 MB per forecast step for all 50 spots (15 MB without the
+    # global.0p25 fallback grid), ~2 GB per 10-day run at 3-hourly steps
+    # (docs/noaa-direct-ingestion.md).
     noaa_gfs_base_url: str = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
+    # File layout below the bucket (GFS v16). GFS v17 is expected to rename files, so the
+    # layout is configuration: placeholders {ymd}, {hh}, {grid}, {fhour:03d}.
+    noaa_gfs_wave_path_template: str = (
+        "gfs.{ymd}/{hh}/wave/gridded/gfswave.t{hh}z.{grid}.f{fhour:03d}.grib2"
+    )
+    noaa_gfs_atmos_path_template: str = "gfs.{ymd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{fhour:03d}"
     noaa_gefs_base_url: str = "https://noaa-gefs-pds.s3.amazonaws.com"
     noaa_step_hours: int = Field(default=3, ge=1, le=6)
     noaa_max_lead_hours: int = Field(default=240, ge=24, le=384)
