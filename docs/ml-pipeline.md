@@ -383,7 +383,8 @@ python -m app.cli ml import-manifest PATH
 * MSE skill against persistence and against climatology, with CIs and reference sample
   sizes.
 
-It writes the rows with `scope='global'`, `scope_key='backtest'`.
+`--json` adds MAE, NRMSE and the CI of the bias. It writes the rows with
+`scope='global'`, `scope_key='backtest'` (or `backtest:<hash>` for a station subset).
 
 ## What has been verified
 
@@ -467,6 +468,13 @@ It writes the rows with `scope='global'`, `scope_key='backtest'`.
     This is one buoy, one test season and a margin just above the 5 % threshold, so it
     is evidence that the pipeline works end to end on real QC'd data, not a claim that
     the correction is generally useful.
+* **Spectral Hm0 backtest and training on 2026-10-11** (three DoT WA buoys with
+  co-located bulletin points, 567 cycles of 2021, 783,212 Hm0 pairs including a proxy
+  diagnostic): full results, the decision per criterion and the caveats are in
+  [docs/ml-evaluation.md](ml-evaluation.md). It supersedes the single-buoy Hm0 re-check
+  above (which used 00Z cycles only). The one version that passed every criterion and
+  can get its features in real time (ridge trained with `--no-obs-features`) is exported
+  in `backend/ml_models/offshore_hs_residual/` for `ml import-manifest`.
 * **Mock only.**
   * The point-forecast and observation collectors were not exercised in the builder's
     live check (they were in the review re-check above).
