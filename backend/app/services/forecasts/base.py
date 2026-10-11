@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from app.services.forecasts.fields import EncodedField
 from app.services.surf_quality.models import SpotParams
 
 FORECAST_FIELDS = (
@@ -67,6 +68,10 @@ class FetchResult:
     errors: dict[int, str] = field(default_factory=dict)
     request_count: int = 0
     warnings: list[str] = field(default_factory=list)
+    # Global map fields read along with the spots (see forecasts.fields); stored as
+    # map_fields rows of the run. Their problems are warnings, never spot errors.
+    fields: list[EncodedField] = field(default_factory=list)
+    field_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

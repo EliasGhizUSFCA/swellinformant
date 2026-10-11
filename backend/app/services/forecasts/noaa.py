@@ -58,6 +58,16 @@ GFS v17 (proposed for late 2026) is expected to rename directories and files. Th
 comes from ``settings.noaa_gfs_base_url`` and the path templates from
 ``settings.noaa_gfs_wave_path_template`` / ``noaa_gfs_atmos_path_template`` (defaults:
 ``WAVE_PATH_TEMPLATE`` / ``ATMOS_PATH_TEMPLATE``), so a rename is a configuration change.
+
+Map ocean layers (docs/map-layers.md). A reader built with a ``field_sink``
+(:class:`app.services.forecasts.fields.FieldSink`) also hands the global fields of every
+map hour (:func:`map_field_hours`) to the sink: UGRD/VGRD 10 m and PRMSL, which it decodes
+anyway, and HTSGW, PERPW and DIRPW from ``global.0p25``, the only GFS-Wave grid that
+covers the whole globe (1440 x 721 cells, 90N to 90S, 0E to 359.75E; decoded live on the
+2026-10-11 12Z cycle). Only those three contiguous wave records are downloaded (one range,
+1.82 MB at f006) when no spot uses that grid. Map hours beyond the spots' hours are read
+for the fields alone. The fields-only source :class:`NoaaGfsFieldsProvider` reads nothing
+else.
 """
 
 from __future__ import annotations
@@ -65,7 +75,8 @@ from __future__ import annotations
 import logging
 import math
 import threading
-from collections.abc import Hashable, Iterable, Sequence
+import time
+from collections.abc import Callable, Hashable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -84,6 +95,7 @@ from app.services.forecasts.base import (
     SpotPoint,
     nominal_gfs_cycle,
 )
+from app.services.forecasts.fields import EncodedField, FieldSink, complete_times
 from app.services.forecasts.grib import (
     CellChoice,
     GribError,
@@ -101,6 +113,7 @@ from app.services.http import (
     TransientProviderError,
     request_with_retries,
 )
+from app.services.map_fields import map_fields_mode
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +190,14 @@ PRMSL = "PRMSL:mean sea level"
 LAND = "LAND:surface"  # land-sea mask: 1 = land, 0 = sea (binary in GFS)
 ATMOS_FIELDS = (U10, V10, GUST, PRMSL)
 
+# Map ocean layers: index key -> map_fields variable. DIRPW is degrees FROM (as stored in
+# GRIB2, see above); PRMSL is converted from Pa to hPa after regridding.
+FIELD_WAVE_GRID = WAVE_GRIDS[-1]  # global.0p25: the only GFS-Wave grid covering the globe
+FIELD_WAVE_RECORDS = {HTSGW: "hs", "PERPW:surface": "tp", "DIRPW:surface": "wave_dir"}
+FIELD_ATMOS_RECORDS = {U10: "wind_u", V10: "wind_v", PRMSL: "pressure"}
+PA_TO_HPA = 0.01
+FIELDS_SOURCE_CODE = "noaa_gfs_fields"
+
 
 def forecast_hours(max_lead_hours: int, step_hours: int) -> list[int]:
     """Forecast hours f000..``max_lead_hours`` every ``step_hours``, on the published cadence.
@@ -193,6 +214,16 @@ def forecast_hours(max_lead_hours: int, step_hours: int) -> list[int]:
         if h > HOURLY_UNTIL_HOUR and h % LATE_STEP_HOURS:
             h += LATE_STEP_HOURS - h % LATE_STEP_HOURS
     return hours
+
+
+def map_field_hours(max_lead_hours: int, step_hours: int) -> list[int]:
+    """Published forecast hours up to ``max_lead_hours`` that are multiples of ``step_hours``.
+
+    Unlike :func:`forecast_hours`, a step never moves forward: with a 4 h step the map
+    hours after f120 are the published multiples of 4, i.e. every 12 h.
+    """
+    step = max(1, step_hours)
+    return [h for h in forecast_hours(max_lead_hours, 1) if h % step == 0]
 
 
 def wind_from_uv(u: float, v: float) -> tuple[float, float | None]:
@@ -353,6 +384,7 @@ class StepSample:
     warnings: list[str] = field(default_factory=list)
     request_count: int = 0  # logical requests (retries of one request are not counted)
     bytes_downloaded: int = 0
+    seconds: float = 0.0  # wall time (set for map-field reads only)
 
 
 # --------------------------------------------------------------------------- reading
@@ -368,6 +400,11 @@ class GfsPointReader:
     Assumption: the wave bitmap and the land-sea mask do not change within a cycle. If a
     later step masks a chosen wave cell (e.g. sea ice), that point has no values at that
     step (listed in ``StepSample.masked``).
+
+    With a ``field_sink``, every step the sink wants also yields the global map fields
+    (see the module docstring); :meth:`read_field_steps` reads hours for the fields alone.
+    A field that cannot be read or encoded is a sink warning, never a failed step. Without
+    a sink (the default) nothing of this runs.
     """
 
     def __init__(
@@ -380,6 +417,7 @@ class GfsPointReader:
         paths: GfsPaths | None = None,
         backoff_seconds: float = 1.0,
         attempts: int = 4,
+        field_sink: FieldSink | None = None,
     ) -> None:
         self.client = client
         self.settings = settings or get_settings()
@@ -405,6 +443,7 @@ class GfsPointReader:
         self._wave_cells: dict[Hashable, tuple[CellChoice | None, str | None]] = {}
         self._wind_cells: dict[Hashable, CellChoice | None] = {}
         self._checked_grids: set[str] = set()
+        self.field_sink = field_sink
 
     @property
     def grids_used(self) -> list[WaveGrid]:
@@ -430,15 +469,41 @@ class GfsPointReader:
         with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="noaa") as pool:
             return [first, *pool.map(self.read_step, hours[1:])]
 
-    def read_step(self, fhour: int) -> StepSample:
-        """Download and sample one forecast hour; failed files are listed, not raised."""
-        # One fetcher per step: its counters are not shared between threads.
-        fetcher = GribFetcher(
+    def read_field_steps(self, hours: Sequence[int], workers: int = 1) -> list[StepSample]:
+        """Read the map fields alone for several forecast hours (needs a field sink)."""
+        if not hours:
+            return []
+        with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="noaa") as pool:
+            return list(pool.map(self.read_field_step, hours))
+
+    def read_field_step(self, fhour: int) -> StepSample:
+        """Read only the map fields of one forecast hour: no spot sampling, LAND or GUST.
+
+        For map hours the spots do not need and for the fields-only source. Failed files
+        are listed in the result and given to the sink as warnings, never raised.
+        """
+        if self.field_sink is None:
+            raise ValueError("read_field_step needs a field sink")
+        return self._read_fields(
+            fhour,
+            (
+                ("atmosphere", self._read_field_atmos),
+                (f"wave {FIELD_WAVE_GRID.name}", self._read_field_waves),
+            ),
+        )
+
+    def _new_fetcher(self) -> GribFetcher:
+        return GribFetcher(
             self.client,
             HTTP_PROVIDER,
             attempts=self.attempts,
             backoff_seconds=self.backoff_seconds,
         )
+
+    def read_step(self, fhour: int) -> StepSample:
+        """Download and sample one forecast hour; failed files are listed, not raised."""
+        # One fetcher per step: its counters are not shared between threads.
+        fetcher = self._new_fetcher()
         step = StepSample(fhour, self.cycle + timedelta(hours=fhour))
         wind: dict[Hashable, dict[str, float | None]] = {}
         try:
@@ -465,9 +530,108 @@ class GfsPointReader:
                 step.values[key] = row
         step.request_count = fetcher.request_count
         step.bytes_downloaded = fetcher.bytes_downloaded
+        if self.field_sink is not None and self._sink_wants(fhour):
+            for failure in step.failed:  # files the map fields needed as well
+                if failure.startswith(("atmosphere", f"wave {FIELD_WAVE_GRID.name}")):
+                    self.field_sink.warn(f"f{fhour:03d} map fields {failure}")
+        if self._sink_wants(fhour) and FIELD_WAVE_GRID not in self.grids_used:
+            # No spot uses the global wave grid: fetch its three map records on their own.
+            # Their failures stay out of step.failed (a map field is never a spot gap).
+            extra = self._read_fields(
+                fhour, ((f"wave {FIELD_WAVE_GRID.name}", self._read_field_waves),)
+            )
+            step.request_count += extra.request_count
+            step.bytes_downloaded += extra.bytes_downloaded
         if step.failed:
             logger.warning("NOAA GFS f%03d incomplete: %s", fhour, "; ".join(step.failed))
         return step
+
+    # ------------------------------------------------------------------ map fields
+    def _sink_wants(self, fhour: int) -> bool:
+        return self.field_sink is not None and self.field_sink.wants(fhour)
+
+    def _encode(self, fhour: int, key: str, data: GridField) -> EncodedField | None:
+        """Regrid, quantise and compress one decoded record for the sink at once."""
+        assert self.field_sink is not None
+        name = FIELD_ATMOS_RECORDS.get(key) or FIELD_WAVE_RECORDS[key]
+        factor = PA_TO_HPA if key == PRMSL else 1.0
+        return self.field_sink.encode(fhour, name, data, factor=factor)
+
+    def _read_fields(
+        self,
+        fhour: int,
+        readers: Sequence[tuple[str, Callable[[GribFetcher, int, list[str]], None]]],
+    ) -> StepSample:
+        """Run field readers with their own fetcher; failures become sink warnings."""
+        sink = self.field_sink
+        assert sink is not None
+        started = time.monotonic()
+        fetcher = self._new_fetcher()
+        out = StepSample(fhour, self.cycle + timedelta(hours=fhour))
+        for label, read in readers:
+            try:
+                read(fetcher, fhour, out.warnings)
+                out.files_read += 1
+            except (ProviderError, httpx.HTTPError) as exc:
+                out.failed.append(f"{label}: {self.paths.shorten(str(exc))}")
+        out.request_count = fetcher.request_count
+        out.bytes_downloaded = fetcher.bytes_downloaded
+        out.seconds = time.monotonic() - started
+        sink.count_download(out.request_count, out.bytes_downloaded)
+        for message in out.warnings:
+            sink.warn(message)
+        for failure in out.failed:
+            sink.warn(f"f{fhour:03d} map fields {failure}")
+        if out.failed:
+            logger.warning("NOAA GFS f%03d map fields incomplete: %s", fhour, "; ".join(out.failed))
+        return out
+
+    def _read_field_atmos(self, fetcher: GribFetcher, fhour: int, warnings: list[str]) -> None:
+        """UGRD/VGRD 10 m and PRMSL of one step, for the sink only."""
+        url = self.paths.atmos(self.cycle, fhour)
+        keys = list(FIELD_ATMOS_RECORDS)  # U10 first: its date/time/step is checked
+        self._read_field_records(fetcher, fhour, url, keys, (U10, V10), None, warnings)
+
+    def _read_field_waves(self, fetcher: GribFetcher, fhour: int, warnings: list[str]) -> None:
+        """HTSGW, PERPW and DIRPW of ``global.0p25`` (one range request), for the sink."""
+        url = self.paths.wave(self.cycle, FIELD_WAVE_GRID.name, fhour)
+        keys = list(FIELD_WAVE_RECORDS)  # HTSGW first
+        self._read_field_records(fetcher, fhour, url, keys, (HTSGW,), FIELD_WAVE_GRID, warnings)
+
+    def _read_field_records(
+        self,
+        fetcher: GribFetcher,
+        fhour: int,
+        url: str,
+        keys: list[str],
+        required: tuple[str, ...],
+        grid: WaveGrid | None,
+        warnings: list[str],
+    ) -> None:
+        short = self.paths.shorten(url)
+        found = select_entries(parse_ncep_idx(fetcher.text(url + ".idx")), keys)
+        missing = [k for k in keys if k not in found]
+        if any(k in missing for k in required):
+            raise GribError(f"{short}.idx lacks {', '.join(missing)}")
+        if missing:
+            warnings.append(f"f{fhour:03d}: {short} index lacks {', '.join(missing)}")
+        present = [k for k in keys if k in found]
+        blobs = fetcher.ranges(url, [found[k] for k in present])
+        pending: list[EncodedField | None] = []
+        reference: tuple[tuple[float, float, float, float, int, int], str] | None = None
+        # One decoded field at a time; only its compressed 0.5 deg version is kept.
+        for key, blob in zip(present, blobs, strict=True):
+            data = _decode(blob, key)
+            if reference is None:
+                reference = (data.geometry_key(), key)
+                self._check_valid_time(data, fhour, url)
+                if grid is not None:
+                    self._check_geometry(grid, data, warnings)
+            elif data.geometry_key() != reference[0]:
+                raise GribError(f"{key} in {short} is on a different grid than {reference[1]}")
+            pending.append(self._encode(fhour, key, data))
+        assert self.field_sink is not None
+        self.field_sink.put(pending)
 
     # ------------------------------------------------------------------ checks
     def _check_valid_time(self, data: GridField, fhour: int, url: str) -> None:
@@ -521,6 +685,7 @@ class GfsPointReader:
         reference: tuple[tuple[float, float, float, float, int, int], str] | None = None
         land: tuple[np.ndarray, tuple[float, float, float, float, int, int]] | None = None
         cells: dict[Hashable, CellChoice | None] | None = None
+        fields: list[EncodedField | None] = []  # map fields, kept once the file is read
         # Decode and sample one field at a time: a decoded pgrb2.0p25 field is 8.3 MB as
         # float64. Cells are chosen on U10 and applied by (j, i) to the other fields.
         for key, blob in zip(present, blobs, strict=True):
@@ -540,6 +705,10 @@ class GfsPointReader:
             assert cells is not None  # U10 precedes the other fields in ``present``
             for p in self.points:
                 raw[p.key][key] = self._sampler.sample(data, cells[p.key])
+            if key in FIELD_ATMOS_RECORDS and self._sink_wants(fhour):
+                fields.append(self._encode(fhour, key, data))
+        if fields and self.field_sink is not None:
+            self.field_sink.put(fields)
         return {k: _atmos_values(v) for k, v in raw.items()}
 
     def _set_land_mask(
@@ -585,6 +754,8 @@ class GfsPointReader:
         cells: dict[Hashable, CellChoice] = {}
         out: dict[Hashable, dict[str, float | None]] = {}
         reference: GridField | None = None
+        fields: list[EncodedField | None] = []  # map fields (global.0p25 only)
+        to_sink = grid is FIELD_WAVE_GRID and self._sink_wants(fhour)
         # Decode one field at a time: a decoded global.0p25 field is 8 MB as float64.
         for idx_key, blob in zip(present, blobs, strict=True):
             data = _decode(blob, idx_key)
@@ -602,6 +773,10 @@ class GfsPointReader:
             name = WAVE_FIELDS[idx_key]
             for key, cell in cells.items():
                 out[key][name] = _wave_value(name, self._sampler.sample(data, cell))
+            if to_sink and idx_key in FIELD_WAVE_RECORDS:
+                fields.append(self._encode(fhour, idx_key, data))
+        if fields and self.field_sink is not None:
+            self.field_sink.put(fields)
         return out
 
     def _wave_cell(self, htsgw: GridField, p: SamplePoint) -> CellChoice | None:
@@ -614,6 +789,16 @@ class GfsPointReader:
                 anchor = "wind_point"
             self._wave_cells[p.key] = (cell, anchor if cell is not None else None)
             return cell
+
+
+def _field_summary_line(sink: FieldSink, fields: list[EncodedField]) -> str:
+    stored = sum(len(f.data) for f in fields) / 1e6
+    complete = len(complete_times(fields))
+    return (
+        f"map fields: {len(fields)} fields, {complete} of {len(sink.hours)} map hours complete "
+        f"(f000-f{sink.hours[-1]:03d} at {sink.target.d:g} deg), {stored:.1f} MB stored; "
+        f"{sink.bytes_downloaded / 1e6:.1f} MB downloaded for the fields only"
+    )
 
 
 @dataclass
@@ -707,6 +892,13 @@ class NoaaGfsProvider(ForecastProvider):
 
     ``request_count`` counts the requests made by ``fetch`` (index and range GETs; a retry
     of the same request is not counted again); the ``current_run`` probes are not included.
+
+    Map ocean layers: when ``map_fields`` is on (by default when
+    :func:`app.services.map_fields.map_fields_mode` is ``with_noaa``), ``fetch`` also
+    returns the global fields of every map hour (:meth:`map_hours`) in
+    ``FetchResult.fields``. Map hours beyond the spots' hours are read for the fields
+    alone, and ``current_run`` then also waits for the last map hour. Field problems are
+    ``FetchResult.field_warnings``, never spot errors.
     """
 
     code = NOAA_GFS_CODE
@@ -716,6 +908,7 @@ class NoaaGfsProvider(ForecastProvider):
         settings: Settings | None = None,
         client: httpx.Client | None = None,
         backoff_seconds: float = 1.0,
+        map_fields: bool | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.client = client or httpx.Client(
@@ -729,6 +922,12 @@ class NoaaGfsProvider(ForecastProvider):
         self.last_hours: list[int] = []
         self.last_bytes_downloaded = 0
         self.last_step_bytes: dict[int, int] = {}
+        # None: decided by the settings (MAP_FIELDS_ENABLED and FORECAST_PROVIDERS).
+        self.map_fields = (
+            map_fields_mode(self.settings) == "with_noaa" if map_fields is None else map_fields
+        )
+        # Map-field hours read for the fields alone in the last fetch (diagnostics).
+        self.last_field_steps: list[StepSample] = []
 
     def source_info(self) -> SourceInfo:
         return SourceInfo(
@@ -760,6 +959,14 @@ class NoaaGfsProvider(ForecastProvider):
             min(s.noaa_max_lead_hours, s.forecast_days * 24, MAX_LEAD_HOURS), s.noaa_step_hours
         )
 
+    def map_hours(self) -> list[int]:
+        """Hours with map fields: MAP_FIELD_MAX_LEAD_HOURS every MAP_FIELD_STEP_HOURS."""
+        s = self.settings
+        return map_field_hours(s.map_field_max_lead_hours, s.map_field_step_hours)
+
+    def _new_sink(self, cycle: datetime) -> FieldSink:
+        return FieldSink(_as_utc(cycle), self.map_hours(), self.settings.map_field_resolution_deg)
+
     # ------------------------------------------------------------------ run discovery
     def _published(self, url: str) -> bool:
         """True if ``url`` exists. Network failures raise instead of meaning "not yet"."""
@@ -781,19 +988,29 @@ class NoaaGfsProvider(ForecastProvider):
         needed step is published for the atmosphere file and all of WAVE_GRIDS (the grids
         in use depend on the spots, which are not known here). A step that is still
         missing despite this shows up as a gap in ``fetch``. A network failure raises
-        TransientProviderError rather than falling back to an older cycle.
+        TransientProviderError rather than falling back to an older cycle. With map fields
+        on, the last needed step is the later of the spots' and the map's last hour.
         """
         last = self.forecast_hours()[-1]
+        if self.map_fields:
+            last = max(last, self.map_hours()[-1])
+        return self._newest_cycle(now, last, [g.name for g in WAVE_GRIDS], "noaa-gfs")
+
+    def _newest_cycle(
+        self, now: datetime, last: int, wave_grids: Sequence[str], key_prefix: str
+    ) -> RunInfo:
+        """Newest cycle (the nominal one, then up to OLDER_CYCLES_TO_TRY older ones) whose
+        step ``last`` is published for the atmosphere file and every grid in ``wave_grids``."""
         nominal = nominal_gfs_cycle(now, self.settings.noaa_availability_lag_hours)
         incomplete: list[str] = []
         for back in range(OLDER_CYCLES_TO_TRY + 1):
             cycle = nominal - timedelta(hours=CYCLE_HOURS * back)
             urls = [self.paths.atmos(cycle, last) + ".idx"]
-            urls += [self.paths.wave(cycle, g.name, last) + ".idx" for g in WAVE_GRIDS]
+            urls += [self.paths.wave(cycle, g, last) + ".idx" for g in wave_grids]
             missing = next((u for u in urls if not self._published(u)), None)
             if missing is None:
                 return RunInfo(
-                    run_key=f"noaa-gfs:{cycle:%Y%m%d%H}",
+                    run_key=f"{key_prefix}:{cycle:%Y%m%d%H}",
                     issued_at=cycle,
                     wave_model_run_at=cycle,
                     atmosphere_model_run_at=cycle,
@@ -809,9 +1026,11 @@ class NoaaGfsProvider(ForecastProvider):
         result = FetchResult()
         self.last_cells, self.last_hours, self.last_bytes_downloaded = {}, [], 0
         self.last_step_bytes = {}
+        self.last_field_steps = []
         if not spots:
             return result
         cycle = run.wave_model_run_at or run.issued_at
+        sink = self._new_sink(cycle) if self.map_fields else None
         reader = GfsPointReader(
             self.client,
             cycle,
@@ -819,13 +1038,23 @@ class NoaaGfsProvider(ForecastProvider):
             settings=self.settings,
             paths=self.paths,
             backoff_seconds=self.backoff_seconds,
+            field_sink=sink,
         )
         hours = self.forecast_hours()
-        steps = reader.read_steps(hours, workers=self.settings.grib_download_workers)
-        result.request_count = sum(s.request_count for s in steps)
-        total_bytes = sum(s.bytes_downloaded for s in steps)
+        workers = self.settings.grib_download_workers
+        steps = reader.read_steps(hours, workers=workers)
+        field_steps: list[StepSample] = []
+        if sink is not None and any(s.files_read for s in steps):
+            # Map hours the spots do not need (e.g. beyond FORECAST_DAYS): fields only.
+            spot_hours = set(hours)
+            extra = [h for h in sink.hours if h not in spot_hours]
+            field_steps = reader.read_field_steps(extra, workers=workers)
+        all_steps = [*steps, *field_steps]
+        result.request_count = sum(s.request_count for s in all_steps)
+        total_bytes = sum(s.bytes_downloaded for s in all_steps)
         self.last_hours, self.last_bytes_downloaded = hours, total_bytes
-        self.last_step_bytes = {s.fhour: s.bytes_downloaded for s in steps}
+        self.last_step_bytes = {s.fhour: s.bytes_downloaded for s in all_steps}
+        self.last_field_steps = field_steps
         if not any(s.files_read for s in steps):
             first = next((f for s in steps for f in s.failed), "no file attempted")
             raise TransientProviderError(
@@ -896,12 +1125,18 @@ class NoaaGfsProvider(ForecastProvider):
             for g in reader.grids_used
         )
         mb = total_bytes / 1e6
+        label = f"{len(hours)} forecast hours f000-f{hours[-1]:03d}"
+        if field_steps:
+            label += f" + {len(field_steps)} hours for map fields only"
         # First, because ingestion keeps only the first 50 warnings.
         result.warnings.append(
-            f"downloaded {mb:.1f} MB in {result.request_count} requests for {len(hours)} "
-            f"forecast hours f000-f{hours[-1]:03d} ({mb / len(hours):.1f} MB per hour)"
+            f"downloaded {mb:.1f} MB in {result.request_count} requests for {label} "
+            f"({mb / len(all_steps):.1f} MB per hour)"
         )
         result.warnings.append(f"wave grids used (spots): {usage}")
+        if sink is not None:
+            result.fields, result.field_warnings = sink.fields, sink.warnings
+            result.warnings.append(_field_summary_line(sink, result.fields))
         if incomplete:
             result.warnings.append(
                 f"{len(incomplete)} of {len(hours)} forecast hours incomplete: "
@@ -919,6 +1154,116 @@ class NoaaGfsProvider(ForecastProvider):
             len(result.errors),
             len(hours),
             len(incomplete),
+            result.request_count,
+            mb,
+        )
+        return result
+
+
+class NoaaGfsFieldsProvider(NoaaGfsProvider):
+    """Only the global map fields of one GFS cycle, as a source of their own.
+
+    The standalone map-fields mode (MAP_FIELDS_ENABLED=true while "noaa_gfs" is not a
+    forecast provider). Its runs belong to the source ``noaa_gfs_fields`` (kind
+    ``fields``), hold map_fields rows and no spot records, and are never selected for spot
+    forecasts, blending, comparisons, verification or the status page: those only read the
+    configured providers' sources (``registry.configured_source_codes``) or ensembles.
+
+    ``current_run`` follows the spot provider's availability rules (nominal cycle with
+    NOAA_AVAILABILITY_LAG_HOURS, then up to OLDER_CYCLES_TO_TRY older ones) but needs only
+    the last map hour of the atmosphere file and ``global.0p25``. ``max_lead_hours``
+    overrides MAP_FIELD_MAX_LEAD_HOURS (e.g. for a short live check).
+    """
+
+    code = FIELDS_SOURCE_CODE
+    RUN_KEY_PREFIX = "noaa-gfs-fields"
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        client: httpx.Client | None = None,
+        backoff_seconds: float = 1.0,
+        *,
+        max_lead_hours: int | None = None,
+    ) -> None:
+        super().__init__(settings, client, backoff_seconds, map_fields=True)
+        self.max_lead_hours = max_lead_hours
+
+    def source_info(self) -> SourceInfo:
+        spot = super().source_info()
+        return SourceInfo(
+            code=self.code,
+            name="NOAA GFS-Wave + GFS global fields",
+            provider=spot.provider,
+            wave_model=f"GFS-Wave WW3 {FIELD_WAVE_GRID.name} (interpolated)",
+            atmosphere_model=spot.atmosphere_model,
+            is_demo=False,
+            attribution=spot.attribution,
+            license_notes=(
+                "US government work, not subject to copyright in the US. NODD terms: data "
+                "are open to the public and can be used as desired; NOAA requests "
+                "attribution and that no endorsement by or affiliation with NOAA be "
+                "stated or implied. Fields here are regridded, quantised and converted "
+                "(hPa), so they must not be presented as original, unaltered NOAA data."
+            ),
+            family=spot.family,
+            kind="fields",
+        )
+
+    def map_hours(self) -> list[int]:
+        s = self.settings
+        lead = s.map_field_max_lead_hours if self.max_lead_hours is None else self.max_lead_hours
+        return map_field_hours(lead, s.map_field_step_hours)
+
+    def run_for_cycle(self, cycle: datetime) -> RunInfo:
+        """RunInfo for a given cycle (no availability check; missing files become gaps)."""
+        c = _as_utc(cycle)
+        if c.hour % CYCLE_HOURS or c != c.replace(minute=0, second=0, microsecond=0):
+            raise PermanentProviderError(f"{c:%Y-%m-%d %H:%M}Z is not a GFS cycle time")
+        return RunInfo(f"{self.RUN_KEY_PREFIX}:{c:%Y%m%d%H}", c, c, c, "noaa-s3-idx")
+
+    def current_run(self, now: datetime) -> RunInfo:
+        """Newest cycle whose last map hour exists for the atmosphere and global.0p25."""
+        return self._newest_cycle(
+            now, self.map_hours()[-1], [FIELD_WAVE_GRID.name], self.RUN_KEY_PREFIX
+        )
+
+    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+        """The global fields of ``run``'s cycle; ``spots`` are ignored (no records)."""
+        result = FetchResult()
+        cycle = run.wave_model_run_at or run.issued_at
+        sink = self._new_sink(cycle)
+        reader = GfsPointReader(
+            self.client,
+            cycle,
+            [],
+            settings=self.settings,
+            paths=self.paths,
+            backoff_seconds=self.backoff_seconds,
+            field_sink=sink,
+        )
+        steps = reader.read_field_steps(sink.hours, workers=self.settings.grib_download_workers)
+        result.request_count = sum(s.request_count for s in steps)
+        total_bytes = sum(s.bytes_downloaded for s in steps)
+        self.last_hours, self.last_bytes_downloaded = sink.hours, total_bytes
+        self.last_step_bytes = {s.fhour: s.bytes_downloaded for s in steps}
+        self.last_field_steps = steps
+        if not any(s.files_read for s in steps):
+            first = next((f for s in steps for f in s.failed), "no file attempted")
+            raise TransientProviderError(
+                f"{run.run_key}: no NOAA GFS file could be read for any map hour ({first})"
+            )
+        result.fields, result.field_warnings = sink.fields, sink.warnings
+        mb = total_bytes / 1e6
+        result.warnings.append(
+            f"downloaded {mb:.1f} MB in {result.request_count} requests for {len(steps)} map "
+            f"hours f000-f{sink.hours[-1]:03d} ({mb / len(steps):.1f} MB per hour)"
+        )
+        result.warnings.append(_field_summary_line(sink, result.fields))
+        logger.info(
+            "NOAA GFS fields %s: %d fields, %d requests, %.1f MB",
+            run.run_key,
+            len(result.fields),
             result.request_count,
             mb,
         )

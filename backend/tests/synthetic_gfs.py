@@ -5,7 +5,8 @@ numbers); nothing is a real forecast. The files mimic the real layout checked li
 2026-10-10 18Z cycle: GRIB2 messages built from the ecCodes ``regular_ll_sfc_grib2``
 sample, one file per forecast hour with an NCEP-style ``.idx`` sidecar, records in the
 real order (wave files start with WIND/WDIR/UGRD/VGRD fillers; the atmosphere file has
-PRMSL first and LAND near the end) and land as missing values in the wave bitmap.
+PRMSL first and LAND near the end) and land as missing values in the wave bitmap. The
+same files feed the map-field tests (``map_settings``, ``add_field_hours``).
 """
 
 from __future__ import annotations
@@ -39,6 +40,26 @@ def noaa_settings(lead: int = 24, step: int = 12, **kw: object) -> Settings:
     }
     base = Settings(**values)  # type: ignore[arg-type]
     return base.model_copy(update={"noaa_max_lead_hours": lead, "noaa_step_hours": step})
+
+
+def map_settings(
+    lead: int = 24,
+    step: int = 12,
+    *,
+    map_lead: int = 24,
+    map_step: int = 12,
+    providers: str = "noaa_gfs",
+    **kw: object,
+) -> Settings:
+    """noaa_settings with map fields: providers "noaa_gfs" = the "with_noaa" mode.
+
+    Map hours run f000..``map_lead`` every ``map_step`` (applied after validation, as in
+    noaa_settings, because MAP_FIELD_MAX_LEAD_HOURS must be >= 24 in production).
+    """
+    base = noaa_settings(lead, step, forecast_providers=providers, **kw)
+    return base.model_copy(
+        update={"map_field_max_lead_hours": map_lead, "map_field_step_hours": map_step}
+    )
 
 
 # Synthetic constant values per wave record (``fhour / 100`` is added to HTSGW so each
@@ -161,7 +182,9 @@ class SyntheticGfs:
         valid: Mask | None = None,
         missing_partition3: bool = False,
         values: dict[str, float] | None = None,
+        arrays: dict[str, np.ndarray] | None = None,
     ) -> None:
+        """``arrays`` replaces whole records (shape of the grid; NaN = masked cell)."""
         g = grid or WAVE_GRID_GEOMETRY[grid_name]
         lat, lon = g.mesh()
         ok = np.ones(lat.shape, dtype=bool) if valid is None else valid(lat, lon)
@@ -171,6 +194,8 @@ class SyntheticGfs:
         for key, base in (values or WAVE_VALUES).items():
             value = base + (fhour / 100 if key == "HTSGW:surface" else 0.0)
             arr = np.where(ok, value, np.nan)
+            if arrays and key in arrays:
+                arr = np.where(ok, arrays[key], np.nan)
             if missing_partition3 and key.endswith("3 in sequence"):
                 arr = np.full(lat.shape, np.nan)  # no third swell partition anywhere
             records.append((key, grib2_message(arr, g, cycle, fhour)))
@@ -227,6 +252,12 @@ class SyntheticGfs:
             self.add_atmos(cycle, h, land=land)
             for name in grids:
                 self.add_wave(cycle, name, h, valid=(wave_valid or {}).get(name))
+
+    def add_field_hours(self, cycle: datetime, hours: list[int]) -> None:
+        """What the map fields need: the atmosphere file and global.0p25 for each hour."""
+        for h in hours:
+            self.add_atmos(cycle, h)
+            self.add_wave(cycle, "global.0p25", h)
 
     # ------------------------------------------------------------------ serving
     def handler(self, request: httpx.Request) -> httpx.Response:
