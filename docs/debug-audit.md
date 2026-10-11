@@ -208,6 +208,27 @@ largest wind-speed effect found was 0.82 m/s; the direct NOAA ingester uses a se
 different (CMEMS) model; Puerto Escondido's forecast point is a missing (land) cell in NOAA's
 `global.0p25` grid, which the GRIB ingester handles by taking the nearest valid sea cell.
 
+### 6.1 Defects found on the first live NOAA + ECMWF run (2026-10-11)
+
+The demo provider always produces a dominant swell and a single model, so these only
+appeared on real data.
+
+| Defect | Root cause | Fix |
+|---|---|---|
+| Alerts and event cards reported "0.16 m @ 11 s swell" at Burleigh Heads while predicting 6–8 ft faces | the event headline was always WW3's primary swell partition, but WW3 ranks only the swells; a 2.0 m wind sea carried the energy | the headline is now the partition with the largest predicted breaking height (`surf_quality.breaking.dominant_component`), also used by the map and spot conditions; labelled "main offshore waves" |
+| ECMWF's CC BY 4.0 attribution was not shown when the blend was authoritative | the spot page showed only the blend source's own generic text | a blend shows every member's attribution (`spot_views.source_attribution`) |
+| The map's "best at the selected time" list ranked spots in darkness as "Exceptional" | it sorted by score at the selected hour, day or night | daylight spots rank first; night entries are tagged, and conditions say "night (not surfable)" |
+| "1.5–1.5 ft" and "run — UTC" on the spot page | a collapsed range and a blend without a single model run time | one value is shown; a missing run time is omitted |
+| Alert emails gave the point estimate only | the uncertainty range never reached the alert snapshot | the 80% range at the event peak and how it was made are in every alert |
+
+Checked and **not** defects: 1,334 of 4,050 blend hours flagged as model disagreement
+(real GFS/ECMWF differences, concentrated at sheltered spots such as Rincon, where ECMWF
+had a 2.1–2.4 m wind sea and GFS 0.5–0.9 m); the range labelled `heuristic` rather than
+`ensemble_heuristic` in half the blend hours (the between-model spread exceeded the GEFS
+spread there, and the larger one is used). Documented limitation: on this run many
+world-class spots scored 90–100 at their best hour, so the top of the uncalibrated
+quality scale is not rare enough.
+
 ## 7. Test and tooling defects
 
 | Defect | Root cause | Fix |
@@ -216,6 +237,7 @@ different (CMEMS) model; Puerto Escondido's forecast point is a missing (land) c
 | A failing Vitest run was committed | the exit code was read through a pipe | exit codes are checked directly |
 | `next build` with a custom `distDir` rewrites `tsconfig.json` | Next.js adds the dist dir to `include` | the e2e runner's change is reverted before committing |
 | An inline comment in `.gitignore` broke the rule | `.gitignore` has no inline comments | comment moved to its own line |
+| The 15-step e2e scenario failed only in a full-suite run | other specs leave simulated Jeffreys Bay swells in the shared e2e database, so the scenario's new search matched one as soon as it was activated (eager Celery ran the whole alert chain inside the request) | the scenario uses a spot no other spec simulates swells at |
 | Playwright could not find its browser | the pinned Playwright expects a newer headless shell than the one installed | `PLAYWRIGHT_CHROMIUM_PATH=/opt/pw-browsers/chromium` (supported by `playwright.config.ts`) |
 
 ## 8. How to re-run the checks
@@ -228,6 +250,9 @@ cd backend && .venv/bin/ruff check app tests && .venv/bin/mypy app
 cd backend && alembic upgrade head && alembic check && alembic downgrade 0002_email_delivery && alembic upgrade head
 # frontend
 cd frontend && npx tsc --noEmit && npx eslint . && npx vitest run
-# end to end (fresh database, demo providers, production build)
-PLAYWRIGHT_CHROMIUM_PATH=/opt/pw-browsers/chromium ./scripts/run-e2e.sh
+# end to end (fresh database, demo providers, production build; Mailpit inbox in Docker)
+E2E_MAILPIT=1 PLAYWRIGHT_CHROMIUM_PATH=/opt/pw-browsers/chromium ./scripts/run-e2e.sh
+# live ingestion (separate scratch database; ~3 GB of NOAA/ECMWF downloads)
+DATABASE_URL=…/swell_live GEFS_ENABLED=true python -m app.cli engine ensemble
+DATABASE_URL=…/swell_live FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs python -m app.cli pipeline
 ```
