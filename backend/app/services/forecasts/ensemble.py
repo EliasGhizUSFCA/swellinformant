@@ -87,6 +87,7 @@ from app.services.forecasts.grib import (
     IndexEntry,
     PointSampler,
     decode_message,
+    load_eccodes,
     parse_ncep_idx,
 )
 from app.services.forecasts.ingestion import STUCK_RUN_AFTER, ensure_source, spot_points
@@ -256,7 +257,7 @@ _HEADER_KEYS = (
 
 def grib_header(message: bytes) -> dict[str, Any]:
     """Header keys that grib.decode_message does not expose (missing keys are None)."""
-    import eccodes
+    eccodes = load_eccodes()
 
     try:
         handle = eccodes.codes_new_from_message(message)

@@ -17,9 +17,9 @@ from datetime import UTC, datetime
 
 import httpx
 import numpy as np
-import pytest
 
 from app.services.forecasts.ensemble import MEMBERS, GefsPaths
+from app.services.forecasts.grib import load_eccodes
 
 BASE_URL = "https://gefs.test"
 CYCLE = datetime(2026, 10, 10, 12, tzinfo=UTC)
@@ -105,7 +105,7 @@ class Record:
 
 
 def grib_message(record: Record, grid: Grid, cycle: datetime, fhour: int) -> bytes:
-    eccodes = pytest.importorskip("eccodes")
+    eccodes = load_eccodes()
     h = eccodes.codes_grib_new_from_samples("regular_ll_sfc_grib2")
     try:
         disc, cat, num = record.param

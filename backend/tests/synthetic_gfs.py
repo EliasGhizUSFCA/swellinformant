@@ -16,9 +16,9 @@ from datetime import datetime
 
 import httpx
 import numpy as np
-import pytest
 
 from app.core.config import Settings
+from app.services.forecasts.grib import load_eccodes
 from app.services.forecasts.noaa import GfsPaths
 
 BASE_URL = "https://noaa.test"
@@ -97,7 +97,7 @@ Mask = Callable[[np.ndarray, np.ndarray], np.ndarray]  # (lat, lon) -> bool arra
 
 
 def grib2_message(values: np.ndarray, grid: Grid, cycle: datetime, fhour: int) -> bytes:
-    eccodes = pytest.importorskip("eccodes")
+    eccodes = load_eccodes()
     h = eccodes.codes_grib_new_from_samples("regular_ll_sfc_grib2")
     try:
         eccodes.codes_set(h, "Ni", grid.ni)

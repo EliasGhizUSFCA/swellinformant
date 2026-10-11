@@ -15,6 +15,7 @@ from app.services.forecasts.grib import (
     PointSampler,
     decode_message,
     haversine_km,
+    load_eccodes,
     nearest_valid_cell,
     parse_ecmwf_index,
     parse_ncep_idx,
@@ -90,7 +91,7 @@ def test_fetcher_reports_unpublished_files() -> None:
 
 
 def _grib_message(values: np.ndarray, lat0: float, lon0: float, step: float) -> bytes:
-    eccodes = pytest.importorskip("eccodes")
+    eccodes = load_eccodes()
     nj, ni = values.shape
     h = eccodes.codes_grib_new_from_samples("regular_ll_sfc_grib2")
     try:

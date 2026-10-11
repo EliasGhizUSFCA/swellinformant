@@ -30,11 +30,16 @@ from app.services.forecasts.ecmwf import (
     file_url,
     wind_from_uv,
 )
-from app.services.forecasts.grib import PointSampler, decode_message, haversine_km
+from app.services.forecasts.grib import (
+    PointSampler,
+    decode_message,
+    haversine_km,
+    load_eccodes,
+)
 from app.services.forecasts.registry import ECMWF_IFS_CODE, build_provider
 from app.services.http import PermanentProviderError, TransientProviderError
 
-eccodes = pytest.importorskip("eccodes")
+eccodes = load_eccodes()
 
 BASE = "https://ecmwf.test"
 CYCLE = datetime(2026, 10, 10, 0, tzinfo=UTC)

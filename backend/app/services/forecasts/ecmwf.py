@@ -91,6 +91,7 @@ from app.services.forecasts.grib import (
     NotPublishedError,
     PointSampler,
     decode_message,
+    load_eccodes,
     nearest_valid_cell,
     parse_ecmwf_index,
     select_entries,
@@ -206,7 +207,7 @@ def combined_band_height(heights: Iterable[float | None]) -> float | None:
 
 def step_window_hours(message: bytes) -> float | None:
     """Length of a statistically processed field's window (e.g. gust ``23-24`` → 1 h)."""
-    import eccodes
+    eccodes = load_eccodes()
 
     try:
         handle = eccodes.codes_new_from_message(message)

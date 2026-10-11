@@ -20,6 +20,7 @@ geometry and reused for every step.
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import math
@@ -271,8 +272,22 @@ class GridField:
         return None if math.isnan(v) else v
 
 
+def load_eccodes() -> Any:
+    """Import ecCodes, always after psycopg's native libraries.
+
+    The ``eccodeslib`` and ``psycopg[binary]`` wheels each bundle their own OpenLDAP build.
+    When ecCodes is loaded first, the process segfaults at exit inside libldap's destructor
+    (``python -c "import eccodes, psycopg"`` exits with SIGSEGV; the reverse order exits
+    cleanly), which failed test runs and Celery worker shutdowns after all work had
+    succeeded. Every ecCodes import in the app and the tests goes through this function;
+    ``importlib`` keeps the order explicit (an import sorter would reorder plain imports).
+    """
+    importlib.import_module("psycopg")
+    return importlib.import_module("eccodes")
+
+
 def _key(handle: Any, name: str, default: Any = None) -> Any:
-    import eccodes
+    eccodes = load_eccodes()
 
     try:
         return eccodes.codes_get(handle, name)
@@ -281,7 +296,7 @@ def _key(handle: Any, name: str, default: Any = None) -> Any:
 
 
 def decode_message(message: bytes) -> GridField:
-    import eccodes
+    eccodes = load_eccodes()
 
     try:
         handle = eccodes.codes_new_from_message(message)
