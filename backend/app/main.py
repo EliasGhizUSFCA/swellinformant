@@ -9,7 +9,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, notifications, opportunities, searches, spots, system, users, webhooks
+from app.api import (
+    accuracy,
+    auth,
+    notifications,
+    opportunities,
+    searches,
+    spots,
+    system,
+    users,
+    webhooks,
+)
 from app.core.config import get_settings
 from app.core.errors import install_exception_handlers
 from app.core.logging import configure_logging
@@ -60,7 +70,17 @@ def create_app() -> FastAPI:
         allow_headers=["Content-Type", "X-CSRF-Token"],
     )
     app.add_middleware(SecurityHeadersMiddleware)
-    for module in (system, auth, users, spots, searches, opportunities, notifications, webhooks):
+    for module in (
+        system,
+        auth,
+        users,
+        spots,
+        searches,
+        opportunities,
+        notifications,
+        webhooks,
+        accuracy,
+    ):
         app.include_router(module.router)
     if settings.enable_dev_endpoints:
         from app.api import dev

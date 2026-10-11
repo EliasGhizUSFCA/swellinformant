@@ -80,3 +80,8 @@ export interface SystemStatus {
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: Array<{ field: string; message: string }> };
 }
+
+export type AccuracyOverview = S["AccuracyOverview"];
+export type AccuracyMetric = S["MetricRow"];
+export type AccuracyPairs = S["PairsOut"];
+export type ModelVersionSummary = S["ModelVersionSummary"];

@@ -2026,6 +2026,289 @@
     }
    }
   },
+  "/api/admin/accuracy/overview": {
+   "get": {
+    "tags": [
+     "accuracy"
+    ],
+    "summary": "Accuracy Overview",
+    "operationId": "accuracy_overview_api_admin_accuracy_overview_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AccuracyOverview"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/accuracy/metrics": {
+   "get": {
+    "tags": [
+     "accuracy"
+    ],
+    "summary": "Accuracy Metrics",
+    "operationId": "accuracy_metrics_api_admin_accuracy_metrics_get",
+    "parameters": [
+     {
+      "name": "variable",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "enum": [
+        "hs",
+        "tp",
+        "dir"
+       ],
+       "type": "string",
+       "default": "hs",
+       "title": "Variable"
+      }
+     },
+     {
+      "name": "scope",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "station",
+          "region",
+          "global",
+          "spot"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Scope"
+      }
+     },
+     {
+      "name": "source",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 40
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Source"
+      }
+     },
+     {
+      "name": "window_days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer",
+         "maximum": 3650,
+         "minimum": 1
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Window Days"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/MetricRow"
+         },
+         "title": "Response Accuracy Metrics Api Admin Accuracy Metrics Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/accuracy/pairs": {
+   "get": {
+    "tags": [
+     "accuracy"
+    ],
+    "summary": "Accuracy Pairs",
+    "operationId": "accuracy_pairs_api_admin_accuracy_pairs_get",
+    "parameters": [
+     {
+      "name": "variable",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "enum": [
+        "hs",
+        "tp",
+        "dir"
+       ],
+       "type": "string",
+       "default": "hs",
+       "title": "Variable"
+      }
+     },
+     {
+      "name": "source",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 40
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Source"
+      }
+     },
+     {
+      "name": "model_version",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 60,
+       "default": "raw",
+       "title": "Model Version"
+      }
+     },
+     {
+      "name": "station",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 80
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Station"
+      }
+     },
+     {
+      "name": "lead_min",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "number",
+         "maximum": 400,
+         "minimum": 0
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Lead Min"
+      }
+     },
+     {
+      "name": "lead_max",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "number",
+         "maximum": 400,
+         "minimum": 0
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Lead Max"
+      }
+     },
+     {
+      "name": "days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 3650,
+       "minimum": 1,
+       "default": 90,
+       "title": "Days"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 5000,
+       "minimum": 1,
+       "default": 1500,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/PairsOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/dev/simulate-swell": {
    "post": {
     "tags": [
@@ -2076,15 +2359,51 @@
     ],
     "summary": "Pipeline",
     "operationId": "pipeline_api_dev_run_pipeline_post",
+    "parameters": [
+     {
+      "name": "acquire",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "description": "Fetch forecasts first (false: use what is stored)",
+       "default": true,
+       "title": "Acquire"
+      },
+      "description": "Fetch forecasts first (false: use what is stored)"
+     },
+     {
+      "name": "deliver",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "description": "False stops after alert generation (QUEUED)",
+       "default": true,
+       "title": "Deliver"
+      },
+      "description": "False stops after alert generation (QUEUED)"
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "type": "object",
+         "additionalProperties": true,
          "title": "Response Pipeline Api Dev Run Pipeline Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -2214,6 +2533,88 @@
  },
  "components": {
   "schemas": {
+   "AccuracyOverview": {
+    "properties": {
+     "latest_validation_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Validation At"
+     },
+     "latest_metrics_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Metrics At"
+     },
+     "pair_counts": {
+      "items": {
+       "$ref": "#/components/schemas/PairCount"
+      },
+      "type": "array",
+      "title": "Pair Counts"
+     },
+     "stations": {
+      "items": {
+       "$ref": "#/components/schemas/StationSummary"
+      },
+      "type": "array",
+      "title": "Stations"
+     },
+     "models": {
+      "items": {
+       "$ref": "#/components/schemas/ModelVersionSummary"
+      },
+      "type": "array",
+      "title": "Models"
+     },
+     "experiments": {
+      "items": {
+       "$ref": "#/components/schemas/ExperimentSummary"
+      },
+      "type": "array",
+      "title": "Experiments"
+     },
+     "lead_buckets_h": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Lead Buckets H"
+     },
+     "notes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Notes"
+     }
+    },
+    "type": "object",
+    "required": [
+     "latest_validation_at",
+     "latest_metrics_at",
+     "pair_counts",
+     "stations",
+     "models",
+     "experiments",
+     "lead_buckets_h",
+     "notes"
+    ],
+    "title": "AccuracyOverview"
+   },
    "AirportOut": {
     "properties": {
      "iata": {
@@ -2629,6 +3030,40 @@
     ],
     "title": "Conditions",
     "description": "One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:\n\n* raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and\n  wind fields), and\n* our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``)."
+   },
+   "DailyStat": {
+    "properties": {
+     "day": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Day"
+     },
+     "n": {
+      "type": "integer",
+      "title": "N"
+     },
+     "bias": {
+      "type": "number",
+      "title": "Bias"
+     },
+     "mae": {
+      "type": "number",
+      "title": "Mae"
+     },
+     "rmse": {
+      "type": "number",
+      "title": "Rmse"
+     }
+    },
+    "type": "object",
+    "required": [
+     "day",
+     "n",
+     "bias",
+     "mae",
+     "rmse"
+    ],
+    "title": "DailyStat"
    },
    "DailySummary": {
     "properties": {
@@ -3073,6 +3508,58 @@
      "source_code"
     ],
     "title": "EventOut"
+   },
+   "ExperimentSummary": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "target": {
+      "type": "string",
+      "title": "Target"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "finished_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Finished At"
+     },
+     "conclusion": {
+      "type": "string",
+      "title": "Conclusion"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "name",
+     "target",
+     "status",
+     "created_at",
+     "finished_at",
+     "conclusion"
+    ],
+    "title": "ExperimentSummary"
    },
    "ForecastPoint": {
     "properties": {
@@ -3614,6 +4101,29 @@
     },
     "type": "object",
     "title": "HTTPValidationError"
+   },
+   "HistogramBin": {
+    "properties": {
+     "lo": {
+      "type": "number",
+      "title": "Lo"
+     },
+     "hi": {
+      "type": "number",
+      "title": "Hi"
+     },
+     "count": {
+      "type": "integer",
+      "title": "Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "lo",
+     "hi",
+     "count"
+    ],
+    "title": "HistogramBin"
    },
    "LinkOut": {
     "properties": {
@@ -4401,6 +4911,169 @@
     ],
     "title": "Message"
    },
+   "MetricRow": {
+    "properties": {
+     "scope": {
+      "type": "string",
+      "title": "Scope"
+     },
+     "scope_key": {
+      "type": "string",
+      "title": "Scope Key"
+     },
+     "source_code": {
+      "type": "string",
+      "title": "Source Code"
+     },
+     "model_version": {
+      "type": "string",
+      "title": "Model Version"
+     },
+     "variable": {
+      "type": "string",
+      "title": "Variable"
+     },
+     "lead_bucket_h": {
+      "type": "integer",
+      "title": "Lead Bucket H"
+     },
+     "period_start": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Period Start"
+     },
+     "period_end": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Period End"
+     },
+     "n": {
+      "type": "integer",
+      "title": "N"
+     },
+     "bias": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bias"
+     },
+     "mae": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mae"
+     },
+     "rmse": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rmse"
+     },
+     "scatter_index": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Scatter Index"
+     },
+     "hh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hh"
+     },
+     "correlation": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Correlation"
+     },
+     "skill_vs_persistence": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Skill Vs Persistence"
+     },
+     "skill_vs_climatology": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Skill Vs Climatology"
+     },
+     "extra": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Extra"
+     },
+     "computed_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Computed At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "scope",
+     "scope_key",
+     "source_code",
+     "model_version",
+     "variable",
+     "lead_bucket_h",
+     "period_start",
+     "period_end",
+     "n",
+     "bias",
+     "mae",
+     "rmse",
+     "scatter_index",
+     "hh",
+     "correlation",
+     "skill_vs_persistence",
+     "skill_vs_climatology",
+     "extra",
+     "computed_at"
+    ],
+    "title": "MetricRow"
+   },
    "ModelPoint": {
     "properties": {
      "valid_time": {
@@ -4539,6 +5212,129 @@
     ],
     "title": "ModelSeries",
     "description": "Raw output of one numerical model (or our blend) at this spot, 3-hourly."
+   },
+   "ModelVersionSummary": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "version": {
+      "type": "integer",
+      "title": "Version"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "model_type": {
+      "type": "string",
+      "title": "Model Type"
+     },
+     "target": {
+      "type": "string",
+      "title": "Target"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "activated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Activated At"
+     },
+     "retired_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Retired At"
+     },
+     "experiment_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Experiment Id"
+     },
+     "training": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Training"
+     },
+     "dataset_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dataset Version"
+     },
+     "decision": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Decision"
+     },
+     "applicability": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Applicability"
+     },
+     "test_metrics": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Test Metrics"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "label",
+     "name",
+     "version",
+     "status",
+     "model_type",
+     "target",
+     "created_at",
+     "activated_at",
+     "retired_at",
+     "experiment_id",
+     "training",
+     "dataset_version",
+     "decision",
+     "applicability",
+     "test_metrics"
+    ],
+    "title": "ModelVersionSummary"
    },
    "NotificationChannelPref": {
     "type": "string",
@@ -5074,6 +5870,110 @@
     ],
     "title": "OfferOut"
    },
+   "PairCount": {
+    "properties": {
+     "source_code": {
+      "type": "string",
+      "title": "Source Code"
+     },
+     "model_version": {
+      "type": "string",
+      "title": "Model Version"
+     },
+     "variable": {
+      "type": "string",
+      "title": "Variable"
+     },
+     "n": {
+      "type": "integer",
+      "title": "N"
+     },
+     "first_valid": {
+      "type": "string",
+      "format": "date-time",
+      "title": "First Valid"
+     },
+     "last_valid": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Last Valid"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source_code",
+     "model_version",
+     "variable",
+     "n",
+     "first_valid",
+     "last_valid"
+    ],
+    "title": "PairCount"
+   },
+   "PairsOut": {
+    "properties": {
+     "variable": {
+      "type": "string",
+      "title": "Variable"
+     },
+     "unit": {
+      "type": "string",
+      "title": "Unit"
+     },
+     "source_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Code"
+     },
+     "model_version": {
+      "type": "string",
+      "title": "Model Version"
+     },
+     "n_total": {
+      "type": "integer",
+      "title": "N Total"
+     },
+     "sample": {
+      "items": {
+       "$ref": "#/components/schemas/ScatterPoint"
+      },
+      "type": "array",
+      "title": "Sample"
+     },
+     "histogram": {
+      "items": {
+       "$ref": "#/components/schemas/HistogramBin"
+      },
+      "type": "array",
+      "title": "Histogram"
+     },
+     "daily": {
+      "items": {
+       "$ref": "#/components/schemas/DailyStat"
+      },
+      "type": "array",
+      "title": "Daily"
+     }
+    },
+    "type": "object",
+    "required": [
+     "variable",
+     "unit",
+     "source_code",
+     "model_version",
+     "n_total",
+     "sample",
+     "histogram",
+     "daily"
+    ],
+    "title": "PairsOut"
+   },
    "PhoneConfirmIn": {
     "properties": {
      "code": {
@@ -5485,6 +6385,45 @@
      "token"
     ],
     "title": "ResetPasswordIn"
+   },
+   "ScatterPoint": {
+    "properties": {
+     "station": {
+      "type": "string",
+      "title": "Station"
+     },
+     "valid_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Valid Time"
+     },
+     "lead_hours": {
+      "type": "number",
+      "title": "Lead Hours"
+     },
+     "forecast": {
+      "type": "number",
+      "title": "Forecast"
+     },
+     "observed": {
+      "type": "number",
+      "title": "Observed"
+     },
+     "error": {
+      "type": "number",
+      "title": "Error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "station",
+     "valid_time",
+     "lead_hours",
+     "forecast",
+     "observed",
+     "error"
+    ],
+    "title": "ScatterPoint"
    },
    "SearchIn": {
     "properties": {
@@ -6800,6 +7739,82 @@
      "primary_airport"
     ],
     "title": "SpotSummary"
+   },
+   "StationSummary": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "latitude": {
+      "type": "number",
+      "title": "Latitude"
+     },
+     "longitude": {
+      "type": "number",
+      "title": "Longitude"
+     },
+     "water_depth_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Water Depth M"
+     },
+     "paired_spots": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Paired Spots"
+     },
+     "observations": {
+      "type": "integer",
+      "title": "Observations"
+     },
+     "latest_observation": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Observation"
+     },
+     "pairs": {
+      "type": "integer",
+      "title": "Pairs"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "provider",
+     "latitude",
+     "longitude",
+     "water_depth_m",
+     "paired_spots",
+     "observations",
+     "latest_observation",
+     "pairs"
+    ],
+    "title": "StationSummary"
    },
    "TokenIn": {
     "properties": {
