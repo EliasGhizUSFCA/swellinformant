@@ -6,6 +6,8 @@
 #
 #   ./scripts/run-e2e.sh                # uses the defaults below
 #   E2E_DATABASE_URL=... ./scripts/run-e2e.sh
+#   E2E_MAILPIT=1 ./scripts/run-e2e.sh  # send every email over SMTP to a throwaway Mailpit
+#                                       # container (needs Docker) and read it from its API
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,8 +22,23 @@ export APP_BASE_URL="http://127.0.0.1:${FRONTEND_PORT}" API_BASE_URL="http://127
 export CORS_ORIGINS="$APP_BASE_URL"
 
 PIDS=()
-cleanup() { for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done; rm -rf "$OUTBOX_DIR"; }
+MAILPIT_CONTAINER=""
+cleanup() {
+  for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
+  rm -rf "$OUTBOX_DIR"
+  if [ -n "$MAILPIT_CONTAINER" ]; then docker stop "$MAILPIT_CONTAINER" >/dev/null 2>&1 || true; fi
+}
 trap cleanup EXIT
+
+if [ "${E2E_MAILPIT:-0}" = "1" ]; then
+  MAILPIT_UI_PORT="${E2E_MAILPIT_UI_PORT:-18125}"
+  MAILPIT_SMTP_PORT="${E2E_MAILPIT_SMTP_PORT:-11125}"
+  echo "▶ starting Mailpit (UI :$MAILPIT_UI_PORT, SMTP :$MAILPIT_SMTP_PORT)"
+  MAILPIT_CONTAINER="$(docker run -d --rm -p "127.0.0.1:${MAILPIT_UI_PORT}:8025" -p "127.0.0.1:${MAILPIT_SMTP_PORT}:1025" axllent/mailpit:v1.27)"
+  export EMAIL_PROVIDER=mailpit SMTP_HOST=127.0.0.1 SMTP_PORT="$MAILPIT_SMTP_PORT"
+  export DEV_INBOX_URL="http://127.0.0.1:${MAILPIT_UI_PORT}" E2E_MAILPIT_URL="http://127.0.0.1:${MAILPIT_UI_PORT}"
+  for _ in $(seq 1 30); do curl -fsS "$E2E_MAILPIT_URL/api/v1/info" >/dev/null 2>&1 && break; sleep 1; done
+fi
 
 PY="$ROOT/backend/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"

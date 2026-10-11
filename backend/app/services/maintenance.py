@@ -6,7 +6,10 @@
   referenced by an open opportunity;
 * matches whose surf window has passed become EXPIRED;
 * expired/used auth tokens, expired sessions and old job logs are removed;
-* notifications older than RETENTION_NOTIFICATION_DAYS are deleted.
+* notifications older than RETENTION_NOTIFICATION_DAYS are deleted;
+* the prediction archive, forecasts at observation stations, buoy observations and
+  verification pairs are kept for RETENTION_ARCHIVE_DAYS (they are the only record of
+  past forecast skill, so they outlive forecast runs by far).
 """
 
 from __future__ import annotations
@@ -21,12 +24,16 @@ from app.core.config import get_settings
 from app.core.database import utcnow
 from app.models import (
     BackgroundJobLog,
+    BuoyObservation,
     FlightOffer,
     FlightSearch,
     ForecastRun,
     Notification,
     OpportunityMatch,
     OpportunityOffer,
+    PointForecast,
+    PredictionArchive,
+    PredictionValidation,
     UserSession,
     UserToken,
 )
@@ -131,6 +138,14 @@ def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
         ).rowcount
         or 0
     )
+    archive_cutoff = now - timedelta(days=s.retention_archive_days)
+    for key, model, column in (
+        ("prediction_archive", PredictionArchive, PredictionArchive.valid_time),
+        ("point_forecasts", PointForecast, PointForecast.valid_time),
+        ("buoy_observations", BuoyObservation, BuoyObservation.observed_at),
+        ("prediction_validation", PredictionValidation, PredictionValidation.valid_time),
+    ):
+        out[key] = db.execute(delete(model).where(column < archive_cutoff)).rowcount or 0  # type: ignore[attr-defined]
     db.commit()
     logger.info("Cleanup: %s", out)
     return out

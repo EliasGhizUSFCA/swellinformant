@@ -47,6 +47,15 @@ class ForecastSource(TimestampMixin, Base):
     wave_model: Mapped[str | None] = mapped_column(String(60))
     atmosphere_model: Mapped[str | None] = mapped_column(String(60))
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Sources in the same family share their model physics or forcing (e.g. NOAA GFS-Wave
+    # read directly and via Open-Meteo), so their agreement is not independent evidence.
+    family: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="unknown", server_default="unknown"
+    )
+    # "deterministic", "ensemble" (mean/spread statistics) or "blend" (our combination).
+    kind: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="deterministic", server_default="deterministic"
+    )
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
     attribution: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -124,6 +133,9 @@ class WaveForecast(Base):
     secondary_swell_height_m: Mapped[float | None] = mapped_column(Float)
     secondary_swell_period_s: Mapped[float | None] = mapped_column(Float)
     secondary_swell_direction_deg: Mapped[float | None] = mapped_column(Float)
+    tertiary_swell_height_m: Mapped[float | None] = mapped_column(Float)
+    tertiary_swell_period_s: Mapped[float | None] = mapped_column(Float)
+    tertiary_swell_direction_deg: Mapped[float | None] = mapped_column(Float)
     wind_wave_height_m: Mapped[float | None] = mapped_column(Float)
     wind_wave_period_s: Mapped[float | None] = mapped_column(Float)
     wind_wave_direction_deg: Mapped[float | None] = mapped_column(Float)
@@ -134,7 +146,13 @@ class WaveForecast(Base):
     sea_level_m: Mapped[float | None] = mapped_column(Float)
     # Deep-water energy flux of the primary swell, P ≈ 0.49 · H² · T  (kW per metre of crest)
     wave_power_kw_m: Mapped[float | None] = mapped_column(Float)
+    # What ``wave_period_s`` means for this source: "tp" (peak), "tm01", "tm02", "tm10".
+    wave_period_kind: Mapped[str | None] = mapped_column(String(8))
     missing_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    # Source-specific extras (period-band heights, grid cell used, member counts ...).
+    extra: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
 
 
 class SurfQualityPrediction(Base):
@@ -162,6 +180,15 @@ class SurfQualityPrediction(Base):
     breaking_height_min_ft: Mapped[float] = mapped_column(Float, nullable=False)
     breaking_height_max_ft: Mapped[float] = mapped_column(Float, nullable=False)
     breaking_height_method: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Central estimate and 10th/90th percentiles of the significant breaking face height.
+    breaking_height_mid_ft: Mapped[float | None] = mapped_column(Float)
+    breaking_p10_ft: Mapped[float | None] = mapped_column(Float)
+    breaking_p90_ft: Mapped[float | None] = mapped_column(Float)
+    # "heuristic" (assumed error model), "ensemble_heuristic" (ensemble spread plus an
+    # assumed floor) or "calibrated" (verified against held-out observations).
+    uncertainty_kind: Mapped[str | None] = mapped_column(String(24))
+    # The ML correction applied to the offshore input, if any ("name@vN").
+    ml_model_version: Mapped[str | None] = mapped_column(String(60))
     score: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[QualityLabel] = mapped_column(
         str_enum(QualityLabel, "prediction_quality_label"), nullable=False
@@ -239,3 +266,6 @@ class SwellEvent(Base):
     )
 
     spot: Mapped[SurfSpot] = relationship(lazy="joined")
+    latest_run: Mapped[ForecastRun | None] = relationship(
+        foreign_keys=[latest_run_id], lazy="select"
+    )

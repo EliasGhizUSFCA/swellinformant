@@ -79,6 +79,7 @@ class WindyProvider(ForecastProvider):
             is_demo=False,
             attribution="Forecast data © Windy.com Point Forecast API",
             license_notes="Requires a paid Windy Point Forecast API key; subject to Windy terms.",
+            family="ncep_gfs",
         )
 
     def current_run(self, now: datetime) -> RunInfo:
@@ -157,6 +158,7 @@ class WindyProvider(ForecastProvider):
                     continue
                 epoch = int(ts) // 1000
                 values.update(atmos_by_ts.get(epoch, {}))
+                # Windy does not document which period definition it returns: leave unknown.
                 records.append(ForecastRecord(datetime.fromtimestamp(epoch, tz=UTC), values))
             if records:
                 result.records[p.spot_id] = records

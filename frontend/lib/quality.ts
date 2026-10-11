@@ -27,14 +27,31 @@ export const QUALITY_LABELS: Record<QualityLabel, string> = {
   exceptional: "Exceptional",
 };
 
+/**
+ * Quality colours (our app's categories, not a surf-forecasting standard): grey = no usable
+ * forecast, blue = poor, yellow = fair, green = good, teal = very good, orange = excellent,
+ * purple = exceptional. Keep in sync with --q-* in app/globals.css.
+ */
 export const QUALITY_COLORS: Record<QualityLabel, string> = {
-  poor: "#94a3b8",
-  fair: "#e5a213",
-  good: "#22a55a",
-  very_good: "#13a39a",
-  excellent: "#0277c2",
+  poor: "#2563eb",
+  fair: "#eab308",
+  good: "#16a34a",
+  very_good: "#0f766e",
+  excellent: "#c2410c",
   exceptional: "#7c3aed",
 };
+
+/** Text colour readable on each quality colour. */
+export const QUALITY_TEXT: Record<QualityLabel, string> = {
+  poor: "#ffffff",
+  fair: "#422006",
+  good: "#ffffff",
+  very_good: "#ffffff",
+  excellent: "#ffffff",
+  exceptional: "#ffffff",
+};
+
+export const NO_FORECAST_COLOR = "#9ca3af";
 
 export function labelForScore(score: number): QualityLabel {
   for (const [threshold, label] of QUALITY_THRESHOLDS) if (score >= threshold) return label;
@@ -42,7 +59,7 @@ export function labelForScore(score: number): QualityLabel {
 }
 
 export function colorForScore(score: number | null | undefined): string {
-  return score == null ? "#cbd5e1" : QUALITY_COLORS[labelForScore(score)];
+  return score == null ? NO_FORECAST_COLOR : QUALITY_COLORS[labelForScore(score)];
 }
 
 export function asQuality(value: string): QualityLabel {

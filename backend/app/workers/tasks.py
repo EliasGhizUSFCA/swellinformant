@@ -29,7 +29,8 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 NEXT_STAGE = {
-    "forecasts.acquire": "quality.predict",
+    "forecasts.acquire": "forecasts.blend",
+    "forecasts.blend": "quality.predict",
     "quality.predict": "detection.detect",
     "detection.detect": "matching.match",
     "matching.match": "flights.discover",
@@ -117,6 +118,14 @@ def acquire_forecasts(self: Task) -> dict[str, Any]:
     )
 
 
+@celery_app.task(name="forecasts.blend", bind=True)
+def blend_forecasts(self: Task) -> dict[str, Any]:
+    """Combine the newest run of each independent model family (FORECAST_BLEND_ENABLED)."""
+    from app.services.forecasts.blend import build_blend
+
+    return run_job("forecasts.blend", lambda db: build_blend(db).as_dict(), task_id=self.request.id)
+
+
 @celery_app.task(name="quality.predict", bind=True)
 def predict_quality(self: Task) -> dict[str, Any]:
     from app.services.surf_quality.predict import compute_pending_predictions
@@ -186,6 +195,46 @@ def cleanup_task(self: Task) -> dict[str, Any]:
     return run_job("maintenance.cleanup", cleanup, task_id=self.request.id, chain=False)
 
 
+@celery_app.task(
+    name="forecasts.acquire_ensemble",
+    bind=True,
+    autoretry_for=(TransientProviderError,),
+    retry_backoff=120,
+    max_retries=2,
+)
+def acquire_ensemble_task(self: Task) -> dict[str, Any]:
+    """GEFS-Wave ensemble mean/spread for forecast uncertainty (GEFS_ENABLED)."""
+    from app.services.forecasts.ensemble import acquire_ensemble
+
+    return run_job(
+        "forecasts.acquire_ensemble", acquire_ensemble, task_id=self.request.id, lock_ttl=3600
+    )
+
+
+@celery_app.task(name="observations.ingest", bind=True)
+def ingest_observations(self: Task) -> dict[str, Any]:
+    """Buoy observations for verification and training (OBSERVATIONS_ENABLED)."""
+    from app.services.observations.ingest import ingest_all
+
+    return run_job("observations.ingest", ingest_all, task_id=self.request.id, lock_ttl=1800)
+
+
+@celery_app.task(name="verification.collect_point_forecasts", bind=True)
+def collect_point_forecasts(self: Task) -> dict[str, Any]:
+    """Archive model forecasts at observation stations (VERIFICATION_ENABLED)."""
+    from app.services.verification.point_forecasts import collect_recent
+
+    return run_job("verification.collect_point_forecasts", collect_recent, task_id=self.request.id)
+
+
+@celery_app.task(name="verification.run", bind=True)
+def run_verification_task(self: Task) -> dict[str, Any]:
+    """Pair forecasts with observations and refresh the accuracy metrics."""
+    from app.services.verification.jobs import run_verification
+
+    return run_job("verification.run", run_verification, task_id=self.request.id, lock_ttl=3600)
+
+
 @celery_app.task(name="forecasts.check_staleness", bind=True)
 def check_staleness(self: Task) -> dict[str, Any]:
     from app.services.forecasts.queries import forecast_status
@@ -216,6 +265,38 @@ def deliver_sms(to: str, body: str) -> str | None:
     return build_sms_provider().send(to, body).message_id
 
 
+ACCOUNT_EMAIL_MAX_RETRIES = 5
+
+
+@celery_app.task(
+    name="notifications.send_account_email", bind=True, max_retries=ACCOUNT_EMAIL_MAX_RETRIES
+)
+def send_account_email(self: Task, message_id: str, text: str, html: str | None) -> str | None:
+    """Deliver a recorded account email; transient failures retry with backoff, and the
+    record ends FAILED (with the provider's reason) once retries are exhausted."""
+    from app.services.notifications.transactional import deliver_account_email
+
+    if self.request.is_eager:
+        # Eager mode (tests, single-process dev): Celery's retry() would re-raise into the
+        # caller (e.g. the registration request), so retry in-process without waiting.
+        for attempt in range(ACCOUNT_EMAIL_MAX_RETRIES + 1):
+            try:
+                status = deliver_account_email(
+                    message_id, text, html, final_attempt=attempt == ACCOUNT_EMAIL_MAX_RETRIES
+                )
+            except TransientProviderError:
+                continue
+            return status.value if status else None
+        return None
+    final = self.request.retries >= ACCOUNT_EMAIL_MAX_RETRIES
+    try:
+        status = deliver_account_email(message_id, text, html, final_attempt=final)
+    except TransientProviderError as exc:
+        raise self.retry(exc=exc, countdown=min(600, 30 * 2**self.request.retries)) from exc
+    return status.value if status else None
+
+
+# Legacy task kept so messages queued by older versions are still delivered.
 @celery_app.task(
     name="notifications.send_email",
     autoretry_for=(TransientProviderError,),

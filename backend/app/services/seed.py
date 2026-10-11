@@ -17,9 +17,10 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.models import Airport, SpotAirport, SurfSpot
+from app.models import Airport, SpotAirport, SpotPhysicalProfile, SurfSpot
 from app.models.enums import BreakType, SkillLevel, TidePreference
-from app.services.geo import haversine_km, window_contains_window
+from app.models.forecast_engine import PROVENANCE_VALUES
+from app.services.geo import haversine_km, window_center, window_contains_window
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,24 @@ SPOT_FIELDS = (
     "accessibility_notes",
     "hazards",
     "description",
+)
+
+
+# Optional curated physical parameters per spot (data/surf_spots/physical_profiles.json):
+# {"<slug>": {"shore_normal_deg": ..., "forecast_point_depth_m": ..., ...,
+#             "data_quality": {"<field>": "measured" | "literature" | ...}, "notes": "..."}}
+PROFILE_FIELDS = (
+    "shore_normal_deg",
+    "forecast_point_depth_m",
+    "controlling_depth_m",
+    "breaker_index",
+    "focusing_ref",
+    "focusing_kappa",
+    "focusing_t_star_s",
+    "shadow_table",
+    "spreading_deg",
+    "regional_correction",
+    "reference_stations",
 )
 
 
@@ -197,6 +216,92 @@ def seed_reference_data(db: Session, data_dir: str | Path | None = None) -> dict
             link.transfer_mode = a.get("transfer_mode", "car")
             link.notes = a.get("notes", "")
         db.flush()
+    profiles = seed_physical_profiles(db, directory)
     db.commit()
     logger.info("Seeded %d airports, %d new spots, %d updated", len(airports_raw), created, updated)
-    return {"airports": len(airports_raw), "spots_created": created, "spots_updated": updated}
+    return {
+        "airports": len(airports_raw),
+        "spots_created": created,
+        "spots_updated": updated,
+        **profiles,
+    }
+
+
+def derived_profile_values(spot: SurfSpot) -> dict[str, Any]:
+    """Default physical profile from the spot's curated windows. Nothing is measured.
+
+    The shore normal is taken as the centre of the optimal swell window and the focusing
+    prior as the spot's (uncalibrated) height factor; depths stay unknown, so the model
+    assumes a deep-water extraction point and no depth limit.
+    """
+    return {
+        "shore_normal_deg": round(
+            window_center(spot.optimal_swell_direction_min, spot.optimal_swell_direction_max), 1
+        ),
+        "forecast_point_depth_m": None,
+        "controlling_depth_m": None,
+        "breaker_index": None,
+        "focusing_ref": spot.height_factor,
+        "focusing_kappa": 0.0,
+        "focusing_t_star_s": 12.0,
+        "shadow_table": None,
+        "spreading_deg": None,
+        "regional_correction": None,
+        "data_quality": {
+            "shore_normal_deg": "estimated",
+            "forecast_point_depth_m": "unknown",
+            "controlling_depth_m": "unknown",
+            "focusing_ref": "estimated",
+            "shadow_table": "unknown",
+        },
+        "notes": (
+            "Derived from the curated swell windows; shore normal = centre of the optimal "
+            "window, focusing = height_factor. Not measured or calibrated."
+        ),
+    }
+
+
+def validate_profile(slug: str, raw: dict[str, Any]) -> list[str]:
+    problems: list[str] = []
+    unknown = set(raw) - {*PROFILE_FIELDS, "data_quality", "notes"}
+    if unknown:
+        problems.append(f"{slug}: unknown profile fields {sorted(unknown)}")
+    table = raw.get("shadow_table")
+    if table is not None and (
+        len(table) != 36 or not all(isinstance(v, int | float) and 0 <= v <= 1 for v in table)
+    ):
+        problems.append(f"{slug}: shadow_table needs 36 values in [0, 1]")
+    for field_name, provenance in (raw.get("data_quality") or {}).items():
+        if provenance not in PROVENANCE_VALUES:
+            problems.append(f"{slug}: data_quality.{field_name} = {provenance!r}")
+    return problems
+
+
+def seed_physical_profiles(db: Session, directory: Path) -> dict[str, int]:
+    """Create a profile for every spot; curated values (if any) override derived ones.
+
+    Rows that already exist are only changed by curated entries, so values entered by
+    hand or by calibration are never reset to the derived defaults.
+    """
+    path = directory / "physical_profiles.json"
+    curated: dict[str, dict[str, Any]] = json.loads(path.read_text()) if path.exists() else {}
+    problems = [p for slug, raw in curated.items() for p in validate_profile(slug, raw)]
+    if problems:
+        raise SeedValidationError("; ".join(problems))
+    created = curated_count = 0
+    for spot in db.scalars(select(SurfSpot)).all():
+        row = db.get(SpotPhysicalProfile, spot.id)
+        entry = curated.get(spot.slug)
+        if row is None:
+            row = SpotPhysicalProfile(spot_id=spot.id, **derived_profile_values(spot))
+            db.add(row)
+            created += 1
+        if entry:
+            for key, value in entry.items():
+                if key == "data_quality":
+                    row.data_quality = {**(row.data_quality or {}), **value}
+                else:
+                    setattr(row, key, value)
+            curated_count += 1
+    db.flush()
+    return {"profiles_created": created, "profiles_curated": curated_count}

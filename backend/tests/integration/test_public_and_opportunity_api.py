@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -30,7 +32,11 @@ def test_forecast_and_events_after_pipeline(
     run_pipeline(db)
     fc = app_client.get("/api/spots/pipeline/forecast?days=5").json()
     assert fc["available"] and fc["source"]["is_demo"] and fc["stale"] is False
-    assert fc["breaking_height_method"] == "komar_gaughan_v1_uncalibrated"
+    assert fc["breaking_height_method"] == "linear_wave_v2"  # the method the predictions used
+    assert fc["algorithm_version"] == "2.0.0"
+    assert fc["points"][0]["uncertainty_kind"] == "heuristic"
+    assert fc["points"][0]["breaking_p10_ft"] < fc["points"][0]["breaking_p90_ft"]
+    assert [m["role"] for m in fc["models"]] == ["authoritative"]
     p0 = fc["points"][0]
     assert {
         "sig_wave_height_m",
@@ -108,3 +114,44 @@ def test_opportunity_endpoints_and_ownership(
     assert item["recipient_masked"].startswith("o***@") and item["is_demo"]
     outbox = owner.get("/api/dev/outbox?limit=5").json()
     assert any("Swell Alert" in str(m.get("subject")) for m in outbox)
+
+
+def test_map_conditions_snapshot(app_client: ApiClient, db: Session, few_spots: list[str]) -> None:
+    from datetime import timedelta
+
+    from app.core.database import utcnow
+
+    empty = app_client.get("/api/map/conditions").json()
+    assert empty["valid_time"] is None and all(s["conditions"] is None for s in empty["spots"])
+    run_pipeline(db)
+    r = app_client.get("/api/map/conditions")
+    assert r.status_code == 200 and "max-age=300" in r.headers["cache-control"]
+    snap = r.json()
+    assert {s["slug"] for s in snap["spots"]} == set(few_spots)
+    assert snap["step_hours"] == 3 and snap["range_start"] < snap["range_end"]
+    c = next(s["conditions"] for s in snap["spots"] if s["slug"] == "jeffreys-bay")
+    # Raw model fields and our prediction fields are both present, with provenance.
+    assert (
+        c["sig_wave_height_m"] is not None
+        and c["breaking_height_max_ft"] >= c["breaking_height_min_ft"]
+    )
+    assert c["source_code"] == "demo" and c["is_demo"] is True and c["run_issued_at"]
+    assert c["method"] and c["algorithm_version"] and c["explanation"]
+
+    later = (utcnow() + timedelta(days=3, minutes=17)).isoformat()
+    at = app_client.get("/api/map/conditions", params={"at": later}).json()
+    assert at["valid_time"].endswith(":00:00Z") or at["valid_time"].endswith(":00:00+00:00")
+    jb = next(s["conditions"] for s in at["spots"] if s["slug"] == "jeffreys-bay")
+    assert (
+        abs(
+            (
+                datetime.fromisoformat(jb["valid_time"]) - datetime.fromisoformat(at["valid_time"])
+            ).total_seconds()
+        )
+        <= 90 * 60
+    )
+    # Requests beyond the forecast range are clamped to it, never extrapolated.
+    far = app_client.get(
+        "/api/map/conditions", params={"at": (utcnow() + timedelta(days=60)).isoformat()}
+    ).json()
+    assert far["valid_time"] <= far["range_end"]

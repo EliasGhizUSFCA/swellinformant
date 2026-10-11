@@ -137,6 +137,8 @@ class NotificationOut(BaseModel):
     recipient_masked: str
     created_at: datetime
     sent_at: datetime | None
+    delivered_at: datetime | None = None
+    provider: str | None = None
     attempts: int
     last_error: str | None
     match_id: uuid.UUID | None

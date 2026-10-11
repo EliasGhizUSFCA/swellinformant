@@ -83,8 +83,11 @@ def sim_match(db: Session, start, end) -> OpportunityMatch:  # type: ignore[no-u
     return hits[0]
 
 
-def alert_count(db: Session, **filters: object) -> int:
+def alert_count(db: Session, include_suppressed: bool = False, **filters: object) -> int:
+    """Notifications that were (or will be) sent; suppressed records are excluded unless asked."""
     stmt = select(func.count(Notification.id))
+    if not include_suppressed:
+        stmt = stmt.where(Notification.status != NotificationStatus.SUPPRESSED)
     for k, v in filters.items():
         stmt = stmt.where(getattr(Notification, k) == v)
     return int(db.scalar(stmt) or 0)
@@ -131,10 +134,15 @@ def test_qualifying_swell_produces_flight_opportunity_and_alert(
     assert set(match.scores) == {"surf", "confidence", "affordability", "convenience"}
 
     sent = db.scalars(select(Notification).where(Notification.match_id == match.id)).all()
-    assert sent and all(n.status == NotificationStatus.SENT for n in sent)
+    assert sent and all(n.status == NotificationStatus.CAPTURED for n in sent)
     assert sent[0].kind == NotificationKind.NEW_OPPORTUNITY
     assert "[DEMO]" in sent[0].subject and "Jeffreys Bay" in sent[0].subject
     assert sent[0].snapshot["price"] is not None
+    # Our prediction's 80 % range at the peak travels with the alert, labelled heuristic.
+    snap = sent[0].snapshot
+    assert snap["range_kind"] == "heuristic"
+    assert snap["range_p10_ft"] <= snap["height_min_ft"] <= snap["range_p90_ft"]
+    assert "80% range" in (sent[0].body_text or "")
 
     # Re-running the whole pipeline never duplicates the alert.
     before = alert_count(db)
@@ -387,6 +395,35 @@ def test_dashboard_only_and_unverified_users_get_no_messages(
         )
         >= 2
     )
+    # Dashboard-only is the user's choice: no record. Unverified email is not: the withheld
+    # alert is visible with its reason, and nothing was handed to a provider.
+    assert alert_count(db, include_suppressed=True, user_id=dash.id) == 0
+    held = db.scalars(select(Notification).where(Notification.user_id == unverified.id)).all()
+    assert held and all(
+        n.status == NotificationStatus.SUPPRESSED
+        and n.last_error == "Not sent: email address not verified."
+        and n.sent_at is None
+        for n in held
+    )
+
+
+def test_suppressed_alert_is_sent_after_verification(db: Session, few_spots: list[str]) -> None:
+    user = make_user(db, "late@example.com", verified=False)
+    make_search(db, user)
+    run_pipeline(db)
+    simulate(db)
+    assert alert_count(db, user_id=user.id) == 0
+    assert alert_count(db, include_suppressed=True, user_id=user.id) >= 1
+    user.email_verified_at = utcnow()
+    db.commit()
+    run_pipeline(db, acquire=False)
+    db.expire_all()
+    delivered = db.scalars(
+        select(Notification).where(
+            Notification.user_id == user.id, Notification.status != NotificationStatus.SUPPRESSED
+        )
+    ).all()
+    assert delivered and all(n.status == NotificationStatus.CAPTURED for n in delivered)
 
 
 def test_daily_alert_cap(db: Session, few_spots: list[str]) -> None:
@@ -399,6 +436,14 @@ def test_daily_alert_cap(db: Session, few_spots: list[str]) -> None:
     simulate(db)
     simulate(db, slug="uluwatu")
     assert alert_count(db, user_id=user.id) <= 1
+    capped = db.scalars(
+        select(Notification).where(
+            Notification.user_id == user.id, Notification.status == NotificationStatus.SUPPRESSED
+        )
+    ).all()
+    assert capped and all(
+        "daily alert limit reached (1 per day)" in (n.last_error or "") for n in capped
+    )
 
 
 def test_price_drop_triggers_follow_up(db: Session, few_spots: list[str]) -> None:
@@ -632,7 +677,7 @@ def test_worker_crash_mid_send_is_recovered(db: Session, few_spots: list[str]) -
     db.commit()
     stats = deliver_pending(db)
     db.refresh(n)
-    assert stats.reclaimed == 1 and n.status == NotificationStatus.SENT
+    assert stats.reclaimed == 1 and n.status == NotificationStatus.CAPTURED
 
 
 def test_interrupted_forecast_run_is_retried(db: Session, few_spots: list[str]) -> None:

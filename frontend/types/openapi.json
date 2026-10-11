@@ -229,6 +229,7 @@
      "auth"
     ],
     "summary": "Verify Email",
+    "description": "Works without a session: the link is usually opened in whatever browser the email\nclient launches.",
     "operationId": "verify_email_api_auth_verify_email_post",
     "requestBody": {
      "content": {
@@ -246,7 +247,7 @@
       "content": {
        "application/json": {
         "schema": {
-         "$ref": "#/components/schemas/Message"
+         "$ref": "#/components/schemas/VerifyOut"
         }
        }
       }
@@ -278,6 +279,69 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/resend-verification-public": {
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Resend Verification Public",
+    "description": "For people who are signed out (e.g. on another device). Same response whether or\nnot the address is registered or already verified.",
+    "operationId": "resend_verification_public_api_auth_resend_verification_public_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ForgotPasswordIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/auth/verification-status": {
+   "get": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Verification Status",
+    "operationId": "verification_status_api_auth_verification_status_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/VerificationStatusOut"
         }
        }
       }
@@ -731,6 +795,59 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/Message"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/map/conditions": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Map Conditions",
+    "description": "All spots at one forecast hour, from cached predictions (public data, cacheable).",
+    "operationId": "map_conditions_api_map_conditions_get",
+    "parameters": [
+     {
+      "name": "at",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date-time"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast time (ISO 8601); default now",
+       "title": "At"
+      },
+      "description": "Forecast time (ISO 8601); default now"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MapSnapshotOut"
         }
        }
       }
@@ -1859,6 +1976,341 @@
     }
    }
   },
+  "/api/webhooks/resend": {
+   "post": {
+    "tags": [
+     "webhooks"
+    ],
+    "summary": "Resend Webhook",
+    "operationId": "resend_webhook_api_webhooks_resend_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": {
+          "type": "integer"
+         },
+         "type": "object",
+         "title": "Response Resend Webhook Api Webhooks Resend Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/webhooks/sendgrid": {
+   "post": {
+    "tags": [
+     "webhooks"
+    ],
+    "summary": "Sendgrid Webhook",
+    "operationId": "sendgrid_webhook_api_webhooks_sendgrid_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": {
+          "type": "integer"
+         },
+         "type": "object",
+         "title": "Response Sendgrid Webhook Api Webhooks Sendgrid Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/accuracy/overview": {
+   "get": {
+    "tags": [
+     "accuracy"
+    ],
+    "summary": "Accuracy Overview",
+    "operationId": "accuracy_overview_api_admin_accuracy_overview_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AccuracyOverview"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/accuracy/metrics": {
+   "get": {
+    "tags": [
+     "accuracy"
+    ],
+    "summary": "Accuracy Metrics",
+    "operationId": "accuracy_metrics_api_admin_accuracy_metrics_get",
+    "parameters": [
+     {
+      "name": "variable",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "enum": [
+        "hs",
+        "hs_h13",
+        "tp",
+        "dir"
+       ],
+       "type": "string",
+       "default": "hs",
+       "title": "Variable"
+      }
+     },
+     {
+      "name": "scope",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "station",
+          "region",
+          "global",
+          "spot"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Scope"
+      }
+     },
+     {
+      "name": "source",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 40
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Source"
+      }
+     },
+     {
+      "name": "window_days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer",
+         "maximum": 3650,
+         "minimum": 1
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Window Days"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/MetricRow"
+         },
+         "title": "Response Accuracy Metrics Api Admin Accuracy Metrics Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/admin/accuracy/pairs": {
+   "get": {
+    "tags": [
+     "accuracy"
+    ],
+    "summary": "Accuracy Pairs",
+    "operationId": "accuracy_pairs_api_admin_accuracy_pairs_get",
+    "parameters": [
+     {
+      "name": "variable",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "enum": [
+        "hs",
+        "hs_h13",
+        "tp",
+        "dir"
+       ],
+       "type": "string",
+       "default": "hs",
+       "title": "Variable"
+      }
+     },
+     {
+      "name": "source",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 40
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Source"
+      }
+     },
+     {
+      "name": "model_version",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "maxLength": 60,
+       "default": "raw",
+       "title": "Model Version"
+      }
+     },
+     {
+      "name": "station",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 80
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Station"
+      }
+     },
+     {
+      "name": "lead_min",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "number",
+         "maximum": 400,
+         "minimum": 0
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Lead Min"
+      }
+     },
+     {
+      "name": "lead_max",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "number",
+         "maximum": 400,
+         "minimum": 0
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Lead Max"
+      }
+     },
+     {
+      "name": "days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 3650,
+       "minimum": 1,
+       "default": 90,
+       "title": "Days"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 5000,
+       "minimum": 1,
+       "default": 1500,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/PairsOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/dev/simulate-swell": {
    "post": {
     "tags": [
@@ -1909,15 +2361,51 @@
     ],
     "summary": "Pipeline",
     "operationId": "pipeline_api_dev_run_pipeline_post",
+    "parameters": [
+     {
+      "name": "acquire",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "description": "Fetch forecasts first (false: use what is stored)",
+       "default": true,
+       "title": "Acquire"
+      },
+      "description": "Fetch forecasts first (false: use what is stored)"
+     },
+     {
+      "name": "deliver",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "description": "False stops after alert generation (QUEUED)",
+       "default": true,
+       "title": "Deliver"
+      },
+      "description": "False stops after alert generation (QUEUED)"
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "type": "object",
+         "additionalProperties": true,
          "title": "Response Pipeline Api Dev Run Pipeline Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -1975,10 +2463,160 @@
      }
     }
    }
+  },
+  "/api/dev/test-email": {
+   "post": {
+    "tags": [
+     "developer tools"
+    ],
+    "summary": "Send Test Email",
+    "description": "Send a test message to the signed-in developer's own verified address.\n\nRestricted to admins (``python -m app.cli make-admin EMAIL``), only to their own\nverified address (never an arbitrary recipient, so it cannot be used as a relay),\nand rate-limited.",
+    "operationId": "send_test_email_api_dev_test_email_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "additionalProperties": true,
+         "type": "object",
+         "title": "Response Send Test Email Api Dev Test Email Post"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/dev/test-email/{message_id}": {
+   "get": {
+    "tags": [
+     "developer tools"
+    ],
+    "summary": "Test Email Status",
+    "operationId": "test_email_status_api_dev_test_email__message_id__get",
+    "parameters": [
+     {
+      "name": "message_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Message Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Test Email Status Api Dev Test Email  Message Id  Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "components": {
   "schemas": {
+   "AccuracyOverview": {
+    "properties": {
+     "latest_validation_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Validation At"
+     },
+     "latest_metrics_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Metrics At"
+     },
+     "pair_counts": {
+      "items": {
+       "$ref": "#/components/schemas/PairCount"
+      },
+      "type": "array",
+      "title": "Pair Counts"
+     },
+     "stations": {
+      "items": {
+       "$ref": "#/components/schemas/StationSummary"
+      },
+      "type": "array",
+      "title": "Stations"
+     },
+     "models": {
+      "items": {
+       "$ref": "#/components/schemas/ModelVersionSummary"
+      },
+      "type": "array",
+      "title": "Models"
+     },
+     "experiments": {
+      "items": {
+       "$ref": "#/components/schemas/ExperimentSummary"
+      },
+      "type": "array",
+      "title": "Experiments"
+     },
+     "lead_buckets_h": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Lead Buckets H"
+     },
+     "notes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Notes"
+     }
+    },
+    "type": "object",
+    "required": [
+     "latest_validation_at",
+     "latest_metrics_at",
+     "pair_counts",
+     "stations",
+     "models",
+     "experiments",
+     "lead_buckets_h",
+     "notes"
+    ],
+    "title": "AccuracyOverview"
+   },
    "AirportOut": {
     "properties": {
      "iata": {
@@ -2043,6 +2681,54 @@
      "csrf_token"
     ],
     "title": "AuthOut"
+   },
+   "BlendInfo": {
+    "properties": {
+     "method": {
+      "type": "string",
+      "title": "Method"
+     },
+     "members": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Members"
+     },
+     "cross_checks": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Cross Checks"
+     },
+     "flagged_hours": {
+      "type": "integer",
+      "title": "Flagged Hours"
+     },
+     "flags": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Flags"
+     },
+     "skill": {
+      "title": "Skill"
+     }
+    },
+    "type": "object",
+    "required": [
+     "method",
+     "members",
+     "cross_checks",
+     "flagged_hours",
+     "flags",
+     "skill"
+    ],
+    "title": "BlendInfo"
    },
    "BreakType": {
     "type": "string",
@@ -2187,6 +2873,144 @@
      "is_daylight": {
       "type": "boolean",
       "title": "Is Daylight"
+     },
+     "sig_wave_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sig Wave Height M"
+     },
+     "source_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Code"
+     },
+     "source_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Name"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo",
+      "default": false
+     },
+     "run_issued_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Issued At"
+     },
+     "method": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Method"
+     },
+     "algorithm_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Algorithm Version"
+     },
+     "explanation": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Explanation"
+     },
+     "breaking_height_mid_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Height Mid Ft"
+     },
+     "breaking_p10_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking P10 Ft"
+     },
+     "breaking_p90_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking P90 Ft"
+     },
+     "uncertainty_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Uncertainty Kind"
+     },
+     "ml_model_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ml Model Version"
      }
     },
     "type": "object",
@@ -2206,7 +3030,42 @@
      "confidence_label",
      "is_daylight"
     ],
-    "title": "Conditions"
+    "title": "Conditions",
+    "description": "One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:\n\n* raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and\n  wind fields), and\n* our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``)."
+   },
+   "DailyStat": {
+    "properties": {
+     "day": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Day"
+     },
+     "n": {
+      "type": "integer",
+      "title": "N"
+     },
+     "bias": {
+      "type": "number",
+      "title": "Bias"
+     },
+     "mae": {
+      "type": "number",
+      "title": "Mae"
+     },
+     "rmse": {
+      "type": "number",
+      "title": "Rmse"
+     }
+    },
+    "type": "object",
+    "required": [
+     "day",
+     "n",
+     "bias",
+     "mae",
+     "rmse"
+    ],
+    "title": "DailyStat"
    },
    "DailySummary": {
     "properties": {
@@ -2344,6 +3203,126 @@
     },
     "type": "object",
     "title": "DestinationsIn"
+   },
+   "EmailDeliveryOut": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "sent_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sent At"
+     },
+     "delivered_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Delivered At"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "status",
+     "provider",
+     "created_at",
+     "sent_at",
+     "delivered_at",
+     "error"
+    ],
+    "title": "EmailDeliveryOut",
+    "description": "What happened to an account email, in provider terms. ``captured`` means a\ndevelopment inbox kept it (nothing was delivered to a real mailbox)."
+   },
+   "EnsemblePoint": {
+    "properties": {
+     "valid_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Valid Time"
+     },
+     "hs_mean_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs Mean M"
+     },
+     "hs_spread_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs Spread M"
+     },
+     "members": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Members"
+     }
+    },
+    "type": "object",
+    "required": [
+     "valid_time",
+     "hs_mean_m",
+     "hs_spread_m",
+     "members"
+    ],
+    "title": "EnsemblePoint"
    },
    "EventOut": {
     "properties": {
@@ -2532,6 +3511,58 @@
     ],
     "title": "EventOut"
    },
+   "ExperimentSummary": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "target": {
+      "type": "string",
+      "title": "Target"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "finished_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Finished At"
+     },
+     "conclusion": {
+      "type": "string",
+      "title": "Conclusion"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "name",
+     "target",
+     "status",
+     "created_at",
+     "finished_at",
+     "conclusion"
+    ],
+    "title": "ExperimentSummary"
+   },
    "ForecastPoint": {
     "properties": {
      "valid_time": {
@@ -2553,6 +3584,39 @@
        }
       ],
       "title": "Sig Wave Height M"
+     },
+     "wave_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Period S"
+     },
+     "wave_period_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Period Kind"
+     },
+     "wave_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Direction Deg"
      },
      "primary_swell_height_m": {
       "anyOf": [
@@ -2620,6 +3684,39 @@
       ],
       "title": "Secondary Swell Direction Deg"
      },
+     "tertiary_swell_height_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tertiary Swell Height M"
+     },
+     "tertiary_swell_period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tertiary Swell Period S"
+     },
+     "tertiary_swell_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tertiary Swell Direction Deg"
+     },
      "wind_wave_height_m": {
       "anyOf": [
        {
@@ -2641,6 +3738,17 @@
        }
       ],
       "title": "Wind Wave Period S"
+     },
+     "wind_wave_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Wave Direction Deg"
      },
      "wind_speed_kmh": {
       "anyOf": [
@@ -2715,6 +3823,83 @@
      "breaking_height_max_ft": {
       "type": "number",
       "title": "Breaking Height Max Ft"
+     },
+     "breaking_height_mid_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Height Mid Ft"
+     },
+     "breaking_p10_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking P10 Ft"
+     },
+     "breaking_p90_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking P90 Ft"
+     },
+     "uncertainty_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Uncertainty Kind"
+     },
+     "breaking_height_method": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Height Method"
+     },
+     "algorithm_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Algorithm Version"
+     },
+     "ml_model_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ml Model Version"
      },
      "score": {
       "type": "integer",
@@ -2919,6 +4104,29 @@
     "type": "object",
     "title": "HTTPValidationError"
    },
+   "HistogramBin": {
+    "properties": {
+     "lo": {
+      "type": "number",
+      "title": "Lo"
+     },
+     "hi": {
+      "type": "number",
+      "title": "Hi"
+     },
+     "count": {
+      "type": "integer",
+      "title": "Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "lo",
+     "hi",
+     "count"
+    ],
+    "title": "HistogramBin"
+   },
    "LinkOut": {
     "properties": {
      "label": {
@@ -2957,6 +4165,114 @@
      "password"
     ],
     "title": "LoginIn"
+   },
+   "MapSnapshotOut": {
+    "properties": {
+     "requested_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Requested At"
+     },
+     "valid_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Valid Time"
+     },
+     "range_start": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Range Start"
+     },
+     "range_end": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Range End"
+     },
+     "step_hours": {
+      "type": "integer",
+      "title": "Step Hours"
+     },
+     "spots": {
+      "items": {
+       "$ref": "#/components/schemas/MapSpotOut"
+      },
+      "type": "array",
+      "title": "Spots"
+     }
+    },
+    "type": "object",
+    "required": [
+     "requested_at",
+     "valid_time",
+     "range_start",
+     "range_end",
+     "step_hours",
+     "spots"
+    ],
+    "title": "MapSnapshotOut",
+    "description": "Every monitored spot at one forecast time, from cached predictions only."
+   },
+   "MapSpotOut": {
+    "properties": {
+     "slug": {
+      "type": "string",
+      "title": "Slug"
+     },
+     "conditions": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Conditions"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "event_at_time": {
+      "type": "boolean",
+      "title": "Event At Time"
+     },
+     "upcoming_event_count": {
+      "type": "integer",
+      "title": "Upcoming Event Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "slug",
+     "conditions",
+     "event_at_time",
+     "upcoming_event_count"
+    ],
+    "title": "MapSpotOut"
    },
    "MatchCounts": {
     "properties": {
@@ -3597,6 +4913,431 @@
     ],
     "title": "Message"
    },
+   "MetricRow": {
+    "properties": {
+     "scope": {
+      "type": "string",
+      "title": "Scope"
+     },
+     "scope_key": {
+      "type": "string",
+      "title": "Scope Key"
+     },
+     "source_code": {
+      "type": "string",
+      "title": "Source Code"
+     },
+     "model_version": {
+      "type": "string",
+      "title": "Model Version"
+     },
+     "variable": {
+      "type": "string",
+      "title": "Variable"
+     },
+     "lead_bucket_h": {
+      "type": "integer",
+      "title": "Lead Bucket H"
+     },
+     "period_start": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Period Start"
+     },
+     "period_end": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Period End"
+     },
+     "n": {
+      "type": "integer",
+      "title": "N"
+     },
+     "bias": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bias"
+     },
+     "mae": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mae"
+     },
+     "rmse": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rmse"
+     },
+     "scatter_index": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Scatter Index"
+     },
+     "hh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hh"
+     },
+     "correlation": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Correlation"
+     },
+     "skill_vs_persistence": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Skill Vs Persistence"
+     },
+     "skill_vs_climatology": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Skill Vs Climatology"
+     },
+     "extra": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Extra"
+     },
+     "computed_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Computed At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "scope",
+     "scope_key",
+     "source_code",
+     "model_version",
+     "variable",
+     "lead_bucket_h",
+     "period_start",
+     "period_end",
+     "n",
+     "bias",
+     "mae",
+     "rmse",
+     "scatter_index",
+     "hh",
+     "correlation",
+     "skill_vs_persistence",
+     "skill_vs_climatology",
+     "extra",
+     "computed_at"
+    ],
+    "title": "MetricRow"
+   },
+   "ModelPoint": {
+    "properties": {
+     "valid_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Valid Time"
+     },
+     "hs_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs M"
+     },
+     "tp_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tp S"
+     },
+     "direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Direction Deg"
+     },
+     "wind_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Kmh"
+     },
+     "wind_direction_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Direction Deg"
+     }
+    },
+    "type": "object",
+    "required": [
+     "valid_time",
+     "hs_m",
+     "tp_s",
+     "direction_deg",
+     "wind_kmh",
+     "wind_direction_deg"
+    ],
+    "title": "ModelPoint"
+   },
+   "ModelSeries": {
+    "properties": {
+     "source_code": {
+      "type": "string",
+      "title": "Source Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "family": {
+      "type": "string",
+      "title": "Family"
+     },
+     "kind": {
+      "type": "string",
+      "title": "Kind"
+     },
+     "role": {
+      "type": "string",
+      "title": "Role"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo"
+     },
+     "run_issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Run Issued At"
+     },
+     "period_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Period Kind"
+     },
+     "points": {
+      "items": {
+       "$ref": "#/components/schemas/ModelPoint"
+      },
+      "type": "array",
+      "title": "Points"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source_code",
+     "name",
+     "family",
+     "kind",
+     "role",
+     "is_demo",
+     "run_issued_at",
+     "period_kind",
+     "points"
+    ],
+    "title": "ModelSeries",
+    "description": "Raw output of one numerical model (or our blend) at this spot, 3-hourly."
+   },
+   "ModelVersionSummary": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "version": {
+      "type": "integer",
+      "title": "Version"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "model_type": {
+      "type": "string",
+      "title": "Model Type"
+     },
+     "target": {
+      "type": "string",
+      "title": "Target"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "activated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Activated At"
+     },
+     "retired_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Retired At"
+     },
+     "experiment_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Experiment Id"
+     },
+     "training": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Training"
+     },
+     "dataset_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dataset Version"
+     },
+     "decision": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Decision"
+     },
+     "applicability": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Applicability"
+     },
+     "test_metrics": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Test Metrics"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "label",
+     "name",
+     "version",
+     "status",
+     "model_type",
+     "target",
+     "created_at",
+     "activated_at",
+     "retired_at",
+     "experiment_id",
+     "training",
+     "dataset_version",
+     "decision",
+     "applicability",
+     "test_metrics"
+    ],
+    "title": "ModelVersionSummary"
+   },
    "NotificationChannelPref": {
     "type": "string",
     "enum": [
@@ -3650,6 +5391,29 @@
        }
       ],
       "title": "Sent At"
+     },
+     "delivered_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Delivered At"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
      },
      "attempts": {
       "type": "integer",
@@ -4108,6 +5872,110 @@
     ],
     "title": "OfferOut"
    },
+   "PairCount": {
+    "properties": {
+     "source_code": {
+      "type": "string",
+      "title": "Source Code"
+     },
+     "model_version": {
+      "type": "string",
+      "title": "Model Version"
+     },
+     "variable": {
+      "type": "string",
+      "title": "Variable"
+     },
+     "n": {
+      "type": "integer",
+      "title": "N"
+     },
+     "first_valid": {
+      "type": "string",
+      "format": "date-time",
+      "title": "First Valid"
+     },
+     "last_valid": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Last Valid"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source_code",
+     "model_version",
+     "variable",
+     "n",
+     "first_valid",
+     "last_valid"
+    ],
+    "title": "PairCount"
+   },
+   "PairsOut": {
+    "properties": {
+     "variable": {
+      "type": "string",
+      "title": "Variable"
+     },
+     "unit": {
+      "type": "string",
+      "title": "Unit"
+     },
+     "source_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Code"
+     },
+     "model_version": {
+      "type": "string",
+      "title": "Model Version"
+     },
+     "n_total": {
+      "type": "integer",
+      "title": "N Total"
+     },
+     "sample": {
+      "items": {
+       "$ref": "#/components/schemas/ScatterPoint"
+      },
+      "type": "array",
+      "title": "Sample"
+     },
+     "histogram": {
+      "items": {
+       "$ref": "#/components/schemas/HistogramBin"
+      },
+      "type": "array",
+      "title": "Histogram"
+     },
+     "daily": {
+      "items": {
+       "$ref": "#/components/schemas/DailyStat"
+      },
+      "type": "array",
+      "title": "Daily"
+     }
+    },
+    "type": "object",
+    "required": [
+     "variable",
+     "unit",
+     "source_code",
+     "model_version",
+     "n_total",
+     "sample",
+     "histogram",
+     "daily"
+    ],
+    "title": "PairsOut"
+   },
    "PhoneConfirmIn": {
     "properties": {
      "code": {
@@ -4137,6 +6005,71 @@
      "phone_number"
     ],
     "title": "PhoneStartIn"
+   },
+   "PhysicalProfileOut": {
+    "properties": {
+     "shore_normal_deg": {
+      "type": "number",
+      "title": "Shore Normal Deg"
+     },
+     "forecast_point_depth_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Point Depth M"
+     },
+     "controlling_depth_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Controlling Depth M"
+     },
+     "focusing_ref": {
+      "type": "number",
+      "title": "Focusing Ref"
+     },
+     "focusing_kappa": {
+      "type": "number",
+      "title": "Focusing Kappa"
+     },
+     "has_shadow_table": {
+      "type": "boolean",
+      "title": "Has Shadow Table"
+     },
+     "data_quality": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object",
+      "title": "Data Quality"
+     },
+     "notes": {
+      "type": "string",
+      "title": "Notes"
+     }
+    },
+    "type": "object",
+    "required": [
+     "shore_normal_deg",
+     "forecast_point_depth_m",
+     "controlling_depth_m",
+     "focusing_ref",
+     "focusing_kappa",
+     "has_shadow_table",
+     "data_quality",
+     "notes"
+    ],
+    "title": "PhysicalProfileOut"
    },
    "ProfileIn": {
     "properties": {
@@ -4454,6 +6387,45 @@
      "token"
     ],
     "title": "ResetPasswordIn"
+   },
+   "ScatterPoint": {
+    "properties": {
+     "station": {
+      "type": "string",
+      "title": "Station"
+     },
+     "valid_time": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Valid Time"
+     },
+     "lead_hours": {
+      "type": "number",
+      "title": "Lead Hours"
+     },
+     "forecast": {
+      "type": "number",
+      "title": "Forecast"
+     },
+     "observed": {
+      "type": "number",
+      "title": "Observed"
+     },
+     "error": {
+      "type": "number",
+      "title": "Error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "station",
+     "valid_time",
+     "lead_hours",
+     "forecast",
+     "observed",
+     "error"
+    ],
+    "title": "ScatterPoint"
    },
    "SearchIn": {
     "properties": {
@@ -5384,6 +7356,16 @@
       },
       "type": "array",
       "title": "Airports"
+     },
+     "physical_profile": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/PhysicalProfileOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -5487,6 +7469,17 @@
       ],
       "title": "Breaking Height Method"
      },
+     "algorithm_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Algorithm Version"
+     },
      "calibrated": {
       "type": "boolean",
       "title": "Calibrated",
@@ -5507,6 +7500,32 @@
       "type": "array",
       "title": "Daily",
       "default": []
+     },
+     "models": {
+      "items": {
+       "$ref": "#/components/schemas/ModelSeries"
+      },
+      "type": "array",
+      "title": "Models",
+      "default": []
+     },
+     "ensemble": {
+      "items": {
+       "$ref": "#/components/schemas/EnsemblePoint"
+      },
+      "type": "array",
+      "title": "Ensemble",
+      "default": []
+     },
+     "blend": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/BlendInfo"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -5722,6 +7741,82 @@
      "primary_airport"
     ],
     "title": "SpotSummary"
+   },
+   "StationSummary": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "latitude": {
+      "type": "number",
+      "title": "Latitude"
+     },
+     "longitude": {
+      "type": "number",
+      "title": "Longitude"
+     },
+     "water_depth_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Water Depth M"
+     },
+     "paired_spots": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Paired Spots"
+     },
+     "observations": {
+      "type": "integer",
+      "title": "Observations"
+     },
+     "latest_observation": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Observation"
+     },
+     "pairs": {
+      "type": "integer",
+      "title": "Pairs"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "provider",
+     "latitude",
+     "longitude",
+     "water_depth_m",
+     "paired_spots",
+     "observations",
+     "latest_observation",
+     "pairs"
+    ],
+    "title": "StationSummary"
    },
    "TokenIn": {
     "properties": {
@@ -6132,6 +8227,82 @@
      "type"
     ],
     "title": "ValidationError"
+   },
+   "VerificationStatusOut": {
+    "properties": {
+     "email_verified": {
+      "type": "boolean",
+      "title": "Email Verified"
+     },
+     "delivery_mode": {
+      "type": "string",
+      "title": "Delivery Mode"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "dev_inbox_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dev Inbox Url"
+     },
+     "captured_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Captured At"
+     },
+     "last_email": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/EmailDeliveryOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "type": "object",
+    "required": [
+     "email_verified",
+     "delivery_mode",
+     "provider",
+     "dev_inbox_url",
+     "captured_at",
+     "last_email"
+    ],
+    "title": "VerificationStatusOut"
+   },
+   "VerifyOut": {
+    "properties": {
+     "message": {
+      "type": "string",
+      "title": "Message"
+     },
+     "outcome": {
+      "type": "string",
+      "title": "Outcome"
+     }
+    },
+    "type": "object",
+    "required": [
+     "message",
+     "outcome"
+    ],
+    "title": "VerifyOut"
    },
    "WindRequirement": {
     "type": "string",

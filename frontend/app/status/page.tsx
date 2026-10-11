@@ -1,20 +1,27 @@
 "use client";
 
-import { Activity, Database } from "lucide-react";
+import { Activity, Database, LineChart } from "lucide-react";
+import Link from "next/link";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useSystemStatus } from "@/hooks/queries";
+import { useMe, useSystemStatus } from "@/hooks/queries";
 import { relativeTime, titleCase } from "@/lib/format";
 
 export default function StatusPage() {
   const { data, isLoading } = useSystemStatus();
+  const { data: me } = useMe();
   return (
     <AppShell>
       <PageHeader eyebrow="System" title="Status & data freshness" description="Background workers keep monitoring whether or not anyone has the site open." />
+      {me?.is_admin && (
+        <Link href="/status/accuracy" className="mb-4 inline-flex items-center gap-2 text-sm font-medium text-ocean hover:underline" data-testid="accuracy-link">
+          <LineChart className="size-4" /> Forecast accuracy dashboard (developers)
+        </Link>
+      )}
       {isLoading && <Skeleton className="h-64" />}
       {data && (
         <div className="grid gap-6 lg:grid-cols-2">

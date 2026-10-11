@@ -15,7 +15,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ForecastProviderName = Literal["open_meteo", "windy", "demo"]
 FlightProviderName = Literal["duffel", "amadeus", "demo"]
-EmailProviderName = Literal["console", "smtp", "resend", "sendgrid"]
+EmailProviderName = Literal["console", "mailpit", "smtp", "resend", "sendgrid"]
+# Providers that capture mail locally for development: nothing reaches a real mailbox.
+CAPTURE_EMAIL_PROVIDERS = frozenset({"console", "mailpit"})
 SmsProviderName = Literal["console", "twilio", "disabled"]
 
 
@@ -76,6 +78,58 @@ class Settings(BaseSettings):
     open_meteo_api_key: str | None = None
     open_meteo_wave_model: str = "ncep_gfswave025"
     open_meteo_atmos_model: str = "gfs_seamless"
+
+    # NOAA open data on AWS (direct GRIB2 by byte range; no key needed).
+    # Bandwidth (measured): ~24 MB per forecast step for all 50 spots (15 MB without the
+    # global.0p25 fallback grid), ~2 GB per 10-day run at 3-hourly steps
+    # (docs/noaa-direct-ingestion.md).
+    noaa_gfs_base_url: str = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
+    # File layout below the bucket (GFS v16). GFS v17 is expected to rename files, so the
+    # layout is configuration: placeholders {ymd}, {hh}, {grid}, {fhour:03d}.
+    noaa_gfs_wave_path_template: str = (
+        "gfs.{ymd}/{hh}/wave/gridded/gfswave.t{hh}z.{grid}.f{fhour:03d}.grib2"
+    )
+    noaa_gfs_atmos_path_template: str = "gfs.{ymd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{fhour:03d}"
+    noaa_gefs_base_url: str = "https://noaa-gefs-pds.s3.amazonaws.com"
+    noaa_step_hours: int = Field(default=3, ge=1, le=6)
+    noaa_max_lead_hours: int = Field(default=240, ge=24, le=384)
+    noaa_availability_lag_hours: float = 5.0
+    # GEFS-Wave ensemble mean/spread (uncertainty); its own job, off by default.
+    gefs_enabled: bool = False
+    gefs_step_hours: int = Field(default=6, ge=3, le=12)
+    gefs_max_lead_hours: int = Field(default=240, ge=24, le=384)
+    gefs_availability_lag_hours: float = 7.5
+    # ECMWF open data (CC BY 4.0, attribution required).
+    ecmwf_base_url: str = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
+    ecmwf_max_lead_hours: int = Field(default=240, ge=24, le=360)
+    ecmwf_availability_lag_hours: float = 8.0
+    # Shared by the GRIB ingesters.
+    grib_download_workers: int = Field(default=6, ge=1, le=16)
+    grib_max_cell_distance_km: float = 60.0
+
+    # ------------------------------------------------------------------ blending
+    # Combine the latest run of each configured source into one forecast (see
+    # app.services.forecasts.blend). Off = use the highest-priority source only.
+    forecast_blend_enabled: bool = True
+
+    # ------------------------------------------------------------------ observations
+    # Comma separated: aodn, metoffice, ndbc (NDBC needs www.ndbc.noaa.gov reachable).
+    observation_providers: str = "aodn,metoffice,ndbc"
+    observations_enabled: bool = False
+    observation_lookback_hours: int = Field(default=48, ge=1, le=24 * 31)
+    aodn_base_url: str = "https://aodn-cloud-optimised.s3.ap-southeast-2.amazonaws.com"
+    metoffice_base_url: str = (
+        "https://met-office-marine-observations-data.s3.eu-west-2.amazonaws.com"
+    )
+    ndbc_base_url: str = "https://www.ndbc.noaa.gov"
+
+    # ------------------------------------------------------------------ verification & ML
+    verification_enabled: bool = False
+    # Forecast sources archived at observation stations for verification.
+    point_forecast_sources: str = "gfswave_bulletin"
+    ml_artifact_dir: str = "/tmp/swell-ml"  # noqa: S108  (use a persistent volume in production)
+    # Apply ACTIVE ML corrections (only models that passed the deployment criteria).
+    ml_corrections_enabled: bool = True
     windy_api_key: str | None = None
     # Demo provider only: false = calm background seas, so only simulated swells create
     # events (used by the end-to-end tests for deterministic results).
@@ -111,8 +165,16 @@ class Settings(BaseSettings):
     fx_rates_usd_json: str | None = None
 
     # ------------------------------------------------------------------ notifications
+    # console: OUTBOX_DIR file; mailpit: local SMTP inbox (web UI at DEV_INBOX_URL);
+    # smtp / resend / sendgrid: real delivery.
     email_provider: EmailProviderName = "console"
     email_from: str = "Swell Travel Agent <alerts@localhost>"
+    # Where developers read captured mail (shown in the UI for capture providers only).
+    dev_inbox_url: str | None = None
+    # Delivery webhooks (optional): Resend signs with Svix ("whsec_..."), SendGrid's Event
+    # Webhook with an ECDSA key (base64 DER public key from the SendGrid settings page).
+    resend_webhook_secret: str | None = None
+    sendgrid_webhook_public_key: str | None = None
     resend_api_key: str | None = None
     sendgrid_api_key: str | None = None
     smtp_host: str = "localhost"
@@ -144,6 +206,9 @@ class Settings(BaseSettings):
     retention_flight_days: int = 30
     retention_job_log_days: int = 30
     retention_notification_days: int = 365
+    # The prediction archive and verification pairs are kept much longer than forecast
+    # runs: they are the only record of what was forecast at each lead time.
+    retention_archive_days: int = 730
 
     @field_validator("app_base_url", "api_base_url")
     @classmethod
@@ -159,13 +224,18 @@ class Settings(BaseSettings):
                 raise ValueError("ENABLE_DEV_ENDPOINTS must be false in production")
             if not self.cookie_secure:
                 raise ValueError("COOKIE_SECURE must be true in production (HTTPS)")
+            if self.email_capture_only:
+                raise ValueError(
+                    f"EMAIL_PROVIDER={self.email_provider} only captures mail locally; "
+                    "use smtp, resend or sendgrid in production"
+                )
         providers = self.forecast_provider_list
         if "demo" in providers and len(providers) > 1:
             raise ValueError(
                 "FORECAST_PROVIDERS cannot mix 'demo' with live providers: synthetic data "
                 "must never be blended into real forecasts"
             )
-        unknown = set(providers) - {"open_meteo", "windy", "demo"}
+        unknown = set(providers) - {"open_meteo", "windy", "demo", "noaa_gfs", "ecmwf_ifs"}
         if unknown:
             raise ValueError(f"Unknown FORECAST_PROVIDERS entries: {sorted(unknown)}")
         if self.detection_lead_min_days > self.detection_lead_max_days:
@@ -196,11 +266,33 @@ class Settings(BaseSettings):
         return names or ["demo"]
 
     @property
+    def observation_provider_list(self) -> list[str]:
+        return [p.strip() for p in self.observation_providers.split(",") if p.strip()]
+
+    @property
+    def point_forecast_source_list(self) -> list[str]:
+        return [p.strip() for p in self.point_forecast_sources.split(",") if p.strip()]
+
+    @property
     def fx_rates_usd(self) -> dict[str, float]:
         if not self.fx_rates_usd_json:
             return {}
         data = json.loads(self.fx_rates_usd_json)
         return {str(k).upper(): float(v) for k, v in data.items()}
+
+    @property
+    def email_capture_only(self) -> bool:
+        """True when email is captured locally (development) rather than delivered."""
+        return self.email_provider in CAPTURE_EMAIL_PROVIDERS
+
+    @property
+    def captured_email_location(self) -> str | None:
+        """Where a developer finds captured mail, or None for real delivery."""
+        if self.email_provider == "mailpit":
+            return self.dev_inbox_url or f"Mailpit at {self.smtp_host}"
+        if self.email_provider == "console":
+            return f"{self.outbox_dir}/outbox.jsonl"
+        return None
 
     def missing_live_credentials(self) -> list[str]:
         """Names of env vars that are required by the configured live providers but unset."""

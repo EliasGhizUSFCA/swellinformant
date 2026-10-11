@@ -145,11 +145,49 @@ class NotificationKind(StrEnum):
 
 
 class NotificationStatus(StrEnum):
+    """Delivery state. Only DELIVERED means the provider confirmed delivery (webhook).
+
+    ACCEPTED: the provider accepted the message for delivery (not yet confirmed).
+    CAPTURED: a development provider (console outbox / Mailpit) captured it; nothing left
+    the machine. SUPPRESSED: not sent because of a rule (e.g. email not verified, daily
+    cap), with the reason in ``last_error``. SKIPPED: withdrawn before sending.
+    """
+
     QUEUED = "queued"
     SENDING = "sending"
-    SENT = "sent"
+    ACCEPTED = "accepted"
+    CAPTURED = "captured"
+    DELIVERED = "delivered"
+    BOUNCED = "bounced"
+    COMPLAINED = "complained"
+    REJECTED = "rejected"
     FAILED = "failed"
     SKIPPED = "skipped"
+    SUPPRESSED = "suppressed"
+
+
+# Statuses meaning "handed over and not (yet) known to have failed".
+NOTIFICATION_HANDED_OVER = frozenset(
+    {NotificationStatus.ACCEPTED, NotificationStatus.CAPTURED, NotificationStatus.DELIVERED}
+)
+
+
+class EmailPurpose(StrEnum):
+    VERIFY_EMAIL = "verify_email"
+    PASSWORD_RESET = "password_reset"  # noqa: S105 - enum value, not a secret
+    TEST = "test"
+
+
+class EmailDeliveryStatus(StrEnum):
+    QUEUED = "queued"
+    SENDING = "sending"
+    ACCEPTED = "accepted"
+    CAPTURED = "captured"
+    DELIVERED = "delivered"
+    BOUNCED = "bounced"
+    COMPLAINED = "complained"
+    REJECTED = "rejected"
+    FAILED = "failed"
 
 
 class JobStatus(StrEnum):
@@ -157,6 +195,13 @@ class JobStatus(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+
+class MLModelStatus(StrEnum):
+    CANDIDATE = "candidate"  # trained and evaluated, not serving
+    ACTIVE = "active"  # passed the deployment criteria and is applied to forecasts
+    REJECTED = "rejected"  # failed the deployment criteria on held-out data
+    RETIRED = "retired"  # was active, since replaced or deactivated
 
 
 QUALITY_ORDER: list[QualityLabel] = [

@@ -152,7 +152,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Verify Email */
+        /**
+         * Verify Email
+         * @description Works without a session: the link is usually opened in whatever browser the email
+         *     client launches.
+         */
         post: operations["verify_email_api_auth_verify_email_post"];
         delete?: never;
         options?: never;
@@ -171,6 +175,44 @@ export interface paths {
         put?: never;
         /** Resend Verification */
         post: operations["resend_verification_api_auth_resend_verification_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/resend-verification-public": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resend Verification Public
+         * @description For people who are signed out (e.g. on another device). Same response whether or
+         *     not the address is registered or already verified.
+         */
+        post: operations["resend_verification_public_api_auth_resend_verification_public_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/verification-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Verification Status */
+        get: operations["verification_status_api_auth_verification_status_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -360,6 +402,26 @@ export interface paths {
         post?: never;
         /** Delete Account */
         delete: operations["delete_account_api_users_me_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/map/conditions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Map Conditions
+         * @description All spots at one forecast hour, from cached predictions (public data, cacheable).
+         */
+        get: operations["map_conditions_api_map_conditions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -752,6 +814,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/webhooks/resend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resend Webhook */
+        post: operations["resend_webhook_api_webhooks_resend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/webhooks/sendgrid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sendgrid Webhook */
+        post: operations["sendgrid_webhook_api_webhooks_sendgrid_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/accuracy/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Accuracy Overview */
+        get: operations["accuracy_overview_api_admin_accuracy_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/accuracy/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Accuracy Metrics */
+        get: operations["accuracy_metrics_api_admin_accuracy_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/accuracy/pairs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Accuracy Pairs */
+        get: operations["accuracy_pairs_api_admin_accuracy_pairs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dev/simulate-swell": {
         parameters: {
             query?: never;
@@ -806,10 +953,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dev/test-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Test Email
+         * @description Send a test message to the signed-in developer's own verified address.
+         *
+         *     Restricted to admins (``python -m app.cli make-admin EMAIL``), only to their own
+         *     verified address (never an arbitrary recipient, so it cannot be used as a relay),
+         *     and rate-limited.
+         */
+        post: operations["send_test_email_api_dev_test_email_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dev/test-email/{message_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Test Email Status */
+        get: operations["test_email_status_api_dev_test_email__message_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccuracyOverview */
+        AccuracyOverview: {
+            /** Latest Validation At */
+            latest_validation_at: string | null;
+            /** Latest Metrics At */
+            latest_metrics_at: string | null;
+            /** Pair Counts */
+            pair_counts: components["schemas"]["PairCount"][];
+            /** Stations */
+            stations: components["schemas"]["StationSummary"][];
+            /** Models */
+            models: components["schemas"]["ModelVersionSummary"][];
+            /** Experiments */
+            experiments: components["schemas"]["ExperimentSummary"][];
+            /** Lead Buckets H */
+            lead_buckets_h: number[];
+            /** Notes */
+            notes: string[];
+        };
         /** AirportOut */
         AirportOut: {
             /** Iata */
@@ -835,6 +1042,27 @@ export interface components {
             /** Csrf Token */
             csrf_token: string;
         };
+        /** BlendInfo */
+        BlendInfo: {
+            /** Method */
+            method: string;
+            /** Members */
+            members: {
+                [key: string]: unknown;
+            }[];
+            /** Cross Checks */
+            cross_checks: {
+                [key: string]: unknown;
+            }[];
+            /** Flagged Hours */
+            flagged_hours: number;
+            /** Flags */
+            flags: {
+                [key: string]: number;
+            };
+            /** Skill */
+            skill: unknown;
+        };
         /**
          * BreakType
          * @enum {string}
@@ -854,7 +1082,14 @@ export interface components {
             /** Confirm Password */
             confirm_password: string;
         };
-        /** Conditions */
+        /**
+         * Conditions
+         * @description One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:
+         *
+         *     * raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and
+         *       wind fields), and
+         *     * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``).
+         */
         Conditions: {
             /**
              * Valid Time
@@ -887,6 +1122,51 @@ export interface components {
             confidence_label: string;
             /** Is Daylight */
             is_daylight: boolean;
+            /** Sig Wave Height M */
+            sig_wave_height_m?: number | null;
+            /** Source Code */
+            source_code?: string | null;
+            /** Source Name */
+            source_name?: string | null;
+            /**
+             * Is Demo
+             * @default false
+             */
+            is_demo: boolean;
+            /** Run Issued At */
+            run_issued_at?: string | null;
+            /** Method */
+            method?: string | null;
+            /** Algorithm Version */
+            algorithm_version?: string | null;
+            /** Explanation */
+            explanation?: string | null;
+            /** Breaking Height Mid Ft */
+            breaking_height_mid_ft?: number | null;
+            /** Breaking P10 Ft */
+            breaking_p10_ft?: number | null;
+            /** Breaking P90 Ft */
+            breaking_p90_ft?: number | null;
+            /** Uncertainty Kind */
+            uncertainty_kind?: string | null;
+            /** Ml Model Version */
+            ml_model_version?: string | null;
+        };
+        /** DailyStat */
+        DailyStat: {
+            /**
+             * Day
+             * Format: date-time
+             */
+            day: string;
+            /** N */
+            n: number;
+            /** Bias */
+            bias: number;
+            /** Mae */
+            mae: number;
+            /** Rmse */
+            rmse: number;
         };
         /** DailySummary */
         DailySummary: {
@@ -940,6 +1220,42 @@ export interface components {
             countries?: string[];
             /** Region Groups */
             region_groups?: string[];
+        };
+        /**
+         * EmailDeliveryOut
+         * @description What happened to an account email, in provider terms. ``captured`` means a
+         *     development inbox kept it (nothing was delivered to a real mailbox).
+         */
+        EmailDeliveryOut: {
+            /** Status */
+            status: string;
+            /** Provider */
+            provider: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Sent At */
+            sent_at: string | null;
+            /** Delivered At */
+            delivered_at: string | null;
+            /** Error */
+            error: string | null;
+        };
+        /** EnsemblePoint */
+        EnsemblePoint: {
+            /**
+             * Valid Time
+             * Format: date-time
+             */
+            valid_time: string;
+            /** Hs Mean M */
+            hs_mean_m: number | null;
+            /** Hs Spread M */
+            hs_spread_m: number | null;
+            /** Members */
+            members: number | null;
         };
         /** EventOut */
         EventOut: {
@@ -1020,6 +1336,26 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** ExperimentSummary */
+        ExperimentSummary: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Target */
+            target: string;
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
+            /** Conclusion */
+            conclusion: string;
+        };
         /** ForecastPoint */
         ForecastPoint: {
             /**
@@ -1031,6 +1367,12 @@ export interface components {
             is_daylight: boolean;
             /** Sig Wave Height M */
             sig_wave_height_m: number | null;
+            /** Wave Period S */
+            wave_period_s?: number | null;
+            /** Wave Period Kind */
+            wave_period_kind?: string | null;
+            /** Wave Direction Deg */
+            wave_direction_deg?: number | null;
             /** Primary Swell Height M */
             primary_swell_height_m: number | null;
             /** Primary Swell Period S */
@@ -1043,10 +1385,18 @@ export interface components {
             secondary_swell_period_s: number | null;
             /** Secondary Swell Direction Deg */
             secondary_swell_direction_deg: number | null;
+            /** Tertiary Swell Height M */
+            tertiary_swell_height_m?: number | null;
+            /** Tertiary Swell Period S */
+            tertiary_swell_period_s?: number | null;
+            /** Tertiary Swell Direction Deg */
+            tertiary_swell_direction_deg?: number | null;
             /** Wind Wave Height M */
             wind_wave_height_m: number | null;
             /** Wind Wave Period S */
             wind_wave_period_s: number | null;
+            /** Wind Wave Direction Deg */
+            wind_wave_direction_deg?: number | null;
             /** Wind Speed Kmh */
             wind_speed_kmh: number | null;
             /** Wind Direction Deg */
@@ -1063,6 +1413,20 @@ export interface components {
             breaking_height_min_ft: number;
             /** Breaking Height Max Ft */
             breaking_height_max_ft: number;
+            /** Breaking Height Mid Ft */
+            breaking_height_mid_ft?: number | null;
+            /** Breaking P10 Ft */
+            breaking_p10_ft?: number | null;
+            /** Breaking P90 Ft */
+            breaking_p90_ft?: number | null;
+            /** Uncertainty Kind */
+            uncertainty_kind?: string | null;
+            /** Breaking Height Method */
+            breaking_height_method?: string | null;
+            /** Algorithm Version */
+            algorithm_version?: string | null;
+            /** Ml Model Version */
+            ml_model_version?: string | null;
             /** Score */
             score: number;
             /** Label */
@@ -1126,6 +1490,15 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HistogramBin */
+        HistogramBin: {
+            /** Lo */
+            lo: number;
+            /** Hi */
+            hi: number;
+            /** Count */
+            count: number;
+        };
         /** LinkOut */
         LinkOut: {
             /** Label */
@@ -1142,6 +1515,34 @@ export interface components {
             email: string;
             /** Password */
             password: string;
+        };
+        /**
+         * MapSnapshotOut
+         * @description Every monitored spot at one forecast time, from cached predictions only.
+         */
+        MapSnapshotOut: {
+            /** Requested At */
+            requested_at: string | null;
+            /** Valid Time */
+            valid_time: string | null;
+            /** Range Start */
+            range_start: string | null;
+            /** Range End */
+            range_end: string | null;
+            /** Step Hours */
+            step_hours: number;
+            /** Spots */
+            spots: components["schemas"]["MapSpotOut"][];
+        };
+        /** MapSpotOut */
+        MapSpotOut: {
+            /** Slug */
+            slug: string;
+            conditions: components["schemas"]["Conditions"] | null;
+            /** Event At Time */
+            event_at_time: boolean;
+            /** Upcoming Event Count */
+            upcoming_event_count: number;
         };
         /** MatchCounts */
         MatchCounts: {
@@ -1387,6 +1788,149 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** MetricRow */
+        MetricRow: {
+            /** Scope */
+            scope: string;
+            /** Scope Key */
+            scope_key: string;
+            /** Source Code */
+            source_code: string;
+            /** Model Version */
+            model_version: string;
+            /** Variable */
+            variable: string;
+            /** Lead Bucket H */
+            lead_bucket_h: number;
+            /**
+             * Period Start
+             * Format: date-time
+             */
+            period_start: string;
+            /**
+             * Period End
+             * Format: date-time
+             */
+            period_end: string;
+            /** N */
+            n: number;
+            /** Bias */
+            bias: number | null;
+            /** Mae */
+            mae: number | null;
+            /** Rmse */
+            rmse: number | null;
+            /** Scatter Index */
+            scatter_index: number | null;
+            /** Hh */
+            hh: number | null;
+            /** Correlation */
+            correlation: number | null;
+            /** Skill Vs Persistence */
+            skill_vs_persistence: number | null;
+            /** Skill Vs Climatology */
+            skill_vs_climatology: number | null;
+            /** Extra */
+            extra: {
+                [key: string]: unknown;
+            };
+            /**
+             * Computed At
+             * Format: date-time
+             */
+            computed_at: string;
+        };
+        /** ModelPoint */
+        ModelPoint: {
+            /**
+             * Valid Time
+             * Format: date-time
+             */
+            valid_time: string;
+            /** Hs M */
+            hs_m: number | null;
+            /** Tp S */
+            tp_s: number | null;
+            /** Direction Deg */
+            direction_deg: number | null;
+            /** Wind Kmh */
+            wind_kmh: number | null;
+            /** Wind Direction Deg */
+            wind_direction_deg: number | null;
+        };
+        /**
+         * ModelSeries
+         * @description Raw output of one numerical model (or our blend) at this spot, 3-hourly.
+         */
+        ModelSeries: {
+            /** Source Code */
+            source_code: string;
+            /** Name */
+            name: string;
+            /** Family */
+            family: string;
+            /** Kind */
+            kind: string;
+            /** Role */
+            role: string;
+            /** Is Demo */
+            is_demo: boolean;
+            /**
+             * Run Issued At
+             * Format: date-time
+             */
+            run_issued_at: string;
+            /** Period Kind */
+            period_kind: string | null;
+            /** Points */
+            points: components["schemas"]["ModelPoint"][];
+        };
+        /** ModelVersionSummary */
+        ModelVersionSummary: {
+            /** Id */
+            id: number;
+            /** Label */
+            label: string;
+            /** Name */
+            name: string;
+            /** Version */
+            version: number;
+            /** Status */
+            status: string;
+            /** Model Type */
+            model_type: string;
+            /** Target */
+            target: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Activated At */
+            activated_at: string | null;
+            /** Retired At */
+            retired_at: string | null;
+            /** Experiment Id */
+            experiment_id: number | null;
+            /** Training */
+            training: {
+                [key: string]: unknown;
+            };
+            /** Dataset Version */
+            dataset_version: string | null;
+            /** Decision */
+            decision: {
+                [key: string]: unknown;
+            };
+            /** Applicability */
+            applicability: {
+                [key: string]: unknown;
+            };
+            /** Test Metrics */
+            test_metrics: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * NotificationChannelPref
          * @enum {string}
@@ -1416,6 +1960,10 @@ export interface components {
             created_at: string;
             /** Sent At */
             sent_at: string | null;
+            /** Delivered At */
+            delivered_at?: string | null;
+            /** Provider */
+            provider?: string | null;
             /** Attempts */
             attempts: number;
             /** Last Error */
@@ -1535,6 +2083,46 @@ export interface components {
             /** Links */
             links: components["schemas"]["LinkOut"][];
         };
+        /** PairCount */
+        PairCount: {
+            /** Source Code */
+            source_code: string;
+            /** Model Version */
+            model_version: string;
+            /** Variable */
+            variable: string;
+            /** N */
+            n: number;
+            /**
+             * First Valid
+             * Format: date-time
+             */
+            first_valid: string;
+            /**
+             * Last Valid
+             * Format: date-time
+             */
+            last_valid: string;
+        };
+        /** PairsOut */
+        PairsOut: {
+            /** Variable */
+            variable: string;
+            /** Unit */
+            unit: string;
+            /** Source Code */
+            source_code: string | null;
+            /** Model Version */
+            model_version: string;
+            /** N Total */
+            n_total: number;
+            /** Sample */
+            sample: components["schemas"]["ScatterPoint"][];
+            /** Histogram */
+            histogram: components["schemas"]["HistogramBin"][];
+            /** Daily */
+            daily: components["schemas"]["DailyStat"][];
+        };
         /** PhoneConfirmIn */
         PhoneConfirmIn: {
             /** Code */
@@ -1544,6 +2132,27 @@ export interface components {
         PhoneStartIn: {
             /** Phone Number */
             phone_number: string;
+        };
+        /** PhysicalProfileOut */
+        PhysicalProfileOut: {
+            /** Shore Normal Deg */
+            shore_normal_deg: number;
+            /** Forecast Point Depth M */
+            forecast_point_depth_m: number | null;
+            /** Controlling Depth M */
+            controlling_depth_m: number | null;
+            /** Focusing Ref */
+            focusing_ref: number;
+            /** Focusing Kappa */
+            focusing_kappa: number;
+            /** Has Shadow Table */
+            has_shadow_table: boolean;
+            /** Data Quality */
+            data_quality: {
+                [key: string]: string;
+            };
+            /** Notes */
+            notes: string;
         };
         /** ProfileIn */
         ProfileIn: {
@@ -1624,6 +2233,24 @@ export interface components {
             confirm_password: string;
             /** Token */
             token: string;
+        };
+        /** ScatterPoint */
+        ScatterPoint: {
+            /** Station */
+            station: string;
+            /**
+             * Valid Time
+             * Format: date-time
+             */
+            valid_time: string;
+            /** Lead Hours */
+            lead_hours: number;
+            /** Forecast */
+            forecast: number;
+            /** Observed */
+            observed: number;
+            /** Error */
+            error: number;
         };
         /** SearchIn */
         SearchIn: {
@@ -1963,6 +2590,7 @@ export interface components {
             description: string;
             /** Airports */
             airports: components["schemas"]["SpotAirportOut"][];
+            physical_profile?: components["schemas"]["PhysicalProfileOut"] | null;
         };
         /** SpotForecastOut */
         SpotForecastOut: {
@@ -1983,6 +2611,8 @@ export interface components {
             stale: boolean;
             /** Breaking Height Method */
             breaking_height_method?: string | null;
+            /** Algorithm Version */
+            algorithm_version?: string | null;
             /**
              * Calibrated
              * @default false
@@ -1998,6 +2628,17 @@ export interface components {
              * @default []
              */
             daily: components["schemas"]["DailySummary"][];
+            /**
+             * Models
+             * @default []
+             */
+            models: components["schemas"]["ModelSeries"][];
+            /**
+             * Ensemble
+             * @default []
+             */
+            ensemble: components["schemas"]["EnsemblePoint"][];
+            blend?: components["schemas"]["BlendInfo"] | null;
         };
         /** SpotMini */
         SpotMini: {
@@ -2070,6 +2711,29 @@ export interface components {
              * @default 0
              */
             upcoming_event_count: number;
+        };
+        /** StationSummary */
+        StationSummary: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** Water Depth M */
+            water_depth_m: number | null;
+            /** Paired Spots */
+            paired_spots: string[];
+            /** Observations */
+            observations: number;
+            /** Latest Observation */
+            latest_observation: string | null;
+            /** Pairs */
+            pairs: number;
         };
         /** TokenIn */
         TokenIn: {
@@ -2277,6 +2941,27 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VerificationStatusOut */
+        VerificationStatusOut: {
+            /** Email Verified */
+            email_verified: boolean;
+            /** Delivery Mode */
+            delivery_mode: string;
+            /** Provider */
+            provider: string;
+            /** Dev Inbox Url */
+            dev_inbox_url: string | null;
+            /** Captured At */
+            captured_at: string | null;
+            last_email: components["schemas"]["EmailDeliveryOut"] | null;
+        };
+        /** VerifyOut */
+        VerifyOut: {
+            /** Message */
+            message: string;
+            /** Outcome */
+            outcome: string;
         };
         /**
          * WindRequirement
@@ -2503,7 +3188,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Message"];
+                    "application/json": components["schemas"]["VerifyOut"];
                 };
             };
             /** @description Validation Error */
@@ -2533,6 +3218,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Message"];
+                };
+            };
+        };
+    };
+    resend_verification_public_api_auth_resend_verification_public_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForgotPasswordIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verification_status_api_auth_verification_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationStatusOut"];
                 };
             };
         };
@@ -2892,6 +3630,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    map_conditions_api_map_conditions_get: {
+        parameters: {
+            query?: {
+                /** @description Forecast time (ISO 8601); default now */
+                at?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapSnapshotOut"];
                 };
             };
             /** @description Validation Error */
@@ -3649,6 +4419,142 @@ export interface operations {
             };
         };
     };
+    resend_webhook_api_webhooks_resend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+        };
+    };
+    sendgrid_webhook_api_webhooks_sendgrid_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+        };
+    };
+    accuracy_overview_api_admin_accuracy_overview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccuracyOverview"];
+                };
+            };
+        };
+    };
+    accuracy_metrics_api_admin_accuracy_metrics_get: {
+        parameters: {
+            query?: {
+                variable?: "hs" | "hs_h13" | "tp" | "dir";
+                scope?: ("station" | "region" | "global" | "spot") | null;
+                source?: string | null;
+                window_days?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricRow"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accuracy_pairs_api_admin_accuracy_pairs_get: {
+        parameters: {
+            query?: {
+                variable?: "hs" | "hs_h13" | "tp" | "dir";
+                source?: string | null;
+                model_version?: string;
+                station?: string | null;
+                lead_min?: number | null;
+                lead_max?: number | null;
+                days?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     simulate_api_dev_simulate_swell_post: {
         parameters: {
             query?: never;
@@ -3686,7 +4592,12 @@ export interface operations {
     };
     pipeline_api_dev_run_pipeline_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Fetch forecasts first (false: use what is stored) */
+                acquire?: boolean;
+                /** @description False stops after alert generation (QUEUED) */
+                deliver?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3702,6 +4613,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3726,6 +4646,61 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_test_email_api_dev_test_email_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    test_email_status_api_dev_test_email__message_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

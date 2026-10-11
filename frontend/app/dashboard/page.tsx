@@ -17,8 +17,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { qk, useEvents, useNotifications, useOpportunities, useSearches } from "@/hooks/queries";
+import { qk, useEvents, useNotifications, useOpportunities, useSearches, useVerificationStatus } from "@/hooks/queries";
 import { errorMessage, post } from "@/lib/api";
+import { deliveryStatus } from "@/lib/delivery";
 import { formatDate, heightRange, relativeTime, titleCase, type Units } from "@/lib/format";
 import { QUALITY_LABELS, asQuality } from "@/lib/quality";
 import type { User } from "@/types/api";
@@ -38,18 +39,56 @@ function Stat({ icon, label, value, href }: { icon: React.ReactNode; label: stri
   return href ? <Link href={href}>{body}</Link> : body;
 }
 
-function VerifyBanner() {
+function VerifyBanner({ email }: { email: string }) {
+  const queryClient = useQueryClient();
+  const status = useVerificationStatus(true);
   const resend = useMutation({
     mutationFn: () => post<{ message: string }>("/api/auth/resend-verification"),
-    onSuccess: (r) => toast.success(r.message),
+    onSuccess: (r) => {
+      toast.success(r.message);
+      void queryClient.invalidateQueries({ queryKey: qk.verification });
+    },
     onError: (e) => toast.error(errorMessage(e)),
   });
+  const s = status.data;
+  const last = s?.last_email;
+  const failed = last && ["failed", "bounced", "rejected", "complained"].includes(last.status);
   return (
-    <Alert variant="warn" className="mb-6">
+    <Alert variant={failed ? "danger" : "warn"} className="mb-6" data-testid="verify-banner">
       <MailWarning />
       <AlertTitle>Verify your email to receive alerts</AlertTitle>
-      <AlertDescription className="flex flex-wrap items-center gap-3">
-        <span>We sent you a link. Opportunities still appear here, but email alerts start after verification.</span>
+      <AlertDescription className="space-y-2">
+        <p>
+          Opportunities still appear here, but email alerts only start once <strong>{email}</strong> is verified.
+        </p>
+        {last && (
+          <p className="flex flex-wrap items-center gap-2 text-sm" data-testid="verify-delivery">
+            Latest verification email:
+            <Badge variant={deliveryStatus(last.status).variant}>{deliveryStatus(last.status).label}</Badge>
+            <span className="text-muted-foreground">
+              {deliveryStatus(last.status).help} ({relativeTime(last.sent_at ?? last.created_at)})
+            </span>
+            {last.error && <span className="text-destructive">Reason: {last.error}</span>}
+          </p>
+        )}
+        {s?.delivery_mode === "capture" && (
+          <p className="text-sm" data-testid="dev-inbox-hint">
+            Development mode: emails are captured, not delivered.{" "}
+            {s.dev_inbox_url ? (
+              <a href={s.dev_inbox_url} target="_blank" rel="noreferrer" className="font-medium text-ocean underline">
+                Open the dev inbox
+              </a>
+            ) : (
+              <>
+                Find the message in <code className="rounded bg-muted px-1">{s.captured_at}</code>
+              </>
+            )}{" "}
+            to get your link.
+          </p>
+        )}
+        {s?.delivery_mode === "live" && !failed && (
+          <p className="text-sm text-muted-foreground">Not there after a few minutes? Check your spam folder, then resend.</p>
+        )}
         <Button size="sm" variant="outline" onClick={() => resend.mutate()} disabled={resend.isPending}>
           Resend link
         </Button>
@@ -111,7 +150,7 @@ function Dashboard({ user }: { user: User }) {
       <Suspense>
         <Welcome />
       </Suspense>
-      {!user.email_verified && <VerifyBanner />}
+      {!user.email_verified && <VerifyBanner email={user.email} />}
 
       <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat icon={<SearchIcon />} label="Active searches" value={searches.isLoading ? "–" : activeSearches} href="/searches" />
@@ -227,8 +266,8 @@ function Dashboard({ user }: { user: User }) {
                 >
                   <div className="truncate text-sm font-medium">{n.subject}</div>
                   <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant={n.status === "sent" ? "good" : n.status === "failed" ? "danger" : "muted"}>
-                      {n.status}
+                    <Badge variant={deliveryStatus(n.status).variant} title={deliveryStatus(n.status).help}>
+                      {deliveryStatus(n.status).label}
                     </Badge>
                     {titleCase(n.channel)} · {relativeTime(n.created_at)}
                   </div>

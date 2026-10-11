@@ -25,8 +25,10 @@
                        │               │                         │
           ┌────────────▼───┐   ┌───────┴────────┐                │
           │ celery beat    │   │ celery worker  │────────────────┘
-          │ (scheduler)    │──▶│ jobs A–H       │──▶ Open-Meteo (NOAA GFS + GFS-Wave/WW3)
-          └────────────────┘   │                │──▶ Windy Point Forecast API (optional, licensed key)
+          │ (scheduler)    │──▶│ jobs A–H       │──▶ NOAA open data (GFS, GFS-Wave, GEFS-Wave, bulletins)
+          └────────────────┘   │                │──▶ ECMWF open data (IFS, ecWAM)
+                               │                │──▶ AODN / Met Office / NDBC buoys (verification)
+                               │                │──▶ Open-Meteo, Windy (optional sources)
                                │                │──▶ Duffel / Amadeus Enterprise (flights)
                                │                │──▶ Resend / SendGrid / SMTP (email)
                                └────────────────┘──▶ Twilio (SMS)
@@ -40,13 +42,18 @@ runs in the browser or inside a web request handler.
 | Job | Task name | Trigger | What it does |
 |-----|-----------|---------|--------------|
 | A | `forecasts.acquire` | beat (every 3 h) | Centralised fetch of wave + wind + sea level for all active spots (batched multi-point requests), one `forecast_runs` row per source/model run. Skips runs already ingested. |
-| B | `quality.predict` | chained after A, beat hourly safety net | Scores every new forecast timestep → `surf_quality_predictions`. |
+| A2 | `forecasts.blend` | chained after A | With two or more independent model families, builds a blend run (one member per family, correlated-error weights, an active ML correction applied to its validated member) and per-hour `forecast_comparisons`. |
+| A3 | `forecasts.acquire_ensemble` | beat 4×/day when `GEFS_ENABLED` | GEFS-Wave ensemble mean/spread at every spot → `forecast_ensemble_stats` (uncertainty only). |
+| B | `quality.predict` | chained after A2, beat hourly safety net | Breaking height (nearshore model v2), 80 % range and quality score for every new timestep → `surf_quality_predictions`; the authoritative run is copied to `prediction_archive`. |
 | C | `detection.detect` | chained after B, beat hourly | Clusters daylight timesteps into `swell_events`; updates / downgrades / expires existing events. |
 | D | `matching.match` | chained after C, beat every 30 min | Evaluates every active saved search against candidate events → `opportunity_matches`. |
 | E | `flights.discover` | chained after D, beat hourly | Searches flights only for surf-matched opportunities; shared cache across users; buffer + tz logic; stores `flight_offers`. |
 | F | `alerts.generate` | chained after E, beat every 15 min | Decides whether an alert is due (new / improved / price drop), dedups, queues `notifications`. |
 | G | `notifications.deliver` | chained after F, beat every 2 min | Claims queued notifications (`FOR UPDATE SKIP LOCKED`), sends via provider, retries transient failures. |
-| H | `maintenance.cleanup` | beat daily | Retention: old forecasts/predictions/flight searches, expired tokens/sessions, job logs; marks stale data. |
+| H | `maintenance.cleanup` | beat daily | Retention: old forecasts/predictions/flight searches, expired tokens/sessions, job logs; marks stale data. The prediction archive is kept `RETENTION_ARCHIVE_DAYS`. |
+| V1 | `observations.ingest` | beat hourly when `OBSERVATIONS_ENABLED` | Buoy observations (AODN, Met Office, NDBC) → `buoy_observations`. |
+| V2 | `verification.collect_point_forecasts` | beat 4×/day when `VERIFICATION_ENABLED` | GFS-Wave station bulletins (forecasts as issued) at the buoys → `point_forecasts`. |
+| V3 | `verification.run` | beat daily when `VERIFICATION_ENABLED` | Pairs forecasts with observations (`prediction_validation`) and computes rolling `forecast_accuracy_metrics`. |
 
 Reliability: Redis job locks (one instance of each job at a time), `acks_late` +
 `task_reject_on_worker_lost`, idempotent upserts guarded by unique constraints,
@@ -92,11 +99,11 @@ workers.
 * **No PostGIS.** With 50–500 spots, nearest-airport and distance queries are trivially
   fast with a haversine in Python; PostGIS would add an extension and image dependency
   without material benefit. The schema stores plain lat/lon and can adopt PostGIS later.
-* **Forecast source:** Open-Meteo's JSON API serving NOAA **GFS** (atmosphere) and NOAA
-  **GFS-Wave** (WAVEWATCH III, `ncep_gfswave025`). It needs no GRIB tooling, supports
-  multi-point batch requests, and exposes model-run metadata. Windy's Point Forecast API
-  is an optional licensed adapter. Surfline has no public/authorized API, so it is not
-  integrated (no scraping).
+* **Forecast sources:** NOAA GFS-Wave + GFS and ECMWF IFS read directly from their
+  open-data buckets as GRIB2 by byte range, blended across independent model families,
+  with GEFS-Wave spread for uncertainty (`docs/decisions.md` ADR-001 to ADR-003).
+  Open-Meteo and Windy remain optional adapters. Surfline has no public/authorized API,
+  so it is not integrated (no scraping).
 * **Flights:** Duffel is primary (self-serve API keys). Amadeus Self-Service was shut
   down on 2026-07-17; the Amadeus adapter remains for Enterprise customers with a
   configurable base URL. A demo provider produces clearly labelled mock offers.

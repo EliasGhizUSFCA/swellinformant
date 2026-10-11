@@ -21,7 +21,9 @@ export function heightRange(minFt: number, maxFt: number, units: Units = "ft"): 
   const a = toUnits(minFt, units);
   const b = toUnits(maxFt, units);
   const round = (v: number) => (units === "m" ? Math.round(v * 10) / 10 : Math.round(v * 2) / 2);
-  return `${trim(round(a))}–${trim(round(b))} ${units}`;
+  const lo = trim(round(a));
+  const hi = trim(round(b));
+  return lo === hi ? `${lo} ${units}` : `${lo}–${hi} ${units}`;
 }
 
 export function metres(value: number | null | undefined, digits = 1): string {

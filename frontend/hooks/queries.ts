@@ -1,10 +1,14 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { ApiError, get } from "@/lib/api";
 import type {
+  AccuracyMetric,
+  AccuracyOverview,
+  AccuracyPairs,
   Airport,
+  MapSnapshot,
   MatchDetail,
   MatchSummary,
   NotificationPage,
@@ -16,6 +20,7 @@ import type {
   SwellEvent,
   SystemStatus,
   User,
+  VerificationStatus,
 } from "@/types/api";
 
 export const qk = {
@@ -35,6 +40,9 @@ export const qk = {
   airports: (q: string) => ["airports", q] as const,
   regions: ["regions"] as const,
   status: ["system-status"] as const,
+  verification: ["verification-status"] as const,
+  accuracy: (part: string, params: string) => ["accuracy", part, params] as const,
+  mapConditions: (at: string | null) => ["map-conditions", at] as const,
 };
 
 /** The signed-in user, or `null` when signed out (never throws for 401). */
@@ -132,3 +140,53 @@ export const useRegions = () =>
 
 export const useSystemStatus = () =>
   useQuery({ queryKey: qk.status, queryFn: ({ signal }) => get<SystemStatus>("/api/system/status", signal), staleTime: 60_000 });
+
+/** Developer accuracy dashboard (admin accounts only). */
+export const useAccuracyOverview = (enabled: boolean) =>
+  useQuery({
+    queryKey: qk.accuracy("overview", ""),
+    queryFn: ({ signal }) => get<AccuracyOverview>("/api/admin/accuracy/overview", signal),
+    enabled,
+    staleTime: 60_000,
+  });
+
+export const useAccuracyMetrics = (params: URLSearchParams, enabled: boolean) =>
+  useQuery({
+    queryKey: qk.accuracy("metrics", params.toString()),
+    queryFn: ({ signal }) => get<AccuracyMetric[]>(`/api/admin/accuracy/metrics?${params}`, signal),
+    enabled,
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  });
+
+export const useAccuracyPairs = (params: URLSearchParams, enabled: boolean) =>
+  useQuery({
+    queryKey: qk.accuracy("pairs", params.toString()),
+    queryFn: ({ signal }) => get<AccuracyPairs>(`/api/admin/accuracy/pairs?${params}`, signal),
+    enabled,
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  });
+
+/** What happened to the latest verification email; polls while it is still in flight. */
+export const useVerificationStatus = (enabled: boolean) =>
+  useQuery({
+    queryKey: qk.verification,
+    queryFn: ({ signal }) => get<VerificationStatus>("/api/auth/verification-status", signal),
+    enabled,
+    refetchInterval: (q) => {
+      const s = q.state.data?.last_email?.status;
+      return s === "queued" || s === "sending" ? 2000 : false;
+    },
+  });
+
+/** All spots at one forecast hour (cached predictions). Keeps the previous hour on screen
+ * while the next loads so scrubbing the time control never blanks the map. */
+export const useMapConditions = (at: string | null) =>
+  useQuery({
+    queryKey: qk.mapConditions(at),
+    queryFn: ({ signal }) =>
+      get<MapSnapshot>(at ? `/api/map/conditions?at=${encodeURIComponent(at)}` : "/api/map/conditions", signal),
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60_000,
+  });

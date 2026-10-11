@@ -8,10 +8,18 @@ from app.services.forecasts.demo import DemoForecastProvider, SwellOverride
 from app.services.forecasts.open_meteo import OpenMeteoProvider
 from app.services.forecasts.windy import WindyProvider
 
+# Source codes of the direct open-data ingesters (their modules are imported lazily
+# because they pull in ecCodes).
+NOAA_GFS_CODE = "noaa_gfs_direct"
+ECMWF_IFS_CODE = "ecmwf_ifs_open"
+GEFS_WAVE_CODE = "noaa_gefs_wave"
+
 SOURCE_CODES = {
     "open_meteo": OpenMeteoProvider.code,
     "windy": WindyProvider.code,
     "demo": DemoForecastProvider.code,
+    "noaa_gfs": NOAA_GFS_CODE,
+    "ecmwf_ifs": ECMWF_IFS_CODE,
 }
 
 
@@ -34,4 +42,12 @@ def build_provider(
         return DemoForecastProvider(
             settings.forecast_days, overrides=overrides, natural_swells=settings.demo_natural_swells
         )
+    if name == "noaa_gfs":
+        from app.services.forecasts.noaa import NoaaGfsProvider
+
+        return NoaaGfsProvider(settings)
+    if name == "ecmwf_ifs":
+        from app.services.forecasts.ecmwf import EcmwfIfsProvider
+
+        return EcmwfIfsProvider(settings)
     raise ValueError(f"Unknown forecast provider {name!r}")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     ARRAY,
@@ -23,6 +23,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.models.enums import BreakType, SkillLevel, TidePreference
 from app.models.types import TimestampMixin, str_enum
+
+if TYPE_CHECKING:
+    from app.models.forecast_engine import SpotPhysicalProfile
 
 
 class Airport(Base):
@@ -123,6 +126,9 @@ class SurfSpot(TimestampMixin, Base):
         passive_deletes=True,
         lazy="selectin",
         order_by="(SpotAirport.is_primary.desc(), SpotAirport.transfer_minutes)",
+    )
+    physical_profile: Mapped[SpotPhysicalProfile | None] = relationship(
+        "SpotPhysicalProfile", uselist=False, lazy="selectin", passive_deletes=True
     )
 
     @property

@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
@@ -33,6 +33,7 @@ from app.models import (
     NotificationPreference,
     OpportunityMatch,
     SavedSearch,
+    SurfQualityPrediction,
     SwellEvent,
     User,
 )
@@ -71,6 +72,7 @@ class AlertStats:
     revalidated: int = 0
     invalidated: int = 0
     stale_forecast: int = 0
+    suppressed: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return self.__dict__.copy()
@@ -78,6 +80,28 @@ class AlertStats:
 
 def label_rank(label: str | QualityLabel) -> int:
     return QUALITY_ORDER.index(QualityLabel(label))
+
+
+def _peak_range(match: OpportunityMatch) -> dict[str, Any]:
+    """The 80 % range of our prediction at the event's peak, from the run that set the peak."""
+    event = match.swell_event
+    db = object_session(match)
+    if db is None or event.latest_run_id is None:
+        return {}
+    pred = db.scalar(
+        select(SurfQualityPrediction).where(
+            SurfQualityPrediction.run_id == event.latest_run_id,
+            SurfQualityPrediction.spot_id == event.spot_id,
+            SurfQualityPrediction.valid_time == event.peak_time,
+        )
+    )
+    if pred is None or pred.breaking_p10_ft is None or pred.breaking_p90_ft is None:
+        return {}
+    return {
+        "range_p10_ft": round(pred.breaking_p10_ft * 2) / 2,
+        "range_p90_ft": round(pred.breaking_p90_ft * 2) / 2,
+        "range_kind": pred.uncertainty_kind,
+    }
 
 
 def build_snapshot(match: OpportunityMatch, kind: NotificationKind) -> dict[str, Any]:
@@ -111,6 +135,16 @@ def build_snapshot(match: OpportunityMatch, kind: NotificationKind) -> dict[str,
         else None,
         "wind_direction": compass_label(event.peak_wind_direction_deg),
         "is_demo_forecast": event.is_demo,
+        "forecast_issued": event.latest_run.issued_at.isoformat() if event.latest_run else None,
+        "forecast_source": event.latest_run.source.name
+        if event.latest_run and event.latest_run.source
+        else None,
+        "arrival_buffer_days": match.search.travel.arrival_buffer_days
+        if match.search.travel
+        else None,
+        "departure_buffer_days": match.search.travel.departure_buffer_days
+        if match.search.travel
+        else None,
         "arrival_date": match.recommended_arrival_date.isoformat()
         if match.recommended_arrival_date
         else None,
@@ -119,6 +153,7 @@ def build_snapshot(match: OpportunityMatch, kind: NotificationKind) -> dict[str,
         else None,
         "price": None,
         "currency": match.currency,
+        **_peak_range(match),
     }
     if offer is not None and match.best_price is not None:
         snap.update(
@@ -234,11 +269,39 @@ def channels_for(
     return out
 
 
+def suppression_reasons(
+    search: SavedSearch, user: User, prefs: NotificationPreference
+) -> list[tuple[NotificationChannel, str]]:
+    """Channels the user asked for but cannot receive yet, with a user-facing reason.
+
+    Channels the user turned off themselves are not "suppressed" (that is their choice)."""
+    if prefs.all_paused:
+        return []
+    pref = search.notification_channel
+    out: list[tuple[NotificationChannel, str]] = []
+    if (
+        pref in (NotificationChannelPref.EMAIL, NotificationChannelPref.BOTH)
+        and prefs.email_enabled
+        and not user.email_verified_at
+    ):
+        out.append((NotificationChannel.EMAIL, "email address not verified"))
+    if (
+        pref in (NotificationChannelPref.SMS, NotificationChannelPref.BOTH)
+        and prefs.sms_enabled
+        and not prefs.sms_ready
+        and not prefs.sms_opted_out_at
+    ):
+        out.append((NotificationChannel.SMS, "phone number not verified"))
+    return out
+
+
 def links_for(snapshot: dict[str, Any], prefs: NotificationPreference) -> dict[str, str]:
     base = get_settings().app_base_url
     links = {
         "opportunity": f"{base}/opportunities/{snapshot['match_id']}",
         "forecast": f"{base}/spots/{snapshot['spot_slug']}",
+        "dashboard": f"{base}/dashboard",
+        "manage": f"{base}/settings#alerts",
         "unsubscribe": f"{base}/unsubscribe?token={prefs.unsubscribe_token}",
     }
     if (
@@ -261,7 +324,9 @@ def _alerts_today(db: Session, user_id: object, now: datetime) -> int:
             select(func.count(Notification.id)).where(
                 Notification.user_id == user_id,
                 Notification.created_at >= now - timedelta(hours=24),
-                Notification.status != NotificationStatus.SKIPPED,
+                Notification.status.notin_(
+                    (NotificationStatus.SKIPPED, NotificationStatus.SUPPRESSED)
+                ),
             )
         )
         or 0
@@ -313,6 +378,58 @@ def _revalidate_best(
     return True
 
 
+def _record_suppressed(
+    db: Session,
+    user: User,
+    match: OpportunityMatch,
+    kind: NotificationKind,
+    snapshot: dict[str, Any],
+    prefs: NotificationPreference,
+    blocked: list[tuple[NotificationChannel, str]],
+    now: datetime,
+    scope: str,
+) -> int:
+    """Make a withheld alert visible in the notification history with its reason.
+
+    The dedup key is separate from the real alert's, and the match's notified snapshot is
+    not updated, so the alert still goes out once the reason no longer applies."""
+    links = links_for(snapshot, prefs)
+    subject, text, _ = render_alert_email(snapshot, links)
+    recorded = 0
+    for channel, reason in blocked:
+        values = {
+            "user_id": user.id,
+            "match_id": match.id,
+            "channel": channel.value,
+            "kind": kind.value,
+            "status": NotificationStatus.SUPPRESSED.value,
+            "dedup_key": f"suppressed:{scope}:{dedup_key(user.id, channel, snapshot)}"[:200],
+            "recipient": "",
+            "subject": subject,
+            "body_text": text,
+            "body_html": None,
+            "snapshot": snapshot,
+            "attempts": 0,
+            "next_attempt_at": now,
+            "last_error": f"Not sent: {reason}.",
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = db.execute(
+            insert(Notification).values(values).on_conflict_do_nothing(index_elements=["dedup_key"])
+        )
+        if result.rowcount:  # type: ignore[attr-defined]
+            recorded += 1
+            logger.info(
+                "notification event=suppressed user=%s match=%s channel=%s reason=%r",
+                user.id,
+                match.id,
+                channel.value,
+                reason,
+            )
+    return recorded
+
+
 def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
     settings = get_settings()
     now = now or utcnow()
@@ -358,10 +475,31 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
         channels = channels_for(search, user, prefs)
         if not channels:
             stats.no_channel += 1
+            blocked = suppression_reasons(search, user, prefs)
+            if blocked:
+                snapshot = build_snapshot(match, kind)
+                stats.suppressed += _record_suppressed(
+                    db, user, match, kind, snapshot, prefs, blocked, now, "unverified"
+                )
+                db.commit()
             continue
         if _alerts_today(db, user.id, now) >= prefs.max_alerts_per_day:
             stats.capped += 1
             logger.info("Daily alert cap reached for user %s", user.id)
+            snapshot = build_snapshot(match, kind)
+            reason = f"daily alert limit reached ({prefs.max_alerts_per_day} per day)"
+            stats.suppressed += _record_suppressed(
+                db,
+                user,
+                match,
+                kind,
+                snapshot,
+                prefs,
+                [(ch, reason) for ch in channels],
+                now,
+                f"cap:{now:%Y-%m-%d}",
+            )
+            db.commit()
             continue
         snapshot = build_snapshot(match, kind)
         links = links_for(snapshot, prefs)

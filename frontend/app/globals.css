@@ -29,11 +29,12 @@
   --seafoam: #2bb3a3;
   --sand: #f6efe2;
   --coral: #f26b5b;
-  --q-poor: #94a3b8;
-  --q-fair: #e5a213;
-  --q-good: #22a55a;
-  --q-very-good: #13a39a;
-  --q-excellent: #0277c2;
+  --q-none: #9ca3af;
+  --q-poor: #2563eb;
+  --q-fair: #eab308;
+  --q-good: #16a34a;
+  --q-very-good: #0f766e;
+  --q-excellent: #c2410c;
   --q-exceptional: #7c3aed;
 }
 
@@ -142,4 +143,9 @@
 }
 .leaflet-popup-content-wrapper {
   border-radius: 12px;
+}
+
+/* Leaflet markers: keep the focus ring for keyboard users, hide it after a mouse click. */
+.leaflet-interactive:focus:not(:focus-visible) {
+  outline: none;
 }

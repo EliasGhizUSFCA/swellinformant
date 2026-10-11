@@ -25,12 +25,13 @@ from app.core.config import get_settings
 from app.core.database import utcnow
 from app.core.errors import AppError, Conflict, Unauthorized
 from app.models import NotificationPreference, User, UserProfile, UserToken
-from app.models.enums import TokenPurpose
+from app.models.enums import EmailPurpose, TokenPurpose
 from app.services.notifications.templates import (
     render_password_reset_email,
     render_verification_email,
 )
-from app.workers.dispatch import dispatch_email, dispatch_sms
+from app.services.notifications.transactional import queue_account_email
+from app.workers.dispatch import dispatch_sms
 
 logger = logging.getLogger(__name__)
 
@@ -93,15 +94,18 @@ def consume_token(db: Session, token: str, purpose: TokenPurpose) -> User:
 
 
 def send_verification(db: Session, user: User) -> None:
+    """Issue a fresh single-use link (older unused links stop working) and queue the email."""
     s = get_settings()
     token = issue_token(
         db, user, TokenPurpose.EMAIL_VERIFY, timedelta(hours=s.email_verification_ttl_hours)
     )
     db.commit()
     subject, text, html = render_verification_email(
-        user.full_name, f"{s.app_base_url}/verify-email?token={token}"
+        user.full_name,
+        f"{s.app_base_url}/verify-email?token={token}",
+        s.email_verification_ttl_hours,
     )
-    dispatch_email(user.email, subject, text, html, tag="verify_email")
+    queue_account_email(db, user, EmailPurpose.VERIFY_EMAIL, subject, text, html)
 
 
 def register(db: Session, full_name: str, email: str, password: str) -> User:
@@ -150,12 +154,46 @@ def authenticate(db: Session, email: str, password: str) -> User:
     return user
 
 
-def verify_email(db: Session, token: str) -> User:
+class VerifyOutcome:
+    VERIFIED = "verified"
+    ALREADY_VERIFIED = "already_verified"
+
+
+def verify_email(db: Session, token: str) -> tuple[User, str]:
+    """Consume a verification token. Replays cannot change anything: a link that was
+    already used reports "already verified" if the address is verified, and otherwise
+    (superseded by a newer link, or expired) is rejected with a clear message."""
+    row = db.scalar(
+        select(UserToken).where(
+            UserToken.token_hash == hash_token(token),
+            UserToken.purpose == TokenPurpose.EMAIL_VERIFY,
+        )
+    )
+    if row is not None and row.used_at is not None:
+        user = db.get(User, row.user_id)
+        if user is not None and user.is_active and user.email_verified_at is not None:
+            return user, VerifyOutcome.ALREADY_VERIFIED
+        raise AppError(
+            "This link has been replaced by a newer one or has expired. "
+            "Use the most recent email, or request a new link.",
+            code="invalid_token",
+        )
     user = consume_token(db, token, TokenPurpose.EMAIL_VERIFY)
+    outcome = VerifyOutcome.ALREADY_VERIFIED if user.email_verified_at else VerifyOutcome.VERIFIED
     if user.email_verified_at is None:
         user.email_verified_at = utcnow()
     db.commit()
-    return user
+    logger.info("Email verified for user %s", user.id)
+    return user, outcome
+
+
+def resend_verification_by_email(db: Session, email: str) -> None:
+    """Public resend: silently does nothing for unknown, inactive or verified accounts so
+    the response never reveals whether an address is registered."""
+    user = db.scalar(select(User).where(User.email == normalize_email(email)))
+    if user is None or not user.is_active or user.email_verified_at is not None:
+        return
+    send_verification(db, user)
 
 
 def request_password_reset(db: Session, email: str) -> None:
@@ -173,7 +211,7 @@ def request_password_reset(db: Session, email: str) -> None:
         f"{s.app_base_url}/reset-password?token={token}",
         s.password_reset_ttl_minutes,
     )
-    dispatch_email(user.email, subject, text, html, tag="password_reset")
+    queue_account_email(db, user, EmailPurpose.PASSWORD_RESET, subject, text, html)
 
 
 def reset_password(db: Session, token: str, new_password: str) -> User:

@@ -20,12 +20,17 @@ router = APIRouter(prefix="/api", tags=["system"])
 
 JOB_NAMES = [
     "forecasts.acquire",
+    "forecasts.blend",
+    "forecasts.acquire_ensemble",
     "quality.predict",
     "detection.detect",
     "matching.match",
     "flights.discover",
     "alerts.generate",
     "notifications.deliver",
+    "observations.ingest",
+    "verification.collect_point_forecasts",
+    "verification.run",
     "maintenance.cleanup",
 ]
 
@@ -75,6 +80,9 @@ def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
             "forecast_providers": s.forecast_provider_list,
             "flight_provider": s.flight_provider,
             "email_provider": s.email_provider,
+            "email_delivery": "capture" if s.email_capture_only else "live",
+            "dev_inbox_url": s.dev_inbox_url if s.email_provider == "mailpit" else None,
+            "captured_email_location": s.captured_email_location,
             "sms_provider": s.sms_provider,
             "dev_tools": s.enable_dev_endpoints,
         },

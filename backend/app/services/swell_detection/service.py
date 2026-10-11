@@ -23,6 +23,7 @@ from app.core.database import utcnow
 from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, SwellEvent, WaveForecast
 from app.models.enums import QualityLabel, SwellEventStatus
 from app.services.forecasts.queries import latest_runs_by_spot
+from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.confidence import confidence_label
 from app.services.surf_quality.scoring import label_for_score
 from app.services.swell_detection.clustering import Cluster, Step, cluster_steps, overlaps
@@ -75,13 +76,11 @@ def _apply_cluster(event: SwellEvent, cluster: Cluster, run: ForecastRun, keep_s
     event.peak_label = QualityLabel(label_for_score(peak_pred.score))
     event.peak_breaking_height_min_ft = peak_pred.breaking_height_min_ft
     event.peak_breaking_height_max_ft = peak_pred.breaking_height_max_ft
-    event.peak_swell_height_m = peak_fc.primary_swell_height_m or peak_fc.sig_wave_height_m
-    event.peak_swell_period_s = peak_fc.primary_swell_period_s or peak_fc.wave_period_s
-    event.peak_swell_direction_deg = (
-        peak_fc.primary_swell_direction_deg
-        if peak_fc.primary_swell_direction_deg is not None
-        else peak_fc.wave_direction_deg
-    )
+    (
+        event.peak_swell_height_m,
+        event.peak_swell_period_s,
+        event.peak_swell_direction_deg,
+    ) = dominant_component(peak_pred, peak_fc)
     event.peak_wind_speed_kmh = peak_fc.wind_speed_kmh
     event.peak_wind_direction_deg = peak_fc.wind_direction_deg
     event.peak_wind_relation = peak_pred.wind_relation

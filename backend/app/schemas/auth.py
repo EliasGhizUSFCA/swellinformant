@@ -153,3 +153,29 @@ class UserOut(BaseModel):
 class AuthOut(BaseModel):
     user: UserOut
     csrf_token: str
+
+
+class VerifyOut(BaseModel):
+    message: str
+    outcome: str  # "verified" | "already_verified"
+
+
+class EmailDeliveryOut(BaseModel):
+    """What happened to an account email, in provider terms. ``captured`` means a
+    development inbox kept it (nothing was delivered to a real mailbox)."""
+
+    status: str
+    provider: str | None
+    created_at: datetime
+    sent_at: datetime | None
+    delivered_at: datetime | None
+    error: str | None
+
+
+class VerificationStatusOut(BaseModel):
+    email_verified: bool
+    delivery_mode: str  # "capture" (development inbox) | "live"
+    provider: str
+    dev_inbox_url: str | None  # web inbox link (Mailpit), when there is one
+    captured_at: str | None  # where captured mail can be read (URL or file path)
+    last_email: EmailDeliveryOut | None

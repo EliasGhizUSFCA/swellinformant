@@ -1,0 +1,748 @@
+{
+  "description": "Observation stations used to verify forecasts. Positions and depths come from the providers' own data (see position_source). paired_spots distances are great-circle km from the station to the break (distance_km) and to the spot's offshore forecast point (forecast_point_distance_km). See docs/observations.md.",
+  "max_bulletin_distance_km": 30,
+  "stations": [
+    {
+      "code": "aodn:tweed-offshore",
+      "provider": "aodn",
+      "provider_id": "Tweed Offshore",
+      "name": "Tweed Offshore wave buoy (QLD)",
+      "latitude": -28.22,
+      "longitude": 153.68,
+      "water_depth_m": 60,
+      "position_source": "LATITUDE/LONGITUDE/water_depth of wave_buoy_realtime_nonqc site 'Tweed Offshore', partition 2026-10 (values are given to 0.01 degree)",
+      "wmo_id": "55057",
+      "is_active": true,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the Queensland Department of Environment and Science / Tweed River Sand Bypassing Project; distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access].",
+      "aodn": {
+        "realtime_sites": [
+          "Tweed Offshore"
+        ],
+        "delayed_sites": []
+      },
+      "coverage": {
+        "realtime": "2024-01 onwards",
+        "delayed_qc": "none (site not in wave_buoy_delayed_qc as of 2026-10-10)"
+      },
+      "measured": "H1/3 (WHTH), Tp (WPPE), peak direction (WPDI); no spectral Hs in the feed",
+      "bulletin_id": null,
+      "bulletin_note": "No GFS-Wave station bulletin within 30 km: the nearest, 55035, is 81 km north (27.49S 153.63E).",
+      "paired_spots": [
+        {
+          "slug": "snapper-rocks-superbank",
+          "relation": "offshore_reference",
+          "distance_km": 14.3,
+          "forecast_point_distance_km": 9.0,
+          "note": "Open-shelf buoy in 60 m ESE of Point Danger; samples the E-SE trade swell and S-SE groundswell before it wraps into the Gold Coast points. The breaks sit behind headlands, so southerly swell is refracted and reduced there, and the point setups respond to direction very differently from the open buoy. Realtime only (not QC'd) and H1/3 rather than spectral Hs."
+        },
+        {
+          "slug": "kirra",
+          "relation": "offshore_reference",
+          "distance_km": 16.4,
+          "forecast_point_distance_km": 7.4,
+          "note": "Open-shelf buoy in 60 m ESE of Point Danger; samples the E-SE trade swell and S-SE groundswell before it wraps into the Gold Coast points. The breaks sit behind headlands, so southerly swell is refracted and reduced there, and the point setups respond to direction very differently from the open buoy. Realtime only (not QC'd) and H1/3 rather than spectral Hs."
+        },
+        {
+          "slug": "burleigh-heads",
+          "relation": "offshore_reference",
+          "distance_km": 26.5,
+          "forecast_point_distance_km": 14.5,
+          "note": "Open-shelf buoy in 60 m ESE of Point Danger; samples the E-SE trade swell and S-SE groundswell before it wraps into the Gold Coast points. The breaks sit behind headlands, so southerly swell is refracted and reduced there, and the point setups respond to direction very differently from the open buoy. Realtime only (not QC'd) and H1/3 rather than spectral Hs."
+        }
+      ]
+    },
+    {
+      "code": "aodn:tweed-heads",
+      "provider": "aodn",
+      "provider_id": "Tweed Heads",
+      "name": "Tweed Heads wave buoy (QLD)",
+      "latitude": -28.18183,
+      "longitude": 153.575917,
+      "water_depth_m": 25,
+      "position_source": "wave_buoy_delayed_qc site 'Tweed Heads', partition 2022-12 (position); depth 25 m from the realtime partition 2026-09 (the 2022 delayed-mode file reports 22 m)",
+      "wmo_id": "55037",
+      "is_active": true,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the Queensland Department of Environment and Science (file prefix DES-QLD); distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access].",
+      "aodn": {
+        "realtime_sites": [
+          "Tweed Heads"
+        ],
+        "delayed_sites": [
+          "Tweed Heads"
+        ]
+      },
+      "coverage": {
+        "realtime": "2024-01 onwards",
+        "delayed_qc": "1995-01 to 2022-12"
+      },
+      "measured": "H1/3 (WHTH), Tp (WPPE), peak direction (WPDI)",
+      "bulletin_id": null,
+      "bulletin_note": "No GFS-Wave station bulletin within 30 km (nearest 55035, 78 km).",
+      "paired_spots": [
+        {
+          "slug": "snapper-rocks-superbank",
+          "relation": "nearshore_reference",
+          "distance_km": 3.3,
+          "forecast_point_distance_km": 18.0,
+          "note": "Shallow (22-25 m) buoy just off the Tweed River entrance: waves are already partly shoaled and refracted, so it is closer to what reaches the breaks but must not be compared directly with offshore model Hs. Delayed-mode QC data 1995-2022 make it the long reference for these spots."
+        },
+        {
+          "slug": "kirra",
+          "relation": "nearshore_reference",
+          "distance_km": 5.4,
+          "forecast_point_distance_km": 16.1,
+          "note": "Shallow (22-25 m) buoy just off the Tweed River entrance: waves are already partly shoaled and refracted, so it is closer to what reaches the breaks but must not be compared directly with offshore model Hs. Delayed-mode QC data 1995-2022 make it the long reference for these spots."
+        },
+        {
+          "slug": "burleigh-heads",
+          "relation": "nearshore_reference",
+          "distance_km": 15.8,
+          "forecast_point_distance_km": 13.8,
+          "note": "Shallow (22-25 m) buoy just off the Tweed River entrance: waves are already partly shoaled and refracted, so it is closer to what reaches the breaks but must not be compared directly with offshore model Hs. Delayed-mode QC data 1995-2022 make it the long reference for these spots."
+        }
+      ]
+    },
+    {
+      "code": "aodn:gold-coast",
+      "provider": "aodn",
+      "provider_id": "Gold Coast",
+      "name": "Gold Coast wave buoy (QLD)",
+      "latitude": -27.965233,
+      "longitude": 153.442583,
+      "water_depth_m": 17,
+      "position_source": "wave_buoy_delayed_qc site 'Gold Coast', partition 2022-12",
+      "wmo_id": "55036",
+      "is_active": true,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the Queensland Department of Environment and Science (file prefix DES-QLD); distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access].",
+      "aodn": {
+        "realtime_sites": [
+          "Gold Coast"
+        ],
+        "delayed_sites": [
+          "Gold Coast"
+        ]
+      },
+      "coverage": {
+        "realtime": "2024-01 onwards",
+        "delayed_qc": "1987-02 to 2022-12"
+      },
+      "measured": "H1/3 (WHTH), Tp (WPPE); peak direction in the realtime feed only",
+      "bulletin_id": null,
+      "bulletin_note": "No GFS-Wave station bulletin within 30 km (nearest 55035, 55 km).",
+      "paired_spots": [
+        {
+          "slug": "burleigh-heads",
+          "relation": "nearshore_reference",
+          "distance_km": 13.6,
+          "forecast_point_distance_km": 26.3,
+          "note": "17 m deep buoy north of Burleigh: strongly depth-transformed waves and a different beach orientation; use as a nearshore context series, not for offshore model verification."
+        }
+      ]
+    },
+    {
+      "code": "aodn:cape-naturaliste",
+      "provider": "aodn",
+      "provider_id": "Cape Naturaliste",
+      "name": "Cape Naturaliste wave buoy (WA)",
+      "latitude": -33.534709,
+      "longitude": 114.764455,
+      "water_depth_m": 50,
+      "position_source": "wave_buoy_delayed_qc site 'Cape Naturaliste 02' (2004-2021); the realtime feed reports the same mooring as -33.53, 114.77",
+      "wmo_id": "56006",
+      "is_active": true,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the Department of Transport WA (Datawell DWR MkIII buoy); distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access]. Delayed-mode files (wave_buoy_delayed_qc) carry this acknowledgement: \"These data were collected and Quality controlled by the Department of Transport (DoT), Western Australian Government. These data were made freely available by the AODN - a data facility of the Integrated Marine Observing System [IMOS]. IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS).\" and ask to be cited as: Department of Transport [W.A] (date), [Title], Downloaded from [url] on [date-of-download].",
+      "aodn": {
+        "realtime_sites": [
+          "Cape Naturaliste"
+        ],
+        "delayed_sites": [
+          "Cape Naturaliste 02"
+        ]
+      },
+      "coverage": {
+        "realtime": "2024-01 onwards",
+        "delayed_qc": "2004-04 to 2021-12"
+      },
+      "measured": "realtime: H1/3 (WHTH), Tp, peak direction, irregular 3-21 h reports; delayed mode: spectral Hs (WSSH), Tp, Tm01, no directions",
+      "bulletin_id": "56006",
+      "bulletin_position": {
+        "latitude": -33.36,
+        "longitude": 114.78,
+        "distance_km": 19.5,
+        "source": "header of gfswave.56006.bull, GFS-Wave cycle 2026-10-10 00Z"
+      },
+      "bulletin_note": "Bulletin 56006 carries the buoy's WMO id but its header position (33.36S 114.78E) is the 1999-2004 deployment, 19 km north of the current mooring.",
+      "paired_spots": [
+        {
+          "slug": "margaret-river-main-break",
+          "relation": "offshore_reference",
+          "distance_km": 53.1,
+          "forecast_point_distance_km": 54.0,
+          "note": "50 m deep buoy off Cape Naturaliste, exposed to the same SW-W Southern Ocean groundswell as the Margaret River coast, which lies 40-55 km to the SSE. Reef-specific shoaling and refraction at the breaks are not represented. The realtime feed is sparse (H1/3, irregular 3-21 h reports) and not QC'd."
+        },
+        {
+          "slug": "the-box",
+          "relation": "offshore_reference",
+          "distance_km": 51.1,
+          "forecast_point_distance_km": 51.8,
+          "note": "50 m deep buoy off Cape Naturaliste, exposed to the same SW-W Southern Ocean groundswell as the Margaret River coast, which lies 40-55 km to the SSE. Reef-specific shoaling and refraction at the breaks are not represented. The realtime feed is sparse (H1/3, irregular 3-21 h reports) and not QC'd."
+        },
+        {
+          "slug": "north-point-gracetown",
+          "relation": "offshore_reference",
+          "distance_km": 41.4,
+          "forecast_point_distance_km": 43.0,
+          "note": "50 m deep buoy off Cape Naturaliste, exposed to the same SW-W Southern Ocean groundswell as the Margaret River coast, which lies 40-55 km to the SSE. Reef-specific shoaling and refraction at the breaks are not represented. The realtime feed is sparse (H1/3, irregular 3-21 h reports) and not QC'd."
+        }
+      ]
+    },
+    {
+      "code": "aodn:cape-naturaliste-01",
+      "provider": "aodn",
+      "provider_id": "Cape Naturaliste 01",
+      "name": "Cape Naturaliste wave buoy, 1999-2004 deployment (WA)",
+      "latitude": -33.362209,
+      "longitude": 114.775567,
+      "water_depth_m": 50,
+      "position_source": "wave_buoy_delayed_qc site 'Cape Naturaliste 01', partition 2002-06",
+      "is_active": false,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the Department of Transport WA (file prefix DOT-WA); distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access]. Delayed-mode files (wave_buoy_delayed_qc) carry this acknowledgement: \"These data were collected and Quality controlled by the Department of Transport (DoT), Western Australian Government. These data were made freely available by the AODN - a data facility of the Integrated Marine Observing System [IMOS]. IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS).\" and ask to be cited as: Department of Transport [W.A] (date), [Title], Downloaded from [url] on [date-of-download].",
+      "aodn": {
+        "realtime_sites": [],
+        "delayed_sites": [
+          "Cape Naturaliste 01"
+        ]
+      },
+      "coverage": {
+        "delayed_qc": "1999-05 to 2004-04"
+      },
+      "measured": "spectral Hs (WSSH), Tp, Tm01; no directions",
+      "bulletin_id": null,
+      "bulletin_note": "Historical deployment (ended 2004, before the 2021+ bulletin archive). GFS-Wave output point 56006 (33.36S 114.78E) sits at this position, which matters when pairing the GEFSv12 wave reforecast (2000-2019) station 56006.",
+      "paired_spots": [
+        {
+          "slug": "margaret-river-main-break",
+          "relation": "historical_reference",
+          "distance_km": 70.9,
+          "forecast_point_distance_km": 73.1,
+          "note": "Earlier mooring 19 km north of the current one; same exposure caveats as aodn:cape-naturaliste."
+        },
+        {
+          "slug": "the-box",
+          "relation": "historical_reference",
+          "distance_km": 68.9,
+          "forecast_point_distance_km": 70.9,
+          "note": "Earlier mooring 19 km north of the current one; same exposure caveats as aodn:cape-naturaliste."
+        },
+        {
+          "slug": "north-point-gracetown",
+          "relation": "historical_reference",
+          "distance_km": 58.6,
+          "forecast_point_distance_km": 62.1,
+          "note": "Earlier mooring 19 km north of the current one; same exposure caveats as aodn:cape-naturaliste."
+        }
+      ]
+    },
+    {
+      "code": "aodn:rottnest-island-02",
+      "provider": "aodn",
+      "provider_id": "Rottnest Island 02",
+      "name": "Rottnest Island wave buoy, deployment 02 (WA)",
+      "latitude": -32.094154,
+      "longitude": 115.407789,
+      "water_depth_m": 48,
+      "position_source": "LATITUDE/LONGITUDE/water_depth of wave_buoy_delayed_qc site 'Rottnest Island 02', partition 2021-09 (source file DOT-WA_20201231_ROTTNEST-ISLAND-02_DM_WAVE-PARAMETERS_END-20211231.nc)",
+      "is_active": false,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the Department of Transport WA (Datawell Directional Waverider MK III); distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access]. Delayed-mode files (wave_buoy_delayed_qc) carry this acknowledgement: \"These data were collected and Quality controlled by the Department of Transport (DoT), Western Australian Government. These data were made freely available by the AODN - a data facility of the Integrated Marine Observing System [IMOS]. IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS).\" and ask to be cited as: Department of Transport [W.A] (date), [Title], Downloaded from [url] on [date-of-download].",
+      "aodn": {
+        "realtime_sites": [],
+        "delayed_sites": [
+          "Rottnest Island 02"
+        ]
+      },
+      "coverage": {
+        "delayed_qc": "2004-09 to 2021-12"
+      },
+      "measured": "delayed mode: spectral Hs (WSSH), Tp, Tm01; the 2021 files carry no direction values",
+      "paired_spots": [],
+      "bulletin_id": "56005",
+      "bulletin_position": {
+        "latitude": -32.11,
+        "longitude": 115.4,
+        "distance_km": 1.9,
+        "source": "header of gfswave.56005.bull, GFS-Wave cycles 2021-06-01 00Z and 2026-06-01 12Z"
+      },
+      "bulletin_note": "Model output point 1.9 km from the buoy; its WW3 depth is 85.9 m (gfswave.56005.spec point line, 2026-06-01 12Z) against 48 m at the mooring.",
+      "notes": "No surf spot nearby; kept for offshore model verification. The delayed-mode record ends in 2021-12 and the station's realtime feed (DoT WA) is not configured, so the station is inactive: it serves backtests over the 2021 overlap with the GFS-Wave bulletin archive."
+    },
+    {
+      "code": "aodn:esperance-04",
+      "provider": "aodn",
+      "provider_id": "Esperance 04",
+      "name": "Esperance wave buoy, deployment 04 (WA)",
+      "latitude": -34.000542,
+      "longitude": 121.90001,
+      "water_depth_m": 52,
+      "position_source": "LATITUDE/LONGITUDE/water_depth of wave_buoy_delayed_qc site 'Esperance 04', partition 2021-09 (source file DOT-WA_20210115_ESPERANCE-04_DM_WAVE-PARAMETERS_END-20211231.nc)",
+      "is_active": false,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the Department of Transport WA (Datawell Directional Waverider MK III); distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access]. Delayed-mode files (wave_buoy_delayed_qc) carry this acknowledgement: \"These data were collected and Quality controlled by the Department of Transport (DoT), Western Australian Government. These data were made freely available by the AODN - a data facility of the Integrated Marine Observing System [IMOS]. IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS).\" and ask to be cited as: Department of Transport [W.A] (date), [Title], Downloaded from [url] on [date-of-download].",
+      "aodn": {
+        "realtime_sites": [],
+        "delayed_sites": [
+          "Esperance 04"
+        ]
+      },
+      "coverage": {
+        "delayed_qc": "2006-06 to 2021-12"
+      },
+      "measured": "delayed mode: spectral Hs (WSSH), Tp, Tm01; the 2021 files carry no direction values",
+      "paired_spots": [],
+      "bulletin_id": "56010",
+      "bulletin_position": {
+        "latitude": -34.0,
+        "longitude": 121.9,
+        "distance_km": 0.1,
+        "source": "header of gfswave.56010.bull, GFS-Wave cycles 2021-06-01 00Z and 2026-06-01 12Z"
+      },
+      "bulletin_note": "Model output point 0.1 km from the buoy, but its WW3 depth is 25.7 m (gfswave.56010.spec point line, 2026-06-01 12Z) against 52 m at the mooring: the coast off Esperance is fringed by the islands of the western Recherche Archipelago, which a 1/4-1/6 degree wave grid resolves only roughly, so local sheltering and depth effects are part of the model error at this point.",
+      "notes": "No surf spot nearby; kept for offshore model verification. The delayed-mode record ends in 2021-12 and the station's realtime feed (DoT WA) is not configured, so the station is inactive: it serves backtests over the 2021 overlap with the GFS-Wave bulletin archive."
+    },
+    {
+      "code": "aodn:apollo-bay",
+      "provider": "aodn",
+      "provider_id": "APOLLO-BAY",
+      "name": "Apollo Bay wave buoy (VIC)",
+      "latitude": -38.754,
+      "longitude": 143.7235,
+      "water_depth_m": 30,
+      "position_source": "median LATITUDE/LONGITUDE of realtime site 'APOLLO-BAY', partition 2026-09",
+      "is_active": true,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the IMOS Coastal Wave Buoys Facility (SOFAR Spotter-V3); earlier files by Deakin University (file prefix VIC-DEAKIN-UNI); distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access].",
+      "aodn": {
+        "realtime_sites": [
+          "APOLLO-BAY",
+          "Apollo Bay"
+        ],
+        "delayed_sites": [
+          "APOLLO-BAY"
+        ]
+      },
+      "coverage": {
+        "realtime": "2024-01 to 2026-09-21 in the parquet dataset (source NetCDF exists for 2026-10, so the cloud-optimised copy lags)",
+        "delayed_qc": "2019-10 to 2026-06"
+      },
+      "measured": "spectral Hs (WSSH), Tp, Tm01, peak and mean direction",
+      "bulletin_id": null,
+      "bulletin_note": "No GFS-Wave station bulletin within 30 km (nearest NKING, 45 km).",
+      "paired_spots": [
+        {
+          "slug": "bells-beach",
+          "relation": "upstream_regional",
+          "distance_km": 64.8,
+          "forecast_point_distance_km": 51.3,
+          "note": "30 m deep Spotter off Apollo Bay, about 65 km WSW of Bells along the same coast. SW groundswell passes this area before reaching Bells, but the buoy may be partly sheltered by Cape Otway from W-SW swell and the coast changes orientation between them; regional indicator only."
+        }
+      ]
+    },
+    {
+      "code": "metoffice:k7",
+      "provider": "metoffice",
+      "provider_id": "k7",
+      "name": "Met Office K7 buoy",
+      "latitude": 60.54,
+      "longitude": -4.1,
+      "water_depth_m": null,
+      "position_source": "median latitude/longitude of the 192 hourly files issued 2026-10-03 00:15 to 2026-10-10 23:15 UTC (water depth not published in the feed)",
+      "is_active": true,
+      "licence": "CC BY-SA 4.0",
+      "share_alike": true,
+      "attribution": "Source: Met Office marine observations (AWS Open Data bucket met-office-marine-observations-data), licensed under CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). Changes: units converted (wind m/s to km/h), values failing the Met Office QC flags removed. Adaptations must be shared under CC BY-SA 4.0.",
+      "metoffice": {
+        "file_prefix": "k7_buoy_"
+      },
+      "measured": "Hm0 (+ swell / wind-sea Hm0), Tp, swell Tp, Tm02, peak / mean / swell direction, wind (m/s)",
+      "paired_spots": [
+        {
+          "slug": "thurso-east",
+          "relation": "upstream_regional",
+          "distance_km": 218.0,
+          "forecast_point_distance_km": 198.2,
+          "note": "Upstream for N-NW swell (about 215 km NNW of Thurso, west of Shetland). Thurso sits on the Pentland Firth coast behind Orkney's shadow for some directions; 10-15 s swell takes roughly 5-8 h to travel from the buoy, so same-time comparisons are a regional indicator only."
+        }
+      ],
+      "bulletin_id": "64046",
+      "bulletin_position": {
+        "latitude": 60.7,
+        "longitude": -4.5,
+        "distance_km": 28.2,
+        "source": "header of gfswave.64046.bull, GFS-Wave cycle 2026-10-10 00Z"
+      }
+    },
+    {
+      "code": "metoffice:k5",
+      "provider": "metoffice",
+      "provider_id": "k5",
+      "name": "Met Office K5 buoy",
+      "latitude": 59.12,
+      "longitude": -11.72,
+      "water_depth_m": null,
+      "position_source": "median latitude/longitude of the 192 hourly files issued 2026-10-03 00:15 to 2026-10-10 23:15 UTC (water depth not published in the feed)",
+      "is_active": true,
+      "licence": "CC BY-SA 4.0",
+      "share_alike": true,
+      "attribution": "Source: Met Office marine observations (AWS Open Data bucket met-office-marine-observations-data), licensed under CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). Changes: units converted (wind m/s to km/h), values failing the Met Office QC flags removed. Adaptations must be shared under CC BY-SA 4.0.",
+      "metoffice": {
+        "file_prefix": "k5_buoy_"
+      },
+      "measured": "Hm0 (+ swell / wind-sea Hm0), Tp, swell Tp, Tm02, peak / mean / swell direction, wind (m/s)",
+      "paired_spots": [
+        {
+          "slug": "thurso-east",
+          "relation": "upstream_regional",
+          "distance_km": 475.3,
+          "forecast_point_distance_km": 462.0,
+          "note": "Upstream for W-NW Atlantic swell, about 470 km WNW of Thurso. Far away and in deep water: use for regional swell timing/size context only."
+        }
+      ],
+      "bulletin_id": "64045",
+      "bulletin_position": {
+        "latitude": 59.1,
+        "longitude": -11.4,
+        "distance_km": 18.4,
+        "source": "header of gfswave.64045.bull, GFS-Wave cycle 2026-10-10 00Z"
+      }
+    },
+    {
+      "code": "metoffice:k4",
+      "provider": "metoffice",
+      "provider_id": "k4",
+      "name": "Met Office K4 buoy",
+      "latitude": 55.25,
+      "longitude": -12.71,
+      "water_depth_m": null,
+      "position_source": "median latitude/longitude of the 192 hourly files issued 2026-10-03 00:15 to 2026-10-10 23:15 UTC (water depth not published in the feed)",
+      "is_active": true,
+      "licence": "CC BY-SA 4.0",
+      "share_alike": true,
+      "attribution": "Source: Met Office marine observations (AWS Open Data bucket met-office-marine-observations-data), licensed under CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). Changes: units converted (wind m/s to km/h), values failing the Met Office QC flags removed. Adaptations must be shared under CC BY-SA 4.0.",
+      "metoffice": {
+        "file_prefix": "k4_buoy_"
+      },
+      "measured": "Hm0 (+ swell / wind-sea Hm0), Tp, swell Tp, Tm02, peak / mean / swell direction, wind (m/s)",
+      "paired_spots": [
+        {
+          "slug": "mullaghmore-head",
+          "relation": "upstream_regional",
+          "distance_km": 285.5,
+          "forecast_point_distance_km": 266.1,
+          "note": "Upstream for W-NW Atlantic swell, about 280 km WNW of Mullaghmore. Mullaghmore's reef focuses and the shelf transforms the swell; regional indicator only (10-15 s swell needs roughly 7-10 h for this distance)."
+        }
+      ],
+      "bulletin_id": null,
+      "bulletin_note": "Bulletin 62105 (54.54N 12.36W) is 81 km from the buoy's reported position, beyond the 30 km pairing limit."
+    },
+    {
+      "code": "metoffice:k2",
+      "provider": "metoffice",
+      "provider_id": "k2",
+      "name": "Met Office K2 buoy",
+      "latitude": 51.05,
+      "longitude": -13.31,
+      "water_depth_m": null,
+      "position_source": "median latitude/longitude of the 192 hourly files issued 2026-10-03 00:15 to 2026-10-10 23:15 UTC (water depth not published in the feed)",
+      "is_active": true,
+      "licence": "CC BY-SA 4.0",
+      "share_alike": true,
+      "attribution": "Source: Met Office marine observations (AWS Open Data bucket met-office-marine-observations-data), licensed under CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). Changes: units converted (wind m/s to km/h), values failing the Met Office QC flags removed. Adaptations must be shared under CC BY-SA 4.0.",
+      "metoffice": {
+        "file_prefix": "k2_buoy_"
+      },
+      "measured": "Hm0 (+ swell / wind-sea Hm0), Tp, swell Tp, Tm02, peak / mean / swell direction, wind (m/s)",
+      "paired_spots": [],
+      "bulletin_id": "62081",
+      "bulletin_position": {
+        "latitude": 51.0,
+        "longitude": -13.3,
+        "distance_km": 5.6,
+        "source": "header of gfswave.62081.bull, GFS-Wave cycle 2026-10-10 00Z"
+      },
+      "notes": "No surf spot nearby; kept for offshore model verification."
+    },
+    {
+      "code": "metoffice:k1",
+      "provider": "metoffice",
+      "provider_id": "k1",
+      "name": "Met Office K1 buoy",
+      "latitude": 48.76,
+      "longitude": -12.47,
+      "water_depth_m": null,
+      "position_source": "median latitude/longitude of the 192 hourly files issued 2026-10-03 00:15 to 2026-10-10 23:15 UTC (water depth not published in the feed)",
+      "is_active": true,
+      "licence": "CC BY-SA 4.0",
+      "share_alike": true,
+      "attribution": "Source: Met Office marine observations (AWS Open Data bucket met-office-marine-observations-data), licensed under CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). Changes: units converted (wind m/s to km/h), values failing the Met Office QC flags removed. Adaptations must be shared under CC BY-SA 4.0.",
+      "metoffice": {
+        "file_prefix": "k1_buoy_"
+      },
+      "measured": "Hm0 (+ swell / wind-sea Hm0), Tp, swell Tp, Tm02, peak / mean / swell direction, wind (m/s)",
+      "paired_spots": [],
+      "bulletin_id": "62029",
+      "bulletin_position": {
+        "latitude": 48.7,
+        "longitude": -12.4,
+        "distance_km": 8.4,
+        "source": "header of gfswave.62029.bull, GFS-Wave cycle 2026-10-10 00Z"
+      },
+      "notes": "No surf spot nearby; kept for offshore model verification."
+    },
+    {
+      "code": "metoffice:brittany",
+      "provider": "metoffice",
+      "provider_id": "brittany",
+      "name": "Met Office Brittany buoy",
+      "latitude": 47.5,
+      "longitude": -8.47,
+      "water_depth_m": null,
+      "position_source": "median latitude/longitude of the 192 hourly files issued 2026-10-03 00:15 to 2026-10-10 23:15 UTC (water depth not published in the feed)",
+      "is_active": true,
+      "licence": "CC BY-SA 4.0",
+      "share_alike": true,
+      "attribution": "Source: Met Office marine observations (AWS Open Data bucket met-office-marine-observations-data), licensed under CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). Changes: units converted (wind m/s to km/h), values failing the Met Office QC flags removed. Adaptations must be shared under CC BY-SA 4.0.",
+      "metoffice": {
+        "file_prefix": "brittany_buoy_"
+      },
+      "measured": "Hm0 (+ swell / wind-sea Hm0), Tp, swell Tp, Tm02, peak / mean / swell direction, wind (m/s)",
+      "paired_spots": [
+        {
+          "slug": "la-graviere-hossegor",
+          "relation": "upstream_regional",
+          "distance_km": 692.2,
+          "forecast_point_distance_km": 677.5,
+          "note": "Upstream for W-NW swell entering the Bay of Biscay, about 690 km NW of Hossegor. 12-16 s swell needs about 15-20 h for this distance, and the Capbreton canyon focuses swell at Hossegor; never compare same-time values for spot calibration."
+        }
+      ],
+      "bulletin_id": "62163",
+      "bulletin_position": {
+        "latitude": 47.5,
+        "longitude": -8.5,
+        "distance_km": 2.3,
+        "source": "header of gfswave.62163.bull, GFS-Wave cycle 2026-10-10 00Z"
+      }
+    },
+    {
+      "code": "ndbc:51201",
+      "provider": "ndbc",
+      "provider_id": "51201",
+      "name": "NDBC 51201 Waimea Bay",
+      "latitude": 21.67,
+      "longitude": -158.12,
+      "water_depth_m": null,
+      "position_source": "gfswave_bulletin_header: header of gfswave.51201.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
+      "position_verified": false,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
+      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "bulletin_id": "51201",
+      "bulletin_position": {
+        "latitude": 21.67,
+        "longitude": -158.12,
+        "distance_km": 0.0,
+        "source": "header of gfswave.51201.bull, GFS-Wave cycle 2026-10-10 00Z"
+      },
+      "paired_spots": [
+        {
+          "slug": "pipeline",
+          "relation": "offshore_reference",
+          "distance_km": 6.9,
+          "forecast_point_distance_km": 15.7,
+          "note": "Deep-water buoy off Waimea Bay (GFS-Wave point depth 473 m), directly offshore of the North Shore reefs and exposed to the same NW-N swell; the reefs add strong refraction/focusing (cf. Caldwell & Aucan 2007), so buoy Hs is not surf height."
+        },
+        {
+          "slug": "sunset-beach",
+          "relation": "offshore_reference",
+          "distance_km": 8.0,
+          "forecast_point_distance_km": 14.6,
+          "note": "Deep-water buoy off Waimea Bay (GFS-Wave point depth 473 m), directly offshore of the North Shore reefs and exposed to the same NW-N swell; the reefs add strong refraction/focusing (cf. Caldwell & Aucan 2007), so buoy Hs is not surf height."
+        },
+        {
+          "slug": "waimea-bay",
+          "relation": "offshore_reference",
+          "distance_km": 6.2,
+          "forecast_point_distance_km": 11.3,
+          "note": "Deep-water buoy off Waimea Bay (GFS-Wave point depth 473 m), directly offshore of the North Shore reefs and exposed to the same NW-N swell; the reefs add strong refraction/focusing (cf. Caldwell & Aucan 2007), so buoy Hs is not surf height."
+        }
+      ]
+    },
+    {
+      "code": "ndbc:51205",
+      "provider": "ndbc",
+      "provider_id": "51205",
+      "name": "NDBC 51205",
+      "latitude": 21.02,
+      "longitude": -156.42,
+      "water_depth_m": null,
+      "position_source": "gfswave_bulletin_header: header of gfswave.51205.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
+      "position_verified": false,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
+      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "bulletin_id": "51205",
+      "bulletin_position": {
+        "latitude": 21.02,
+        "longitude": -156.42,
+        "distance_km": 0.0,
+        "source": "header of gfswave.51205.bull, GFS-Wave cycle 2026-10-10 00Z"
+      },
+      "paired_spots": [
+        {
+          "slug": "jaws-peahi",
+          "relation": "offshore_reference",
+          "distance_km": 15.4,
+          "forecast_point_distance_km": 11.5,
+          "note": "Buoy off Maui's north shore, upstream of Pe'ahi for N-NW swell; Pe'ahi's reef focuses big swell strongly."
+        }
+      ]
+    },
+    {
+      "code": "ndbc:46026",
+      "provider": "ndbc",
+      "provider_id": "46026",
+      "name": "NDBC 46026",
+      "latitude": 37.75,
+      "longitude": -122.82,
+      "water_depth_m": null,
+      "position_source": "gfswave_bulletin_header: header of gfswave.46026.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
+      "position_verified": false,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
+      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "bulletin_id": "46026",
+      "bulletin_position": {
+        "latitude": 37.75,
+        "longitude": -122.82,
+        "distance_km": 0.0,
+        "source": "header of gfswave.46026.bull, GFS-Wave cycle 2026-10-10 00Z"
+      },
+      "paired_spots": [
+        {
+          "slug": "ocean-beach-sf",
+          "relation": "offshore_reference",
+          "distance_km": 27.1,
+          "forecast_point_distance_km": 11.1,
+          "note": "Offshore of the Golden Gate; waves reaching Ocean Beach are modified by the San Francisco Bar (ebb-tidal delta)."
+        },
+        {
+          "slug": "mavericks",
+          "relation": "offshore_reference",
+          "distance_km": 40.2,
+          "forecast_point_distance_km": 24.6,
+          "note": "NW of Mavericks; the Pillar Point reef focuses long-period NW swell."
+        }
+      ]
+    },
+    {
+      "code": "ndbc:46012",
+      "provider": "ndbc",
+      "provider_id": "46012",
+      "name": "NDBC 46012",
+      "latitude": 37.36,
+      "longitude": -122.88,
+      "water_depth_m": null,
+      "position_source": "gfswave_bulletin_header: header of gfswave.46012.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
+      "position_verified": false,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
+      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "bulletin_id": "46012",
+      "bulletin_position": {
+        "latitude": 37.36,
+        "longitude": -122.88,
+        "distance_km": 0.0,
+        "source": "header of gfswave.46012.bull, GFS-Wave cycle 2026-10-10 00Z"
+      },
+      "paired_spots": [
+        {
+          "slug": "mavericks",
+          "relation": "offshore_reference",
+          "distance_km": 36.5,
+          "forecast_point_distance_km": 26.4,
+          "note": "SW of Half Moon Bay in deep water; exposed to the same W-NW swell as Mavericks, whose reef focuses it."
+        }
+      ]
+    },
+    {
+      "code": "ndbc:46053",
+      "provider": "ndbc",
+      "provider_id": "46053",
+      "name": "NDBC 46053",
+      "latitude": 34.24,
+      "longitude": -119.85,
+      "water_depth_m": null,
+      "position_source": "gfswave_bulletin_header: header of gfswave.46053.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
+      "position_verified": false,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
+      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "bulletin_id": "46053",
+      "bulletin_position": {
+        "latitude": 34.24,
+        "longitude": -119.85,
+        "distance_km": 0.0,
+        "source": "header of gfswave.46053.bull, GFS-Wave cycle 2026-10-10 00Z"
+      },
+      "paired_spots": [
+        {
+          "slug": "rincon",
+          "relation": "offshore_reference",
+          "distance_km": 37.3,
+          "forecast_point_distance_km": 18.7,
+          "note": "In the Santa Barbara Channel, partly sharing the Channel Islands / Point Conception shadow with Rincon; the point's refraction is not represented."
+        }
+      ]
+    },
+    {
+      "code": "ndbc:46224",
+      "provider": "ndbc",
+      "provider_id": "46224",
+      "name": "NDBC 46224",
+      "latitude": 33.18,
+      "longitude": -117.47,
+      "water_depth_m": null,
+      "position_source": "gfswave_bulletin_header: header of gfswave.46224.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
+      "position_verified": false,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
+      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "bulletin_id": "46224",
+      "bulletin_position": {
+        "latitude": 33.18,
+        "longitude": -117.47,
+        "distance_km": 0.0,
+        "source": "header of gfswave.46224.bull, GFS-Wave cycle 2026-10-10 00Z"
+      },
+      "paired_spots": [
+        {
+          "slug": "trestles",
+          "relation": "offshore_reference",
+          "distance_km": 25.1,
+          "forecast_point_distance_km": 24.1,
+          "note": "About 25 km SSE of Trestles off the north San Diego County coast, inside the Southern California Bight: like Trestles it is partly shadowed from W-NW swell by the Channel Islands and open to S-SW swell, so it is the closest comparable exposure. The cobblestone points at Trestles refract and focus swell, and island shadowing changes over short distances with direction, so buoy Hs is an offshore reference, not surf height. Position is the GFS-Wave output point until NDBC metadata replaces it."
+        }
+      ]
+    }
+  ]
+}

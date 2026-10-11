@@ -15,7 +15,9 @@ from app.services.geo import angular_diff, compass_label, window_distance
 from app.services.surf_quality.breaking import estimate_breaking_height
 from app.services.surf_quality.models import QualityResult, SeaState, SpotParams
 
-ALGORITHM_VERSION = "1.0.0"
+# 2.0.0: breaking heights from the linear_wave_v2 nearshore model (energy-flux
+# combination, directional spreading, shore normal); typical-to-sets ranges.
+ALGORITHM_VERSION = "2.0.0"
 
 WEIGHTS: dict[str, float] = {
     "swell_direction": 0.20,

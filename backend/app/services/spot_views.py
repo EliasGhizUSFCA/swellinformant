@@ -10,25 +10,44 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import utcnow
-from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, SwellEvent, WaveForecast
+from app.models import (
+    ForecastComparison,
+    ForecastEnsembleStat,
+    ForecastRun,
+    ForecastSource,
+    SurfQualityPrediction,
+    SurfSpot,
+    SwellEvent,
+    WaveForecast,
+)
 from app.models.enums import SwellEventStatus
 from app.schemas.spots import (
     AirportOut,
+    BlendInfo,
     Conditions,
     DailySummary,
+    EnsemblePoint,
     EventOut,
     ForecastPoint,
     ForecastRunOut,
     ForecastSourceOut,
+    MapSnapshotOut,
+    MapSpotOut,
+    ModelPoint,
+    ModelSeries,
+    PhysicalProfileOut,
     SpotAirportOut,
     SpotDetail,
     SpotForecastOut,
     SpotMini,
     SpotSummary,
 )
-from app.services.forecasts.queries import is_stale, latest_runs_by_spot
-from app.services.surf_quality.breaking import METHOD_CALIBRATED
+from app.services.forecasts.queries import USABLE, is_stale, latest_runs_by_spot
+from app.services.forecasts.registry import configured_source_codes
+from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.scoring import label_for_score
+
+MODEL_SERIES_STEP_HOURS = 3
 
 
 def spot_mini(spot: SurfSpot) -> SpotMini:
@@ -82,24 +101,33 @@ def event_out(
     )
 
 
-def _conditions(p: SurfQualityPrediction, f: WaveForecast) -> Conditions:
+def _conditions(
+    p: SurfQualityPrediction, f: WaveForecast, run: ForecastRun | None = None
+) -> Conditions:
+    source = run.source if run is not None else None
+    main = dominant_component(p, f)  # the component that drives the surf, not "swell 1"
     return Conditions(
+        sig_wave_height_m=f.sig_wave_height_m,
+        source_code=source.code if source else None,
+        source_name=source.name if source else None,
+        is_demo=bool(source.is_demo) if source else False,
+        run_issued_at=run.issued_at if run is not None else None,
+        method=p.breaking_height_method,
+        algorithm_version=p.algorithm_version,
+        explanation=p.explanation,
+        breaking_height_mid_ft=p.breaking_height_mid_ft,
+        breaking_p10_ft=p.breaking_p10_ft,
+        breaking_p90_ft=p.breaking_p90_ft,
+        uncertainty_kind=p.uncertainty_kind,
+        ml_model_version=p.ml_model_version,
         valid_time=p.valid_time,
         score=p.score,
         label=p.label.value,
         breaking_height_min_ft=p.breaking_height_min_ft,
         breaking_height_max_ft=p.breaking_height_max_ft,
-        swell_height_m=f.primary_swell_height_m
-        if f.primary_swell_height_m is not None
-        else f.sig_wave_height_m,
-        swell_period_s=f.primary_swell_period_s
-        if f.primary_swell_period_s is not None
-        else f.wave_period_s,
-        swell_direction_deg=(
-            f.primary_swell_direction_deg
-            if f.primary_swell_direction_deg is not None
-            else f.wave_direction_deg
-        ),
+        swell_height_m=main[0],
+        swell_period_s=main[1],
+        swell_direction_deg=main[2],
         wind_speed_kmh=f.wind_speed_kmh,
         wind_direction_deg=f.wind_direction_deg,
         wind_relation=p.wind_relation,
@@ -149,9 +177,9 @@ def spot_summaries(
             if runs.get(p.spot_id) is None or runs[p.spot_id].id != p.run_id:
                 continue
             if p.spot_id not in current and p.valid_time >= now - timedelta(minutes=30):
-                current[p.spot_id] = _conditions(p, f)
+                current[p.spot_id] = _conditions(p, f, runs[p.spot_id])
             if p.is_daylight and (p.spot_id not in best or p.score > best[p.spot_id].score):
-                best[p.spot_id] = _conditions(p, f)
+                best[p.spot_id] = _conditions(p, f, runs[p.spot_id])
 
     events: dict[int, list[SwellEvent]] = defaultdict(list)
     for e in db.scalars(
@@ -197,6 +225,7 @@ def spot_detail(db: Session, spot: SurfSpot, now: datetime | None = None) -> Spo
         accessibility_notes=spot.accessibility_notes,
         hazards=spot.hazards,
         description=spot.description,
+        physical_profile=_profile_out(spot),
         airports=[
             SpotAirportOut(
                 airport=AirportOut.model_validate(a.airport),
@@ -207,6 +236,22 @@ def spot_detail(db: Session, spot: SurfSpot, now: datetime | None = None) -> Spo
             )
             for a in spot.airports
         ],
+    )
+
+
+def _profile_out(spot: SurfSpot) -> PhysicalProfileOut | None:
+    row = spot.physical_profile
+    if row is None:
+        return None
+    return PhysicalProfileOut(
+        shore_normal_deg=row.shore_normal_deg,
+        forecast_point_depth_m=row.forecast_point_depth_m,
+        controlling_depth_m=row.controlling_depth_m,
+        focusing_ref=row.focusing_ref,
+        focusing_kappa=row.focusing_kappa,
+        has_shadow_table=row.shadow_table is not None,
+        data_quality=dict(row.data_quality or {}),
+        notes=row.notes,
     )
 
 
@@ -256,14 +301,21 @@ def forecast_points(
             valid_time=p.valid_time,
             is_daylight=p.is_daylight,
             sig_wave_height_m=f.sig_wave_height_m,
+            wave_period_s=f.wave_period_s,
+            wave_period_kind=f.wave_period_kind,
+            wave_direction_deg=f.wave_direction_deg,
             primary_swell_height_m=f.primary_swell_height_m,
             primary_swell_period_s=f.primary_swell_period_s,
             primary_swell_direction_deg=f.primary_swell_direction_deg,
             secondary_swell_height_m=f.secondary_swell_height_m,
             secondary_swell_period_s=f.secondary_swell_period_s,
             secondary_swell_direction_deg=f.secondary_swell_direction_deg,
+            tertiary_swell_height_m=f.tertiary_swell_height_m,
+            tertiary_swell_period_s=f.tertiary_swell_period_s,
+            tertiary_swell_direction_deg=f.tertiary_swell_direction_deg,
             wind_wave_height_m=f.wind_wave_height_m,
             wind_wave_period_s=f.wind_wave_period_s,
+            wind_wave_direction_deg=f.wind_wave_direction_deg,
             wind_speed_kmh=f.wind_speed_kmh,
             wind_direction_deg=f.wind_direction_deg,
             wind_gust_kmh=f.wind_gust_kmh,
@@ -272,6 +324,13 @@ def forecast_points(
             wave_power_kw_m=f.wave_power_kw_m,
             breaking_height_min_ft=p.breaking_height_min_ft,
             breaking_height_max_ft=p.breaking_height_max_ft,
+            breaking_height_mid_ft=p.breaking_height_mid_ft,
+            breaking_p10_ft=p.breaking_p10_ft,
+            breaking_p90_ft=p.breaking_p90_ft,
+            uncertainty_kind=p.uncertainty_kind,
+            breaking_height_method=p.breaking_height_method,
+            algorithm_version=p.algorithm_version,
+            ml_model_version=p.ml_model_version,
             score=p.score,
             label=p.label.value,
             confidence=p.confidence,
@@ -282,6 +341,154 @@ def forecast_points(
         )
         for p, f in rows
     ]
+
+
+def _series(
+    db: Session,
+    source: ForecastSource,
+    run: ForecastRun,
+    role: str,
+    spot_id: int,
+    start: datetime,
+    end: datetime,
+) -> ModelSeries | None:
+    rows = db.scalars(
+        select(WaveForecast)
+        .where(
+            WaveForecast.run_id == run.id,
+            WaveForecast.spot_id == spot_id,
+            WaveForecast.valid_time >= start,
+            WaveForecast.valid_time <= end,
+        )
+        .order_by(WaveForecast.valid_time)
+    ).all()
+    points = [
+        ModelPoint(
+            valid_time=r.valid_time,
+            hs_m=r.sig_wave_height_m,
+            tp_s=r.wave_period_s,
+            direction_deg=r.wave_direction_deg,
+            wind_kmh=r.wind_speed_kmh,
+            wind_direction_deg=r.wind_direction_deg,
+        )
+        for r in rows
+        if r.valid_time.hour % MODEL_SERIES_STEP_HOURS == 0
+    ]
+    if not points:
+        return None
+    return ModelSeries(
+        source_code=source.code,
+        name=source.name,
+        family=source.family,
+        kind=source.kind,
+        role=role,
+        is_demo=source.is_demo,
+        run_issued_at=run.issued_at,
+        period_kind=rows[0].wave_period_kind,
+        points=points,
+    )
+
+
+def model_series(
+    db: Session, spot: SurfSpot, run: ForecastRun, start: datetime, end: datetime
+) -> list[ModelSeries]:
+    """The authoritative run plus every other model's raw forecast, for comparison."""
+    entries: list[tuple[ForecastSource, ForecastRun, str]] = [(run.source, run, "authoritative")]
+    seen = {run.id}
+    if run.source.kind == "blend":
+        for key, role in (("members", "member"), ("cross_checks", "cross_check")):
+            for m in run.details.get(key, []):
+                member = db.get(ForecastRun, m.get("run_id"))
+                if member is not None and member.id not in seen:
+                    entries.append((member.source, member, role))
+                    seen.add(member.id)
+    for code in configured_source_codes():
+        source = db.scalar(select(ForecastSource).where(ForecastSource.code == code))
+        if source is None:
+            continue
+        latest = db.scalar(
+            select(ForecastRun)
+            .where(ForecastRun.source_id == source.id, ForecastRun.status.in_(USABLE))
+            .order_by(ForecastRun.issued_at.desc(), ForecastRun.id.desc())
+            .limit(1)
+        )
+        if latest is not None and latest.id not in seen:
+            entries.append((source, latest, "reference"))
+            seen.add(latest.id)
+    out = [_series(db, src, r, role, spot.id, start, end) for src, r, role in entries]
+    return [s for s in out if s is not None]
+
+
+def ensemble_series(
+    db: Session, spot: SurfSpot, start: datetime, end: datetime
+) -> list[EnsemblePoint]:
+    ens_run = db.scalar(
+        select(ForecastRun)
+        .join(ForecastSource, ForecastSource.id == ForecastRun.source_id)
+        .where(ForecastSource.kind == "ensemble", ForecastRun.status.in_(USABLE))
+        .order_by(ForecastRun.issued_at.desc(), ForecastRun.id.desc())
+        .limit(1)
+    )
+    if ens_run is None:
+        return []
+    rows = db.scalars(
+        select(ForecastEnsembleStat)
+        .where(
+            ForecastEnsembleStat.run_id == ens_run.id,
+            ForecastEnsembleStat.spot_id == spot.id,
+            ForecastEnsembleStat.valid_time >= start,
+            ForecastEnsembleStat.valid_time <= end,
+        )
+        .order_by(ForecastEnsembleStat.valid_time)
+    ).all()
+    return [
+        EnsemblePoint(
+            valid_time=r.valid_time,
+            hs_mean_m=r.hs_mean_m,
+            hs_spread_m=r.hs_spread_m,
+            members=r.members,
+        )
+        for r in rows
+    ]
+
+
+def blend_info(db: Session, run: ForecastRun, spot: SurfSpot) -> BlendInfo | None:
+    if run.source.kind != "blend":
+        return None
+    flags: dict[str, int] = defaultdict(int)
+    flagged = 0
+    for (row_flags,) in db.execute(
+        select(ForecastComparison.flags).where(
+            ForecastComparison.blend_run_id == run.id, ForecastComparison.spot_id == spot.id
+        )
+    ):
+        if row_flags:
+            flagged += 1
+        for f in row_flags:
+            flags[f.split(":")[0]] += 1
+    return BlendInfo(
+        method=str(run.details.get("method", "")),
+        members=list(run.details.get("members", [])),
+        cross_checks=list(run.details.get("cross_checks", [])),
+        flagged_hours=flagged,
+        flags=dict(flags),
+        skill=run.details.get("skill"),
+    )
+
+
+def source_attribution(db: Session, run: ForecastRun) -> str:
+    """The attribution to show for a run. A blend repeats every member's attribution,
+    because the members' licences (e.g. ECMWF's CC BY 4.0) require it wherever their data
+    is shown, including in a combination."""
+    if run.source.kind != "blend":
+        return run.source.attribution
+    codes = [m.get("code") for m in run.details.get("members", []) if m.get("code")]
+    by_code = {
+        s.code: s.attribution
+        for s in db.scalars(select(ForecastSource).where(ForecastSource.code.in_(codes))).all()
+    }
+    parts = [run.source.attribution] + [by_code[c] for c in codes if by_code.get(c)]
+    return " ".join(dict.fromkeys(parts))
 
 
 def spot_forecast(
@@ -297,11 +504,11 @@ def spot_forecast(
             message="No forecast has been ingested for this spot yet.",
         )
     start = now - timedelta(hours=3)
-    points = forecast_points(db, run.id, spot.id, start, now + timedelta(days=days))
+    end = now + timedelta(days=days)
+    points = forecast_points(db, run.id, spot.id, start, end)
     source = run.source
-    method = None
-    if points:
-        method = METHOD_CALIBRATED if spot.calibration else "komar_gaughan_v1_uncalibrated"
+    # Report the method the stored predictions actually used.
+    method = points[0].breaking_height_method if points else None
     return SpotForecastOut(
         spot_slug=spot.slug,
         timezone=spot.timezone,
@@ -311,7 +518,7 @@ def spot_forecast(
             code=source.code,
             name=source.name,
             is_demo=source.is_demo,
-            attribution=source.attribution,
+            attribution=source_attribution(db, run),
             wave_model=source.wave_model,
             atmosphere_model=source.atmosphere_model,
         ),
@@ -325,9 +532,13 @@ def spot_forecast(
         ),
         stale=is_stale(run, now),
         breaking_height_method=method,
+        algorithm_version=points[0].algorithm_version if points else None,
         calibrated=bool(spot.calibration),
         points=points,
         daily=daily_summaries(points, spot.timezone),
+        models=model_series(db, spot, run, start, end),
+        ensemble=ensemble_series(db, spot, start, end),
+        blend=blend_info(db, run, spot),
     )
 
 
@@ -351,3 +562,80 @@ def upcoming_events(
 def event_counts(db: Session) -> dict[str, int]:
     rows = db.execute(select(SwellEvent.status, func.count()).group_by(SwellEvent.status)).all()
     return {str(status.value): int(n) for status, n in rows}
+
+
+MAP_STEP_HOURS = 3
+
+
+def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) -> MapSnapshotOut:
+    """Conditions at every active spot for one forecast hour (nearest stored timestep within
+    ±90 min), read from the latest predictions already in the database. Never fetches model
+    data, so scrubbing the map's time control is cheap."""
+    now = now or utcnow()
+    spots = db.scalars(select(SurfSpot).where(SurfSpot.is_active).order_by(SurfSpot.name)).all()
+    runs = latest_runs_by_spot(db, now)
+    run_ids = {r.id for r in runs.values()}
+    range_start = range_end = None
+    if run_ids:
+        lo, hi = db.execute(
+            select(
+                func.min(SurfQualityPrediction.valid_time),
+                func.max(SurfQualityPrediction.valid_time),
+            ).where(SurfQualityPrediction.run_id.in_(run_ids))
+        ).one()
+        floor = (now - timedelta(hours=MAP_STEP_HOURS)).replace(minute=0, second=0, microsecond=0)
+        range_start = max(lo, floor).replace(minute=0, second=0, microsecond=0) if lo else None
+        range_end = hi
+    target = at or now
+    if range_start and range_end:
+        target = min(max(target, range_start), range_end)
+    target = target.replace(minute=0, second=0, microsecond=0)
+
+    conditions: dict[int, Conditions] = {}
+    if run_ids:
+        window = timedelta(minutes=90)
+        rows = db.execute(
+            select(SurfQualityPrediction, WaveForecast)
+            .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
+            .where(
+                SurfQualityPrediction.run_id.in_(run_ids),
+                SurfQualityPrediction.valid_time >= target - window,
+                SurfQualityPrediction.valid_time <= target + window,
+            )
+        ).all()
+        best_gap: dict[int, float] = {}
+        for p, f in rows:
+            run = runs.get(p.spot_id)
+            if run is None or run.id != p.run_id:
+                continue
+            gap = abs((p.valid_time - target).total_seconds())
+            if gap < best_gap.get(p.spot_id, float("inf")):
+                best_gap[p.spot_id] = gap
+                conditions[p.spot_id] = _conditions(p, f, run)
+
+    covering: dict[int, int] = defaultdict(int)
+    upcoming: dict[int, int] = defaultdict(int)
+    for e in db.scalars(
+        select(SwellEvent).where(
+            SwellEvent.status == SwellEventStatus.ACTIVE, SwellEvent.end_time >= now
+        )
+    ).all():
+        upcoming[e.spot_id] += 1
+        if e.start_time <= target <= e.end_time:
+            covering[e.spot_id] += 1
+    return MapSnapshotOut(
+        requested_at=at,
+        valid_time=target if run_ids else None,
+        range_start=range_start,
+        range_end=range_end,
+        step_hours=MAP_STEP_HOURS,
+        spots=[
+            MapSpotOut(
+                slug=s.slug,
+                conditions=conditions.get(s.id),
+                event_at_time=covering.get(s.id, 0) > 0,
+                upcoming_event_count=upcoming.get(s.id, 0),
+            )
+            for s in spots
+        ],
+    )

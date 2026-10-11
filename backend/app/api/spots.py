@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,7 @@ from app.schemas.opportunities import MatchSummary
 from app.schemas.spots import (
     AirportOut,
     EventOut,
+    MapSnapshotOut,
     RegionOut,
     SpotDetail,
     SpotForecastOut,
@@ -26,6 +28,7 @@ from app.schemas.spots import (
 from app.services.opportunity_views import list_matches
 from app.services.spot_views import (
     event_out,
+    map_snapshot,
     spot_detail,
     spot_forecast,
     spot_summaries,
@@ -40,6 +43,17 @@ def _spot(db: Session, slug: str) -> SurfSpot:
     if spot is None:
         raise NotFound("Surf spot not found.")
     return spot
+
+
+@router.get("/map/conditions", response_model=MapSnapshotOut)
+def map_conditions(
+    response: Response,
+    at: datetime | None = Query(None, description="Forecast time (ISO 8601); default now"),
+    db: Session = Depends(get_db),
+) -> MapSnapshotOut:
+    """All spots at one forecast hour, from cached predictions (public data, cacheable)."""
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return map_snapshot(db, at)
 
 
 @router.get("/spots", response_model=list[SpotSummary])

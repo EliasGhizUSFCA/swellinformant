@@ -1,8 +1,11 @@
 """Email and SMS delivery adapters.
 
-Email: console (dev outbox), SMTP (any SMTP server, e.g. Mailpit locally), Resend,
-SendGrid. SMS: console (dev outbox), Twilio. Every adapter raises
+Email: console (dev outbox file), mailpit (local SMTP inbox for development), SMTP (any
+SMTP server), Resend, SendGrid. SMS: console (dev outbox), Twilio. Every adapter raises
 TransientProviderError for retryable failures and PermanentProviderError otherwise.
+
+A successful ``send`` means the provider *accepted* the message (or a development inbox
+*captured* it). Delivery is only confirmed later by provider webhooks.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import smtplib
 import ssl
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -45,6 +49,8 @@ class EmailMessageData:
 class SendResult:
     provider: str
     message_id: str | None
+    # True for development providers: the message was captured locally, not delivered.
+    captured: bool = False
 
 
 def _outbox_write(settings: Settings, kind: str, payload: dict[str, object]) -> str:
@@ -95,11 +101,12 @@ class ConsoleEmailProvider(EmailProvider):
             },
         )
         logger.info("[console email] %s (%s)", message.subject, mid)
-        return SendResult(self.name, mid)
+        return SendResult(self.name, mid, captured=True)
 
 
 class SmtpEmailProvider(EmailProvider):
     name = "smtp"
+    captures = False
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -138,7 +145,15 @@ class SmtpEmailProvider(EmailProvider):
             raise PermanentProviderError(f"SMTP rejected message: {exc}") from exc
         except (OSError, smtplib.SMTPException) as exc:
             raise TransientProviderError(f"SMTP unavailable: {exc}") from exc
-        return SendResult(self.name, str(msg["Message-ID"]))
+        return SendResult(self.name, str(msg["Message-ID"]), captured=self.captures)
+
+
+class MailpitEmailProvider(SmtpEmailProvider):
+    """Development inbox: plain SMTP to Mailpit (SMTP_HOST:SMTP_PORT). Messages are
+    captured and readable at DEV_INBOX_URL; they never reach a real mailbox."""
+
+    name = "mailpit"
+    captures = True
 
 
 class _HttpEmailProvider(EmailProvider):
@@ -307,12 +322,14 @@ class RecipientOptedOut(PermanentProviderError):
 
 def build_email_provider(settings: Settings | None = None) -> EmailProvider:
     settings = settings or get_settings()
-    return {
+    factories: dict[str, Callable[[Settings], EmailProvider]] = {
         "console": ConsoleEmailProvider,
+        "mailpit": MailpitEmailProvider,
         "smtp": SmtpEmailProvider,
         "resend": ResendEmailProvider,
         "sendgrid": SendGridEmailProvider,
-    }[settings.email_provider](settings)
+    }
+    return factories[settings.email_provider](settings)
 
 
 def build_sms_provider(settings: Settings | None = None) -> SmsProvider:

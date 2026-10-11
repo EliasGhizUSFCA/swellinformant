@@ -189,12 +189,21 @@ def send_one(
         stats.failed += 1
         logger.error("Notification %s failed permanently: %s", n.id, exc)
         return
-    n.status = NotificationStatus.SENT
+    # Acceptance is not delivery: only a provider webhook can move this to DELIVERED.
+    n.status = NotificationStatus.CAPTURED if result.captured else NotificationStatus.ACCEPTED
     n.sent_at = now
     n.provider = result.provider
     n.provider_message_id = result.message_id
     n.last_error = None
     stats.sent += 1
+    logger.info(
+        "notification event=%s id=%s channel=%s provider=%s attempts=%d",
+        n.status.value,
+        n.id,
+        n.channel.value,
+        result.provider,
+        n.attempts,
+    )
 
 
 def deliver_pending(db: Session, now: datetime | None = None, limit: int = 100) -> DeliveryStats:

@@ -26,6 +26,13 @@ export type SwellEvent = S["EventOut"];
 export type SpotForecast = S["SpotForecastOut"];
 export type ForecastPoint = S["ForecastPoint"];
 export type DailySummary = S["DailySummary"];
+export type MapSnapshot = S["MapSnapshotOut"];
+export type MapSpot = S["MapSpotOut"];
+export type ModelSeries = S["ModelSeries"];
+export type ModelPoint = S["ModelPoint"];
+export type EnsemblePoint = S["EnsemblePoint"];
+export type BlendInfo = S["BlendInfo"];
+export type PhysicalProfile = S["PhysicalProfileOut"];
 
 export type SearchInput = S["SearchIn"];
 export type Search = S["SearchOut"];
@@ -37,6 +44,8 @@ export type Offer = S["OfferOut"];
 export type FlightSlice = S["SliceOut"];
 export type NotificationItem = S["NotificationOut"];
 export type NotificationPage = S["NotificationPage"];
+export type VerificationStatus = S["VerificationStatusOut"];
+export type VerifyResult = S["VerifyOut"];
 
 export type QualityLabel = "poor" | "fair" | "good" | "very_good" | "excellent" | "exceptional";
 
@@ -46,6 +55,9 @@ export interface SystemStatus {
     forecast_providers: string[];
     flight_provider: string;
     email_provider: string;
+    email_delivery: "capture" | "live";
+    dev_inbox_url: string | null;
+    captured_email_location: string | null;
     sms_provider: string;
     dev_tools: boolean;
   };
@@ -68,3 +80,8 @@ export interface SystemStatus {
 export interface ApiErrorBody {
   error: { code: string; message: string; details?: Array<{ field: string; message: string }> };
 }
+
+export type AccuracyOverview = S["AccuracyOverview"];
+export type AccuracyMetric = S["MetricRow"];
+export type AccuracyPairs = S["PairsOut"];
+export type ModelVersionSummary = S["ModelVersionSummary"];

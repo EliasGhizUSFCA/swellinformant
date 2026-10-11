@@ -8,10 +8,24 @@ user is never left without their verification link.
 from __future__ import annotations
 
 import logging
+import uuid
 
 from kombu.exceptions import OperationalError
 
 logger = logging.getLogger(__name__)
+
+
+def dispatch_account_email(message_id: uuid.UUID | str, text: str, html: str | None) -> None:
+    """Queue delivery of a recorded account email (see services/notifications/transactional)."""
+    from app.workers import tasks
+
+    try:
+        tasks.send_account_email.delay(str(message_id), text, html)
+    except OperationalError:
+        logger.warning("Broker unavailable; sending account email %s inline", message_id)
+        from app.services.notifications.transactional import deliver_account_email
+
+        deliver_account_email(message_id, text, html, final_attempt=True)
 
 
 def dispatch_email(to: str, subject: str, text: str, html: str | None, tag: str) -> None:

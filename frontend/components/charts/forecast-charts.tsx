@@ -26,6 +26,8 @@ type Row = {
   hmin: number;
   hmax: number;
   range: [number, number];
+  band: [number, number] | null;
+  uncertaintyKind: string | null;
   swell: number | null;
   period: number | null;
   swellDir: number | null;
@@ -40,8 +42,11 @@ type Row = {
 
 export function toRows(points: ForecastPoint[], units: Units): Row[] {
   return points.map((p) => {
-    const hmin = Math.round(toUnits(p.breaking_height_min_ft, units) * 10) / 10;
-    const hmax = Math.round(toUnits(p.breaking_height_max_ft, units) * 10) / 10;
+    const round = (ft: number) => Math.round(toUnits(ft, units) * 10) / 10;
+    const hmin = round(p.breaking_height_min_ft);
+    const hmax = round(p.breaking_height_max_ft);
+    const p10 = p.breaking_p10_ft;
+    const p90 = p.breaking_p90_ft;
     return {
       t: new Date(p.valid_time).getTime(),
       iso: p.valid_time,
@@ -50,6 +55,8 @@ export function toRows(points: ForecastPoint[], units: Units): Row[] {
       hmin,
       hmax,
       range: [hmin, hmax],
+      band: p10 != null && p90 != null ? [round(p10), round(p90)] : null,
+      uncertaintyKind: p.uncertainty_kind ?? null,
       swell: p.primary_swell_height_m ?? p.sig_wave_height_m ?? null,
       period: p.primary_swell_period_s ?? null,
       swellDir: p.primary_swell_direction_deg ?? null,
@@ -111,8 +118,13 @@ function ChartTooltip({
         {QUALITY_LABELS[label]} · {row.score}/100 {!row.daylight && <span className="text-muted-foreground">(night)</span>}
       </div>
       <div className="mt-1">
-        Faces ≈ {row.hmin}–{row.hmax} {units}
+        Faces ≈ {row.hmin}–{row.hmax} {units} <span className="text-muted-foreground">(typical–sets)</span>
       </div>
+      {row.band && (
+        <div className="text-muted-foreground">
+          80% range {row.band[0]}–{row.band[1]} {units} ({uncertaintyLabel(row.uncertaintyKind)})
+        </div>
+      )}
       <div>
         Swell {row.swell?.toFixed(1) ?? "—"} m @ {row.period?.toFixed(0) ?? "—"} s {compass(row.swellDir)}
       </div>
@@ -125,6 +137,16 @@ function ChartTooltip({
 }
 
 const axisStyle = { fontSize: 11, fill: "var(--muted-foreground)" };
+
+const UNCERTAINTY_LABEL: Record<string, string> = {
+  heuristic: "assumed error model, not yet verified",
+  ensemble_heuristic: "from ensemble spread, not yet verified",
+  calibrated: "verified against observations",
+};
+
+export function uncertaintyLabel(kind?: string | null): string {
+  return (kind && UNCERTAINTY_LABEL[kind]) ?? "not available";
+}
 
 export function QualityChart({ points, tz, units }: { points: ForecastPoint[]; tz: string; units: Units }) {
   const rows = toRows(points, units);
@@ -146,9 +168,19 @@ export function QualityChart({ points, tz, units }: { points: ForecastPoint[]; t
               <Cell key={r.t} fill={r.color} fillOpacity={r.daylight ? 0.9 : 0.35} />
             ))}
           </Bar>
-          <Area yAxisId="height" type="monotone" dataKey="range" stroke="#0e7490" fill="#0e7490" fillOpacity={0.15} strokeWidth={1.5} isAnimationActive={false} />
+          <Area yAxisId="height" type="monotone" dataKey="band" stroke="none" fill="#0e7490" fillOpacity={0.08} isAnimationActive={false} />
+          <Area yAxisId="height" type="monotone" dataKey="range" stroke="#0e7490" fill="#0e7490" fillOpacity={0.2} strokeWidth={1.5} isAnimationActive={false} />
         </ComposedChart>
       </ResponsiveContainer>
+      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" data-testid="quality-chart-legend">
+        <span>bars: quality score (0–100)</span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-4 rounded-sm bg-[#0e7490]/40" /> estimated faces, typical–sets
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-4 rounded-sm bg-[#0e7490]/15" /> 80% forecast range ({uncertaintyLabel(rows.find((r) => r.uncertaintyKind)?.uncertaintyKind)})
+        </span>
+      </div>
     </div>
   );
 }
@@ -217,13 +249,29 @@ export function WindChart({ points, tz }: { points: ForecastPoint[]; tz: string 
   );
 }
 
-export function DailyStrip({ daily, units }: { daily: DailySummary[]; units: Units }) {
+export function DailyStrip({
+  daily,
+  units,
+  selected,
+  onSelect,
+}: {
+  daily: DailySummary[];
+  units: Units;
+  selected?: string | null;
+  onSelect?: (d: DailySummary) => void;
+}) {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-2" data-testid="daily-strip">
       {daily.map((d) => {
         const label = labelForScore(d.best_score);
+        const Tag = onSelect ? "button" : "div";
         return (
-          <div key={d.date} className="rounded-xl border bg-card p-2.5 text-center">
+          <Tag
+            key={d.date}
+            {...(onSelect ? { type: "button" as const, onClick: () => onSelect(d), "aria-pressed": selected === d.date } : {})}
+            className={`rounded-xl border bg-card p-2.5 text-center ${onSelect ? "transition-colors hover:border-ocean" : ""} ${selected === d.date ? "border-ocean ring-2 ring-ocean/30" : ""}`}
+            data-testid={`day-${d.date}`}
+          >
             <div className="text-xs text-muted-foreground">
               {formatCalendarDate(d.date, { weekday: "short", month: undefined, day: undefined })}
             </div>
@@ -233,7 +281,7 @@ export function DailyStrip({ daily, units }: { daily: DailySummary[]; units: Uni
             <div className="text-[11px] text-muted-foreground">
               {QUALITY_LABELS[label]} · {d.good_hours}h good
             </div>
-          </div>
+          </Tag>
         );
       })}
     </div>

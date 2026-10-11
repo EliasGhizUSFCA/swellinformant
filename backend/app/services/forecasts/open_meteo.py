@@ -33,6 +33,7 @@ from app.services.forecasts.base import (
     SpotPoint,
     nominal_gfs_cycle,
 )
+from app.services.forecasts.families import family_for_open_meteo_model, period_kind_for_open_meteo
 from app.services.http import PermanentProviderError, TransientProviderError, request_with_retries
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ class OpenMeteoProvider(ForecastProvider):
                 "Free tier is non-commercial and rate limited; commercial use requires an "
                 "Open-Meteo API subscription (OPEN_METEO_API_KEY)."
             ),
+            family=family_for_open_meteo_model(self.wave_model),
         )
 
     def _get(self, url: str, params: dict[str, Any]) -> httpx.Response:
@@ -306,7 +308,11 @@ class OpenMeteoProvider(ForecastProvider):
                     values.update(atmos.get(p.spot_id, {}).get(ts, {}))
                     values.update(tides.get(p.spot_id, {}).get(ts, {}))
                     records.append(
-                        ForecastRecord(valid_time=datetime.fromtimestamp(ts, tz=UTC), values=values)
+                        ForecastRecord(
+                            valid_time=datetime.fromtimestamp(ts, tz=UTC),
+                            values=values,
+                            period_kind=period_kind_for_open_meteo(self.wave_model),
+                        )
                     )
                 if records:
                     result.records[p.spot_id] = records

@@ -140,9 +140,13 @@ def test_unauthenticated_requests_are_rejected(app_client: ApiClient) -> None:
 def test_email_verification_single_use_and_expiry(app_client: ApiClient, db) -> None:  # type: ignore[no-untyped-def]
     app_client.register(verify=False)
     token = latest_link_token("verify-email")
-    assert app_client.post("/api/auth/verify-email", {"token": token}).status_code == 200
+    first = app_client.post("/api/auth/verify-email", {"token": token})
+    assert first.status_code == 200 and first.json()["outcome"] == "verified"
     assert app_client.get("/api/auth/me").json()["email_verified"] is True
-    assert app_client.post("/api/auth/verify-email", {"token": token}).status_code == 400
+    # Replaying a used link changes nothing and says so (a refresh is not an error).
+    replay = app_client.post("/api/auth/verify-email", {"token": token})
+    assert replay.status_code == 200 and replay.json()["outcome"] == "already_verified"
+    assert db.scalar(select(func.count(UserToken.id)).where(UserToken.used_at.is_(None))) == 0
 
     app_client.post("/api/auth/logout")
     app_client.register("second@example.com", verify=False)
@@ -150,6 +154,55 @@ def test_email_verification_single_use_and_expiry(app_client: ApiClient, db) -> 
     db.execute(update(UserToken).values(expires_at=utcnow() - timedelta(minutes=1)))
     db.commit()
     assert app_client.post("/api/auth/verify-email", {"token": token2}).status_code == 400
+
+
+def test_superseded_verification_link_is_rejected(app_client: ApiClient, db) -> None:  # type: ignore[no-untyped-def]
+    """Resending issues a new single-use link; the older one can no longer verify."""
+    app_client.register(verify=False)
+    old = latest_link_token("verify-email")
+    assert app_client.post("/api/auth/resend-verification").status_code == 200
+    new = latest_link_token("verify-email")
+    assert new != old
+    rejected = app_client.post("/api/auth/verify-email", {"token": old})
+    assert rejected.status_code == 400 and rejected.json()["error"]["code"] == "invalid_token"
+    assert app_client.get("/api/auth/me").json()["email_verified"] is False
+    assert app_client.post("/api/auth/verify-email", {"token": new}).json()["outcome"] == "verified"
+
+
+def test_verification_works_without_a_session(make_client) -> None:  # type: ignore[no-untyped-def]
+    """The link is usually opened in whatever browser the mail client launches."""
+    device: ApiClient = make_client()
+    device.register(verify=False)
+    token = latest_link_token("verify-email")
+    other: ApiClient = make_client()  # no cookies at all
+    r = other.post("/api/auth/verify-email", {"token": token})
+    assert r.status_code == 200 and r.json()["outcome"] == "verified"
+    assert device.get("/api/auth/me").json()["email_verified"] is True
+
+
+def test_public_resend_does_not_reveal_accounts(make_client) -> None:  # type: ignore[no-untyped-def]
+    signed_out: ApiClient = make_client()
+    unknown = signed_out.post(
+        "/api/auth/resend-verification-public", {"email": "nobody@example.com"}
+    )
+    owner: ApiClient = make_client()
+    owner.register("waiting@example.com", verify=False)
+    before = latest_link_token("verify-email")
+    known = signed_out.post(
+        "/api/auth/resend-verification-public", {"email": "waiting@example.com"}
+    )
+    assert unknown.status_code == known.status_code == 200
+    assert unknown.json() == known.json()
+    assert latest_link_token("verify-email") != before  # a fresh link was sent
+
+
+def test_verification_status_reports_what_happened(app_client: ApiClient) -> None:
+    app_client.register(verify=False)
+    status = app_client.get("/api/auth/verification-status").json()
+    assert status["email_verified"] is False
+    assert status["delivery_mode"] == "capture" and status["provider"] == "console"
+    assert status["last_email"]["status"] == "captured"
+    assert status["last_email"]["provider"] == "console"
 
 
 def test_password_reset_flow(make_client) -> None:  # type: ignore[no-untyped-def]

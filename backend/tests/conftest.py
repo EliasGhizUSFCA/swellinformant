@@ -48,6 +48,18 @@ from app.core.database import SessionLocal, get_engine  # noqa: E402
 from app.core.redis import get_redis  # noqa: E402
 
 MUTABLE_TABLES = [
+    "prediction_validation",
+    "forecast_accuracy_metrics",
+    "ml_model_versions",
+    "ml_experiments",
+    "point_forecasts",
+    "buoy_observations",
+    "buoy_stations",
+    "nearshore_observations",
+    "prediction_archive",
+    "forecast_comparisons",
+    "forecast_ensemble_stats",
+    "email_messages",
     "notifications",
     "opportunity_offers",
     "opportunity_matches",

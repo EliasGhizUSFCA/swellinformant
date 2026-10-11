@@ -9,6 +9,13 @@ import { tileConfig } from "@/lib/map-tiles";
 import { colorForScore } from "@/lib/quality";
 import type { SpotSummary } from "@/types/api";
 
+/** What a marker shows for the selected forecast time (null = no usable forecast). */
+export interface MarkerState {
+  score: number | null;
+  tooltip: string;
+  highlight?: boolean;
+}
+
 const TILES = tileConfig(
   process.env.NEXT_PUBLIC_MAP_TILE_URL,
   process.env.NEXT_PUBLIC_MAP_ATTRIBUTION,
@@ -37,11 +44,15 @@ function InvalidateOnResize() {
   return null;
 }
 
-/** World map of monitored spots; marker colour = best forecast quality in the next 7 days. */
+/**
+ * World map of monitored spots. Marker colour = our predicted quality at the selected
+ * forecast time when ``markers`` is given, otherwise the best quality in the next 7 days.
+ */
 export default function SurfMap({
   spots,
   selected,
   onSelect,
+  markers,
   height = "100%",
   zoom = 2,
   center = [15, 10] as [number, number],
@@ -49,6 +60,7 @@ export default function SurfMap({
   spots: SpotSummary[];
   selected?: string | null;
   onSelect?: (slug: string) => void;
+  markers?: Record<string, MarkerState>;
   height?: string;
   zoom?: number;
   center?: [number, number];
@@ -92,25 +104,33 @@ export default function SurfMap({
           }}
         />
         {spots.map((s) => {
-          const score = s.best_upcoming?.score ?? s.current?.score ?? null;
+          const m = markers?.[s.slug];
+          const score = markers ? (m?.score ?? null) : (s.best_upcoming?.score ?? s.current?.score ?? null);
           const isSel = s.slug === selected;
+          const emphasised = markers ? !!m?.highlight : !!s.next_event;
           return (
             <CircleMarker
               key={s.slug}
               center={[s.latitude, s.longitude]}
-              radius={isSel ? 11 : s.next_event ? 8 : 6}
+              radius={isSel ? 11 : emphasised ? 8 : 6}
               pathOptions={{
                 color: isSel ? "#06263a" : "#ffffff",
                 weight: isSel ? 3 : 1.5,
                 fillColor: colorForScore(score),
                 fillOpacity: 0.95,
               }}
+              // Set at creation (Leaflet ignores className changes in later setStyle calls).
+              className={`spot-marker spot-${s.slug}`}
               eventHandlers={{ click: () => onSelect?.(s.slug) }}
             >
               <Tooltip direction="top" offset={[0, -6]}>
                 <strong>{s.name}</strong>
                 <br />
-                {score != null ? `Best next 7 days: ${score}/100` : "No forecast yet"}
+                {markers
+                  ? (m?.tooltip ?? "No usable forecast")
+                  : score != null
+                    ? `Best next 7 days: ${score}/100`
+                    : "No usable forecast yet"}
               </Tooltip>
             </CircleMarker>
           );

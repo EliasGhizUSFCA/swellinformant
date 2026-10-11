@@ -36,6 +36,7 @@ def test_acquisition_chains_through_every_stage(db: Session, few_spots: list[str
     by_job = logs(db)
     for job in (
         "forecasts.acquire",
+        "forecasts.blend",
         "quality.predict",
         "detection.detect",
         "matching.match",
