@@ -12,8 +12,11 @@ You save a search once: which waves you want (size, quality, wind), where you wo
 when you can travel, your budget and home airports. Background workers then run around
 the clock, without the browser open:
 
-1. fetch NOAA wave + wind forecasts for every spot (centrally, once for all users);
-2. score each forecast hour for surf quality and estimate breaking wave height;
+1. fetch wave + wind forecasts for every spot centrally, once per model run for all users:
+   NOAA GFS-Wave/GFS and ECMWF IFS read directly from their open-data buckets, plus the
+   GEFS-Wave ensemble for uncertainty, and blend the independent models;
+2. turn the offshore forecast into **our prediction** of breaking wave height at each break
+   (a physical nearshore model with an uncertainty range) and a separate surf-quality score;
 3. detect upcoming **swell events** 5–10 days ahead;
 4. match events against each saved search;
 5. search flights that land **before** the swell (default: arrive 2 days early, leave
@@ -44,17 +47,26 @@ variables.
 
 **Forecast pipeline**
 
-* Open-Meteo adapter (NOAA GFS + GFS-Wave) and Windy Point Forecast adapter.
-* Deterministic demo generator.
-* Model-run tracking, staleness detection, retention.
+* Direct NOAA GFS-Wave + GFS and ECMWF IFS ingestion (GRIB2 by HTTP byte range, no keys),
+  GEFS-Wave ensemble mean/spread, plus Open-Meteo and Windy adapters and a demo generator.
+* Source dependency families and a multi-model blend (no equal averaging), with
+  per-hour disagreement flags between independent models.
+* Model-run tracking, staleness detection, retention, and an immutable archive of every
+  prediction issued (for verification at each lead time).
 
-**Surf scoring**
+**Surf prediction and scoring** (algorithm 2.0.0, [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md))
 
-* Documented 0–100 quality score (direction, period, size, wind, tide, consistency, plus
-  limiting-factor gates). Labels Poor → Exceptional.
-* Breaking-height estimate (Komar–Gaughan), always marked as uncalibrated.
-* Separate forecast-confidence score.
+* Breaking height from linear wave theory + Komar–Gaughan per swell partition, with
+  directional spreading, shore normal, shadowing and a focusing prior; spot physical
+  profiles carry a provenance flag for every parameter.
+* An 80% range (p10–p90) labelled heuristic (or ensemble-based) until it is verified.
+* A documented 0–100 quality score kept separate from height and from forecast confidence.
 * Daylight-only windows from NOAA sunrise and sunset.
+
+**Developer tools**
+
+* Accuracy dashboard (`/status/accuracy`, admin accounts): MAE/RMSE/bias by model, station
+  and lead, scatter plots, error distributions, history and the model registry.
 
 **Swell detection**
 
@@ -91,7 +103,9 @@ variables.
 
 * Landing page and auth pages.
 * Dashboard; search list, wizard and detail.
-* Live world map; spot detail with quality, swell and wind charts and a daily outlook.
+* Live world map with our prediction and the raw model data per spot, a date/time
+  selector and charts; spot detail with our prediction and its range, each model's raw
+  output side by side, quality, swell and wind charts and a daily outlook.
 * Opportunity detail with flight options and the travel timeline.
 * Notification history, settings, and system status.
 
@@ -103,7 +117,8 @@ Browser ──▶ frontend (Next.js :3000) ──/api/* proxy──▶ backend (
                                                           ▼      │
                                          Redis 7 (broker, locks, rate limits, quotas)
                                                           │
-                       celery beat (schedule) ──▶ celery worker (jobs A–H) ──▶ Open-Meteo / Windy
+                       celery beat (schedule) ──▶ celery worker (jobs A–H) ──▶ NOAA / ECMWF open data (S3)
+                                                                         ──▶ Open-Meteo / Windy
                                                                          ──▶ Duffel / Amadeus
                                                                          ──▶ SMTP / Resend / SendGrid / Twilio
 ```
@@ -115,13 +130,17 @@ Browser ──▶ frontend (Next.js :3000) ──/api/* proxy──▶ backend (
   tests.
 * Monitoring runs only in Celery.
   * Beat triggers each job on its schedule, and also once at startup.
-  * Each stage chains to the next when it succeeds: forecasts → quality → detection →
-    matching → flights → alerts → delivery.
+  * Each stage chains to the next when it succeeds: forecasts → blend → predictions →
+    detection → matching → flights → alerts → delivery.
 
 Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (jobs table and design
 decisions), [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md),
 [`docs/MATCHING_AND_FLIGHTS.md`](docs/MATCHING_AND_FLIGHTS.md),
-[`docs/FORECAST_SOURCES.md`](docs/FORECAST_SOURCES.md), and
+[`docs/FORECAST_SOURCES.md`](docs/FORECAST_SOURCES.md),
+[`docs/noaa-direct-ingestion.md`](docs/noaa-direct-ingestion.md),
+[`docs/surf-forecast-model-research.md`](docs/surf-forecast-model-research.md) (research and
+sources), [`docs/decisions.md`](docs/decisions.md) (architectural decision records),
+[`docs/debug-audit.md`](docs/debug-audit.md) (map/email audit and fixes), and
 [`data/surf_spots/README.md`](data/surf_spots/README.md) (dataset).
 
 ```
@@ -240,19 +259,16 @@ docker compose down -v               # stop and delete all data
 | Backend API | http://localhost:8000 (health: `/api/health`, readiness: `/api/health/ready`) |
 | API documentation (OpenAPI / Swagger UI) | http://localhost:8000/docs |
 | System status (jobs, data freshness, provider modes) | http://localhost:3000/status |
-| Mailpit inbox (optional) | http://localhost:8025, after `docker compose --profile mail up -d` with `EMAIL_PROVIDER=smtp` in `.env` |
+| Development inbox (Mailpit) — every email the stack sends | http://localhost:8025 |
+| Forecast accuracy dashboard (admin accounts) | http://localhost:3000/status/accuracy |
 
 ### Demo walkthrough
 
-1. Open http://localhost:3000 and register. In console mode, emails are not actually sent;
-   they are written to the outbox. Get the verification link with:
-
-   ```bash
-   docker compose exec worker cat /tmp/swell-outbox/outbox.jsonl
-   ```
-
-   Or, with `ENABLE_DEV_ENDPOINTS=true`, open http://localhost:3000/api/dev/outbox while
-   signed in. Without Docker, the file is `/tmp/swell-outbox/outbox.jsonl`.
+1. Open http://localhost:3000 and register. In Docker Compose the verification email lands
+   in the Mailpit inbox at http://localhost:8025 (the dashboard links to it and shows the
+   message status: `captured` means a development inbox has it; nothing claims
+   "delivered" without a provider's signed confirmation). Outside Docker with
+   `EMAIL_PROVIDER=console`, emails are written to `/tmp/swell-outbox/outbox.jsonl`.
 2. **Searches → New search.** Pick, for example, Jeffreys Bay, home airport SFO, a
    $5,000 budget.
 3. Force a swell to see the full flow:
@@ -271,6 +287,9 @@ docker compose down -v               # stop and delete all data
 
 | Service | Variables | Where credentials come from | Demo alternative |
 |---------|-----------|-----------------------------|------------------|
+| Forecasts: NOAA GFS-Wave + GFS, direct | `FORECAST_PROVIDERS=noaa_gfs` (recommended with `ecmwf_ifs`), `NOAA_*` tuning | None: NOAA open data on AWS | `FORECAST_PROVIDERS=demo` (default) |
+| Forecasts: ECMWF IFS open data | `FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs`, `ECMWF_*` tuning | None: CC BY 4.0 open data (attribution is shown automatically) | — |
+| Forecast uncertainty: GEFS-Wave ensemble | `GEFS_ENABLED=true` | None: NOAA open data | Heuristic ranges without it |
 | Forecasts: Open-Meteo (NOAA GFS / GFS-Wave) | `FORECAST_PROVIDERS=open_meteo`, optional `OPEN_METEO_API_KEY` | No key for non-commercial use; commercial keys at open-meteo.com/en/pricing | `FORECAST_PROVIDERS=demo` (default) |
 | Forecasts: Windy Point Forecast | `FORECAST_PROVIDERS=windy` (or `open_meteo,windy`), `WINDY_API_KEY` | api.windy.com/keys (paid Point Forecast plan) | — |
 | Flights: Duffel | `FLIGHT_PROVIDER=duffel`, `DUFFEL_ACCESS_TOKEN` | app.duffel.com → Developers → Access tokens (`duffel_test_…` = sandbox) | `FLIGHT_PROVIDER=demo` (default) |
@@ -285,12 +304,79 @@ Inbound STOP/START: set your Twilio number's "A message comes in" webhook to
 `POST ${API_BASE_URL}/api/webhooks/twilio/sms`. Requests are verified with
 `X-Twilio-Signature`, so `API_BASE_URL` must be the exact public URL Twilio calls.
 
+### Live forecasts from NOAA and ECMWF
+
+```env
+FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs   # two independent model families -> blended
+GEFS_ENABLED=true                       # ensemble spread for the uncertainty ranges
+```
+
+* No keys are needed. Each GFS cycle downloads about 1.9 GB (81 steps × ~24 MB for the 50
+  spots), each ECMWF cycle about 0.85 GB and each GEFS cycle about 0.2 GB; measured
+  2026-10-11: ~4 min, ~2 min and ~30 s. Reduce with `NOAA_STEP_HOURS=6` or shorter
+  `NOAA_MAX_LEAD_HOURS` / `ECMWF_MAX_LEAD_HOURS`.
+* Try it once synchronously (fresh database recommended):
+
+  ```bash
+  docker compose exec backend python -m app.cli engine ensemble --force
+  docker compose exec backend python -m app.cli pipeline
+  ```
+
+* The spot page then shows our prediction (from the blend), each model's raw offshore
+  values, the GEFS spread and where the models disagree. Details and limitations:
+  [`docs/FORECAST_SOURCES.md`](docs/FORECAST_SOURCES.md).
+
+### Email delivery: sender and DNS verification
+
+Local development needs nothing: Mailpit captures everything. For real delivery:
+
+1. **Pick a provider** (`EMAIL_PROVIDER=resend`, `sendgrid` or `smtp`) and set its key and
+   `EMAIL_FROM` to an address on a domain you control, e.g.
+   `Swell Travel Agent <alerts@mail.your-domain.com>`.
+2. **Verify the sending domain** with the provider. It gives you DNS records to add:
+   * **SPF**: a TXT record (or an `include:` in your existing SPF record) authorising the
+     provider's servers;
+   * **DKIM**: one or more CNAME/TXT records with the provider's signing keys;
+   * **DMARC**: a TXT record at `_dmarc.your-domain.com`, e.g.
+     `v=DMARC1; p=none; rua=mailto:dmarc@your-domain.com` to start with;
+   * for Resend and SendGrid, a custom return-path/bounce domain (CNAME) is recommended.
+   Wait until the provider dashboard shows the domain as verified; unverified senders are
+   rejected or land in spam.
+3. **Delivery confirmation webhooks** (optional, recommended). The app marks an email
+   `accepted` when the provider takes it and only moves it to `delivered`, `bounced` or
+   `complained` when a signed webhook says so:
+   * Resend: add a webhook to `${API_BASE_URL}/api/webhooks/resend` and set
+     `RESEND_WEBHOOK_SECRET` (its Svix signing secret);
+   * SendGrid: enable the signed Event Webhook to `${API_BASE_URL}/api/webhooks/sendgrid`
+     and set `SENDGRID_WEBHOOK_PUBLIC_KEY`.
+4. **Test from the app**: make your account an admin
+   (`python -m app.cli make-admin you@example.com`), verify your email, then use
+   `POST /api/dev/test-email` (dev endpoints) — it sends only to your own verified address.
+5. Production refuses capture-only providers (`console`, `mailpit`) at start-up.
+
+Real provider delivery was not verified from the build environment (no credentials or
+DNS); Mailpit delivery is verified end to end.
+
+### Map configuration
+
+The map works without configuration (OpenStreetMap tiles, attribution shown, light use
+only under the OSM tile policy). For more traffic use a tile provider:
+
+* CARTO: `NEXT_PUBLIC_CARTO_API_KEY=<key>` (free keys at carto.com/basemaps/apikey;
+  key-less CARTO raster tiles now show "API KEY REQUIRED").
+* Any XYZ provider: `NEXT_PUBLIC_MAP_TILE_URL=https://…/{z}/{x}/{y}.png` and
+  `NEXT_PUBLIC_MAP_ATTRIBUTION="© …"`.
+* These are build-time variables: run `docker compose build frontend` after changing them.
+  The tile host is added to the Content-Security-Policy automatically; extra hosts go in
+  `MAP_TILE_HOSTS`.
+
 ### Switching from demo to live
 
 1. Put the credentials in `.env` (never commit it), for example:
 
    ```env
-   FORECAST_PROVIDERS=open_meteo
+   FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs
+   GEFS_ENABLED=true
    FLIGHT_PROVIDER=duffel
    DUFFEL_ACCESS_TOKEN=duffel_test_xxx
    EMAIL_PROVIDER=resend
@@ -360,12 +446,34 @@ npm run build            # production build
 * builds and starts the production frontend on :3100;
 * runs the browser tests, including register → verify → login → create a search →
   simulated swell → mock flights → alert queued → alert sent → dashboard → pause →
-  no new alerts.
+  no new alerts, the map, the spot page and the 15-step upgrade scenario
+  (`e2e/scenario.spec.ts`: account → verification email → login → map → spot →
+  forecast → saved search → labelled simulated swell → mock flights → queued alert →
+  alert email → link → opportunity).
 
 ```bash
 cd frontend && npx playwright install chromium && cd ..   # once
-./scripts/run-e2e.sh
+./scripts/run-e2e.sh                                    # emails via the console capture file
+E2E_MAILPIT=1 ./scripts/run-e2e.sh                      # emails via a Mailpit container (needs Docker)
+./scripts/run-e2e.sh e2e/scenario.spec.ts               # one spec
 ```
+
+The e2e suite uses the demo forecast and mock flights only; it never claims real email
+delivery or real fares.
+
+**Live forecast ingestion** is tested separately from the suite (it downloads ~3 GB):
+
+```bash
+cd backend
+createdb swell_live    # scratch database
+DATABASE_URL=postgresql+psycopg://swell:swell@localhost:5432/swell_live \
+  python -m app.cli init-db
+DATABASE_URL=… GEFS_ENABLED=true python -m app.cli engine ensemble
+DATABASE_URL=… FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs python -m app.cli pipeline
+```
+
+It prints the records, errors, bytes and timings per source, the blend and the
+predictions; the results of the 2026-10-11 run are in `docs/FORECAST_SOURCES.md`.
 
 `scripts/run-e2e.sh` expects the backend virtualenv at `backend/.venv` and frontend
 dependencies installed. If Chromium is installed somewhere else, set
@@ -392,7 +500,11 @@ dependencies installed. If Chromium is installed somewhere else, set
 | Backend exits with `ValidationError` on start | A setting is invalid (e.g. `APP_ENV=production` with the default `SECRET_KEY`, `demo` mixed with live providers, or an unknown provider). The message names the field |
 | `Bind for 0.0.0.0:5432 failed: port is already allocated` | Another Postgres, Redis or app is using the port. Change the host port in `.env` (`POSTGRES_PORT`, `REDIS_PORT`, `BACKEND_PORT`, `FRONTEND_PORT`), or stop the local service (`brew services stop postgresql@16`) |
 | Background jobs not executing | `docker compose ps` should show `worker` healthy and `beat` up. `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate `celery … worker` and `celery … beat` processes |
-| No verification / alert email | Console mode writes to the outbox (see the walkthrough). Real providers log `PermanentProviderError` with the provider's reason. Check `/notifications` for the status and last error |
+| No verification / alert email | In Docker, open Mailpit (http://localhost:8025). Console mode writes to the outbox file. The dashboard banner and `/notifications` show each email's status: `failed`/`rejected` carry the provider's reason; `accepted` means the provider took it but has not confirmed delivery (check the provider's logs, your domain's SPF/DKIM/DMARC, and spam folders) |
+| `noaa_gfs` run fails with "no complete NOAA GFS cycle" | The newest cycles are still uploading (f240 lands ~5 h after the cycle) or NOAA changed the file layout (GFS v17: 404 on every file). Check one URL from the error in a browser; adjust `NOAA_GFS_WAVE_PATH_TEMPLATE` / `NOAA_GFS_ATMOS_PATH_TEMPLATE` after a layout change |
+| ECMWF logs `503 SlowDown` | The ECMWF bucket throttles bursts. The provider paces and retries; occasional 503s are normal. Persistent ones: lower `GRIB_DOWNLOAD_WORKERS` |
+| `ImportError: eccodes` / `Cannot find the ecCodes library` | ecCodes ships as a binary wheel (`eccodeslib`) for Linux x86-64/arm64 and macOS; reinstall with `pip install -e ".[dev]"`. On other platforms install the system library (`brew install eccodes`, `apt install libeccodes0`) |
+| A spot shows many "models disagree" hours | Expected near sheltered coasts, where the models' nearest sea cells differ (e.g. Rincon, Trestles); the range widens instead of trusting one model. Check the chosen cells in `wave_forecasts.extra` |
 | Pages show "The service is temporarily unavailable" / `/api/*` returns 500 | The Next.js server can't reach the backend: check `docker compose ps backend`. If the backend is up, `BACKEND_URL` is wrong. It is baked in at build time: rebuild the frontend after changing it (`docker compose build frontend`) |
 | Map shows "API KEY REQUIRED" tiles | CARTO raster basemaps now require a key; builds before this fix used key-less CARTO. Pull the latest code and rebuild the frontend (`docker compose build frontend && docker compose up -d`): it defaults to OpenStreetMap. For CARTO, set `NEXT_PUBLIC_CARTO_API_KEY`. The build prints a warning for a CARTO URL without `?key=` |
 | Map is grey with markers, "Map tiles couldn't load" | The tile server is unreachable (network, firewall, content blocker) or the URL is wrong. Open a tile URL from the browser's Network tab to see the error. The configured tile host is allowed by the CSP automatically; add others with `MAP_TILE_HOSTS` |
@@ -449,9 +561,15 @@ Checklist:
 * Both are labelled DEMO / MOCK in the UI, the API (`is_demo`, `is_mock`) and every alert.
 * The `simulate-swell` tool works only with the demo forecast provider.
 
-**Verified live:** Open-Meteo (NOAA GFS + GFS-Wave). On 2026-10-09 a Docker Compose run
-on macOS (Apple silicon) ingested the 12 UTC model run for all 50 spots (19,200 hourly
-records, 0 errors). Scoring and detection then ran on it.
+**Verified live**
+
+* NOAA GFS-Wave + GFS direct, ECMWF IFS open data and GEFS-Wave statistics, on
+  2026-10-11: all 50 spots, 0 errors (4,050 + 3,250 records and 2,050 ensemble rows),
+  then the blend, 11,350 predictions, the archive and swell detection
+  ([`docs/FORECAST_SOURCES.md`](docs/FORECAST_SOURCES.md)).
+* Open-Meteo (NOAA GFS + GFS-Wave), on 2026-10-09: 19,200 records, 0 errors.
+* Email to Mailpit, end to end (verification and alert emails, including the 15-step
+  scenario).
 
 **Implemented but not verified against the real services** (outbound network to these
 APIs was blocked in the build environment). Each adapter is unit-tested against
@@ -472,20 +590,25 @@ SMTP is verified end to end: the Docker stack delivered a verification email to 
 
 * Booking or payment: the app links to the provider or a public search page.
 * Surfline or other proprietary surf forecasts: no authorized API.
-* Buoy or observation ingestion, and fitted per-spot calibration (the schema supports
-  it; see SURF_SCORING.md §7).
+* Fitted per-spot calibration of breaking heights: there are no nearshore (surf-height)
+  observations to fit or verify against (the schema supports them; see SURF_SCORING.md
+  §7).
 * Social login, two-factor authentication, multi-language UI.
 * Push notifications.
 * Hotel or car search.
-* An admin UI: use the API docs and the status page.
+* A general admin UI: use the API docs, the status page and the accuracy dashboard.
 
 **Forecast and price uncertainty**
 
 * Wave forecasts 5–10 days ahead routinely shift in timing (± a day) and size.
   Confidence is shown separately from quality for this reason.
-* Breaking heights come from a generic shoaling formula with a hand-set spot factor.
-  They can be wrong by a factor of 2 at reef and point breaks with unusual bathymetry.
-* Weights, thresholds and labels are reasoned defaults, not fitted to observations.
+* Breaking heights come from a physical model with estimated spot profiles (shore normal,
+  shadowing, focusing; no bathymetry). They are unvalidated against surf observations and
+  can be wrong by a factor of 2 at reef and point breaks with unusual bathymetry. The 80%
+  range is a heuristic, not a calibrated probability.
+* Quality-score weights, thresholds and labels are reasoned defaults, not fitted to
+  observations. On the first live run many world-class spots reached 90–100 at their best
+  hour of a big southern-hemisphere swell: the top of the scale is not rare enough yet.
 * Fares change constantly. Every price is a quote with a timestamp, re-validated
   before alerting when the provider supports it, and may differ at booking time.
 * Nothing here is travel, safety or financial advice. Check local conditions, hazards,

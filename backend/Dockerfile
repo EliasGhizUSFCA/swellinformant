@@ -23,7 +23,8 @@ RUN --mount=type=secret,id=ca \
 COPY backend/ ./
 COPY data/ /data/
 RUN useradd --create-home --uid 10001 swell \
-    && mkdir -p /tmp/swell-outbox && chown swell /tmp/swell-outbox \
+    && mkdir -p /tmp/swell-outbox /var/lib/swell-ml \
+    && chown swell /tmp/swell-outbox /var/lib/swell-ml \
     && chmod +x /app/docker-entrypoint.sh
 
 USER swell

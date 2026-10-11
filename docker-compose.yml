@@ -30,6 +30,20 @@ x-backend-env: &backend-env
   OPEN_METEO_API_KEY: ${OPEN_METEO_API_KEY:-}
   WINDY_API_KEY: ${WINDY_API_KEY:-}
   DEMO_NATURAL_SWELLS: ${DEMO_NATURAL_SWELLS:-true}
+  # Live forecast engine (FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs): blend, ensemble, bandwidth.
+  FORECAST_BLEND_ENABLED: ${FORECAST_BLEND_ENABLED:-true}
+  GEFS_ENABLED: ${GEFS_ENABLED:-false}
+  NOAA_STEP_HOURS: ${NOAA_STEP_HOURS:-3}
+  NOAA_MAX_LEAD_HOURS: ${NOAA_MAX_LEAD_HOURS:-240}
+  ECMWF_MAX_LEAD_HOURS: ${ECMWF_MAX_LEAD_HOURS:-240}
+  GRIB_DOWNLOAD_WORKERS: ${GRIB_DOWNLOAD_WORKERS:-6}
+  # Buoy observations, verification and ML post-processing (off by default).
+  OBSERVATIONS_ENABLED: ${OBSERVATIONS_ENABLED:-false}
+  OBSERVATION_PROVIDERS: ${OBSERVATION_PROVIDERS:-aodn,metoffice,ndbc}
+  VERIFICATION_ENABLED: ${VERIFICATION_ENABLED:-false}
+  ML_CORRECTIONS_ENABLED: ${ML_CORRECTIONS_ENABLED:-true}
+  ML_ARTIFACT_DIR: /var/lib/swell-ml
+  RETENTION_ARCHIVE_DAYS: ${RETENTION_ARCHIVE_DAYS:-730}
   DETECTION_LEAD_MIN_DAYS: ${DETECTION_LEAD_MIN_DAYS:-5}
   DETECTION_LEAD_MAX_DAYS: ${DETECTION_LEAD_MAX_DAYS:-10}
   FLIGHT_PROVIDER: ${FLIGHT_PROVIDER:-demo}
@@ -71,6 +85,8 @@ x-backend: &backend
   volumes:
     # Console email/SMS providers write here; shared so the API's /api/dev/outbox can read it.
     - outbox:/tmp/swell-outbox
+    # Trained ML correction artifacts (checksum-verified on load).
+    - ml-artifacts:/var/lib/swell-ml
   restart: unless-stopped
   depends_on:
     postgres:
@@ -191,3 +207,4 @@ services:
 volumes:
   pgdata:
   outbox:
+  ml-artifacts:
