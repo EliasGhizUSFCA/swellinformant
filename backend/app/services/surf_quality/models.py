@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.services.geo import window_center
@@ -85,6 +85,16 @@ def profile_from_orm(spot: Any) -> Profile | None:
     )
 
 
+# Offshore wave heights of a sea state (an Hs correction scales all of them alike).
+HEIGHT_FIELDS = (
+    "sig_wave_height_m",
+    "primary_swell_height_m",
+    "secondary_swell_height_m",
+    "tertiary_swell_height_m",
+    "wind_wave_height_m",
+)
+
+
 @dataclass(frozen=True)
 class SeaState:
     """Offshore conditions for one valid time (metres, seconds, degrees FROM, km/h)."""
@@ -109,6 +119,15 @@ class SeaState:
     wind_gust_kmh: float | None = None
     # 0 = local low tide, 1 = local high tide (derived from the sea-level series)
     tide_stage: float | None = None
+
+    def scaled(self, factor: float) -> SeaState:
+        """The same sea state with every offshore height multiplied by ``factor``."""
+        changes = {
+            name: getattr(self, name) * factor
+            for name in HEIGHT_FIELDS
+            if getattr(self, name) is not None
+        }
+        return replace(self, **changes)
 
     @classmethod
     def from_orm(cls, row: Any, tide_stage: float | None = None) -> SeaState:

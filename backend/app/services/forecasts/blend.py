@@ -70,6 +70,7 @@ from app.services.forecasts.families import are_independent, prior_error_correla
 from app.services.forecasts.ingestion import AcquisitionOutcome, store_records
 from app.services.forecasts.queries import USABLE, is_stale
 from app.services.forecasts.registry import configured_source_codes
+from app.services.ml.hook import RunCorrector, scale_heights, spot_slugs
 from app.services.surf_quality.uncertainty import lead_sigma
 
 logger = logging.getLogger(__name__)
@@ -478,6 +479,11 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
     for m in [*members, *duplicates]:
         _load_series(db, m)
     skill = load_skill(db, [m.family for m in members])
+    # An active ML correction is applied to the members of the family it was validated on,
+    # before combining (ml.hook); cross-checks stay raw so integrity checks compare raw data.
+    correctors = {m.code: c for m in members if (c := RunCorrector.for_run(db, m.run)) is not None}
+    slugs = spot_slugs(db) if correctors else {}
+    applied_labels: set[str] = set()
     records: dict[int, list[ForecastRecord]] = {}
     comparisons: list[dict[str, Any]] = []
     spot_ids = sorted({s for m in members for s in m.series})
@@ -494,10 +500,19 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
         for t in anchor[2]:
             hours: list[HourValues] = []
             dup_hours: list[HourValues] = []
+            corrected: dict[str, dict[str, Any]] = {}
             for m, rows, times in aligned:
                 values = {name: value_at(rows, times, t, name) for name in FORECAST_FIELDS}
                 if all(v is None for v in values.values()):
                     continue
+                corrector = correctors.get(m.code) if m in members else None
+                if corrector is not None:
+                    row = {**values, "wave_period_kind": rows[0].wave_period_kind}
+                    hit = corrector.factor(slugs.get(spot_id, ""), row, t)
+                    if hit is not None:
+                        values = scale_heights(values, hit[0])
+                        corrected[m.code] = hit[1]
+                        applied_labels.add(corrector.label)
                 hv = HourValues(
                     m.code,
                     m.family,
@@ -511,11 +526,10 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
             values, weights, kind = blend_hour(hours, skill)
             if values["sig_wave_height_m"] is None and values["primary_swell_height_m"] is None:
                 continue
-            out.append(
-                ForecastRecord(
-                    t, values, period_kind=kind, extra={"families": len({h.family for h in hours})}
-                )
-            )
+            extra: dict[str, Any] = {"families": len({h.family for h in hours})}
+            if corrected:
+                extra["ml_corrections"] = corrected
+            out.append(ForecastRecord(t, values, period_kind=kind, extra=extra))
             cmp_ = compare_hour(hours, dup_hours)
             comparisons.append(
                 {
@@ -558,6 +572,7 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
         "method": METHOD,
         "spot_ids": sorted(records),
         "members": [_member_info(m) for m in members],
+        "ml_corrections": sorted(applied_labels),
         "cross_checks": [_member_info(m) for m in duplicates],
         "skill": skill.evidence or "no verification yet: lead-time prior only",
         "flagged_hours": flagged,

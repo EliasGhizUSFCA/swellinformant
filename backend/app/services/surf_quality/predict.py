@@ -23,6 +23,7 @@ from app.models import (
     WaveForecast,
 )
 from app.models.enums import ForecastRunStatus
+from app.services.ml.hook import RunCorrector
 from app.services.surf_quality.confidence import completeness, confidence_label, run_agreement
 from app.services.surf_quality.models import SeaState, SpotParams
 from app.services.surf_quality.scoring import ALGORITHM_VERSION, evaluate
@@ -163,6 +164,9 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
 
     ensembles = _ensemble_index(db, run)
     between = _between_model_sigma(db, run)
+    # An active ML correction of offshore Hs (ml.hook). A blend's members were already
+    # corrected before blending, so a blend run is never corrected again here.
+    corrector = None if run.source.kind == "blend" else RunCorrector.for_run(db, run)
     spots = {s.id: s for s in db.scalars(select(SurfSpot)).all()}
     by_spot: dict[int, list[WaveForecast]] = defaultdict(list)
     for row in db.scalars(
@@ -181,6 +185,12 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
         stages = tide_stages([f.valid_time for f in forecasts], [f.sea_level_m for f in forecasts])
         for f, stage in zip(forecasts, stages, strict=True):
             sea = SeaState.from_orm(f, tide_stage=stage)
+            ml_label, ml_info = _ml_correction(f), (f.extra or {}).get("ml_corrections")
+            if corrector is not None:
+                hit = corrector.factor(spot.slug, _row_values(f), f.valid_time)
+                if hit is not None:
+                    sea = sea.scaled(hit[0])
+                    ml_label, ml_info = corrector.label, hit[1]
             result = evaluate(sea, params)
             lead_hours = (f.valid_time - run.issued_at).total_seconds() / 3600.0
             values = {
@@ -220,7 +230,7 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
                     "breaking_p10_ft": unc.p10_ft,
                     "breaking_p90_ft": unc.p90_ft,
                     "uncertainty_kind": unc.kind,
-                    "ml_model_version": None,
+                    "ml_model_version": ml_label,
                     "score": result.score,
                     "label": result.label,
                     "components": {
@@ -228,6 +238,7 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
                         "run_agreement": agreement,
                         "tide_stage": stage,
                         "uncertainty": unc.as_dict(),
+                        **({"ml_correction": ml_info} if ml_info else {}),
                         "breaking": {
                             "partitions": result.breaking.partitions,
                             "assumptions": result.breaking.assumptions,
@@ -307,3 +318,28 @@ def compute_pending_predictions(db: Session) -> dict[str, int]:
         "predictions": total,
         "archived": archived["archived"],
     }
+
+
+def _row_values(f: WaveForecast) -> dict[str, object]:
+    """The forecast values the correction's features are built from (ml.features)."""
+    return {
+        name: getattr(f, name)
+        for name in (
+            "sig_wave_height_m",
+            "wave_period_s",
+            "wave_period_kind",
+            "wave_direction_deg",
+            "primary_swell_height_m",
+            "primary_swell_period_s",
+            "primary_swell_direction_deg",
+            "wind_speed_kmh",
+            "wind_direction_deg",
+        )
+    }
+
+
+def _ml_correction(f: WaveForecast) -> str | None:
+    """Label of the correction a blend applied to one of this hour's members, if any."""
+    applied = (f.extra or {}).get("ml_corrections") or {}
+    labels = sorted({str(v.get("model")) for v in applied.values() if isinstance(v, dict)})
+    return ", ".join(labels)[:60] or None

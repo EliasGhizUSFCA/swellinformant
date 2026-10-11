@@ -125,3 +125,25 @@ two runs issued in the same hour collide.
 corrected in place (key on `run_key`) rather than followed by a new migration.
 **Consequences.** Development databases created from the first draft must be downgraded to
 `0002_email_delivery` and upgraded again (`alembic check` detects the difference).
+
+## ADR-012 An ML correction is applied to the model it was validated on, once
+
+**Context.** A correction is trained and accepted (ADR-008) on one model family's raw
+forecasts at buoys (GFS-Wave station bulletins, family `ncep_gfs`). With two independent
+families the authoritative forecast is the blend, whose family is `blend`.
+**Decision.** `ml/hook.py` applies the active correction in exactly one place per value:
+the blend corrects each *member* of the trained family before combining (cross-checks stay
+raw, so integrity checks still compare raw data); a single-source run of that family is
+corrected in the prediction job; a blend run is never corrected again. Only offshore heights
+are scaled (Hs and every partition by the same factor); periods, directions and wind are
+untouched, and the breaking-height model runs on the corrected offshore values. Features are
+built as in training: the paired buoy's spectral Hm0 at or before the cycle time (within
+1 h) and the analysis error against the archived lead-0 bulletin of the same cycle. When a
+required feature is missing the value stays raw. Predictions and the archive record the
+model version; blended hours record which member was corrected (`wave_forecasts.extra`).
+**Alternatives.** Correcting the blended value (not what was validated); correcting
+breaking heights (no observations to validate against).
+**Consequences.** A correction that requires cycle-time observations only works where such
+observations arrive in real time; models meant for production are trained with
+`--no-obs-features` unless the paired buoy has a real-time Hm0 feed. A blend built before a
+correction was activated is not rebuilt; the next upstream run uses it.
