@@ -1,4 +1,10 @@
-"""Job B — score every forecast timestep of a model run."""
+"""Job B — score every forecast timestep of a model run.
+
+Every prediction also gets its two confidence classes (methodology forecast-v1,
+``forecast_confidence``): forecast confidence of the offshore forecast and local
+confidence of the breaking-wave estimate at the break, with the inputs and rules used,
+the run's issue time, the lead time and the research assessment local confidence used.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +17,8 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.core.database import utcnow
 from app.models import (
-    ForecastComparison,
     ForecastEnsembleStat,
     ForecastRun,
     ForecastSource,
@@ -25,6 +29,18 @@ from app.models import (
 from app.models.enums import ForecastRunStatus
 from app.services.ml.hook import RunCorrector
 from app.services.surf_quality.confidence import completeness, confidence_label, run_agreement
+from app.services.surf_quality.confidence_context import RunConfidenceContext, station_codes
+from app.services.surf_quality.forecast_confidence import (
+    METHOD as CONFIDENCE_METHOD,
+)
+from app.services.surf_quality.forecast_confidence import (
+    EnsembleSignal,
+    ForecastInputs,
+    classify_forecast,
+    classify_local,
+    confidence_inputs,
+    run_change_ratio,
+)
 from app.services.surf_quality.models import SeaState, SpotParams
 from app.services.surf_quality.scoring import ALGORITHM_VERSION, evaluate
 from app.services.surf_quality.sun import is_daylight
@@ -58,20 +74,6 @@ def tide_stages(times: list[datetime], levels: list[float | None]) -> list[float
     return [
         None if pd.isna(v) else round(float(v), 3) for v in stage.reindex(pd.DatetimeIndex(times))
     ]
-
-
-def _previous_run(db: Session, run: ForecastRun) -> ForecastRun | None:
-    return db.scalar(
-        select(ForecastRun)
-        .where(
-            ForecastRun.source_id == run.source_id,
-            ForecastRun.id != run.id,
-            ForecastRun.issued_at <= run.issued_at,
-            ForecastRun.status.in_((ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)),
-        )
-        .order_by(ForecastRun.issued_at.desc(), ForecastRun.id.desc())
-        .limit(1)
-    )
 
 
 def _ensemble_index(
@@ -124,46 +126,32 @@ def _nearest_ensemble(
     return best[1] if best else None
 
 
-def _between_model_sigma(db: Session, run: ForecastRun) -> dict[tuple[int, datetime], float]:
-    """σ_ln(Hs) between independent model families, from the blend's comparisons.
-
-    With two families σ ≈ |ln(Hs_a / Hs_b)| / 2 (their standard deviation); with more,
-    half the largest pairwise log ratio is a lower bound, which is the conservative use.
-    """
-    out: dict[tuple[int, datetime], float] = {}
-    for spot_id, valid_time, ratio in db.execute(
-        select(
-            ForecastComparison.spot_id,
-            ForecastComparison.valid_time,
-            ForecastComparison.hs_log_ratio_max,
-        ).where(ForecastComparison.blend_run_id == run.id)
-    ):
-        if ratio is not None:
-            out[(spot_id, valid_time)] = ratio / 2.0
-    return out
+def _missing_swell(f: WaveForecast) -> bool:
+    """No period or no direction for the swell (nor the bulk sea the model falls back to)."""
+    period = f.primary_swell_period_s if f.primary_swell_period_s is not None else f.wave_period_s
+    direction = (
+        f.primary_swell_direction_deg
+        if f.primary_swell_direction_deg is not None
+        else f.wave_direction_deg
+    )
+    return period is None or direction is None
 
 
-def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -> int:
+def compute_predictions_for_run(
+    db: Session, run_id: int, force: bool = False, now: datetime | None = None
+) -> int:
     run = db.get(ForecastRun, run_id)
     if run is None or run.status not in (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL):
         return 0
     if run.predictions_computed_at and not force:
         return 0
-    settings = get_settings()
-    stale = (utcnow() - run.issued_at).total_seconds() > settings.forecast_stale_hours * 3600
-
-    prev = _previous_run(db, run)
-    prev_heights: dict[tuple[int, datetime], float | None] = {}
-    if prev is not None:
-        for spot_id, valid_time, h in db.execute(
-            select(
-                WaveForecast.spot_id, WaveForecast.valid_time, WaveForecast.primary_swell_height_m
-            ).where(WaveForecast.run_id == prev.id)
-        ):
-            prev_heights[(spot_id, valid_time)] = h
+    now = now or utcnow()
+    # Staleness per source (queries.stale_after_hours), previous run, blend comparisons,
+    # verification and research assessments: read once for the whole run.
+    ctx = RunConfidenceContext.load(db, run, now)
+    stale = ctx.stale
 
     ensembles = _ensemble_index(db, run)
-    between = _between_model_sigma(db, run)
     # An active ML correction of offshore Hs (ml.hook). A blend's members were already
     # corrected before blending, so a blend run is never corrected again here.
     corrector = None if run.source.kind == "blend" else RunCorrector.for_run(db, run)
@@ -182,6 +170,8 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
         if spot is None:
             continue
         params = SpotParams.from_orm(spot)
+        stations = station_codes(spot)
+        research = ctx.research.get(spot_id)
         stages = tide_stages([f.valid_time for f in forecasts], [f.sea_level_m for f in forecasts])
         for f, stage in zip(forecasts, stages, strict=True):
             sea = SeaState.from_orm(f, tide_stage=stage)
@@ -203,19 +193,46 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
                     "wind_direction_deg",
                 )
             }
+            prev_hs, prev_swell = ctx.previous.get((spot_id, f.valid_time), (None, None))
             # Diagnostic only (see confidence.py): how much this hour changed since the
             # previous run of the same source.
-            agreement = run_agreement(
-                f.primary_swell_height_m, prev_heights.get((spot_id, f.valid_time))
-            )
+            agreement = run_agreement(f.primary_swell_height_m, prev_swell)
+            ensemble = _nearest_ensemble(ensembles.get(spot_id, []), f.valid_time)
             unc = breaking_uncertainty(
                 result.breaking.mid_ft,
                 lead_hours,
-                ensemble=_nearest_ensemble(ensembles.get(spot_id, []), f.valid_time),
-                between_model_sigma=between.get((spot_id, f.valid_time)),
+                ensemble=ensemble,
+                between_model_sigma=ctx.between_model_sigma(spot_id, f.valid_time),
                 calibration=params.calibration,
             )
             conf = confidence_index(unc.sigma_forecast, completeness(values), stale)
+            families = ctx.hour_families(spot_id, f.valid_time)
+            forecast_conf = classify_forecast(
+                ForecastInputs(
+                    index=conf,
+                    sigma_source=unc.source,
+                    lead_hours=lead_hours,
+                    source_code=run.source.code,
+                    is_demo=run.source.is_demo,
+                    families=families,
+                    ensemble=None
+                    if ensemble is None
+                    else EnsembleSignal(ensemble.hs_mean_m, ensemble.hs_spread_m, ensemble.members),
+                    disagreement=ctx.disagreement(spot_id, f.valid_time),
+                    run_change_ratio=run_change_ratio(
+                        f.sig_wave_height_m
+                        if f.sig_wave_height_m is not None
+                        else f.primary_swell_height_m,
+                        prev_hs if prev_hs is not None else prev_swell,
+                    ),
+                    verification=ctx.verification.lookup(families, stations, lead_hours),
+                    missing_wind=f.wind_speed_kmh is None or f.wind_direction_deg is None,
+                    missing_swell=_missing_swell(f),
+                    stale=stale,
+                    stale_after_hours=ctx.stale_after_hours,
+                )
+            )
+            local_conf = classify_local(forecast_conf.cls, research)
             rows.append(
                 {
                     "forecast_id": f.id,
@@ -250,6 +267,13 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
                     "confidence_label": confidence_label(conf).value,
                     "explanation": result.explanation,
                     "algorithm_version": ALGORITHM_VERSION,
+                    "forecast_confidence_class": forecast_conf.cls,
+                    "local_confidence_class": local_conf.cls,
+                    "confidence_method": CONFIDENCE_METHOD,
+                    "confidence_inputs": confidence_inputs(forecast_conf, local_conf),
+                    "issued_at": run.issued_at,
+                    "lead_hours": round(lead_hours, 2),
+                    "research_assessment_id": local_conf.assessment_id,
                 }
             )
     if rows:
@@ -270,8 +294,9 @@ def compute_predictions_for_run(db: Session, run_id: int, force: bool = False) -
     return len(rows)
 
 
-def outdated_authoritative_runs(db: Session) -> list[int]:
-    """Runs currently shown to users whose predictions predate ALGORITHM_VERSION.
+def outdated_authoritative_runs(db: Session, now: datetime | None = None) -> list[int]:
+    """Runs currently shown to users whose predictions predate ALGORITHM_VERSION or the
+    confidence methodology (forecast-v1).
 
     After an algorithm upgrade the live forecast is rescored at once instead of waiting
     for the next model cycle. Older runs keep the version they were issued with (the
@@ -279,7 +304,7 @@ def outdated_authoritative_runs(db: Session) -> list[int]:
     """
     from app.services.forecasts.queries import latest_runs_by_spot
 
-    run_ids = sorted({r.id for r in latest_runs_by_spot(db).values()})
+    run_ids = sorted({r.id for r in latest_runs_by_spot(db, now).values()})
     if not run_ids:
         return []
     return list(
@@ -287,14 +312,15 @@ def outdated_authoritative_runs(db: Session) -> list[int]:
             select(SurfQualityPrediction.run_id)
             .where(
                 SurfQualityPrediction.run_id.in_(run_ids),
-                SurfQualityPrediction.algorithm_version != ALGORITHM_VERSION,
+                (SurfQualityPrediction.algorithm_version != ALGORITHM_VERSION)
+                | SurfQualityPrediction.confidence_method.is_distinct_from(CONFIDENCE_METHOD),
             )
             .distinct()
         ).all()
     )
 
 
-def compute_pending_predictions(db: Session) -> dict[str, int]:
+def compute_pending_predictions(db: Session, now: datetime | None = None) -> dict[str, int]:
     pending = db.scalars(
         select(ForecastRun.id)
         .where(
@@ -305,13 +331,13 @@ def compute_pending_predictions(db: Session) -> dict[str, int]:
     ).all()
     total = 0
     for run_id in pending:
-        total += compute_predictions_for_run(db, run_id)
-    rescored = outdated_authoritative_runs(db)
+        total += compute_predictions_for_run(db, run_id, now=now)
+    rescored = outdated_authoritative_runs(db, now)
     for run_id in rescored:
-        total += compute_predictions_for_run(db, run_id, force=True)
+        total += compute_predictions_for_run(db, run_id, force=True, now=now)
     from app.services.forecasts.archive import archive_authoritative
 
-    archived = archive_authoritative(db)
+    archived = archive_authoritative(db, now)
     return {
         "runs": len(pending),
         "rescored_runs": len(rescored),

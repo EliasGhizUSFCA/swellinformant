@@ -140,6 +140,11 @@ class EventOut(BaseModel):
     is_demo: bool
     source_code: str
     history: list[dict[str, Any]] = []
+    # Forecast and local confidence at the event's peak hour (forecast-v1; see
+    # Conditions). None for events last updated before these classes existed.
+    forecast_confidence_class: str | None = None
+    local_confidence_class: str | None = None
+    confidence_reasons: list[str] = []
 
 
 class SpotSummary(SpotMini):
@@ -284,6 +289,9 @@ class DailySummary(BaseModel):
     avg_wind_kmh: float | None
     good_hours: int
     confidence: int
+    # Forecast and local confidence at the day's best hour (``best_time``).
+    forecast_confidence_class: str | None = None
+    local_confidence_class: str | None = None
 
 
 class ForecastSourceOut(BaseModel):

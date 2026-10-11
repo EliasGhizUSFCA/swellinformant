@@ -1,7 +1,9 @@
 """Combine the latest run of each independent model family into one forecast.
 
 Which sources take part
-  The newest usable, non-stale deterministic run of every configured source. Sources of
+  The newest usable, non-stale deterministic run of every configured source (staleness is
+  per source, ``queries.stale_after_hours``: ECMWF's 12-hourly cycles stay members for
+  25 h, GFS runs for 16 h). Sources of
   the same dependency family (``families.py``) are not independent evidence: the
   highest-priority one becomes the member and the others are kept only as an integrity
   cross-check (two copies of the same model should agree; when they do not, ingestion of
@@ -37,7 +39,8 @@ Disagreement
   For every pair of independent families: |ln(Hs_a/Hs_b)|, |ΔTp| (peak periods only),
   angular Δ direction and |Δ wind speed|. Thresholds (heuristic, documented) raise flags;
   ``agreement`` in [0, 1] summarises them. The uncertainty model widens the forecast range
-  by the between-model spread (``predict._between_model_sigma``).
+  by the between-model spread, and forecast confidence uses the flags and log ratios
+  (``surf_quality.confidence_context``).
 """
 
 from __future__ import annotations
