@@ -150,7 +150,9 @@ decisions), [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md),
 [`docs/noaa-direct-ingestion.md`](docs/noaa-direct-ingestion.md),
 [`docs/surf-forecast-model-research.md`](docs/surf-forecast-model-research.md) (research and
 sources), [`docs/decisions.md`](docs/decisions.md) (architectural decision records),
-[`docs/debug-audit.md`](docs/debug-audit.md) (map/email audit and fixes), and
+[`docs/debug-audit.md`](docs/debug-audit.md) (map/email audit and fixes),
+[`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md) (what changed in the forecasting
+upgrade, test results, remaining setup), and
 [`data/surf_spots/README.md`](data/surf_spots/README.md) (dataset).
 
 ```
