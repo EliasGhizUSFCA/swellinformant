@@ -2,6 +2,9 @@
 
 * forecast runs older than RETENTION_FORECAST_DAYS are deleted (their wave forecasts and
   predictions cascade), always keeping the two newest usable runs per source;
+* map fields (the map's ocean layers, about 0.1 MB per field and 0.5 deg) are kept for the
+  two newest runs that have fields only; older map_fields rows are deleted (a deleted
+  forecast run also takes its fields with it);
 * flight searches older than RETENTION_FLIGHT_DAYS are deleted unless an offer is still
   referenced by an open opportunity;
 * matches whose surf window has passed become EXPIRED;
@@ -17,7 +20,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, delete, exists, select, update
+from sqlalchemy import and_, delete, exists, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -38,6 +41,7 @@ from app.models import (
     UserToken,
 )
 from app.models.enums import ForecastRunStatus, MatchStatus
+from app.models.forecast_engine import MapField
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,18 @@ def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
     s = get_settings()
     now = now or utcnow()
     out: dict[str, int] = {}
+
+    # Map fields: the newest two runs (by model cycle) that have any.
+    keep_field_runs = db.scalars(
+        select(MapField.run_id)
+        .group_by(MapField.run_id)
+        .order_by(func.max(MapField.cycle_time).desc(), MapField.run_id.desc())
+        .limit(2)
+    ).all()
+    old_fields = delete(MapField)
+    if keep_field_runs:
+        old_fields = old_fields.where(MapField.run_id.notin_(keep_field_runs))
+    out["map_fields"] = db.execute(old_fields).rowcount or 0  # type: ignore[attr-defined]
 
     keep_ids: set[int] = set()
     for source_id in db.scalars(select(ForecastRun.source_id).distinct()).all():

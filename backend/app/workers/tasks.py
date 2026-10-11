@@ -211,6 +211,32 @@ def acquire_ensemble_task(self: Task) -> dict[str, Any]:
     )
 
 
+@celery_app.task(
+    name="forecasts.map_fields",
+    bind=True,
+    autoretry_for=(TransientProviderError,),
+    retry_backoff=120,
+    max_retries=2,
+)
+def acquire_map_fields_task(self: Task) -> dict[str, Any]:
+    """Global map fields on their own (standalone mode only; otherwise a no-op).
+
+    In "with_noaa" mode the NOAA acquisition stores the fields itself; with "off" nothing
+    is fetched (see app.services.map_fields.map_fields_mode).
+    """
+    from app.core.config import get_settings
+    from app.services.forecasts.ingestion import acquire_map_fields
+    from app.services.map_fields import map_fields_mode
+
+    def job(db: Session) -> dict[str, Any]:
+        mode = map_fields_mode(get_settings())
+        if mode != "standalone":
+            return {"skipped": f"map fields mode is {mode!r}, not 'standalone'"}
+        return acquire_map_fields(db)
+
+    return run_job("forecasts.map_fields", job, task_id=self.request.id, lock_ttl=3600, chain=False)
+
+
 @celery_app.task(name="observations.ingest", bind=True)
 def ingest_observations(self: Task) -> dict[str, Any]:
     """Buoy observations for verification and training (OBSERVATIONS_ENABLED)."""
