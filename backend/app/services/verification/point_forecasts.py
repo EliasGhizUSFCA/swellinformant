@@ -75,6 +75,9 @@ _CYCLE_RE = re.compile(r"Cycle\s*:\s*(\d{8})\s+(\d{1,2})\s*UTC")
 _DAY_HOUR_RE = re.compile(r"^\s*(\d{1,2})\s+(\d{1,2})\s*$")
 _TOTAL_RE = re.compile(r"^\s*(\d+\.\d+)\s+(\d+)\s*(\d+)?\s*$")
 _PART_RE = re.compile(r"^\s*(\*)?\s*(\d+\.\d+)\s+(\d+\.\d+)\s+(\d+)\s*$")
+# Bulletin ids are WMO-style station ids (56006, 51201, 62163); they go into the URL path,
+# so anything else is refused rather than requested.
+_BULLETIN_ID_RE = re.compile(r"[A-Za-z0-9]{3,10}")
 
 
 class BulletinFormatError(PermanentProviderError):
@@ -226,6 +229,8 @@ def parse_cbull(text: str) -> tuple[str, datetime, list[CompactRow]]:
 
 
 def bulletin_url(base_url: str, station_id: str, cycle: datetime) -> str:
+    if not _BULLETIN_ID_RE.fullmatch(station_id):
+        raise ValueError(f"invalid GFS-Wave bulletin id {station_id!r}")
     hh = f"{cycle.hour:02d}"
     return (
         f"{base_url.rstrip('/')}/gfs.{cycle:%Y%m%d}/{hh}/wave/station/bulls.t{hh}z/"
@@ -335,7 +340,10 @@ def _fetch(
         )
     except ProviderError as exc:
         return _Fetched(code, cycle, error=str(exc), transient=exc.transient)
-    if response.status_code in (403, 404):
+    if response.status_code == 404:
+        # Not published (yet), or before the archive starts. The NODD bucket allows
+        # public listing, so a missing key is a 404 (checked 2026-10-11); a 403 means
+        # access was refused and is reported as an error below, not hidden as "missing".
         return _Fetched(code, cycle, missing=True)
     if response.status_code != 200:
         return _Fetched(code, cycle, error=f"HTTP {response.status_code} for {url}")
@@ -374,6 +382,8 @@ def collect_range(
         "errors": 0,
         "transient_errors": 0,
         "rows_inserted": 0,
+        # Table rows / partition cells that did not match the bulletin layout (skipped).
+        "malformed_cells": 0,
         "error_samples": [],
     }
     if not station_rows or not cycle_list:
@@ -397,7 +407,14 @@ def collect_range(
             if (s.id, cycle) in stored:
                 result["already_stored"] += 1
                 continue
-            url = bulletin_url(settings.noaa_gfs_base_url, str(s.metadata_["bulletin_id"]), cycle)
+            try:
+                url = bulletin_url(
+                    settings.noaa_gfs_base_url, str(s.metadata_["bulletin_id"]), cycle
+                )
+            except ValueError as exc:
+                result["errors"] += 1
+                result["error_samples"].append(f"{s.code} {cycle:%Y%m%d%H}: {exc}")
+                continue
             jobs.append((url, s.code, cycle))
     own_client = client is None
     http = client or httpx.Client(
@@ -448,6 +465,12 @@ def _store(
         result["error_samples"].append(f"{item.station_code} {item.cycle:%Y%m%d%H}: {exc}")
         return
     result["fetched"] += 1
+    if bulletin.malformed:
+        result["malformed_cells"] += bulletin.malformed
+        result["error_samples"].append(
+            f"{item.station_code} {item.cycle:%Y%m%d%H}: {bulletin.malformed} malformed "
+            "row(s)/cell(s) skipped"
+        )
     rows = point_forecast_rows(bulletin, station, max_lead)
     if not rows:
         return
@@ -494,8 +517,15 @@ def collect_recent(
             db, start, latest, DEFAULT_CYCLES, client=client, backoff_seconds=backoff_seconds
         )
         sources[source] = outcome
-        if outcome["transient_errors"] and not outcome["fetched"] and not outcome["already_stored"]:
+        nothing_read = not outcome["fetched"] and not outcome["already_stored"]
+        if outcome["transient_errors"] and nothing_read:
             raise TransientProviderError(
                 f"{SOURCE_CODE}: every download failed ({outcome['error_samples'][:1]})"
+            )
+        if outcome["errors"] and nothing_read:
+            # e.g. HTTP 403 on every file (wrong NOAA_GFS_BASE_URL or a policy change):
+            # fail the job instead of reporting success with zero bulletins.
+            raise PermanentProviderError(
+                f"{SOURCE_CODE}: no bulletin could be read ({outcome['error_samples'][:1]})"
             )
     return {"latest_cycle": latest.isoformat(), "sources": sources}

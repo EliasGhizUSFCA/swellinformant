@@ -63,6 +63,9 @@ PROVIDER = "ndbc"
 REALTIME_DATASET = "ndbc_realtime2"
 HISTORICAL_DATASET = "ndbc_historical_stdmet"
 REALTIME_DAYS = 44  # realtime2 files hold ~45 days
+# NDBC station ids are short alphanumerics (46026, 51201, KIKT1). Ids go into URL paths,
+# so anything else is refused rather than requested.
+STATION_ID_RE = re.compile(r"[A-Za-z0-9]{1,8}")
 
 STDMET_SENTINELS: dict[str, float] = {
     "WDIR": 999.0,
@@ -319,45 +322,80 @@ class NdbcProvider:
         end: datetime,
         stats: ParseStats,
         warnings: list[str],
+        errors: list[str] | None = None,
     ) -> tuple[list[ObservationRecord], int]:
+        """Records of one station from its realtime and yearly files.
+
+        A file that cannot be fetched or parsed is reported in ``errors`` and the station
+        keeps what its other files gave (partial results are kept, not dropped). After a
+        transient failure the station's remaining files are skipped (the host is probably
+        down, so their retries would only burn time). The first failure is raised only
+        when no file at all could be read.
+        """
+        if not STATION_ID_RE.fullmatch(station_id):
+            raise PermanentProviderError(f"ndbc: invalid station id {station_id!r}")
+        errors = errors if errors is not None else []
         now = self.now or datetime.now(UTC)
-        records: list[ObservationRecord] = []
+        realtime: list[ObservationRecord] = []
+        historical: list[ObservationRecord] = []
+        spec: dict[datetime, dict[str, Any]] | None = None
         files = 0
         realtime_from = now - timedelta(days=REALTIME_DAYS)
+        # (kind, path, query, label) of every file this window needs, in fetch order.
+        plan: list[tuple[str, str, dict[str, str] | None, str]] = []
         if end >= realtime_from:
-            text = self._get(f"data/realtime2/{station_id}.txt")
-            if text is not None:
-                files += 1
-                records = parse_stdmet(
-                    text, dataset=REALTIME_DATASET, start=start, end=end, stats=stats
-                )
-            spec_text = self._get(f"data/realtime2/{station_id}.spec")
-            if spec_text is not None:
-                files += 1
-                records = merge_spec(records, parse_spec(spec_text, start=start, end=end), stats)
+            for kind in ("txt", "spec"):
+                path = f"data/realtime2/{station_id}.{kind}"
+                plan.append((kind, path, None, path))
         history_end = min(end, realtime_from)
         last_year = min(history_end.year, now.year - 1) if start < history_end else start.year - 1
         for year in range(start.year, last_year + 1):
-            text = self._get(
-                "view_text_file.php",
-                {
-                    "filename": f"{station_id.lower()}h{year}.txt.gz",
-                    "dir": "data/historical/stdmet/",
-                },
+            name = f"{station_id.lower()}h{year}.txt.gz"
+            plan.append(
+                (
+                    "year",
+                    "view_text_file.php",
+                    {"filename": name, "dir": "data/historical/stdmet/"},
+                    name,
+                )
             )
-            if text is None:
-                continue
-            files += 1
-            records += parse_stdmet(
-                text, dataset=HISTORICAL_DATASET, start=start, end=end, stats=stats
-            )
+        failures: list[ProviderError] = []
+        for kind, path, params, label in plan:
+            try:
+                text = self._get(path, params)
+                if text is None:
+                    if kind == "year":
+                        # Not an error (no data that year, or not published yet), but the
+                        # window is then not covered: say so.
+                        warnings.append(f"ndbc {station_id}: {label} not found (404)")
+                    continue
+                if kind == "txt":
+                    realtime = parse_stdmet(
+                        text, dataset=REALTIME_DATASET, start=start, end=end, stats=stats
+                    )
+                elif kind == "spec":
+                    spec = parse_spec(text, start=start, end=end)
+                else:
+                    historical += parse_stdmet(
+                        text, dataset=HISTORICAL_DATASET, start=start, end=end, stats=stats
+                    )
+                files += 1
+            except ProviderError as exc:
+                failures.append(exc)
+                errors.append(f"{label}: {exc}")
+                if exc.transient:
+                    break
+        if spec is not None:
+            realtime = merge_spec(realtime, spec, stats)
+        if not files and failures:
+            raise next((f for f in failures if f.transient), failures[0])
         gap_start = max(start, datetime(now.year, 1, 1, tzinfo=UTC))
         if gap_start < min(end, realtime_from):
             warnings.append(
                 f"ndbc {station_id}: {gap_start:%Y-%m-%d} to {min(end, realtime_from):%Y-%m-%d}"
                 " is only in NDBC monthly files, which are not implemented"
             )
-        return records, files
+        return realtime + historical, files
 
     def fetch(self, stations: list[StationRef], start: datetime, end: datetime) -> ProviderFetch:
         result = ProviderFetch()
@@ -386,8 +424,11 @@ class NdbcProvider:
                 # don't spend the retry budget on every remaining station.
                 out.errors.append("skipped: NDBC host unreachable")
                 continue
+            file_errors: list[str] = []
             try:
-                records, files = self._station_records(sid, start, end, out.stats, result.warnings)
+                records, files = self._station_records(
+                    sid, start, end, out.stats, result.warnings, file_errors
+                )
             except ProviderError as exc:
                 consecutive_transient = consecutive_transient + 1 if exc.transient else 0
                 first_error = first_error or str(exc)
@@ -396,6 +437,7 @@ class NdbcProvider:
             consecutive_transient = 0
             fetched += 1
             out.records, out.files = records, files
+            out.errors.extend(file_errors)
         result.requests = self.requests
         if stations and not fetched and first_error and consecutive_transient:
             raise TransientProviderError(f"ndbc: no station could be fetched ({first_error})")

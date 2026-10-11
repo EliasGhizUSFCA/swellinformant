@@ -45,6 +45,7 @@ import ast
 import io
 import logging
 import re
+import threading
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -345,9 +346,12 @@ class AodnProvider:
         self.workers = min(8, self.settings.grib_download_workers)
         self._conventions: dict[str, Conventions] = {}
         self.requests = 0
+        # _get runs in pool threads; += on an attribute is not atomic.
+        self._count_lock = threading.Lock()
 
     def _get(self, url: str) -> bytes:
-        self.requests += 1
+        with self._count_lock:
+            self.requests += 1
         response = request_with_retries(
             self.client, "GET", url, provider=PROVIDER, backoff_seconds=self.backoff_seconds
         )

@@ -573,6 +573,65 @@ class TestNdbc:
         assert out.station_updates["latitude"] == 21.671
         assert out.station_updates["position_source"] == "ndbc_activestations"
 
+    def test_one_bad_file_keeps_the_other_files(self) -> None:
+        """A yearly file that cannot be parsed (here an HTML page answered with 200) or is
+        missing must not discard the realtime records and the other years: partial
+        results are kept and every problem is reported."""
+        now = datetime(2026, 10, 11, 0, 0, tzinfo=UTC)
+        files = {
+            "/data/realtime2/51201.txt": REALTIME_TXT,
+            "/data/realtime2/51201.spec": REALTIME_SPEC,
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/view_text_file.php":
+                name = request.url.params["filename"]
+                if name == "51201h2023.txt.gz":
+                    return httpx.Response(200, text=HISTORICAL_2023)
+                if name == "51201h2024.txt.gz":
+                    return httpx.Response(200, text="<html>Unable to access data file</html>")
+                return httpx.Response(404)
+            text = files.get(request.url.path)
+            return httpx.Response(200, text=text) if text else httpx.Response(404)
+
+        p = ndbc.NdbcProvider(
+            Settings(ndbc_base_url="https://ndbc.example"),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+            backoff_seconds=0,
+            now=now,
+        )
+        result = p.fetch(
+            [StationRef("ndbc:51201", "51201", 21.67, -158.12)],
+            datetime(2023, 1, 1, tzinfo=UTC),
+            now,
+        )
+        out = result.stations["ndbc:51201"]
+        # realtime .txt + .spec + the 2023 yearly file; 2024 unparseable, 2025 missing.
+        assert out.files == 3 and len(out.records) == 3 + 2
+        assert len(out.errors) == 1 and "51201h2024.txt.gz" in out.errors[0]
+        assert any("51201h2025.txt.gz not found" in w for w in result.warnings)
+
+    def test_invalid_station_id_is_not_requested(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            return httpx.Response(404)
+
+        p = ndbc.NdbcProvider(
+            Settings(ndbc_base_url="https://ndbc.example"),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+            backoff_seconds=0,
+            now=datetime(2026, 10, 11, tzinfo=UTC),
+        )
+        result = p.fetch(
+            [StationRef("ndbc:x", "../../etc", 0.0, 0.0)],
+            datetime(2026, 10, 9, tzinfo=UTC),
+            datetime(2026, 10, 11, tzinfo=UTC),
+        )
+        assert calls == ["/activestations.xml"]
+        assert "invalid station id" in result.stations["ndbc:x"].errors[0]
+
     def test_unreachable_host_is_transient(self) -> None:
         calls = 0
 

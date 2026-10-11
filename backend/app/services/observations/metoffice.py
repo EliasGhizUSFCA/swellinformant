@@ -40,6 +40,7 @@ import io
 import json
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -223,6 +224,8 @@ class MetOfficeProvider:
         self.backoff_seconds = backoff_seconds
         self.workers = min(8, self.settings.grib_download_workers)
         self.requests = 0
+        # _get runs in pool threads; += on an attribute is not atomic.
+        self._count_lock = threading.Lock()
 
     def select_files(
         self, keys: list[str], wanted: set[str], start: datetime, end: datetime
@@ -246,7 +249,8 @@ class MetOfficeProvider:
         return out
 
     def _get_text(self, key: str) -> str:
-        self.requests += 1
+        with self._count_lock:
+            self.requests += 1
         url = object_url(self.base_url, key)
         response = request_with_retries(
             self.client, "GET", url, provider=PROVIDER, backoff_seconds=self.backoff_seconds

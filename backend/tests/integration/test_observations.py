@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models import BuoyObservation, BuoyStation, PointForecast
+from app.services.http import PermanentProviderError
 from app.services.observations import ingest as obs_ingest
 from app.services.observations.ingest import ingest_all, ingest_range, upsert_observations
 from app.services.observations.records import ObservationRecord
@@ -348,6 +349,67 @@ def test_collect_recent(db: Session, settings_env: pytest.MonkeyPatch) -> None:
     down = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(503)))
     with pytest.raises(obs_ingest.TransientProviderError):
         collect_recent(db, now=now + timedelta(days=3), client=down, backoff_seconds=0)
+    # A 403 on every file is a refusal (wrong bucket, policy), not "not published yet":
+    # counted as errors, and the job fails instead of reporting zero bulletins as success.
+    refused = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(403)))
+    later = now + timedelta(days=6)
+    outcome = collect_range(
+        db, later - timedelta(hours=12), later, (0, 12), client=refused, backoff_seconds=0
+    )
+    assert outcome["missing"] == 0 and outcome["errors"] > 0 and outcome["fetched"] == 0
+    assert "HTTP 403" in outcome["error_samples"][0]
+    with pytest.raises(PermanentProviderError):
+        collect_recent(db, now=later, client=refused, backoff_seconds=0)
+
+
+def test_collect_range_reports_malformed_cells_and_bad_ids(
+    db: Session, settings_env: pytest.MonkeyPatch
+) -> None:
+    """Rows that do not match the layout are counted and reported, not silently dropped;
+    a bulletin id that is not a plain station id is never put into a URL."""
+    set_env(settings_env, NOAA_GFS_BASE_URL="https://noaa.example")
+    seed_stations(db)
+    # SYNTHETIC damage to the real trimmed bulletin: one Hst cell and one partition cell.
+    lines = BULL_62163.splitlines()
+    i = next(n for n, line in enumerate(lines) if line.startswith(" | 10  3 |"))
+    lines[i] = lines[i].replace("2.65  1  ", "x.xx  1  ")
+    lines[i + 1] = lines[i + 1].replace("2.59 10.1 121", "2.59 10.1 abc")
+    damaged = "\n".join(lines) + "\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/gfs.20261010/00/wave/station/bulls.t00z/gfswave.62163.bull"):
+            return httpx.Response(200, text=damaged)
+        return httpx.Response(404)
+
+    brittany = station(db, "metoffice:brittany")
+    brittany.metadata_ = {**brittany.metadata_, "bulletin_id": "../../evil"}
+    db.commit()
+    cycle = datetime(2026, 10, 10, 0, tzinfo=UTC)
+    out = collect_range(
+        db,
+        cycle,
+        cycle,
+        (0,),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        backoff_seconds=0,
+    )
+    assert out["errors"] == 1 and "invalid GFS-Wave bulletin id" in out["error_samples"][0]
+    assert out["fetched"] == 0  # the refused id was never requested
+
+    brittany.metadata_ = {**brittany.metadata_, "bulletin_id": "62163"}
+    db.commit()
+    out = collect_range(
+        db,
+        cycle,
+        cycle,
+        (0,),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        backoff_seconds=0,
+    )
+    assert out["fetched"] == 1 and out["malformed_cells"] == 2
+    assert any("2 malformed" in s for s in out["error_samples"])
+    # The damaged Hst row is skipped; the row with the bad partition keeps its total Hs.
+    assert out["rows_inserted"] == 47
 
 
 # ------------------------------------------------------------------------------------ CLI

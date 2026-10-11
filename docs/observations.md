@@ -134,7 +134,12 @@ failure (see below), as designed.
   VIS 99.0; TIDE 99.00. A blanket mask would delete a real 99-degree wind direction. Old
   yearly layouts (2-digit years, no minute column, `WD`/`BAR` names) are handled. Months
   of the current year older than ~45 days are only in NDBC monthly files, which are not
-  implemented; requests reaching into that gap get a warning.
+  implemented; requests reaching into that gap get a warning, and so does a yearly file
+  that answers 404 (not published yet, or no data that year).
+* A station keeps what its readable files gave: a file that fails to download or parse is
+  reported in the station's `errors` while the other files' records are still stored.
+  After a transient failure the station's remaining files are skipped (host down).
+  Station ids are checked (alphanumeric only) before they go into a URL.
 * WVHT is stored as `spectral_hm0` (NDBC computes it from the spectrum), DPD as `tp_s`,
   APD as `tm_s` (`tm_kind = apd`), MWD (the direction at DPD) as `peak_direction_deg`,
   and WSPD x 3.6 / WDIR as wind.
@@ -165,8 +170,13 @@ failure (see below), as designed.
   is the distance from the buoy. Leads are kept hourly to 120 h and 3-hourly after that,
   up to `FORECAST_DAYS`.
 * Bulletins appear about 5.4 h after the cycle (the 12Z files of 2026-10-10 were written
-  at 17:25 UTC). A cycle that is not published yet is counted as `missing` and picked up
-  by the next run.
+  at 17:25 UTC). A cycle that is not published yet (HTTP 404; the bucket allows public
+  listing, so a missing key is a 404) is counted as `missing` and picked up by the next
+  run. Any other status, including 403, is an error: when no bulletin at all could be
+  read, `collect_recent` fails the job instead of reporting success. Table rows or
+  partition cells that do not match the layout are skipped and counted in
+  `malformed_cells` (with samples in `error_samples`). Bulletin ids are checked
+  (alphanumeric only) before they go into a URL.
 * Licence: NOAA data, public domain.
 
 ## Conventions on ingest
@@ -293,7 +303,7 @@ invented to fill a gap.
   * `list`
   * `collect-forecasts --start ISO --end ISO [--cycles 0,12] [--station CODE ...]`
     (backfill from 2021-03-22 18Z, idempotent, at most 8 parallel downloads, 404s counted
-    as `missing`)
+    as `missing`, other statuses as `errors`)
 
 ## Live verification (2026-10-11, own database, sandbox)
 
