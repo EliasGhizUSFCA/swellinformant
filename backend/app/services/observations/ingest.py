@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import bisect
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -75,11 +76,15 @@ def build_provider(
     client: httpx.Client | None = None,
     *,
     backoff_seconds: float = 1.0,
+    datasets: Sequence[str] | None = None,
 ) -> Any:
+    """Provider adapter by name. ``datasets`` (AODN only) restricts the datasets read."""
+    if datasets is not None and name != "aodn":
+        raise ValueError(f"datasets can only be chosen for the aodn provider, not {name!r}")
     if name == "aodn":
         from app.services.observations.aodn import AodnProvider
 
-        return AodnProvider(settings, client, backoff_seconds=backoff_seconds)
+        return AodnProvider(settings, client, backoff_seconds=backoff_seconds, datasets=datasets)
     if name == "metoffice":
         from app.services.observations.metoffice import MetOfficeProvider
 
@@ -231,14 +236,19 @@ def ingest_range(
     client: httpx.Client | None = None,
     settings: Settings | None = None,
     backoff_seconds: float = 1.0,
+    datasets: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Ingest one provider's observations in [start, end] for its active stations (or the
     given station codes, active or not). Raises ProviderError if the provider as a whole
-    failed; per-station problems are reported in the result."""
+    failed; per-station problems are reported in the result. ``datasets`` (AODN only)
+    restricts the datasets read, e.g. ``["wave_buoy_delayed_qc"]`` for a QC'd-only
+    backfill."""
     if provider not in PROVIDER_NAMES:
         raise ValueError(
             f"Unknown observation provider {provider!r} (known: {list(PROVIDER_NAMES)})"
         )
+    if datasets is not None and provider != "aodn":
+        raise ValueError(f"datasets can only be chosen for the aodn provider, not {provider!r}")
     start, end = start.astimezone(UTC), end.astimezone(UTC)
     if start >= end:
         raise ValueError("start must be before end")
@@ -249,6 +259,8 @@ def ingest_range(
         "end": end.isoformat(),
         "stations": {},
     }
+    if datasets is not None:
+        result["datasets"] = list(datasets)
     if stations:
         unknown = sorted(set(stations) - {s.code for s in rows})
         if unknown:
@@ -256,7 +268,9 @@ def ingest_range(
     if not rows:
         result["message"] = "no stations for this provider (run `obs seed-stations`?)"
         return result
-    adapter = build_provider(provider, settings, client, backoff_seconds=backoff_seconds)
+    adapter = build_provider(
+        provider, settings, client, backoff_seconds=backoff_seconds, datasets=datasets
+    )
     fetch: ProviderFetch = adapter.fetch([_station_ref(s) for s in rows], start, end)
     totals = {"records": 0, "inserted": 0, "updated": 0, "unchanged": 0, "errors": 0}
     for station in rows:

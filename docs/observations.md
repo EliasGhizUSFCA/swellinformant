@@ -63,14 +63,21 @@ points and shelves involved change the numbers a lot.
   | --- | --- | --- |
   | `aodn:cape-naturaliste` | 2004-04 to 2021-12 (`Cape Naturaliste 02`, 228 files) | 2024-01 to 2026-10 (`Cape Naturaliste`) |
   | `aodn:cape-naturaliste-01` (inactive) | 1999-05 to 2004-04 (`Cape Naturaliste 01`, 65 files) | none |
+  | `aodn:rottnest-island-02` (inactive, verification only) | 2004-09 to 2021-12 (`Rottnest Island 02`, 225 files) | not configured |
+  | `aodn:esperance-04` (inactive, verification only) | 2006-06 to 2021-12 (`Esperance 04`, 195 files) | not configured |
   | `aodn:tweed-heads` | 1995-01 to 2022-12 (`Tweed Heads`, 211 files) | 2024-01 to 2026-10 |
   | `aodn:gold-coast` | 1987-02 to 2022-12 (`Gold Coast`, 213 files) | 2024-01 to 2026-10 |
   | `aodn:apollo-bay` | 2019-10 to 2026-06 (`APOLLO-BAY`, 108 files) | 2024-01 to 2025-05 (`Apollo Bay`), 2025-06 to 2026-09 (`APOLLO-BAY`) |
   | `aodn:tweed-offshore` | none | 2024-01 to 2026-10 (`Tweed Offshore`) |
 
   The GFS-Wave bulletin archive starts with the 2021-03-22 18Z cycle, so delayed-QC
-  observations overlap archived bulletin forecasts only at Cape Naturaliste (bulletin
-  56006), for about nine months (2021-03-22 to 2021-12-31). The Apollo Bay realtime
+  observations overlap archived bulletin forecasts at a co-located bulletin only at Cape
+  Naturaliste (56006), Rottnest Island 02 (56005) and Esperance 04 (56010), for about nine
+  months (2021-03-22 to 2021-12-31). The Tweed Heads and Gold Coast delayed-mode files of
+  2021-2022 carry `WHTH` only (`WSSH` is present as a column but empty, checked on every
+  partition of the window on 2026-10-11), so they hold no spectral Hm0 in that overlap.
+  Apollo Bay's delayed-mode Hm0 runs to 2026-06, but its nearest bulletin point (NKING)
+  is 50 km away in other exposure (docs/ml-evaluation.md). The Apollo Bay realtime
   Parquet copy ended on 2026-09-21 although the source NetCDF for October 2026 exists in
   `imos-data`, so the cloud-optimised dataset can lag.
 * Licence: CC BY 4.0. Acknowledgement text, copied from the source NetCDF
@@ -249,7 +256,15 @@ and `historical_reference` (an earlier mooring).
 | trestles | `ndbc:46224` | offshore_reference | 25.1 | 46224 |
 
 `metoffice:k1` and `metoffice:k2` have no nearby spot. They are kept for offshore model
-verification (bulletins 62029 and 62081, 8.4 and 5.6 km away).
+verification (bulletins 62029 and 62081, 8.4 and 5.6 km away). So are
+`aodn:rottnest-island-02` and `aodn:esperance-04` (Department of Transport WA Datawell
+Directional Waverider MK III buoys in 48 and 52 m, bulletins 56005 and 56010, 1.9 and
+0.1 km away): their delayed-mode Hm0 overlaps the bulletin archive in 2021, which is
+what the backtest in docs/ml-evaluation.md needs. Both are inactive (the delayed-mode
+record ends in 2021-12 and their realtime feeds are not configured), so no scheduled job
+touches them. The WW3 depth at the 56010 output point is 25.7 m against 52 m at the
+mooring, so local sheltering and depth effects among the islands off Esperance are part
+of the model error there.
 
 Justifications and caveats (the full text of each is in the catalog `note`):
 
@@ -299,11 +314,19 @@ invented to fill a gap.
 * CLI (`python -m app.cli obs ...`):
   * `seed-stations [--catalog PATH]`
   * `ingest [--provider aodn|metoffice|ndbc] [--since ISO --until ISO] [--station CODE ...]`
-    (runs even if `OBSERVATIONS_ENABLED` is false)
+    (runs even if `OBSERVATIONS_ENABLED` is false). `--provider aodn --aodn-dataset
+    delayed_qc` reads only the delayed-mode QC'd dataset, for a backfill that must not
+    contain realtime `not_qc` rows (they would otherwise fill the gaps QC left).
   * `list`
   * `collect-forecasts --start ISO --end ISO [--cycles 0,12] [--station CODE ...]`
     (backfill from 2021-03-22 18Z, idempotent, at most 8 parallel downloads, 404s counted
     as `missing`, other statuses as `errors`)
+  * `collect-forecasts ... --station CODE --bulletin-id ID` archives another bulletin for
+    one station, for diagnostics. Unless `ID` is the station's catalog `bulletin_id`, the
+    rows are stored as source `gfswave_bulletin_proxy`, never pooled with the
+    like-for-like `gfswave_bulletin` statistics, and never collected by the scheduled job.
+    A proxy point can be tens of km away in other depth and exposure, so its error
+    against the buoy mixes model error with the change in sea state between the places.
 
 ## Live verification (2026-10-11, own database, sandbox)
 

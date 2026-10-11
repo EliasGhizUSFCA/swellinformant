@@ -80,6 +80,7 @@ logger = logging.getLogger(__name__)
 PROVIDER = "aodn"
 DELAYED = "wave_buoy_delayed_qc"
 REALTIME = "wave_buoy_realtime_nonqc"
+DATASETS = (DELAYED, REALTIME)
 PARTITION_LOOKBACK = timedelta(days=32)
 _TIMESTAMP_RE = re.compile(r"/timestamp=(-?\d+)/")
 
@@ -325,7 +326,13 @@ def _values(
 
 
 class AodnProvider:
-    """Fetches the realtime and delayed-mode records of catalog stations."""
+    """Fetches the realtime and delayed-mode records of catalog stations.
+
+    ``datasets`` restricts which of :data:`DATASETS` are read (default both). A backfill
+    that must contain quality-controlled data only (e.g. a verification backtest) passes
+    ``(DELAYED,)``: otherwise the realtime rows of the same window (``not_qc``) fill the
+    gaps that delayed-mode QC left.
+    """
 
     name = PROVIDER
 
@@ -335,7 +342,13 @@ class AodnProvider:
         client: httpx.Client | None = None,
         *,
         backoff_seconds: float = 1.0,
+        datasets: Iterable[str] | None = None,
     ) -> None:
+        chosen = tuple(datasets) if datasets is not None else DATASETS
+        unknown = sorted(set(chosen) - set(DATASETS))
+        if unknown or not chosen:
+            raise ValueError(f"aodn: unknown datasets {unknown}; choose from {list(DATASETS)}")
+        self.datasets = chosen
         self.settings = settings or get_settings()
         self.base_url = self.settings.aodn_base_url.rstrip("/")
         self.client = client or httpx.Client(
@@ -392,6 +405,8 @@ class AodnProvider:
                 (DELAYED, sites.get("delayed_sites", [])),
                 (REALTIME, sites.get("realtime_sites", [])),
             ):
+                if dataset not in self.datasets:
+                    continue
                 for site in names:
                     try:
                         jobs += [(dataset, k) for k in self._site_keys(dataset, site, start, end)]

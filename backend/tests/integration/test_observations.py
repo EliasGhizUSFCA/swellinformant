@@ -255,6 +255,33 @@ def test_ingest_range_end_to_end(db: Session, settings_env: pytest.MonkeyPatch) 
         ingest_range(db, "aodn", T0, T0)
 
 
+def test_ingest_range_dataset_filter(db: Session, settings_env: pytest.MonkeyPatch) -> None:
+    """A delayed-QC-only backfill never reads the realtime (not QC'd) dataset."""
+    set_env(settings_env, AODN_BASE_URL="https://aodn.example")
+    seed_stations(db)
+    content = aodn_parquet([_row(0, WSSH=1.5, WHTH=None, WPPE=12.0, WPDI=230.0)])
+    calls: list[str] = []
+    inner = _aodn_handler(content)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return inner.handle_request(request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    window = (T0, T0 + timedelta(days=1), ["aodn:cape-naturaliste"])
+    out = ingest_range(db, "aodn", *window, client=client, datasets=["wave_buoy_delayed_qc"])
+    res = out["stations"]["aodn:cape-naturaliste"]
+    assert out["datasets"] == ["wave_buoy_delayed_qc"]
+    assert (res["files"], res["records"]) == (0, 0)
+    assert not any("realtime" in c for c in calls)
+    both = ingest_range(db, "aodn", *window, client=client)
+    assert both["stations"]["aodn:cape-naturaliste"]["records"] == 1
+    with pytest.raises(ValueError):
+        ingest_range(db, "metoffice", *window, client=client, datasets=["wave_buoy_delayed_qc"])
+    with pytest.raises(ValueError):
+        ingest_range(db, "aodn", *window, client=client, datasets=["nope"])
+
+
 def test_ingest_all_reports_partial_failures(db: Session, settings_env: pytest.MonkeyPatch) -> None:
     assert ingest_all(db) == {"skipped": "OBSERVATIONS_ENABLED is false"}
     set_env(
@@ -305,7 +332,11 @@ def test_collect_range_is_idempotent(db: Session, settings_env: pytest.MonkeyPat
     calls: list[str] = []
     client = httpx.Client(transport=_bulletin_transport(calls))
     start, end = datetime(2026, 10, 9, 12, tzinfo=UTC), datetime(2026, 10, 10, 0, tzinfo=UTC)
-    n_bulletin_stations = len([s for s in load_catalog()["stations"] if s.get("bulletin_id")])
+    # Without station codes only ACTIVE stations are collected (the inactive verification
+    # buoys aodn:rottnest-island-02 and aodn:esperance-04 have bulletins but are skipped).
+    n_bulletin_stations = len(
+        [s for s in load_catalog()["stations"] if s.get("bulletin_id") and s.get("is_active", True)]
+    )
 
     first = collect_range(db, start, end, (0, 12), client=client, backoff_seconds=0)
     assert first["cycles"] == 2
@@ -412,6 +443,56 @@ def test_collect_range_reports_malformed_cells_and_bad_ids(
     assert out["rows_inserted"] == 47
 
 
+def test_collect_range_proxy_bulletin(db: Session, settings_env: pytest.MonkeyPatch) -> None:
+    """A bulletin other than the station's own is stored under the proxy source code.
+
+    The pairing used here (the real 62163 bulletin served for Apollo Bay) is SYNTHETIC:
+    it only exercises the mechanics; 62163 is the Brittany buoy's output point.
+    """
+    from app.services.verification.point_forecasts import PROXY_SOURCE_CODE, SOURCE_CODE
+
+    set_env(settings_env, NOAA_GFS_BASE_URL="https://noaa.example")
+    seed_stations(db)
+    calls: list[str] = []
+    client = httpx.Client(transport=_bulletin_transport(calls))
+    cycle = datetime(2026, 10, 10, 0, tzinfo=UTC)
+    out = collect_range(
+        db,
+        cycle,
+        cycle,
+        (0,),
+        ["aodn:apollo-bay"],
+        client=client,
+        backoff_seconds=0,
+        bulletin_override="62163",
+    )
+    assert (out["source"], out["bulletin_id"], out["fetched"]) == (PROXY_SOURCE_CODE, "62163", 1)
+    apollo = station(db, "aodn:apollo-bay")
+    rows = db.scalars(select(PointForecast).where(PointForecast.station_id == apollo.id)).all()
+    assert len(rows) == 48 and {r.source_code for r in rows} == {PROXY_SOURCE_CODE}
+    assert rows[0].extra["bulletin_id"] == "62163" and rows[0].distance_km > 10_000
+    again = collect_range(
+        db, cycle, cycle, (0,), ["aodn:apollo-bay"], client=client, bulletin_override="62163"
+    )
+    assert again["already_stored"] == 1 and again["rows_inserted"] == 0
+    # The scheduled path never fetches proxies, and the station's own id is not a proxy.
+    calls.clear()
+    regular = collect_range(db, cycle, cycle, (0,), client=client, backoff_seconds=0)
+    assert "aodn:apollo-bay" not in regular["stations"]
+    own = collect_range(
+        db, cycle, cycle, (0,), ["metoffice:brittany"], client=client, bulletin_override="62163"
+    )
+    assert own["source"] == SOURCE_CODE and own["already_stored"] == 1
+    for stations, bulletin in (
+        (["aodn:apollo-bay"], "../x"),
+        (None, "62163"),
+        (["aodn:apollo-bay", "metoffice:k5"], "62163"),
+        (["nope:x"], "62163"),
+    ):
+        with pytest.raises(ValueError):
+            collect_range(db, cycle, cycle, (0,), stations, bulletin_override=bulletin)
+
+
 # ------------------------------------------------------------------------------------ CLI
 
 
@@ -426,5 +507,8 @@ def test_cli_seed_and_list(db: Session, capsys: pytest.CaptureFixture[str]) -> N
     cape = next(s for s in listed if s["code"] == "aodn:cape-naturaliste")
     assert cape["bulletin_id"] == "56006" and cape["observations"] == 0
     assert main(["obs", "collect-forecasts", "--start", "2026-10-10", "--end", "2026-10-09"]) == 2
+    proxy_without_station = ["--start", "2026-10-09", "--end", "2026-10-10", "--bulletin-id", "X1"]
+    assert main(["obs", "collect-forecasts", *proxy_without_station]) == 2
+    assert main(["obs", "ingest", "--provider", "metoffice", "--aodn-dataset", "delayed_qc"]) == 2
     with pytest.raises(SystemExit):
         main(["obs", "collect-forecasts", "--start", "2026-10-09", "--end", "x"])

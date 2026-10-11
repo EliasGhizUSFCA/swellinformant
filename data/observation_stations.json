@@ -249,6 +249,72 @@
       ]
     },
     {
+      "code": "aodn:rottnest-island-02",
+      "provider": "aodn",
+      "provider_id": "Rottnest Island 02",
+      "name": "Rottnest Island wave buoy, deployment 02 (WA)",
+      "latitude": -32.094154,
+      "longitude": 115.407789,
+      "water_depth_m": 48,
+      "position_source": "LATITUDE/LONGITUDE/water_depth of wave_buoy_delayed_qc site 'Rottnest Island 02', partition 2021-09 (source file DOT-WA_20201231_ROTTNEST-ISLAND-02_DM_WAVE-PARAMETERS_END-20211231.nc)",
+      "is_active": false,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the Department of Transport WA (Datawell Directional Waverider MK III); distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access]. Delayed-mode files (wave_buoy_delayed_qc) carry this acknowledgement: \"These data were collected and Quality controlled by the Department of Transport (DoT), Western Australian Government. These data were made freely available by the AODN - a data facility of the Integrated Marine Observing System [IMOS]. IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS).\" and ask to be cited as: Department of Transport [W.A] (date), [Title], Downloaded from [url] on [date-of-download].",
+      "aodn": {
+        "realtime_sites": [],
+        "delayed_sites": [
+          "Rottnest Island 02"
+        ]
+      },
+      "coverage": {
+        "delayed_qc": "2004-09 to 2021-12"
+      },
+      "measured": "delayed mode: spectral Hs (WSSH), Tp, Tm01; the 2021 files carry no direction values",
+      "paired_spots": [],
+      "bulletin_id": "56005",
+      "bulletin_position": {
+        "latitude": -32.11,
+        "longitude": 115.4,
+        "distance_km": 1.9,
+        "source": "header of gfswave.56005.bull, GFS-Wave cycles 2021-06-01 00Z and 2026-06-01 12Z"
+      },
+      "bulletin_note": "Model output point 1.9 km from the buoy; its WW3 depth is 85.9 m (gfswave.56005.spec point line, 2026-06-01 12Z) against 48 m at the mooring.",
+      "notes": "No surf spot nearby; kept for offshore model verification. The delayed-mode record ends in 2021-12 and the station's realtime feed (DoT WA) is not configured, so the station is inactive: it serves backtests over the 2021 overlap with the GFS-Wave bulletin archive."
+    },
+    {
+      "code": "aodn:esperance-04",
+      "provider": "aodn",
+      "provider_id": "Esperance 04",
+      "name": "Esperance wave buoy, deployment 04 (WA)",
+      "latitude": -34.000542,
+      "longitude": 121.90001,
+      "water_depth_m": 52,
+      "position_source": "LATITUDE/LONGITUDE/water_depth of wave_buoy_delayed_qc site 'Esperance 04', partition 2021-09 (source file DOT-WA_20210115_ESPERANCE-04_DM_WAVE-PARAMETERS_END-20211231.nc)",
+      "is_active": false,
+      "licence": "CC BY 4.0",
+      "attribution": "Data was sourced from Australia's Integrated Marine Observing System (IMOS) - IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS). Collected by the Department of Transport WA (Datawell Directional Waverider MK III); distributed by the AODN. Cite as: Australian Ocean Data Network (AODN). [year of download], [dataset title], [data access URL], accessed [date of access]. Delayed-mode files (wave_buoy_delayed_qc) carry this acknowledgement: \"These data were collected and Quality controlled by the Department of Transport (DoT), Western Australian Government. These data were made freely available by the AODN - a data facility of the Integrated Marine Observing System [IMOS]. IMOS is enabled by the National Collaborative Research Infrastructure Strategy (NCRIS).\" and ask to be cited as: Department of Transport [W.A] (date), [Title], Downloaded from [url] on [date-of-download].",
+      "aodn": {
+        "realtime_sites": [],
+        "delayed_sites": [
+          "Esperance 04"
+        ]
+      },
+      "coverage": {
+        "delayed_qc": "2006-06 to 2021-12"
+      },
+      "measured": "delayed mode: spectral Hs (WSSH), Tp, Tm01; the 2021 files carry no direction values",
+      "paired_spots": [],
+      "bulletin_id": "56010",
+      "bulletin_position": {
+        "latitude": -34.0,
+        "longitude": 121.9,
+        "distance_km": 0.1,
+        "source": "header of gfswave.56010.bull, GFS-Wave cycles 2021-06-01 00Z and 2026-06-01 12Z"
+      },
+      "bulletin_note": "Model output point 0.1 km from the buoy, but its WW3 depth is 25.7 m (gfswave.56010.spec point line, 2026-06-01 12Z) against 52 m at the mooring: the coast off Esperance is fringed by the islands of the western Recherche Archipelago, which a 1/4-1/6 degree wave grid resolves only roughly, so local sheltering and depth effects are part of the model error at this point.",
+      "notes": "No surf spot nearby; kept for offshore model verification. The delayed-mode record ends in 2021-12 and the station's realtime feed (DoT WA) is not configured, so the station is inactive: it serves backtests over the 2021 overlap with the GFS-Wave bulletin archive."
+    },
+    {
       "code": "aodn:apollo-bay",
       "provider": "aodn",
       "provider_id": "APOLLO-BAY",
