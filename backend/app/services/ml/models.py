@@ -155,6 +155,9 @@ class TrainedCorrection:
     factor_min: float = FACTOR_MIN
     factor_max: float = FACTOR_MAX
     trained_rows: int = 0
+    # Candidate features with no value at all in the training rows (e.g. wind for a
+    # source without wind); they carry no information and are left out of the model.
+    unused_features: tuple[str, ...] = ()
 
     def matrix(self, frame: pd.DataFrame) -> np.ndarray:
         return frame[list(self.feature_names)].to_numpy(dtype=float)
@@ -195,6 +198,7 @@ class TrainedCorrection:
             "metre_scale": self.metre_scale,
             "factor_clamp": [self.factor_min, self.factor_max],
             "trained_rows": self.trained_rows,
+            "unused_features": list(self.unused_features),
         }
 
 
@@ -218,7 +222,13 @@ def fit_correction(
 ) -> TrainedCorrection:
     if len(train) < MIN_TRAIN_ROWS:
         raise InsufficientDataError(f"{kind}: only {len(train)} training rows")
-    names = tuple(feature_names)
+    # A feature that is missing in every training row is dropped (histogram gradient
+    # boosting cannot bin an all-NaN column, and no model can learn from it).
+    names = tuple(n for n in feature_names if bool(train[n].notna().any()))
+    unused = tuple(n for n in feature_names if n not in names)
+    missing_core = [n for n in ALWAYS_REQUIRED if n not in names]
+    if missing_core:
+        raise InsufficientDataError(f"{kind}: no values for {missing_core} in the training rows")
     estimator = make_estimator(kind, params, names, seed)
     estimator.fit(train[list(names)].to_numpy(dtype=float), train[TARGET_NAME].to_numpy(float))
     return TrainedCorrection(
@@ -231,6 +241,7 @@ def fit_correction(
         lead_max=float(train["lead_hours"].max()),
         metre_scale=metre_scale,
         trained_rows=len(train),
+        unused_features=unused,
     )
 
 
@@ -254,7 +265,8 @@ def score_hs(frame: pd.DataFrame, pred: np.ndarray) -> dict[str, dict[str, float
 
     ``frame`` needs obs_hs_m, lead_hours, pred_raw, pred_persistence and
     pred_climatology (see baselines.add_reference_predictions). Skill vs each reference
-    is computed on the rows where that reference exists (``n_<ref>`` reports how many).
+    is computed on the rows where that reference exists (``n_<ref>`` reports how many)
+    and only when there are at least ``MIN_REFERENCE_PAIRS`` of them.
     """
     obs = frame["obs_hs_m"].to_numpy(dtype=float)
     lead = frame["lead_hours"].to_numpy(dtype=float)
@@ -279,8 +291,13 @@ def score_hs(frame: pd.DataFrame, pred: np.ndarray) -> dict[str, dict[str, float
         )
         for ref_name, ref in refs.items():
             r = ref[mask]
-            row[f"skill_vs_{ref_name}"] = vm.finite_or_none(vm.skill_score(p, o, r))
-            row[f"n_{ref_name}"] = float(vm.finite_pairs(p, o, r)[0].size)
+            n_ref = int(vm.finite_pairs(p, o, r)[0].size)
+            row[f"n_{ref_name}"] = float(n_ref)
+            row[f"skill_vs_{ref_name}"] = (
+                vm.finite_or_none(vm.skill_score(p, o, r))
+                if n_ref >= vm.MIN_REFERENCE_PAIRS
+                else None
+            )
         out[label] = row
     return out
 
@@ -359,7 +376,11 @@ def train_candidates(
     """Fit, select (validation) and evaluate (test, once) every candidate."""
     frame = dataset.frame
     if len(frame) < MIN_TRAIN_ROWS:
-        raise InsufficientDataError(f"dataset has only {len(frame)} rows")
+        summary = dataset.summary
+        raise InsufficientDataError(
+            f"dataset has only {len(frame)} rows (minimum {MIN_TRAIN_ROWS}); targets are "
+            f"{summary.get('hs_kinds')} observations; dropped: {summary.get('dropped')}"
+        )
     grids = grids or HYPERPARAMETER_GRIDS
     kinds = [k for k in candidates if k != "raw"]
     unknown = sorted(set(kinds) - set(CANDIDATE_KINDS))

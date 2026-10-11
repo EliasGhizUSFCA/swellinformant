@@ -282,6 +282,19 @@ class PairingSummary:
     hs_by_kind: Counter[str] = field(default_factory=Counter)
     unmatched: Counter[str] = field(default_factory=Counter)
     skipped: Counter[str] = field(default_factory=Counter)
+    # station id -> error message for stations whose pairing failed (rolled back).
+    errors: dict[int, str] = field(default_factory=dict)
+
+    def merge(self, other: PairingSummary) -> None:
+        self.forecasts_scanned += other.forecasts_scanned
+        self.stations += other.stations
+        for mine, theirs in (
+            (self.pairs_written, other.pairs_written),
+            (self.hs_by_kind, other.hs_by_kind),
+            (self.unmatched, other.unmatched),
+            (self.skipped, other.skipped),
+        ):
+            mine.update(theirs)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -291,6 +304,7 @@ class PairingSummary:
             "hs_pairs_by_observed_kind": dict(self.hs_by_kind),
             "unmatched": dict(self.unmatched),
             "skipped": dict(self.skipped),
+            "errors": {str(k): v for k, v in self.errors.items()},
         }
 
 
@@ -480,27 +494,48 @@ def pair_forecasts(
     """Pair pending point forecasts with observations and write prediction_validation.
 
     ``full=True`` ignores the look-back window and reprocesses forecasts that already
-    have pairs (backfill after delayed-mode QC data arrive). Commits once per station so
-    a failure part-way keeps the stations already done (reported by the caller's log).
+    have pairs (backfill after delayed-mode QC data arrive). Stations are loaded and
+    committed one at a time, so memory stays bounded by one station's forecasts. A station
+    whose pairing fails is rolled back and listed in ``summary.errors`` while the others
+    continue (partial results are reported, not dropped); if every station fails, the
+    first error is raised.
     """
     now = now or utcnow()
     summary = PairingSummary()
-    pending = _pending_forecasts(
-        db,
-        now=now,
-        lookback=None if full else lookback,
-        sources=sources,
-        station_ids=station_ids,
-        full=full,
-    )
-    summary.forecasts_scanned = len(pending)
-    for station_id, group in pending.groupby("station_id", sort=True):
-        summary.stations += 1
-        start = group["valid_time"].min() - pd.Timedelta(tolerance)
-        end = group["valid_time"].max() + pd.Timedelta(tolerance)
-        obs = load_observations(db, [int(station_id)], start.to_pydatetime(), end.to_pydatetime())
-        rows = build_pairs(group, obs, tolerance=tolerance, summary=summary)
-        replace_pairs(db, _forecast_keys(group), rows)
-        db.commit()
+    first_error: Exception | None = None
+    if station_ids is None:
+        station_ids = list(
+            db.scalars(
+                select(PointForecast.station_id).distinct().order_by(PointForecast.station_id)
+            )
+        )
+    for station_id in sorted({int(s) for s in station_ids}):
+        group = _pending_forecasts(
+            db,
+            now=now,
+            lookback=None if full else lookback,
+            sources=sources,
+            station_ids=[station_id],
+            full=full,
+        )
+        if group.empty:
+            continue
+        station_summary = PairingSummary(forecasts_scanned=len(group), stations=1)
+        try:
+            start = group["valid_time"].min() - pd.Timedelta(tolerance)
+            end = group["valid_time"].max() + pd.Timedelta(tolerance)
+            obs = load_observations(db, [station_id], start.to_pydatetime(), end.to_pydatetime())
+            rows = build_pairs(group, obs, tolerance=tolerance, summary=station_summary)
+            replace_pairs(db, _forecast_keys(group), rows)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.exception("Pairing failed for station %s", station_id)
+            summary.errors[station_id] = f"{type(exc).__name__}: {exc}"[:500]
+            first_error = first_error or exc
+            continue
+        summary.merge(station_summary)
+    if first_error is not None and summary.stations == 0:
+        raise first_error
     logger.info("Pairing: %s", summary.as_dict())
     return summary

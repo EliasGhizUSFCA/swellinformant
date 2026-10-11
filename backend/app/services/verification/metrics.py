@@ -192,6 +192,12 @@ def pearson_cc(m: ArrayLike, o: ArrayLike) -> float:
     return float(np.sum(dm * do)) / denom if denom > 0 else math.nan
 
 
+# Skill vs a reference is reported only when at least this many rows have the reference
+# (e.g. a monthly climatology fitted on a short training period covers few test months);
+# the reference sample size is always reported next to the score.
+MIN_REFERENCE_PAIRS = 30
+
+
 def skill_score(m: ArrayLike, o: ArrayLike, ref: ArrayLike) -> float:
     """MSE skill score vs a reference forecast: 1 - MSE(m, o) / MSE(ref, o).
 

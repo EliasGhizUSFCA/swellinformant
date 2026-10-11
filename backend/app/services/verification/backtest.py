@@ -114,9 +114,10 @@ def bucket_row(
         r = sub[f"pred_{ref}"].to_numpy(dtype=float)
         n_ref = int(vm.finite_pairs(m, o, r)[0].size)
         row[f"n_{ref}"] = n_ref
-        row[f"skill_vs_{ref}"] = vm.finite_or_none(vm.skill_score(m, o, r)) if n_ref else None
+        enough = n_ref >= vm.MIN_REFERENCE_PAIRS
+        row[f"skill_vs_{ref}"] = vm.finite_or_none(vm.skill_score(m, o, r)) if enough else None
         row[f"skill_vs_{ref}_ci"] = (
-            _ci(vm.skill_score_ci(m, o, r, blocks, **kwargs)) if n_ref else [None, None]
+            _ci(vm.skill_score_ci(m, o, r, blocks, **kwargs)) if enough else [None, None]
         )
     return row
 
@@ -275,7 +276,8 @@ def format_table(result: BacktestResult) -> str:
     pct = int(BACKTEST_CONFIDENCE * 100)
     header = (
         f"{'lead':>5} {'n':>6} {'bias':>7} {'RMSE [' + str(pct) + '% CI]':>26} {'SI':>6} "
-        f"{'HH':>6} {'CC':>6} {'SS_pers [CI]':>26} {'SS_clim [CI]':>26}"
+        f"{'HH':>6} {'CC':>6} {'SS_pers [CI]':>26} {'n_pers':>6} {'SS_clim [CI]':>26} "
+        f"{'n_clim':>6}"
     )
     lines = [
         f"Backtest {result.source}: {len(result.folds)} rolling-origin folds, gap "
@@ -291,10 +293,13 @@ def format_table(result: BacktestResult) -> str:
             f"{_fmt_ci(r['rmse'], r['rmse_ci']):>26} {_fmt(r['si']):>6} {_fmt(r['hh']):>6} "
             f"{_fmt(r['cc']):>6} "
             f"{_fmt_ci(r.get('skill_vs_persistence'), r.get('skill_vs_persistence_ci')):>26} "
-            f"{_fmt_ci(r.get('skill_vs_climatology'), r.get('skill_vs_climatology_ci')):>26}"
+            f"{r.get('n_persistence', 0):>6} "
+            f"{_fmt_ci(r.get('skill_vs_climatology'), r.get('skill_vs_climatology_ci')):>26} "
+            f"{r.get('n_climatology', 0):>6}"
         )
     lines.append(
-        "RMSE and SI favour negatively biased models; read them with bias and HH. "
-        "n_persistence / n_climatology (reference sample sizes) are in the JSON output."
+        "RMSE and SI favour negatively biased models; read them with bias and HH. Skill "
+        "scores use only rows that have the reference (n_pers / n_clim) and are shown as '-' "
+        f"below {vm.MIN_REFERENCE_PAIRS} such rows."
     )
     return "\n".join(lines)

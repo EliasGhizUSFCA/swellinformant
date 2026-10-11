@@ -22,7 +22,8 @@ re-run on the same day upserts the same rows), for every combination of
 References: persistence = the observation at or before the cycle time (<= 1 h old, same
 height kind); climatology = the station's monthly mean of observations BEFORE the start
 of the 90-day window (at least MIN_CLIMATOLOGY_OBS per month), i.e. out of sample.
-Rows need at least ``MIN_PAIRS_FOR_METRICS`` pairs. ``extra`` holds the cycle-block
+Rows need at least ``MIN_PAIRS_FOR_METRICS`` pairs; a skill score also needs
+``metrics.MIN_REFERENCE_PAIRS`` rows that have the reference. ``extra`` holds the cycle-block
 bootstrap CIs (``JOB_BOOTSTRAP_N`` replicates, 90 %), NRMSE, event scores for
 Hs >= 2 m and >= 3 m, reference sample sizes and, for ensemble sources with a spread,
 the normal CRPS and the coverage/width of the mean ± 1.645·spread interval.
@@ -349,7 +350,7 @@ def group_metrics(
             )
             n_ref = int(vm.finite_pairs(f, o, r)[0].size)
             extra[f"n_{ref}"] = n_ref
-            if n_ref >= MIN_PAIRS_FOR_METRICS:
+            if n_ref >= vm.MIN_REFERENCE_PAIRS:
                 out[f"skill_vs_{ref}"] = vm.finite_or_none(vm.skill_score(f, o, r))
         extra["events"] = {f"{t:g}": vm.event_scores(f, o, t) for t in EVENT_THRESHOLDS_M}
         spread = sub["hs_spread_m"].to_numpy(dtype=float) if "hs_spread_m" in sub else None
@@ -410,21 +411,29 @@ def compute_accuracy_metrics(
     correction = load_active_correction(db, model_name)
     if correction is not None:
         summary["corrected_model"] = correction.label
-        corrected = _corrected_pairs(db, correction, load_start, period_end)
-        if not corrected.empty:
-            months = corrected["valid_time"].dt.month.to_numpy()
-            corrected["ref_climatology"] = [
-                clim.get((int(s), str(k), int(m)), np.nan)
-                for s, k, m in zip(
-                    corrected["station_id"], corrected["observed_kind"], months, strict=True
+        try:
+            corrected = _corrected_pairs(db, correction, load_start, period_end)
+            if not corrected.empty:
+                months = corrected["valid_time"].dt.month.to_numpy()
+                corrected["ref_climatology"] = [
+                    clim.get((int(s), str(k), int(m)), np.nan)
+                    for s, k, m in zip(
+                        corrected["station_id"], corrected["observed_kind"], months, strict=True
+                    )
+                ]
+                summary["corrected_pairs"] = _store_corrected_pairs(db, corrected, correction.label)
+                db.commit()
+                frames.append(corrected)
+            else:
+                summary["warnings"].append(
+                    f"{correction.label}: no out-of-sample forecasts in the window"
                 )
-            ]
-            summary["corrected_pairs"] = _store_corrected_pairs(db, corrected, correction.label)
-            db.commit()
-            frames.append(corrected)
-        else:
+        except Exception as exc:
+            # The raw-model metrics must not be lost because the corrected ones failed.
+            db.rollback()
+            logger.exception("Corrected-model verification failed for %s", correction.label)
             summary["warnings"].append(
-                f"{correction.label}: no out-of-sample forecasts in the window"
+                f"{correction.label}: corrected metrics skipped ({type(exc).__name__}: {exc})"
             )
     if not frames:
         return summary

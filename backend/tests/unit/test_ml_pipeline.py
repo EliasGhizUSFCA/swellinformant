@@ -33,6 +33,7 @@ from app.services.ml.models import (
     FACTOR_MAX,
     FACTOR_MIN,
     TrainedCorrection,
+    fit_correction,
     least_squares_scale,
     required_features,
 )
@@ -299,6 +300,28 @@ def test_factor_is_clamped_and_never_extrapolated() -> None:
     factors, applied = mild.factors(_matrix(rows))
     np.testing.assert_allclose(factors, [0.9, 1.0, 1.0, 1.0, 0.9])
     assert applied.tolist() == [True, False, False, False, True]
+
+
+@pytest.mark.parametrize("kind", ["linear", "rf", "gbt"])
+def test_candidates_train_without_a_feature_the_source_lacks(kind: str) -> None:
+    """GFS-Wave station bulletins carry no wind: every candidate must still train."""
+    case = make_case("bias", n_stations=1, days=30, lead_step=12, max_lead=120, seed=4)
+    fc, obs, stations = frames_for_assembly(case)
+    fc[["wind_speed_kmh", "wind_direction_deg"]] = np.nan
+    frame = assemble_frame(fc, obs, stations)
+    grid: dict[str, dict[str, Any]] = {
+        "linear": {"alpha": 1.0},
+        "rf": {"n_estimators": 10, "max_depth": 4, "min_samples_leaf": 5},
+        "gbt": {"max_iter": 20, "max_leaf_nodes": 7},
+    }
+    params = grid[kind]
+    model = fit_correction(kind, params, frame, ft.FEATURE_NAMES)
+    assert set(model.unused_features) == {"wind_speed_kmh", "wind_dir_sin", "wind_dir_cos"}
+    assert "wind_speed_kmh" not in model.feature_names
+    corrected = model.correct(frame)
+    assert np.isfinite(corrected).all()
+    # The synthetic model over-forecasts, so the correction lowers Hs on average.
+    assert float(np.mean(corrected / frame["model_hs_m"])) < 1.0
 
 
 def test_required_features_follow_training_coverage() -> None:

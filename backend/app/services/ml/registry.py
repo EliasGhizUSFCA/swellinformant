@@ -633,6 +633,7 @@ def record_training_run(
                 "factor_clamp": [c.model.factor_min, c.model.factor_max],
                 "hs_floor_m": HS_FLOOR_M,
                 "seed": report.seed,
+                "unused_features": list(c.model.unused_features),
             },
             status=MLModelStatus.CANDIDATE if decision["passed_all"] else MLModelStatus.REJECTED,
             artifact_root=artifact_root,

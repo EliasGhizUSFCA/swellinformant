@@ -23,6 +23,7 @@ from app.models import (
     PredictionValidation,
 )
 from app.services.verification import metrics as vm
+from app.services.verification import pairing
 from app.services.verification.backtest import format_table, run_backtest
 from app.services.verification.jobs import compute_accuracy_metrics, run_verification
 from app.services.verification.pairing import pair_forecasts
@@ -164,6 +165,32 @@ def test_pairing_rules_and_idempotence(db: Session) -> None:
     db.commit()
     pair_forecasts(db, now=NOW, full=True)
     assert 18.0 not in {p.lead_hours for p in _pairs(db, "hs")}
+
+
+def test_a_failing_station_is_reported_and_the_rest_are_paired(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    good, broken = _station(db, "synthetic:good"), _station(db, "synthetic:broken")
+    for st in (good, broken):
+        _fc(db, st, 6, hs_m=2.0)
+        _obs(db, st, CYCLE + timedelta(hours=6), hs_m=1.8)
+    db.commit()
+    real_build = pairing.build_pairs
+
+    def flaky(forecasts: Any, observations: Any, **kw: Any) -> Any:
+        if int(forecasts["station_id"].iloc[0]) == broken.id:
+            raise RuntimeError("synthetic failure")
+        return real_build(forecasts, observations, **kw)
+
+    monkeypatch.setattr(pairing, "build_pairs", flaky)
+    summary = pair_forecasts(db, now=NOW, lookback=timedelta(days=30))
+    assert summary.stations == 1 and summary.pairs_written["hs"] == 1
+    assert summary.errors == {broken.id: "RuntimeError: synthetic failure"}
+    assert summary.as_dict()["errors"] == {str(broken.id): "RuntimeError: synthetic failure"}
+    assert {p.station_id for p in _pairs(db)} == {good.id}
+    # When every station fails there is nothing partial to report: the error is raised.
+    with pytest.raises(RuntimeError, match="synthetic failure"):
+        pair_forecasts(db, now=NOW, station_ids=[broken.id], full=True)
 
 
 def test_future_forecasts_are_not_paired(db: Session) -> None:
