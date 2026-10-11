@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
@@ -33,6 +33,7 @@ from app.models import (
     NotificationPreference,
     OpportunityMatch,
     SavedSearch,
+    SurfQualityPrediction,
     SwellEvent,
     User,
 )
@@ -79,6 +80,28 @@ class AlertStats:
 
 def label_rank(label: str | QualityLabel) -> int:
     return QUALITY_ORDER.index(QualityLabel(label))
+
+
+def _peak_range(match: OpportunityMatch) -> dict[str, Any]:
+    """The 80 % range of our prediction at the event's peak, from the run that set the peak."""
+    event = match.swell_event
+    db = object_session(match)
+    if db is None or event.latest_run_id is None:
+        return {}
+    pred = db.scalar(
+        select(SurfQualityPrediction).where(
+            SurfQualityPrediction.run_id == event.latest_run_id,
+            SurfQualityPrediction.spot_id == event.spot_id,
+            SurfQualityPrediction.valid_time == event.peak_time,
+        )
+    )
+    if pred is None or pred.breaking_p10_ft is None or pred.breaking_p90_ft is None:
+        return {}
+    return {
+        "range_p10_ft": round(pred.breaking_p10_ft * 2) / 2,
+        "range_p90_ft": round(pred.breaking_p90_ft * 2) / 2,
+        "range_kind": pred.uncertainty_kind,
+    }
 
 
 def build_snapshot(match: OpportunityMatch, kind: NotificationKind) -> dict[str, Any]:
@@ -130,6 +153,7 @@ def build_snapshot(match: OpportunityMatch, kind: NotificationKind) -> dict[str,
         else None,
         "price": None,
         "currency": match.currency,
+        **_peak_range(match),
     }
     if offer is not None and match.best_price is not None:
         snap.update(

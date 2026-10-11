@@ -83,6 +83,21 @@ def _buffers(s: dict[str, Any]) -> str:
     return f"arrive {a} day(s) before the swell, leave {d} day(s) after"
 
 
+RANGE_NOTES = {
+    "heuristic": "estimated, not yet verified",
+    "ensemble_heuristic": "from the ensemble spread, not yet verified",
+    "calibrated": "checked against observations",
+}
+
+
+def _height(s: dict[str, Any]) -> str:
+    text = f"{s['height_min_ft']:g}–{s['height_max_ft']:g} ft faces"
+    if s.get("range_p10_ft") is not None and s.get("range_p90_ft") is not None:
+        note = RANGE_NOTES.get(str(s.get("range_kind")), "not yet verified")
+        text += f" (80% range {s['range_p10_ft']:g}–{s['range_p90_ft']:g} ft, {note})"
+    return text
+
+
 def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
     swell = (
         f"{s['swell_height_m']} m @ {s['swell_period_s']} s from {s['swell_direction']}"
@@ -92,10 +107,7 @@ def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
     rows = [
         ("Destination", f"{s['spot_name']}, {s['country']}"),
         ("Swell dates", s["window_label"]),
-        (
-            "Predicted breaking waves (our estimate)",
-            f"{s['height_min_ft']:g}–{s['height_max_ft']:g} ft faces",
-        ),
+        ("Predicted breaking waves (our estimate)", _height(s)),
         ("Main offshore waves (raw model forecast)", swell),
         (
             "Wind",

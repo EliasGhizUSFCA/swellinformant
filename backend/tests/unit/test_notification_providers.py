@@ -205,6 +205,9 @@ class TestTemplates:
             "departure_buffer_days": 1,
             "forecast_issued": "2026-07-03T06:00:00+00:00",
             "forecast_source": "NOAA GFS-Wave",
+            "range_p10_ft": 4.5,
+            "range_p90_ft": 12.0,
+            "range_kind": "ensemble_heuristic",
         }
         links = {
             **LINKS,
@@ -214,7 +217,8 @@ class TestTemplates:
         subject, text, html = render_alert_email(snap, links)
         for expected in (
             "Swell dates:",
-            "Predicted breaking waves (our estimate): 6–9 ft faces",
+            "Predicted breaking waves (our estimate): 6–9 ft faces (80% range 4.5–12 ft, from "
+            "the ensemble spread, not yet verified)",
             "Main offshore waves (raw model forecast): 2.4 m @ 16 s from SW",
             "Round-trip flight: $780 per traveller",
             "Suggested travel dates: Jul 10 – Jul 15",

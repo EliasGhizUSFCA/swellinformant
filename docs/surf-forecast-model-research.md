@@ -110,6 +110,20 @@ Sets are 1.27·Hb. When `spot.calibration` holds a, b and c, `calibrated_power_l
 5. Request 3's sea level is CMEMS `total_sea_level` via Open-Meteo's default model, not GFS [14].
 6. Puerto Escondido's forecast point (15.72, −97.12) is missing in NOAA's global.0p25 grid [1]. Open-Meteo returned data for all 50 spots on 2026-10-09 (FORECAST_SOURCES.md), so it presumably uses another cell (unverified).
 
+**Update after implementation (2026-10-11).** Status of the points above:
+- `forecasts/noaa.py`, `forecasts/ecmwf.py` and `forecasts/ensemble.py` now exist. Each was verified live on 2026-10-11 for all 50 spots with 0 errors:
+  - NOAA GFS-Wave + GFS: 4,050 records, 1.91 GB.
+  - ECMWF IFS: 3,250 records, 847 MB.
+  - GEFS-Wave statistics: 2,050 rows, 201 MB.
+  The blend and the predictions were then built from these runs (`docs/FORECAST_SOURCES.md`).
+- Discrepancies 1 and 2 are fixed. `SURF_SCORING.md` describes 2.0.0. `LEAD_TABLE` now holds the unfiltered errors (0.080/0.192/0.276/0.352/0.430), and the spread scale is k = 1.05.
+- Discrepancies 3 and 4 are avoided by the direct providers:
+  - Wind comes from the nearest GFS cell with LAND < 0.5 (ECMWF: lsm < 0.5) to the break.
+  - The NOAA path is pure GFS, with no HRRR blending.
+  The Open-Meteo path is unchanged and documented.
+- Discrepancy 6: the direct NOAA provider uses the native `global.0p16` grid. Puerto Escondido gets a valid cell 7.7 km from its forecast point (15.67 N, 97.17 W), and ECMWF gets one 14.3 km away.
+- First live comparison of GFS and ECMWF: 33% of spot-hours were flagged over 10 days. In the first 48 h, Hs disagreement concentrated at sheltered Southern California spots (Rincon, Trestles), where ECMWF had a stronger local wind sea. This is the case the blend's widened range is meant for.
+
 ## 3. Primary scientific sources
 
 **Verified:** F = full text or code read; A = abstract or search extract; M = metadata only; S = secondary transcription.

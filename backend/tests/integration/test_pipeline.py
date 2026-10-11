@@ -138,6 +138,11 @@ def test_qualifying_swell_produces_flight_opportunity_and_alert(
     assert sent[0].kind == NotificationKind.NEW_OPPORTUNITY
     assert "[DEMO]" in sent[0].subject and "Jeffreys Bay" in sent[0].subject
     assert sent[0].snapshot["price"] is not None
+    # Our prediction's 80 % range at the peak travels with the alert, labelled heuristic.
+    snap = sent[0].snapshot
+    assert snap["range_kind"] == "heuristic"
+    assert snap["range_p10_ft"] <= snap["height_min_ft"] <= snap["range_p90_ft"]
+    assert "80% range" in (sent[0].body_text or "")
 
     # Re-running the whole pipeline never duplicates the alert.
     before = alert_count(db)
