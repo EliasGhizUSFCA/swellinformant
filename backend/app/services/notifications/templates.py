@@ -116,6 +116,8 @@ def _forecast_confidence(s: dict[str, Any]) -> str:
 
 
 def _local_confidence(s: dict[str, Any]) -> str | None:
+    """'Low — How this break responds ...': the reason only when local confidence is
+    lower than forecast confidence (``local_confidence_reason``, as in the API)."""
     cls = s.get("local_confidence_class")
     if not cls:
         return None

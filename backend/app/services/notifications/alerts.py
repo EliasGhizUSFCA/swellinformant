@@ -120,14 +120,14 @@ def _peak_confidence(pred: SurfQualityPrediction | None, now: datetime) -> dict[
     if pred is None or pred.forecast_confidence_class is None:
         return {}
     fields = api_fields(pred)
-    local_reason = ((pred.confidence_inputs or {}).get("local") or {}).get("reason")
     return {
         "forecast_confidence_class": fields["forecast_confidence_class"],
         "local_confidence_class": fields["local_confidence_class"],
         "confidence_reasons": fields["confidence_reasons"],
         "confidence_lead_hours": fields["lead_hours"],
         "peak_in_hours": round((pred.valid_time - now).total_seconds() / 3600.0, 1),
-        "local_confidence_reason": local_reason,
+        # Only when local confidence is lower than forecast confidence (as in the API).
+        "local_confidence_reason": fields["local_confidence_reason"],
     }
 
 

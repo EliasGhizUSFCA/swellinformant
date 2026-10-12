@@ -23,6 +23,7 @@ from app.models import (
     Notification,
     PredictionArchive,
     SpotResearchAssessment,
+    SpotResearchSource,
     SurfQualityPrediction,
     SurfSpot,
 )
@@ -403,7 +404,10 @@ def test_requirement_4_spot_without_research_evidence_never_high_local_or_high_r
     from app.services.research import current_assessments
     from app.services.research.assess import assess_all
 
-    assess_all(db)  # no evidence file in the test data: every spot is assessed without any
+    # No evidence at all (the session seed may have loaded the committed evidence file):
+    # every spot is assessed without any.
+    db.execute(delete(SpotResearchSource))
+    assess_all(db)
     db.commit()
     assessments = current_assessments(db)
     assert assessments
@@ -488,6 +492,11 @@ def test_api_outputs(db: Session, scored: dict[str, Any], app_client: ApiClient)
         assert point.local_confidence_class == fc.LOW
         assert point.lead_hours is not None and point.confidence_reasons
         assert point.confidence_reasons[-1] == fc.NO_RESEARCH_REASON  # forecast reasons first
+        # The single local reason, only when local confidence is lower than the forecast's.
+        assert point.local_confidence_reason == (
+            None if point.forecast_confidence_class == fc.LOW else fc.NO_RESEARCH_REASON
+        )
+    assert any(p.local_confidence_reason == fc.NO_RESEARCH_REASON for p in out.points)
     for day in out.daily:
         best = next(p for p in out.points if p.valid_time == day.best_time)
         assert day.forecast_confidence_class == best.forecast_confidence_class
@@ -496,6 +505,26 @@ def test_api_outputs(db: Session, scored: dict[str, Any], app_client: ApiClient)
     cond = next(s.conditions for s in snap.spots if s.slug == "uluwatu")
     assert cond is not None and cond.forecast_confidence_class == fc.HIGH
     assert cond.local_confidence_class == fc.LOW and cond.lead_hours is not None
+    assert cond.local_confidence_reason == fc.NO_RESEARCH_REASON
+    # The well-researched spot (SYNTHETIC High research): local = forecast, no local reason.
+    high = next(s.conditions for s in snap.spots if s.slug == "pipeline")
+    assert high is not None and high.local_confidence_class == high.forecast_confidence_class
+    assert high.local_confidence_reason is None
+    # Events: the peak hour's classes and the local reason (stored at detection).
+    from app.services.swell_detection.service import detect_events
+
+    detect_events(db, NOW)
+    events = {e.spot.slug: e for e in upcoming_events(db, NOW)}
+    assert events, "the SYNTHETIC sea state should produce events"
+    for slug, e in events.items():
+        assert e.forecast_confidence_class in CLASSES and e.confidence_reasons
+        lower = fc.rank(e.local_confidence_class or fc.LOW) < fc.rank(
+            e.forecast_confidence_class or fc.LOW
+        )
+        assert (e.local_confidence_reason is not None) == lower, slug
+        if slug != "pipeline" and lower:  # Low or no research everywhere but pipeline
+            assert e.local_confidence_reason == fc.NO_RESEARCH_REASON
+    assert any(e.local_confidence_reason is not None for e in events.values())
     # Over HTTP (real "now" is long after these synthetic runs: stale, so capped).
     body = app_client.client.get("/api/spots/uluwatu/forecast").json()
     point = body["points"][0] if body["points"] else None
@@ -546,4 +575,7 @@ def test_demo_data_is_low_in_predictions_events_and_alerts(
     assert snap["forecast_confidence_class"] == fc.LOW
     text = sent[0].body_text or ""
     assert "Forecast confidence: Low — about " in text and " days away" in text
-    assert "Confidence at this break: Low — " in text
+    # Local confidence equals forecast confidence (both Low): no separate local reason.
+    assert snap["local_confidence_class"] == fc.LOW and snap["local_confidence_reason"] is None
+    assert "Confidence at this break: Low\n" in text
+    assert all(e.local_confidence_reason is None for e in events)

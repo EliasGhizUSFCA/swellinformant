@@ -75,6 +75,7 @@ EVENT_CONFIDENCE_KEYS = (
     "forecast_confidence_class",
     "local_confidence_class",
     "confidence_reasons",
+    "local_confidence_reason",
 )
 SNAPSHOT_CONFIDENCE_KEYS = (*EVENT_CONFIDENCE_KEYS, "lead_hours")
 

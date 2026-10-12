@@ -170,18 +170,27 @@ never gets High local confidence, however good the forecast is.
   class) are unchanged.
 * `prediction_archive` (immutable): `forecast_confidence_class`, `local_confidence_class`,
   `research_class` (overall research class used), `confidence_method`, `confidence_inputs`.
+  Rows archived before forecast-v1 existed keep these columns empty: the archive is never
+  rewritten, so a run that was archived under the old code and is rescored afterwards keeps
+  its original rows (in the 2026-10-11 live clone: 3,850 such rows).
 * API: `Conditions` and `ForecastPoint` (map snapshot, spot summaries `current` /
   `best_upcoming`, spot detail, spot forecast) have `forecast_confidence_class`,
   `local_confidence_class`, `confidence_reasons` (forecast reasons first, then the research
-  reason) and `lead_hours`; `EventOut` has the classes and reasons of the event's peak hour;
-  `DailySummary` the classes of the day's best hour. `SpotSummary.research_class` and
-  `SpotDetail.research` are research confidence, separate fields.
+  reason), `lead_hours` and `local_confidence_reason`; `EventOut` has the classes, reasons and
+  local reason of the event's peak hour; `DailySummary` the classes of the day's best hour.
+  `local_confidence_reason` is the single reason the local class is lower than the forecast
+  class (always the research sentence, since local confidence is the min of the two), and
+  `null` when the classes are equal (including after the read-time staleness cap below).
+  `SpotSummary.research_class` and `SpotDetail.research` are research confidence, separate
+  fields.
 * Events: detection stores the peak hour's classes, reasons and lead in the event's newest
   `history` snapshot (no migration).
 * Alerts: "Forecast confidence: Moderate — about 6 days away" (the class of the event's peak
   hour, as in the API; the distance is from when the alert is built) and "Confidence at this
-  break: Low — How this break responds to swell is not well documented yet." Older snapshots
-  keep the index wording.
+  break: Low — How this break responds to swell is not well documented yet." The reason
+  after the local class is `local_confidence_reason`, so it appears only when the local class
+  is lower ("Confidence at this break: Low" when both are Low). Older snapshots keep the
+  index wording.
 * **Read-time staleness:** when the authoritative run has gone stale since it was scored, the
   API caps both classes at Moderate and puts the staleness reason first.
 * A run whose predictions were scored with another methodology is rescored once it is shown

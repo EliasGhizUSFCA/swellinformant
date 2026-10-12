@@ -324,6 +324,37 @@ def test_read_time_staleness_caps_both_classes() -> None:
     assert stale["confidence_reasons"][0] == fc.STALE_REASON
 
 
+def test_local_confidence_reason_only_when_local_is_lower() -> None:
+    def stored(forecast: str, local: str, research: ResearchBasisInput | None) -> object:
+        fcst = classify(index=85)
+        loc = classify_local(local, research)
+
+        class Stored:
+            forecast_confidence_class = forecast
+            local_confidence_class = local
+            confidence_inputs = fc.confidence_inputs(fcst, loc)
+            lead_hours = 30.0
+
+        return Stored()
+
+    lower = fc.api_fields(stored(HIGH, LOW, None))
+    assert lower["local_confidence_reason"] == fc.NO_RESEARCH_REASON
+    partial = fc.api_fields(stored(HIGH, MODERATE, high_research(swell_size=MODERATE)))
+    assert partial["local_confidence_reason"] == (
+        "How this break responds to swell is only partly documented."
+    )
+    # Equal classes: the forecast explains both, so there is no separate local reason.
+    assert fc.api_fields(stored(LOW, LOW, None))["local_confidence_reason"] is None
+    assert fc.api_fields(stored(HIGH, HIGH, high_research()))["local_confidence_reason"] is None
+    # Read-time staleness can make the classes equal (High/Moderate -> Moderate/Moderate).
+    capped = fc.api_fields(stored(HIGH, MODERATE, high_research(swell_size=MODERATE)), stale=True)
+    assert capped["forecast_confidence_class"] == capped["local_confidence_class"] == MODERATE
+    assert capped["local_confidence_reason"] is None
+    # Older rows without stored inputs: no reason is guessed.
+    assert fc.local_reason(HIGH, LOW, None) is None
+    assert fc.local_reason(None, None, None) is None
+
+
 # --------------------------------------------------------------------------- owner's requirements
 def test_requirement_2_well_researched_spot_low_or_moderate_at_9_days_or_strong_disagreement() -> (
     None

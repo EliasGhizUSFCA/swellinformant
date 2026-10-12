@@ -177,6 +177,8 @@ swell size.") and every input and rule (`confidence_inputs`).
 at this break = min(forecast confidence, research basis), research basis = min(swell
 direction, swell size, max(bathymetry, local behaviour)) from the spot's research assessment;
 no assessment gives Low ("How this break responds to swell is not well documented yet.").
+When it is lower than forecast confidence, that one research sentence is also returned as
+`local_confidence_reason`, so the UI never has to pick it out of `confidence_reasons`.
 
 Rules, thresholds and the evidence behind them: [forecast-confidence.md](forecast-confidence.md).
 Research confidence (how well the break is documented) is a separate assessment

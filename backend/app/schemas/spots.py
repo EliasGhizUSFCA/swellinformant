@@ -78,6 +78,9 @@ class Conditions(BaseModel):
     local_confidence_class: str | None = None
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
+    # The one reason local confidence is lower than forecast confidence (how well the
+    # break is understood); None when the two classes are equal.
+    local_confidence_reason: str | None = None
 
 
 class MapSpotOut(BaseModel):
@@ -145,6 +148,7 @@ class EventOut(BaseModel):
     forecast_confidence_class: str | None = None
     local_confidence_class: str | None = None
     confidence_reasons: list[str] = []
+    local_confidence_reason: str | None = None
 
 
 class SpotSummary(SpotMini):
@@ -277,6 +281,9 @@ class ForecastPoint(BaseModel):
     local_confidence_class: str | None = None
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
+    # The one reason local confidence is lower than forecast confidence (how well the
+    # break is understood); None when the two classes are equal.
+    local_confidence_reason: str | None = None
 
 
 class DailySummary(BaseModel):

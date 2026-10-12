@@ -562,6 +562,23 @@ def stored_reasons(inputs: dict[str, Any] | None) -> list[str]:
     return out
 
 
+def local_reason(
+    forecast_cls: str | None, local_cls: str | None, inputs: dict[str, Any] | None
+) -> str | None:
+    """The single reason local confidence is lower than forecast confidence, else None.
+
+    Local confidence is min(forecast class, research basis), so when it is lower the
+    research basis is what holds it back and the stored local reason (the research
+    sentence) is the reason. None as well when the stored inputs have no local reason.
+    """
+    if forecast_cls not in _RANK or local_cls not in _RANK:
+        return None
+    if _RANK[local_cls] >= _RANK[forecast_cls]:
+        return None
+    reason = ((inputs or {}).get("local") or {}).get("reason")
+    return str(reason) if reason else None
+
+
 def api_fields(prediction: Any, *, stale: bool = False) -> dict[str, Any]:
     """forecast/local class, reasons and lead for the API, from a stored prediction.
 
@@ -570,7 +587,8 @@ def api_fields(prediction: Any, *, stale: bool = False) -> dict[str, Any]:
     """
     fc_cls = prediction.forecast_confidence_class
     local_cls = prediction.local_confidence_class
-    reasons = stored_reasons(prediction.confidence_inputs)
+    inputs = prediction.confidence_inputs
+    reasons = stored_reasons(inputs)
     if stale and fc_cls is not None:
         fc_cls = lower(fc_cls, MODERATE)
         local_cls = lower(local_cls, fc_cls) if local_cls is not None else None
@@ -581,4 +599,5 @@ def api_fields(prediction: Any, *, stale: bool = False) -> dict[str, Any]:
         "local_confidence_class": local_cls,
         "confidence_reasons": reasons,
         "lead_hours": None if prediction.lead_hours is None else round(prediction.lead_hours, 1),
+        "local_confidence_reason": local_reason(fc_cls, local_cls, inputs),
     }
