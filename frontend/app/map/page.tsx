@@ -307,7 +307,9 @@ export default function MapPage() {
         {/* Right column on large screens: the spot panel, or the best spots. */}
         {isDesktop &&
           (selectedSpot ? (
-            <div className="absolute top-16 right-3 z-[1100] flex w-[400px]" style={{ bottom: bottomInset + 26 }}>
+            // Ends above Leaflet's zoom buttons and attribution (about 100 px over the timeline),
+            // so both stay usable while a spot is open.
+            <div className="absolute top-16 right-3 z-[1100] flex w-[400px]" style={{ bottom: bottomInset + 104 }}>
               <SpotPanel
                 spot={selectedSpot}
                 at={bySlug.get(selectedSpot.slug)?.conditions ?? null}
