@@ -128,7 +128,7 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
           )}
         </div>
         {/* A separate assessment of the break itself: kept visibly apart from the forecast. */}
-        <div className="min-w-0 border-t pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-8">
+        <div id="research" className="min-w-0 scroll-mt-24 border-t pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-8">
           <div className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">About this break</div>
           <ResearchConfidence research={s.research} />
         </div>

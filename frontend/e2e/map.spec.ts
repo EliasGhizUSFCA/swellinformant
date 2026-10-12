@@ -323,7 +323,11 @@ test.describe("interactive map", () => {
     }
     await expect(panel.getByText("Upcoming swell events")).toBeVisible();
     await expect(panel.getByTestId("opps-signed-out")).toBeVisible(); // signed out: no private data
-    await expect(panel.getByTestId("forecast-confidence-slot")).toBeAttached();
+    await expect(panel.getByTestId("forecast-confidence-slot")).toBeVisible();
+    // Research confidence is its own per-spot line; the demo backend has no evidence loaded
+    // in e2e (reset database + seed), so it reads whatever the API says, never a default.
+    const research = panel.getByTestId("panel-research-confidence");
+    await expect(research).toContainText("Spot research confidence");
     await panel.getByRole("button", { name: "Close spot details" }).click();
     await expect(panel).toHaveCount(0);
   });

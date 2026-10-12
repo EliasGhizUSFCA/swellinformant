@@ -4,6 +4,7 @@ import { ArrowRight, Plane, X } from "lucide-react";
 import Link from "next/link";
 
 import { ConditionsSummary } from "@/components/conditions";
+import { ConfidenceBadge } from "@/components/confidence";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
 import { DemoBadge, MatchStatusBadge, QualityBadge } from "@/components/quality";
 import { Button } from "@/components/ui/button";
@@ -73,13 +74,16 @@ export function SpotPanel({
         )}
 
         {/*
-          FORECAST CONFIDENCE SLOT. The forecast-confidence component (components/confidence.tsx,
-          built separately) renders here from `at.forecast_confidence_class`,
-          `at.local_confidence_class`, `at.confidence_reasons` and `at.lead_hours`. It is a
-          separate assessment from research confidence and from the quality score: keep it
-          its own block, never merged into one number.
+          Forecast and local confidence for the selected hour are part of ForecastBreakdown
+          above. Research confidence is a separate, per-spot assessment (how well the break's
+          ideal conditions are documented): shown on its own line, never merged with either.
         */}
-        <div data-testid="forecast-confidence-slot" hidden />
+        <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="forecast-confidence-slot">
+          <ConfidenceBadge value={spot.research_class} kind="research" data-testid="panel-research-confidence" />
+          <Link href={`/spots/${spot.slug}#research`} className="text-muted-foreground underline-offset-2 hover:underline">
+            What we know about this break
+          </Link>
+        </div>
 
         {spot.best_upcoming && <ConditionsSummary c={spot.best_upcoming} tz={spot.timezone} units={units} title="Best surf window, next 7 days" />}
 

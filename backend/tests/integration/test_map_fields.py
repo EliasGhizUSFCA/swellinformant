@@ -336,8 +336,10 @@ def _iso(value: str) -> datetime:
 def test_index_without_fields_says_what_to_set(app_client: ApiClient) -> None:
     resp = app_client.get("/api/map/fields")
     assert resp.status_code == 200
-    # The endpoint's own header (SecurityHeadersMiddleware also appends "no-store" to /api/).
-    assert "public, max-age=300" in resp.headers.get_list("cache-control")
+    # The endpoint's own header wins: the security middleware adds "no-store" only to API
+    # responses that set no Cache-Control themselves (otherwise browsers never cache fields).
+    assert resp.headers.get_list("cache-control") == ["public, max-age=300"]
+    assert app_client.get("/api/spots").headers.get_list("cache-control") == ["no-store"]
     body = resp.json()
     assert body["available"] is False and body["valid_times"] == [] and body["source"] is None
     assert "FORECAST_PROVIDERS" in body["message"] and "MAP_FIELDS_ENABLED" in body["message"]
