@@ -6,7 +6,9 @@ It checks, with plain reasons:
 
 * **Forecast sources** (every FORECAST_PROVIDERS source, the blend when two independent
   model families are configured, GEFS-Wave when GEFS_ENABLED): the newest successful run,
-  its age and the source's own stale limit (``queries.stale_after_hours``, ADR-015).
+  its age and the source's own stale limit (``queries.stale_after_hours``, ADR-015). A
+  stale blend is only a problem of its own when every member is fresh and no acquisition
+  or blend run is in progress (the chain rebuilds it right after the acquisition).
 * **Scheduled jobs** (the beat schedule of the current settings, plus the chained blend
   stage): the last result from ``background_job_logs``, consecutive failures, overdue
   runs (no run started for ``2 x longest interval + 30 min``; a run in progress counts)
@@ -75,6 +77,8 @@ from app.workers.schedule import (
 )
 
 BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: ecCodes)
+# Jobs that (re)build the blend: forecasts.acquire, then the chained forecasts.blend stage.
+BLEND_BUILDERS = frozenset({"forecasts.acquire", "forecasts.blend"})
 OVERDUE_FACTOR = 2  # missed runs tolerated before a job counts as overdue
 OVERDUE_GRACE = timedelta(minutes=30)  # queueing behind long jobs (2 worker slots)
 STUCK_GRACE = timedelta(minutes=15)
@@ -200,9 +204,30 @@ def _source_message(s: SourceHealthOut) -> str:
     return text + "."
 
 
+def _blend_building(db: Session, now: datetime) -> bool:
+    """True while forecasts.acquire or forecasts.blend has a run in progress (not stuck)."""
+    since = now - timedelta(seconds=TASK_TIME_LIMIT_SECONDS) - STUCK_GRACE
+    running = db.scalar(
+        select(func.count())
+        .select_from(BackgroundJobLog)
+        .where(
+            BackgroundJobLog.job_name.in_(BLEND_BUILDERS),
+            BackgroundJobLog.status == JobStatus.RUNNING,
+            BackgroundJobLog.started_at > since,
+        )
+    )
+    return bool(running)
+
+
 def _check_sources(
-    db: Session, settings: Settings, now: datetime
+    db: Session, settings: Settings, now: datetime, building: bool = False
 ) -> tuple[list[SourceHealthOut], list[Problem]]:
+    """Forecast sources, blend and ensemble.
+
+    ``building``: forecasts.acquire or forecasts.blend is running now. A member that has
+    just been refreshed by that acquisition leaves the blend behind until the chained
+    blend stage has run, so a stale blend is not a problem of its own meanwhile.
+    """
     out: list[SourceHealthOut] = []
     problems: list[Problem] = []
     forecast_codes = configured_source_codes(settings)
@@ -236,7 +261,8 @@ def _check_sources(
         out.insert(0, blend)
         # Only a problem of its own when every member is fresh: otherwise the member's
         # problem already explains it (and the blend is rebuilt once the member recovers).
-        if blend.status != "ok" and all(s.status == "ok" for s in forecasts):
+        # Nor while an acquisition or the blend itself is running: the chain rebuilds it.
+        if blend.status != "ok" and all(s.status == "ok" for s in forecasts) and not building:
             problems.append(
                 Problem(
                     f"blend_{blend.status}",
@@ -606,7 +632,7 @@ def data_health(
     """The data-health report (read-only; a handful of indexed queries)."""
     settings = settings or get_settings()
     now = now or utcnow()
-    sources, source_problems = _check_sources(db, settings, now)
+    sources, source_problems = _check_sources(db, settings, now, building=_blend_building(db, now))
     jobs, heartbeat, job_problems = _check_jobs(db, settings, now)
     map_fields, map_problems = _check_map_fields(db, settings, now)
     observations, obs_problems = _check_observations(db, settings, now)

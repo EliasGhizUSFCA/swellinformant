@@ -218,6 +218,16 @@ def test_live_sources_blend_and_ensemble(db: Session, env: pytest.MonkeyPatch) -
     problems = keys(db)
     assert "blend_missing" in problems and "ensemble_stale" in problems
     assert not any(k.startswith("forecast_") for k in problems)
+    # While an acquisition (or the blend stage) runs, the chain is about to rebuild the
+    # blend: not a problem of its own. A run "running" past the time limit does not count.
+    acquire = job_log(db, "forecasts.acquire", JobStatus.RUNNING, 5)
+    assert "blend_missing" not in keys(db)
+    assert data_health(db).out.forecast_sources[0].status == "missing"  # still shown as is
+    acquire.started_at = utcnow() - timedelta(minutes=50)
+    db.commit()
+    assert "blend_missing" in keys(db)
+    job_log(db, "forecasts.blend", JobStatus.RUNNING, 1)
+    assert "blend_missing" not in keys(db)
 
 
 def test_job_failed_overdue_stuck_running_and_never_run(db: Session) -> None:
