@@ -59,7 +59,11 @@ state. It is not the breaking (surf) height at any beach.
   writes `MOD(630 − θ, 360)`). It is stored as it is, without +180. Live at 5 spots, the
   served direction agreed with the spot provider's own DIRPW sample within 0.9° to 3.8°
   (table below). That sample was checked against NDBC station bulletins in
-  noaa-direct-ingestion.md. ecCodes calls PERPW "Primary wave mean period", but WW3 writes
+  noaa-direct-ingestion.md. An independent physical check on the served f006 fields: in
+  the Southern Ocean westerlies (45S to 55S, all longitudes) the circular mean of
+  `wave_dir` is 265° and that of the 10 m wind direction (from the served u, v) 283°;
+  where the wind exceeds 7 m/s the median difference is 26°. Directions "going to" would
+  put the waves near 85°. ecCodes calls PERPW "Primary wave mean period", but WW3 writes
   the peak period there (research notes), so it is labelled as the peak period.
 
 ## Modes and settings
@@ -76,7 +80,7 @@ state. It is not the breaking (surf) height at any beach.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
-| `MAP_FIELD_RESOLUTION_DEG` | 0.5 | Output grid spacing. Must divide 180 (0.25, 0.5, 1, …) |
+| `MAP_FIELD_RESOLUTION_DEG` | 0.5 | Output grid spacing. Must divide 180 (0.25, 0.5, 1, …). Otherwise (e.g. 0.7) a NOAA spot run stores no fields and says why in `details.map_fields.warnings`, and the standalone job fails with that message; spot forecasts are unaffected |
 | `MAP_FIELD_MAX_LEAD_HOURS` | 240 | Last forecast hour with fields |
 | `MAP_FIELD_STEP_HOURS` | 3 | Fields at the published forecast hours that are multiples of this |
 
@@ -92,8 +96,9 @@ Fixed contract: `backend/app/schemas/map_fields.py`. Nothing was added to it.
   six `variables` with label, unit and display range. The run is the newest one (by model
   cycle) with at least one complete valid time. When several runs hold that cycle (for
   example the NOAA spot run and a fields-only run after a change of mode), the one with
-  the most complete valid times is served, and on a tie the newer run. Incomplete times
-  are logged and left out.
+  the most complete valid times is served, and on a tie the newer run
+  (`map_fields.servable_runs`, the same order retention uses). Incomplete times are
+  logged and left out.
   `Cache-Control: public, max-age=300`.
 * `GET /api/map/fields/{variable}?at=ISO` returns one field as
   `application/octet-stream`. The decoding parameters are in the `X-Field-Meta` header
@@ -178,7 +183,9 @@ f000 to f240 every 3 h: 81 hours.
   download worker encodes one field at a time.
 * **Failures.** A field that cannot be read or encoded is a warning in the run's
   `details.map_fields.warnings` (with one "incomplete" line per hour that lacks a
-  variable). It is never a spot error and never a failed spot step.
+  variable). It is never a spot error and never a failed spot step. If the database
+  refuses the fields of a NOAA spot run, they are rolled back to a SAVEPOINT and listed
+  there as "map fields not stored"; the spot records are stored as usual.
 
 ## Storage, jobs and retention
 
@@ -197,14 +204,24 @@ f000 to f240 every 3 h: 81 hours.
   `standalone`. Beat runs it on the `forecast-acquisition` interval
   (`FORECAST_REFRESH_MINUTES`, every 3 h by default), and once when beat starts. It skips
   a cycle whose fields already exist: a fields run of that cycle that is SUCCESS or
-  PARTIAL, or rows of that cycle from any run (for example the NOAA spot run) covering
-  every map hour and variable.
+  PARTIAL and read every requested map hour (`details.map_hours`), or rows of that cycle
+  from any run (for example the NOAA spot run) covering every map hour and variable. A
+  shorter run of the same cycle (for example a check with `--max-lead-hours 12`) does not
+  count for the hours it did not read, so the scheduled job still reads the whole cycle
+  and replaces its rows in place.
 * **CLI.** `python -m app.cli engine map-fields [--cycle YYYYMMDDHH] [--max-lead-hours N]
   [--force]` works in every mode except `off`. It prints JSON with counts, stored and
-  downloaded bytes, requests, the duration and per-hour figures.
-* **Retention.** `maintenance.cleanup` keeps the fields of the two newest runs that have
-  fields and deletes older `map_fields` rows (reported as `map_fields`). A forecast run
-  removed by its own retention takes its fields with it (FK cascade).
+  downloaded bytes, requests, rows pruned, the duration and per-hour figures.
+* **Retention.** `maintenance.prune_map_fields` keeps the fields of the two best
+  servable runs, in the read side's order (`map_fields.servable_runs`: newest cycle,
+  then most complete valid times, then the newer run), so the served run is never
+  deleted. Every other `map_fields` row goes, including rows of runs without a single
+  complete valid time (they are never served). It runs right after every acquisition that
+  stores fields (standalone job and NOAA spot run) and in `maintenance.cleanup` (reported
+  as `map_fields`), so storage stays at about two runs between the daily cleanups. One
+  DELETE statement picks the runs to keep and deletes the rest, so fields that another
+  acquisition commits meanwhile are not deleted. A forecast run removed by its own
+  retention takes its fields with it (FK cascade).
 
 ## Bandwidth and storage (measured live)
 
@@ -245,7 +262,41 @@ resident memory 662 MB (103 MB after the imports alone). Stored: **39.0 MB** for
 | One valid time (all six) | 482 kB |
 
 PostgreSQL reported 43 MB for the `map_fields` table holding these 486 rows and the 18
-rows below (the bytes are already compressed). Retention keeps two runs: about 80 MB.
+rows below (the bytes are already compressed). Retention keeps two runs: about 80 MB,
+plus deleted row versions until autovacuum reclaims them.
+
+**Re-measured by the review** on the next cycle, **2026-10-11 18Z** (2026-10-12 01:54 to
+02:00 UTC, another scratch database):
+
+* 5-hour CLI run: 30 fields, 25 requests, 23.95 MB downloaded, 2.42 MB stored, 3.9 s
+  for the job (7.0 s for the process), peak 564 MB. A second call was skipped.
+* Full run of the same cycle, started without `--force` after the 5-hour run: it read
+  all 81 hours. 486 fields, 405 requests, 380.7 MB (3.97 to 4.84 MB per hour, 1.8 to
+  5.2 s each), 39.04 MB stored, 45.2 s for the job (48.1 s for the process), peak 659 MB.
+  Mean compressed bytes per field: hs 55.5 kB, tp 76.6, wave_dir 99.9, wind_u 100.6,
+  wind_v 99.3, pressure 50.1 (482 kB per valid time). The table held 42 MB.
+* Served f006 (valid 2026-10-12 00Z): hs nodata 42.6 % of nodes, 31.1 % of the area; hs
+  node mean 2.22 m, p99 6.80 m, max 9.5 m; tp 1.1 to 24.9 s; 10 m wind max 31.8 m/s;
+  pressure 955 to 1060 hPa. In the Southern Ocean (45S to 55S) the circular mean of
+  `wave_dir` is 264° and that of the wind direction (FROM) 284°.
+* Orientation, checked in the raw served bytes (row `(90 - lat) / 0.5`, column
+  `(lon + 180) / 0.5`): hs is nodata at 0N 20E, 45N 100E, 23N 10E, 40N 100W and 85S 0E,
+  and valid at 0N 160W, 50S 90E, 45S 100E, 0N 160E and 30N 40W, so neither a north-south
+  nor an east-west flip is possible.
+* `with_noaa`, the same 2 spots, f000 to f006: 46.0 MB and 25 requests without fields,
+  51.4 MB and 31 with. The spot records were identical, and the NOAA run's 18 fields were
+  byte-identical to the fields-only run's fields of the same hours. The index then served
+  the fields-only run of the cycle (81 complete valid times against 3).
+* The same cross-check as below, at 18Z f006 (Hs m point / field (raw box mean); Tp s;
+  direction point / field (raw box mean); wind m/s): Pipeline 1.25 / 1.3 (1.294), 14.4 /
+  14.5, 311 / 307.5 (307.8), 5.58 / 5.52. Jeffreys Bay 1.82 / 1.6 (1.612), 12.0 / 12.1,
+  220 / 219.0 (218.5), 2.00 / 2.69. Thurso East 1.24 / 1.5 (1.514), 9.1 / 9.1, 314 /
+  322.5 (322.9), 8.69 / 9.18. Nazaré 1.24 / 1.2 (1.243), 11.0 / 11.0, 316 / 316.5
+  (317.1), 3.82 / 3.54. Teahupoo 2.40 / 2.4 (2.426), **7.0 / 9.9**, **117 / 135.0**
+  (134.9), 9.82 / 10.00. At Teahupoo's node the raw `global.0p25` box holds two wave
+  systems: five cells peak at 7.0 s from about 116° (trade-wind sea), the southern row at
+  18.0 s from 199° (a long-period south swell). The box mean, 9.9 s from 135°, matches
+  no cell (see Limitations).
 
 **`with_noaa`, 2 spots** (Pipeline on `global.0p16`, Jeffreys Bay on `gsouth.0p25`, so
 no spot uses `global.0p25`), f000 to f006 every 3 h, same cycle, run twice:
@@ -321,11 +372,21 @@ mean of the raw `global.0p25` cells around that node (1.82 MB download).
   already stored cycle, the served index and all six fields over HTTP (nearest time, 404
   outside the range, 422), the statistics and cross-check above, the `global.0p25` and
   `pgrb2.0p25` geometry, and a `with_noaa` acquisition for 2 spots storing fields on the
-  NOAA run, compared with the same acquisition without fields.
-* **Synthetic data only (tests):** missing or failing files, encoding failures,
-  re-ingestion replacing rows, the skip rules, the choice between runs of one cycle,
-  retention, the Celery task and beat entry, the CLI argument handling, and the
-  isolation of fields-only runs from the spot pipeline.
+  NOAA run, compared with the same acquisition without fields. Also live: a full-cycle
+  request after a 5-hour run of the same cycle reads all 81 hours, and with the 3-hour
+  NOAA spot run and the 81-hour fields run of one cycle stored, the index serves the
+  fields run. All of this was repeated by the review on the 18Z cycle (above), with the
+  NOAA run's fields byte-identical to the fields-only run's.
+* **Synthetic data only (tests):** missing or failing files, encoding failures, an
+  invalid MAP_FIELD_RESOLUTION_DEG, fields the database refuses, pruning while another
+  session commits newer fields, re-ingestion replacing rows, the skip rules, the
+  choice between runs of one cycle, retention and pruning after each acquisition, the
+  Celery task and beat entry, the CLI argument handling, the isolation of fields-only
+  runs from the spot pipeline, and a reader with an idle sink making exactly the requests
+  (files and byte ranges) of a reader without one. On the same synthetic files, the
+  provider without map fields made the same 31 requests (same byte ranges, 8.38 MB) and
+  returned the same records and warnings as the code before map fields (a one-off
+  comparison against that commit, not a test).
 * **Not verified:** a full 81-hour `with_noaa` acquisition with all 50 spots (its extra
   cost is extrapolated above), the Celery worker running the job against NOAA, and
   behaviour across a GFS version change.
@@ -338,6 +399,11 @@ mean of the raw `global.0p25` cells around that node (1.82 MB download).
 * The 0.5° boxes (about 55 km) smooth coastal detail. Coastal nodes average only their
   sea cells, and small islands and narrow straits disappear. The layers show the big
   picture, not conditions at a break.
+* Peak period and peak direction are box means too. Where the dominant wave system
+  changes inside a box, the node's value lies between the systems and may match no
+  cell (live at Teahupoo's node above: cells of 7.0 s from about 116° and of 18.0 s from
+  199° gave 9.9 s from 135°). The layers show the big picture; a break's own forecast
+  keeps the native cell's values.
 * All layers are model output (GFS / GFS-Wave), not observations, and they carry the
   model's errors. Wave height is offshore significant wave height, not surf height. They
   are not for navigation.

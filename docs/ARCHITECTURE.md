@@ -51,7 +51,7 @@ runs in the browser or inside a web request handler.
 | E | `flights.discover` | chained after D, beat hourly | Searches flights only for surf-matched opportunities; shared cache across users; buffer + tz logic; stores `flight_offers`. |
 | F | `alerts.generate` | chained after E, beat every 15 min | Decides whether an alert is due (new / improved / price drop), dedups, queues `notifications`. |
 | G | `notifications.deliver` | chained after F, beat every 2 min | Claims queued notifications (`FOR UPDATE SKIP LOCKED`), sends via provider, retries transient failures. |
-| H | `maintenance.cleanup` | beat daily | Retention: old forecasts/predictions/flight searches, expired tokens/sessions, job logs; marks stale data. The prediction archive is kept `RETENTION_ARCHIVE_DAYS`; map fields only for the two newest runs that have them. |
+| H | `maintenance.cleanup` | beat daily | Retention: old forecasts/predictions/flight searches, expired tokens/sessions, job logs; marks stale data. The prediction archive is kept `RETENTION_ARCHIVE_DAYS`; map fields only for the two best servable runs (also pruned right after every acquisition that stores fields). |
 | V1 | `observations.ingest` | beat hourly when `OBSERVATIONS_ENABLED` | Buoy observations (AODN, Met Office, NDBC) → `buoy_observations`. |
 | V2 | `verification.collect_point_forecasts` | beat 4×/day when `VERIFICATION_ENABLED` | GFS-Wave station bulletins (forecasts as issued) at the buoys → `point_forecasts`. |
 | V3 | `verification.run` | beat daily when `VERIFICATION_ENABLED` | Pairs forecasts with observations (`prediction_validation`) and computes rolling `forecast_accuracy_metrics`. |
