@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -31,6 +32,7 @@ from app.services.forecasts.demo import DemoForecastProvider, SwellOverride
 from app.services.forecasts.fields import EncodedField, summarise
 from app.services.forecasts.registry import build_provider
 from app.services.http import ProviderError
+from app.services.maintenance import prune_map_fields
 from app.services.surf_quality.models import SpotParams
 
 if TYPE_CHECKING:
@@ -271,11 +273,21 @@ def acquire_from_provider(
         "warnings": result.warnings[:50],
     }
     if result.fields or result.field_warnings:
-        store_map_fields(db, run, result.fields)
-        run.details = {
-            **run.details,
-            "map_fields": summarise(result.fields, result.field_warnings),
-        }
+        fields, field_warnings = result.fields, list(result.field_warnings)
+        try:
+            with db.begin_nested():  # a SAVEPOINT: the map fields never cost the spot records
+                store_map_fields(db, run, fields)
+                if fields:
+                    prune_map_fields(db)  # bound storage now, not only at the daily cleanup
+        except SQLAlchemyError as exc:
+            # The first line of the driver's message only: the statement's parameters and
+            # PostgreSQL's DETAIL line repeat the row, field bytes included.
+            message = str(getattr(exc, "orig", None) or exc).strip().splitlines() or [""]
+            reason = f"{type(exc).__name__}: {message[0][:300]}"
+            logger.error("Map fields of %s not stored: %s", info.run_key, reason)
+            field_warnings.append(f"map fields not stored ({reason})")
+            fields = []
+        run.details = {**run.details, "map_fields": summarise(fields, field_warnings)}
     if not result.records:
         run.status = ForecastRunStatus.FAILED
         run.error_message = "no spot returned usable data"
@@ -344,9 +356,11 @@ def acquire_map_fields(
     MAP_FIELD_MAX_LEAD_HOURS.
 
     Without ``force``, nothing is downloaded when the cycle's fields already exist: a
-    fields run of the cycle that is SUCCESS or PARTIAL (a PARTIAL one is not retried, as
-    for spot runs), or map_fields rows of the cycle from any run (e.g. the NOAA spot run in
-    "with_noaa" mode) covering every map hour and variable.
+    fields run of the cycle that is SUCCESS or PARTIAL and read every requested map hour
+    (``details.map_hours``; a PARTIAL one is not retried, as for spot runs), or map_fields
+    rows of the cycle from any run (e.g. the NOAA spot run in "with_noaa" mode) covering
+    every map hour and variable. Afterwards only the two best servable runs keep their
+    fields (``maintenance.prune_map_fields``).
 
     The run has no spot records, ``details.spot_ids = []`` and ``predictions_computed_at``
     set on completion (there is nothing to score), so the prediction job skips it.
@@ -375,7 +389,11 @@ def acquire_map_fields(
         )
     )
     if not force and run is not None:
-        if run.status in (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL):
+        # A run counts only for the hours it read: a short --max-lead-hours run of the
+        # cycle must not stop the scheduled job from reading the whole cycle.
+        attempted = set((run.details or {}).get("map_hours", []))
+        done = run.status in (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
+        if done and attempted >= set(hours):
             return {**out, "status": "skipped", "run_id": run.id, "message": "already stored"}
         if run.status == ForecastRunStatus.RUNNING and now - run.started_at < STUCK_RUN_AFTER:
             return {**out, "status": "skipped", "run_id": run.id, "message": "in progress"}
@@ -402,7 +420,12 @@ def acquire_map_fields(
     run.status = ForecastRunStatus.RUNNING
     run.error_message = None
     run.predictions_computed_at = None
-    run.details = {"metadata_source": info.metadata_source, "fields_only": True, "spot_ids": []}
+    run.details = {
+        "metadata_source": info.metadata_source,
+        "fields_only": True,
+        "spot_ids": [],
+        "map_hours": hours,
+    }
     db.commit()
     out["run_id"] = run.id
 
@@ -433,6 +456,7 @@ def acquire_map_fields(
         run.error_message = "no map hour has all six fields"
     run.completed_at = utcnow()
     run.predictions_computed_at = run.completed_at  # no spot records: nothing to score
+    pruned = prune_map_fields(db)
     db.commit()
     steps = sorted(provider.last_field_steps, key=lambda s: s.fhour)
     logger.info(
@@ -451,6 +475,7 @@ def acquire_map_fields(
         "stored_bytes": summary["bytes"],
         "downloaded_bytes": provider.last_bytes_downloaded,
         "requests": result.request_count,
+        "pruned_fields": pruned,
         "duration_s": round(time.monotonic() - started, 1),
         "steps": [
             {

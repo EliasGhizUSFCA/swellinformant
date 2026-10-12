@@ -7,6 +7,7 @@ model output. The live check against NOAA is documented in docs/map-layers.md.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import zlib
@@ -19,7 +20,7 @@ from sqlalchemy import delete, event, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.database import get_engine
+from app.core.database import SessionLocal, get_engine
 from app.models import (
     ForecastRun,
     ForecastSource,
@@ -31,11 +32,12 @@ from app.models import (
 from app.models.enums import ForecastRunStatus
 from app.models.forecast_engine import MAP_FIELD_VARIABLES, MapField
 from app.services import map_fields as map_fields_service
+from app.services.forecasts.base import FetchResult, RunInfo, SpotPoint
 from app.services.forecasts.fields import QUANTISATION, TargetGrid, decode_bytes
 from app.services.forecasts.ingestion import acquire_from_provider, acquire_map_fields
 from app.services.forecasts.noaa import NoaaGfsFieldsProvider, NoaaGfsProvider
 from app.services.forecasts.queries import candidate_runs, forecast_status, latest_runs_by_spot
-from app.services.maintenance import cleanup
+from app.services.maintenance import cleanup, prune_map_fields
 from app.services.pipeline import run_pipeline
 from app.services.surf_quality.predict import compute_pending_predictions
 from tests.conftest import ApiClient
@@ -136,6 +138,33 @@ def test_a_noaa_run_without_map_fields_has_none(db: Session) -> None:
     assert not any("global.0p25" in path for path in world.paths_requested())
 
 
+def test_map_fields_the_database_refuses_never_cost_the_spot_records(db: Session) -> None:
+    keep_spots(db, KEEP)
+    world = SyntheticGfs()
+    world.add_cycle(CYCLE, HOURS)
+    provider = NoaaGfsProvider(map_settings(), client=world.client(), backoff_seconds=0)
+    fetch = provider.fetch
+
+    def refused(spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+        result = fetch(spots, run)
+        # The last field gets a variable the map_fields CHECK constraint rejects.
+        result.fields[-1] = dataclasses.replace(result.fields[-1], variable="sst")
+        return result
+
+    provider.fetch = refused  # type: ignore[method-assign]
+    outcome = acquire_from_provider(db, provider, now=NOW)
+
+    assert outcome.status == ForecastRunStatus.SUCCESS.value and outcome.records == 6
+    run = db.get(ForecastRun, outcome.run_id)
+    assert run is not None and run.status == ForecastRunStatus.SUCCESS
+    assert db.scalar(select(func.count()).select_from(WaveForecast)) == 6
+    assert stored(db) == []  # none of the 18 (the SAVEPOINT is rolled back as a whole)
+    summary = run.details["map_fields"]
+    assert (summary["count"], summary["bytes"], summary["valid_times"]) == (0, 0, [])
+    assert summary["warnings"][-1].startswith("map fields not stored (IntegrityError")
+    assert "\\x" not in summary["warnings"][-1]  # no field bytes in the message
+
+
 # --------------------------------------------------------------------------- standalone
 def test_standalone_job_stores_fields_under_their_own_source(db: Session) -> None:
     world = standalone_world()
@@ -176,6 +205,23 @@ def test_standalone_job_stores_fields_under_their_own_source(db: Session) -> Non
     assert len(world.requests) == before
     forced = acquire_map_fields(db, now=NOW, provider=provider, force=True)
     assert forced["status"] == "success" and len(stored(db)) == 18
+
+
+def test_a_short_run_of_a_cycle_does_not_stop_the_full_one(db: Session) -> None:
+    # E.g. a live check with --max-lead-hours 0, then the scheduled job for the same cycle.
+    world = standalone_world()
+    short = acquire_map_fields(db, cycle=CYCLE, provider=fields_only(world, 0))
+    assert short["status"] == "success" and short["map_hours"] == 1
+    full = acquire_map_fields(db, cycle=CYCLE, provider=fields_only(world, 24))
+    assert full["status"] == "success" and full["run_id"] == short["run_id"]
+    assert (full["map_hours"], full["complete_hours"], full["fields"]) == (3, 3, 18)
+    assert map_fields_service.field_index(db).valid_times == TIMES
+    # Now every requested hour was read: skipped, and so is a shorter request.
+    before = len(world.requests)
+    for lead in (24, 12):
+        again = acquire_map_fields(db, cycle=CYCLE, provider=fields_only(world, lead))
+        assert again["status"] == "skipped" and again["message"] == "already stored"
+    assert len(world.requests) == before
 
 
 def test_standalone_job_skips_a_cycle_the_noaa_run_already_stored(db: Session) -> None:
@@ -481,9 +527,15 @@ def test_of_two_runs_of_one_cycle_the_more_complete_is_served(
 # --------------------------------------------------------------------------- retention
 def test_cleanup_keeps_the_fields_of_the_two_newest_runs(db: Session) -> None:
     cycles = [CYCLE - timedelta(hours=12), CYCLE - timedelta(hours=6), CYCLE]
+    pruned = []
     for cycle in cycles:
         world = standalone_world(cycle, [0])
-        assert acquire_map_fields(db, cycle=cycle, provider=fields_only(world, 0))["fields"] == 6
+        out = acquire_map_fields(db, cycle=cycle, provider=fields_only(world, 0))
+        assert out["fields"] == 6
+        pruned.append(out["pruned_fields"])
+    # Pruned right after storing, not only by the daily cleanup: two runs keep fields.
+    assert pruned == [0, 0, 6]
+    assert {r.cycle_time for r in stored(db)} == set(cycles[1:])
     oldest = db.scalar(select(ForecastRun).where(ForecastRun.issued_at == cycles[0]))
     assert oldest is not None
     old = datetime.now(UTC) - timedelta(days=get_settings().retention_forecast_days + 1)
@@ -492,10 +544,105 @@ def test_cleanup_keeps_the_fields_of_the_two_newest_runs(db: Session) -> None:
 
     out = cleanup(db)
 
-    assert out["map_fields"] == 6
+    assert out["map_fields"] == 0
     assert {r.cycle_time for r in stored(db)} == set(cycles[1:])
     assert out["forecast_runs"] == 1  # the run's own retention (and cascade) still applies
     assert db.scalar(select(func.count()).select_from(ForecastRun)) == 2
+
+
+def _copy_fields(db: Session, rows: list[MapField], key: str, cycle: datetime) -> None:
+    """Store ``rows`` again under a new run ``key`` of ``cycle`` (same synthetic bytes)."""
+    run = ForecastRun(
+        source_id=db.scalars(select(ForecastRun.source_id)).first(),
+        run_key=key,
+        issued_at=cycle,
+        started_at=NOW,
+        status=ForecastRunStatus.SUCCESS,
+        details={},
+    )
+    db.add(run)
+    db.flush()
+    columns = [c.key for c in MapField.__table__.columns if c.key != "id"]
+    for r in rows:
+        values = {c: getattr(r, c) for c in columns}
+        db.add(MapField(**{**values, "run_id": run.id, "run_key": key, "cycle_time": cycle}))
+    db.commit()
+
+
+def test_pruning_never_deletes_fields_another_acquisition_commits_meanwhile(
+    db: Session, fields_run: ForecastRun
+) -> None:
+    # E.g. the CLI and the Celery job storing two cycles at once: the newer cycle's fields
+    # are committed by another session just before this session's DELETE runs.
+    rows = stored(db)
+    newer = CYCLE + timedelta(hours=6)
+    engine = get_engine()
+    injected: list[int] = []
+
+    def commit_newer_cycle(_conn: Any, _cursor: Any, statement: str, *_: Any) -> None:
+        if statement.startswith("DELETE FROM map_fields") and not injected:
+            injected.append(1)
+            with SessionLocal() as other:
+                _copy_fields(other, rows, "noaa-gfs-fields:2026101100", newer)
+
+    event.listen(engine, "before_cursor_execute", commit_newer_cycle)
+    try:
+        pruned = prune_map_fields(db)
+    finally:
+        event.remove(engine, "before_cursor_execute", commit_newer_cycle)
+    db.commit()
+
+    assert injected and pruned == 0
+    assert {r.cycle_time for r in stored(db)} == {CYCLE, newer}
+    assert map_fields_service.field_index(db).run_key == "noaa-gfs-fields:2026101100"
+
+
+def test_retention_never_deletes_the_served_fields(db: Session, fields_run: ForecastRun) -> None:
+    # Two newer cycles whose fields lack hs at every hour (as when the wave file was
+    # missing): no valid time has all six variables, so they can never be served.
+    no_hs = [r for r in stored(db) if r.variable != "hs"]
+    for back in (6, 12):
+        _copy_fields(db, no_hs, f"no-hs-{back}", CYCLE + timedelta(hours=back))
+    assert len(stored(db)) == 18 + 2 * 15
+
+    out = cleanup(db)
+
+    # The newest two runs by cycle are the useless ones; the served run keeps its fields.
+    assert out["map_fields"] == 2 * 15
+    assert {r.run_id for r in stored(db)} == {fields_run.id} and len(stored(db)) == 18
+    index = map_fields_service.field_index(db)
+    assert index.available and index.run_key == fields_run.run_key and index.valid_times == TIMES
+
+
+def test_retention_keeps_the_most_complete_run_of_the_served_cycle(
+    db: Session, fields_run: ForecastRun
+) -> None:
+    # Two newer runs of the same cycle with only the first valid time.
+    first = [r for r in stored(db) if r.valid_time == TIMES[0]]
+    for key in ("copy-a", "copy-b"):
+        _copy_fields(db, first, key, CYCLE)
+    assert map_fields_service.field_index(db).run_key == fields_run.run_key  # 3 times beat 1
+
+    out = cleanup(db)
+
+    assert out["map_fields"] == 6  # copy-a goes; copy-b is the second best
+    assert {r.run_key for r in stored(db)} == {fields_run.run_key, "copy-b"}
+    assert map_fields_service.field_index(db).valid_times == TIMES
+
+
+def test_a_failed_newer_cycle_leaves_the_served_fields_alone(
+    db: Session, fields_run: ForecastRun
+) -> None:
+    newer = CYCLE + timedelta(hours=6)
+    world = SyntheticGfs()
+    for h in HOURS:
+        world.add_atmos(newer, h)  # no wave files: wind and pressure only
+    out = acquire_map_fields(db, cycle=newer, provider=fields_only(world))
+    assert out["status"] == "failed" and out["fields"] == 9
+    # Its rows could never be served and are pruned at once; the served run is untouched.
+    assert out["pruned_fields"] == 9
+    assert {r.run_id for r in stored(db)} == {fields_run.id}
+    assert map_fields_service.field_index(db).run_key == fields_run.run_key
 
 
 # --------------------------------------------------------------------------- jobs

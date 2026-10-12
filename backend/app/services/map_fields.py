@@ -22,9 +22,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -37,8 +37,6 @@ logger = logging.getLogger(__name__)
 
 MapFieldsMode = Literal["with_noaa", "standalone", "off"]
 NOAA_PROVIDER_NAME = "noaa_gfs"  # the FORECAST_PROVIDERS entry of the direct NOAA ingester
-# Runs looked at when the newest one has no complete valid time.
-RUNS_TO_TRY = 5
 
 
 def map_fields_mode(settings: Settings | None = None) -> MapFieldsMode:
@@ -97,45 +95,73 @@ class _CurrentRun:
     valid_times: list[datetime]  # times at which all six variables exist
 
 
+@dataclass(frozen=True)
+class ServableRun:
+    """A run whose map fields can be served: at least one complete valid time."""
+
+    run_id: int
+    cycle_time: datetime
+    complete_times: int  # valid times at which all six variables exist
+
+
+def servable_runs_query(limit: int | None = None) -> Select[Any]:
+    """(run_id, cycle_time, complete valid times) of the servable runs, best first.
+
+    Order: newest model cycle first; among runs of one cycle (e.g. the NOAA spot run and a
+    fields-only run after a change of mode) the one with the most complete valid times,
+    then the newer run. The read side serves the first; retention keeps the first two, so
+    it never deletes what is served. Aggregates only: no field bytes are read.
+    """
+    per_time = (
+        select(
+            MapField.run_id,
+            func.max(MapField.cycle_time).label("cycle"),
+            func.count(func.distinct(MapField.variable)).label("n"),
+        )
+        .group_by(MapField.run_id, MapField.valid_time)
+        .subquery()
+    )
+    complete = func.count().filter(per_time.c.n == len(MAP_FIELD_VARIABLES))
+    stmt = (
+        select(per_time.c.run_id, func.max(per_time.c.cycle), complete)
+        .group_by(per_time.c.run_id)
+        .having(complete > 0)
+        .order_by(func.max(per_time.c.cycle).desc(), complete.desc(), per_time.c.run_id.desc())
+    )
+    return stmt if limit is None else stmt.limit(limit)
+
+
+def servable_runs(db: Session, limit: int | None = None) -> list[ServableRun]:
+    """Runs with at least one complete valid time, best first (see servable_runs_query)."""
+    return [ServableRun(r, c, n) for r, c, n in db.execute(servable_runs_query(limit)).all()]
+
+
 def _current_run(db: Session) -> _CurrentRun | None:
     """The newest run (by model cycle) that has at least one complete valid time.
 
-    Several runs can hold the same cycle (e.g. the NOAA spot run and a fields-only run
-    after a change of mode); then the one with the most complete valid times wins, and on
-    a tie the newer run. Reads only (run, valid time, variable count) aggregates: no field
-    bytes are loaded.
+    Ties within one cycle as in :func:`servable_runs`. Reads only (run, valid time,
+    variable count) aggregates: no field bytes are loaded.
     """
-    runs = db.execute(
-        select(MapField.run_id, func.max(MapField.cycle_time).label("cycle"))
-        .group_by(MapField.run_id)
-        .order_by(func.max(MapField.cycle_time).desc(), MapField.run_id.desc())
-        .limit(RUNS_TO_TRY)
+    best = servable_runs(db, limit=1)
+    if not best:
+        return None
+    counts = db.execute(
+        select(MapField.valid_time, func.count(func.distinct(MapField.variable)))
+        .where(MapField.run_id == best[0].run_id)
+        .group_by(MapField.valid_time)
+        .order_by(MapField.valid_time)
     ).all()
-    chosen: _CurrentRun | None = None
-    for run_id, cycle in runs:
-        if chosen is not None and cycle < chosen.cycle_time:
-            break  # an older cycle: the newest cycle with a complete time is decided
-        counts = db.execute(
-            select(MapField.valid_time, func.count(func.distinct(MapField.variable)))
-            .where(MapField.run_id == run_id)
-            .group_by(MapField.valid_time)
-            .order_by(MapField.valid_time)
-        ).all()
-        complete = [t for t, n in counts if n == len(MAP_FIELD_VARIABLES)]
-        incomplete = [t for t, n in counts if n != len(MAP_FIELD_VARIABLES)]
-        if incomplete:
-            logger.info(
-                "map fields run %s: %d valid time(s) lack a variable and are not served (first %s)",
-                run_id,
-                len(incomplete),
-                incomplete[0].isoformat(),
-            )
-        if not complete or (chosen is not None and len(complete) <= len(chosen.valid_times)):
-            continue
-        run = db.get(ForecastRun, run_id)
-        if run is not None:
-            chosen = _CurrentRun(run, cycle, complete)
-    return chosen
+    complete = [t for t, n in counts if n == len(MAP_FIELD_VARIABLES)]
+    incomplete = [t for t, n in counts if n != len(MAP_FIELD_VARIABLES)]
+    if incomplete:
+        logger.info(
+            "map fields run %s: %d valid time(s) lack a variable and are not served (first %s)",
+            best[0].run_id,
+            len(incomplete),
+            incomplete[0].isoformat(),
+        )
+    run = db.get(ForecastRun, best[0].run_id)
+    return None if run is None or not complete else _CurrentRun(run, best[0].cycle_time, complete)
 
 
 def field_index(db: Session) -> FieldIndexOut:
