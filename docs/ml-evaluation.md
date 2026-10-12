@@ -1221,3 +1221,102 @@ python -m app.cli verify backtest ... --end 2026-08-21T00:00:00Z --no-write   # 
 
 The analysis-time check (11.2) used the repository's loaders and `match_observations`
 on leads 0-2 h, as in section 1; it is a one-off query, not a command.
+
+## 12. Validation of the 80 % ranges, the forecast-confidence classes and the correction against NDBC (2026-10-12)
+
+### 12.0 Plan, fixed before any result in this section was computed
+
+This plan was written and committed before any coverage, class or training result of
+section 12 was computed. The criteria in it are not changed afterwards; where a result
+fails them, the result is reported, not the criterion.
+
+**Data.** `swell_fval_live`, an unchanged copy of the section-11 database
+(`swell_ndbc_live`): raw GFS-Wave station bulletins (`gfswave_bulletin`, 00Z on every
+second day, 2024-10-12 to 2026-10-12) paired with NDBC spectral Hm0 (nearest observation
+within 30 min, leads >= 3 h, `ml.dataset.build_dataset`). Primary station set: the five
+offshore references of the paired spots, 51201, 51205, 46026, 46224 and 46053 ("OFF5");
+all ten NDBC buoys of section 11 are a sensitivity check. For the correction, the AODN
+delayed-QC Hm0 pairs of section 3 (Cape Naturaliste, Rottnest Island 02, Esperance 04,
+2021) are added. GEFS-Wave station bulletins (`gefs.wave.{ID}.bull` in
+`s3://noaa-gefs-pds/gefs.YYYYMMDD/00/wave/station/gefs.wave.t00z.bull_tar`) print the
+ensemble spread only from the 2026-02-26 00Z cycle onward (earlier files list the
+averages only) and exist for 6 of the 10 buoys (51201, 51205, 51101, 46214, 46086,
+46054); they are collected for the same days as the deterministic bulletins.
+
+**Split (ranges and classes).** TEST = cycles from 2025-10-12 00Z to the end of the
+archive (the newer 12 months, one northern winter and one summer). TRAIN = every row
+whose valid time is at or before 2025-10-12 00Z - 312 h (max lead 240 h + 3 days, the
+gap used everywhere in the project); rows in between are purged. For the ensemble range
+(7.5 months of data): TEST = cycles from 2026-06-20 00Z, TRAIN = valid times at or before
+2026-06-07 00Z. Confidence intervals: 90 %, cycle-block bootstrap, 1,000 replicates,
+seed 20261010.
+
+**1. Offshore 80 % range.** For each pair, the app's offshore range for a single
+deterministic source without ensemble (`surf_quality/uncertainty.py`): sigma_f =
+`lead_sigma(lead)`, sigma_off = sqrt(sigma_f^2 + 0.15^2), p10/p90 = Hs_model x
+exp(-/+ 1.2816 sigma_off), with Hs_model the bulletin's total Hst. Coverage = share of
+observed Hm0 inside [p10, p90]; the shares below p10 and above p90 are reported too; by
+lead bucket (24, 48, 72, 120, 168, 240 h and all leads) and by station.
+
+* If TEST coverage lies in 75-85 % at every lead bucket with n >= 200, the heuristic range
+  has passed a held-out coverage check as it is.
+* Otherwise a lead-dependent scale is fitted on TRAIN only. With e = ln(max(obs, 0.05)) -
+  ln(max(model, 0.05)) and s = sigma_off(lead): per lead bucket b, k_lo,b =
+  Q0.90(-e / s) / 1.2816 and k_hi,b = Q0.90(e / s) / 1.2816 over the TRAIN rows of b (so
+  that each tail holds 10 % on TRAIN: the app calls the bounds p10 and p90, so each bound
+  should be a 10 % quantile, not only their span an 80 % interval); k(lead) is the linear
+  interpolation of k_b between the bucket centres, constant before 24 h and after 240 h;
+  fitted p10 = Hs_model x exp(-1.2816 k_lo(lead) s), p90 = Hs_model x exp(+1.2816
+  k_hi(lead) s). The central value is not changed. A symmetric variant (one k_b =
+  Q0.80(|e| / s) / 1.2816) is reported as a diagnostic only.
+* The app's offshore range may be called calibrated only if the fitted range has a TEST
+  coverage in 75-85 % at every lead bucket with n >= 200 (OFF5 pooled). Even then the label
+  applies only to the offshore component, only to hours whose spread comes from the lead
+  table (single deterministic source, no ensemble), and only at spots paired as
+  offshore reference with a buoy in the TEST set; the breaking-height range keeps its
+  nearshore heuristic share and says so. The WA 2021 pairs (other ocean, earlier years)
+  are scored with the TRAIN-fitted range as an out-of-region check and reported.
+* Ensemble range (`ensemble_heuristic`): sigma_f = 1.05 x Hs spread / Hs mean of the
+  GEFS-Wave bulletin at the valid time (mean > 0.05 m, else the lead table), the same
+  floor, centred on the deterministic Hst; same coverage table, criterion and fit on the
+  ensemble split, all six GEFS buoys pooled.
+
+**2. Forecast-confidence classes.** For each pair, the forecast-v1 class from
+`classify_forecast` with the inputs that exist historically: lead time; one
+deterministic family (`ncep_gfs`); index = `confidence_index(lead_sigma(lead),
+completeness, stale=False)` with completeness from the bulletin's partition-1 height,
+period and direction plus wind counted as present (the app's NOAA source always carries
+GFS 10 m wind; the bulletin has none, and counting it missing would cap every hour at
+Moderate for a reason the app never has); `missing_swell` when partition 1 has no period
+or direction; no disagreement, no run-to-run change (the archive's previous cycle is 48 h
+older, not the app's 6 h), not stale. Two variants: V0 without verification rows (as in
+the live system today), V1 with the verification row the scheduled job would have
+produced for the buoy at that cycle (raw bulletin, 90-day window of valid times ending at
+the cycle time, n >= 200, nearest lead bucket, same scatter index and persistence skill).
+The ensemble variant adds the GEFS spread (six buoys, ensemble split). Reported on TEST
+by class and by class x lead bucket: n, bias, median |error|, p90 |error|, RMSE (m) and
+median |ln(obs/model)|.
+
+* Monotonicity (pass): pooled over leads, RMSE, median |error| and p90 |error| increase
+  strictly High < Moderate < Low, and the 90 % CIs of RMSE(Moderate) - RMSE(High) and
+  RMSE(Low) - RMSE(Moderate) exclude zero.
+* A class boundary counts as clearly misplaced only if the same test fails on TRAIN. Only
+  then is a change proposed, derived from TRAIN alone, and it is adopted (as forecast-v1.1)
+  only if the changed classes pass the same test on TEST. Otherwise forecast-v1 stays.
+
+**3. ML correction.** Decision run M1: `ml train --candidates linear,rf,gbt --folds 3
+--boot 1000 --no-obs-features` on the pairs of OFF5 plus the three WA buoys (spectral Hm0,
+`gfswave_bulletin`), default chronological 60/20/20 split by cycles with the 312 h gaps,
+deployment criteria (a)-(f) of `ml/registry.py` unchanged. Only features known at issue
+time are used (as for P2 v4), because the spots receive no buoy observation at the cycle
+time through the prediction job. Transfer check (ADR-013) for the version the
+auto-activation rule would pick (lowest validation RMSE among versions that pass every
+criterion): imported into a migrated copy of `swell_live2` (the real 2026-10-11 runs),
+factors computed through `ml/hook.py` on the gridded NOAA GFS run at every spot the
+correction applies to, compared with the factors on the held-out test at the buoys. A
+spot passes if at most 15 % of its corrected hours have a factor outside the central 90 %
+range (p5-p95) of the test factors (about 10 % are outside by construction when the
+inputs look like the test inputs; ADR-013 failed with 18 % below p5 alone). Activation
+only if the version passes (a)-(f) and the transfer check, only at the spots that pass it
+and that are paired with a buoy that has held-out TEST pairs, and only at the trained
+leads; otherwise the reasons are recorded.
