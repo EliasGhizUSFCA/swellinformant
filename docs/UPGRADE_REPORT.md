@@ -136,3 +136,92 @@ docker compose exec backend python -m app.cli make-admin you@example.com   # acc
 5. Verify NDBC live and add NDBC-paired spots (Hawaii, California) to verification.
 6. Add an ECMWF/GEFS date check, a total ECMWF retry budget, and an advisory lock for
    concurrent `ml train` runs (review residuals).
+
+---
+
+# Phase 2: map redesign, simplified frontend, research and forecast confidence
+
+Branch `claude/funny-hamilton-49k2m3`, 2026-10-11 to 2026-10-12. Each part was built, then
+adversarially reviewed and fixed before it was merged.
+
+## 9. Interactive map ([`map-layers.md`](map-layers.md))
+
+* **Look and controls** (as in the reference screenshot): full-screen dark map (Natural
+  Earth land and borders, country and city labels), ocean colour field with animated
+  particles, layer tabs *Wind Speed / Wave Height / Wave Energy / Wave Period*, a
+  *Pressure* toggle (isobars every 4 hPa), *Settings* (units, particles, dark or street
+  basemap, every spot filter), a *Legend* drawer, locate-me, and a bottom timeline with day
+  labels, 3-hour ticks, a local-time bubble and play. Spot markers, the ranked list
+  ("Best spots now") and the spot panel are kept; on phones the panel is a bottom sheet.
+* **Data**: NOAA GFS-Wave (global 0.25°) and GFS fields, regridded to 0.5° (area-weighted
+  box means, directions as unit vectors), quantised to bytes and served by
+  `GET /api/map/fields`. They come with every NOAA acquisition, or from a standalone job
+  (`MAP_FIELDS_ENABLED=true`) next to demo spot forecasts. Measured on the real 12Z cycle of
+  2026-10-11: 81 steps to 240 h, 380 MB downloaded, 66 s, 39 MB stored; served wave height
+  equals an independent box mean of the raw NOAA cells within 0.05 m.
+* **Honesty**: the legend says these are offshore model values, not surf height; wave
+  energy is labelled as the deep-water approximation 0.49·Hs²·Te. Colour-field redraw at
+  1440×900: median 13.5 ms.
+* Review fixes included a phone attribution overlay that caught taps, run-keyed field
+  caching, trail fading, prefetch bandwidth, the job's skip and retention rules, and the
+  API middleware that stopped browsers from caching the fields.
+
+## 10. Simplified frontend
+
+* Primary information always visible: our breaking-height prediction with its 80 % range,
+  the rating ("Excellent Surf — 8.9/10") with a one-line reason derived from the actual
+  factors, the best upcoming window, wind, swell period and direction, and forecast
+  confidence. Secondary information (model comparison, tide and secondary swells, research
+  detail, scoring method, technical spot data, sources) sits behind "Why this rating?" and
+  other expandable sections or "Learn more" popovers that work by mouse, keyboard and touch.
+* Applied to the dashboard, spot list and detail pages, charts, travel opportunities, saved
+  searches, notifications and the map panel. A before/after inventory confirmed that every
+  measurement is still reachable; nothing needed for travel decisions was removed.
+
+## 11. Research confidence ([`research-confidence.md`](research-confidence.md))
+
+* Per spot and per condition: how well the break's ideal conditions are documented
+  (methodology `research-v1.1`). Source tiers (survey, peer-reviewed, official; guidebook,
+  encyclopedia, forecast-site guide, magazine; community), independence by publisher,
+  agreement computed against the spot profile, conflicts, recency at sand breaks; the
+  overall class is not an average and never rises with the number of filled fields.
+  Assessments are history rows (never updated), so earlier assessments stay available.
+* **Evidence**: `data/surf_spots/research_evidence.json`, all 50 spots, 259 sources and 805
+  claims, each re-checked by an independent verifier. Web pages could not be opened in the
+  build environment, so the evidence came from domain-restricted web searches and every
+  source is marked `retrieval: web_search`; such evidence is capped at Moderate
+  (ADR-016). Result: 18 spots Moderate, 32 Low, none High. Without the cap three spots
+  would be High.
+
+## 12. Forecast confidence ([`forecast-confidence.md`](forecast-confidence.md))
+
+* Per forecast hour (`forecast-v1`): the 0–100 index class adjusted by lead time (at most
+  Moderate beyond 7 days, Low beyond 10, High at 3–7 days only with a small ensemble
+  spread), GEFS spread, disagreement between independent model families only (GFS and
+  GEFS share NCEP forcing and never confirm each other), run-to-run change, missing
+  variables, per-source staleness, verification where it exists and demo data. Plain
+  reasons are stored and shown; the classes are not probabilities.
+* *Local confidence* at the break = min(forecast class, research basis), with its own
+  reason. Research and forecast confidence are stored and shown separately and never
+  combined into one number; both are archived with every prediction.
+* **Staleness defect fixed** (ADR-015): with one 18 h limit, ECMWF (12-hourly, published
+  ~8 h after the cycle) dropped out of the blend for several hours every day. Limits are
+  now per source (NOAA 16 h, GEFS 18.5 h, ECMWF 25 h). On the real 2026-10-11 runs ECMWF
+  stayed in the blend 18 of 19 hours instead of 11.
+* Live distribution (2026-10-11 runs, 4,050 hours, High/Moderate/Low): 0–1 day
+  159/86/5, 1–3 days 544/239/17, 3–7 days 811/715/74, 7–10 days 0/920/280, beyond 10 days
+  0/0/200.
+
+## 13. Test results (2026-10-12, integrated branch)
+
+| Command | Result |
+|---|---|
+| `ruff check`, `ruff format`, `mypy app` | pass (150 files) |
+| `alembic upgrade head && alembic check` (to 0005) | pass, no drift |
+| `pytest tests/unit` / `pytest tests/integration` (separate processes) | **500 passed** / **186 passed** |
+| `npx tsc --noEmit && npx eslint . && npx vitest run` | pass, 147 tests |
+| `./scripts/run-e2e.sh` (production build, demo backend) | **51 passed** |
+
+Not verified: research classes against observed surf, forecast-confidence calibration
+(no nearshore observations), Safari/Firefox rendering of the map particles, and a
+long-running Celery beat refreshing the map fields.

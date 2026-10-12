@@ -60,8 +60,31 @@ variables.
   directional spreading, shore normal, shadowing and a focusing prior; spot physical
   profiles carry a provenance flag for every parameter.
 * An 80% range (p10–p90) labelled heuristic (or ensemble-based) until it is verified.
-* A documented 0–100 quality score kept separate from height and from forecast confidence.
+* A documented 0–100 quality score kept separate from height and from forecast confidence
+  (shown as "Excellent Surf — 8.9/10" with a "Why this rating?" breakdown).
 * Daylight-only windows from NOAA sunrise and sunset.
+
+**Two separate confidence assessments** (never merged into one number)
+
+* *Research confidence* per spot and per condition (swell direction, size, period, wind,
+  tide, bottom, season, how the wave breaks): High / Moderate / Low from cited sources,
+  their independence, type, agreement and age, with the gaps in plain language
+  ([`docs/research-confidence.md`](docs/research-confidence.md)). The committed evidence
+  covers all 50 spots (259 sources); because it was read through web-search results only,
+  no condition is above Moderate yet.
+* *Forecast confidence* per forecast hour: lead time, ensemble spread, disagreement between
+  independent model families only, run-to-run change, data completeness, staleness and
+  source; plus *local confidence* at the break, which can be no better than how well the
+  break is researched ([`docs/forecast-confidence.md`](docs/forecast-confidence.md)).
+  Documented classes, not calibrated probabilities. Every assessment is kept with the
+  prediction archive.
+
+**Interactive map**
+
+* Full-screen dark map with NOAA ocean layers: wave height, wave energy, wave period and
+  wind speed as colour fields with animated particles, optional isobars, a timeline over
+  the model's valid times, a legend, settings (units, particles, dark or street basemap,
+  spot filters) and locate-me. Spot markers stay coloured by our surf prediction.
 
 **Verification and ML post-processing**
 
@@ -371,8 +394,10 @@ DNS); Mailpit delivery is verified end to end.
 
 ### Map configuration
 
-The map works without configuration (OpenStreetMap tiles, attribution shown, light use
-only under the OSM tile policy). For more traffic use a tile provider:
+The map works without configuration: the default basemap is a dark vector map drawn from
+Natural Earth data bundled with the app (no tile server). The "Streets" basemap in the
+map's settings uses OpenStreetMap tiles (attribution shown, light use only under the OSM
+tile policy). For more traffic on that basemap use a tile provider:
 
 * CARTO: `NEXT_PUBLIC_CARTO_API_KEY=<key>` (free keys at carto.com/basemaps/apikey;
   key-less CARTO raster tiles now show "API KEY REQUIRED").
@@ -661,8 +686,24 @@ Checklist:
   then the blend, 11,350 predictions, the archive and swell detection
   ([`docs/FORECAST_SOURCES.md`](docs/FORECAST_SOURCES.md)).
 * Open-Meteo (NOAA GFS + GFS-Wave), on 2026-10-09: 19,200 records, 0 errors.
+* Map ocean layers from the real GFS cycle 2026-10-11 12Z (all 81 steps to 240 h),
+  served over HTTP and rendered by the map; values cross-checked against the NOAA point
+  samples ([`docs/map-layers.md`](docs/map-layers.md)).
+* Forecast confidence on the real 2026-10-11 NOAA / ECMWF / GEFS runs, and the
+  per-source staleness fix (ECMWF stays in the blend until its run is 25 h old instead of
+  dropping out after 18 h).
 * Email to Mailpit, end to end (verification and alert emails, including the 15-step
   scenario).
+
+**Known limits of the confidence assessments**
+
+* Research evidence was gathered on 2026-10-11 through domain-restricted web searches,
+  because the research environment could not open the pages; every source and claim was
+  re-checked by an independent verifier, but excerpts are the search tool's text about a
+  page. Such evidence is capped at Moderate. Re-running the research with direct page
+  access (and adding surveyed bathymetry) is what can raise a spot to High.
+* Forecast and research confidence classes are documented heuristics; they have not been
+  calibrated against observed surf (no nearshore observations exist yet).
 
 **Implemented but not verified against the real services** (outbound network to these
 APIs was blocked in the build environment). Each adapter is unit-tested against
