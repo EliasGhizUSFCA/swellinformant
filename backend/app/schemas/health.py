@@ -87,6 +87,12 @@ class HeartbeatOut(BaseModel):
     limit_minutes: int
 
 
+class StorageOut(BaseModel):
+    database_bytes: int
+    # DATA_HEALTH_DATABASE_MAX_GB; None = no limit configured.
+    database_max_gb: float | None = None
+
+
 class DataHealthOut(BaseModel):
     # Kept first so a plain-text monitor can match '"status":"ok"' at the start.
     status: OverallStatus
@@ -98,3 +104,4 @@ class DataHealthOut(BaseModel):
     map_fields: MapFieldsHealthOut
     observations: ObservationsHealthOut
     heartbeat: HeartbeatOut
+    storage: StorageOut

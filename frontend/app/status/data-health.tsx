@@ -9,7 +9,7 @@
  * limits are operational heuristics (how late data may be), not forecast accuracy.
  */
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertTriangle, CheckCircle2, HeartPulse, Map as MapIcon, Radio, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Database, HeartPulse, Map as MapIcon, Radio, XCircle } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -75,6 +75,13 @@ export interface DataHealth {
     }>;
   };
   heartbeat: { last_job_finished_at: string | null; age_minutes: number | null; limit_minutes: number };
+  storage: { database_bytes: number; database_max_gb: number | null };
+}
+
+/** "184 MB", "12.3 GB" (binary units, as PostgreSQL's pg_size_pretty). */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  return `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
 export const useDataHealth = () =>
@@ -258,6 +265,13 @@ export function LayersAndObservations({ data }: { data: DataHealth }) {
             {data.heartbeat.last_job_finished_at
               ? `Last background job finished ${relativeTime(data.heartbeat.last_job_finished_at)} (alarm after ${data.heartbeat.limit_minutes} min of silence)`
               : "No background job has finished yet"}
+          </div>
+        </div>
+        <div className="flex items-start gap-2">
+          <Database className="mt-0.5 size-4 text-ocean" />
+          <div className="text-xs text-muted-foreground">
+            Database {formatBytes(data.storage.database_bytes)}
+            {data.storage.database_max_gb !== null ? ` (alarm above ${data.storage.database_max_gb} GB)` : " (no size alarm configured)"}
           </div>
         </div>
       </CardContent>

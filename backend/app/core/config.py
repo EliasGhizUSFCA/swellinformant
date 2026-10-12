@@ -232,6 +232,9 @@ class Settings(BaseSettings):
     # ingestion look-back window (OBSERVATION_LOOKBACK_HOURS): beyond it, the hourly job
     # can no longer fill the gap by itself.
     data_health_observation_stale_hours: float | None = Field(default=None, gt=0)
+    # Degraded once the database is larger than this (GB). None = no limit. Size it from
+    # the disk and the growth per day in docs/operations.md ("Capacity").
+    data_health_database_max_gb: float | None = Field(default=None, gt=0)
 
     @field_validator("app_base_url", "api_base_url")
     @classmethod

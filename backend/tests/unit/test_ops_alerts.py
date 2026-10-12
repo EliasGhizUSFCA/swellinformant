@@ -16,6 +16,7 @@ from app.schemas.health import (
     HeartbeatOut,
     MapFieldsHealthOut,
     ObservationsHealthOut,
+    StorageOut,
 )
 from app.services.health import HealthReport, Problem, ago, overall_status
 from app.services.notifications.ops_alerts import (
@@ -150,6 +151,7 @@ def _report(problems: list[Problem]) -> HealthReport:
         map_fields=MapFieldsHealthOut(mode="off", status="off"),
         observations=ObservationsHealthOut(enabled=False),
         heartbeat=HeartbeatOut(limit_minutes=30),
+        storage=StorageOut(database_bytes=0),
     )
     return HealthReport(out=out, problems=problems)
 

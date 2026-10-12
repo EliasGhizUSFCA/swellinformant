@@ -5,6 +5,7 @@ import {
   ageLine,
   type DataHealth,
   DataHealthSummary,
+  formatBytes,
   formatHours,
   freshnessTone,
   JobTable,
@@ -97,6 +98,7 @@ function report(overrides: Partial<DataHealth> = {}): DataHealth {
       providers: [{ provider: "ndbc", status: "missing", active_stations: 0, newest_observed_at: null, age_hours: null, stale_after_hours: 48 }],
     },
     heartbeat: { last_job_finished_at: now, age_minutes: 1, limit_minutes: 30 },
+    storage: { database_bytes: 193_035_287, database_max_gb: null },
     ...overrides,
   };
 }
@@ -123,6 +125,8 @@ describe("data health helpers", () => {
     expect(formatHours(3.42)).toBe("3.4 h");
     expect(formatHours(50)).toBe("2.1 days");
     expect(formatHours(null)).toBe("—");
+    expect(formatBytes(193_035_287)).toBe("184 MB");
+    expect(formatBytes(13.2 * 1024 ** 3)).toBe("13.2 GB");
   });
 
   it("states the stale limit, or the blend rule", () => {
@@ -180,5 +184,6 @@ describe("data health components", () => {
     expect(card).toHaveTextContent("offshore model fields, not surf height");
     expect(card).toHaveTextContent("NDBC · 0 active stations · none stored");
     expect(card).toHaveTextContent("alarm after 30 min");
+    expect(card).toHaveTextContent("Database 184 MB (no size alarm configured)");
   });
 });

@@ -334,6 +334,18 @@ def test_observation_freshness_per_provider(db: Session, env: pytest.MonkeyPatch
     assert "observations_stale:ndbc" not in keys(db)
 
 
+def test_database_size_limit(db: Session, env: pytest.MonkeyPatch) -> None:
+    run(db, "demo", 1)
+    heartbeat(db)
+    report = data_health(db)
+    assert report.status == "ok" and report.out.storage.database_bytes > 0
+    assert report.out.storage.database_max_gb is None
+    set_env(env, DATA_HEALTH_DATABASE_MAX_GB="0.000001")  # about 1 kB: always exceeded
+    report = data_health(db)
+    assert [p.key for p in report.problems] == ["database_size"]
+    assert "DATA_HEALTH_DATABASE_MAX_GB" in report.out.reasons[0]
+
+
 # --------------------------------------------------------------------------- API
 def test_api_is_public_and_strict_mode_answers_503_when_failing(
     db: Session, app_client: ApiClient

@@ -16,6 +16,7 @@ It checks, with plain reasons:
 * **Observations** (when OBSERVATIONS_ENABLED): the newest buoy observation per provider
   against DATA_HEALTH_OBSERVATION_STALE_HOURS (default: the ingestion look-back window).
 * **Heartbeat**: the newest finished job of any kind (this check's own job excluded).
+* **Storage**: the database size, against DATA_HEALTH_DATABASE_MAX_GB when that is set.
 
 Overall status: ``failing`` when the product cannot serve fresh forecasts (no forecast
 source is fresh) or no background job has finished for DATA_HEALTH_HEARTBEAT_MINUTES
@@ -54,6 +55,7 @@ from app.schemas.health import (
     Severity,
     SourceHealthOut,
     SourceRole,
+    StorageOut,
 )
 from app.services.forecasts.queries import USABLE, is_stale, stale_after_hours
 from app.services.forecasts.registry import (
@@ -561,6 +563,28 @@ def _check_observations(
     return ObservationsHealthOut(enabled=True, providers=providers), problems
 
 
+# --------------------------------------------------------------------------- storage
+def _check_storage(db: Session, settings: Settings) -> tuple[StorageOut, list[Problem]]:
+    """Database size against DATA_HEALTH_DATABASE_MAX_GB (no limit when unset).
+
+    PostgreSQL cannot see the free space of its disk; size the limit from the disk and the
+    growth figures in docs/operations.md, leaving room for backups and a day of growth.
+    """
+    size = int(db.scalar(select(func.pg_database_size(func.current_database()))) or 0)
+    limit = settings.data_health_database_max_gb
+    out = StorageOut(database_bytes=size, database_max_gb=limit)
+    if limit is None or size <= limit * 1024**3:
+        return out, []
+    return out, [
+        Problem(
+            "database_size",
+            "degraded",
+            f"The database holds {size / 1024**3:.1f} GB, more than DATA_HEALTH_DATABASE_MAX_GB "
+            f"({limit:g} GB): check the retention settings and the free disk space.",
+        )
+    ]
+
+
 # --------------------------------------------------------------------------- report
 def overall_status(problems: Iterable[Problem]) -> OverallStatus:
     severities = {p.severity for p in problems}
@@ -579,7 +603,8 @@ def data_health(
     jobs, heartbeat, job_problems = _check_jobs(db, settings, now)
     map_fields, map_problems = _check_map_fields(db, settings, now)
     observations, obs_problems = _check_observations(db, settings, now)
-    problems = [*source_problems, *job_problems, *map_problems, *obs_problems]
+    storage, storage_problems = _check_storage(db, settings)
+    problems = [*source_problems, *job_problems, *map_problems, *obs_problems, *storage_problems]
     problems.sort(key=lambda p: (p.severity != "failing", p.key))
     out = DataHealthOut(
         status=overall_status(problems),
@@ -593,6 +618,7 @@ def data_health(
         map_fields=map_fields,
         observations=observations,
         heartbeat=heartbeat,
+        storage=storage,
     )
     return HealthReport(out=out, problems=problems)
 
