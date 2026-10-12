@@ -30,7 +30,7 @@ from app.models.enums import QualityLabel, SwellEventStatus
 from app.services.forecasts.queries import latest_runs_by_spot
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.confidence import confidence_label
-from app.services.surf_quality.forecast_confidence import api_fields
+from app.services.surf_quality.forecast_confidence import api_fields, cap_for_staleness
 from app.services.surf_quality.scoring import label_for_score
 from app.services.swell_detection.clustering import Cluster, Step, cluster_steps, overlaps
 
@@ -91,11 +91,14 @@ def _confidence_snapshot(peak: SurfQualityPrediction) -> dict[str, Any]:
     }
 
 
-def peak_confidence(event: SwellEvent) -> dict[str, Any]:
+def peak_confidence(event: SwellEvent, *, stale: bool = False) -> dict[str, Any]:
     """EventOut's peak-hour confidence fields from the newest history snapshot (may be empty
-    for events last updated before forecast-v1)."""
+    for events last updated before forecast-v1). ``stale``: the event's run has gone stale
+    since detection, so the read-time staleness rule applies, exactly as for the same hour
+    in the forecast (``forecast_confidence.cap_for_staleness``)."""
     latest = (event.history or [])[-1:] or [{}]
-    return {k: latest[0][k] for k in EVENT_CONFIDENCE_KEYS if k in latest[0]}
+    fields = {k: latest[0][k] for k in EVENT_CONFIDENCE_KEYS if k in latest[0]}
+    return cap_for_staleness(fields) if stale else fields
 
 
 def _apply_cluster(event: SwellEvent, cluster: Cluster, run: ForecastRun, keep_start: bool) -> None:

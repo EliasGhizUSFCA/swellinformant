@@ -379,6 +379,41 @@ def test_a_new_research_assessment_rescores_the_authoritative_run(
     assert compute_pending_predictions(db, NOW)["rescored_runs"] == 0
 
 
+def test_events_get_the_read_time_staleness_cap(db: Session, scored: dict[str, Any]) -> None:
+    """The same hour must not read High in an event and Moderate in the forecast."""
+    from app.services.swell_detection.service import detect_events
+
+    detect_events(db, NOW)
+    fresh = {e.id: e for e in upcoming_events(db, NOW)}
+    assert any(e.forecast_confidence_class == fc.HIGH for e in fresh.values())
+    later = NOW + timedelta(hours=30)  # the GFS member is stale by then (16 h rule)
+    assert queries.is_stale(scored["run"], later)
+    events = upcoming_events(db, later)
+    assert events
+    for e in events:
+        assert e.forecast_confidence_class in (fc.MODERATE, fc.LOW)
+        assert e.confidence_reasons[0] == fc.STALE_REASON
+        assert fc.rank(e.local_confidence_class or fc.LOW) <= fc.rank(e.forecast_confidence_class)
+        # What the forecast endpoints show for the peak hour at the same "now".
+        peak = db.scalar(
+            select(SurfQualityPrediction).where(
+                SurfQualityPrediction.run_id == scored["run"].id,
+                SurfQualityPrediction.spot_id == _spot(db, e.spot.slug).id,
+                SurfQualityPrediction.valid_time == e.peak_time,
+            )
+        )
+        assert peak is not None
+        shown = fc.api_fields(peak, stale=True)
+        assert (e.forecast_confidence_class, e.local_confidence_class) == (
+            shown["forecast_confidence_class"],
+            shown["local_confidence_class"],
+        )
+        assert e.confidence_reasons == shown["confidence_reasons"]
+        assert e.local_confidence_reason == shown["local_confidence_reason"]
+    # The well-researched spot (SYNTHETIC High research) still reads High while fresh.
+    assert fresh and all(e.confidence_reasons[0] != fc.STALE_REASON for e in fresh.values())
+
+
 def test_requirement_2_and_3_classes_by_lead_with_synthetic_ensemble(
     db: Session, scored: dict[str, Any]
 ) -> None:
@@ -607,3 +642,18 @@ def test_demo_data_is_low_in_predictions_events_and_alerts(
     assert snap["local_confidence_class"] == fc.LOW and snap["local_confidence_reason"] is None
     assert "Confidence at this break: Low\n" in text
     assert all(e.local_confidence_reason is None for e in events)
+    # An alert built once the run has gone stale (alerts are withheld only at twice the
+    # stale-after age) reads like the API at that time: the staleness reason comes first.
+    from app.core.database import utcnow
+    from app.models import OpportunityMatch
+    from app.models.enums import NotificationKind
+    from app.services.notifications.alerts import build_snapshot
+
+    match = db.scalars(select(OpportunityMatch)).first()
+    assert match is not None
+    kind = NotificationKind(snap["kind"])
+    assert build_snapshot(match, kind)["confidence_reasons"][0] != fc.STALE_REASON
+    later = utcnow() + timedelta(hours=queries.stale_after_hours("demo") + 1)
+    stale_snap = build_snapshot(match, kind, later)
+    assert stale_snap["forecast_confidence_class"] == fc.LOW  # demo: Low either way
+    assert stale_snap["confidence_reasons"][0] == fc.STALE_REASON

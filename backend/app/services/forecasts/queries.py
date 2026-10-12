@@ -111,6 +111,16 @@ def is_stale(run: ForecastRun, now: datetime | None = None, *, factor: float = 1
     return now - run.issued_at > timedelta(hours=stale_after_hours(run.source.code) * factor)
 
 
+def run_id_is_stale(db: Session, run_id: int | None, now: datetime | None = None) -> bool:
+    """:func:`is_stale` for a run referenced by id (an event's ``latest_run_id``); False
+    without a run. ``Session.get`` uses the identity map, so a list of events from a few
+    runs loads each run once."""
+    if run_id is None:
+        return False
+    run = db.get(ForecastRun, run_id)
+    return run is not None and is_stale(run, now)
+
+
 def candidate_runs(db: Session, require_predictions: bool = True) -> list[ForecastRun]:
     codes = authoritative_source_codes()
     stmt = (

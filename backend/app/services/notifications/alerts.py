@@ -53,7 +53,7 @@ from app.services.flights.filtering import convert
 from app.services.flights.links import google_flights_url
 from app.services.flights.registry import build_flight_provider
 from app.services.flights.service import revalidate_offer
-from app.services.forecasts.queries import is_stale
+from app.services.forecasts.queries import is_stale, run_id_is_stale
 from app.services.geo import compass_label
 from app.services.http import ProviderError
 from app.services.notifications.templates import fmt_range, render_alert_email, render_alert_sms
@@ -113,13 +113,16 @@ def _peak_range(pred: SurfQualityPrediction | None) -> dict[str, Any]:
     }
 
 
-def _peak_confidence(pred: SurfQualityPrediction | None, now: datetime) -> dict[str, Any]:
+def _peak_confidence(
+    pred: SurfQualityPrediction | None, now: datetime, *, stale: bool = False
+) -> dict[str, Any]:
     """Forecast and local confidence at the event's peak hour, as the API shows them
-    (EventOut uses the same peak hour), and how far ahead the peak is when the alert is
+    (EventOut uses the same peak hour, including the read-time staleness cap when the run
+    has gone stale since it was scored), and how far ahead the peak is when the alert is
     built. Absent for predictions scored before forecast-v1."""
     if pred is None or pred.forecast_confidence_class is None:
         return {}
-    fields = api_fields(pred)
+    fields = api_fields(pred, stale=stale)
     return {
         "forecast_confidence_class": fields["forecast_confidence_class"],
         "local_confidence_class": fields["local_confidence_class"],
@@ -137,7 +140,10 @@ def build_snapshot(
     event = match.swell_event
     spot = match.spot
     offer = match.best_offer if match.status == MatchStatus.FLIGHT_FOUND else None
+    now = now or utcnow()
     peak = _peak_prediction(match)
+    db = object_session(match)
+    stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
     snap: dict[str, Any] = {
         "kind": kind.value,
         "match_id": str(match.id),
@@ -184,7 +190,7 @@ def build_snapshot(
         "price": None,
         "currency": match.currency,
         **_peak_range(peak),
-        **_peak_confidence(peak, now or utcnow()),
+        **_peak_confidence(peak, now, stale=stale),
     }
     if offer is not None and match.best_price is not None:
         snap.update(

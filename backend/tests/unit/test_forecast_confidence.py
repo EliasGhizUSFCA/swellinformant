@@ -355,6 +355,41 @@ def test_local_confidence_reason_only_when_local_is_lower() -> None:
     assert fc.local_reason(None, None, None) is None
 
 
+def test_event_peak_fields_get_the_same_read_time_staleness_cap_as_the_forecast() -> None:
+    """EventOut and alerts show an event's stored peak-hour fields; once its run is stale
+    they must read exactly like the same hour in the forecast (api_fields(stale=True))."""
+    from types import SimpleNamespace
+
+    from app.services.swell_detection.service import EVENT_CONFIDENCE_KEYS, peak_confidence
+
+    for forecast, local, research in (
+        (HIGH, LOW, None),
+        (HIGH, MODERATE, high_research(swell_size=MODERATE)),
+        (HIGH, HIGH, high_research()),
+        (MODERATE, LOW, None),
+        (LOW, LOW, None),
+    ):
+        stored = SimpleNamespace(
+            forecast_confidence_class=forecast,
+            local_confidence_class=local,
+            confidence_inputs=fc.confidence_inputs(
+                classify(index=85), classify_local(local, research)
+            ),
+            lead_hours=30.0,
+        )
+        snapshot = {k: v for k, v in fc.api_fields(stored).items() if k in EVENT_CONFIDENCE_KEYS}
+        event = SimpleNamespace(history=[{"peak_score": 70}, snapshot])
+        expected = {
+            k: v for k, v in fc.api_fields(stored, stale=True).items() if k in EVENT_CONFIDENCE_KEYS
+        }
+        assert peak_confidence(event, stale=True) == expected, (forecast, local)
+        assert peak_confidence(event) == snapshot
+        assert fc.cap_for_staleness(snapshot) == expected
+    # Events last updated before forecast-v1 have no classes: nothing is invented.
+    assert peak_confidence(SimpleNamespace(history=[{"peak_score": 70}]), stale=True) == {}
+    assert peak_confidence(SimpleNamespace(history=[]), stale=True) == {}
+
+
 # --------------------------------------------------------------------------- owner's requirements
 def test_requirement_2_well_researched_spot_low_or_moderate_at_9_days_or_strong_disagreement() -> (
     None

@@ -579,25 +579,47 @@ def local_reason(
     return str(reason) if reason else None
 
 
+def cap_for_staleness(fields: dict[str, Any]) -> dict[str, Any]:
+    """The staleness rule applied at read time to API confidence fields (``api_fields``,
+    or an event's stored peak-hour fields): a run that has gone stale since it was scored
+    is shown at most Moderate, local confidence follows (it is a min), the staleness reason
+    comes first and the local reason stays only while local is still the lower class.
+    Fields without a forecast class (scored before forecast-v1) are returned unchanged."""
+    fc_cls = fields.get("forecast_confidence_class")
+    if fc_cls not in _RANK:
+        return fields
+    capped = lower(fc_cls, MODERATE)
+    local_cls = fields.get("local_confidence_class")
+    if local_cls in _RANK:
+        local_cls = lower(local_cls, capped)
+    reasons = list(fields.get("confidence_reasons") or [])
+    if STALE_REASON not in reasons:
+        reasons = [STALE_REASON, *reasons]
+    reason = fields.get("local_confidence_reason")
+    if local_cls not in _RANK or _RANK[local_cls] >= _RANK[capped]:
+        reason = None
+    return {
+        **fields,
+        "forecast_confidence_class": capped,
+        "local_confidence_class": local_cls,
+        "confidence_reasons": reasons,
+        "local_confidence_reason": reason,
+    }
+
+
 def api_fields(prediction: Any, *, stale: bool = False) -> dict[str, Any]:
     """forecast/local class, reasons and lead for the API, from a stored prediction.
 
-    ``stale`` applies the staleness rule at read time: a run that has gone stale since it
-    was scored is shown at most Moderate (and local confidence follows, as it is a min).
+    ``stale`` applies the staleness rule at read time (:func:`cap_for_staleness`).
     """
     fc_cls = prediction.forecast_confidence_class
     local_cls = prediction.local_confidence_class
     inputs = prediction.confidence_inputs
-    reasons = stored_reasons(inputs)
-    if stale and fc_cls is not None:
-        fc_cls = lower(fc_cls, MODERATE)
-        local_cls = lower(local_cls, fc_cls) if local_cls is not None else None
-        if STALE_REASON not in reasons:
-            reasons = [STALE_REASON, *reasons]
-    return {
+    fields = {
         "forecast_confidence_class": fc_cls,
         "local_confidence_class": local_cls,
-        "confidence_reasons": reasons,
+        "confidence_reasons": stored_reasons(inputs),
         "lead_hours": None if prediction.lead_hours is None else round(prediction.lead_hours, 1),
         "local_confidence_reason": local_reason(fc_cls, local_cls, inputs),
     }
+    return cap_for_staleness(fields) if stale else fields

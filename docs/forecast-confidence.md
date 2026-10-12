@@ -177,7 +177,8 @@ never gets High local confidence, however good the forecast is.
   `best_upcoming`, spot detail, spot forecast) have `forecast_confidence_class`,
   `local_confidence_class`, `confidence_reasons` (forecast reasons first, then the research
   reason), `lead_hours` and `local_confidence_reason`; `EventOut` has the classes, reasons and
-  local reason of the event's peak hour; `DailySummary` the classes of the day's best hour.
+  local reason of the event's peak hour (stored at detection, with the read-time staleness cap
+  below); `DailySummary` the classes of the day's best hour.
   `local_confidence_reason` is the single reason the local class is lower than the forecast
   class (always the research sentence, since local confidence is the min of the two), and
   `null` when the classes are equal (including after the read-time staleness cap below).
@@ -192,7 +193,10 @@ never gets High local confidence, however good the forecast is.
   is lower ("Confidence at this break: Low" when both are Low). Older snapshots keep the
   index wording.
 * **Read-time staleness:** when the authoritative run has gone stale since it was scored, the
-  API caps both classes at Moderate and puts the staleness reason first.
+  API caps both classes at Moderate and puts the staleness reason first. The same cap applies
+  to an event's peak-hour fields (`EventOut`) and to alert snapshots when the event's run is
+  stale, so one hour never reads High in an event or email and Moderate in the forecast
+  (`forecast_confidence.cap_for_staleness`).
 * A run whose predictions were scored with another methodology, or whose local confidence
   used a research assessment that is no longer current (after `research load` or a seed), is
   rescored once it is shown to users (`predict.outdated_authoritative_runs`); archived rows

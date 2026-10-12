@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.database import utcnow
 from app.models import (
@@ -42,7 +42,7 @@ from app.schemas.spots import (
     SpotMini,
     SpotSummary,
 )
-from app.services.forecasts.queries import USABLE, is_stale, latest_runs_by_spot
+from app.services.forecasts.queries import USABLE, is_stale, latest_runs_by_spot, run_id_is_stale
 from app.services.forecasts.registry import configured_source_codes
 from app.services.research.views import research_classes, research_out
 from app.services.surf_quality.breaking import dominant_component
@@ -73,6 +73,9 @@ def event_out(
     event: SwellEvent, now: datetime | None = None, include_history: bool = False
 ) -> EventOut:
     now = now or utcnow()
+    # The read-time staleness rule, as for the same hour in the forecast (_conditions).
+    db = object_session(event)
+    stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
     return EventOut(
         id=event.id,
         spot=spot_mini(event.spot),
@@ -101,7 +104,7 @@ def event_out(
         is_demo=event.is_demo,
         source_code=event.source_code,
         history=event.history if include_history else [],
-        **peak_confidence(event),
+        **peak_confidence(event, stale=stale),
     )
 
 
