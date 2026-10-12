@@ -1,4 +1,4 @@
-"""Forecast confidence and local confidence per forecast hour, methodology "forecast-v1".
+"""Forecast confidence and local confidence per forecast hour, methodology "forecast-v1.1".
 
 Two classes (High / Moderate / Low), each with short plain-language reasons
 (docs/forecast-confidence.md has every threshold with the evidence behind it):
@@ -13,6 +13,17 @@ Two classes (High / Moderate / Low), each with short plain-language reasons
   so a rule can only lower the class. The one conditional is the lead-time rule for
   3-7 days, which allows High only when an ensemble spread exists and is small; it is a
   cap of Moderate otherwise and never lifts the index class.
+
+  forecast-v1.1 (2026-10-12) adds one cap: an hour with a single deterministic model
+  family and no ensemble row is at most Moderate at every lead (``single_source_no_ensemble``;
+  before, only beyond 3 days). Against five NDBC buoys, raw GFS-Wave hours that forecast-v1
+  classed High (leads up to 52 h) and Moderate (to 150 h) had the same median offshore
+  error on the training year (0.23 m) and RMSEs whose difference was not distinguishable
+  from zero; no other High / Moderate boundary inside 3 days separated them on that year.
+  With a GEFS-Wave spread the three classes were distinct (docs/forecast-confidence.md
+  section 8, docs/ml-evaluation.md section 12.3). The evidence is for GFS-Wave; the cap
+  applies to any single family without an ensemble, and like every rule it can only
+  lower a class.
 * **Local confidence**: how trustworthy our BREAKING-wave prediction at this break is.
   It can be no better than the forecast and no better than how well the break is
   understood: ``min(forecast class, research basis)`` with research basis
@@ -37,7 +48,7 @@ from typing import Any
 
 from app.services.forecasts.families import are_independent
 
-METHOD = "forecast-v1"
+METHOD = "forecast-v1.1"
 
 HIGH, MODERATE, LOW = "high", "moderate", "low"
 _RANK = {LOW: 0, MODERATE: 1, HIGH: 2}
@@ -357,7 +368,8 @@ def _pair_name(families: Sequence[str]) -> str:
 
 # --------------------------------------------------------------------------- forecast
 def classify_forecast(inp: ForecastInputs) -> ForecastConfidence:
-    """Forecast-v1 class, reasons (most important first) and the rules that fired."""
+    """Forecast-confidence class (:data:`METHOD`), reasons (most important first) and the
+    rules that fired."""
     rules: list[Rule] = []
 
     def cap(rule: str, to: str, reason: str, priority: int) -> None:
@@ -406,7 +418,15 @@ def classify_forecast(inp: ForecastInputs) -> ForecastConfidence:
             note("lead_3_7d", f"{span}.", 20)
     else:
         note("lead_short", f"{span}.", 20)
-        if rel is None:
+        if rel is None and independent < 2 and not inp.is_demo:
+            # forecast-v1.1: High needs a second family or an ensemble spread (module doc).
+            cap(
+                "single_source_no_ensemble",
+                MODERATE,
+                "Only one forecast model and no ensemble data to check it.",
+                62,
+            )
+        elif rel is None:
             note("no_ensemble", "No ensemble data for this hour.", 12)
 
     # Single deterministic source beyond 3 days (an ensemble of the same chain is not a

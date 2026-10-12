@@ -1,4 +1,4 @@
-"""Forecast confidence and local confidence, methodology forecast-v1 (pure rules).
+"""Forecast confidence and local confidence, methodology forecast-v1.1 (pure rules).
 
 Every input here is a SYNTHETIC test value; nothing is a real forecast or verification.
 """
@@ -199,9 +199,39 @@ def test_3_to_7_days_high_only_with_a_small_ensemble_spread() -> None:
 
 
 def test_no_ensemble_inside_3_days_is_a_reason_not_a_penalty() -> None:
+    """With two independent families, a missing ensemble inside 3 days is only a reason."""
     out = classify(ensemble=None, sigma_source="lead_table", index=82)
     assert out.cls == HIGH and "No ensemble data for this hour." in out.reasons
     assert all(r.effect == "note" for r in out.rules)
+
+
+@pytest.mark.parametrize("families", [(GFS,), (GFS, GEFS), (ECMWF,), ()])
+def test_single_source_without_ensemble_is_never_high(families: tuple[str, ...]) -> None:
+    """forecast-v1.1: one family (GEFS does not count as a second one) and no ensemble
+    row caps every lead at Moderate (buoy validation, docs/forecast-confidence.md 8)."""
+    for lead in (3.0, 24.0, 52.0, 72.0):
+        out = classify(
+            lead_hours=lead,
+            ensemble=None,
+            sigma_source="lead_table",
+            index=90,
+            families=families,
+            disagreement=None,
+        )
+        assert out.cls == MODERATE
+        assert "cap:moderate:single_source_no_ensemble" in [r.as_str() for r in out.rules]
+        assert "Only one forecast model and no ensemble data to check it." in out.reasons
+    # An ensemble spread (small) or a second independent family lifts the cap.
+    assert classify(ensemble=SMALL, families=(GFS,), disagreement=None).cls == HIGH
+    two = classify(ensemble=None, sigma_source="lead_table", index=90, families=BOTH)
+    assert two.cls == HIGH
+    # A flat sea (spread / mean meaningless) counts as no ensemble.
+    flat = classify(ensemble=EnsembleSignal(0.04, 0.01), families=(GFS,), disagreement=None)
+    assert flat.cls == MODERATE
+    # Demo data is Low anyway; the rule does not add a second reason there.
+    demo = classify(ensemble=None, families=(GFS,), is_demo=True, disagreement=None)
+    assert demo.cls == LOW and all(r.rule != "single_source_no_ensemble" for r in demo.rules)
+    assert fc.METHOD == "forecast-v1.1"
 
 
 def test_ensemble_spread_downgrades_when_large() -> None:
@@ -276,7 +306,7 @@ def test_inputs_record_every_value_and_rule() -> None:
     out = classify(lead_hours=200.0, run_change_ratio=1.6)
     local = classify_local(out.cls, None)
     stored = fc.confidence_inputs(out, local)
-    assert stored["method"] == "forecast-v1"
+    assert stored["method"] == "forecast-v1.1"
     assert stored["lead_h"] == 200.0 and stored["independent_families"] == 2
     assert stored["ensemble"] == {"rel_spread": 0.1, "members": None}
     assert (
