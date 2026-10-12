@@ -7,14 +7,20 @@ verified address, through the configured email provider, when:
 * a problem appears (new key);
 * a problem's severity rises (degraded -> failing);
 * a problem is still unresolved DATA_HEALTH_ALERT_REPEAT_HOURS after the last alert about
-  it (a reminder; never more often, so a flapping or persistent problem cannot flood
-  the inbox);
-* a problem that was alerted has cleared (a recovery notice).
+  it (a reminder);
+* a problem that was alerted has cleared (a recovery notice);
+* a problem that cleared comes back, but only once DATA_HEALTH_ALERT_REPEAT_HOURS have
+  passed since the last alert about it. Until then the recurrence is recorded and listed
+  as "already reported" in other emails, and it clears again without a second recovery
+  notice. So each problem key gets at most one problem alert per repeat interval (plus
+  one recovery notice after it), even when it flaps between runs; only a rise in
+  severity is sent at once.
 
 All due items of one run go into one email per recipient. The alert state lives in the
 job's own log rows (``background_job_logs.details["alert_state"]`` of the newest
 successful ``ops.data_health`` run), so it survives restarts without a table of its own;
-job logs are kept RETENTION_JOB_LOG_DAYS (30), far longer than any repeat interval.
+job logs are kept RETENTION_JOB_LOG_DAYS (30), far longer than any repeat interval. A
+cleared problem's entry is kept until the repeat interval since its last alert has passed.
 
 An item is only marked as alerted when at least one recipient's provider accepted (or
 the development inbox captured) the email; otherwise it stays due and the next run tries
@@ -24,7 +30,7 @@ again. Logs carry counts only, never addresses.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -46,23 +52,43 @@ SEVERITY_RANK = {"degraded": 1, "failing": 2}
 
 @dataclass
 class ProblemState:
-    """What the previous runs knew about one problem key."""
+    """What the previous runs knew about one problem key.
+
+    ``resolved_at`` is None while the problem is present and the time it cleared
+    otherwise. ``recovered_at`` is when the recovery notice for the last alerted
+    occurrence was delivered: set, the admins' last word about this key is "cleared"
+    (a recurrence within the repeat interval stays silent); None with ``last_alert_at``
+    set, an alert is open (they were told about the problem and not yet that it cleared).
+    """
 
     severity: str
     message: str
-    first_seen: datetime
+    first_seen: datetime  # start of the current (or last) occurrence
     last_alert_at: datetime | None = None
     alerted_severity: str | None = None
-    resolved_at: datetime | None = None  # cleared, recovery notice not yet delivered
+    resolved_at: datetime | None = None
+    recovered_at: datetime | None = None
+
+    @property
+    def present(self) -> bool:
+        return self.resolved_at is None
+
+    @property
+    def alert_open(self) -> bool:
+        return self.last_alert_at is not None and self.recovered_at is None
 
     def as_dict(self) -> dict[str, Any]:
+        def iso(value: datetime | None) -> str | None:
+            return value.isoformat() if value else None
+
         return {
             "severity": self.severity,
             "message": self.message,
             "first_seen": self.first_seen.isoformat(),
-            "last_alert_at": self.last_alert_at.isoformat() if self.last_alert_at else None,
+            "last_alert_at": iso(self.last_alert_at),
             "alerted_severity": self.alerted_severity,
-            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "resolved_at": iso(self.resolved_at),
+            "recovered_at": iso(self.recovered_at),
         }
 
     @classmethod
@@ -78,13 +104,14 @@ class ProblemState:
             last_alert_at=when("last_alert_at"),
             alerted_severity=data.get("alerted_severity"),
             resolved_at=when("resolved_at"),
+            recovered_at=when("recovered_at"),
         )
 
 
 @dataclass
 class DueItem:
     key: str
-    reason: str  # new | escalated | reminder | unsent | recovered
+    reason: str  # new | escalated | reminder | unsent | recurred | recovered
     severity: str
     message: str
     first_seen: datetime
@@ -104,6 +131,10 @@ class AlertPlan:
         return bool(self.problems or self.recoveries)
 
 
+def _escalated(severity: str, old: ProblemState) -> bool:
+    return SEVERITY_RANK[severity] > SEVERITY_RANK.get(old.alerted_severity or "degraded", 1)
+
+
 def plan_alerts(
     previous: dict[str, ProblemState],
     problems: list[Problem],
@@ -113,31 +144,45 @@ def plan_alerts(
     """Decide which problems and recoveries are due (pure: no I/O).
 
     ``state`` describes the situation *before* anything is sent; :func:`mark_sent`
-    records a delivered alert.
+    records a delivered alert. Transitions per problem key (``repeat`` counts from the
+    last delivered alert about the key):
+
+    * absent -> present: ``new``.
+    * present, never delivered: ``unsent`` (retried every run).
+    * present, alert open: ``escalated`` on a severity rise, ``reminder`` after
+      ``repeat``, else nothing.
+    * present -> absent, alert open: ``recovered`` (retried until delivered).
+    * present -> absent, never delivered (or recurrence never alerted): forgotten or kept
+      silently; no recovery notice for something nobody was told about.
+    * back before its recovery notice went out: the open alert simply continues.
+    * back after its recovery notice: ``recurred`` once ``repeat`` has passed since the
+      last alert (or ``escalated``), else recorded silently.
+    * a cleared, recovered entry is dropped once ``repeat`` has passed since its alert.
     """
     plan = AlertPlan()
     current = {p.key: p for p in problems}
     for key, problem in current.items():
         old = previous.get(key)
+        reason: str | None
         if old is None:
             state = ProblemState(problem.severity, problem.message, first_seen=now)
-            reason: str | None = "new"
+            reason = "new"
         else:
+            recurrence = not old.alert_open and not old.present  # cleared and told so
             state = ProblemState(
                 problem.severity,
                 problem.message,
-                first_seen=old.first_seen,
+                first_seen=now if recurrence else old.first_seen,
                 last_alert_at=old.last_alert_at,
                 alerted_severity=old.alerted_severity,
+                recovered_at=old.recovered_at,
             )
             if old.last_alert_at is None:
                 reason = "unsent"
-            elif SEVERITY_RANK[problem.severity] > SEVERITY_RANK.get(
-                old.alerted_severity or "degraded", 1
-            ):
+            elif _escalated(problem.severity, old):
                 reason = "escalated"
             elif now - old.last_alert_at >= repeat:
-                reason = "reminder"
+                reason = "reminder" if old.alert_open else "recurred"
             else:
                 reason = None
         plan.state[key] = state
@@ -153,30 +198,38 @@ def plan_alerts(
         if old.last_alert_at is None:
             continue  # never reported, so nothing to recover from
         resolved = old.resolved_at or now
-        plan.state[key] = ProblemState(
-            old.severity,
-            old.message,
-            first_seen=old.first_seen,
-            last_alert_at=old.last_alert_at,
-            alerted_severity=old.alerted_severity,
-            resolved_at=resolved,
-        )
+        if not old.alert_open:
+            # Its recovery was already delivered (this occurrence was never alerted):
+            # keep it silently while a recurrence would still be inside the interval.
+            if now - old.last_alert_at < repeat:
+                plan.state[key] = replace(old, resolved_at=resolved)
+            continue
+        plan.state[key] = replace(old, resolved_at=resolved)
         plan.recoveries.append(DueItem(key, "recovered", old.severity, old.message, old.first_seen))
     plan.problems.sort(key=lambda d: (d.severity != "failing", d.key))
     plan.recoveries.sort(key=lambda d: d.key)
     return plan
 
 
-def mark_sent(plan: AlertPlan, now: datetime) -> dict[str, ProblemState]:
-    """The state after the plan's email was delivered: alerted problems carry ``now``,
-    recovered problems are forgotten."""
-    state = dict(plan.state)
+def mark_sent(plan: AlertPlan, now: datetime, repeat: timedelta) -> dict[str, ProblemState]:
+    """The state after the plan's email was delivered.
+
+    Alerted problems carry ``now`` (and an open alert); recovered problems keep their last
+    alert time with ``recovered_at`` set, so a recurrence inside the repeat interval stays
+    silent, or are forgotten when that interval has already passed.
+    """
+    state = {k: replace(v) for k, v in plan.state.items()}
     for item in plan.problems:
         s = state[item.key]
         s.last_alert_at = now
         s.alerted_severity = item.severity
+        s.recovered_at = None
     for item in plan.recoveries:
-        state.pop(item.key, None)
+        s = state[item.key]
+        if s.last_alert_at is None or now - s.last_alert_at >= repeat:
+            state.pop(item.key)
+        else:
+            s.recovered_at = now
     return state
 
 
@@ -186,6 +239,7 @@ REASON_LABELS = {
     "escalated": "now failing",
     "reminder": "still unresolved",
     "unsent": "not yet reported",
+    "recurred": "back again after it had cleared",
 }
 
 
@@ -311,7 +365,7 @@ def run_data_health_check(db: Session, now: datetime | None = None) -> dict[str,
             counts = send_alert(recipients, subject, text)
             email.update(counts, subject=subject)
             if counts["sent"]:
-                state = mark_sent(plan, now)
+                state = mark_sent(plan, now, repeat)
             logger.info(
                 "Data-health alert (%s): %d sent, %d failed",
                 report.status,

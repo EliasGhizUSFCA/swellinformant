@@ -442,9 +442,44 @@ def test_alert_lifecycle_dedup_reminder_and_recovery(
     assert "recovered: all checks ok" in str(latest["subject"]) and "Resolved:" in str(
         latest["text"]
     )
-    assert recovered["alert_state"] == {}
+    kept = recovered["alert_state"]  # kept until 12 h after the last alert, then dropped
+    assert all(v["recovered_at"] and v["resolved_at"] for v in kept.values())  # type: ignore[union-attr]
     assert check(db, clock, t1 + timedelta(minutes=15))["alerts"] == []
     assert len(ops_emails()) == 3
+    later = check(db, clock, t1 + timedelta(hours=12))["alert_state"]
+    assert not set(kept) & set(later)  # type: ignore[arg-type]
+
+
+def test_flapping_problem_sends_one_alert_and_one_recovery_per_interval(
+    db: Session, clock: pytest.MonkeyPatch
+) -> None:
+    make_user(db, "ops-admin@example.com", admin=True, verified=True)
+    t0 = utcnow()
+
+    def flaky(now: datetime, failed: bool) -> dict[str, object]:
+        run(db, "demo", 1, now=now)  # fresh forecasts throughout: only the job flaps
+        result = check(db, clock, now)  # every job logged successful at ``now`` ...
+        if failed:  # ... then flights.discover fails right after (synthetic)
+            job_log(db, "flights.discover", JobStatus.FAILED, 1, now=now + timedelta(seconds=1))
+            clock.setattr(tasks, "utcnow", lambda: now + timedelta(seconds=2))
+            result = tasks.run_job(
+                DATA_HEALTH_TASK,
+                lambda s: run_data_health_check(s, now=now + timedelta(seconds=2)),
+                chain=False,
+            )
+        return result
+
+    assert flaky(t0, failed=True)["alerts"] == ["new:job_failed:flights.discover"]
+    assert flaky(t0 + timedelta(minutes=15), failed=False)["alerts"] == [
+        "recovered:job_failed:flights.discover"
+    ]
+    for minutes in range(30, 12 * 60, 15):
+        result = flaky(t0 + timedelta(minutes=minutes), failed=minutes % 30 == 0)
+        assert result["alerts"] == [], minutes
+    assert len(ops_emails()) == 2  # one alert and one recovery notice in 12 h
+    again = flaky(t0 + timedelta(hours=12), failed=True)
+    assert again["alerts"] == ["recurred:job_failed:flights.discover"]
+    assert "back again after it had cleared" in str(ops_emails()[0]["text"])
 
 
 def test_no_admin_recipient_keeps_the_problem_due(db: Session, clock: pytest.MonkeyPatch) -> None:

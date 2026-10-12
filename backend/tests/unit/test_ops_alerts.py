@@ -40,7 +40,7 @@ def step(
     """One job run: (due items as 'reason:key', the state the run stores)."""
     plan = plan_alerts(state, problems, now, REPEAT)
     due = [f"{i.reason}:{i.key}" for i in (*plan.problems, *plan.recoveries)]
-    return due, (mark_sent(plan, now) if delivered and plan.due else plan.state)
+    return due, (mark_sent(plan, now, REPEAT) if delivered and plan.due else plan.state)
 
 
 def test_ok_to_ok_sends_nothing() -> None:
@@ -69,11 +69,62 @@ def test_unresolved_problem_is_repeated_after_the_repeat_interval() -> None:
 
 def test_recovery_notice_after_an_alerted_problem_clears() -> None:
     _, state = step({}, [STALE], T0)
-    due, state = step(state, [], T0 + timedelta(hours=1))
+    cleared = T0 + timedelta(hours=1)
+    due, state = step(state, [], cleared)
     assert due == [f"recovered:{STALE.key}"]
-    assert state == {}  # forgotten once the recovery was delivered
-    due, _ = step(state, [], T0 + timedelta(hours=2))
+    kept = state[STALE.key]  # kept, silently, until the repeat interval has passed
+    assert (kept.resolved_at, kept.recovered_at, kept.last_alert_at) == (cleared, cleared, T0)
+    assert not kept.alert_open and not kept.present
+    due, state = step(state, [], T0 + timedelta(hours=2))
     assert due == []  # exactly one recovery notice
+    due, state = step(state, [], T0 + REPEAT)
+    assert due == [] and state == {}  # forgotten once the repeat interval has passed
+
+
+def test_recovery_after_the_repeat_interval_forgets_the_problem_at_once() -> None:
+    _, state = step({}, [STALE], T0)
+    due, state = step(state, [], T0 + REPEAT + timedelta(minutes=15))
+    assert due == [f"recovered:{STALE.key}"] and state == {}
+    due, _ = step(state, [STALE], T0 + REPEAT + timedelta(minutes=30))
+    assert due == [f"new:{STALE.key}"]
+
+
+def test_flapping_problem_is_alerted_at_most_once_per_repeat_interval() -> None:
+    _, state = step({}, [STALE], T0)  # alert
+    _, state = step(state, [], T0 + timedelta(minutes=15))  # recovery notice
+    for minutes in range(30, 12 * 60, 15):  # back, gone, back, ... every run
+        problems = [STALE] if minutes % 30 == 0 else []
+        due, state = step(state, problems, T0 + timedelta(minutes=minutes))
+        assert due == [], minutes  # neither a new alert nor a second recovery notice
+    assert state[STALE.key].last_alert_at == T0
+    due, state = step(state, [STALE], T0 + REPEAT)  # still flapping 12 h after the alert
+    assert due == [f"recurred:{STALE.key}"]
+    assert state[STALE.key].alert_open and state[STALE.key].last_alert_at == T0 + REPEAT
+    due, state = step(state, [], T0 + REPEAT + timedelta(minutes=15))
+    assert due == [f"recovered:{STALE.key}"]  # that alert gets its own recovery notice
+
+
+def test_recurrence_inside_the_interval_is_reported_once_it_has_passed() -> None:
+    _, state = step({}, [STALE], T0)
+    _, state = step(state, [], T0 + timedelta(hours=1))
+    back = T0 + timedelta(hours=2)
+    due, state = step(state, [STALE], back)
+    assert due == []
+    assert state[STALE.key].first_seen == back  # a new occurrence
+    assert state[STALE.key].present and not state[STALE.key].alert_open
+    due, state = step(state, [STALE], T0 + timedelta(hours=11, minutes=45))
+    assert due == []
+    due, state = step(state, [STALE], T0 + REPEAT)
+    assert due == [f"recurred:{STALE.key}"]
+    assert state[STALE.key].first_seen == back
+
+
+def test_recurrence_with_a_higher_severity_is_sent_at_once() -> None:
+    _, state = step({}, [STALE], T0)
+    _, state = step(state, [], T0 + timedelta(hours=1))
+    worse = Problem(STALE.key, "failing", "NOAA run is 40 h old.")
+    due, _ = step(state, [worse], T0 + timedelta(hours=2))
+    assert due == [f"escalated:{STALE.key}"]
 
 
 def test_problem_that_was_never_alerted_clears_silently() -> None:
@@ -98,7 +149,11 @@ def test_failed_recovery_notice_is_retried_and_keeps_its_resolution_time() -> No
     assert due == [f"recovered:{STALE.key}"]
     assert state[STALE.key].resolved_at == resolved
     due, state = step(state, [], resolved + timedelta(minutes=15))
-    assert due == [f"recovered:{STALE.key}"] and state == {}
+    assert due == [f"recovered:{STALE.key}"]
+    assert state[STALE.key].resolved_at == resolved
+    assert state[STALE.key].recovered_at == resolved + timedelta(minutes=15)
+    due, _ = step(state, [], resolved + timedelta(minutes=30))
+    assert due == []
 
 
 def test_problem_back_before_its_recovery_notice_went_out_is_not_new() -> None:
@@ -131,11 +186,14 @@ def test_failing_back_to_degraded_and_ok() -> None:
     due, state = step(state, [STALE], T0 + timedelta(hours=1))
     assert due == [f"recovered:{FAILING.key}"]
     due, state = step(state, [], T0 + timedelta(hours=2))
-    assert due == [f"recovered:{STALE.key}"] and state == {}
+    assert due == [f"recovered:{STALE.key}"]
+    assert all(s.recovered_at is not None for s in state.values())
 
 
 def test_state_round_trips_through_the_job_log_json() -> None:
-    _, state = step({}, [STALE], T0)
+    _, state = step({}, [STALE, JOB], T0)
+    _, state = step(state, [STALE], T0 + timedelta(hours=1))  # JOB recovered
+    assert state[JOB.key].recovered_at is not None
     restored = {k: ProblemState.from_dict(v.as_dict()) for k, v in state.items()}
     assert restored == state
 
