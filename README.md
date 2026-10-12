@@ -382,6 +382,37 @@ only under the OSM tile policy). For more traffic use a tile provider:
   The tile host is added to the Content-Security-Policy automatically; extra hosts go in
   `MAP_TILE_HOSTS`.
 
+### Map ocean layers
+
+The map's global layers (offshore significant wave height, not surf height; peak period
+and direction; 10 m wind; sea-level pressure) are NOAA GFS-Wave and GFS model output,
+regridded to 0.5° and served by `GET /api/map/fields`. Without them the index says what
+to set and the map shows the spots only.
+
+```env
+# With live NOAA spot forecasts the layers come with every NOAA acquisition (automatic):
+FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs
+# Real ocean layers with demo (or any other) spot forecasts: the standalone mode.
+MAP_FIELDS_ENABLED=true
+# MAP_FIELDS_ENABLED=false switches them off. Tuning (defaults):
+MAP_FIELD_RESOLUTION_DEG=0.5
+MAP_FIELD_MAX_LEAD_HOURS=240
+MAP_FIELD_STEP_HOURS=3
+```
+
+* In the standalone mode the job `forecasts.map_fields` reads only the global fields of
+  the newest complete GFS cycle (every 3 h, under the separate source
+  `noaa_gfs_fields`, never used for spot forecasts). Measured live on 2026-10-11:
+  about 380 MB download, 66 s and 39 MB stored per cycle (f000 to f240 every 3 h). With
+  `noaa_gfs` as a provider the fields come from the files it reads anyway, plus at most
+  1.8 MB per forecast hour (none with the default spots, two of which use the global
+  wave grid).
+* Fetch them now: `python -m app.cli engine map-fields [--cycle YYYYMMDDHH]
+  [--max-lead-hours N] [--force]` (any mode except off).
+* Encoding, sources, licence, measurements and limitations:
+  [`docs/map-layers.md`](docs/map-layers.md). Model output, not observations, and not
+  for navigation.
+
 ### Observations, verification and ML post-processing
 
 Forecast accuracy is measured against buoys, never assumed. Everything here is off by

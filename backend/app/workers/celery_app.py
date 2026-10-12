@@ -28,9 +28,23 @@ from app.core.logging import configure_logging, install_redaction
 settings = get_settings()
 
 
+def _map_fields_standalone() -> bool:
+    # Imported here: app.services.map_fields pulls in the models.
+    from app.services.map_fields import map_fields_mode
+
+    return map_fields_mode(settings) == "standalone"
+
+
 def _optional_schedule() -> dict[str, dict[str, object]]:
     """Jobs that only run when their feature flag is on (they download extra data)."""
     jobs: dict[str, dict[str, object]] = {}
+    if _map_fields_standalone():
+        # Same interval as forecast-acquisition (every 3 h by default), so both look for a
+        # new GFS cycle at the same moments; a cycle already stored is skipped cheaply.
+        jobs["map-fields"] = {
+            "task": "forecasts.map_fields",
+            "schedule": timedelta(minutes=settings.forecast_refresh_minutes),
+        }
     if settings.gefs_enabled:
         # GEFS-Wave 00/06/12/18Z output is complete ~7 h after the cycle.
         jobs["ensemble-acquisition"] = {
@@ -127,9 +141,12 @@ def _redact_task_logs(logger: logging.Logger, **_: object) -> None:
 def _kick_off_pipeline(**_: object) -> None:
     """Interval schedules first fire one interval after beat starts; on a fresh stack that
     would mean hours without forecasts. Queue one acquisition (which chains through every
-    stage) as soon as the scheduler starts. The job lock makes a duplicate run harmless."""
+    stage) as soon as the scheduler starts, and the map-field job in standalone mode. The
+    job lock makes a duplicate run harmless."""
     if get_settings().beat_run_on_start:
         celery_app.send_task("forecasts.acquire")
+        if _map_fields_standalone():
+            celery_app.send_task("forecasts.map_fields")
 
 
 @worker_process_init.connect
