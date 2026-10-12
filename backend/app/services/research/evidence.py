@@ -147,8 +147,12 @@ def _unknown_keys(
 
 
 def _valid_url(url: str) -> bool:
-    parts = urlsplit(url)
-    return parts.scheme in ("http", "https") and bool(parts.hostname) and " " not in url
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:  # e.g. an unbalanced IPv6 bracket: a problem to list, not a crash
+        return False
+    return parts.scheme in ("http", "https") and bool(host) and " " not in url
 
 
 def _parse_claim(problems: list[str], where: str, raw: Any) -> EvidenceClaim | None:

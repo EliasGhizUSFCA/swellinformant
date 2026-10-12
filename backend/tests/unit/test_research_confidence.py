@@ -125,6 +125,26 @@ def test_validation_lists_every_problem() -> None:
     assert len(info.value.problems) >= 11
 
 
+def test_malformed_urls_are_listed_problems_not_crashes() -> None:
+    """urlsplit raises ValueError on e.g. an unbalanced IPv6 bracket; the loader must still
+    report it with every other problem (SYNTHETIC sources)."""
+    raw = synthetic_file(
+        {
+            "pipeline": [
+                synthetic_source("ipv6", "guidebook", _claims("wind"), url="http://[::1/x"),
+                synthetic_source("port", "guidebook", _claims("wind"), url="https://[bad]:80/"),
+                synthetic_source("blog", "blog", _claims("wind")),
+            ]
+        }
+    )
+    with pytest.raises(EvidenceValidationError) as info:
+        parse_evidence(raw, {"pipeline"})
+    text = "\n".join(info.value.problems)
+    assert "pipeline source 'ipv6': url must be an http(s) URL" in text
+    assert "pipeline source 'port': url must be an http(s) URL" in text
+    assert "source_type 'blog'" in text
+
+
 def test_valid_file_parses() -> None:
     raw = synthetic_file({"pipeline": [synthetic_source("a", "guidebook", _claims("wind"))]})
     parsed = parse_evidence(raw, {"pipeline"})
