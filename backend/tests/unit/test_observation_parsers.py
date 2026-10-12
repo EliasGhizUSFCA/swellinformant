@@ -12,12 +12,13 @@ Provenance of the test inputs:
   Source: Met Office marine observations, licensed under CC BY-SA 4.0
   (https://creativecommons.org/licenses/by-sa/4.0/); the fixture is redistributed under
   the same licence. Variants derived from it in a test are labelled SYNTHETIC.
-* NDBC: SYNTHETIC text that follows NDBC's documented realtime2 / historical layouts
-  (www.ndbc.noaa.gov is unreachable from the sandbox these tests were written in).
+* NDBC: SYNTHETIC text in NDBC's realtime2 / historical layouts (the real-file tests are in
+  tests/unit/test_ndbc_real_files.py).
 """
 
 from __future__ import annotations
 
+import gzip
 import io
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -584,13 +585,11 @@ class TestNdbc:
         }
 
         def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/view_text_file.php":
-                name = request.url.params["filename"]
-                if name == "51201h2023.txt.gz":
-                    return httpx.Response(200, text=HISTORICAL_2023)
-                if name == "51201h2024.txt.gz":
-                    return httpx.Response(200, text="<html>Unable to access data file</html>")
-                return httpx.Response(404)
+            # Yearly files are read as .gz from data/historical/stdmet/ (verified live).
+            if request.url.path == "/data/historical/stdmet/51201h2023.txt.gz":
+                return httpx.Response(200, content=gzip.compress(HISTORICAL_2023.encode()))
+            if request.url.path == "/data/historical/stdmet/51201h2024.txt.gz":
+                return httpx.Response(200, text="<html>Unable to access data file</html>")
             text = files.get(request.url.path)
             return httpx.Response(200, text=text) if text else httpx.Response(404)
 
@@ -606,10 +605,13 @@ class TestNdbc:
             now,
         )
         out = result.stations["ndbc:51201"]
-        # realtime .txt + .spec + the 2023 yearly file; 2024 unparseable, 2025 missing.
+        # realtime .txt + .spec + the 2023 yearly file; 2024 is not gzip; 2025 is missing
+        # and so are its monthly files, like the 2026 monthly files.
         assert out.files == 3 and len(out.records) == 3 + 2
         assert len(out.errors) == 1 and "51201h2024.txt.gz" in out.errors[0]
-        assert any("51201h2025.txt.gz not found" in w for w in result.warnings)
+        assert "gzip" in out.errors[0]
+        assert any("51201 Dec 2025 monthly not found" in w for w in result.warnings)
+        assert any("51201 Aug 2026 monthly not found" in w for w in result.warnings)
 
     def test_invalid_station_id_is_not_requested(self) -> None:
         calls: list[str] = []

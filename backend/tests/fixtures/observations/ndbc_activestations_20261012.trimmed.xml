@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?><stations created="2026-10-12T09:55:13UTC" count="1354">
+  <!--Site Elevation (elev attribute), when present, is reported in meters above mean sea level.-->
+  <station id="46012" lat="37.356" lon="-122.881" elev="0" name="HALF MOON BAY - 24NM SSW of San Francisco, CA" owner="NDBC" pgm="NDBC Meteorological/Ocean" type="usv" met="y" currents="n" waterquality="n" dart="n"/>
+  <station id="46026" lat="37.75" lon="-122.838" elev="0" name="SAN FRANCISCO - 18NM West of San Francisco, CA" owner="NDBC" pgm="NDBC Meteorological/Ocean" type="buoy" met="y" currents="n" waterquality="n" dart="n"/>
+  <station id="46224" lat="33.178" lon="-117.472" elev="0" name="Oceanside Offshore, CA (045)" owner="SCRIPPS" pgm="IOOS Partners" type="buoy" met="y" currents="n" waterquality="n" dart="n"/>
+  <station id="51201" lat="21.671" lon="-158.118" elev="0" name="Waimea Bay, HI (106)" owner="Pacific Islands Ocean Observing System" pgm="IOOS Partners" type="buoy" met="y" currents="n" waterquality="n" dart="n"/>
+</stations>

@@ -9,7 +9,8 @@ Conventions (shared by every provider adapter):
   verification must not mix them silently;
 * periods in seconds: ``tp_s`` is always the spectral peak period; ``tm_s`` carries a mean
   period whose definition is in ``tm_kind`` ("tm01", "tm02", "tz" time-domain zero
-  up-crossing, "apd" NDBC average period);
+  up-crossing, "apd" an NDBC average period whose definition is not known for the
+  station; see app.services.observations.ndbc);
 * directions are nautical degrees the waves / wind come FROM, in [0, 360);
 * wind speed in km/h (m/s x 3.6).
 
@@ -119,6 +120,8 @@ class ParseStats:
     invalid_values: Counter[str] = field(default_factory=Counter)
     # Field-level values the provider's per-value QC flagged (dropped).
     flagged_values: Counter[str] = field(default_factory=Counter)
+    # Rows that repeated a measurement already read (merged into it, not stored twice).
+    duplicates_merged: int = 0
 
     def merge(self, other: ParseStats) -> None:
         self.rows_read += other.rows_read
@@ -127,6 +130,7 @@ class ParseStats:
         self.no_wave_data += other.no_wave_data
         self.invalid_values.update(other.invalid_values)
         self.flagged_values.update(other.flagged_values)
+        self.duplicates_merged += other.duplicates_merged
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -136,6 +140,7 @@ class ParseStats:
             "no_wave_data": self.no_wave_data,
             "invalid_values": dict(self.invalid_values),
             "flagged_values": dict(self.flagged_values),
+            "duplicates_merged": self.duplicates_merged,
         }
 
 
@@ -177,6 +182,9 @@ class ProviderFetch:
     stations: dict[str, StationFetch] = field(default_factory=dict)
     requests: int = 0
     warnings: list[str] = field(default_factory=list)
+    # Response bytes as transferred (compressed files counted compressed); 0 when the
+    # adapter does not count them.
+    bytes_downloaded: int = 0
 
     def station(self, code: str) -> StationFetch:
         return self.stations.setdefault(code, StationFetch())
