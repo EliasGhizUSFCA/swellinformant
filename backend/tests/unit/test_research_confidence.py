@@ -361,7 +361,8 @@ def test_recency_downgrade_at_sand_bottom_breaks() -> None:
     entry = _var(old, "bathymetry", sand)
     assert entry["class"] == "moderate" and "recency:sand_bottom" in entry["rules"]
     assert entry["gaps"] == [
-        "The newest source on the shape of the bottom is more than 15 years old, and sandbars move."
+        "The newest dated source on the shape of the bottom is more than 15 years old, and "
+        "sandbars move."
     ]
     assert _var(old, "bathymetry")["class"] == "high"  # reef: bottoms do not move
     recent = [*old, synthetic_source("r", "guidebook", _claims("bathymetry", None), year=2015)]
@@ -370,7 +371,13 @@ def test_recency_downgrade_at_sand_bottom_breaks() -> None:
         synthetic_source("s", "survey_data", _claims("local_behavior", None), year=None),
         synthetic_source("p", "peer_reviewed", _claims("local_behavior", None), year=None),
     ]
-    assert _var(unknown, "local_behavior", sand)["class"] == "moderate"  # unknown never helps
+    undated = _var(unknown, "local_behavior", sand)
+    assert undated["class"] == "moderate"  # unknown never helps
+    # ... but the gap says the sources are undated, not that they are old.
+    assert undated["gaps"] == [
+        "No source on how the wave breaks has a publication date, and sandbars move, so the "
+        "descriptions may be out of date."
+    ]
     # Other variables are not affected by the age of sources.
     dated = [
         synthetic_source("s", "survey_data", _claims("tide"), year=1990),

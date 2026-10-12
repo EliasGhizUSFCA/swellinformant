@@ -355,10 +355,18 @@ def assess_variable(
         if "cap:bathymetry_unmeasured" in rules:
             gaps.append("No survey or peer-reviewed study of the bottom was found.")
         if "recency:sand_bottom" in rules:
-            gaps.append(
-                f"The newest source on {_TOPIC[variable]} is more than "
-                f"{RECENCY_MAX_AGE_YEARS} years old, and sandbars move."
-            )
+            dated = [y for r in supporting if (y := r.source.published_year) is not None]
+            if dated:
+                gaps.append(
+                    f"The newest dated source on {_TOPIC[variable]} is more than "
+                    f"{RECENCY_MAX_AGE_YEARS} years old, and sandbars move."
+                )
+            else:
+                # Most web sources carry no publication date: say that, not "too old".
+                gaps.append(
+                    f"No source on {_TOPIC[variable]} has a publication date, and sandbars "
+                    "move, so the descriptions may be out of date."
+                )
         if "cap:search_only" in rules:
             gaps.append(
                 f"Sources on {_TOPIC[variable]} were seen only as search summaries, "

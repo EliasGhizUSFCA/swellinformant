@@ -120,27 +120,33 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
     ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
     ctx.lineWidth = 1;
     ctx.stroke();
-    // Value labels about every 320 px along each line, on a small dark pill.
+    // Value labels along each line on a small dark pill: about every 320 px, or, zoomed out
+    // to the whole world (zoom < 3), only on every second isobar (8 hPa) about every 480 px
+    // and further apart, so the labels do not bury the field.
     ctx.font = ISOBAR_FONT;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const w = v.worldPx;
+    const zoomedOut = w < 2048;
+    const spacing = zoomedOut ? 480 : 320;
+    const gap = zoomedOut ? 12 : 2;
     for (const k of pathCopies(v)) {
       const dx = k * w;
       for (const p of o.isobars) {
         if (!visible(p, v, dx)) continue;
-        let run = 160; // first label half a spacing in
+        if (zoomedOut && Math.round(p.value) % 8 !== 0) continue;
+        let run = spacing / 2; // first label half a spacing in
         for (let i = 2; i < p.pts.length; i += 2) {
           const x0 = p.pts[i - 2]! * w + dx - v.originX;
           const y0 = p.pts[i - 1]! * w - v.originY;
           const x1 = p.pts[i]! * w + dx - v.originX;
           const y1 = p.pts[i + 1]! * w - v.originY;
           run += Math.hypot(x1 - x0, y1 - y0);
-          if (run < 320) continue;
+          if (run < spacing) continue;
           const text = String(Math.round(p.value));
           const tw = measure(ctx, ISOBAR_FONT, text) + 8;
           const box = { x: x1 - tw / 2, y: y1 - 7, w: tw, h: 14 };
-          if (placeBoxes([box], v, 2, taken).length) {
+          if (placeBoxes([box], v, gap, taken).length) {
             taken.push(box);
             ctx.fillStyle = "rgba(24, 24, 24, 0.8)";
             ctx.beginPath();
