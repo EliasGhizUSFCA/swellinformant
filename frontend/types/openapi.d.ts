@@ -1202,6 +1202,8 @@ export interface components {
             confidence_reasons: string[];
             /** Lead Hours */
             lead_hours?: number | null;
+            /** Local Confidence Reason */
+            local_confidence_reason?: string | null;
         };
         /** DailyStat */
         DailyStat: {
@@ -1242,6 +1244,10 @@ export interface components {
             good_hours: number;
             /** Confidence */
             confidence: number;
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: string | null;
+            /** Local Confidence Class */
+            local_confidence_class?: string | null;
         };
         /**
          * DateMode
@@ -1386,6 +1392,17 @@ export interface components {
             history: {
                 [key: string]: unknown;
             }[];
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: string | null;
+            /** Local Confidence Class */
+            local_confidence_class?: string | null;
+            /**
+             * Confidence Reasons
+             * @default []
+             */
+            confidence_reasons: string[];
+            /** Local Confidence Reason */
+            local_confidence_reason?: string | null;
         };
         /** ExperimentSummary */
         ExperimentSummary: {
@@ -1551,6 +1568,8 @@ export interface components {
             confidence_reasons: string[];
             /** Lead Hours */
             lead_hours?: number | null;
+            /** Local Confidence Reason */
+            local_confidence_reason?: string | null;
         };
         /** ForecastRunOut */
         ForecastRunOut: {
@@ -2372,6 +2391,8 @@ export interface components {
             published_year: number | null;
             /** Accessed At */
             accessed_at: string | null;
+            /** Retrieval */
+            retrieval?: string | null;
         };
         /** ResearchVariableOut */
         ResearchVariableOut: {

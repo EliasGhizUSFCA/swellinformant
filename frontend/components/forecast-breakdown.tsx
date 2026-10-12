@@ -123,7 +123,7 @@ export function ForecastBreakdown({
         )}
         <div className="mt-2.5 space-y-1.5">
           <ForecastConfidence value={c.forecast_confidence_class} reasons={c.confidence_reasons} leadHours={c.lead_hours} legacyIndex={c.confidence} />
-          <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} />
+          <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} reason={c.local_confidence_reason} />
         </div>
         <WhyThisRating
           className="mt-2"

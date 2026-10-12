@@ -118,7 +118,7 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
               />
               <div className="mt-3 space-y-1.5 border-t pt-3">
                 <ForecastConfidence value={c.forecast_confidence_class} reasons={c.confidence_reasons} leadHours={c.lead_hours} legacyIndex={c.confidence} />
-                <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} />
+                <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} reason={c.local_confidence_reason} />
               </div>
             </>
           ) : (

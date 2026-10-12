@@ -3133,6 +3133,17 @@
        }
       ],
       "title": "Lead Hours"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -3242,6 +3253,28 @@
      "confidence": {
       "type": "integer",
       "title": "Confidence"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
      }
     },
     "type": "object",
@@ -3600,6 +3633,47 @@
       "type": "array",
       "title": "History",
       "default": []
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Confidence Reasons",
+      "default": []
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -4227,6 +4301,17 @@
        }
       ],
       "title": "Lead Hours"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -6771,6 +6856,17 @@
        }
       ],
       "title": "Accessed At"
+     },
+     "retrieval": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Retrieval"
      }
     },
     "type": "object",
