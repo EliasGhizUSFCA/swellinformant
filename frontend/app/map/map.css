@@ -1,0 +1,58 @@
+/* Full-screen forecast map: Leaflet's controls restyled for the dark map. */
+.forecast-map .leaflet-container {
+  background: #151a21;
+}
+/* Zoom buttons and attribution sit just above the floating timeline. */
+.forecast-map .leaflet-bottom {
+  bottom: var(--map-bottom-inset, 0px);
+}
+.forecast-map .leaflet-control-zoom {
+  border: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.38);
+}
+.forecast-map .leaflet-control-zoom a {
+  background: rgba(21, 25, 29, 0.85);
+  color: #fff;
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(12px);
+}
+.forecast-map .leaflet-control-zoom a:hover {
+  background: rgba(35, 41, 47, 0.95);
+}
+.forecast-map .leaflet-control-zoom a:focus-visible {
+  outline: 2px solid #d9f75e;
+  outline-offset: -2px;
+}
+/* One class more specific than leaflet.css's own rules, which load later (lazy chunk). */
+.forecast-map .leaflet-container .leaflet-control-attribution {
+  background: rgba(21, 25, 29, 0.8);
+  color: #c9ced3;
+  border-radius: 6px 0 0 0;
+}
+.forecast-map .leaflet-container .leaflet-control-attribution a {
+  color: #eef1f4;
+}
+/* Phones: a compact strip that never spans the whole width of the map. */
+@media (max-width: 639px) {
+  .forecast-map .leaflet-container .leaflet-control-attribution {
+    max-width: calc(100vw - 56px);
+    font-size: 10px;
+    line-height: 1.35;
+  }
+}
+.forecast-map .leaflet-tooltip {
+  background: rgba(21, 25, 29, 0.94);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+.forecast-map .leaflet-tooltip-top::before {
+  border-top-color: rgba(21, 25, 29, 0.94);
+}
+/* Keyboard focus on the map itself (arrow keys pan, +/- zoom). */
+.forecast-map .leaflet-container:focus-visible {
+  outline: 2px solid #d9f75e;
+  outline-offset: -2px;
+}
