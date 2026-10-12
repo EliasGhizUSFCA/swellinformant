@@ -217,6 +217,22 @@ class Settings(BaseSettings):
     # runs: they are the only record of what was forecast at each lead time.
     retention_archive_days: int = 730
 
+    # ------------------------------------------------------------------ data health
+    # The ``ops.data_health`` beat job (app.services.health) checks forecast, map-field,
+    # observation and job freshness every DATA_HEALTH_CHECK_MINUTES and emails admin
+    # users when the status degrades: at most one alert per problem per
+    # DATA_HEALTH_ALERT_REPEAT_HOURS, plus a recovery notice once a problem clears.
+    data_health_check_minutes: int = Field(default=15, ge=5, le=1440)
+    data_health_alerts_enabled: bool = True
+    data_health_alert_repeat_hours: float = Field(default=12.0, ge=1.0, le=24.0 * 7)
+    # No finished job of any kind for this long = the worker or the scheduler is down
+    # (notifications.deliver alone runs every 2 minutes).
+    data_health_heartbeat_minutes: int = Field(default=30, ge=10, le=24 * 60)
+    # A provider without a new buoy observation for this long is stale. None = the
+    # ingestion look-back window (OBSERVATION_LOOKBACK_HOURS): beyond it, the hourly job
+    # can no longer fill the gap by itself.
+    data_health_observation_stale_hours: float | None = Field(default=None, gt=0)
+
     @field_validator("app_base_url", "api_base_url")
     @classmethod
     def _strip_slash(cls, v: str) -> str:

@@ -25,18 +25,11 @@ from app.models import BackgroundJobLog
 from app.models.enums import JobStatus
 from app.services.http import TransientProviderError
 from app.workers.celery_app import celery_app
+from app.workers.schedule import DATA_HEALTH_TASK, NEXT_STAGE
 
 logger = logging.getLogger(__name__)
 
-NEXT_STAGE = {
-    "forecasts.acquire": "forecasts.blend",
-    "forecasts.blend": "quality.predict",
-    "quality.predict": "detection.detect",
-    "detection.detect": "matching.match",
-    "matching.match": "flights.discover",
-    "flights.discover": "alerts.generate",
-    "alerts.generate": "notifications.deliver",
-}
+__all__ = ["NEXT_STAGE", "run_job"]
 
 
 def run_job(
@@ -273,6 +266,16 @@ def check_staleness(self: Task) -> dict[str, Any]:
         return {"stale_sources": stale}
 
     return run_job("forecasts.check_staleness", check, task_id=self.request.id, chain=False)
+
+
+@celery_app.task(name=DATA_HEALTH_TASK, bind=True)
+def data_health_task(self: Task) -> dict[str, Any]:
+    """Data-health check; emails admin users when it degrades and when it recovers."""
+    from app.services.notifications.ops_alerts import run_data_health_check
+
+    return run_job(
+        DATA_HEALTH_TASK, run_data_health_check, task_id=self.request.id, lock_ttl=600, chain=False
+    )
 
 
 # ---------------------------------------------------------------- transactional messages

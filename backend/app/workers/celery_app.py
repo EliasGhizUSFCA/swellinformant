@@ -1,4 +1,4 @@
-"""Celery application and beat schedule.
+"""Celery application (the beat schedule itself is built in app.workers.schedule).
 
 Start a worker:     celery -A app.workers.celery_app worker --loglevel=INFO
 Start the scheduler: celery -A app.workers.celery_app beat --loglevel=INFO
@@ -11,10 +11,8 @@ and serialised by a Redis lock, so a redelivered task is harmless.
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 
 from celery import Celery
-from celery.schedules import crontab
 from celery.signals import (
     after_setup_logger,
     after_setup_task_logger,
@@ -24,48 +22,20 @@ from celery.signals import (
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging, install_redaction
+from app.workers.schedule import (
+    TASK_SOFT_TIME_LIMIT_SECONDS,
+    TASK_TIME_LIMIT_SECONDS,
+    build_beat_schedule,
+    map_fields_standalone,
+    optional_schedule,
+)
 
 settings = get_settings()
 
 
-def _map_fields_standalone() -> bool:
-    # Imported here: app.services.map_fields pulls in the models.
-    from app.services.map_fields import map_fields_mode
-
-    return map_fields_mode(settings) == "standalone"
-
-
 def _optional_schedule() -> dict[str, dict[str, object]]:
-    """Jobs that only run when their feature flag is on (they download extra data)."""
-    jobs: dict[str, dict[str, object]] = {}
-    if _map_fields_standalone():
-        # Same interval as forecast-acquisition (every 3 h by default), so both look for a
-        # new GFS cycle at the same moments; a cycle already stored is skipped cheaply.
-        jobs["map-fields"] = {
-            "task": "forecasts.map_fields",
-            "schedule": timedelta(minutes=settings.forecast_refresh_minutes),
-        }
-    if settings.gefs_enabled:
-        # GEFS-Wave 00/06/12/18Z output is complete ~7 h after the cycle.
-        jobs["ensemble-acquisition"] = {
-            "task": "forecasts.acquire_ensemble",
-            "schedule": crontab(hour="1,7,13,19", minute=40),
-        }
-    if settings.observations_enabled:
-        jobs["observation-ingest"] = {
-            "task": "observations.ingest",
-            "schedule": timedelta(hours=1),
-        }
-    if settings.verification_enabled:
-        jobs["point-forecast-archive"] = {
-            "task": "verification.collect_point_forecasts",
-            "schedule": crontab(hour="0,6,12,18", minute=50),
-        }
-        jobs["verification"] = {
-            "task": "verification.run",
-            "schedule": crontab(hour=4, minute=10),
-        }
-    return jobs
+    """The feature-flagged jobs for this module's settings (schedule.optional_schedule)."""
+    return optional_schedule(settings)
 
 
 celery_app = Celery(
@@ -85,8 +55,8 @@ celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
-    task_time_limit=1800,
-    task_soft_time_limit=1500,
+    task_time_limit=TASK_TIME_LIMIT_SECONDS,
+    task_soft_time_limit=TASK_SOFT_TIME_LIMIT_SECONDS,
     broker_connection_retry_on_startup=True,
     task_publish_retry_policy={
         "max_retries": 2,
@@ -97,33 +67,7 @@ celery_app.conf.update(
     broker_transport_options={"visibility_timeout": 3600},
     task_always_eager=settings.celery_task_always_eager,
     task_eager_propagates=True,
-    beat_schedule={
-        "forecast-acquisition": {
-            "task": "forecasts.acquire",
-            "schedule": timedelta(minutes=settings.forecast_refresh_minutes),
-        },
-        "quality-prediction-safety-net": {
-            "task": "quality.predict",
-            "schedule": timedelta(minutes=30),
-        },
-        "swell-detection": {"task": "detection.detect", "schedule": timedelta(hours=1)},
-        "user-matching": {"task": "matching.match", "schedule": timedelta(minutes=30)},
-        "flight-discovery": {"task": "flights.discover", "schedule": timedelta(hours=1)},
-        "alert-generation": {"task": "alerts.generate", "schedule": timedelta(minutes=15)},
-        "notification-delivery": {
-            "task": "notifications.deliver",
-            "schedule": timedelta(minutes=2),
-        },
-        "forecast-staleness-check": {
-            "task": "forecasts.check_staleness",
-            "schedule": timedelta(hours=1),
-        },
-        "maintenance-cleanup": {
-            "task": "maintenance.cleanup",
-            "schedule": crontab(hour=3, minute=30),
-        },
-        **_optional_schedule(),
-    },
+    beat_schedule=build_beat_schedule(settings),
 )
 
 
@@ -145,7 +89,7 @@ def _kick_off_pipeline(**_: object) -> None:
     job lock makes a duplicate run harmless."""
     if get_settings().beat_run_on_start:
         celery_app.send_task("forecasts.acquire")
-        if _map_fields_standalone():
+        if map_fields_standalone(get_settings()):
             celery_app.send_task("forecasts.map_fields")
 
 
