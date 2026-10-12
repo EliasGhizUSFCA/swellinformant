@@ -106,10 +106,13 @@ the API appends the local-confidence reason last.
   (tighter than a typical 3-day ensemble), **large > 0.30** (as wide as a typical 7-day
   ensemble) and **very large > 0.40** (as wide as a typical 10-day ensemble, where the
   deterministic forecast has no skill against climatology).
-* **Run-to-run change** predicts error only weakly: in the research sample its correlation
-  with the error was about 0.3 against 0.5-0.6 for the ensemble spread, and it added nothing
-  once the spread was known (`confidence.py`). It is therefore only a one-class downgrade at
-  a large change (factor 1.4, the same ratio the blend uses for "disagree") and is labelled
+* **Run-to-run change** predicts error only weakly. The research document records run-to-run
+  agreement as "a diagnostic only" (research notes §2), and the earlier analysis noted in the
+  `confidence.py` docstring found a correlation with the error of about 0.3 against 0.5-0.6
+  for the ensemble spread, adding nothing once the spread was known. Those two correlations
+  are not reproduced in the research document or in [ml-evaluation.md](ml-evaluation.md), so
+  treat them as unverified. Run change is therefore only a one-class downgrade at a large
+  change (factor 1.4, the same ratio the blend uses for "disagree") and is labelled
   heuristic.
 * **Independent families only.** The source dependency analysis (research notes §6) finds
   NOAA GFS-Wave, Open-Meteo's and Windy's GFS-Wave to be one model; GEFS-Wave shares the
@@ -128,7 +131,7 @@ the API appends the local-confidence reason last.
   pairs, newest window) for the verification sources of each family behind the hour
   (`blend.FAMILY_VERIFICATION_SOURCES`) and the nearest lead bucket (24, 48, 72, 120, 168,
   240 h); a buoy paired with the spot (`spot_physical_profiles.reference_stations`) is
-  preferred over the global row. In the WA backtest the scatter index was 0.12-0.37 and the
+  preferred over the global row. In the WA backtest the scatter index was 0.11-0.37 and the
   skill against persistence 0.48-0.90 at every lead, so **SI > 0.5 or no skill against
   persistence** marks a clearly worse forecast than any measured there. Without a row for a
   paired buoy the reason "Not yet checked against buoys near this spot." is added, without a

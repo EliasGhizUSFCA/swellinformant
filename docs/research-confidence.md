@@ -341,8 +341,9 @@ Loaded with `research load` on a fresh database (2026-10-12, research-v1.1):
 support is search-only, and in this file all of it is. Without the cap (the research-v1
 rules on the same evidence) Jaws, Sunset Beach and The Box would be High overall (and 19
 spots High on swell direction). Examples: Jaws is Moderate (swell direction, size, wind,
-bathymetry, season and local behaviour capped from High; gaps: no swell-period evidence,
-and swell direction, wind and size seen only as search summaries); Pipeline is Moderate (no
+bathymetry, season and local behaviour capped from High; gaps: swell period supported by
+only one forecast-site source (Low), and swell direction, wind and size seen only as search
+summaries); Pipeline is Moderate (no
 swell-size claim, a single source for wind, tide, period and season, bathymetry capped as
 unmeasured); Nazaré is Low (a single forecast-site source for swell direction, no evidence
 for size, period, bathymetry or local behaviour, and no listed tide preference to compare
