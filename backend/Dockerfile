@@ -1,6 +1,7 @@
 # One image for the API, the Celery worker and the Celery beat scheduler.
 # Build context: repository root (needs backend/ and data/).
-FROM python:3.12-slim AS base
+# Python 3.13: the version CI (.github/workflows/ci.yml) and local development test with.
+FROM python:3.13-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
