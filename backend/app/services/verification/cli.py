@@ -4,6 +4,7 @@
   verify metrics [--days N]
   verify backtest --source S [--start ISO --end ISO] [--folds K] [--station CODE]
                   [--hs-kind spectral_hm0|h_third] [--boot N] [--no-write] [--json]
+                  [--lt-climatology-before ISO] [--by-season]
 
 These commands run whether or not VERIFICATION_ENABLED is set (that flag only gates
 the scheduled job).
@@ -45,13 +46,24 @@ def register(subparsers: Any) -> None:
         help="observed height definition to verify against (default: spectral Hm0)",
     )
     backtest.add_argument("--boot", type=int, default=1000, help="bootstrap replicates")
+    backtest.add_argument(
+        "--lt-climatology-before",
+        type=_iso,
+        default=None,
+        help="add a long-term climatology reference from QC'd observations before ISO "
+        "(must be at or before the first tested cycle)",
+    )
+    backtest.add_argument(
+        "--by-season",
+        action="store_true",
+        help="also report winter (Oct-Mar, northern hemisphere) and summer half-years",
+    )
     backtest.add_argument("--no-write", action="store_true")
     backtest.add_argument("--json", action="store_true", help="print JSON instead of a table")
 
 
 def run(args: argparse.Namespace) -> int:
     from app.core.database import SessionLocal
-    from app.services.ml.dataset import InsufficientDataError
 
     with SessionLocal() as db:
         if args.verify_cmd == "pair":
@@ -83,8 +95,10 @@ def run(args: argparse.Namespace) -> int:
                     n_boot=args.boot,
                     write=not args.no_write,
                     hs_kind=args.hs_kind,
+                    lt_climatology_before=args.lt_climatology_before,
+                    by_season=args.by_season,
                 )
-            except InsufficientDataError as exc:
+            except ValueError as exc:  # InsufficientDataError, or a refused option
                 print(f"backtest: {exc}", file=sys.stderr)
                 return 1
             if args.json:
