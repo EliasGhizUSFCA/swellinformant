@@ -310,3 +310,41 @@ Validation (all problems are reported together; nothing is written when there is
   swell direction, size and period one of the two bounds may be left out, not both),
   `agrees` (`true` / `false` / `null`);
 * unknown fields are rejected, so typos do not pass silently.
+
+## 9. The committed evidence file (2026-10-11)
+
+`data/surf_spots/research_evidence.json` holds the evidence assembled on 2026-10-11 for all
+50 spots: 260 sources and 807 claims from domain-restricted web searches (one publisher per
+query), every source and claim re-checked by an independent verifier with its own searches.
+Direct page access was blocked by the research environment's network policy, so **every
+source has `"retrieval": "web_search"`**: the excerpts are the search tool's text about the
+pages, not quotations from the pages. Source types: 60 magazine, 60 official, 52 surf
+forecast site, 39 community, 38 encyclopedia, 5 peer-reviewed, 4 guidebook, 2 survey data.
+Sixteen claims state only one bound (e.g. "up to 30 ft", "320° or more"), which the format
+accepts since research-v1.1.
+
+Loaded with `research load` on a fresh database (2026-10-12, research-v1.1):
+
+| Variable | High | Moderate | Low | `cap:search_only` fired |
+|---|---:|---:|---:|---:|
+| Swell direction | 0 | 43 | 7 | 19 |
+| Swell size | 0 | 25 | 25 | 15 |
+| Swell period | 0 | 12 | 38 | 3 |
+| Wind | 0 | 32 | 18 | 10 |
+| Tide | 0 | 16 | 34 | 6 |
+| Bottom / bathymetry | 0 | 30 | 20 | 3 |
+| Season | 0 | 29 | 21 | 12 |
+| How the wave breaks | 0 | 36 | 14 | 20 |
+| **Overall** | **0** | **18** | **32** | |
+
+**No spot is High overall**, because rule 5 caps every variable at Moderate when all of its
+support is search-only, and in this file all of it is. Without the cap (the research-v1
+rules on the same evidence) Jaws, Sunset Beach and The Box would be High overall (and 19
+spots High on swell direction). Examples: Jaws is Moderate (swell direction, size, wind,
+bathymetry, season and local behaviour capped from High; gaps: no swell-period evidence,
+and swell direction, wind and size seen only as search summaries); Pipeline is Moderate (no
+swell-size claim, a single source for wind, tide, period and season, bathymetry capped as
+unmeasured); Nazaré is Low (a single forecast-site source for swell direction, no evidence
+for size, period, bathymetry or local behaviour, and no listed tide preference to compare
+with).
+

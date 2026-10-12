@@ -419,3 +419,32 @@ def test_methodology_change_adds_a_history_row_and_keeps_the_old_one(
         ("research-v1.1", True),
     ]
 
+
+def test_committed_evidence_file_loads_and_no_spot_is_high(db: Session) -> None:
+    """The REAL research_evidence.json (not synthetic): it validates, seeding loads it, and
+    because every source was read only through search summaries no spot is High."""
+    _clear_assessments(db)
+    path = DEFAULT_DATA_DIR / EVIDENCE_FILENAME
+    assert path.exists()
+    evidence = load_evidence(db, path)
+    assert evidence is not None
+    sources = [s for spot in evidence.spots.values() for s in spot.sources]
+    assert len(evidence.spots) == 50 and len(sources) == 260
+    assert sum(len(s.claims) for s in sources) == 807
+    assert {s.retrieval for s in sources} == {"web_search"}
+
+    out = seed_reference_data(db)  # the default data directory, with the file present
+    db.commit()
+    assert out["research_evidence_spots"] == 50 and out["research_sources_created"] == 260
+    current = current_assessments(db)
+    assert len(current) == 50
+    assert all(a.methodology_version == "research-v1.1" for a in current.values())
+    assert all(a.overall_class != "high" for a in current.values())
+    for a in current.values():
+        for entry in a.per_variable.values():
+            assert entry["class"] != "high"
+            if entry["sources"]:
+                assert entry["search_only"] and entry["summary"].endswith(SEARCH_ONLY_NOTE)
+    # Seeding again changes nothing.
+    again = seed_reference_data(db)
+    assert again["research_assessments_created"] == 0 and again["research_sources_created"] == 0
