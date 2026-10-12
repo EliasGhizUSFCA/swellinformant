@@ -24,7 +24,31 @@ The exponents 0.8 and 0.4 come from Komar–Gaughan scaling (Hb ∝ H0^0.8 · T^
 
 The 80 % range is Hb · exp(∓1.2816 σ). It is a stated assumption, not a calibrated
 interval, until verification against observations exists (``uncertainty_kind``
-"calibrated" is reserved for that case and nothing sets it yet).
+"calibrated" is reserved for a validated translation and nothing sets it yet).
+
+**Calibrated offshore component** (``ndbc-offshore-v1``, docs/ml-evaluation.md section
+12.2). Against NDBC spectral Hm0 the lead-table range above covered 53-89 % instead of
+80 % (the raw GFS-Wave forecast is biased low, so most misses were above p90). Scales
+fitted on the older year only (2024-10 to 2025-09) give each offshore bound its own factor
+on σ_off::
+
+    offshore p10 = Hs · exp(−1.2816 · k_lo(lead) · σ_off)
+    offshore p90 = Hs · exp(+1.2816 · k_hi(lead) · σ_off)
+
+with k_lo, k_hi linear in lead between the bucket centres of OFFSHORE_CALIBRATION and
+constant outside them. On the held-out newer year (2025-10 to 2026-10) the result covered
+75.1-80.2 % at every lead bucket pooled over five buoys, which passes the pre-registered
+75-85 % criterion. It is used ONLY when the caller passes an ``OffshoreContext`` and every
+condition holds (``OffshoreCalibration.applies``): the spread comes from the lead table
+(no ensemble row, no model disagreement), the central value is a raw forecast of the one
+deterministic family it was fitted on (GFS-Wave, ``ncep_gfs``; not a blend and not
+ML-corrected, since the factors absorb the raw model's low bias), the lead lies within the
+validated 3-240 h, and the spot is one whose paired offshore buoy confirmed the range in
+its own held-out data (``spot_slugs``). Then the breaking range uses k_lo · σ_off for its
+lower and k_hi · σ_off for its upper bound, the central value is unchanged, and
+``offshore_kind`` is "calibrated" while ``kind`` keeps the heuristic label: the
+translation share σ_m (the larger part of the breaking range) is still an assumption.
+Without a context (or outside those conditions) everything is as above.
 
 The confidence index (0–100) is *not* a probability. It summarises offshore forecast
 certainty only: 100 · exp(−σ_f / 0.4) × data completeness, ×0.8 when the run is stale.
@@ -69,6 +93,84 @@ def lead_sigma(lead_hours: float) -> float:
     return min(SIGMA_MAX, s1 + (s1 - s0) / (d1 - d0) * (days - d1))
 
 
+# Offshore range calibration (docs/ml-evaluation.md section 12.2). k_lo / k_hi per lead
+# bucket centre, fitted on TRAIN (valid times up to 2025-09-29, five NDBC buoys) as
+# Q0.90(∓e / σ_off) / Z80 with e = ln(obs Hm0) − ln(raw GFS-Wave bulletin Hs).
+OFFSHORE_CALIBRATION_VERSION = "ndbc-offshore-v1"
+
+
+@dataclass(frozen=True)
+class OffshoreContext:
+    """What ``breaking_uncertainty`` must know to use a calibrated offshore range.
+
+    ``families``: the deterministic model families behind the central value (one for a
+    single source; ensembles are not listed). ``ml_corrected``: an ML correction changed
+    the central offshore Hs of this hour.
+    """
+
+    spot_slug: str
+    families: tuple[str, ...]
+    ml_corrected: bool
+
+
+@dataclass(frozen=True)
+class OffshoreCalibration:
+    """Lead-dependent factors on σ_off for the lower and upper offshore bound."""
+
+    version: str
+    sigma_source: str  # the spread source it was fitted for
+    family: str  # the one deterministic family of the central value
+    lead_h: tuple[float, ...]  # bucket centres
+    k_lo: tuple[float, ...]
+    k_hi: tuple[float, ...]
+    lead_min_h: float
+    lead_max_h: float
+    spot_slugs: frozenset[str]
+
+    def factors(self, lead_hours: float) -> tuple[float, float]:
+        """(k_lo, k_hi) at this lead: linear between centres, constant outside."""
+        return _interp(lead_hours, self.lead_h, self.k_lo), _interp(
+            lead_hours, self.lead_h, self.k_hi
+        )
+
+    def applies(self, ctx: OffshoreContext | None, sigma_source: str, lead_hours: float) -> bool:
+        return (
+            ctx is not None
+            and sigma_source == self.sigma_source
+            and tuple(ctx.families) == (self.family,)
+            and not ctx.ml_corrected
+            and self.lead_min_h <= lead_hours <= self.lead_max_h
+            and ctx.spot_slug in self.spot_slugs
+        )
+
+
+def _interp(x: float, xs: tuple[float, ...], ys: tuple[float, ...]) -> float:
+    if x <= xs[0]:
+        return ys[0]
+    for i in range(1, len(xs)):
+        if x <= xs[i]:
+            x0, x1, y0, y1 = xs[i - 1], xs[i], ys[i - 1], ys[i]
+            return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+    return ys[-1]
+
+
+# Spots whose paired offshore buoy (data/observation_stations.json) had held-out coverage
+# consistent with 80 %: 51205 (85.5 %) -> jaws-peahi; 46026 (79.4 %) -> mavericks,
+# ocean-beach-sf; 46224 (76.7 %) -> trestles. Not listed: the 51201 spots (90.8 %, too
+# wide) and rincon (46053, 69.3 %, too narrow), although they were part of the pooled fit.
+OFFSHORE_CALIBRATION = OffshoreCalibration(
+    version=OFFSHORE_CALIBRATION_VERSION,
+    sigma_source="lead_table",
+    family="ncep_gfs",
+    lead_h=(24.0, 48.0, 72.0, 120.0, 168.0, 240.0),
+    k_lo=(0.0858, 0.1479, 0.1642, 0.2140, 0.3210, 0.4126),
+    k_hi=(1.9384, 1.6650, 1.3346, 1.0678, 0.9726, 0.9488),
+    lead_min_h=3.0,
+    lead_max_h=240.0,
+    spot_slugs=frozenset({"jaws-peahi", "mavericks", "ocean-beach-sf", "trestles"}),
+)
+
+
 @dataclass(frozen=True)
 class EnsembleInfo:
     hs_mean_m: float | None = None
@@ -87,11 +189,21 @@ class Uncertainty:
     sigma_total: float  # σ_ln(Hb)
     p10_ft: float
     p90_ft: float
-    kind: str
+    kind: str  # label of the breaking range as a whole
     source: str
+    # Label of the offshore component: "calibrated" (OFFSHORE_CALIBRATION applied) or the
+    # heuristic kind; and of the translation share ("calibrated" only with a validated
+    # spot calibration).
+    offshore_kind: str = "heuristic"
+    nearshore_kind: str = "heuristic"
+    offshore_calibration: str | None = None
+    offshore_k_lo: float = 1.0
+    offshore_k_hi: float = 1.0
+    sigma_total_lo: float | None = None  # σ_ln(Hb) behind p10 when it differs from p90's
+    sigma_total_hi: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "sigma_forecast": round(self.sigma_forecast, 3),
             "sigma_offshore": round(self.sigma_offshore, 3),
             "sigma_period_rel": round(self.sigma_period_rel, 3),
@@ -99,7 +211,15 @@ class Uncertainty:
             "sigma_total": round(self.sigma_total, 3),
             "kind": self.kind,
             "source": self.source,
+            "offshore_kind": self.offshore_kind,
+            "nearshore_kind": self.nearshore_kind,
         }
+        if self.offshore_calibration is not None:
+            out["offshore_calibration"] = self.offshore_calibration
+            out["offshore_k"] = [round(self.offshore_k_lo, 4), round(self.offshore_k_hi, 4)]
+            out["sigma_total_lo"] = round(self.sigma_total_lo or self.sigma_total, 3)
+            out["sigma_total_hi"] = round(self.sigma_total_hi or self.sigma_total, 3)
+        return out
 
 
 def translation_sigma(calibration: dict[str, Any] | None) -> tuple[float, bool]:
@@ -117,7 +237,10 @@ def breaking_uncertainty(
     ensemble: EnsembleInfo | None = None,
     between_model_sigma: float | None = None,
     calibration: dict[str, Any] | None = None,
+    offshore: OffshoreContext | None = None,
 ) -> Uncertainty:
+    """The breaking-height range (module docstring). ``offshore``: optional context that
+    lets the calibrated offshore component apply (OFFSHORE_CALIBRATION.applies)."""
     source = "lead_table"
     sigma_f = lead_sigma(lead_hours)
     # Tiny means make spread/mean meaningless (flat seas): keep the lead table there.
@@ -137,13 +260,35 @@ def breaking_uncertainty(
         sigma_t = ensemble.tp_spread_s / ensemble.tp_mean_s
 
     sigma_m, calibrated = translation_sigma(calibration)
-    total = math.sqrt((0.8 * sigma_off) ** 2 + (0.4 * sigma_t) ** 2 + sigma_m**2)
-    if calibrated:
-        kind = "calibrated"
-    elif source == "ensemble_spread":
-        kind = "ensemble_heuristic"
-    else:
-        kind = "heuristic"
+
+    def total_with(k: float) -> float:
+        return math.sqrt((0.8 * k * sigma_off) ** 2 + (0.4 * sigma_t) ** 2 + sigma_m**2)
+
+    total = total_with(1.0)
+    heuristic_kind = "ensemble_heuristic" if source == "ensemble_spread" else "heuristic"
+    kind = "calibrated" if calibrated else heuristic_kind
+    cal = OFFSHORE_CALIBRATION
+    if cal.applies(offshore, source, lead_hours):
+        k_lo, k_hi = cal.factors(lead_hours)
+        total_lo, total_hi = total_with(k_lo), total_with(k_hi)
+        return Uncertainty(
+            sigma_forecast=sigma_f,
+            sigma_offshore=sigma_off,
+            sigma_period_rel=sigma_t,
+            sigma_translation=sigma_m,
+            sigma_total=total,
+            p10_ft=round(breaking_mid_ft * math.exp(-Z80 * total_lo), 1),
+            p90_ft=round(breaking_mid_ft * math.exp(Z80 * total_hi), 1),
+            kind=kind,
+            source=source,
+            offshore_kind="calibrated",
+            nearshore_kind="calibrated" if calibrated else "heuristic",
+            offshore_calibration=cal.version,
+            offshore_k_lo=k_lo,
+            offshore_k_hi=k_hi,
+            sigma_total_lo=total_lo,
+            sigma_total_hi=total_hi,
+        )
     return Uncertainty(
         sigma_forecast=sigma_f,
         sigma_offshore=sigma_off,
@@ -154,7 +299,31 @@ def breaking_uncertainty(
         p90_ft=round(breaking_mid_ft * math.exp(Z80 * total), 1),
         kind=kind,
         source=source,
+        offshore_kind=heuristic_kind,
+        nearshore_kind="calibrated" if calibrated else "heuristic",
     )
+
+
+def offshore_range(
+    hs_m: float,
+    lead_hours: float,
+    *,
+    ensemble: EnsembleInfo | None = None,
+    between_model_sigma: float | None = None,
+    offshore: OffshoreContext | None = None,
+) -> tuple[float, float, str]:
+    """(p10, p90, kind) of the OFFSHORE Hs itself (m): the component of the breaking
+    range that buoys can verify, calibrated under the same conditions."""
+    unc = breaking_uncertainty(
+        1.0, lead_hours, ensemble=ensemble, between_model_sigma=between_model_sigma
+    )
+    s = unc.sigma_offshore
+    k_lo = k_hi = 1.0
+    kind = unc.kind
+    if OFFSHORE_CALIBRATION.applies(offshore, unc.source, lead_hours):
+        k_lo, k_hi = OFFSHORE_CALIBRATION.factors(lead_hours)
+        kind = "calibrated"
+    return hs_m * math.exp(-Z80 * k_lo * s), hs_m * math.exp(Z80 * k_hi * s), kind
 
 
 def confidence_index(sigma_forecast: float, data_completeness: float, stale: bool) -> int:
