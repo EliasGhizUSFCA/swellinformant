@@ -172,7 +172,7 @@ famous, well-documented break can have an untrustworthy 9-day forecast, and an e
 2-day forecast says little about a break nobody has documented.
 **Decision.** Three separate classifications, stored separately and shown separately, none of
 them a calibrated probability: research confidence (`spot_research_assessments`, methodology
-research-v1, docs/research-confidence.md); forecast confidence of the offshore forecast and
+research-v1, research-v1.1 since ADR-016, docs/research-confidence.md); forecast confidence of the offshore forecast and
 local confidence of the breaking-wave estimate (`surf_quality_predictions`, methodology
 forecast-v1, docs/forecast-confidence.md). The only link is documented: local confidence =
 min(forecast confidence, research basis) with research basis = min(swell direction, swell
@@ -209,3 +209,28 @@ stale-after age).
 per-source settings (more configuration for values that follow from the cycle and lag).
 **Consequences.** ECMWF stays in the blend through its whole cycle; a GFS run now counts as
 stale after 16 h instead of 18 h, i.e. as soon as one cycle has been missed.
+
+## ADR-016 Evidence seen only through search summaries is at most Moderate
+
+**Context.** The first real research evidence (2026-10-11: 260 sources, 807 claims for the
+50 spots) was gathered with domain-restricted web searches while direct page access was
+blocked. Every source was re-checked by an independent verifier, but every excerpt is a
+search tool's text about a page, not the page itself. Under research-v1 that evidence would
+have made three spots (Jaws, Sunset Beach, The Box) High overall.
+**Decision.** Record how each source was read (`spot_research_sources.retrieval`: `fetched`
+by default, `web_search`; migration 0005, a check constraint, part of the evidence
+fingerprint). Methodology research-v1.1 caps a variable at Moderate when all of its
+supporting sources are search-only (rule `cap:search_only`, applied after the research-v1
+rules) and ends its summary with "(based on search summaries; source pages not read in
+full)". The format also accepts one-bound values (one bound of a direction, size or period
+range left out), which the file uses for 16 claims; the evidence file itself is committed
+unchanged.
+**Alternatives.** Rejecting search-only evidence (would discard verified, attributed
+statements and leave every spot without evidence); treating it like read pages (overstates
+it: a summary can compress or misattribute what the page says); a separate source tier
+(mixes how a source was read with what kind of source it is).
+**Consequences.** No spot is High until some evidence is read directly (live: 18 Moderate,
+32 Low). The methodology change adds one assessment row per spot and keeps the research-v1
+rows. Local confidence, which uses the research basis, is at most Moderate everywhere for
+now.
+

@@ -1,4 +1,4 @@
-"""Research confidence, methodology "research-v1" (docs/research-confidence.md).
+"""Research confidence, methodology "research-v1.1" (docs/research-confidence.md).
 
 Research confidence says how well a break's ideal conditions are understood: how strong
 and how independent the published evidence for each researched variable is, and whether
@@ -24,6 +24,11 @@ Per variable (``RESEARCH_VARIABLES``):
 * Bathymetry is capped at Moderate without survey or peer-reviewed support. At
   sand-bottom breaks bathymetry and local behaviour drop one class unless a supporting
   source with a known year is at most 15 years older than the research (sandbars move).
+* research-v1.1: a variable whose supporting sources were ALL read only as search
+  summaries (``retrieval`` "web_search": the excerpt is a search tool's text about the
+  page, not the page itself) is capped at Moderate (rule ``cap:search_only``), applied
+  after the rules above; its summary then ends "(based on search summaries; source pages
+  not read in full)". So overall High needs some directly read evidence.
 
 Overall: Low if swell direction or wind is Low or 4+ variables are Low; High only if
 swell direction, size and wind are High and none of tide, bathymetry and local behaviour
@@ -65,7 +70,7 @@ from app.services.research.values import (
 
 logger = logging.getLogger(__name__)
 
-METHODOLOGY_VERSION = "research-v1"
+METHODOLOGY_VERSION = "research-v1.1"
 
 HIGH, MODERATE, LOW = "high", "moderate", "low"
 _DOWNGRADE = {HIGH: MODERATE, MODERATE: LOW, LOW: LOW}
@@ -85,6 +90,8 @@ SOURCE_TIERS: dict[str, int] = {
 MEASURED_BATHYMETRY_TYPES = frozenset({"survey_data", "peer_reviewed"})
 RECENCY_VARIABLES = frozenset({"bathymetry", "local_behavior"})
 RECENCY_MAX_AGE_YEARS = 15
+SEARCH_ONLY_RETRIEVAL = "web_search"
+SEARCH_ONLY_NOTE = "(based on search summaries; source pages not read in full)"
 MAX_OVERALL_GAPS = 4
 
 VARIABLE_LABELS: dict[str, str] = {
@@ -272,6 +279,7 @@ def assess_variable(
                 "tier": TIER_NAMES[SOURCE_TIERS[src.source_type]],
                 "published_year": src.published_year,
                 "accessed_at": _iso(src.accessed_at),
+                "retrieval": src.retrieval,
                 "value": claim.value,
                 "researcher_agrees": j.researcher,
                 "computed_agrees": j.computed,
@@ -325,6 +333,14 @@ def assess_variable(
         ):
             rules.append("recency:sand_bottom")
             cls = _DOWNGRADE[cls]
+    # research-v1.1: evidence seen only through search summaries is at most Moderate.
+    # Judged on the supporting sources when there are any, else on all sources (for the
+    # summary note); a supporting source that was read directly lifts the cap.
+    judged = supporting or list(roles.values())
+    search_only = bool(judged) and all(r.source.retrieval == SEARCH_ONLY_RETRIEVAL for r in judged)
+    if search_only and cls == HIGH:
+        rules.append("cap:search_only")
+        cls = MODERATE
 
     gaps: list[str] = []
     if not entries:
@@ -342,6 +358,11 @@ def assess_variable(
             gaps.append(
                 f"The newest source on {_TOPIC[variable]} is more than "
                 f"{RECENCY_MAX_AGE_YEARS} years old, and sandbars move."
+            )
+        if "cap:search_only" in rules:
+            gaps.append(
+                f"Sources on {_TOPIC[variable]} were seen only as search summaries, "
+                "not read in full."
             )
         if not gaps and cls == LOW:
             profile_missing = (variable == "tide" and profile.get("tide_preference") is None) or (
@@ -381,7 +402,10 @@ def assess_variable(
             "not_comparable": len(not_comparable),
         },
         "newest_year": max(years_all) if years_all else None,
-        "summary": _variable_summary(variable, len(roles), n_sup, n_con, strongest),
+        "search_only": search_only,
+        "summary": _variable_summary(
+            variable, len(roles), n_sup, n_con, strongest, search_only=search_only
+        ),
         "gaps": gaps,
         "rules": rules,
         "flag_differences": flag_differences,
@@ -390,8 +414,15 @@ def assess_variable(
 
 
 def _variable_summary(
-    variable: str, n_sources: int, n_sup: int, n_con: int, strongest: str | None
+    variable: str,
+    n_sources: int,
+    n_sup: int,
+    n_con: int,
+    strongest: str | None,
+    *,
+    search_only: bool = False,
 ) -> str:
+    """One plain sentence; with search-only evidence it ends with SEARCH_ONLY_NOTE."""
     if n_sources == 0:
         return "No sources found."
     verb = "Described by" if variable in DESCRIPTIVE_VARIABLES else "Supported by"
@@ -410,7 +441,7 @@ def _variable_summary(
         )
     if n_con:
         text += f"; {n_con} {disagree}"
-    return text + "."
+    return f"{text} {SEARCH_ONLY_NOTE}" if search_only else text + "."
 
 
 def overall_class(classes: dict[str, str]) -> str:
@@ -497,6 +528,7 @@ def evidence_fingerprint(
                     "source_type": s.source_type,
                     "published_year": s.published_year,
                     "accessed_at": s.accessed_at,
+                    "retrieval": s.retrieval,
                     "claims": sorted(
                         (
                             {
@@ -536,7 +568,7 @@ class ComputedAssessment:
 def compute_assessment(
     sources: Sequence[EvidenceSource], profile: dict[str, Any]
 ) -> ComputedAssessment:
-    """Pure research-v1 assessment of one spot from its evidence and profile values.
+    """Pure research-v1.1 assessment of one spot from its evidence and profile values.
 
     The age of evidence is measured against the year of the newest ``accessed_at`` (when
     the research was done), not the clock, so an assessment only changes when the
@@ -596,6 +628,7 @@ def stored_evidence(
                 accessed_at=s.accessed_at,
                 notes=s.notes,
                 claims=tuple(claims.get(s.id, [])),
+                retrieval=s.retrieval,
             )
         )
     return out

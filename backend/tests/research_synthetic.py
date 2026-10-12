@@ -63,10 +63,12 @@ def synthetic_source(
     year: int | None = 2020,
     url: str | None = None,
     accessed: str = ACCESSED,
+    retrieval: str | None = None,
 ) -> dict[str, Any]:
+    """``retrieval`` None leaves the field out (the format's default, "fetched")."""
     publisher = publisher or f"Synthetic Publisher {key}"
     host = publisher.lower().replace(" ", "-")
-    return {
+    out: dict[str, Any] = {
         "key": key,
         "title": f"SYNTHETIC test source {key}",
         "url": url if url is not None else f"https://{host}.example.org/{key}",
@@ -76,6 +78,9 @@ def synthetic_source(
         "accessed_at": accessed,
         "claims": claims,
     }
+    if retrieval is not None:
+        out["retrieval"] = retrieval
+    return out
 
 
 def synthetic_file(spots: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:

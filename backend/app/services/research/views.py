@@ -45,6 +45,7 @@ def _sources(per_variable: dict[str, Any]) -> list[ResearchSourceOut]:
             source_type=e["source_type"],
             published_year=e["published_year"],
             accessed_at=e["accessed_at"],
+            retrieval=e.get("retrieval"),  # absent in research-v1 assessments
         )
         for e in ordered
     ]

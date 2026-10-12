@@ -186,6 +186,9 @@ class ResearchSourceOut(BaseModel):
     source_type: str
     published_year: int | None
     accessed_at: datetime | None
+    # How the source was read: "fetched" (the page itself) or "web_search" (only a search
+    # tool's summary of the page). None for assessments made before this was recorded.
+    retrieval: str | None = None
 
 
 class ResearchVariableOut(BaseModel):

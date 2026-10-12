@@ -12,14 +12,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import delete, event, func, select
+from sqlalchemy import delete, event, func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.cli import main as cli_main
 from app.core.database import get_engine
 from app.models import SpotResearchAssessment, SpotResearchClaim, SpotResearchSource, SurfSpot
 from app.services.research import assess, current_assessments
-from app.services.research.assess import assess_all, assess_spot
+from app.services.research.assess import SEARCH_ONLY_NOTE, assess_all, assess_spot
+from app.services.research.cli import format_assessment
 from app.services.research.evidence import (
     EVIDENCE_FILENAME,
     EvidenceValidationError,
@@ -87,8 +89,10 @@ def _snapshot(db: Session) -> list[tuple[Any, ...]]:
 
 
 def _clear_assessments(db: Session) -> None:
-    """The session-wide seed may have left assessments; start from none."""
+    """The session-wide seed may have left assessments and (from the committed evidence
+    file) evidence; start from none."""
     db.execute(delete(SpotResearchAssessment))
+    db.execute(delete(SpotResearchSource))  # claims go with them (ON DELETE CASCADE)
     db.commit()
 
 
@@ -154,7 +158,7 @@ def test_assessment_history(db: Session, tmp_path: Path, monkeypatch: pytest.Mon
     sync_evidence(db, load_evidence(db, _evidence_file(tmp_path)))
     first, created = assess_spot(db, pipeline)
     db.commit()
-    assert created and first.is_current and first.methodology_version == "research-v1"
+    assert created and first.is_current and first.methodology_version == "research-v1.1"
     assert first.overall_class == "high"
     season = first.per_variable["seasonality"]
     assert season["class"] == "low" and season["agreement"]["contradicting"] == 1
@@ -260,7 +264,8 @@ def test_api_detail_and_summaries(app_client: ApiClient, db: Session, tmp_path: 
     detail = app_client.get("/api/spots/pipeline").json()
     research = detail["research"]
     assert detail["research_class"] == research["research_class"] == "high"
-    assert research["methodology_version"] == "research-v1"
+    assert research["methodology_version"] == "research-v1.1"
+    assert {s["retrieval"] for s in research["sources"]} == {"fetched"}  # the default
     assert [v["label"] for v in research["variables"]] == [
         "Swell direction",
         "Swell size",
@@ -333,3 +338,84 @@ def test_cli(db: Session, tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     assert cli_main(["research", "load", "--path", str(bad)]) == 2
     assert "atlantis: unknown spot slug" in capsys.readouterr().err
     assert cli_main(["research", "load", "--path", str(tmp_path / "nope.json")]) == 1
+
+
+# --- retrieval and research-v1.1 --------------------------------------------------------
+
+
+def test_retrieval_column_defaults_to_fetched_and_is_checked(db: Session) -> None:
+    _clear_assessments(db)
+    spot_id = _spot(db, "pipeline").id
+    insert = text(
+        "INSERT INTO spot_research_sources (spot_id, source_key, title, publisher, "
+        "source_type, notes, created_at{col}) VALUES (:spot, :key, 'SYNTHETIC', "
+        "'Synthetic', 'guidebook', '', now(){val})"
+    )
+    # Rows written without the column (e.g. before migration 0005) were read directly.
+    db.execute(text(insert.text.format(col="", val="")), {"spot": spot_id, "key": "old"})
+    stored = db.scalar(
+        select(SpotResearchSource.retrieval).where(SpotResearchSource.source_key == "old")
+    )
+    assert stored == "fetched"
+    with pytest.raises(IntegrityError, match="ck_spot_research_sources_retrieval"):
+        db.execute(
+            text(insert.text.format(col=", retrieval", val=", 'scraped'")),
+            {"spot": spot_id, "key": "bad"},
+        )
+    db.rollback()
+
+
+def test_search_only_evidence_is_moderate_and_a_retrieval_change_is_new_history(
+    db: Session, tmp_path: Path
+) -> None:
+    _clear_assessments(db)
+    pipeline = _spot(db, "pipeline")
+    sync_evidence(db, load_evidence(db, _evidence_file(tmp_path)))
+    read, _ = assess_spot(db, pipeline)
+    db.commit()
+    assert read.overall_class == "high"
+
+    searched = [{**s, "retrieval": "web_search"} for s in _pipeline_sources()]
+    counts = sync_evidence(db, load_evidence(db, _evidence_file(tmp_path, {"pipeline": searched})))
+    db.commit()
+    assert counts["sources_updated"] == 3 and counts["claim_sets_replaced"] == 0
+    assert set(db.scalars(select(SpotResearchSource.retrieval))) == {"web_search"}
+    capped, created = assess_spot(db, pipeline)
+    db.commit()
+    assert created and capped.id != read.id
+    assert capped.evidence_fingerprint != read.evidence_fingerprint
+    assert capped.overall_class == "moderate"
+    for v in ("swell_direction", "swell_size", "wind"):
+        entry = capped.per_variable[v]
+        assert entry["class"] == "moderate" and "cap:search_only" in entry["rules"]
+        assert entry["summary"].endswith(SEARCH_ONLY_NOTE)
+    db.refresh(read)
+    assert read.is_current is False and read.overall_class == "high"  # history kept
+    report = format_assessment("Pipeline", "pipeline", capped)
+    assert report.count("; search summary only)") == 3
+    assert "were seen only as search summaries, not read in full." in report
+
+
+def test_methodology_change_adds_a_history_row_and_keeps_the_old_one(
+    db: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_assessments(db)
+    pipeline = _spot(db, "pipeline")
+    sync_evidence(db, load_evidence(db, _evidence_file(tmp_path)))
+    with monkeypatch.context() as m:
+        m.setattr(assess, "METHODOLOGY_VERSION", "research-v1")  # the previous methodology
+        old, _ = assess_spot(db, pipeline)
+        db.commit()
+    new, created = assess_spot(db, pipeline)
+    db.commit()
+    assert created and new.id != old.id
+    rows = db.scalars(
+        select(SpotResearchAssessment)
+        .where(SpotResearchAssessment.spot_id == pipeline.id)
+        .order_by(SpotResearchAssessment.id)
+    ).all()
+    assert [(r.methodology_version, r.is_current) for r in rows] == [
+        ("research-v1", False),
+        ("research-v1.1", True),
+    ]
+

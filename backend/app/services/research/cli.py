@@ -159,8 +159,9 @@ def format_assessment(name: str, slug: str, row: Any) -> str:
     for s in view.sources:
         year = s.published_year if s.published_year is not None else "n.d."
         accessed = s.accessed_at.date().isoformat() if s.accessed_at else "?"
+        read = "; search summary only" if s.retrieval == "web_search" else ""
         lines.append(
-            f"  [{s.source_type}] {s.publisher}: {s.title} ({year}; accessed {accessed})"
+            f"  [{s.source_type}] {s.publisher}: {s.title} ({year}; accessed {accessed}{read})"
             + (f"\n      {s.url}" if s.url else "")
         )
     return "\n".join(lines)

@@ -6,7 +6,8 @@ is a different question from forecast confidence ("how trustworthy is this upcom
 prediction?", stored on each prediction) and the two are never merged into one number.
 
 * ``spot_research_sources``: a source actually consulted for a spot (title, URL,
-  publisher, type, year, when it was accessed).
+  publisher, type, year, when it was accessed, and whether the page itself was read or
+  only a search tool's summary of it).
 * ``spot_research_claims``: what one source says about one variable, with a short excerpt
   and whether it agrees with the value in the spot profile.
 * ``spot_research_assessments``: the computed classification per variable and overall,
@@ -61,6 +62,10 @@ SOURCE_TYPES = (
     "community",  # forums, blogs, user-generated spot pages
 )
 CONFIDENCE_CLASSES = ("high", "moderate", "low")
+# How a source was read (spot_research_sources.retrieval): "fetched" = the page or
+# publication itself was read; "web_search" = only a search tool's summary of the page was
+# available, so the excerpt is the search tool's text about the page, not the page's own.
+RETRIEVAL_METHODS = ("fetched", "web_search")
 
 
 class SpotResearchSource(Base):
@@ -70,6 +75,10 @@ class SpotResearchSource(Base):
         CheckConstraint(
             "source_type IN (" + ", ".join(f"'{t}'" for t in SOURCE_TYPES) + ")",
             name="source_type",
+        ),
+        CheckConstraint(
+            "retrieval IN (" + ", ".join(f"'{r}'" for r in RETRIEVAL_METHODS) + ")",
+            name="retrieval",
         ),
     )
 
@@ -84,6 +93,10 @@ class SpotResearchSource(Base):
     source_type: Mapped[str] = mapped_column(String(24), nullable=False)
     published_year: Mapped[int | None] = mapped_column(Integer)
     accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # RETRIEVAL_METHODS; sources recorded before this column existed were read directly.
+    retrieval: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="fetched", server_default="fetched"
+    )
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow

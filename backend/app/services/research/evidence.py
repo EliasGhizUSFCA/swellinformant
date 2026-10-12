@@ -11,9 +11,11 @@ research evidence, like ``spots.json`` is for spots:
   replaced only when they changed, and sources (of any spot) that are no longer in the
   file are deleted. Running it twice changes nothing.
 
-Claims are stored as the researchers wrote them, including their own ``agrees``
-judgement; the assessment recomputes agreement against the current profile
-(:mod:`app.services.research.assess`), so a later profile edit never needs a re-sync.
+Each source records how it was read (``retrieval``: "fetched" by default, or "web_search"
+when only a search tool's summary of the page was available). Claims are stored as the
+researchers wrote them, including their own ``agrees`` judgement; the assessment
+recomputes agreement against the current profile (:mod:`app.services.research.assess`),
+so a later profile edit never needs a re-sync.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import utcnow
 from app.models import SpotResearchClaim, SpotResearchSource, SurfSpot
-from app.models.research import RESEARCH_VARIABLES, SOURCE_TYPES
+from app.models.research import RESEARCH_VARIABLES, RETRIEVAL_METHODS, SOURCE_TYPES
 from app.services.research.values import validate_value
 from app.services.seed import SeedValidationError, resolve_data_dir
 
@@ -52,7 +54,8 @@ SPOT_KEYS = frozenset({"notes", "sources"})
 SOURCE_REQUIRED = frozenset(
     {"key", "title", "url", "publisher", "source_type", "published_year", "accessed_at"}
 )
-SOURCE_KEYS = SOURCE_REQUIRED | {"claims", "notes"}
+SOURCE_KEYS = SOURCE_REQUIRED | {"claims", "notes", "retrieval"}
+DEFAULT_RETRIEVAL = "fetched"  # the page itself was read (RETRIEVAL_METHODS)
 CLAIM_KEYS = frozenset({"variable", "claim", "value", "excerpt", "agrees"})
 _KEY_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
@@ -85,6 +88,8 @@ class EvidenceSource:
     accessed_at: datetime | None  # always set when parsed from the file
     notes: str
     claims: tuple[EvidenceClaim, ...]
+    # "fetched" (the page was read) or "web_search" (only a search tool's summary of it).
+    retrieval: str = DEFAULT_RETRIEVAL
 
 
 @dataclass(frozen=True)
@@ -218,6 +223,9 @@ def _parse_source(
     notes = raw.get("notes", "")
     if not isinstance(notes, str):
         problems.append(f"{where}: notes must be a string")
+    retrieval = raw.get("retrieval", DEFAULT_RETRIEVAL)
+    if retrieval not in RETRIEVAL_METHODS:
+        problems.append(f"{where}: retrieval {retrieval!r} is not one of {list(RETRIEVAL_METHODS)}")
     claims_raw = raw["claims"]
     claims: list[EvidenceClaim] = []
     if not isinstance(claims_raw, list) or not claims_raw:
@@ -239,6 +247,7 @@ def _parse_source(
         accessed_at=accessed,
         notes=notes.strip(),
         claims=tuple(claims),
+        retrieval=retrieval,
     )
 
 
@@ -333,6 +342,7 @@ def _source_fields(s: EvidenceSource) -> dict[str, Any]:
         "published_year": s.published_year,
         "accessed_at": s.accessed_at,
         "notes": s.notes,
+        "retrieval": s.retrieval,
     }
 
 

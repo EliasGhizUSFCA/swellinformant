@@ -2,8 +2,10 @@
 
 Source: `backend/app/services/research/` (`values.py`, `evidence.py`, `assess.py`,
 `views.py`, `cli.py`). Tables: `spot_research_sources`, `spot_research_claims`,
-`spot_research_assessments` (migration `0004_confidence_map_fields`).
-Methodology version: `research-v1` (stored on every assessment row).
+`spot_research_assessments` (migration `0004_confidence_map_fields`;
+`spot_research_sources.retrieval` from `0005_research_retrieval`).
+Methodology version: `research-v1.1` (stored on every assessment row; section 3 lists what
+changed from `research-v1`).
 
 ## 1. What it is, and what it is not
 
@@ -33,8 +35,13 @@ It is **not**:
 
 Evidence lives in `data/surf_spots/research_evidence.json` (format in section 8). Each
 **source** is one page or publication that was actually consulted; each **claim** is what
-that source says about one variable, with a verbatim excerpt (≤ 300 characters) and,
-where possible, a normalised value. The loader validates the whole file and reports every
+that source says about one variable, with a short excerpt (≤ 300 characters) and, where
+possible, a normalised value. Each source also records **how it was read**
+(`retrieval`): `fetched` (the default) when the page or publication itself was read and the
+excerpt is copied from it, `web_search` when only a search tool's text about the page was
+available, so the excerpt is that summary and not the page's own words. Search-only
+evidence is weaker (the summary may compress or misattribute what the page says) and is
+capped in section 3. The loader validates the whole file and reports every
 problem at once; the sync into the tables is idempotent (section 6).
 
 ### Source tiers
@@ -60,11 +67,11 @@ value (`values.py`):
 
 | Variable | Value | Agrees when |
 |----------|-------|-------------|
-| `swell_direction` | `{"min", "max"}` degrees FROM, clockwise, may wrap through north | the window overlaps the profile's optimal window widened by 30° on each side |
+| `swell_direction` | `{"min", "max"}` degrees FROM, clockwise, may wrap through north; one bound may be omitted (`{"min": 320}`, "320° or more") | the window overlaps the profile's optimal window widened by 30° on each side; a one-bound value is compared as that single direction (the open side of a circular range is undefined) and is never exact |
 | `wind` | `{"offshore_from_deg"}` | within 45° of the profile's offshore wind direction |
 | `tide` | `{"tide"}` (`low`, `low_to_mid`, `mid`, `mid_to_high`, `high`, `all`) | same class, or adjacent on low → low_to_mid → mid → mid_to_high → high; `all` matches only `all`; not comparable when the profile has no tide preference |
-| `swell_size` | `{"min_ft", "max_ft"}` breaking **face** height in feet (one bound may be null) | the range overlaps the profile's working range |
-| `swell_period` | `{"min_s", "max_s"}` seconds (one bound may be null) | the range overlaps the profile's `min_swell_period_s` .. `ideal_swell_period_s` |
+| `swell_size` | `{"min_ft", "max_ft"}` breaking **face** height in feet (one bound may be null or omitted) | the range overlaps the profile's working range |
+| `swell_period` | `{"min_s", "max_s"}` seconds (one bound may be null or omitted) | the range overlaps the profile's `min_swell_period_s` .. `ideal_swell_period_s` |
 | `seasonality` | `{"months": [..]}` | at least one month in common with `best_months`; not comparable when the profile lists none |
 | `bathymetry`, `local_behavior` | `null` (descriptive) | the researcher's flag; `null` counts as a supporting description |
 
@@ -81,7 +88,7 @@ An **exact** match (needed for one rule below) is stricter: direction-window end
 offshore direction within 11.25° (the same 16-point compass name), the same tide class,
 both range bounds within 0.5 ft / 0.5 s, the same set of months.
 
-## 3. Per-variable rules (research-v1)
+## 3. Per-variable rules (research-v1.1)
 
 *Supporting* = the claim agrees (or, for `bathymetry` and `local_behavior`, describes
 without a judgement). *Contradicting* = it disagrees.
@@ -111,16 +118,30 @@ without a judgement). *Contradicting* = it disagrees.
    or a description that says "sand-bottom", "sand bottom", "sandbar", "sand bar" or
    "sand spit" (e.g. the Gold Coast points, Skeleton Bay). The age is measured against the
    research date, not the clock, so an assessment changes only when its evidence does.
+5. **Search-summary cap (new in research-v1.1).** A variable whose supporting sources were
+   *all* read only as search summaries (`retrieval` = `web_search`) is capped at
+   **Moderate** (rule `cap:search_only`, gap "Sources on … were seen only as search
+   summaries, not read in full."). It is applied last, after rules 1-4, so it changes only
+   what would otherwise be High; one supporting source that was read directly lifts it.
+   Whenever a variable's evidence is search-only (its supporting sources, or all its sources
+   when none supports), its summary ends "(based on search summaries; source pages not read
+   in full)", whatever its class. Consequence: overall High needs directly read evidence for
+   swell direction, size and wind.
+
+`research-v1` → `research-v1.1`: rule 5, `retrieval` in the evidence fingerprint, and the
+format accepts one-bound values (above). Rules 1-4 and the overall rule are unchanged.
+Because the methodology version changed, the next assessment run inserts a new row for every
+spot and keeps the research-v1 rows as history (section 5).
 
 Each variable stores (`spot_research_assessments.per_variable[<variable>]`): `class`,
 `label`, `sources` (pages), `independent_sources`, `independent_supporting`,
 `independent_contradicting`, `strongest_source_type` (of the supporting sources),
 `agreement` (`supporting` / `contradicting` / `not_comparable` page counts),
-`newest_year`, `summary` (one plain sentence, e.g. "Supported by 3 independent sources,
-including a peer-reviewed study."), `gaps`, `rules` (which rules fired, e.g.
-`["base:high", "conflict:same_tier"]`), `flag_differences` and `evidence` (one entry per
-claim: source metadata without the excerpt, the value, the researcher's flag, the
-computed and the used agreement).
+`newest_year`, `search_only` (rule 5's condition), `summary` (one plain sentence, e.g.
+"Supported by 3 independent sources, including a peer-reviewed study."), `gaps`, `rules`
+(which rules fired, e.g. `["base:high", "conflict:same_tier"]`), `flag_differences` and
+`evidence` (one entry per claim: source metadata including `retrieval`, without the
+excerpt, the value, the researcher's flag, the computed and the used agreement).
 
 A variable without evidence gets a fixed gap sentence:
 
@@ -181,7 +202,8 @@ can say what is missing.
 
 Assessments are never updated in place or deleted. `assess_spot` computes the assessment
 and its `evidence_fingerprint` (sha256 of the canonical JSON of the methodology version,
-every source and claim of the spot, the profile values compared and the research year).
+every source (including its `retrieval`) and claim of the spot, the profile values compared
+and the research year).
 It inserts a new row (and flips the previous row's `is_current` to false in the same
 transaction, before the insert, so the partial unique index "one current row per spot"
 holds) only when the fingerprint or the methodology version changed; otherwise it returns
@@ -212,8 +234,8 @@ are validated but not stored (there is no column for them); they stay in the fil
 API: `GET /api/spots` and every other `SpotSummary` carry `research_class` (one query for
 all spots); `GET /api/spots/{slug}` carries `research` (`ResearchOut`: overall class,
 summary, gaps, one row per variable with its label, class, summary, gaps and source
-count, the sources without excerpts, `methodology_version`, `assessed_at`,
-`research_updated_at`). The sources come from the snapshot in the assessment, so they are
+count, the sources without excerpts but with `retrieval` (`null` in research-v1
+assessments), `methodology_version`, `assessed_at`, `research_updated_at`). The sources come from the snapshot in the assessment, so they are
 exactly the ones it used.
 
 ## 7. Adding evidence
@@ -221,6 +243,9 @@ exactly the ones it used.
 1. Research one spot at a time. For every source, re-open the page and copy the excerpt
    verbatim (≤ 300 characters; the loader rejects longer ones). Never write an excerpt from
    memory, never cite a page you did not open, and never use Surfline or Windy content.
+   When the page itself could not be read and only a search tool's summary of it was
+   available, say so with `"retrieval": "web_search"` (the excerpt is then the summary's
+   text); such evidence is capped at Moderate (section 3, rule 5).
 2. Pick the `source_type` honestly (section 2). Use the publisher's real name and the same
    spelling every time, so pages of one publisher count once.
 3. Give a structured `value` only when the source states one: directions as degrees FROM
@@ -253,6 +278,7 @@ exactly the ones it used.
           "source_type": "encyclopedia",
           "published_year": 2023,
           "accessed_at": "2026-10-11",
+          "retrieval": "fetched",
           "claims": [
             {
               "variable": "swell_direction",
@@ -278,8 +304,9 @@ Validation (all problems are reported together; nothing is written when there is
   `title`, `publisher` (non-empty), `url` (an `http(s)` URL, or `null` for a printed
   work), `source_type` (one of the eight types), `published_year` (a year or `null`),
   `accessed_at` (a date such as `2026-10-11`, not in the future), `claims` (non-empty),
-  optional `notes`;
+  optional `notes`, optional `retrieval` (`fetched` (default) or `web_search`);
 * claim: `variable` (one of the eight variables), `claim` and `excerpt` (non-empty,
-  excerpt ≤ 300 characters), `value` (`null` or the variable's shape from section 2),
+  excerpt ≤ 300 characters), `value` (`null` or the variable's shape from section 2; for
+  swell direction, size and period one of the two bounds may be left out, not both),
   `agrees` (`true` / `false` / `null`);
 * unknown fields are rejected, so typos do not pass silently.

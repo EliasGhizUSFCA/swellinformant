@@ -1,4 +1,4 @@
-"""Research confidence: evidence validation, agreement and the research-v1 rules.
+"""Research confidence: evidence validation, agreement and the research-v1.1 rules.
 
 All evidence here is SYNTHETIC (tests/research_synthetic.py); no real source is cited.
 """
@@ -15,6 +15,7 @@ from app.models.research import RESEARCH_VARIABLES
 from app.services.research import assess
 from app.services.research.assess import (
     NO_EVIDENCE_GAPS,
+    SEARCH_ONLY_NOTE,
     VARIABLE_LABELS,
     compute_assessment,
     evidence_fingerprint,
@@ -52,7 +53,9 @@ def _var(sources: list[dict], variable: str, profile: dict | None = None) -> dic
 
 def test_value_shapes() -> None:
     assert validate_value("swell_direction", {"min": 270, "max": 20}) == []
-    assert validate_value("swell_direction", {"min": 270}) != []
+    assert validate_value("swell_direction", {"min": 270}) == []  # one bound: one direction
+    assert validate_value("swell_direction", {}) != []
+    assert validate_value("swell_direction", {"min": 270, "lo": 1}) != []
     assert validate_value("swell_direction", {"min": 400, "max": 20}) != []
     assert validate_value("wind", {"offshore_from_deg": 90}) == []
     assert validate_value("wind", {"offshore_from_deg": True}) != []  # bool is not a number
@@ -60,6 +63,9 @@ def test_value_shapes() -> None:
     assert validate_value("tide", {"tide": "spring"}) != []
     assert validate_value("swell_size", {"min_ft": 4, "max_ft": None}) == []
     assert validate_value("swell_size", {"min_ft": None, "max_ft": None}) != []
+    assert validate_value("swell_size", {"max_ft": 30}) == []  # omitted = null
+    assert validate_value("swell_size", {"max_ft": None}) != []
+    assert validate_value("swell_period", {"min_s": 12}) == []
     assert validate_value("swell_size", {"min_ft": 10, "max_ft": 4}) != []
     assert validate_value("swell_period", {"min_s": 12, "max_s": 18}) == []
     assert validate_value("swell_period", {"min_s": 12, "max_s": 45}) != []
@@ -78,7 +84,7 @@ def test_validation_lists_every_problem() -> None:
         [
             synthetic_claim("wave_quality"),  # not a RESEARCH_VARIABLE
             {**synthetic_claim("tide", {"tide": "low"}), "excerpt": "x" * 301},
-            synthetic_claim("swell_direction", {"min": 10}),  # bad shape
+            synthetic_claim("swell_direction", {"from": 10}),  # bad shape
         ],
         url="ftp://example.org/x",
     )
@@ -109,7 +115,7 @@ def test_validation_lists_every_problem() -> None:
         "source_type 'blog'",
         "variable 'wave_quality'",
         "excerpt is longer than 300",
-        "value for swell_direction must have exactly the keys",
+        "value for swell_direction must have the keys ['max', 'min']",
         "url must be an http(s) URL",
         "accessed_at is in the future",
         "unknown fields ['pages']",
@@ -152,6 +158,11 @@ def test_direction_window_overlap_with_tolerance_and_wrap() -> None:
     # Exact = both ends within 11.25 deg of the profile's.
     assert compare_value("swell_direction", {"min": 290, "max": 325}, p).exact is True
     assert compare_value("swell_direction", {"min": 270, "max": 325}, p).exact is False
+    # One bound ("320 deg or more"): that single direction, never exact.
+    one = compare_value("swell_direction", {"min": 320}, p)
+    assert one.agrees is True and one.exact is False
+    assert compare_value("swell_direction", {"max": 355}, p).agrees is False  # outside 265-350
+    assert compare_value("swell_direction", {"min": 340}, north).agrees is True
 
 
 def test_wind_tide_ranges_and_months() -> None:
@@ -176,6 +187,11 @@ def test_wind_tide_ranges_and_months() -> None:
     assert compare_value("swell_size", {"min_ft": 4, "max_ft": 15}, p).exact is True
     assert compare_value("swell_period", {"min_s": 6, "max_s": 10}, p).agrees is False
     assert compare_value("swell_period", {"min_s": 14, "max_s": None}, p).agrees is True
+    # An omitted bound is the same as null (open on that side).
+    assert compare_value("swell_size", {"max_ft": 5}, p).agrees is True
+    assert compare_value("swell_size", {"min_ft": 16}, p).agrees is False
+    assert compare_value("swell_period", {"min_s": 14}, p).agrees is True
+    assert compare_value("swell_size", {"min_ft": 4}, p).exact is False
     assert compare_value("seasonality", {"months": [6, 7]}, p).agrees is False
     assert compare_value("seasonality", {"months": [12, 4]}, p).agrees is True
     assert compare_value("seasonality", {"months": [12]}, _profile(best_months=[])).agrees is None
@@ -419,3 +435,115 @@ def test_fingerprint_is_order_independent_and_tracks_changes(
     assert fp != evidence_fingerprint(one, {**SYNTHETIC_PROFILE, "tide_preference": "low"}, 2026)
     monkeypatch.setattr(assess, "METHODOLOGY_VERSION", "research-test")
     assert fp != evidence_fingerprint(one, SYNTHETIC_PROFILE, 2026)
+
+
+# --- retrieval (research-v1.1) ----------------------------------------------------------
+
+
+def test_retrieval_is_optional_and_validated() -> None:
+    raw = synthetic_file(
+        {
+            "pipeline": [
+                synthetic_source("a", "guidebook", _claims("wind")),
+                synthetic_source("b", "official", _claims("wind"), retrieval="web_search"),
+                synthetic_source("c", "magazine", _claims("wind"), retrieval="fetched"),
+            ]
+        }
+    )
+    parsed = parse_evidence(raw, {"pipeline"})
+    assert [s.retrieval for s in parsed.spots["pipeline"].sources] == [
+        "fetched",  # the default when the field is absent
+        "web_search",
+        "fetched",
+    ]
+    bad = synthetic_file(
+        {
+            "pipeline": [
+                synthetic_source("x", "guidebook", _claims("wind"), retrieval="scraped"),
+                {**synthetic_source("y", "guidebook", _claims("wind")), "retrieval": None},
+            ]
+        }
+    )
+    with pytest.raises(EvidenceValidationError) as info:
+        parse_evidence(bad, {"pipeline"})
+    text = "\n".join(info.value.problems)
+    assert "retrieval 'scraped' is not one of ['fetched', 'web_search']" in text
+    assert "retrieval None is not one of" in text
+
+
+def _well_researched(retrieval: dict[str, str | None]) -> list[dict]:
+    core = ["swell_direction", "swell_size", "wind", "tide", "bathymetry", "local_behavior"]
+    claims = [synthetic_claim(v, AGREEING_VALUES[v], True) for v in core]
+    return [
+        synthetic_source("survey", "survey_data", claims, retrieval=retrieval.get("survey")),
+        synthetic_source("guide", "guidebook", claims, retrieval=retrieval.get("guide")),
+    ]
+
+
+def test_search_only_support_is_capped_at_moderate() -> None:
+    searched = _assess(_well_researched({"survey": "web_search", "guide": "web_search"}))
+    # The same evidence read directly is High (test_well_researched_spot_is_high).
+    assert searched.overall_class == "moderate"
+    for v in ("swell_direction", "swell_size", "wind", "tide", "bathymetry", "local_behavior"):
+        entry = searched.per_variable[v]
+        assert entry["class"] == "moderate", v
+        assert entry["rules"][-1] == "cap:search_only"
+        assert entry["search_only"] is True
+        assert entry["summary"].endswith(SEARCH_ONLY_NOTE), entry["summary"]
+        assert entry["gaps"][0].endswith("were seen only as search summaries, not read in full.")
+        assert {e["retrieval"] for e in entry["evidence"]} == {"web_search"}
+    # Not researched at all: no note, no cap.
+    period = searched.per_variable["swell_period"]
+    assert period["search_only"] is False and period["summary"] == "No sources found."
+    assert "cap:search_only" not in period["rules"]
+
+
+def test_one_directly_read_supporting_source_lifts_the_search_cap() -> None:
+    mixed = _assess(_well_researched({"guide": "web_search"}))  # the survey was read
+    assert mixed.overall_class == "high"
+    wind = mixed.per_variable["wind"]
+    assert wind["class"] == "high" and wind["search_only"] is False
+    assert "cap:search_only" not in wind["rules"] and not wind["summary"].endswith(SEARCH_ONLY_NOTE)
+
+
+def test_search_cap_only_lowers_high_and_notes_weaker_evidence() -> None:
+    # A single tier-A source read as a search summary: Moderate by research-v1 already;
+    # the cap does not fire (it never lowers Moderate) but the summary says how it was read.
+    one = _var([synthetic_source("o", "official", _claims("wind"), retrieval="web_search")], "wind")
+    assert one["class"] == "moderate" and "cap:search_only" not in one["rules"]
+    assert one["search_only"] is True
+    assert one["summary"] == (
+        "Supported by one source (an official publication) "
+        "(based on search summaries; source pages not read in full)"
+    )
+    # Contradicted only: Low as before, and the note is still there.
+    contra = _var(
+        [
+            synthetic_source(
+                "g",
+                "guidebook",
+                _claims("wind", False, {"offshore_from_deg": 300}),
+                retrieval="web_search",
+            )
+        ],
+        "wind",
+    )
+    assert contra["class"] == "low" and contra["summary"].endswith(SEARCH_ONLY_NOTE)
+
+
+def test_fingerprint_includes_retrieval() -> None:
+    fetched = parsed_sources(_well_researched({}))
+    searched = parsed_sources(_well_researched({"survey": "web_search"}))
+    assert evidence_fingerprint(fetched, SYNTHETIC_PROFILE, 2026) != evidence_fingerprint(
+        searched, SYNTHETIC_PROFILE, 2026
+    )
+    # An explicit "fetched" is the same evidence as the default.
+    explicit = parsed_sources(_well_researched({"survey": "fetched", "guide": "fetched"}))
+    assert evidence_fingerprint(fetched, SYNTHETIC_PROFILE, 2026) == evidence_fingerprint(
+        explicit, SYNTHETIC_PROFILE, 2026
+    )
+
+
+def test_methodology_version_is_research_v1_1() -> None:
+    assert assess.METHODOLOGY_VERSION == "research-v1.1"
+    assert _assess([]).methodology_version == "research-v1.1"

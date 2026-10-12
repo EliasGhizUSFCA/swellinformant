@@ -5,7 +5,7 @@ confidence) and the spot views. The other modules (docs/research-confidence.md):
 
 * ``values``: structured claim values and their comparison with a spot profile;
 * ``evidence``: loading, validating and syncing ``research_evidence.json``;
-* ``assess``: the research-v1 methodology and the assessment history;
+* ``assess``: the research-v1.1 methodology and the assessment history;
 * ``views``: API read models; ``cli``: ``python -m app.cli research ...``.
 """
 

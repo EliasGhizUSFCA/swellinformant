@@ -19,10 +19,13 @@ local_behavior          null (descriptive)                     not compared
 Assumptions (documented in docs/research-confidence.md):
 
 * Directions are nautical degrees the swell or wind comes FROM; a window runs clockwise
-  from ``min`` to ``max`` and may wrap through north (``{"min": 300, "max": 20}``).
+  from ``min`` to ``max`` and may wrap through north (``{"min": 300, "max": 20}``). A
+  window with only one bound (``{"min": 320}``, "320 degrees or more") states one
+  direction that works; it is compared as that single direction and is never exact,
+  because the open side of a circular range is undefined.
 * Sizes are breaking face heights in feet, the unit of the profile's working range, never
   offshore significant wave height and never Hawaiian scale. A one-sided range (one bound
-  null) is open on that side.
+  null or omitted) is open on that side; the same holds for periods.
 * The profile's period range runs from ``min_swell_period_s`` (rarely works below) to
   ``ideal_swell_period_s``; a source range agrees when it overlaps it.
 
@@ -54,8 +57,11 @@ MAX_FACE_HEIGHT_FT = 150.0
 
 # Variables whose claims describe rather than state a comparable value.
 DESCRIPTIVE_VARIABLES = frozenset({"bathymetry", "local_behavior"})
+# Range variables whose value may state only one bound (the other key omitted or null).
+OPTIONAL_BOUND_VARIABLES = frozenset({"swell_direction", "swell_size", "swell_period"})
 
 # Accepted keys of a structured value, per variable (None = no structured value).
+# For the range variables (OPTIONAL_BOUND_VARIABLES) one of the two keys may be omitted.
 VALUE_KEYS: dict[str, frozenset[str] | None] = {
     "swell_direction": frozenset({"min", "max"}),
     "wind": frozenset({"offshore_from_deg"}),
@@ -89,12 +95,18 @@ def validate_value(variable: str, value: Any) -> list[str]:
         return [f"{variable} takes no structured value (descriptive variable); use null"]
     if not isinstance(value, dict):
         return [f"value must be an object with keys {sorted(keys)} or null"]
-    if set(value) != keys:
+    if variable in OPTIONAL_BOUND_VARIABLES:
+        if not value or not set(value) <= keys:
+            return [
+                f"value for {variable} must have the keys {sorted(keys)} "
+                "(one of them may be omitted)"
+            ]
+    elif set(value) != keys:
         return [f"value for {variable} must have exactly the keys {sorted(keys)}"]
     problems: list[str] = []
     if variable == "swell_direction":
         for k in ("min", "max"):
-            if not _is_number(value[k]) or not 0 <= value[k] <= 360:
+            if k in value and (not _is_number(value[k]) or not 0 <= value[k] <= 360):
                 problems.append(f"value.{k} must be a direction in degrees 0-360")
     elif variable == "wind":
         v = value["offshore_from_deg"]
@@ -110,7 +122,8 @@ def validate_value(variable: str, value: Any) -> list[str]:
             if variable == "swell_size"
             else ("min_s", "max_s", MAX_PERIOD_S, "s")
         )
-        lo, hi = value[lo_key], value[hi_key]
+        lo: Any = value.get(lo_key)  # an omitted bound is null
+        hi: Any = value.get(hi_key)
         for k, v in ((lo_key, lo), (hi_key, hi)):
             if v is not None and (not _is_number(v) or not 0 < v <= limit):
                 problems.append(f"value.{k} must be null or a number in (0, {limit:g}] {unit}")
@@ -199,7 +212,10 @@ def _range_exact(
 def compare_value(variable: str, value: dict[str, Any], profile: dict[str, Any]) -> Comparison:
     """Compare a (validated) structured value with ``profile_values(spot)``."""
     if variable == "swell_direction":
-        lo, hi = norm_deg(value["min"]), norm_deg(value["max"])
+        # One stated bound: that single direction (lo == hi), never an exact match.
+        one_bound = "min" not in value or "max" not in value
+        lo = norm_deg(value["min"] if "min" in value else value["max"])
+        hi = norm_deg(value["max"] if "max" in value else value["min"])
         p_lo = profile["optimal_swell_direction_min"]
         p_hi = profile["optimal_swell_direction_max"]
         if window_width(p_lo, p_hi) + 2 * DIRECTION_TOLERANCE_DEG >= 360:
@@ -209,7 +225,8 @@ def compare_value(variable: str, value: dict[str, Any], profile: dict[str, Any])
                 lo, hi, p_lo - DIRECTION_TOLERANCE_DEG, p_hi + DIRECTION_TOLERANCE_DEG
             )
         exact = (
-            angular_diff(lo, p_lo) <= EXACT_DIRECTION_DEG
+            not one_bound
+            and angular_diff(lo, p_lo) <= EXACT_DIRECTION_DEG
             and angular_diff(hi, p_hi) <= EXACT_DIRECTION_DEG
         )
         return Comparison(agrees, agrees and exact)
@@ -226,12 +243,12 @@ def compare_value(variable: str, value: dict[str, Any], profile: dict[str, Any])
             return Comparison(False)
         return Comparison(abs(TIDE_ORDER.index(mine) - TIDE_ORDER.index(theirs)) <= 1)
     if variable == "swell_size":
-        args = (value["min_ft"], value["max_ft"])
+        args = (value.get("min_ft"), value.get("max_ft"))
         bounds = (profile["wave_height_min_ft"], profile["wave_height_max_ft"])
         agrees = _ranges_overlap(*args, *bounds)
         return Comparison(agrees, agrees and _range_exact(*args, *bounds, EXACT_RANGE_FT))
     if variable == "swell_period":
-        args = (value["min_s"], value["max_s"])
+        args = (value.get("min_s"), value.get("max_s"))
         bounds = (profile["min_swell_period_s"], profile["ideal_swell_period_s"])
         agrees = _ranges_overlap(*args, *bounds)
         return Comparison(agrees, agrees and _range_exact(*args, *bounds, EXACT_RANGE_S))
