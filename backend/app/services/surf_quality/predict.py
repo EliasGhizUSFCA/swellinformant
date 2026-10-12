@@ -22,6 +22,7 @@ from app.models import (
     ForecastEnsembleStat,
     ForecastRun,
     ForecastSource,
+    SpotResearchAssessment,
     SurfQualityPrediction,
     SurfSpot,
     WaveForecast,
@@ -295,25 +296,38 @@ def compute_predictions_for_run(
 
 
 def outdated_authoritative_runs(db: Session, now: datetime | None = None) -> list[int]:
-    """Runs currently shown to users whose predictions predate ALGORITHM_VERSION or the
-    confidence methodology (forecast-v1).
+    """Runs currently shown to users whose predictions predate ALGORITHM_VERSION, the
+    confidence methodology (forecast-v1) or the spot's current research assessment.
 
     After an algorithm upgrade the live forecast is rescored at once instead of waiting
-    for the next model cycle. Older runs keep the version they were issued with (the
-    prediction archive is the record of what was forecast).
+    for the next model cycle; likewise after new research evidence (``research load`` or a
+    seed), so local confidence follows the current assessment. Older runs keep the version
+    they were issued with (the prediction archive is the record of what was forecast).
     """
     from app.services.forecasts.queries import latest_runs_by_spot
 
     run_ids = sorted({r.id for r in latest_runs_by_spot(db, now).values()})
     if not run_ids:
         return []
+    # Each spot's current research assessment; no row = never assessed (NULL on both sides).
+    current_research = (
+        select(SpotResearchAssessment.spot_id, SpotResearchAssessment.id)
+        .where(SpotResearchAssessment.is_current)
+        .subquery()
+    )
     return list(
         db.scalars(
             select(SurfQualityPrediction.run_id)
+            .outerjoin(
+                current_research, current_research.c.spot_id == SurfQualityPrediction.spot_id
+            )
             .where(
                 SurfQualityPrediction.run_id.in_(run_ids),
                 (SurfQualityPrediction.algorithm_version != ALGORITHM_VERSION)
-                | SurfQualityPrediction.confidence_method.is_distinct_from(CONFIDENCE_METHOD),
+                | SurfQualityPrediction.confidence_method.is_distinct_from(CONFIDENCE_METHOD)
+                | SurfQualityPrediction.research_assessment_id.is_distinct_from(
+                    current_research.c.id
+                ),
             )
             .distinct()
         ).all()

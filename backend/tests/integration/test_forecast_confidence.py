@@ -351,6 +351,34 @@ def test_requirement_1_research_and_forecast_confidence_are_stored_separately(
     assert [p.local_confidence_class for p in rescored] == classes["jeffreys-bay"]
 
 
+def test_a_new_research_assessment_rescores_the_authoritative_run(
+    db: Session, scored: dict[str, Any]
+) -> None:
+    """`research load` / a seed inserts new assessments; the next prediction job must
+    rescore the run users see, or local confidence keeps the superseded assessment until
+    the next model cycle (seen on the live clone: 4,050 hours, 0 rescored)."""
+    run = scored["run"]
+    assert compute_pending_predictions(db, NOW)["rescored_runs"] == 0  # nothing to redo
+    before = _preds(db, run.id, "jeffreys-bay")
+    assert {p.research_assessment_id for p in before} == {None}
+    assert {p.local_confidence_class for p in before} == {fc.LOW}
+    row = _synthetic_research(db, "jeffreys-bay", fc.HIGH)  # SYNTHETIC
+    out = compute_pending_predictions(db, NOW)
+    assert out["rescored_runs"] == 1
+    db.expire_all()
+    after = _preds(db, run.id, "jeffreys-bay")
+    assert {p.research_assessment_id for p in after} == {row.id}
+    assert [p.local_confidence_class for p in after] == [p.forecast_confidence_class for p in after]
+    assert [p.forecast_confidence_class for p in after] == [
+        p.forecast_confidence_class for p in before
+    ]
+    # Superseding the other spots' assessments the same way is detected too; afterwards
+    # the run is up to date and is not rescored again.
+    _synthetic_research(db, "uluwatu", fc.MODERATE)  # SYNTHETIC
+    assert compute_pending_predictions(db, NOW)["rescored_runs"] == 1
+    assert compute_pending_predictions(db, NOW)["rescored_runs"] == 0
+
+
 def test_requirement_2_and_3_classes_by_lead_with_synthetic_ensemble(
     db: Session, scored: dict[str, Any]
 ) -> None:

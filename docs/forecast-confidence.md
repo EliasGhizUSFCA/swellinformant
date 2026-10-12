@@ -193,8 +193,10 @@ never gets High local confidence, however good the forecast is.
   index wording.
 * **Read-time staleness:** when the authoritative run has gone stale since it was scored, the
   API caps both classes at Moderate and puts the staleness reason first.
-* A run whose predictions were scored with another methodology is rescored once it is shown
-  to users (`predict.outdated_authoritative_runs`); archived rows are never rewritten.
+* A run whose predictions were scored with another methodology, or whose local confidence
+  used a research assessment that is no longer current (after `research load` or a seed), is
+  rescored once it is shown to users (`predict.outdated_authoritative_runs`); archived rows
+  are never rewritten.
 
 `confidence_inputs` (JSON): `method`, `index`, `index_class`, `sigma_source`, `lead_h`,
 `source`, `demo`, `families`, `independent_families`, `ensemble` {`rel_spread`, `members`},
@@ -252,7 +254,11 @@ file; blend, predictions (rescoring), archive and detection run at a fixed "now"
   0-1 / 1-3 / 3-7 / 7-10 / > 10 days: Moderate 90 / 290 / 572 / 361 / 0). No spot can be High
   locally while no research variable is High. `local_confidence_reason` was set on 2,593
   hours ("… not well documented yet." 2,161, "… only partly documented." 432) and empty on
-  1,457 where the two classes are equal.
+  1,457 where the two classes are equal. The rescoring had to be forced in this check: the
+  prediction job then rescored 0 runs although all 4,050 hours referenced the superseded
+  assessment. Since the review fix it is automatic (§4); a re-run on the clone after
+  `research assess --slug pipeline --force` rescored the blend run once (4,050 predictions)
+  and then nothing.
 * **Most common reasons:** "Not yet checked against buoys near this spot." (4,050; no
   verification metrics in the live data), "Ensemble members agree closely." (2,974), "GFS and
   ECMWF agree on swell size." (1,282), "Ensemble members differ somewhat on swell size." (734),
