@@ -212,7 +212,7 @@ stale after 16 h instead of 18 h, i.e. as soon as one cycle has been missed.
 
 ## ADR-016 Evidence seen only through search summaries is at most Moderate
 
-**Context.** The first real research evidence (2026-10-11: 260 sources, 807 claims for the
+**Context.** The first real research evidence (2026-10-11: 259 sources, 805 claims for the
 50 spots) was gathered with domain-restricted web searches while direct page access was
 blocked. Every source was re-checked by an independent verifier, but every excerpt is a
 search tool's text about a page, not the page itself. Under research-v1 that evidence would

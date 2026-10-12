@@ -2209,32 +2209,6 @@
        "agrees": null
       }
      ]
-    },
-    {
-     "key": "magicseaweed-rincon",
-     "title": "Rincon (The Cove) Surf Report and Surf Forecast - Surfline",
-     "url": "https://magicseaweed.com/Rincon-Point-Surf-Guide/272/",
-     "publisher": "Magicseaweed",
-     "source_type": "surf_forecast_site",
-     "published_year": null,
-     "accessed_at": "2026-10-11",
-     "retrieval": "web_search",
-     "claims": [
-      {
-       "variable": "bathymetry",
-       "claim": "The point was shaped by a river mouth over a very long time.",
-       "value": null,
-       "excerpt": "The break exists because a river mouth has shaped the point over a very long time.",
-       "agrees": null
-      },
-      {
-       "variable": "local_behavior",
-       "claim": "A classic California right-hand point and one of the world's best point breaks.",
-       "value": null,
-       "excerpt": "The guide describes Rincon as one of the world's best point breaks and a classic California right-hand point.",
-       "agrees": null
-      }
-     ]
     }
    ]
   },

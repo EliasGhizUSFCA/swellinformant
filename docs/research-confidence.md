@@ -314,7 +314,7 @@ Validation (all problems are reported together; nothing is written when there is
 ## 9. The committed evidence file (2026-10-11)
 
 `data/surf_spots/research_evidence.json` holds the evidence assembled on 2026-10-11 for all
-50 spots: 260 sources and 807 claims from domain-restricted web searches (one publisher per
+50 spots: 259 sources and 805 claims from domain-restricted web searches (one publisher per
 query), every source and claim re-checked by an independent verifier with its own searches.
 Direct page access was blocked by the research environment's network policy, so **every
 source has `"retrieval": "web_search"`**: the excerpts are the search tool's text about the
