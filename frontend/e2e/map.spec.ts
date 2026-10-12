@@ -201,9 +201,10 @@ async function centreOf(page: Page, selector: string) {
 }
 
 /**
- * Direction the particle trails point: the alpha gradient summed over the particle canvas.
- * A trail is brightest at its head, so along one trail the sum is (head − tail) alpha in the
- * direction of travel (x east, y down).
+ * Direction the particle trails point: the alpha difference over ±3 px, summed over the
+ * particle canvas. A trail is brightest at its head, so along one trail the sum is about
+ * 3 × (head − tail) alpha in the direction of travel (x east, y down); across a thin
+ * antialiased line (at most 3 px wide) it is zero, so line thickness adds no noise.
  */
 async function trailGradient(page: Page) {
   return page.locator("canvas.map-particle-canvas").evaluate((c: HTMLCanvasElement) => {
@@ -212,11 +213,11 @@ async function trailGradient(page: Page) {
     const a = (x: number, y: number) => d[(y * w + x) * 4 + 3]!;
     let gx = 0;
     let gy = 0;
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
+    for (let y = 3; y < h - 3; y++) {
+      for (let x = 3; x < w - 3; x++) {
         if (!a(x, y)) continue;
-        gx += a(x + 1, y) - a(x - 1, y);
-        gy += a(x, y + 1) - a(x, y - 1);
+        gx += a(x + 3, y) - a(x - 3, y);
+        gy += a(x, y + 3) - a(x, y - 3);
       }
     }
     return { gx, gy };
@@ -889,6 +890,7 @@ test.describe("ocean layers: geography, motion and bandwidth (synthetic fields)"
     const wind = await trailGradient(page);
     expect(wind.gy, JSON.stringify(wind)).toBeLessThan(0);
     expect(Math.abs(wind.gy)).toBeGreaterThan(3 * Math.abs(wind.gx));
+    console.log(`trail gradients: waves ${JSON.stringify(wave)}, wind ${JSON.stringify(wind)}`);
     // Trails fade out completely. On an 8-bit canvas, dimming each frame by 0.92 stops at
     // alpha 6/255, a veil that piles up wherever particles have been (a spike at 6 in the
     // alpha histogram); the half-float particle canvas has none.
