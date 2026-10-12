@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { apiGet, apiPost, verifyEmailFromOutbox } from "./helpers";
-import { mockFields, mockFieldsUnavailable, syntheticValidTimes, syntheticValue, type FieldMock } from "./map-fields.mock";
+import { mockFields, mockFieldsUnavailable, syntheticValidTimes, syntheticValue, type FieldMock, type SyntheticFields } from "./map-fields.mock";
 
 /**
  * Interactive map against the production build. Tile servers are not reachable from CI
@@ -22,7 +22,12 @@ const TILE_PNG = Buffer.from(
 
 interface Snapshot {
   valid_time: string | null;
-  spots: Array<{ slug: string; event_at_time: boolean; conditions: null | { score: number; breaking_height_min_ft: number; breaking_height_max_ft: number } }>;
+  step_hours: number;
+  spots: Array<{
+    slug: string;
+    event_at_time: boolean;
+    conditions: null | { score: number; is_daylight: boolean; breaking_height_min_ft: number; breaking_height_max_ft: number };
+  }>;
 }
 interface Spot {
   slug: string;
@@ -119,6 +124,152 @@ async function shot(page: Page, name: string, settleMs = 0) {
   await page.screenshot({ path: `${SHOTS}/${name}.png` });
 }
 
+const lonGap = (a: number, b: number) => {
+  const d = Math.abs(a - b) % 360;
+  return Math.min(d, 360 - d);
+};
+
+/** RGBA of the colour-field canvas itself (below the land and particles) at a page point. */
+async function fieldPixel(page: Page, x: number, y: number): Promise<number[]> {
+  return field(page).evaluate(
+    (c: HTMLCanvasElement, [px, py]) => {
+      const r = c.getBoundingClientRect();
+      const i = Math.floor(((px - r.left) * c.width) / r.width);
+      const j = Math.floor(((py - r.top) * c.height) / r.height);
+      return Array.from(c.getContext("2d")!.getImageData(i, j, 1, 1).data);
+    },
+    [x, y] as const,
+  );
+}
+
+/**
+ * Page-coordinate extent of the "hot" field pixels (red > 150) within ±r CSS px of a point.
+ * (An extent, not a centroid: Mercator stretches the northern half of a square more than
+ * the southern half, so a pixel centroid sits a few pixels poleward of its centre.)
+ */
+async function hotBox(page: Page, x: number, y: number, r: number) {
+  return field(page).evaluate(
+    (c: HTMLCanvasElement, [px, py, rr]) => {
+      const b = c.getBoundingClientRect();
+      const sx = c.width / b.width;
+      const sy = c.height / b.height;
+      const i0 = Math.max(0, Math.floor((px - rr - b.left) * sx));
+      const j0 = Math.max(0, Math.floor((py - rr - b.top) * sy));
+      const w = Math.min(c.width, Math.ceil((px + rr - b.left) * sx)) - i0;
+      const h = Math.min(c.height, Math.ceil((py + rr - b.top) * sy)) - j0;
+      const d = c.getContext("2d")!.getImageData(i0, j0, w, h).data;
+      let n = 0;
+      let minI = Infinity;
+      let maxI = -Infinity;
+      let minJ = Infinity;
+      let maxJ = -Infinity;
+      for (let j = 0; j < h; j++) {
+        for (let i = 0; i < w; i++) {
+          const k = (j * w + i) * 4;
+          if (d[k + 3]! > 0 && d[k]! > 150) {
+            n++;
+            minI = Math.min(minI, i);
+            maxI = Math.max(maxI, i);
+            minJ = Math.min(minJ, j);
+            maxJ = Math.max(maxJ, j);
+          }
+        }
+      }
+      if (!n) return null;
+      return {
+        n,
+        left: b.left + (i0 + minI) / sx,
+        right: b.left + (i0 + maxI + 1) / sx,
+        top: b.top + (j0 + minJ) / sy,
+        bottom: b.top + (j0 + maxJ + 1) / sy,
+      };
+    },
+    [x, y, r] as const,
+  );
+}
+
+/** Latitude at page row `y`, given that row `y0` is at `lat0`, at Leaflet zoom `zoom`. */
+function latAtRow(y: number, y0: number, lat0: number, zoom: number): number {
+  const my0 = 0.5 - Math.log(Math.tan(Math.PI / 4 + (lat0 * Math.PI) / 360)) / (2 * Math.PI);
+  const my = my0 + (y - y0) / (256 * 2 ** zoom);
+  return (Math.atan(Math.sinh(Math.PI * (1 - 2 * my))) * 180) / Math.PI;
+}
+
+async function centreOf(page: Page, selector: string) {
+  const b = (await page.locator(selector).boundingBox())!;
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+}
+
+/**
+ * Direction the particle trails point: the alpha gradient summed over the particle canvas.
+ * A trail is brightest at its head, so along one trail the sum is (head − tail) alpha in the
+ * direction of travel (x east, y down).
+ */
+async function trailGradient(page: Page) {
+  return page.locator("canvas.map-particle-canvas").evaluate((c: HTMLCanvasElement) => {
+    const { width: w, height: h } = c;
+    const d = c.getContext("2d")!.getImageData(0, 0, w, h).data;
+    const a = (x: number, y: number) => d[(y * w + x) * 4 + 3]!;
+    let gx = 0;
+    let gy = 0;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        if (!a(x, y)) continue;
+        gx += a(x + 1, y) - a(x - 1, y);
+        gy += a(x, y + 1) - a(x, y - 1);
+      }
+    }
+    return { gx, gy };
+  });
+}
+
+/**
+ * Static arrows (reduced motion) sit on a 46 px grid with the head barbs at the downstream
+ * end, so their ink leans from each cell's centre towards where the flow goes. Also a hash of
+ * the pixels, to tell whether the canvas changes.
+ */
+async function arrowLean(page: Page) {
+  return page.locator("canvas.map-particle-canvas").evaluate((c: HTMLCanvasElement) => {
+    const { width: w, height: h } = c;
+    const d = c.getContext("2d")!.getImageData(0, 0, w, h).data;
+    let sx = 0;
+    let sy = 0;
+    let ink = 0;
+    let hash = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const a = d[(y * w + x) * 4 + 3]!;
+        if (!a) continue;
+        sx += a * ((x % 46) - 22.5);
+        sy += a * ((y % 46) - 22.5);
+        ink += a;
+        hash = (hash * 31 + a * (x + 1) + y) % 1_000_000_007;
+      }
+    }
+    return { dx: ink ? sx / ink : 0, dy: ink ? sy / ink : 0, ink, hash };
+  });
+}
+
+// SYNTHETIC uniform flow: waves FROM the west (270°, so they travel east) at 10 s, and wind
+// blowing TOWARDS the north (u 0, v 8 m/s, i.e. a southerly).
+const UNIFORM_FLOW: SyntheticFields = {
+  name: "uniform-flow",
+  value: (variable) => (({ hs: 2, tp: 10, wave_dir: 270, wind_u: 0, wind_v: 8, pressure: 1013 }) as Record<string, number>)[variable] ?? null,
+};
+
+// SYNTHETIC hot spots: Hs 9 m within ±1° of 60°N 30°W and of 20°S 150°E, 0.5 m elsewhere.
+const HOT_SPOTS = [
+  { lat: 60, lon: -30 },
+  { lat: -20, lon: 150 },
+];
+const HOT_FIELD: SyntheticFields = {
+  name: "hot-spots",
+  value: (variable, lat, lon) => {
+    if (variable === "hs") return HOT_SPOTS.some((h) => Math.abs(lat - h.lat) <= 1 && lonGap(lon, h.lon) <= 1) ? 9 : 0.5;
+    return ({ tp: 10, wave_dir: 270, wind_u: 0, wind_v: 0, pressure: 1013 } as Record<string, number>)[variable] ?? null;
+  },
+};
+
 test.describe("interactive map", () => {
   test("loads with 50 markers, working tiles and no uncaught errors", async ({ page }) => {
     const { errors, tiles } = await openMap(page);
@@ -176,10 +327,17 @@ test.describe("interactive map", () => {
     await expect(panel).toHaveCount(0);
   });
 
-  test("the forecast time control requests cached predictions for the chosen hour", async ({ page }) => {
+  test("the forecast time control requests cached predictions for the chosen hour", async ({ page, request }) => {
     await openMap(page);
     const before = await page.getByTestId("time-label").innerText();
-    const req = page.waitForRequest((r) => r.url().includes("/api/map/conditions?at="));
+    // Eight steps after the server's "now" hour. The request is debounced (250 ms), so clicks
+    // slower than that may also ask for earlier hours: wait for the final hour's request.
+    const snap = (await apiGet(request, "/api/map/conditions")) as Snapshot;
+    const final = Date.parse(snap.valid_time!) + 8 * snap.step_hours * 3600_000;
+    const req = page.waitForRequest((r) => {
+      const at = new URL(r.url()).searchParams.get("at");
+      return r.url().includes("/api/map/conditions?at=") && at !== null && Date.parse(at) === final;
+    });
     for (let i = 0; i < 8; i++) await page.getByRole("button", { name: "Later" }).click();
     const url = new URL((await req).url());
     const at = new Date(url.searchParams.get("at")!);
@@ -242,6 +400,29 @@ test.describe("interactive map", () => {
     await page.locator("path.spot-uluwatu").click({ force: true });
     await expect(page.getByTestId("panel-spot-name")).toHaveText(/Uluwatu/);
     expect(errors).toEqual([]);
+  });
+
+  test("the best-spots list ranks daylight hours above night ones and tags the night", async ({ page, request }) => {
+    await openMap(page);
+    const spots = (await apiGet(request, "/api/spots")) as Spot[];
+    const snap = (await apiGet(request, "/api/map/conditions")) as Snapshot;
+    const cond = new Map(snap.spots.map((s) => [s.slug, s.conditions]));
+    const rank = (slug: string) => {
+      const c = cond.get(slug);
+      return c ? (c.is_daylight ? 1000 : 0) + c.score : -1;
+    };
+    // The same ordering as before the redesign: daylight first, then score; 15 rows.
+    const expected = [...spots].sort((a, b) => rank(b.slug) - rank(a.slug)).slice(0, 15);
+    const rows = page.getByTestId("top-spots").locator("li");
+    await expect(rows).toHaveCount(15);
+    for (const [i, s] of expected.entries()) {
+      await expect(rows.nth(i)).toContainText(`${s.name} · ${s.country}`);
+      const c = cond.get(s.slug);
+      await expect(rows.nth(i).getByTestId("night-tag")).toHaveCount(c && !c.is_daylight ? 1 : 0);
+    }
+    // A row opens that spot's panel.
+    await rows.first().getByRole("button").click();
+    await expect(page.getByTestId("panel-spot-name")).toHaveText(expected[0]!.name);
   });
 
   test("signed-in users see their own opportunities in the spot panel", async ({ page }) => {
@@ -345,18 +526,18 @@ test.describe("ocean layers (synthetic fields)", () => {
     await page.getByRole("button", { name: "Legend", exact: true }).click();
     const legend = page.getByTestId("legend-drawer");
     await expect(page.getByRole("radio", { name: "Wave Height" })).toHaveAttribute("aria-checked", "true");
-    await expect(legend.getByTestId("legend-title")).toHaveText("Wave Height (ft)");
+    await expect(legend.getByTestId("legend-title")).toHaveText("Offshore wave height, Hs (ft)");
     await expect(legend.getByTestId("legend-about")).toContainText("Surf height at a beach is different");
 
     await page.getByRole("radio", { name: "Wind Speed" }).click();
     await expect(field(page)).toHaveAttribute("data-layer", "wind");
     await expect.poll(() => requested(mock, "wind_u", now) && requested(mock, "wind_v", now)).toBe(true);
-    await expect(legend.getByTestId("legend-title")).toHaveText("Wind Speed (km/h)");
+    await expect(legend.getByTestId("legend-title")).toHaveText("Wind speed (km/h)");
     await expect(legend.getByTestId("legend-ticks")).toContainText("100"); // 0–30 m/s ≈ 0–108 km/h
 
     await page.getByRole("radio", { name: "Wave Energy" }).click();
     await expect(field(page)).toHaveAttribute("data-layer", "energy");
-    await expect(legend.getByTestId("legend-title")).toHaveText("Wave Energy (kW/m)");
+    await expect(legend.getByTestId("legend-title")).toHaveText("Offshore wave power (kW/m)");
     await expect(legend.getByTestId("legend-about")).toContainText("0.49 × Hs² × Te");
     await expect(legend.getByTestId("legend-ticks")).toContainText("150");
 
@@ -368,7 +549,7 @@ test.describe("ocean layers (synthetic fields)", () => {
     await page.keyboard.up("ArrowRight");
     await expect(page.getByRole("radio", { name: "Wave Period" })).toHaveAttribute("aria-checked", "true");
     await expect(field(page)).toHaveAttribute("data-layer", "tp");
-    await expect(legend.getByTestId("legend-title")).toHaveText("Wave Period (s)");
+    await expect(legend.getByTestId("legend-title")).toHaveText("Offshore peak period (s)");
     await expect(field(page)).toHaveAttribute("aria-label", /Offshore peak wave period/);
 
     // Units from Settings apply to the legend.
@@ -377,9 +558,9 @@ test.describe("ocean layers (synthetic fields)", () => {
     await page.getByTestId("map-settings").getByRole("radio", { name: "kn", exact: true }).click();
     await page.getByTestId("map-settings").getByRole("radio", { name: "m", exact: true }).click();
     await page.keyboard.press("Escape");
-    await expect(legend.getByTestId("legend-title")).toHaveText("Wind Speed (kn)");
+    await expect(legend.getByTestId("legend-title")).toHaveText("Wind speed (kn)");
     await page.getByRole("radio", { name: "Wave Height" }).click();
-    await expect(legend.getByTestId("legend-title")).toHaveText("Wave Height (m)");
+    await expect(legend.getByTestId("legend-title")).toHaveText("Offshore wave height, Hs (m)");
     await expect(legend.getByTestId("legend-ticks")).toContainText("10");
   });
 
@@ -510,9 +691,9 @@ test.describe("ocean layers (synthetic fields)", () => {
     await page.reload();
     await expect(page.locator("path.spot-marker")).toHaveCount(50);
     await page.getByRole("button", { name: "Legend", exact: true }).click();
-    await expect(page.getByTestId("legend-title")).toHaveText("Wave Height (m)");
+    await expect(page.getByTestId("legend-title")).toHaveText("Offshore wave height, Hs (m)");
     await page.getByRole("radio", { name: "Wind Speed" }).click();
-    await expect(page.getByTestId("legend-title")).toHaveText("Wind Speed (m/s)");
+    await expect(page.getByTestId("legend-title")).toHaveText("Wind speed (m/s)");
   });
 
   test("the legend drawer opens and closes and names the data source and model cycle", async ({ page }) => {
@@ -623,6 +804,248 @@ test.describe("ocean layers (synthetic fields)", () => {
   });
 });
 
+test.describe("ocean layers: geography, motion and bandwidth (synthetic fields)", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("the colour field lands where Leaflet puts each position (asymmetric hot spots)", async ({ page, browser, baseURL }) => {
+    await openMapWithFields(page, { fields: HOT_FIELD });
+    // Whole world (zoom 2): hot at both spots, cold at their mirror images, which a flipped
+    // row order, flipped columns or a 180° longitude shift would paint instead.
+    for (const h of HOT_SPOTS) {
+      const p = await screenPoint(page, h.lat, h.lon);
+      expect((await fieldPixel(page, p.x, p.y))[0], `hot at ${h.lat}, ${h.lon}`).toBeGreaterThan(150);
+      const shifted = h.lon > 0 ? h.lon - 180 : h.lon + 180;
+      for (const [lat, lon] of [
+        [-h.lat, h.lon],
+        [h.lat, -h.lon],
+        [h.lat, shifted],
+        [-h.lat, -h.lon],
+      ] as const) {
+        const q = await screenPoint(page, lat, lon);
+        expect((await fieldPixel(page, q.x, q.y))[0], `cold at the mirror image ${lat}, ${lon}`).toBeLessThan(90);
+      }
+    }
+    // Zoom 7, where a 0.5° cell is 45 px wide (91 px tall at 60°N): the hot square (±1.2° at
+    // the colour threshold) is centred on Leaflet's own projection of the spot, which the
+    // user-location marker shows: within 3 px east-west and 0.04° north-south. A half-cell
+    // shift would be 22 px / 0.25°. Each spot gets a fresh browser context, because the
+    // locate button accepts a cached position up to 5 minutes old.
+    for (const [n, h] of HOT_SPOTS.entries()) {
+      const ctx = await browser.newContext({
+        baseURL,
+        viewport: { width: 1440, height: 900 },
+        geolocation: { latitude: h.lat, longitude: h.lon },
+        permissions: ["geolocation"],
+      });
+      try {
+        const p = await ctx.newPage();
+        await openMapWithFields(p, { fields: HOT_FIELD });
+        await p.getByRole("button", { name: "Show my location" }).click();
+        await expect(p.locator("path.user-location-marker")).toBeVisible();
+        await expect(field(p)).toHaveAttribute("data-zoom", "7");
+        const offset = async () => {
+          const m = await centreOf(p, "path.user-location-marker");
+          const c = await hotBox(p, m.x, m.y, 300);
+          if (!c || c.n < 500) return null;
+          const north = latAtRow(c.top, m.y, h.lat, 7);
+          const south = latAtRow(c.bottom, m.y, h.lat, 7);
+          return { dxPx: (c.left + c.right) / 2 - m.x, dLat: (north + south) / 2 - h.lat, north, south };
+        };
+        await expect
+          .poll(async () => {
+            const o = await offset();
+            return o ? Math.max(Math.abs(o.dxPx) / 3, Math.abs(o.dLat) / 0.04) : Infinity;
+          }, { message: `hot square centred on ${h.lat}, ${h.lon}`, timeout: 10_000 })
+          .toBeLessThan(1);
+        const o = (await offset())!;
+        expect(o.north - h.lat).toBeGreaterThan(1.1); // the square is the expected size (±1.2°)
+        expect(h.lat - o.south).toBeGreaterThan(1.1);
+        // The hover readout samples the same place (the bilinear sampler, not the renderer).
+        const m = await centreOf(p, "path.user-location-marker");
+        await p.mouse.move(m.x + 1, m.y + 1);
+        await expect(p.getByTestId("map-readout")).toContainText(/29\.5 ft|30 ft/);
+        await shot(p, `hot-spot-${n + 1}-zoom7`);
+      } finally {
+        await ctx.close();
+      }
+    }
+  });
+
+  test("particles travel towards wave_dir + 180° on wave tabs and with (u, v) on the wind tab", async ({ page }) => {
+    const { mock, now } = await openMapWithFields(page, { fields: UNIFORM_FLOW });
+    const particles = page.locator("canvas.map-particle-canvas");
+    await expect(particles).toHaveAttribute("data-mode", "animated");
+    // Waves from 270° (west): trails head east.
+    await page.waitForTimeout(1500); // let trails build up
+    const wave = await trailGradient(page);
+    expect(wave.gx, JSON.stringify(wave)).toBeGreaterThan(0);
+    expect(Math.abs(wave.gx)).toBeGreaterThan(3 * Math.abs(wave.gy));
+    // Wind towards the north (v > 0): trails head up the screen (y decreases).
+    await page.getByRole("radio", { name: "Wind Speed" }).click();
+    await expect(field(page)).toHaveAttribute("data-layer", "wind");
+    await expect.poll(() => requested(mock, "wind_u", now) && requested(mock, "wind_v", now)).toBe(true);
+    await expect.poll(async () => Number(await field(page).getAttribute("data-painted"))).toBeGreaterThan(10_000);
+    await page.waitForTimeout(1500);
+    const wind = await trailGradient(page);
+    expect(wind.gy, JSON.stringify(wind)).toBeLessThan(0);
+    expect(Math.abs(wind.gy)).toBeGreaterThan(3 * Math.abs(wind.gx));
+    // Trails fade out completely. On an 8-bit canvas, dimming each frame by 0.92 stops at
+    // alpha 6/255, a veil that piles up wherever particles have been (a spike at 6 in the
+    // alpha histogram); the half-float particle canvas has none.
+    await expect(particles).toHaveAttribute("data-color-type", "float16");
+    await page.waitForTimeout(5000);
+    const alpha = await particles.evaluate((c: HTMLCanvasElement) => {
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      const h = new Array<number>(256).fill(0);
+      for (let i = 3; i < d.length; i += 4) h[d[i]!]!++;
+      return { at5: h[5]!, at6: h[6]!, at7: h[7]!, inked: (d.length / 4 - h[0]!) / (d.length / 4) };
+    });
+    test.info().annotations.push({ type: "particle canvas alpha", description: JSON.stringify(alpha) });
+    expect(alpha.at6, JSON.stringify(alpha)).toBeLessThan(3 * Math.max(1, (alpha.at5 + alpha.at7) / 2));
+  });
+
+  test("prefers-reduced-motion: still arrows pointing downstream, nothing animates", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await openMapWithFields(page, { fields: UNIFORM_FLOW });
+    const particles = page.locator("canvas.map-particle-canvas");
+    await expect(particles).toHaveAttribute("data-mode", "static");
+    expect(Number(await particles.getAttribute("data-arrows"))).toBeGreaterThan(100);
+    const a = await arrowLean(page);
+    expect(a.dx, JSON.stringify(a)).toBeGreaterThan(0.5); // waves from the west: arrows point east
+    expect(Math.abs(a.dx)).toBeGreaterThan(3 * Math.abs(a.dy));
+    await page.waitForTimeout(800);
+    expect((await arrowLean(page)).hash, "no animation").toBe(a.hash);
+    await page.getByRole("radio", { name: "Wind Speed" }).click();
+    await expect(field(page)).toHaveAttribute("data-layer", "wind");
+    await expect.poll(async () => (await arrowLean(page)).dy).toBeLessThan(-0.5); // wind towards the north: arrows point up
+    const w = await arrowLean(page);
+    expect(Math.abs(w.dy)).toBeGreaterThan(3 * Math.abs(w.dx));
+    await page.getByRole("button", { name: "Legend", exact: true }).click();
+    await expect(page.getByTestId("legend-drawer")).toContainText("still arrows");
+  });
+
+  test("a hidden tab stops the particles and holds playback until it is shown again", async ({ page }) => {
+    const { mock } = await openMapWithFields(page);
+    const particles = page.locator("canvas.map-particle-canvas");
+    await expect(particles).toHaveAttribute("data-mode", "animated");
+    const slider = page.getByRole("slider", { name: "Forecast time" });
+    await slider.focus();
+    await page.keyboard.press("Home");
+    await page.getByRole("button", { name: "Play forecast" }).click();
+    await expect(slider).toHaveAttribute("aria-valuenow", "1", { timeout: 5_000 });
+    const setHidden = (hidden: boolean) =>
+      page.evaluate((h) => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (h ? "hidden" : "visible") });
+        Object.defineProperty(document, "hidden", { configurable: true, get: () => h });
+        document.dispatchEvent(new Event("visibilitychange"));
+      }, hidden);
+    await setHidden(true);
+    await expect(particles).toHaveAttribute("data-mode", "off");
+    await page.waitForTimeout(600); // a debounced request already scheduled may still go out
+    const held = await slider.getAttribute("aria-valuenow");
+    const requests = mock.requests.length;
+    // Asserting that nothing happens needs a fixed wait: more than two playback steps (1.1 s each).
+    await page.waitForTimeout(2_600);
+    await expect(slider).toHaveAttribute("aria-valuenow", held!);
+    expect(mock.requests.length, "no downloads while hidden").toBe(requests);
+    await setHidden(false);
+    await expect(particles).toHaveAttribute("data-mode", "animated");
+    await expect.poll(async () => Number(await slider.getAttribute("aria-valuenow"))).toBeGreaterThan(Number(held));
+    await page.getByRole("button", { name: "Pause" }).click();
+  });
+
+  test("dragging the timeline downloads only the step it settles on and its neighbours", async ({ page }) => {
+    const { mock, nowIndex } = await openMapWithFields(page);
+    const t = mock.validTimes;
+    // The start-up prefetch of the neighbouring steps is done.
+    await expect.poll(() => requested(mock, "hs", t[nowIndex + 1]!) && requested(mock, "hs", t[nowIndex - 1]!)).toBe(true);
+    await page.waitForTimeout(500);
+    const before = mock.requests.length;
+    const slider = page.getByRole("slider", { name: "Forecast time" });
+    const box = (await slider.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.02, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.98, box.y + box.height / 2, { steps: 20 });
+    await page.mouse.up();
+    const end = Number(await slider.getAttribute("aria-valuenow"));
+    expect(end).toBeGreaterThan(t.length - 3);
+    await expect.poll(() => requested(mock, "hs", t[end]!) && requested(mock, "hs", t[end - 1]!)).toBe(true);
+    await page.waitForTimeout(800);
+    const times = new Set(mock.requests.slice(before).map((r) => r.split("@")[1]));
+    // The settled step and its neighbours (one more if the machine was slow enough for the
+    // 250 ms debounce to fire during the drag), not every step the thumb passed.
+    expect([...times].length, [...times].join(", ")).toBeLessThanOrEqual(4);
+    expect(times.has(t[end]!)).toBe(true);
+    // Each request names the model run (a cache key only: a new run never reuses old bytes).
+    expect(mock.urls.every((u) => new URL(u).searchParams.get("run") === "synthetic-run")).toBe(true);
+  });
+
+  test("performance: colour-field redraw, particle frame cost and field-cache memory", async ({ page }) => {
+    const { mock } = await openMapWithFields(page);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Performance.enable");
+    const metrics = async () => {
+      const { metrics: m } = (await cdp.send("Performance.getMetrics")) as { metrics: Array<{ name: string; value: number }> };
+      return Object.fromEntries(m.map((x) => [x.name, x.value]));
+    };
+    /** Main-thread script and task time per animation frame over `ms`. */
+    const perFrame = async (ms: number) => {
+      const m0 = await metrics();
+      const frames = await page.evaluate(
+        (dur) =>
+          new Promise<number>((resolve) => {
+            let n = 0;
+            const t0 = performance.now();
+            const tick = () => {
+              n++;
+              if (performance.now() - t0 < dur) requestAnimationFrame(tick);
+              else resolve(n);
+            };
+            requestAnimationFrame(tick);
+          }),
+        ms,
+      );
+      const m1 = await metrics();
+      return { frames, scriptMs: ((m1.ScriptDuration! - m0.ScriptDuration!) * 1000) / frames, taskMs: ((m1.TaskDuration! - m0.TaskDuration!) * 1000) / frames };
+    };
+    const particles = page.locator("canvas.map-particle-canvas");
+    await expect(particles).toHaveAttribute("data-mode", "animated");
+    const count = await particles.evaluate((c: HTMLCanvasElement) => `${c.width}x${c.height}`);
+    const animated = await perFrame(3000);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByTestId("map-settings").getByRole("switch", { name: /Animated particles/ }).click();
+    await page.keyboard.press("Escape");
+    await expect(particles).toHaveAttribute("data-mode", "off");
+    const still = await perFrame(3000);
+    const note = `particles on: ${animated.scriptMs.toFixed(2)} ms script / ${animated.taskMs.toFixed(2)} ms task per frame (${animated.frames} frames, canvas ${count}); off: ${still.scriptMs.toFixed(2)} / ${still.taskMs.toFixed(2)} ms`;
+    console.log(note);
+    test.info().annotations.push({ type: "particle frame cost (1440x900)", description: note });
+    expect(animated.scriptMs).toBeLessThan(12); // regression guard; one frame at 60 Hz is 16.7 ms
+
+    // Field cache: step through 12 times (36 fields with the prefetch); the LRU keeps 24.
+    const heap = async () => (await cdp.send("Runtime.getHeapUsage")) as { usedSize: number; totalSize: number; backingStorageSize?: number };
+    await cdp.send("HeapProfiler.collectGarbage");
+    const h0 = await heap();
+    const slider = page.getByRole("slider", { name: "Forecast time" });
+    await slider.focus();
+    await page.keyboard.press("Home");
+    for (let i = 1; i <= 12; i++) {
+      await page.keyboard.press("ArrowRight");
+      await expect.poll(() => requested(mock, "hs", mock.validTimes[i]!)).toBe(true);
+      await expect(field(page)).toHaveAttribute("data-at", mock.validTimes[i]!);
+    }
+    await page.waitForTimeout(500);
+    await cdp.send("HeapProfiler.collectGarbage");
+    const h1 = await heap();
+    const mb = (b: number) => (b / 1e6).toFixed(1);
+    const grew = h1.usedSize + (h1.backingStorageSize ?? 0) - h0.usedSize - (h0.backingStorageSize ?? 0);
+    const memNote = `JS heap ${mb(h0.usedSize)} → ${mb(h1.usedSize)} MB, array buffers ${mb(h0.backingStorageSize ?? 0)} → ${mb(h1.backingStorageSize ?? 0)} MB after ${new Set(mock.requests).size} field downloads (expected decoded cache: 24 × 720 × 361 × 4 B = 25.0 MB)`;
+    console.log(memNote);
+    test.info().annotations.push({ type: "field cache memory", description: memNote });
+    expect(grew / 1e6).toBeLessThan(80);
+  });
+});
+
 test.describe("map on a phone (390 × 844)", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
@@ -683,6 +1106,33 @@ test.describe("map on a phone (390 × 844)", () => {
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Legend", exact: true }).click();
     await expect(page.getByTestId("legend-drawer")).toBeVisible();
+    // The open drawer leaves the zoom buttons at the right edge uncovered and usable.
+    const drawer = (await page.getByTestId("legend-drawer").boundingBox())!;
+    const zoom = (await page.locator(".leaflet-control-zoom").boundingBox())!;
+    expect(drawer.x + drawer.width).toBeLessThan(zoom.x);
+    await page.locator(".leaflet-control-zoom-in").click({ timeout: 5_000 });
     await shot(page, "mobile-390x844-synthetic-legend");
+  });
+
+  test("a long source attribution goes to the legend, not over the markers", async ({ page }) => {
+    // The real NOAA attribution is a 140-character sentence; on a phone it wrapped to three
+    // lines over the map and caught taps meant for markers (seen with live data).
+    const origin = {
+      code: "synthetic",
+      name: "Synthetic test fields",
+      attribution:
+        "Synthetic test data, not a forecast: a sentence as long as a real model attribution, naming an agency, two models and the programme that disseminates them.",
+      is_demo: true,
+    };
+    await openMapWithFields(page, { origin });
+    const strip = page.locator(".leaflet-control-attribution");
+    await expect(strip).toContainText("Synthetic test fields");
+    await expect(strip).not.toContainText("programme that disseminates");
+    expect((await strip.boundingBox())!.height).toBeLessThan(34); // at most two short lines
+    await page.locator("path.spot-jeffreys-bay").click({ force: true });
+    await expect(page.getByTestId("panel-spot-name")).toHaveText("Jeffreys Bay (Supertubes)");
+    await page.getByRole("button", { name: "Close spot details" }).click();
+    await page.getByRole("button", { name: "Legend", exact: true }).click();
+    await expect(page.getByTestId("legend-source")).toContainText(origin.attribution);
   });
 });

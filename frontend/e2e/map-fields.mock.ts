@@ -77,11 +77,19 @@ export interface GridSpec {
   ny: number;
 }
 
+/** A named SYNTHETIC field generator: value at (lat, lon) for step t, or null for no data. */
+export interface SyntheticFields {
+  name: string;
+  value: (variable: string, lat: number, lon: number, t: number) => number | null;
+}
+
+export const DEFAULT_FIELDS: SyntheticFields = { name: "default", value: syntheticValue };
+
 const encoded = new Map<string, Buffer>();
 
 /** zlib-compressed uint8 bytes for one synthetic field, per the wire format. */
-export function syntheticFieldBytes(variable: string, t: number, grid: GridSpec): Buffer {
-  const key = `${variable}|${t}|${grid.nx}x${grid.ny}`;
+export function syntheticFieldBytes(variable: string, t: number, grid: GridSpec, fields: SyntheticFields = DEFAULT_FIELDS): Buffer {
+  const key = `${fields.name}|${variable}|${t}|${grid.nx}x${grid.ny}`;
   const hit = encoded.get(key);
   if (hit) return hit;
   const e = ENCODING[variable]!;
@@ -90,7 +98,7 @@ export function syntheticFieldBytes(variable: string, t: number, grid: GridSpec)
   const bytes = new Uint8Array(grid.nx * grid.ny);
   for (let j = 0; j < grid.ny; j++) {
     for (let i = 0; i < grid.nx; i++) {
-      const v = syntheticValue(variable, 90 - j * dlat, -180 + i * dlon, t);
+      const v = fields.value(variable, 90 - j * dlat, -180 + i * dlon, t);
       bytes[j * grid.nx + i] = v == null ? 255 : Math.max(0, Math.min(254, Math.round((v - e.offset) / e.scale)));
     }
   }
@@ -109,14 +117,22 @@ export interface FieldMock {
   validTimes: string[];
   /** Every field request, as "variable@at". */
   requests: string[];
+  /** Every field request URL. */
+  urls: string[];
 }
 
 /** Serves a synthetic field index and field bytes for /api/map/fields*. */
 export async function mockFields(
   page: Page,
-  { grid = { nx: 720, ny: 361 }, validTimes = syntheticValidTimes(), variables = VARIABLES }: { grid?: GridSpec; validTimes?: string[]; variables?: string[] } = {},
+  {
+    grid = { nx: 720, ny: 361 },
+    validTimes = syntheticValidTimes(),
+    variables = VARIABLES,
+    fields = DEFAULT_FIELDS,
+    origin = SYNTHETIC_SOURCE,
+  }: { grid?: GridSpec; validTimes?: string[]; variables?: string[]; fields?: SyntheticFields; origin?: typeof SYNTHETIC_SOURCE } = {},
 ): Promise<FieldMock> {
-  const mock: FieldMock = { validTimes, requests: [] };
+  const mock: FieldMock = { validTimes, requests: [], urls: [] };
   await page.route(/\/api\/map\/fields(\?.*)?$/, (route) =>
     route.fulfill({
       status: 200,
@@ -124,7 +140,7 @@ export async function mockFields(
       body: JSON.stringify({
         available: true,
         message: null,
-        source: SYNTHETIC_SOURCE,
+        source: origin,
         run_key: "synthetic-run",
         cycle_time: validTimes[0],
         valid_times: validTimes,
@@ -137,6 +153,7 @@ export async function mockFields(
     const variable = url.pathname.split("/").pop()!;
     const at = url.searchParams.get("at") ?? "";
     mock.requests.push(`${variable}@${at}`);
+    mock.urls.push(url.toString());
     const t = validTimes.findIndex((v) => Date.parse(v) === Date.parse(at));
     if (!ENCODING[variable] || !variables.includes(variable) || t < 0) {
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: { code: "not_found", message: "No map field for that variable and time." } }) });
@@ -161,7 +178,7 @@ export async function mockFields(
       status: 200,
       contentType: "application/octet-stream",
       headers: { "X-Field-Meta": JSON.stringify(meta), "Access-Control-Expose-Headers": "X-Field-Meta" },
-      body: syntheticFieldBytes(variable, t, grid),
+      body: syntheticFieldBytes(variable, t, grid, fields),
     });
   });
   return mock;
