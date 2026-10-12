@@ -32,8 +32,8 @@ project scrapes websites, bypasses anti-bot systems or calls private endpoints.
 * Each hour stores a `forecast_comparisons` row: Hs log ratio, Tp, direction and wind
   differences, and flags (`hs_disagree` above a ratio of 1.4, `period_disagree` above 3 s,
   `direction_disagree` above 30°, `wind_disagree` above 15 km/h). Flagged hours widen
-  the forecast range; the spot page shows every model's raw values next to our
-  prediction.
+  the forecast range and cap forecast confidence at Moderate (Low when Hs differs by more
+  than a factor 2); the spot page shows every model's raw values next to our prediction.
 * **First live comparison (2026-10-11, GFS 00Z vs ECMWF 12Z the day before):** 1,334 of
   4,050 spot-hours flagged (705 Hs, 604 period, 564 direction, 181 wind). In the first
   48 h, Hs disagreement was concentrated at sheltered Southern California spots: at
@@ -66,8 +66,18 @@ project scrapes websites, bypasses anti-bot systems or calls private endpoints.
   nothing could be read fails without replacing the last good data. A `FAILED` run is
   fetched again on the next schedule (the acquisition jobs record provider failures as
   outcomes instead of raising them, so Celery's `autoretry_for` does not fire for them).
-* **Staleness.** A spot's latest run older than `FORECAST_STALE_HOURS` (18) is flagged:
-  the UI warns, confidence is multiplied by 0.8, and alerts are not generated from it.
+* **Staleness (per source, ADR-015).** A run is stale once it is older than its source's
+  cycle interval + publication lag + acquisition interval (`FORECAST_REFRESH_MINUTES`) + 2 h:
+  **NOAA GFS 16 h** (6 + 5 + 3 + 2), **GEFS-Wave 18.5 h** (6 + 7.5 + 3 + 2), **ECMWF 25 h**
+  (12 + 8 + 3 + 2, two long cycles a day); demo, Open-Meteo and Windy keep
+  `FORECAST_STALE_HOURS` (18). A blend is stale when any member is stale by its own rule.
+  Stale runs are left out of the blend, lose to fresh runs as the authoritative source, carry
+  the index's ×0.8 factor and at most Moderate forecast confidence
+  ([forecast-confidence.md](forecast-confidence.md)), are flagged in the UI and
+  `/api/system/status` (each source lists its `stale_after_hours`), and alerts are not
+  generated once a run is twice its stale-after age. Before this rule a single 18 h limit made
+  the newest ECMWF run stale for several hours every day (it is routinely 20-23 h old before
+  the next cycle is fetched), which silently dropped ECMWF from the blend.
 * **Retention.** Forecast runs older than `RETENTION_FORECAST_DAYS` are deleted nightly
   (the two newest successful runs per source are kept). The prediction archive keeps the
   authoritative predictions for `RETENTION_ARCHIVE_DAYS` (730).

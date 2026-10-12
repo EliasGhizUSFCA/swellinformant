@@ -1,8 +1,12 @@
 """Spot research evidence and research confidence (see app.models.research).
 
 ``current_assessments`` is the read side shared with the prediction job (local
-confidence) and the spot views. The seeding of evidence and the assessment methodology
-live in this package's other modules.
+confidence) and the spot views. The other modules (docs/research-confidence.md):
+
+* ``values``: structured claim values and their comparison with a spot profile;
+* ``evidence``: loading, validating and syncing ``research_evidence.json``;
+* ``assess``: the research-v1.1 methodology and the assessment history;
+* ``views``: API read models; ``cli``: ``python -m app.cli research ...``.
 """
 
 from __future__ import annotations

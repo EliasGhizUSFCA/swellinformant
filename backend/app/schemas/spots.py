@@ -78,6 +78,9 @@ class Conditions(BaseModel):
     local_confidence_class: str | None = None
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
+    # The one reason local confidence is lower than forecast confidence (how well the
+    # break is understood); None when the two classes are equal.
+    local_confidence_reason: str | None = None
 
 
 class MapSpotOut(BaseModel):
@@ -140,6 +143,12 @@ class EventOut(BaseModel):
     is_demo: bool
     source_code: str
     history: list[dict[str, Any]] = []
+    # Forecast and local confidence at the event's peak hour (forecast-v1; see
+    # Conditions). None for events last updated before these classes existed.
+    forecast_confidence_class: str | None = None
+    local_confidence_class: str | None = None
+    confidence_reasons: list[str] = []
+    local_confidence_reason: str | None = None
 
 
 class SpotSummary(SpotMini):
@@ -177,6 +186,9 @@ class ResearchSourceOut(BaseModel):
     source_type: str
     published_year: int | None
     accessed_at: datetime | None
+    # How the source was read: "fetched" (the page itself) or "web_search" (only a search
+    # tool's summary of the page). None for assessments made before this was recorded.
+    retrieval: str | None = None
 
 
 class ResearchVariableOut(BaseModel):
@@ -272,6 +284,9 @@ class ForecastPoint(BaseModel):
     local_confidence_class: str | None = None
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
+    # The one reason local confidence is lower than forecast confidence (how well the
+    # break is understood); None when the two classes are equal.
+    local_confidence_reason: str | None = None
 
 
 class DailySummary(BaseModel):
@@ -284,6 +299,9 @@ class DailySummary(BaseModel):
     avg_wind_kmh: float | None
     good_hours: int
     confidence: int
+    # Forecast and local confidence at the day's best hour (``best_time``).
+    forecast_confidence_class: str | None = None
+    local_confidence_class: str | None = None
 
 
 class ForecastSourceOut(BaseModel):

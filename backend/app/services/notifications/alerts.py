@@ -53,13 +53,18 @@ from app.services.flights.filtering import convert
 from app.services.flights.links import google_flights_url
 from app.services.flights.registry import build_flight_provider
 from app.services.flights.service import revalidate_offer
+from app.services.forecasts.queries import is_stale, run_id_is_stale
 from app.services.geo import compass_label
 from app.services.http import ProviderError
 from app.services.notifications.templates import fmt_range, render_alert_email, render_alert_sms
+from app.services.surf_quality.forecast_confidence import api_fields
 
 logger = logging.getLogger(__name__)
 
 REVALIDATE_AFTER = timedelta(hours=2)
+# Alerts are withheld once the event's forecast run is older than this many times its
+# source's stale-after age.
+STALE_ALERT_FACTOR = 2.0
 
 
 @dataclass
@@ -82,19 +87,23 @@ def label_rank(label: str | QualityLabel) -> int:
     return QUALITY_ORDER.index(QualityLabel(label))
 
 
-def _peak_range(match: OpportunityMatch) -> dict[str, Any]:
-    """The 80 % range of our prediction at the event's peak, from the run that set the peak."""
+def _peak_prediction(match: OpportunityMatch) -> SurfQualityPrediction | None:
+    """Our prediction at the event's peak hour, from the run that set the peak."""
     event = match.swell_event
     db = object_session(match)
     if db is None or event.latest_run_id is None:
-        return {}
-    pred = db.scalar(
+        return None
+    return db.scalar(
         select(SurfQualityPrediction).where(
             SurfQualityPrediction.run_id == event.latest_run_id,
             SurfQualityPrediction.spot_id == event.spot_id,
             SurfQualityPrediction.valid_time == event.peak_time,
         )
     )
+
+
+def _peak_range(pred: SurfQualityPrediction | None) -> dict[str, Any]:
+    """The 80 % range of our prediction at the event's peak."""
     if pred is None or pred.breaking_p10_ft is None or pred.breaking_p90_ft is None:
         return {}
     return {
@@ -104,10 +113,37 @@ def _peak_range(match: OpportunityMatch) -> dict[str, Any]:
     }
 
 
-def build_snapshot(match: OpportunityMatch, kind: NotificationKind) -> dict[str, Any]:
+def _peak_confidence(
+    pred: SurfQualityPrediction | None, now: datetime, *, stale: bool = False
+) -> dict[str, Any]:
+    """Forecast and local confidence at the event's peak hour, as the API shows them
+    (EventOut uses the same peak hour, including the read-time staleness cap when the run
+    has gone stale since it was scored), and how far ahead the peak is when the alert is
+    built. Absent for predictions scored before forecast-v1."""
+    if pred is None or pred.forecast_confidence_class is None:
+        return {}
+    fields = api_fields(pred, stale=stale)
+    return {
+        "forecast_confidence_class": fields["forecast_confidence_class"],
+        "local_confidence_class": fields["local_confidence_class"],
+        "confidence_reasons": fields["confidence_reasons"],
+        "confidence_lead_hours": fields["lead_hours"],
+        "peak_in_hours": round((pred.valid_time - now).total_seconds() / 3600.0, 1),
+        # Only when local confidence is lower than forecast confidence (as in the API).
+        "local_confidence_reason": fields["local_confidence_reason"],
+    }
+
+
+def build_snapshot(
+    match: OpportunityMatch, kind: NotificationKind, now: datetime | None = None
+) -> dict[str, Any]:
     event = match.swell_event
     spot = match.spot
     offer = match.best_offer if match.status == MatchStatus.FLIGHT_FOUND else None
+    now = now or utcnow()
+    peak = _peak_prediction(match)
+    db = object_session(match)
+    stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
     snap: dict[str, Any] = {
         "kind": kind.value,
         "match_id": str(match.id),
@@ -153,7 +189,8 @@ def build_snapshot(match: OpportunityMatch, kind: NotificationKind) -> dict[str,
         else None,
         "price": None,
         "currency": match.currency,
-        **_peak_range(match),
+        **_peak_range(peak),
+        **_peak_confidence(peak, now, stale=stale),
     }
     if offer is not None and match.best_price is not None:
         snap.update(
@@ -431,12 +468,10 @@ def _record_suppressed(
 
 
 def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
-    settings = get_settings()
     now = now or utcnow()
     stats = AlertStats()
-    fresh_after = now - timedelta(hours=settings.forecast_stale_hours * 2)
     rows = db.execute(
-        select(OpportunityMatch, ForecastRun.issued_at)
+        select(OpportunityMatch, ForecastRun)
         .join(SavedSearch, SavedSearch.id == OpportunityMatch.search_id)
         .join(User, User.id == OpportunityMatch.user_id)
         .join(SwellEvent, SwellEvent.id == OpportunityMatch.swell_event_id)
@@ -449,11 +484,13 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
             OpportunityMatch.status.in_((MatchStatus.FLIGHT_FOUND, MatchStatus.SURF_ONLY)),
         )
     ).all()
-    for match, issued_at in rows:
+    for match, run in rows:
         stats.considered += 1
         search = match.search
-        if issued_at is None or issued_at < fresh_after:
-            stats.stale_forecast += 1  # never alert on stale data
+        # Never alert on stale data: twice the source's stale-after age (per source,
+        # queries.stale_after_hours; a blend by its members).
+        if run is None or is_stale(run, now, factor=STALE_ALERT_FACTOR):
+            stats.stale_forecast += 1
             continue
         if (
             match.status == MatchStatus.SURF_ONLY
@@ -477,7 +514,7 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
             stats.no_channel += 1
             blocked = suppression_reasons(search, user, prefs)
             if blocked:
-                snapshot = build_snapshot(match, kind)
+                snapshot = build_snapshot(match, kind, now)
                 stats.suppressed += _record_suppressed(
                     db, user, match, kind, snapshot, prefs, blocked, now, "unverified"
                 )
@@ -486,7 +523,7 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
         if _alerts_today(db, user.id, now) >= prefs.max_alerts_per_day:
             stats.capped += 1
             logger.info("Daily alert cap reached for user %s", user.id)
-            snapshot = build_snapshot(match, kind)
+            snapshot = build_snapshot(match, kind, now)
             reason = f"daily alert limit reached ({prefs.max_alerts_per_day} per day)"
             stats.suppressed += _record_suppressed(
                 db,
@@ -501,7 +538,7 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
             )
             db.commit()
             continue
-        snapshot = build_snapshot(match, kind)
+        snapshot = build_snapshot(match, kind, now)
         links = links_for(snapshot, prefs)
         subject, text, html = render_alert_email(snapshot, links)
         queued_any = False
