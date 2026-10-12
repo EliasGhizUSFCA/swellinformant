@@ -215,23 +215,25 @@ With the old single 18 h limit, ECMWF's newest 12-hourly cycle (published about 
 the cycle and fetched by the next 3-hourly acquisition) was stale for several hours every
 day and silently dropped out of the blend.
 
-## 6. Live check (2026-10-11, real data)
+## 6. Live check (real 2026-10-11 runs, re-run 2026-10-12 with the final code)
 
-A clone of the live database (`swell_live_d`, never `swell_live` itself) with the real runs
-NOAA GFS `noaa-gfs:2026101100`, ECMWF IFS `ecmwf-ifs:2026101012` and GEFS-Wave
-`gefs-wave:2026101018`, migrated to head; research assessed with `research load` (no
-evidence file yet: all 50 spots Low); blend, predictions, archive and detection run at a fixed
-"now" of 2026-10-11 08:30 UTC, the hour of the day at which ECMWF used to drop out.
+A fresh clone of the live database (`swell_live_d`, created from `swell_live`, which is never
+modified) with the real runs NOAA GFS `noaa-gfs:2026101100`, ECMWF IFS `ecmwf-ifs:2026101012`
+and GEFS-Wave `gefs-wave:2026101018`, migrated from 0003 to head (0005); research assessed
+first with no evidence in the database (all 50 spots Low), then with the committed evidence
+file; blend, predictions (rescoring), archive and detection run at a fixed "now" of
+2026-10-11 08:30 UTC, the hour of the day at which ECMWF used to drop out
+(`FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs`).
 
 * **Staleness.** At 08:30 the ECMWF run was 20.5 h old: old rule (18 h) → blend members
-  `[noaa_gfs_direct]` only, so no blend was built and GFS alone was authoritative (**0**
-  spot-hours with ECMWF); per-source rule → members GFS + ECMWF and **3,850 of 4,050**
-  blended spot-hours (77 valid times × 50 spots) with ECMWF as a member (the remaining 200
-  are beyond ECMWF's 240 h). Hour by hour from 2026-10-10 20:00 to 2026-10-11 14:00 the old
-  rule kept ECMWF for 11 of 19 hours (lost from 07:00), the new one for 18 (lost from 14:00,
-  25 h after the cycle).
-* **Forecast classes by lead** (4,050 blend predictions; local confidence was Low for all,
-  as every spot's research is Low):
+  `[noaa_gfs_direct]` only, the existing blend run counted as stale and GFS alone was
+  authoritative for all 50 spots (**0** spot-hours with ECMWF); per-source rule → members
+  GFS + ECMWF, the blend authoritative for all 50 spots and **3,850 of 4,050** blended
+  spot-hours (81 valid times × 50 spots) with ECMWF as a member (the remaining 200 are
+  beyond ECMWF's 240 h). Hour by hour from 2026-10-10 20:00 to 2026-10-11 14:00 the old
+  rule kept the ECMWF 12Z run in the blend for 11 of 19 hours (lost from 07:00), the new one
+  for 18 (lost from 14:00, 25 h after the cycle).
+* **Forecast classes by lead** (4,050 blend predictions):
 
   | Lead (days) | High | Moderate | Low |
   |---|---:|---:|---:|
@@ -242,20 +244,39 @@ evidence file yet: all 50 spots Low); blend, predictions, archive and detection 
   | > 10 | 0 | 0 | 200 |
 
   Median GEFS-Wave relative spread at these hours: 0.025 / 0.034 / 0.084 / 0.153 / 0.229.
+  The forecast classes were identical before and after the research evidence was loaded
+  (forecast confidence never reads research).
+* **Local confidence.** Without evidence: Low for all 4,050 hours. With the committed
+  evidence file (research-v1.1: 18 spots Moderate, 32 Low overall; research basis Moderate at
+  19 spots, Low at 31) and the run rescored: High 0, Moderate 1,313, Low 2,737 (by lead
+  0-1 / 1-3 / 3-7 / 7-10 / > 10 days: Moderate 90 / 290 / 572 / 361 / 0). No spot can be High
+  locally while no research variable is High. `local_confidence_reason` was set on 2,593
+  hours ("… not well documented yet." 2,161, "… only partly documented." 432) and empty on
+  1,457 where the two classes are equal.
 * **Most common reasons:** "Not yet checked against buoys near this spot." (4,050; no
   verification metrics in the live data), "Ensemble members agree closely." (2,974), "GFS and
   ECMWF agree on swell size." (1,282), "Ensemble members differ somewhat on swell size." (734),
   "GFS and ECMWF disagree on swell period." (604), "… on swell size." (586), "… on swell
   direction." (564), and the lead-time reasons ("An 8-day forecast — forecasts this far out
-  often change.", 400).
+  often change." and "A 9-day forecast — …", 400 each). Rules that capped or downgraded:
+  `lead_7_10d` 1,200, `period_disagree` 604, `hs_disagree` 586, `direction_disagree` 564,
+  `lead_3_7d_spread_not_small` 288, `lead_over_10d` 200, `single_source_over_3d` 200,
+  `spread_large` 182, `wind_disagree` 181, `hs_strong_disagree` 119, `spread_very_large` 110.
 * **Examples.** Rincon, valid 2026-10-11 18Z, 30 h: Low (index 29) — "GFS and ECMWF disagree
   strongly on swell size." (Hs log ratio 0.98, a factor 2.7), "… on swell period." (Tp
-  4.2 s apart), although the GEFS spread was small (0.10). Uluwatu, 2026-10-15 03Z, 111 h:
-  High (index 95) — a 5-day forecast with GEFS spread 0.021 and GFS / ECMWF within 1 %; local
-  Low ("How this break responds to swell is not well documented yet."). Pipeline,
-  2026-10-18 21Z, 201 h: Moderate (index 72) — "An 8-day forecast — forecasts this far out
-  often change.", "GFS and ECMWF disagree on swell period." (6.0 s) and "… on swell
-  direction." (51°).
+  4.2 s apart), although the GEFS spread was small (0.10); local Low with no separate local
+  reason (both Low). Uluwatu, 2026-10-15 03Z, 111 h: High (index 95) — a 5-day forecast with
+  GEFS spread 0.021 and GFS / ECMWF within 1 %; local Low ("How this break responds to swell
+  is not well documented yet.": research Moderate overall, but its swell-size evidence is Low,
+  so the basis is Low). Jaws, 2026-10-12 18Z, 54 h: High (index 70, spread 0.10); local
+  Moderate ("… only partly documented."). Pipeline, 2026-10-18 21Z, 201 h: Moderate
+  (index 72) — "An 8-day forecast — forecasts this far out often change.", "GFS and ECMWF
+  disagree on swell period." (6.0 s) and "… on swell direction." (51°); local Low.
+* **Events and archive.** Detection updated 49 events; their peak-hour classes were High /
+  Low 27, Moderate / Low 18, Low / Low 4 (forecast / local, before the evidence was loaded).
+  The clone's 3,850 archive rows were written by the old code and were not rewritten (the
+  rescoring inserted none), so they keep empty confidence columns; a demo-mode pipeline on a
+  fresh database archived 4,050 rows, all with both classes and the research class.
 * Not exercised live: verification rows (none exist yet), run-to-run change (no previous run
   of the same source in the clone), missing variables and demo data (covered by tests).
 
