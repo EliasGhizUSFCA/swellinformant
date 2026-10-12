@@ -3,11 +3,11 @@
 #
 #   scripts/backup-db.sh                    # DATABASE_URL (or libpq PG* variables) -> ./backups
 #   scripts/backup-db.sh --compose          # the compose "postgres" service (docker compose exec)
-#   BACKUP_DIR=/srv/swell-backups BACKUP_KEEP=14 BACKUP_MAX_AGE_DAYS=30 scripts/backup-db.sh
+#   BACKUP_DIR=/srv/swell-backups BACKUP_KEEP=7 BACKUP_MAX_AGE_DAYS=30 scripts/backup-db.sh
 #
 # Options (environment variable in brackets):
 #   --dir DIR            where backups go [BACKUP_DIR, default ./backups]
-#   --keep N             keep at most the N newest backups, 0 = no count limit [BACKUP_KEEP, 14]
+#   --keep N             keep at most the N newest backups, 0 = no count limit [BACKUP_KEEP, 7]
 #   --max-age-days D     delete backups older than D days, 0 = no age limit
 #                        [BACKUP_MAX_AGE_DAYS, 30]
 #   --prefix NAME        file name prefix [BACKUP_PREFIX, swell]
@@ -31,7 +31,7 @@ ROOT=$(dirname -- "$SCRIPT_DIR")
 . "$SCRIPT_DIR/lib/pg-env.sh"
 
 DIR=${BACKUP_DIR:-./backups}
-KEEP=${BACKUP_KEEP:-14}
+KEEP=${BACKUP_KEEP:-7}
 MAX_AGE_DAYS=${BACKUP_MAX_AGE_DAYS:-30}
 PREFIX=${BACKUP_PREFIX:-swell}
 COMPOSE=0
