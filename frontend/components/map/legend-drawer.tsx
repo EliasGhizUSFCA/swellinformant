@@ -60,7 +60,8 @@ export function LegendDrawer({
       id="map-legend-drawer"
       aria-label="Legend"
       data-testid="legend-drawer"
-      className={cn("flex max-h-full w-[min(320px,calc(100vw-2rem))] flex-col overflow-y-auto rounded-2xl p-4 text-sm", GLASS)}
+      // On phones it stays clear of Leaflet's zoom buttons at the right edge.
+      className={cn("flex max-h-full w-[min(320px,calc(100vw-6rem))] flex-col overflow-y-auto rounded-2xl p-4 text-sm", GLASS)}
     >
       <div className="mb-3 flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">Legend</h2>
@@ -71,7 +72,7 @@ export function LegendDrawer({
 
       <section aria-label={`${def.label} colour scale`}>
         <div className="mb-1.5 text-xs font-semibold text-white" data-testid="legend-title">
-          {def.label} ({layerUnit(layer, units)})
+          {def.scaleTitle} ({layerUnit(layer, units)})
         </div>
         <div className="h-3 rounded-full ring-1 ring-white/15" style={{ background: cssGradient(scale.stops) }} data-testid="legend-scale" />
         <div className="relative mt-1 h-4 text-[11px] text-white/80 tabular-nums" data-testid="legend-ticks">

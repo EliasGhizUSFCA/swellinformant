@@ -21,6 +21,8 @@ export interface LayerDef {
   label: string;
   /** What the colour layer shows, for screen readers ("Offshore significant wave height"). */
   longName: string;
+  /** Legend title above the colour scale; says "offshore" wherever the numbers are sea state. */
+  scaleTitle: string;
   /** Fields to download for this layer at one time step. */
   needs: FieldVariableName[];
   /** Plain sentence for the legend. */
@@ -32,6 +34,7 @@ export const LAYERS: LayerDef[] = [
     id: "wind",
     label: "Wind Speed",
     longName: "Wind speed",
+    scaleTitle: "Wind speed",
     needs: ["wind_u", "wind_v"],
     about: "Wind speed from the weather model. Particles drift with the wind; the readout says where the wind blows from.",
   },
@@ -39,6 +42,7 @@ export const LAYERS: LayerDef[] = [
     id: "hs",
     label: "Wave Height",
     longName: "Offshore significant wave height",
+    scaleTitle: "Offshore wave height, Hs",
     needs: ["hs", "tp", "wave_dir"],
     about:
       "Offshore significant wave height (swell and wind sea combined) from the wave model. Surf height at a beach is different; tap a spot for our surf prediction.",
@@ -47,6 +51,7 @@ export const LAYERS: LayerDef[] = [
     id: "energy",
     label: "Wave Energy",
     longName: "Offshore wave power",
+    scaleTitle: "Offshore wave power",
     needs: ["hs", "tp", "wave_dir"],
     about:
       "Offshore wave power per metre of wave crest, estimated as P ≈ 0.49 × Hs² × Te kW/m with the energy period Te ≈ 0.9 × peak period (deep-water approximation). It is open-ocean model energy, not surf at a beach.",
@@ -55,6 +60,7 @@ export const LAYERS: LayerDef[] = [
     id: "tp",
     label: "Wave Period",
     longName: "Offshore peak wave period",
+    scaleTitle: "Offshore peak period",
     needs: ["tp", "hs", "wave_dir"],
     about:
       "Offshore peak wave period: the period of the most energetic waves. Longer-period swell travels further and usually breaks with more power.",

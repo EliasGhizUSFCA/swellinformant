@@ -23,10 +23,15 @@ export interface CanvasLayerOptions {
   /** CSS pixels per canvas pixel (2 = half resolution, smoothed when the browser scales it). */
   cssPxPerPixel?: () => number;
   className?: string;
+  /** Settings for the 2D context (browsers ignore members they do not know). */
+  contextSettings?: CanvasContextSettings;
   draw: (ctx: CanvasRenderingContext2D, view: PixelView, canvas: HTMLCanvasElement) => void;
   /** Called when the map starts moving or zooming (e.g. to pause an animation). */
   onMoveStart?: () => void;
 }
+
+/** CanvasRenderingContext2DSettings plus `colorType` (newer than this TypeScript's DOM types). */
+export type CanvasContextSettings = CanvasRenderingContext2DSettings & { colorType?: "unorm8" | "float16" };
 
 export class CanvasLayer extends L.Layer {
   canvas: HTMLCanvasElement | null = null;
@@ -119,7 +124,7 @@ export class CanvasLayer extends L.Layer {
     const origin = topLeft.add(map.getPixelOrigin());
     this.zoom = map.getZoom();
     this.view = { originX: origin.x, originY: origin.y, width, height, worldPx: 256 * Math.pow(2, this.zoom) };
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", this.opts.contextSettings);
     if (!ctx) return;
     ctx.setTransform(1 / k, 0, 0, 1 / k, 0, 0);
     ctx.clearRect(0, 0, width, height);

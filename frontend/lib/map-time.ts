@@ -89,8 +89,12 @@ export function timelineDays(steps: readonly string[], tz: string): TimelineDay[
   return days;
 }
 
-/** "8am Sun PDT" (minutes only when not on the hour: "8:30am Sun IST"). */
-export function bubbleLabel(iso: string, tz: string): string {
+/**
+ * "8am Sun PDT" (minutes only when not on the hour: "8:30am Sun IST"). `withDate` adds the
+ * month and day ("8am Sun Oct 25 PDT") for timelines longer than a week, where a weekday
+ * alone would name two different days.
+ */
+export function bubbleLabel(iso: string, tz: string, withDate = false): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     weekday: "short",
@@ -98,12 +102,17 @@ export function bubbleLabel(iso: string, tz: string): string {
     minute: "2-digit",
     hour12: true,
     timeZoneName: "short",
+    ...(withDate ? { month: "short", day: "numeric" } : {}),
   }).formatToParts(new Date(iso));
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
   const minute = get("minute");
   const time = `${get("hour")}${minute && minute !== "00" ? `:${minute}` : ""}${get("dayPeriod").toLowerCase()}`;
-  return `${time} ${get("weekday")} ${get("timeZoneName")}`.trim();
+  const day = withDate ? `${get("weekday")} ${get("month")} ${get("day")}` : get("weekday");
+  return `${time} ${day} ${get("timeZoneName")}`.trim();
 }
+
+/** True when the steps span more than seven local days, so weekday names repeat. */
+export const weekdaysRepeat = (days: readonly TimelineDay[]): boolean => days.length > 7;
 
 /** Long form for screen readers: "Sunday, October 25, 8:00 AM PDT". */
 export function longTimeLabel(iso: string, tz: string): string {

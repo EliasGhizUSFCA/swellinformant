@@ -3,7 +3,7 @@
 import { ChevronLeft, ChevronRight, Loader2, Pause, Play } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { bubbleLabel, longTimeLabel, stepHours, tickIndices, timelineDays } from "@/lib/map-time";
+import { bubbleLabel, longTimeLabel, stepHours, tickIndices, timelineDays, weekdaysRepeat } from "@/lib/map-time";
 import { cn } from "@/lib/utils";
 
 import { ACTIVE_PILL, FOCUS, GLASS } from "./map-ui";
@@ -103,7 +103,7 @@ export function Timeline({
           style={{ left: `${pos * 100}%`, transform: `translateX(-${pos * 100}%)` }}
         >
           <span className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold shadow", ACTIVE_PILL)} data-testid="time-label">
-            {bubbleLabel(current, tz)}
+            {bubbleLabel(current, tz, weekdaysRepeat(days))}
             {busy && <Loader2 className="size-3 animate-spin" aria-hidden />}
           </span>
         </div>

@@ -11,7 +11,7 @@ import { countryLabels, lineStrings, polygonRings } from "@/lib/map-geo";
 
 import type { BasemapGeometry } from "./basemap-draw";
 
-export const NATURAL_EARTH_ATTRIBUTION = '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noreferrer">Natural Earth</a>';
+export const NATURAL_EARTH_ATTRIBUTION = '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noopener noreferrer">Natural Earth</a>';
 
 let pending: Promise<BasemapGeometry> | null = null;
 

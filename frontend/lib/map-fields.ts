@@ -49,6 +49,9 @@ export interface FieldGrid {
 
 const NUMERIC_KEYS = ["nx", "ny", "lat0", "lon0", "dlat", "dlon", "scale", "offset"] as const;
 
+/** Largest grid accepted (a global 0.1° grid has 6.5 M cells); guards the browser's memory. */
+export const MAX_FIELD_CELLS = 16_000_000;
+
 /** Parses and validates the X-Field-Meta header. Throws on anything unusable. */
 export function parseFieldMeta(header: string | null): FieldMeta {
   if (!header) throw new Error("Missing X-Field-Meta header");
@@ -56,8 +59,11 @@ export function parseFieldMeta(header: string | null): FieldMeta {
   for (const key of NUMERIC_KEYS) {
     if (typeof raw[key] !== "number" || !Number.isFinite(raw[key])) throw new Error(`Invalid field meta: ${key}`);
   }
-  const meta = { nodata: 255, ...raw } as FieldMeta;
+  const nodata = raw.nodata ?? 255;
+  if (typeof nodata !== "number" || !Number.isInteger(nodata) || nodata < 0 || nodata > 255) throw new Error("Invalid field meta: nodata");
+  const meta = { ...raw, nodata } as FieldMeta;
   if (!Number.isInteger(meta.nx) || !Number.isInteger(meta.ny) || meta.nx < 2 || meta.ny < 2) throw new Error("Invalid field meta: grid size");
+  if (meta.nx * meta.ny > MAX_FIELD_CELLS) throw new Error("Invalid field meta: grid too large");
   if (meta.dlat <= 0 || meta.dlon <= 0) throw new Error("Invalid field meta: spacing");
   return meta;
 }
@@ -222,7 +228,11 @@ export function waveFlowGrids(dir: FieldGrid, tp: FieldGrid): { u: FieldGrid; v:
 export class LruCache<K, V> {
   private readonly items = new Map<K, V>();
 
-  constructor(readonly capacity: number) {}
+  /** `onEvict` runs for every entry dropped to make room (not for `delete`). */
+  constructor(
+    readonly capacity: number,
+    private readonly onEvict?: (key: K) => void,
+  ) {}
 
   get(key: K): V | undefined {
     const value = this.items.get(key);
@@ -236,14 +246,24 @@ export class LruCache<K, V> {
   set(key: K, value: V): void {
     this.items.delete(key);
     this.items.set(key, value);
-    while (this.items.size > this.capacity) {
-      const oldest = this.items.keys().next().value as K;
-      this.items.delete(oldest);
-    }
+    while (this.items.size > this.capacity) this.evictOldest();
+  }
+
+  /** Drops the least recently used entry. */
+  evictOldest(): void {
+    const oldest = this.items.keys().next();
+    if (oldest.done) return;
+    this.items.delete(oldest.value);
+    this.onEvict?.(oldest.value);
   }
 
   delete(key: K): void {
     this.items.delete(key);
+  }
+
+  /** The value without marking it as recently used. */
+  peek(key: K): V | undefined {
+    return this.items.get(key);
   }
 
   has(key: K): boolean {
@@ -255,43 +275,90 @@ export class LruCache<K, V> {
   }
 }
 
-export const fieldUrl = (variable: string, at: string) => `/api/map/fields/${variable}?at=${encodeURIComponent(at)}`;
+/**
+ * The field URL. `run` (the index's run_key) is only a cache key: the server ignores it and
+ * serves its current run, but each model run gets its own URLs, so no HTTP cache can hand
+ * back the previous run's bytes for the same valid time.
+ */
+export const fieldUrl = (variable: string, at: string, run?: string | null) =>
+  `/api/map/fields/${variable}?at=${encodeURIComponent(at)}${run ? `&run=${encodeURIComponent(run)}` : ""}`;
 
 /** Fetches, inflates and decodes one field. */
-export async function fetchField(variable: string, at: string, signal?: AbortSignal): Promise<FieldGrid> {
-  const res = await fetch(fieldUrl(variable, at), { credentials: "same-origin", signal });
+export async function fetchField(variable: string, at: string, run?: string | null, signal?: AbortSignal): Promise<FieldGrid> {
+  const res = await fetch(fieldUrl(variable, at, run), { credentials: "same-origin", signal });
   if (!res.ok) throw new Error(`Field ${variable} at ${at}: HTTP ${res.status}`);
   const meta = parseFieldMeta(res.headers.get("X-Field-Meta"));
   return decodeField(await inflate(await res.arrayBuffer()), meta);
 }
 
 /**
- * Decoded fields keyed by (variable, valid time): each is downloaded and decoded once and
- * kept in an LRU of ~24 fields (about 1 MB each at 0.5°). In-flight requests are shared.
+ * Decoded fields keyed by (model run, variable, valid time): each is downloaded and decoded
+ * once and kept in an LRU of at most `capacity` fields (24, about 1 MB each at 0.5°) and at
+ * most `maxBytes` of decoded values (64 MB: a finer backend grid, 0.25° at 4.2 MB a field,
+ * keeps 15 instead of 24). In-flight requests are shared. The run is part of the key because
+ * the index is re-read every few minutes: after a new model run, a valid time both runs
+ * share must not show the previous run's field.
  */
 export class FieldStore {
   private readonly cache: LruCache<string, Promise<FieldGrid>>;
+  /** Decoded size of each loaded field (in-flight ones count once they arrive). */
+  private readonly bytes = new Map<string, number>();
+  private total = 0;
 
   constructor(
     capacity = 24,
-    private readonly loader: (variable: string, at: string) => Promise<FieldGrid> = fetchField,
+    private readonly loader: (variable: string, at: string, run?: string | null) => Promise<FieldGrid> = fetchField,
+    readonly maxBytes = 64e6,
   ) {
-    this.cache = new LruCache(capacity);
+    this.cache = new LruCache(capacity, (key) => this.forget(key));
   }
 
-  load(variable: string, at: string): Promise<FieldGrid> {
-    const key = `${variable}@${at}`;
+  private static key(variable: string, at: string, run?: string | null): string {
+    return `${run ?? ""}|${variable}@${at}`;
+  }
+
+  private forget(key: string): void {
+    this.total -= this.bytes.get(key) ?? 0;
+    this.bytes.delete(key);
+  }
+
+  load(variable: string, at: string, run?: string | null): Promise<FieldGrid> {
+    const key = FieldStore.key(variable, at, run);
     const hit = this.cache.get(key);
     if (hit) return hit;
-    const pending = this.loader(variable, at).catch((e: unknown) => {
-      this.cache.delete(key);
-      throw e;
-    });
+    const pending: Promise<FieldGrid> = this.loader(variable, at, run).then(
+      (g) => {
+        // Still cached (not evicted while in flight): count it, then evict the least recently
+        // used fields while over the byte budget, keeping at least one loaded field.
+        if (this.cache.peek(key) === pending && !this.bytes.has(key)) {
+          this.bytes.set(key, g.values.byteLength);
+          this.total += g.values.byteLength;
+          while (this.total > this.maxBytes && this.cache.size > 1 && this.bytes.size > 1) this.cache.evictOldest();
+        }
+        return g;
+      },
+      (e: unknown) => {
+        if (this.cache.peek(key) === pending) {
+          this.cache.delete(key);
+          this.forget(key);
+        }
+        throw e;
+      },
+    );
     this.cache.set(key, pending);
     return pending;
   }
 
-  has(variable: string, at: string): boolean {
-    return this.cache.has(`${variable}@${at}`);
+  has(variable: string, at: string, run?: string | null): boolean {
+    return this.cache.has(FieldStore.key(variable, at, run));
+  }
+
+  /** Decoded bytes held (loaded fields only). */
+  get heldBytes(): number {
+    return this.total;
+  }
+
+  get size(): number {
+    return this.cache.size;
   }
 }

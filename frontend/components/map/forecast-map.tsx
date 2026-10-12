@@ -81,6 +81,7 @@ function FieldCanvas({ grid, scale, basemap, label, at, layer }: { grid: FieldGr
         canvas.setAttribute("aria-label", metaRef.current.label);
         canvas.dataset.layer = metaRef.current.layer;
         canvas.dataset.at = metaRef.current.at ?? "";
+        canvas.dataset.zoom = String(Math.round(Math.log2(view.worldPx / 256) * 100) / 100);
         const p = paintRef.current;
         if (!p) {
           canvas.dataset.painted = "0";
@@ -127,9 +128,14 @@ function ParticleCanvas({ flow, mode }: { flow: Flow | null; mode: ParticleMode 
       zIndex: Z.particles,
       cssPxPerPixel: () => 1 / Math.min(2, window.devicePixelRatio || 1),
       className: "map-particle-canvas",
+      // The trails fade by dimming the previous frame, and 8-bit alpha stops decaying at
+      // 6/255: a faint white veil that covered a quarter of the canvas after ten seconds of
+      // live NOAA winds. A half-float canvas (where supported) fades to nothing.
+      contextSettings: { colorType: "float16" },
       draw: (ctx, view, canvas) => {
         animator.stop();
         canvas.dataset.mode = modeRef.current;
+        canvas.dataset.colorType = (ctx.getContextAttributes?.() as { colorType?: string } | undefined)?.colorType ?? "unorm8";
         if (modeRef.current === "animated") animator.start(ctx, view);
         else if (modeRef.current === "static") canvas.dataset.arrows = String(animator.drawArrows(ctx, view));
       },
@@ -387,6 +393,7 @@ export interface ForecastMapProps {
   userLocation: { lat: number; lon: number; key: number } | null;
   /** Accessible description of the colour layer and time, e.g. "Offshore wave height, 8am Sun PDT". */
   fieldLabel: string;
+  /** Short credit for the ocean layers in Leaflet's attribution strip (plain text, escaped here). */
   fieldAttribution?: string;
 }
 

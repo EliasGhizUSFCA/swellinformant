@@ -44,27 +44,27 @@ interface Loaded {
 }
 
 /**
- * The given fields at one valid time. Keeps the previous time's fields on screen while the
- * next ones load (no blank flashes when scrubbing) and prefetches `prefetch` times afterwards.
+ * The given fields at one valid time of model run `run` (the index's run_key). Keeps the
+ * previous time's fields on screen while the next ones load (no blank flashes when
+ * scrubbing). Once they are on screen it prefetches the `prefetch` times, which the caller
+ * derives from the displayed (settled) time: steps passed while dragging the timeline are
+ * never downloaded.
  */
-export function useFieldGrids(variables: FieldVariableName[], at: string | null, prefetch: string[] = []) {
+export function useFieldGrids(variables: FieldVariableName[], at: string | null, prefetch: string[] = [], run: string | null = null) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failed, setFailed] = useState<{ key: string; message: string } | null>(null);
-  const key = at && variables.length ? `${variables.join(",")}@${at}` : null;
+  const key = at && variables.length ? `${run ?? ""}|${variables.join(",")}@${at}` : null;
   const prefetchKey = prefetch.join("|");
 
   useEffect(() => {
     if (!key || !at) return;
     let cancelled = false;
     const s = fieldStore();
-    Promise.all(variables.map((v) => s.load(v, at).then((g) => [v, g] as const))).then(
+    Promise.all(variables.map((v) => s.load(v, at, run).then((g) => [v, g] as const))).then(
       (pairs) => {
         if (cancelled) return;
         setLoaded({ key, at, grids: Object.fromEntries(pairs) as FieldSet });
         setFailed(null);
-        for (const t of prefetchKey ? prefetchKey.split("|") : []) {
-          for (const v of variables) s.load(v, t).catch(() => undefined);
-        }
       },
       (e: unknown) => {
         if (!cancelled) setFailed({ key, message: e instanceof Error ? e.message : String(e) });
@@ -73,9 +73,19 @@ export function useFieldGrids(variables: FieldVariableName[], at: string | null,
     return () => {
       cancelled = true;
     };
-    // `variables` is captured through `key`.
+    // `variables`, `at` and `run` are captured through `key`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, prefetchKey]);
+  }, [key]);
+
+  const shown = !!key && loaded?.key === key;
+  useEffect(() => {
+    if (!shown || !prefetchKey) return;
+    const s = fieldStore();
+    for (const t of prefetchKey.split("|")) {
+      for (const v of variables) s.load(v, t, run).catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown, key, prefetchKey]);
 
   if (!key) return { grids: null, at: null, loading: false, error: null };
   return {

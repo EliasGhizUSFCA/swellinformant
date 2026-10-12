@@ -34,6 +34,14 @@
 .forecast-map .leaflet-container .leaflet-control-attribution a {
   color: #eef1f4;
 }
+/* Phones: a compact strip that never spans the whole width of the map. */
+@media (max-width: 639px) {
+  .forecast-map .leaflet-container .leaflet-control-attribution {
+    max-width: calc(100vw - 56px);
+    font-size: 10px;
+    line-height: 1.35;
+  }
+}
 .forecast-map .leaflet-tooltip {
   background: rgba(21, 25, 29, 0.94);
   color: #fff;

@@ -26,7 +26,7 @@ import { formatDateTime, heightRange, type Units } from "@/lib/format";
 import type { FieldVariableName } from "@/lib/map-fields";
 import { isobarsFor } from "@/lib/map-geo";
 import { layerDef, layerScale, type DisplayUnits } from "@/lib/map-layers";
-import { bubbleLabel, nearestStepIndex, timelineSteps } from "@/lib/map-time";
+import { bubbleLabel, longTimeLabel, nearestStepIndex, timelineSteps } from "@/lib/map-time";
 import { QUALITY_LABELS } from "@/lib/quality";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
@@ -97,14 +97,15 @@ export default function MapPage() {
     [snapshot.data, predictionsCover],
   );
 
+  // Playback holds while the tab is hidden (no downloads nobody sees) and resumes when shown.
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || !pageVisible) return;
     const t = setTimeout(() => {
       if (stepIndex >= steps.length - 1) setPlaying(false);
       else setSelectedTime(steps[stepIndex + 1] ?? null);
     }, 1100);
     return () => clearTimeout(t);
-  }, [playing, stepIndex, steps]);
+  }, [playing, pageVisible, stepIndex, steps]);
 
   // --- ocean layers ---------------------------------------------------------------------
   const layer = settings.layer;
@@ -112,12 +113,14 @@ export default function MapPage() {
   const offered = useMemo(() => new Set((index?.variables ?? []).map((v) => v.name)), [index]);
   const layerVars = useMemo(() => def.needs.filter((v) => offered.size === 0 || offered.has(v)), [def, offered]);
   const pressureVars = useMemo<FieldVariableName[]>(() => (settings.pressure && offered.has("pressure") ? ["pressure"] : []), [settings.pressure, offered]);
-  const neighbours = useMemo(
-    () => (fieldsAvailable ? [steps[stepIndex + 1], steps[stepIndex - 1]].filter((s): s is string => !!s) : []),
-    [fieldsAvailable, steps, stepIndex],
-  );
-  const layerFields = useFieldGrids(layerVars, debounced.field, neighbours);
-  const pressureField = useFieldGrids(pressureVars, debounced.field, neighbours);
+  // Prefetch around the settled (debounced) time only, never around steps passed while scrubbing.
+  const neighbours = useMemo(() => {
+    const i = debounced.field ? steps.indexOf(debounced.field) : -1;
+    return i < 0 ? [] : [steps[i + 1], steps[i - 1]].filter((s): s is string => !!s);
+  }, [steps, debounced.field]);
+  const runKey = fieldsAvailable ? (index.run_key ?? null) : null;
+  const layerFields = useFieldGrids(layerVars, debounced.field, neighbours, runKey);
+  const pressureField = useFieldGrids(pressureVars, debounced.field, neighbours, runKey);
   const pressureGrid = settings.pressure ? (pressureField.grids?.pressure ?? null) : null;
   const isobars = useMemo(() => (pressureGrid ? isobarsFor(pressureGrid) : null), [pressureGrid]);
   const scale = useMemo(() => layerScale(layer, index), [layer, index]);
@@ -156,7 +159,7 @@ export default function MapPage() {
   const predictionNote = predictionsCover
     ? null
     : range
-      ? `Our spot predictions run from ${formatDateTime(range.start, tz)} to ${formatDateTime(range.end, tz)}; the ocean layers continue beyond them.`
+      ? `No surf predictions for this time: ours run from ${formatDateTime(range.start, tz)} to ${formatDateTime(range.end, tz)}. The ocean layers cover a longer period.`
       : "No spot predictions for this time.";
 
   const locate = () => {
@@ -195,6 +198,9 @@ export default function MapPage() {
 
   const listIsOpen = listOpen ?? isDesktop;
   const timeText = at ? bubbleLabel(at, tz) : "";
+  // The canvas keeps the previous step's field until the next one arrives: describe what it shows.
+  const fieldTime = layerFields.at ?? at;
+  const fieldTimeText = fieldTime ? longTimeLabel(fieldTime, tz) : "";
   const notice = !fieldIndex.isLoading && !fieldsAvailable ? (index?.message ?? "Ocean layers are not available.") : null;
 
   const spotList = (
@@ -236,8 +242,10 @@ export default function MapPage() {
             cities={cityLabels.length ? cityLabels : null}
             onZoom={setZoom}
             userLocation={userLocation}
-            fieldLabel={fieldsAvailable ? `${def.longName} (${def.label} layer), ${timeText}` : `Ocean layers unavailable, ${timeText}`}
-            fieldAttribution={index?.source?.attribution}
+            fieldLabel={fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : `Ocean layers unavailable, ${timeText}`}
+            // The map's credit strip names the source; its full attribution sentence is in the
+            // legend (on a phone the sentence alone covered three lines of the map, and markers).
+            fieldAttribution={index?.source?.name ?? index?.source?.attribution}
           />
         )}
 
