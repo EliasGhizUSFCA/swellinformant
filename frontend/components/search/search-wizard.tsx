@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { AirportPicker } from "@/components/airport-picker";
 import { Field } from "@/components/field";
+import { InfoPopover } from "@/components/info-popover";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,7 +23,9 @@ import { Switch } from "@/components/ui/switch";
 import { qk, useRegions, useSpots } from "@/hooks/queries";
 import { ApiError, errorMessage, post, put } from "@/lib/api";
 import { fromUnits, toUnits } from "@/lib/format";
+import { GLOSSARY } from "@/lib/glossary";
 import { QUALITY_COLORS, QUALITY_OPTIONS } from "@/lib/quality";
+import { score10 } from "@/lib/rating";
 import { cn } from "@/lib/utils";
 import { toSearchInput, validateStep, WIZARD_STEPS, type StepKey, type WizardState } from "@/lib/validation";
 import type { Search, User } from "@/types/api";
@@ -239,13 +242,12 @@ function SurfStep({ state, set, errors = {} }: StepProps) {
             <NumberInput id="wave_preferred" value={state.wave_preferred} onChange={(v) => set("wave_preferred", v)} step={0.5} min={0} suffix={u} />
           </Field>
         </div>
-        <p className="mt-2 flex gap-2 text-xs text-muted-foreground">
-          <Info className="mt-0.5 size-3.5 shrink-0" />
-          <span>
-            These are estimated <strong className="font-medium">breaking face heights</strong> at the break — not the offshore
-            significant wave height that models report. A 2 m offshore swell can mean anything from 3 ft to 12 ft depending on
-            period, direction and the spot.
-          </span>
+        <p className="mt-2 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+          Estimated <strong className="font-medium">breaking wave faces</strong> at the break, not the offshore wave height models report.
+          <InfoPopover term="breakingHeight">
+            <p>{GLOSSARY.breakingHeight.body}</p>
+            <p>A 2 m offshore swell can mean anything from 3 ft to 12 ft depending on period, direction and the spot.</p>
+          </InfoPopover>
         </p>
       </div>
 
@@ -263,13 +265,13 @@ function SurfStep({ state, set, errors = {} }: StepProps) {
                 <span className="size-2.5 rounded-full" style={{ backgroundColor: QUALITY_COLORS[q.value] }} />
                 {q.label}
               </span>
-              <span className="text-[11px] text-muted-foreground">Score ≥ {q.min}</span>
+              <span className="text-[11px] text-muted-foreground">Rating ≥ {score10(q.min)}/10</span>
             </RadioCard>
           ))}
         </RadioGroup>
-        <p className="mt-2 text-xs text-muted-foreground">
-          {QUALITY_OPTIONS.find((q) => q.value === state.min_quality)?.hint} Scores combine swell direction, period, size, wind,
-          tide and consistency with documented weights.
+        <p className="mt-2 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+          {QUALITY_OPTIONS.find((q) => q.value === state.min_quality)?.hint}
+          <InfoPopover term="qualityRating" />
         </p>
       </div>
 
@@ -519,9 +521,8 @@ function DatesStep({ state, set, errors = {} }: StepProps) {
       <Alert variant="info">
         <Info />
         <AlertDescription>
-          Example: a swell on Aug 10–13 with “arrive {state.arrival_buffer_days} days early” and “leave {state.departure_buffer_days}{" "}
-          day after” means landing by Aug {10 - state.arrival_buffer_days} and flying home on Aug {13 + state.departure_buffer_days}. We
-          check each itinerary&apos;s real arrival time, the time-zone change and the airport transfer.
+          Example: for a swell on Aug 10–13 you would land by Aug {10 - state.arrival_buffer_days} and fly home on Aug{" "}
+          {13 + state.departure_buffer_days}. We check each itinerary&apos;s real arrival time, time zones and the airport transfer.
         </AlertDescription>
       </Alert>
     </div>

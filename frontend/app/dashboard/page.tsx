@@ -56,10 +56,10 @@ function VerifyBanner({ email }: { email: string }) {
   return (
     <Alert variant={failed ? "danger" : "warn"} className="mb-6" data-testid="verify-banner">
       <MailWarning />
-      <AlertTitle>Verify your email to receive alerts</AlertTitle>
+      <AlertTitle>Verify your email to get alerts</AlertTitle>
       <AlertDescription className="space-y-2">
         <p>
-          Opportunities still appear here, but email alerts only start once <strong>{email}</strong> is verified.
+          Trips still show up here. Email alerts to <strong>{email}</strong> start once it is verified.
         </p>
         {last && (
           <p className="flex flex-wrap items-center gap-2 text-sm" data-testid="verify-delivery">
@@ -73,9 +73,9 @@ function VerifyBanner({ email }: { email: string }) {
         )}
         {s?.delivery_mode === "capture" && (
           <p className="text-sm" data-testid="dev-inbox-hint">
-            Development mode: emails are captured, not delivered.{" "}
+            Development mode: emails are captured, not sent.{" "}
             {s.dev_inbox_url ? (
-              <a href={s.dev_inbox_url} target="_blank" rel="noreferrer" className="font-medium text-ocean underline">
+              <a href={s.dev_inbox_url} target="_blank" rel="noopener noreferrer" className="font-medium text-ocean underline">
                 Open the dev inbox
               </a>
             ) : (
@@ -87,7 +87,7 @@ function VerifyBanner({ email }: { email: string }) {
           </p>
         )}
         {s?.delivery_mode === "live" && !failed && (
-          <p className="text-sm text-muted-foreground">Not there after a few minutes? Check your spam folder, then resend.</p>
+          <p className="text-sm text-muted-foreground">Not there after a few minutes? Check spam, then resend.</p>
         )}
         <Button size="sm" variant="outline" onClick={() => resend.mutate()} disabled={resend.isPending}>
           Resend link
@@ -104,9 +104,7 @@ function Welcome() {
     <Alert variant="info" className="mb-6">
       <Waves />
       <AlertTitle>Welcome aboard!</AlertTitle>
-      <AlertDescription>
-        Create a search to tell us what waves you want and where you can fly from — we&apos;ll do the watching.
-      </AlertDescription>
+      <AlertDescription>Create a search with the waves you want and where you fly from. We&apos;ll do the watching.</AlertDescription>
     </Alert>
   );
 }
@@ -138,7 +136,7 @@ function Dashboard({ user }: { user: User }) {
       <PageHeader
         eyebrow="Dashboard"
         title={`Hi ${user.full_name.split(" ")[0]} — here's the swell outlook`}
-        description="Opportunities update automatically as new model runs arrive, even while this page is closed."
+        description="Updates automatically with every new forecast, even while this page is closed."
         actions={
           <Button asChild>
             <Link href="/searches/new">
@@ -160,8 +158,10 @@ function Dashboard({ user }: { user: User }) {
       </div>
 
       <div className="grid gap-8 lg:grid-cols-[1.6fr_1fr]">
-        <section data-testid="current-opportunities">
-          <SectionTitle>Current surf opportunities</SectionTitle>
+        {/* min-w-0: let the single phone column shrink so long names truncate instead of
+            widening the page. */}
+        <section className="min-w-0" data-testid="current-opportunities">
+          <SectionTitle>Your surf trips</SectionTitle>
           {opportunities.isLoading && <Skeleton className="h-36" />}
           {!opportunities.isLoading && opps.length === 0 && (
             <EmptyState
@@ -170,7 +170,7 @@ function Dashboard({ user }: { user: User }) {
               description={
                 (searches.data ?? []).length === 0
                   ? "Create a search and we'll start matching swells to your preferences."
-                  : "Your searches are active. When a qualifying swell is 5–10 days out it will show up here."
+                  : "Your searches are active. Matching swells appear here 5–10 days out."
               }
               action={
                 (searches.data ?? []).length === 0 ? (
@@ -198,18 +198,18 @@ function Dashboard({ user }: { user: User }) {
               Top surf forecasts
             </SectionTitle>
             {events.isLoading && <Skeleton className="h-40" />}
-            <div className="grid gap-3 sm:grid-cols-2">
-              {(events.data ?? []).map((e) => (
-                <EventCard key={e.id} event={e} units={units} />
+            <div className="grid gap-3 sm:grid-cols-2" data-testid="top-events">
+              {(events.data ?? []).map((e, i) => (
+                <div key={e.id} className={i === 0 ? "min-w-0 sm:col-span-2" : "min-w-0"}>
+                  <EventCard event={e} units={units} featured={i === 0} />
+                </div>
               ))}
             </div>
-            {events.data?.length === 0 && (
-              <p className="text-sm text-muted-foreground">No Good-or-better swells in the current forecast window.</p>
-            )}
+            {events.data?.length === 0 && <p className="text-sm text-muted-foreground">No Good-or-better swells in the current forecast.</p>}
           </div>
         </section>
 
-        <aside className="space-y-6">
+        <aside className="min-w-0 space-y-6">
           <Card>
             <CardHeader className="flex-row items-center justify-between">
               <CardTitle>Active searches</CardTitle>
@@ -229,7 +229,7 @@ function Dashboard({ user }: { user: User }) {
                       {s.name}
                     </Link>
                     <div className="text-xs text-muted-foreground">
-                      {heightRange(s.wave_min_ft, s.wave_max_ft, units)} · {QUALITY_LABELS[asQuality(s.min_quality)]}+ · from{" "}
+                      {heightRange(s.wave_min_ft, s.wave_max_ft, units)} breaking · {QUALITY_LABELS[asQuality(s.min_quality)]}+ · from{" "}
                       {s.origins.join(", ")}
                     </div>
                   </div>

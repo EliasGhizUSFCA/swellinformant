@@ -1,25 +1,29 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, CalendarCheck, ChevronDown, ExternalLink, Info, Luggage, Plane, RefreshCw, ShieldCheck, Waves, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarCheck, ExternalLink, Info, Luggage, Plane, RefreshCw, ShieldCheck, Waves, Wind, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState } from "react";
 import { toast } from "sonner";
 
 import { DailyStrip } from "@/components/charts/forecast-charts";
+import { ForecastConfidence } from "@/components/confidence";
+import { InfoPopover } from "@/components/info-popover";
 import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader, SectionTitle } from "@/components/page-header";
-import { ConfidenceBadge, DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
+import { DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
+import { RatingHeadline } from "@/components/rating";
 import { RequireAuth } from "@/components/require-auth";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Disclosure } from "@/components/ui/disclosure";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { qk, useOpportunity } from "@/hooks/queries";
 import { errorMessage, post } from "@/lib/api";
+import { hasField, legacyIndexText } from "@/lib/confidence";
 import {
   compass,
   formatCalendarDate,
@@ -34,6 +38,7 @@ import {
   type Units,
 } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
+import { ratingReason } from "@/lib/rating";
 import { cn } from "@/lib/utils";
 import type { FlightSlice, MatchDetail, Offer, User } from "@/types/api";
 
@@ -65,7 +70,6 @@ function SliceView({ title, slice }: { title: string; slice: FlightSlice }) {
 }
 
 function OfferCard({ offer, best }: { offer: Offer; best: boolean }) {
-  const [open, setOpen] = useState(best);
   const validated = offer.validation_status === "valid" || offer.validation_status === "price_changed";
   return (
     <div className={cn("rounded-2xl border bg-card p-4", best && "border-primary ring-1 ring-primary")} data-testid="offer-card">
@@ -94,15 +98,10 @@ function OfferCard({ offer, best }: { offer: Offer; best: boolean }) {
           </span>
         )}
       </div>
-      <button type="button" className="mt-3 flex items-center gap-1 text-xs font-medium text-ocean" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        Itinerary <ChevronDown className={cn("size-3.5 transition", open && "rotate-180")} />
-      </button>
-      {open && (
-        <div className="mt-3 space-y-4">
-          <SliceView title="Outbound" slice={offer.outbound} />
-          <SliceView title="Return" slice={offer.inbound} />
-        </div>
-      )}
+      <Disclosure summary="Itinerary" defaultOpen={best} className="mt-3" contentClassName="mt-3 space-y-4">
+        <SliceView title="Outbound" slice={offer.outbound} />
+        <SliceView title="Return" slice={offer.inbound} />
+      </Disclosure>
       <div className="mt-4 flex flex-wrap gap-2">
         {offer.links.map((l) => (
           <Button key={l.url} asChild variant="outline" size="sm">
@@ -122,6 +121,15 @@ const SCORE_LABELS: Record<string, string> = {
   confidence: "Forecast confidence",
   convenience: "Trip convenience",
 };
+
+function Measure({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 text-sm font-medium text-ink">{children}</dd>
+    </div>
+  );
+}
 
 function Detail({ user, m }: { user: User; m: MatchDetail }) {
   const units = (user.profile.units as Units) ?? "ft";
@@ -159,7 +167,6 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
           <span className="flex flex-wrap items-center gap-2">
             <MatchStatusBadge status={m.status} />
             <QualityBadge label={m.peak_label} score={m.peak_score} />
-            <ConfidenceBadge label={m.confidence_label} value={m.confidence} />
             {m.is_demo && <DemoBadge />}
             {m.has_mock_flights && <DemoBadge mock />}
             <span className="text-xs">from your search “{m.search_name}”</span>
@@ -183,14 +190,14 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
         <Alert variant="warn" className="mb-6">
           <Waves />
           <AlertTitle>Surf matches — no eligible flight yet</AlertTitle>
-          <AlertDescription>{m.status_reason ?? "No itinerary meets your budget and schedule."} We&apos;ll keep checking.</AlertDescription>
+          <AlertDescription>{m.status_reason ?? "No itinerary fits your budget and schedule."} We&apos;ll keep checking.</AlertDescription>
         </Alert>
       )}
       {m.status === "pending_flights" && (
         <Alert variant="info" className="mb-6">
           <Plane />
           <AlertTitle>Checking flights</AlertTitle>
-          <AlertDescription>The swell matches; flight search is queued. {m.flight_search_error}</AlertDescription>
+          <AlertDescription>The swell matches and a flight search is queued. {m.flight_search_error}</AlertDescription>
         </Alert>
       )}
       {(m.status === "expired" || m.status === "dismissed") && (
@@ -202,48 +209,79 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
         <div className="space-y-6">
-          <Card>
+          <Card data-testid="swell-overview">
             <CardHeader>
-              <CardTitle>Swell event overview</CardTitle>
+              <CardTitle>Swell overview</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-6 sm:grid-cols-2">
-              <div className="space-y-2 text-sm">
-                <div className="font-display text-3xl font-semibold">{heightRange(m.breaking_height_min_ft, m.breaking_height_max_ft, units)}</div>
-                <div className="text-xs text-muted-foreground">estimated breaking faces at peak (approximate)</div>
-                <div>
-                  Swell {metres(e.peak_swell_height_m)} @ {seconds(e.peak_swell_period_s)} from {compass(e.peak_swell_direction_deg)}
-                </div>
-                <div>
-                  Wind {e.peak_wind_speed_kmh != null ? `${Math.round(e.peak_wind_speed_kmh)} km/h` : "—"} from {compass(e.peak_wind_direction_deg)} ·{" "}
-                  {WIND_RELATION_LABEL[e.peak_wind_relation] ?? e.peak_wind_relation}
-                </div>
-                <div>
-                  Best surf window: <strong>{formatDateTime(m.window_start, tz)}</strong> → <strong>{formatDateTime(m.window_end, tz)}</strong> ({tz})
-                </div>
-                <div className="text-muted-foreground">
-                  {m.qualifying_hours} daylight hours meet your criteria · event v{e.version}, updated {relativeTime(e.last_updated_at)}
-                </div>
-              </div>
-              <div className="space-y-3">
+            <CardContent className="space-y-4">
+              <RatingHeadline
+                size="lg"
+                label={m.peak_label}
+                score={m.peak_score}
+                reason={ratingReason({ periodS: e.peak_swell_period_s, windRelation: e.peak_wind_relation, windSpeedKmh: e.peak_wind_speed_kmh })}
+              />
+              <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+                <Measure
+                  label={
+                    <span className="inline-flex items-center gap-1">
+                      Breaking waves at peak (our estimate) <InfoPopover term="breakingHeight" />
+                    </span>
+                  }
+                >
+                  <span className="font-display text-2xl font-semibold">{heightRange(m.breaking_height_min_ft, m.breaking_height_max_ft, units)}</span>
+                </Measure>
+                <Measure label={`Best surf window (${tz})`}>
+                  {formatDateTime(m.window_start, tz)} → {formatDateTime(m.window_end, tz)}
+                  <div className="text-xs font-normal text-muted-foreground">{m.qualifying_hours} daylight hours meet your criteria</div>
+                </Measure>
+                <Measure label="Swell (offshore)">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Waves className="size-3.5 text-ocean" /> {metres(e.peak_swell_height_m)} @ {seconds(e.peak_swell_period_s)} from {compass(e.peak_swell_direction_deg)}
+                  </span>
+                </Measure>
+                <Measure label="Wind at peak">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Wind className="size-3.5 text-ocean" />
+                    {e.peak_wind_speed_kmh != null ? `${Math.round(e.peak_wind_speed_kmh)} km/h` : "—"} from {compass(e.peak_wind_direction_deg)} ·{" "}
+                    {WIND_RELATION_LABEL[e.peak_wind_relation] ?? e.peak_wind_relation}
+                  </span>
+                </Measure>
+              </dl>
+              <p className="text-xs text-muted-foreground">
+                Swell event v{e.version}, updated {relativeTime(e.last_updated_at)}.
+              </p>
+              {/* Only when the API sends a class for this swell: nothing rather than a guess. */}
+              {(hasField(e, "forecast_confidence_class") || hasField(m, "forecast_confidence_class")) && (
+                <ForecastConfidence
+                  className="border-t pt-3"
+                  value={hasField(e, "forecast_confidence_class") ? e.forecast_confidence_class : m.forecast_confidence_class}
+                  reasons={e.confidence_reasons}
+                  legacyIndex={m.confidence}
+                />
+              )}
+              <Disclosure summary="How this trip is scored" contentClassName="mt-3 space-y-3" data-testid="match-scoring">
                 <div className="flex items-center gap-3">
                   <ScoreRing score={m.overall_score} size={64} />
                   <div>
-                    <div className="font-semibold">Overall match</div>
+                    <div className="flex items-center gap-1 font-semibold">
+                      Overall match <InfoPopover term="overallMatch" />
+                    </div>
                     <div className="text-xs text-muted-foreground">Heuristic index — not a probability.</div>
                   </div>
                 </div>
                 {Object.entries(m.scores).map(([k, v]) =>
                   v == null ? null : (
                     <div key={k}>
-                      <div className="mb-1 flex justify-between text-xs">
+                      <div className="mb-1 flex justify-between gap-3 text-xs">
                         <span>{SCORE_LABELS[k] ?? k}</span>
-                        <span className="font-medium tabular-nums">{Math.round(Number(v))}/100</span>
+                        <span className="text-right font-medium tabular-nums">{k === "confidence" ? legacyIndexText(Number(v)) : `${Math.round(Number(v))}/100`}</span>
                       </div>
-                      <Progress value={Number(v)} />
+                      {/* No bar for the confidence index: a filled bar reads like a percentage. */}
+                      {k !== "confidence" && <Progress value={Number(v)} />}
                     </div>
                   ),
                 )}
-              </div>
+              </Disclosure>
             </CardContent>
           </Card>
 
@@ -339,20 +377,25 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
               <p className="text-muted-foreground">{m.accessibility_notes}</p>
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <AlertTriangle className="size-4 text-amber-600" /> Uncertainty & limitations
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
+          {m.limitations.length > 0 && (
+            <Disclosure
+              variant="card"
+              className="shadow-sm"
+              summary={
+                <>
+                  <AlertTriangle className="size-4 text-amber-600" /> Uncertainty & limitations
+                </>
+              }
+              hint={m.limitations.length}
+              data-testid="limitations"
+            >
               <ul className="list-disc space-y-2 pl-4 text-xs text-muted-foreground">
                 {m.limitations.map((l) => (
                   <li key={l}>{l}</li>
                 ))}
               </ul>
-            </CardContent>
-          </Card>
+            </Disclosure>
+          )}
         </aside>
       </div>
     </>
