@@ -309,10 +309,27 @@ silently change the height definition. Such versions are kept for evaluation.
 * **Moving a model between environments.**
   * `ml export-manifest ID DIR` writes the verified artifact and a JSON manifest (the
     registry record, the experiment and the package versions).
+  * `ml export-manifest ID DIR --compress` re-serialises the same model with joblib
+    zlib compression (level 3) to make it smaller to ship. The re-serialised model is
+    loaded back and must give the original's factors on a seeded probe matrix within
+    1e-9 (tree ensembles sum their trees in parallel, so the order varies at ~1e-16);
+    the manifest records the new sha256 and the registry's original one
+    (`source_sha256`), and importing it where the original exists is a no-op.
   * `ml import-manifest PATH` verifies the sha256 and registers the model as a new
     version. It is CANDIDATE if its recorded decision passed, otherwise REJECTED, and is
-    never imported as ACTIVE. Importing the same artifact twice is a no-op.
+    never imported as ACTIVE. Importing the same artifact twice is a no-op. The version
+    number is the next free one in the importing database, so a label can differ from
+    the exporting database's.
   * A warning is logged when the scikit-learn version differs.
+* **Where a version applies** (`applicability.spot_slugs`): the spots paired, as an
+  offshore reference, with a training station **that also has held-out test pairs**. A
+  spot reached only through stations without test pairs (e.g. buoys whose data all fall
+  before the test period) is recorded in `applicability.excluded_spots` as
+  `no_held_out_test_pairs`, because the correction was never tested there.
+  `ml restrict ID --exclude-spot SLUG --reason TEXT` removes spots from a version after
+  registration (never adds any), with the reason and time stored in
+  `applicability.restrictions`; it is refused for an ACTIVE version (running processes
+  cache the active applicability): deactivate, restrict, activate.
 
 ## Applying a correction (`ml/apply.py`)
 
@@ -373,9 +390,19 @@ python -m app.cli ml evaluate VERSION_ID     # recorded decision + scores on new
 python -m app.cli ml list [--name N]
 python -m app.cli ml activate VERSION_ID     # exit 3 when the criteria failed / not Hm0
 python -m app.cli ml deactivate NAME
-python -m app.cli ml export-manifest VERSION_ID DIR
+python -m app.cli ml export-manifest VERSION_ID DIR [--compress]
 python -m app.cli ml import-manifest PATH
+python -m app.cli ml restrict VERSION_ID --exclude-spot SLUG [--exclude-spot SLUG ...] --reason TEXT
+python -m app.cli verify ranges --station CODE ... --test-start ISO [--ensemble-source E]
+                                [--check-station CODE ...] [--boot N] [--json PATH]
+python -m app.cli verify confidence-classes --station CODE ... --test-start ISO
+                                [--ensemble-source E] [--method forecast-v1.1|forecast-v1]
+                                [--scan-boundaries] [--window-days N] [--boot N] [--json PATH]
 ```
+
+`verify ranges` scores the coverage of the app's offshore 80 % range at buoys and fits
+the lead-dependent scale on the TRAIN period; `verify confidence-classes` scores the
+realised error of the forecast-confidence classes (docs/ml-evaluation.md section 12).
 
 `verify backtest` prints a per-lead table with these columns:
 

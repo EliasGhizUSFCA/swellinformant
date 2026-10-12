@@ -287,6 +287,33 @@ for that job; they are not used yet.
   (alphanumeric only) before they go into a URL.
 * Licence: NOAA data, public domain.
 
+### GEFS-Wave station statistics (ensemble mean and spread at the buoys), live-verified 2026-10-12
+
+* `{noaa-gefs-pds}/gefs.YYYYMMDD/HH/wave/station/gefs.wave.tHHz.bull_tar`: one tar per
+  cycle (3.7 MB on 2026-10-11 00Z) with one `gefs.wave.{ID}.bull` per station, read in
+  memory (only members named exactly `gefs.wave.{bulletin_id}.bull`; nothing is
+  extracted). `obs collect-forecasts --source gefswave_station --start ISO --end ISO
+  [--cycles 0] [--station CODE ...]` archives them as point forecasts with source
+  `gefswave_station`, family `ncep_gefs` (`verification/gefs_bulletins.py`).
+* Each row `| DD HH | Hs avg | Hs spr | Tp avg | Tp spr | U10avg | U10spr | P(Hs>1 m) ... |`,
+  3-hourly to 240 h then 6-hourly: `avg` is the ensemble mean, `spr` the spread
+  (standard deviation of the members, as the file's legend says). Stored: `hs_m` = Hs
+  mean (never a member and not the deterministic run), `hs_spread_m`, `tp_s` = mean of
+  the members' peak periods, `wind_speed_kmh` = U10 mean x 3.6; the other spreads and the
+  exceedance probabilities go to `extra`. There are no directions.
+* **Only cycles from 2026-02-26 00Z carry the spreads.** Earlier files (checked on
+  2025-01-15 and 2026-02-25, `tests/fixtures/observations/gefs.wave.51201.20250115t00z.averages-only.bull`)
+  print three numbers per row under the same twelve-column header; which three cannot be
+  read from the file, so they are refused, never stored or guessed.
+* The header longitude is signed degrees east with a trailing `W` on every station
+  (52200, Guam: `144.788W` = 144.79 E), so the sign is used and the letter ignored.
+* Files exist for 6 of the 10 NDBC stations of the backtest (51201, 51205, 51101,
+  46214, 46086, 46054); none for 46026, 46224, 46053, 46237.
+* Live: 115 cycles (00Z every second day, 2026-02-26 to 2026-10-12), 425,113,600 bytes,
+  55,890 rows, 0 missing, 0 errors, 0 malformed rows (`swell_fval_live`). Used only to
+  validate the app's ensemble-based range (docs/ml-evaluation.md section 12); never
+  pooled with the deterministic rows. Licence: NOAA data, public domain.
+
 ## Conventions on ingest
 
 * Times are UTC, rounded to the nearest minute (two copies of one AODN record differ by

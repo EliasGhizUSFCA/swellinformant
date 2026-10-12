@@ -161,6 +161,9 @@ operator step after a shadow evaluation on gridded inputs.
 **Consequences.** User-facing forecasts are uncorrected. The criteria are unchanged; the
 gate added here is "validated on the inputs it will receive", which the next training run
 (gridded GFS-Wave archived at the buoys) is designed to satisfy.
+**Update (2026-10-12).** For the US spots superseded by ADR-020: an NDBC-trained version
+passed the same transfer check and ships for activation there. This version (v4) stays an
+inactive candidate for the Western Australian spots.
 
 ## ADR-014 Research confidence and forecast confidence are separate assessments
 
@@ -258,3 +261,75 @@ overlap, 191 of 192 merged records at 46026 fall on an archived time, the last o
 off, and all 192 at 51201; heights within 0.05 m). Copies stored before this change would
 stay, since re-ingesting does not delete rows at other times; none were stored outside
 scratch databases, because NDBC was unreachable before 2026-10-12.
+
+## ADR-018 A calibrated offshore range only where the spot's own buoy agrees
+
+**Context.** Against five NDBC buoys (docs/ml-evaluation.md 12.2) the app's offshore 80 %
+range for one deterministic source covered 53 % at 24 h and 85-89 % beyond 5 days. A
+lead-dependent two-tail scale fitted on the older year covered 75.1-80.2 % at every lead
+bucket on the held-out year, pooled, which meets the pre-registered criterion; by buoy it
+covered 69 % (46053) to 91 % (51201). The ensemble range passed pooled but was 88-90 % at
+the only two GEFS buoys that are offshore references of spots.
+**Decision.** Implement the fitted scale as the calibrated OFFSHORE component
+`ndbc-offshore-v1` (`surf_quality/uncertainty.py`), used only for raw single-family
+GFS-Wave hours whose spread comes from the lead table, at leads 3-240 h, and only at spots
+whose paired offshore buoy's own held-out coverage has a CI overlapping 75-85 %
+(jaws-peahi, mavericks, ocean-beach-sf, trestles). The breaking range keeps
+`uncertainty_kind` heuristic and records `offshore_kind: calibrated` beside it, because
+its translation share is not calibrated. The ensemble range stays `ensemble_heuristic`.
+The per-buoy rule was added after the results and only narrows the claim.
+**Alternatives.** Label every paired spot (pooled pass): contradicted at two buoys by
+their own data. Apply the scale everywhere: in Western Australia it put 18 % below p10 and
+3 % above p90. A new `uncertainty_kind` value: needs a migration and frontend labels for a
+breaking range that is still mostly heuristic.
+**Consequences.** The prediction job must pass an `OffshoreContext` (spot, families,
+whether ML-corrected) for the label to appear; until then predictions are unchanged. With
+the correction of ADR-020 active the central value is no longer raw, so the label does not
+apply at the corrected spots.
+
+## ADR-019 forecast-v1.1: no High from a single model without an ensemble
+
+**Context.** At five NDBC buoys forecast-v1's single-source High (leads up to 52 h) and
+Moderate classes had the same median offshore error on the training year and an RMSE
+difference whose CI included zero; no High / Moderate lead boundary between 24 and 72 h
+separated them (docs/ml-evaluation.md 12.3). With a GEFS-Wave spread all three classes
+were distinct.
+**Decision.** Add the cap `single_source_no_ensemble`: fewer than two independent families
+and no ensemble row means at most Moderate at every lead (method `forecast-v1.1`). Chosen
+on the training year only (the one candidate that passed there), confirmed on the held-out
+year (Low − Moderate RMSE 0.146 m [0.123, 0.169]); the test on the held-out year used the
+two classes that exist.
+**Alternatives.** Keep v1 (contradicted on the training year); move the lead boundary
+(no boundary passed); let verification rows restore High (they did not separate the
+classes on the training year).
+**Consequences.** On the real 2026-10-11 runs the rule fired on no hour (every hour had a
+GEFS-Wave row); it matters when the ensemble or the second family is missing. The evidence
+is for GFS-Wave; the rule also caps an ECMWF-only hour, which is untested. Rows scored
+earlier keep `forecast-v1`.
+
+## ADR-020 The NDBC-trained correction is activated at seven US spots
+
+**Context.** `ml train` on spectral Hm0 at five NDBC buoys and three AODN delayed-QC buoys
+(docs/ml-evaluation.md 12.4) gave three candidates that passed criteria (a)-(f) on a
+held-out year (2025-10 to 2026-10, 139,257 pairs). The lowest validation RMSE, the random
+forest, cut test RMSE from 0.427 to 0.320 m; its factors on the real gridded run at the
+spots all lay inside the central 90 % of its test factors (ADR-013's transfer check). At
+46053 (Rincon) it brought no measurable benefit and moved the bias from -0.12 to
++0.16 m; the WA buoys' data were all in the training part.
+**Decision.** Ship `offshore_hs_residual` v6 (random forest, compressed to 3.7 MB) in
+`backend/ml_models/` for activation at jaws-peahi, mavericks, ocean-beach-sf, pipeline,
+sunset-beach, trestles and waimea-bay, leads 3-240 h, `ncep_gfs` forecasts. The registry
+excludes spots whose stations have no held-out test pairs (`no_held_out_test_pairs`), and
+rincon was excluded with `ml restrict` after the per-buoy results (a narrowing, not a
+criterion change). Activation remains an operator step (`ml import-manifest`, `ml
+activate`).
+**Alternatives.** Keep everything raw (rejects a correction that passed every criterion
+and the transfer gate); include rincon as the plan allowed (no evidence of benefit there);
+the ridge (fails the transfer check at 9 of 11 spots).
+**Consequences.** Offshore Hs at the seven spots rises by a factor 1.10-1.61 on the live
+run, and breaking heights with it (about +23 % at a factor 1.3), which is not validated
+because breaking heights are not observed. The held-out bias after correction is +0.09 m.
+With the correction active, the heuristic offshore range around the corrected value
+covered 80-94 % by lead at the buoys and stays labelled heuristic. Deactivating
+(`ml deactivate offshore_hs_residual`) returns every spot to raw forecasts.
+
