@@ -965,7 +965,12 @@ class NoaaGfsProvider(ForecastProvider):
         return map_field_hours(s.map_field_max_lead_hours, s.map_field_step_hours)
 
     def _new_sink(self, cycle: datetime) -> FieldSink:
-        return FieldSink(_as_utc(cycle), self.map_hours(), self.settings.map_field_resolution_deg)
+        try:
+            return FieldSink(
+                _as_utc(cycle), self.map_hours(), self.settings.map_field_resolution_deg
+            )
+        except ValueError as exc:  # e.g. MAP_FIELD_RESOLUTION_DEG=0.7 does not divide 180
+            raise PermanentProviderError(f"map fields: {exc}") from exc
 
     # ------------------------------------------------------------------ run discovery
     def _published(self, url: str) -> bool:
@@ -1030,7 +1035,13 @@ class NoaaGfsProvider(ForecastProvider):
         if not spots:
             return result
         cycle = run.wave_model_run_at or run.issued_at
-        sink = self._new_sink(cycle) if self.map_fields else None
+        sink: FieldSink | None = None
+        if self.map_fields:
+            try:
+                sink = self._new_sink(cycle)
+            except PermanentProviderError as exc:  # a map setting never costs the spots
+                logger.error("NOAA GFS %s: no map fields: %s", run.run_key, exc)
+                result.field_warnings.append(str(exc))
         reader = GfsPointReader(
             self.client,
             cycle,

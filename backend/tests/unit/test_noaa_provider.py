@@ -523,7 +523,31 @@ def test_map_fields_are_off_by_default_and_an_idle_sink_changes_nothing() -> Non
         field_sink=FieldSink(CYCLE, [], 0.5),  # wants no hour
     )
     assert [s.values for s in a.read_steps(HOURS)] == [s.values for s in b.read_steps(HOURS)]
-    assert sorted(plain.paths_requested()) == sorted(idle.paths_requested())
+
+    def ranges(world: SyntheticGfs) -> list[tuple[str, str, str | None]]:
+        return sorted((r.method, r.url.path, r.headers.get("Range")) for r in world.requests)
+
+    assert ranges(plain) == ranges(idle)  # the same files and the same byte ranges
+
+
+def test_an_invalid_map_resolution_never_costs_the_spots() -> None:
+    # 0.7 deg passes the setting's own range check but does not divide 180.
+    s = map_settings().model_copy(update={"map_field_resolution_deg": 0.7})
+    p = NoaaGfsProvider(s, client=hawaii_break_on_land().client(), backoff_seconds=0)
+    result = p.fetch([HAWAII, SOUTH], RUN)
+    baseline = provider(hawaii_break_on_land()).fetch([HAWAII, SOUTH], RUN)
+    assert result.records == baseline.records and result.errors == baseline.errors == {}
+    assert result.fields == [] and len(result.field_warnings) == 1
+    assert "must divide 180" in result.field_warnings[0]
+
+    s = map_settings(providers="demo", map_fields_enabled=True)
+    fields = NoaaGfsFieldsProvider(
+        s.model_copy(update={"map_field_resolution_deg": 0.7}),
+        client=SyntheticGfs().client(),
+        backoff_seconds=0,
+    )
+    with pytest.raises(PermanentProviderError, match="must divide 180"):
+        fields.fetch([], fields.run_for_cycle(CYCLE))
 
 
 def test_reader_hands_fields_to_the_sink_for_wanted_hours_only() -> None:
