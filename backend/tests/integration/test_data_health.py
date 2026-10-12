@@ -233,6 +233,9 @@ def test_job_failed_overdue_stuck_running_and_never_run(db: Session) -> None:
     job_log(db, "quality.predict", JobStatus.RUNNING, 50)  # hard time limit 30 min + 15
     job_log(db, "alerts.generate", JobStatus.SUCCESS, 30)
     job_log(db, "alerts.generate", JobStatus.RUNNING, 1)
+    job_log(db, "flights.discover", JobStatus.SUCCESS, 60 * 5)  # hourly: overdue after 150 min
+    job_log(db, "flights.discover", JobStatus.RUNNING, 2)  # ... but it is running right now
+    job_log(db, "forecasts.check_staleness", JobStatus.SUCCESS, 10)
     job_log(db, DATA_HEALTH_TASK, JobStatus.SUCCESS, 5)  # 15-min job, overdue after 60
     report = data_health(db)
     jobs = report.out.jobs
@@ -242,6 +245,7 @@ def test_job_failed_overdue_stuck_running_and_never_run(db: Session) -> None:
     assert by_job(jobs, "matching.match").status == "overdue"
     assert by_job(jobs, "quality.predict").status == "stuck"
     assert by_job(jobs, "alerts.generate").status == "running"
+    assert by_job(jobs, "flights.discover").status == "running"  # started: not overdue
     assert by_job(jobs, "maintenance.cleanup").status == "never_run"
     assert by_job(jobs, "forecasts.blend").schedule == "after forecasts.acquire"
     assert by_job(jobs, "forecasts.blend").overdue_after_minutes is None
@@ -448,6 +452,16 @@ def test_alert_lifecycle_dedup_reminder_and_recovery(
     assert len(ops_emails()) == 3
     later = check(db, clock, t1 + timedelta(hours=12))["alert_state"]
     assert not set(kept) & set(later)  # type: ignore[arg-type]
+
+
+def test_first_check_after_an_outage_does_not_report_itself_overdue(db: Session) -> None:
+    run(db, "demo", 1)
+    job_log(db, DATA_HEALTH_TASK, JobStatus.SUCCESS, 60 * 5)  # last run before a 5 h outage
+    job_log(db, "notifications.deliver", JobStatus.SUCCESS, 60 * 5)
+    heartbeat(db)  # the worker is back
+    result = tasks.run_job(DATA_HEALTH_TASK, run_data_health_check, chain=False)
+    assert f"job_overdue:{DATA_HEALTH_TASK}" not in result["problems"]  # type: ignore[operator]
+    assert "job_overdue:alerts.generate" in result["problems"]  # type: ignore[operator]
 
 
 def test_flapping_problem_sends_one_alert_and_one_recovery_per_interval(

@@ -9,8 +9,9 @@ It checks, with plain reasons:
   its age and the source's own stale limit (``queries.stale_after_hours``, ADR-015).
 * **Scheduled jobs** (the beat schedule of the current settings, plus the chained blend
   stage): the last result from ``background_job_logs``, consecutive failures, overdue
-  runs (no real run for ``2 x longest interval + 30 min``) and stuck runs (still
-  "running" 15 min after the hard task time limit: the worker process was killed).
+  runs (no run started for ``2 x longest interval + 30 min``; a run in progress counts)
+  and stuck runs (still "running" 15 min after the hard task time limit: the worker
+  process was killed).
 * **Map fields** (unless the mode is "off"): the served run's model cycle against the
   NOAA GFS stale limit, since the fields come from the same 6-hourly cycles.
 * **Observations** (when OBSERVATIONS_ENABLED): the newest buoy observation per provider
@@ -350,7 +351,13 @@ def _job_health(
             detail=real[0].error_message,
         )
     elif overdue_after is not None:
-        reference = real[0].started_at if real else None
+        # A run in progress (and not stuck, checked above) counts as a run: the job did
+        # start. This also keeps ops.data_health from calling itself overdue while it runs
+        # for the first time after an outage.
+        starts = [r.started_at for r in real[:1]]
+        if newest is not None and newest.status == JobStatus.RUNNING:
+            starts.append(newest.started_at)
+        reference = max(starts) if starts else None
         if reference is not None and now - reference > overdue_after:
             status = "overdue"
             problem = Problem(
