@@ -8,8 +8,9 @@
   ml list [--name N]
   ml activate VERSION_ID
   ml deactivate NAME
-  ml export-manifest VERSION_ID DIR
+  ml export-manifest VERSION_ID DIR [--compress]
   ml import-manifest PATH
+  ml restrict VERSION_ID --exclude-spot SLUG [--exclude-spot SLUG ...] --reason TEXT
 
 ``--hs-kind`` selects the observed height definition used as the target (default
 spectral_hm0, like with like). Versions trained on any other kind (e.g. h_third) are
@@ -71,8 +72,17 @@ def register(subparsers: Any) -> None:
     exp = sub.add_parser("export-manifest", help="export a version (artifact + record)")
     exp.add_argument("version_id", type=int)
     exp.add_argument("directory")
+    exp.add_argument(
+        "--compress",
+        action="store_true",
+        help="re-serialise the same model with joblib compression (smaller file to ship)",
+    )
     imp = sub.add_parser("import-manifest", help="import an exported version")
     imp.add_argument("path")
+    res = sub.add_parser("restrict", help="remove spots from a version's applicability")
+    res.add_argument("version_id", type=int)
+    res.add_argument("--exclude-spot", action="append", required=True, help="spot slug")
+    res.add_argument("--reason", required=True, help="why (stored with the version)")
 
 
 def _print(value: Any) -> None:
@@ -158,12 +168,19 @@ def run(args: argparse.Namespace) -> int:
                 _print({"retired": retired.label if retired else None})
                 return 0
             if args.ml_cmd == "export-manifest":
-                _print(
-                    {"manifest": str(registry.export_manifest(db, args.version_id, args.directory))}
+                path = registry.export_manifest(
+                    db, args.version_id, args.directory, compress=args.compress
                 )
+                _print({"manifest": str(path)})
                 return 0
             if args.ml_cmd == "import-manifest":
                 _print(registry.version_summary(registry.import_manifest(db, args.path)))
+                return 0
+            if args.ml_cmd == "restrict":
+                v = registry.restrict_applicability(
+                    db, args.version_id, {slug: args.reason for slug in args.exclude_spot}
+                )
+                _print({**registry.version_summary(v), "applicability": v.applicability})
                 return 0
         except registry.ActivationError as exc:
             print(f"ml {args.ml_cmd}: {exc}", file=sys.stderr)
