@@ -554,7 +554,8 @@ class NdbcProvider:
             try:
                 body = gzip.decompress(body)
             except (OSError, EOFError, zlib.error) as exc:
-                # NDBC answers some missing files with an HTML page and status 200.
+                # Defensive: a 200 answer that is not gzip (an HTML error page, say) is
+                # an error, not data. Every missing file seen live answered 404.
                 raise PermanentProviderError(f"ndbc: {path} is not a gzip file ({exc})") from exc
         return body.decode("ascii", errors="replace")
 

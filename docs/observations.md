@@ -125,36 +125,137 @@ points and shelves involved change the numbers a lot.
   derived from these rows and redistributed (exports, published statistics) has to carry
   the attribution and the same licence.
 
-### NOAA NDBC (US), NOT verified live
+### NOAA NDBC (US), live-verified 2026-10-12
 
-`www.ndbc.noaa.gov` is blocked from the sandbox this was built in (the proxy answers
-`403 Forbidden` to CONNECT). The adapter follows NDBC's documented formats and was tested
-only with synthetic fixtures. A live `ingest_all` run reported it as a transient provider
-failure (see below), as designed.
+Verified against the real service (`www.ndbc.noaa.gov` is reachable since 2026-10-12)
+and, for the CDIP-operated buoys, against the CDIP THREDDS realtime files of the same
+buoys. Every statement below was checked on files downloaded that day; the NDBC
+documents cited are *Measurement Descriptions and Units*
+(<https://www.ndbc.noaa.gov/faq/measdes.shtml>), *How are significant wave height,
+dominant period, average period, and wave steepness calculated?*
+(<https://www.ndbc.noaa.gov/faq/wavecalc.shtml>), *Acquisition Time*
+(<https://www.ndbc.noaa.gov/faq/acq.shtml>), the wave glossary
+(<https://www.ndbc.noaa.gov/waveobs.shtml>) and the *NDBC Web Data Guide* (June 2023,
+<https://www.ndbc.noaa.gov/docs/ndbc_web_data_guide.pdf>).
 
-* Realtime, last ~45 days: `{NDBC_BASE_URL}/data/realtime2/{ID}.txt` (standard
-  meteorological) and `{ID}.spec` (NDBC's own swell / wind-sea split; `SwD` is a 16-point
-  compass name, stored as the sector centre). Missing values are `MM`.
-* History: `view_text_file.php?filename={id}h{YYYY}.txt.gz&dir=data/historical/stdmet/`.
-  Missing values are runs of 9s with a meaning that depends on the column: WVHT, DPD and
-  APD 99.00; MWD and WDIR 999; WSPD and GST 99.0; PRES 9999.0; ATMP, WTMP and DEWP 999.0;
-  VIS 99.0; TIDE 99.00. A blanket mask would delete a real 99-degree wind direction. Old
-  yearly layouts (2-digit years, no minute column, `WD`/`BAR` names) are handled. Months
-  of the current year older than ~45 days are only in NDBC monthly files, which are not
-  implemented; requests reaching into that gap get a warning, and so does a yearly file
-  that answers 404 (not published yet, or no data that year).
+**Files** (all names seen live; station ids are lower case in archive file names):
+
+| Period | URL | Format |
+| --- | --- | --- |
+| last 45 days | `{NDBC_BASE_URL}/data/realtime2/{ID}.txt` and `{ID}.spec` | text, missing = `MM` (`.spec` also `-99`, and `NO` = no swell found) |
+| complete years | `{NDBC_BASE_URL}/data/historical/stdmet/{id}h{YYYY}.txt.gz` | gzip (read directly: about 9 times smaller than the `view_text_file.php` answer the adapter used before, 174 KB vs 1.53 MB for 51201 in 2025) |
+| months of the current year | `{NDBC_BASE_URL}/data/stdmet/{Mon}/{id}{m}{YYYY}.txt.gz`, `m` = 1-9 | gzip; quality controlled (Web Data Guide, section 4) |
+| newest month | `{NDBC_BASE_URL}/data/stdmet/{Mon}/{id}.txt` | uncompressed (`Sep/51201.txt` on 2026-10-12) |
+
+The month codes for October to December (`a`, `b`, `c`) follow NDBC's naming but could
+not be seen live: those directories were empty on 2026-10-12 (presumably emptied once
+the previous year's yearly file was published; not checked). A wrong guess would show as a 404 warning, not as
+missing data passed off as complete. Early in a year, before the previous year's yearly
+file is published (HTTP 404), the adapter reads that year's monthly files instead. A file
+missing under every name is a coverage warning; a file that answers 200 but is not gzip
+is an error, not data (a defensive check: every missing file seen live answered 404,
+including the old `view_text_file.php` name). Live, two of the 110 yearly and
+monthly files requested for the 24-month window were missing: 51201 March and April 2026.
+
+**Values and units** (columns `#YY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES ...`,
+units line `degT m/s m/s m sec sec degT hPa`):
+
+* **WVHT is the spectral significant wave height Hm0** = 4·sqrt(m0), m0 summed over the
+  non-directional spectrum: wavecalc.shtml, "WVHT = 4 × sqrt(m0) ... variance is calculated
+  using the nondirectional wave spectrum". measdes.shtml describes WVHT as "the average
+  of the highest one-third of all of the wave heights", which is the traditional meaning,
+  not the computation. Stored as `hs_kind = spectral_hm0`. Live check: NDBC WVHT equals
+  CDIP `waveHs` (CF `sea_surface_wave_significant_height`) exactly at six CDIP buoys
+  (51201, 51205, 46224, 46214, 46277, 46237; 449-902 reports each). For the NDBC-processed
+  46026, 4·sqrt(m0) recomputed from the realtime `.data_spec` densities agrees with WVHT
+  to 0.03 m (median of 2,130 reports; the densities are rounded to 3 decimals, so this is
+  a consistency check, not a proof).
+* **DPD** is the dominant (peak) period, 1/fp of the band with the largest spectral
+  density (wavecalc.shtml), stored as `tp_s`. Live: equal to CDIP `waveTp` within 0.005 s.
+* **APD depends on who processes the buoy** (wavecalc.shtml): sqrt(m0/m2) = Tm02 for
+  NDBC's own systems, m0/m1 = Tm01 for Scripps (CDIP) buoys, a zero-crossing period for
+  UK, Irish and French buoys shown by NDBC. The catalog states it per station
+  (`apd_kind`), and `tm_kind` is stored accordingly (`tm01` or `tm02`; `apd` only when a
+  station does not say). Live: NDBC APD equals CDIP `waveTa` (first moment) within
+  0.005 s at all six CDIP buoys and differs from CDIP `waveTz` (second moment) by
+  0.53-1.32 s (medians). Before this check every NDBC period was stored as `apd`.
+* **MWD is the direction from which the waves at DPD come**, degrees true (measdes), i.e.
+  a peak direction FROM, stored as `peak_direction_deg`. Live: equal to CDIP `waveDp`
+  (`sea_surface_wave_from_direction_at_variance_spectral_density_maximum`) within
+  0.5 degree. No conversion is needed.
+* WDIR is the wind direction FROM (degrees true), WSPD the 8-minute mean (m/s, stored
+  x 3.6 as km/h) at the anemometer height (3.2-4.1 m on these NDBC hulls, station
+  pages), not adjusted to 10 m. The CDIP Waveriders report no wind.
+* `.spec`: SwH / SwP / SwD swell and WWH / WWP / WWD wind-sea split; SwD and WWD are
+  16-point compass names of the direction the waves come FROM (measdes: "The direction
+  from which the swell waves ... are coming"), stored as the sector centre.
+* Missing values in the yearly and monthly files are runs of 9s with a per-column meaning
+  (measdes: "a variable number of 9's ... depending on the data type"): WVHT, DPD and APD
+  99.00; MWD and WDIR 999; WSPD and GST 99.0; PRES 9999.0; ATMP, WTMP and DEWP 999.0; VIS
+  99.0; TIDE 99.00 (all seen live). A blanket mask would delete a real 99-degree wind.
+* Precision: realtime files print heights to 0.1 m, DPD in whole seconds and APD to 0.1 s;
+  the archives print 0.01 m and 0.01 s. `.txt` and `.spec` round ties differently (an
+  archived 0.95 m appears as 1.0 in `.txt` and 0.9 in `.spec`).
+
+**Times** are UTC ("Both Realtime and Historical files show times in UTC only",
+measdes.shtml). For CDIP buoys NDBC's time is the end of CDIP's sample: CDIP `waveTime`
+(the "UTC sample start time" of a 1600 s sample) + 26 min at 51201, 51205, 46224 and
+46214, + 30 min at 46277 and 46237 (DWR-M4), in every one of 449-902 matched reports.
+NDBC's own buoys report waves every 30 min at :10 and :40 in `.spec` and in the
+archives.
+
+**Realtime copies (bug fixed).** The realtime `.txt` of NDBC's own buoys prints each
+20-minute wave report on the 10-minute meteorological rows next to the wave time ("wave
+information is displayed on the same lines as meteorological data", acq.shtml): 10 min
+before, at, or 10 min after the `.spec` time (live at 46026, 46053, 46054, 46086 and
+51101: 3,793 wave rows for 2,139 reports at 46026), often with DPD on only one copy.
+The adapter stored every copy, so a 30-min record became two or three records 10 min
+apart (8 records for 4 reports in the 46026 fixture). Now the copies of a report (same
+height within one 0.1 m rounding step, same APD and MWD, within 15 min) become one
+record at the `.spec` time, the time the QC'd archive uses, each value taken from the
+closest copy that has it; `parse.duplicates_merged` counts the folded rows. Checked on
+the overlap of the realtime files with the August 2026 monthly files (2026-08-28 to
+08-31, re-run on the afternoon of 2026-10-12): at 46026, 328 realtime wave rows became
+192 records, 191 of them at an archived time (the other at 16:09 next to the archived
+16:10 report) and none more than 0.05 m from the archived height; at 51201 (CDIP, no
+copies) all 192 records fall on archived times and agree within 0.05 m.
+
+**QC**: realtime rows have passed NDBC's automated checks only and carry no flags
+(`not_qc`); the yearly and monthly files are NDBC's quality-controlled archive
+(`probably_good`, no per-value flags either), so they supersede realtime rows of the same
+report.
+
+**Positions and depths.** `activestations.xml` (current deployment of every active
+station: id, lat, lon, name, owner, program, type) replaces the catalog position on every
+ingest; it has no water depth. The catalog now carries the activestations positions
+(`position_verified: true`), the water depth from each station page
+(`station_page.php?station=ID`, "Water depth"), the deployment date from
+`metadata/stationmetadata.xml`, and for CDIP buoys CDIP's own depth (`metaWaterDepth`;
+46224: 223 m at CDIP vs 238 m at NDBC, 46237: 16.46 vs 16.76 m). The previous catalog
+positions were the GFS-Wave output points, 0.2-2.8 km from the buoys.
+
+**Platforms.** activestations.xml lists 46012 (Half Moon Bay) as type `usv`: since
+2023-08 it is an uncrewed surface vehicle (station page: "Uncrewed Surface Vehicle",
+earlier Saildrones SD-1073, SD-1077 and SD-1063), with a watch circle of 20,254 yards
+(18.5 km), no APD and no MWD in its 2026 files and no yearly files for 2024 or 2025. A
+moving platform without positions in the data is not comparable with a fixed model
+point, so `ndbc:46012` is kept in the catalog inactive and unpaired.
+
+**Requests**: the adapter downloads `activestations.xml` (273 KB) and the two realtime
+files (150-600 KB each for a 10-minute station) on every run, whatever the window. The
+scheduled 48 h job therefore moves about 5.6 MB per run for the 11 active NDBC stations
+(measured live). NDBC also publishes 5-day files (`data/5day2/`), which would be enough
+for that job; they are not used yet.
+
 * A station keeps what its readable files gave: a file that fails to download or parse is
   reported in the station's `errors` while the other files' records are still stored.
   After a transient failure the station's remaining files are skipped (host down).
   Station ids are checked (alphanumeric only) before they go into a URL.
-* WVHT is stored as `spectral_hm0` (NDBC computes it from the spectrum), DPD as `tp_s`,
-  APD as `tm_s` (`tm_kind = apd`), MWD (the direction at DPD) as `peak_direction_deg`,
-  and WSPD x 3.6 / WDIR as wind.
-* Positions: the catalog uses the GFS-Wave output-point position for the same WMO id
-  (`position_verified = false`). The first successful NDBC ingest replaces it from
-  `activestations.xml`, and re-seeding keeps the replacement.
-* Licence: US Government work, public domain. Credit the operator where NDBC lists a
-  partner.
+* Licence: NDBC data are a US Government work, public domain. For the CDIP buoys the CDIP
+  files state "These data may be redistributed and used without restriction." and carry
+  an acknowledgment, copied verbatim into each station's `attribution` (e.g. "CDIP is
+  primarily supported by the U.S. Army Corps of Engineers (USACE). Station partner:
+  PACIOOS ; Field operator: PACIOOS/UH").
 
 ### GFS-Wave station bulletins (model forecasts at the buoys), live-verified
 
@@ -194,7 +295,8 @@ failure (see below), as designed.
   several per cent).
 * Periods are in seconds. `tp_s` is always the spectral peak period. `tm_s` carries a
   mean period whose definition is in `tm_kind`: `tm01`, `tm02`, `tz` (time-domain zero
-  up-crossing) or `apd` (NDBC average period).
+  up-crossing) or `apd` (an NDBC average period of a station whose APD definition is not
+  in the catalog; NDBC's own buoys give Tm02 and CDIP buoys Tm01, stored as such).
 * Directions are nautical degrees FROM in [0, 360) (360 is stored as 0). Going-to
   sources get +180. Directions are never averaged as plain numbers.
 * Wind is in km/h (m/s x 3.6).
@@ -211,7 +313,7 @@ failure (see below), as designed.
 | AODN realtime | always `not_qc` (the dataset is declared non-QC). Rows flagged 3, 4 or 9 are dropped and counted. |
 | Met Office | `probably_good` (automated real-time checks only). A value whose `<column>_qc` JSON is anything but `{"good": []}` is dropped and counted (`parse.flagged_values`). |
 | NDBC realtime | `not_qc` (NDBC blanks failed values as `MM` but publishes no flags). |
-| NDBC historical | `probably_good` (final NDBC QC, no per-value flags). |
+| NDBC yearly and monthly archive | `probably_good` (NDBC's quality-controlled archive, no per-value flags). |
 
 Precedence when two records describe the same measurement (same station, within 15
 minutes; for example AODN realtime at :00 versus delayed mode at :11):
@@ -248,12 +350,17 @@ and `historical_reference` (an earlier mooring).
 | thurso-east | `metoffice:k5` | upstream_regional | 475.3 | 64045 (18.4) |
 | mullaghmore-head | `metoffice:k4` | upstream_regional | 285.5 | none (62105 is 81 km away) |
 | la-graviere-hossegor | `metoffice:brittany` | upstream_regional | 692.2 | 62163 (2.3) |
-| pipeline / sunset-beach / waimea-bay | `ndbc:51201` | offshore_reference | 6.9 / 8.0 / 6.2 | 51201 |
-| jaws-peahi | `ndbc:51205` | offshore_reference | 15.4 | 51205 |
-| ocean-beach-sf, mavericks | `ndbc:46026` | offshore_reference | 27.1, 40.2 | 46026 |
-| mavericks | `ndbc:46012` | offshore_reference | 36.5 | 46012 |
-| rincon | `ndbc:46053` | offshore_reference | 37.3 | 46053 |
-| trestles | `ndbc:46224` | offshore_reference | 25.1 | 46224 |
+| pipeline / sunset-beach / waimea-bay | `ndbc:51201` (200 m) | offshore_reference | 6.7 / 7.8 / 6.0 | 51201 (0.2) |
+| pipeline / sunset-beach / waimea-bay | `ndbc:51101` (4,847 m) | upstream_regional | 507.6 / 507.5 / 507.9 | 51101 (2.6) |
+| jaws-peahi | `ndbc:51205` (200 m) | offshore_reference | 15.3 | 51205 (0.2) |
+| ocean-beach-sf / mavericks | `ndbc:46026` (53 m) | offshore_reference | 28.6 / 41.3 | 46026 (1.6) |
+| ocean-beach-sf | `ndbc:46237` (16.8 m) | nearshore_reference | 11.1 | 46237 (0.4) |
+| ocean-beach-sf / mavericks | `ndbc:46214` (600 m) | upstream_regional | 86.2 / 98.6 | 46214 (0.7) |
+| trestles | `ndbc:46277` (303 m) | offshore_reference | 8.3 | none (no bulletin for 46277) |
+| trestles | `ndbc:46224` (238 m) | offshore_reference | 25.2 | 46224 (0.3) |
+| trestles | `ndbc:46086` (1,862 m) | upstream_regional | 106.0 | 46086 (2.8) |
+| rincon | `ndbc:46053` (417 m) | offshore_reference | 36.3 | 46053 (1.0) |
+| rincon | `ndbc:46054` (454 m) | upstream_regional | 91.6 | 46054 (1.7) |
 
 `metoffice:k1` and `metoffice:k2` have no nearby spot. They are kept for offshore model
 verification (bulletins 62029 and 62081, 8.4 and 5.6 km away). So are
@@ -289,14 +396,27 @@ Justifications and caveats (the full text of each is in the catalog `note`):
   7-10 h from K4 to Mullaghmore, 15-20 h from Brittany to Hossegor), and the shelf,
   Orkney's shadow, Mullaghmore's reef and the Capbreton canyon transform it. Never
   compare same-time values for spot calibration.
-* **NDBC.** 51201 sits directly off Waimea Bay in deep water. The reefs add strong
-  refraction and focusing (Caldwell & Aucan 2007), so buoy Hs is not surf height. 51205
-  lies upstream of Pe'ahi for N-NW swell. 46026 and 46012 are offshore of Ocean Beach (SF
-  Bar effects) and Mavericks (Pillar Point reef focusing). 46053 is in the Santa Barbara
-  Channel, partly sharing Rincon's island and Point Conception shadow. 46224, about 25 km
-  south-southeast of Trestles inside the Southern California Bight, has comparable
-  island shadowing, which changes quickly with direction. All NDBC positions are model
-  output points until NDBC metadata replaces them.
+* **NDBC** (positions from activestations.xml, depths from the NDBC station pages; the
+  pairing table with bearings, the analysis-time check of each bulletin point and the
+  stations considered and not used is in docs/ml-evaluation.md, section 11). 51201 (CDIP
+  Waverider, 200 m) lies 6-8 km W-WNW of the three North Shore breaks in the same NW-N
+  exposure; the reefs add strong refraction and focusing (Caldwell & Aucan 2007), so buoy
+  Hs is not surf height. 51101 is a deep-ocean buoy 508 km NW, on the path of the NW
+  swell (9-10 h ahead at 15 s): context only. 51205 (200 m) is 15 km WNW of Pe'ahi on
+  the same open coast. 46026 (53 m) is offshore of Ocean Beach (SF Bar effects) and
+  Mavericks (Pillar Point reef focusing); 46237 sits on the SF Bar in 17 m, so its waves
+  are already transformed by the bar (nearshore context for Ocean Beach only); 46214 is
+  86-99 km upstream for W-NW swell. 46277 (303 m) is 8 km SW of Trestles in the same
+  exposure but has no GFS-Wave bulletin; 46224 is 25 km SSE inside the Southern
+  California Bight with comparable island shadowing, which changes quickly with
+  direction; 46086, 106 km SSW outside the island shadow, is upstream for
+  southern-hemisphere swell. 46053 is in the Santa Barbara Channel, partly sharing
+  Rincon's island and Point Conception shadow (no reports after 2026-10-06 05:50 UTC);
+  46054 is at the channel's western entrance, upstream for W swell. Not used: 46012 (an
+  uncrewed surface vehicle since 2023-08), 51001 (its GFS-Wave output point is 118 km
+  from the mooring), 51000 (outside the NW-N windows; output point 31 km away), 46025
+  (SSE of Rincon, outside its 250-300 degree window) and 46217 (Anacapa Passage: not in
+  activestations.xml and no yearly, monthly or realtime file for 2024-2026).
 
 Spots without a buoy in a reachable or documented feed have no pairing. No pairing was
 invented to fill a gap.
@@ -341,12 +461,29 @@ invented to fill a gap.
 | `ingest_all` job body with `aodn,metoffice,ndbc` | `status = partial` in 30.5 s. AODN: 177 new rows (Tweed Heads 91, Gold Coast 86) and the rest already stored. Met Office: 282 rows already stored. NDBC: `ProxyError: 403 Forbidden after 3 attempts`, reported as transient. |
 | Real-file parsing | Full 385-row bulletins (56006 from 2021-03-23 and 2026-10-10, 51201, 62163) parse with 0 malformed cells. A real AODN delayed-mode partition (Cape Naturaliste 02, December 2021) gives 1,189 `good` WSSH records at :11/:41. |
 
-Verified only with mocks or fixtures: every NDBC request and parser (synthetic text in
-the documented layouts), the `activestations.xml` position update, AODN delayed-mode QC
-codes 3/4/9 and `WATCH_CIRCLE_flag` handling (the live runs rejected no AODN rows, and
-the two real partitions inspected carry only flag 1 in delayed mode and flag 2 in
-realtime), Met Office flagged-value handling (no flagged values appeared live), re-issued Met Office hours, and transient-failure paths other than the
-NDBC proxy refusal.
+Verified only with mocks or fixtures: AODN delayed-mode QC codes 3/4/9 and
+`WATCH_CIRCLE_flag` handling (the live runs rejected no AODN rows, and the two real
+partitions inspected carry only flag 1 in delayed mode and flag 2 in realtime), Met
+Office flagged-value handling (no flagged values appeared live), re-issued Met Office
+hours, and transient-failure paths other than the NDBC proxy refusal. (At the time of
+this table NDBC was verified only with synthetic text; see the next section.)
+
+## Live verification of NDBC (2026-10-12, own database `swell_ndbc_live`)
+
+| Check | Result |
+| --- | --- |
+| `obs seed-stations` with the updated catalog | 26 stations, of them 12 NDBC (11 active; `ndbc:46012` inactive). Every NDBC position equals activestations.xml after ingest (`position_verified: true`). |
+| Realtime only, 2026-10-09 00:00 to 2026-10-12 12:00 UTC, 11 stations | 1,654 records, 23 requests, 5,586,387 bytes, 0 errors. At the NDBC-processed buoys (46026, 46054, 46086, 51101) 100-129 duplicate wave rows per station were folded into their report; the CDIP buoys had none. 46053: no record (no reports after 2026-10-06 05:50 UTC). |
+| 24-month backfill, 2024-10-12 00:00 to 2026-10-12 12:00 UTC, 11 stations | 337,400 records (spectral Hm0), 135 requests (yearly 2024 and 2025, monthly January-August 2026, realtime), 16,983,432 bytes, 0 errors; 2 coverage warnings (51201 March and April 2026 monthly files: 404 under both names). 1,626 records already stored by the realtime run were `unchanged`; at most stations 189-192 realtime records of 2026-08-29 to 08-31 were superseded by the QC'd August file in the same run. |
+| History for the long-term climatology, 2019-10-12 to 2024-10-12, 10 stations | 680,809 records, 61 requests (yearly files), 24,265,456 bytes, 0 errors. |
+| GFS-Wave bulletins at the 10 NDBC stations with a bulletin | 366 cycles each (00Z on every second day, 2024-10-12 to 2026-10-12), 589,260 rows, 0 missing, 0 malformed cells. |
+| `verify pair --full` | 585,970 forecasts scanned, 504,351 Hs pairs, all `observed_kind = spectral_hm0`, 81,619 without an observation within 30 min. |
+| Backtest | docs/ml-evaluation.md, section 11. |
+
+Not verified live: the October to December monthly-file codes (`a`, `b`, `c`; those
+directories were empty), a status-200 answer that is not gzip (never seen live; tested
+with a synthetic body), the old yearly layouts with 2-digit years (synthetic fixture
+only; the files read live were 2019-2026), and the 5-day files (not used).
 
 ## Known limitations
 
@@ -359,4 +496,11 @@ NDBC proxy refusal.
   swells by direction and period, not by index.
 * Met Office ingestion downloads one small file per buoy and hour (about 288 requests per
   48 h lookback). Skipping hours already stored would cut that.
-* NDBC monthly files (the current year beyond ~45 days) are not implemented.
+* NDBC: a month that lies wholly inside the realtime window (the last 44 days) is read
+  from the realtime files (`not_qc`) even when NDBC has already published its
+  quality-controlled monthly file (September 2026 on 2026-10-12). A later backfill whose
+  window covers that month, run once it has left the realtime window, reads the monthly
+  file, and its `probably_good` records then supersede the realtime ones. The scheduled
+  48 h job never does that.
+* NDBC realtime `.txt` prints heights to 0.1 m and DPD in whole seconds; the archive
+  values (0.01 m, 0.01 s) replace them when they arrive.

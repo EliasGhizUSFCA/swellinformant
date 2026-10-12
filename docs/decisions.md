@@ -234,3 +234,27 @@ it: a summary can compress or misattribute what the page says); a separate sourc
 rows. Local confidence, which uses the research basis, is at most Moderate everywhere for
 now.
 
+## ADR-017 NDBC: one record per wave report, APD defined per station
+
+**Context.** Checked against the live service on 2026-10-12 (docs/observations.md), the
+NDBC adapter stored each 20-minute wave report of NDBC's own buoys two or three times,
+because realtime `.txt` prints it on the 10-minute meteorological rows around the wave
+time (3,793 wave rows for 2,139 reports at 46026). It also stored every average period as
+the undefined `apd`, although NDBC documents APD as Tm02 for its own systems and Tm01 for
+CDIP buoys (confirmed against CDIP `waveTa` within 0.005 s at six buoys).
+**Decision.** Copies of one report (same height within one 0.1 m rounding step, same APD
+and MWD, within 15 min) become one record at the `.spec` time, which is also the time of
+the QC'd archive; each value comes from the closest copy that has it, and
+`parse.duplicates_merged` counts the folded rows. The catalog states `apd_kind` per
+station (`tm02` NDBC, `tm01` CDIP) and `tm_kind` is stored from it; a station without it
+keeps `apd`. Yearly and monthly archive records (`probably_good`) supersede realtime ones
+(`not_qc`) of the same report.
+**Alternatives.** Keeping every row (inflates pair counts and weights NDBC buoys two to
+three times in pooled scores); keeping only the row at the `.spec` time (often loses DPD,
+which NDBC prints on one copy only); storing APD as `apd` everywhere (mixes Tm01 and Tm02
+in one column).
+**Consequences.** One record per report, matching the archive (on the August 2026
+overlap, 191 of 192 merged records at 46026 fall on an archived time, the last one minute
+off, and all 192 at 51201; heights within 0.05 m). Copies stored before this change would
+stay, since re-ingesting does not delete rows at other times; none were stored outside
+scratch databases, because NDBC was unreachable before 2026-10-12.

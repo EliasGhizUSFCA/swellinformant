@@ -478,8 +478,11 @@ python -m app.cli ml import-manifest PATH
 * **Mock only.**
   * The point-forecast and observation collectors were not exercised in the builder's
     live check (they were in the review re-check above).
-  * NDBC and CDIP observations were never seen live; those hosts are blocked in the
-    build environment.
+  * NDBC and CDIP observations were not seen live in these runs; those hosts were
+    blocked in the build environment until 2026-10-12. Since then NDBC is verified live
+    (docs/observations.md) and the raw GFS-Wave bulletins are backtested against ten
+    NDBC buoys off Hawaii and California (docs/ml-evaluation.md, section 11); no
+    correction was trained on those pairs yet.
 
 ## Limitations
 

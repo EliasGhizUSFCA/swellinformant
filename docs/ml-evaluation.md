@@ -9,8 +9,9 @@ synthetic.
 **What this measures.** Offshore significant wave height **Hm0** (the spectral estimate,
 `4·sqrt(m0)`) at buoy positions, forecast by GFS-Wave and observed by moored buoys whose
 delayed-mode data passed the data owner's quality control. It does **not** measure
-breaking (surf) height, which no dataset used here observes, and it says nothing about
-regions other than south-west Western Australia.
+breaking (surf) height, which no dataset used here observes. Sections 1-10 cover
+south-west Western Australia (2021); section 11 adds a backtest of the raw forecast
+against NDBC buoys off Hawaii and California (2024-2026), run on 2026-10-12.
 
 ## Headline
 
@@ -39,6 +40,13 @@ regions other than south-west Western Australia.
   model produced on its held-out test (5th percentile 0.79 vs 0.98 at the buoy), i.e. the
   model would run on inputs it was not validated on. Activation is an explicit operator
   step after a shadow check on gridded forecasts.
+* **Second region: NDBC buoys off Hawaii and California** (section 11; 10 buoys,
+  2025-02-11 to 2026-10-12, 409,344 pairs over 305 cycles, raw bulletins only). The same
+  low bias as in Western Australia (pooled -0.23 m at every lead); RMSE 0.38 m at 24 h,
+  0.51 m at 168 h and 0.64 m at 240 h. Skill over a 2019-2024 monthly climatology of the
+  same buoys: 0.58 at 24 h, 0.23 at 168 h, negative at 240 h (-0.28). Off Trestles (46224)
+  the raw forecast is not distinguishably better than that climatology at any lead, and
+  off Pe'ahi (51205) only slightly; winter has larger errors but more skill than summer.
 
 ## 1. Data inventory
 
@@ -597,8 +605,10 @@ the choice.
 * **Offshore Hs at buoys only.** Everything here is offshore Hm0 at three buoy positions.
   Breaking (surf) height is not validated at all: no nearshore or surf-height
   observations exist in the project. Offshore skill does not carry over to surf height.
-* **Australian sites only, one region.** South-west Western Australia (Rottnest,
-  Cape Naturaliste, Esperance). The results do not transfer automatically to other
+* **One region for the ML correction.** The correction was trained and tested in
+  south-west Western Australia only (Rottnest, Cape Naturaliste, Esperance). Section 11
+  backtests the raw forecast at NDBC buoys off Hawaii and California, but no correction
+  was trained or tested there. The results do not transfer automatically to other
   regions, other buoys or other forecast sources.
 * **Applicability of the exported correction.** It is applied only at the spots paired
   with its training station through an offshore relation (`margaret-river-main-break`,
@@ -687,7 +697,9 @@ leads 0-2 h; it is a one-off query, not a command.
   missing.
 * **Mock only:** the new `--aodn-dataset` filter and `--bulletin-id` proxy option are
   covered by integration tests with mocked HTTP; they were also used live for this study.
-* **Not available here:** NDBC, CDIP and CO-OPS (blocked in this sandbox) were not used.
+* **Not available here (2026-10-11):** NDBC, CDIP and CO-OPS were blocked in the sandbox
+  when sections 1-10 were produced. NDBC and CDIP became reachable on 2026-10-12 and are
+  used in section 11 (its own live/mock list is in 11.8).
 
 ## 10. Deployment in the application
 
@@ -729,3 +741,483 @@ python -m app.cli ml import-manifest ml_models/offshore_hs_residual/offshore_hs_
 python -m app.cli ml activate <id printed by the import>    # explicit operator step
 python -m app.cli ml deactivate offshore_hs_residual       # back to raw at any time
 ```
+
+## 11. NDBC buoys off Hawaii and California (2024-10 to 2026-10)
+
+A second backtest of the **raw** GFS-Wave station bulletins, against NOAA NDBC buoys near
+the eight US spots, run on 2026-10-12 after `www.ndbc.noaa.gov` became reachable. Every
+number comes from live downloads (NDBC files, NOAA NODD bulletins) into a scratch
+database (`swell_ndbc_live`) and the repository's own commands; nothing is synthetic.
+What the NDBC adapter was checked against, and the fixes, are in
+`docs/observations.md` ("NOAA NDBC (US), live-verified 2026-10-12").
+
+**What this measures.** Offshore spectral Hm0 at the buoys (NDBC `WVHT` is
+4·sqrt(m0) from the non-directional spectrum, NDBC wavecalc.shtml; it equals CDIP
+`waveHs` exactly at the six CDIP buoys checked) against the bulletin's total-sea `Hst`
+at the bulletin output point next to each buoy. It does **not** measure breaking (surf)
+height. No ML correction was trained or applied here (the shipped correction covers the
+Western Australian spots only).
+
+### 11.1 Data
+
+| Data | Window | Volume | Downloaded |
+| --- | --- | --- | --- |
+| NDBC observations, 11 stations (yearly `.txt.gz` 2024 and 2025, monthly files January-August 2026, realtime `.txt` + `.spec`) | 2024-10-12 00:00 to 2026-10-12 12:00 UTC | 337,400 records (spectral Hm0), 0 errors | 135 requests, 16,983,432 bytes |
+| NDBC observations for the long-term climatology, 10 stations (yearly files 2019-2024) | 2019-10-12 to 2024-10-12 | 680,809 records | 61 requests, 24,265,456 bytes |
+| GFS-Wave station bulletins, 10 stations, 00Z cycle on every second day (`obs collect-forecasts`) | 2024-10-12 00Z to 2026-10-12 00Z | 366 cycles x 161 leads (hourly to 120 h, 3-hourly to 240 h) = 58,926 rows per station, 589,260 in all; 0 missing, 0 errors, 0 malformed cells | 3,996 bulletin files of about 52 KB (about 208 MB) |
+
+* **Bulletin archive.** The NODD bucket holds bulletins from 2021-03-22 18Z, so the
+  24-month window was not limited by the archive. Bulletins exist (bulls.t00z listing of
+  2026-10-11) for 51201, 51205, 51101, 51000, 51001, 46026, 46237, 46214, 46012, 46224,
+  46086, 46053, 46054 and 46025; there is none for 46277.
+* **Sampling.** Only the 00Z cycle of every second day was archived (25 % of the 1,462
+  00Z/12Z cycles in the window). A stored forecast row takes about 870 bytes in
+  PostgreSQL; all cycles for ten stations would have needed about 2 GB more on a build
+  machine shared with other work. The first month (2024-10-12 to 2024-11-11) was first
+  collected daily for all 16 bulletin stations of the catalog (496 files); the rows of
+  the odd days and of the six non-NDBC stations were then deleted from the scratch
+  database so that every station and month has the same sampling. The days were fixed by
+  the calendar (every second day from the first), not by the weather. Consecutive tested
+  cycles are 48 h apart, so the cycle-block bootstrap resamples less correlated blocks
+  than with 12-hourly cycles.
+* **Gaps** (months with fewer than half the expected reports): 46026 February to May
+  2025 (no reports in March and April; new hull 2025-05-20); 51205 January to March and
+  June to August 2025; 46214 August, November and December 2025 and January 2026
+  (redeployed 2026-01-26); 51101 February to September 2026 (redeployed 2026-09-20);
+  51201 March and April 2026 (the monthly files answer 404 under both names); 46237
+  November and December 2024, August and September 2026; 46053 October and December
+  2024, March 2025, and no reports after 2026-10-06 05:40 UTC; 46054 November 2025;
+  46086 September 2025. 46224 has none. Forecasts without an observation within 30 min
+  are dropped and counted, never filled.
+* **Pairing** (`verify pair --full`): 585,970 forecasts with a past valid time scanned,
+  504,351 Hs pairs, **all against spectral Hm0** (`observed_kind = spectral_hm0`), 81,619
+  forecasts without an observation within 30 min (the gaps above). Per station: 46026
+  50,090, 46053 50,441, 46054 55,899, 46086 53,961, 46214 47,209, 46224 58,258, 46237
+  50,851, 51101 40,536, 51201 52,569, 51205 44,537 (all leads, analysis rows included).
+  Mean observed Hm0 over these pairs is 0.93 m (46224) to 2.43 m (46214), mean bulletin
+  Hst 0.71 to 2.36 m. No Tp or direction pairs: the bulletin has no total-sea peak period
+  or direction.
+* **QC.** Observations up to 2026-08-31 come from NDBC's quality-controlled yearly and
+  monthly archive (`probably_good`). Those from 2026-09-01 (46237 from 2026-10-02, 51101
+  from 2026-09-21) come from the realtime files (`not_qc`, automated checks only): the
+  adapter reads a month's QC'd file only when the realtime file does not cover the whole
+  month, and on 2026-10-12 it covered September. That is 2-9 % of each station's
+  test-period observations; a sensitivity run without them is in 11.4.
+
+### 11.2 Pairings (spot to buoy)
+
+Positions from NDBC `activestations.xml` (2026-10-12), depths from the NDBC station
+pages (CDIP's own value where it differs), bulletin output points and WW3 depths from
+the 2026-10-11 00Z bulletins (`.bull` header, `.spec` point line). Bearing = direction
+from the break to the buoy. Analysis-time check: bulletin `Hst` at leads 0-2 h (never
+scored) against the buoy over the whole window, as in section 1; ratio = median of
+observed / model, by the sector of bulletin partition 1 (FROM; sectors with 30 or more
+rows).
+
+| Spot(s) | Buoy (operator, platform, depth) | Relation | km to break, bearing | Bulletin point km / WW3 depth | Analysis time: n, bias m, RMSE m, CC, obs/model (by sector) | Representative? |
+| --- | --- | --- | --- | --- | --- | --- |
+| pipeline, sunset-beach, waimea-bay | 51201 Waimea Bay (PacIOOS / CDIP 106, Waverider DWR-M3, 200 m) | offshore_reference | 6.7 / 7.8 / 6.0, W to WNW (263-300 deg) | 0.2 / 472.7 m | 987, -0.29, 0.40, 0.944, 1.20 (N 1.22, NE 1.20, NW 1.18) | **yes**: directly offshore of the North Shore in the same NW-N exposure; ratio uniform across directions |
+| pipeline, sunset-beach, waimea-bay | 51101 NW Hawaii Two (NDBC, 4,847 m) | upstream_regional | 508, NW (306 deg) | 2.6 / 4,715.7 m | 758, -0.16, 0.33, 0.948, 1.06 (uniform 1.04-1.07) | context only: open ocean on the NW swell path, about 9-10 h upstream at 15 s |
+| jaws-peahi | 51205 Pauwela (PacIOOS / CDIP 187, DWR-M3, 200 m) | offshore_reference | 15.3, WNW (303 deg) | 0.2 / 242.7 m | 836, -0.41, 0.55, 0.838, 1.24 (E 1.17, NE 1.25, N 1.39, NW 1.57) | **yes, with a caveat**: same open north coast of Maui, but the buoy exceeds the model far more for N-NW swell (ratio 1.39-1.57) than for E-NE seas (1.17-1.25), so model error depends on direction |
+| ocean-beach-sf, mavericks | 46026 San Francisco (NDBC 3-m discus, 53 m) | offshore_reference | 28.6 / 41.3, W / NW (268 / 314 deg) | 1.6 / 53.0 m | 939, -0.22, 0.33, 0.946, 1.13 (W 1.14, NW 1.14, S 1.10, SW 1.07) | **yes**: open shelf in the same W-NW exposure, model point at the same depth |
+| ocean-beach-sf | 46237 San Francisco Bar (CDIP 142, DWR-M4, 16.8 m) | nearshore_reference | 11.1, WNW (286 deg) | 0.4 / 26.7 m | 954, -0.35, 0.45, 0.911, 1.30 (W 1.32, SW 1.30) | partly: the swell is already transformed by the bar, which the grid resolves only roughly (26.7 m model depth) |
+| ocean-beach-sf, mavericks | 46214 Point Reyes (CDIP 029, DWR-M3, 600 m) | upstream_regional | 86.2 / 98.6, WNW (284 / 301 deg) | 0.7 / 818.8 m | 888, -0.15, 0.36, 0.942, 1.05 (NW 1.06, W 1.03) | context only: deep water upstream for W-NW swell |
+| trestles | 46224 Oceanside Offshore (CDIP 045, DWR-M3, 238 m) | offshore_reference | 25.2, SSE (154 deg) | 0.3 / 361.3 m | 1,095, -0.24, 0.28, 0.863, 1.35 (S 1.34, SW 1.31, W 1.39) | **yes, with a caveat**: same island-shadowed Bight exposure, but observed Hm0 is 31-39 % above the model at analysis time in every sector |
+| trestles | 46277 Green Beach Offshore (CDIP 271, DWR-M4, 303 m) | offshore_reference | 8.3, SW (232 deg) | no bulletin | not possible | the closest offshore buoy for Trestles, but not in the bulletin backtest (observations ingested for later gridded verification) |
+| trestles | 46086 San Clemente Basin (NDBC 2.1-m buoy, 1,862 m) | upstream_regional | 106, SSW (203 deg) | 2.8 / 1,513.2 m | 1,007, -0.34, 0.43, 0.887, 1.28 (S 1.20, W 1.31, NW 1.27) | context only: outside the island shadow, upstream for southern-hemisphere swell |
+| rincon | 46053 East Santa Barbara (NDBC 3-m discus, 417 m) | offshore_reference | 36.3, WSW (247 deg) | 1.0 / 283.2 m | 935, -0.13, 0.24, 0.883, 1.14 (W 1.14) | **yes**: in the channel that W swell runs down to Rincon, edge of its window |
+| rincon | 46054 West Santa Barbara (NDBC 3-m discus, 454 m) | upstream_regional | 91.6, W (263 deg) | 1.7 / 290.6 m | 1,049, -0.42, 0.50, 0.936, 1.25 (NW 1.26, W 1.25) | context only: western entrance of the channel, upstream for W swell |
+
+Every pairing has its justification in the catalog (`data/observation_stations.json`,
+`paired_spots[].note`). Buoy Hs is an offshore reference for each spot, never its surf
+height. The analysis-time ratios differ from station to station (1.05 to 1.35): part of
+what follows is the model's local error at each output point, which is why the
+stations are also reported separately.
+
+**Considered and not used.** 46012 Half Moon Bay (the traditional Mavericks buoy) has
+been an uncrewed surface vehicle since 2023-08, moving within an 18.5 km watch circle,
+without APD or MWD and without yearly files for 2024 or 2025. 51001 (NW Hawaii): its
+bulletin output point is 118 km from the current mooring. 51000 (NE of Oahu): outside
+the NW-N windows of the Hawaiian spots, output point 31 km from the buoy. 51207, 51210
+(Kaneohe Bay), 51202 (Mokapu Point), 51211 (Pearl Harbor entrance) and 51212 (Barbers
+Point): 37-48 km from the North Shore breaks on the windward or south shore of Oahu, in
+other exposure. 46025 Santa Monica Basin: 77 km SSE of Rincon, outside its 250-300
+degree window. 46217 (Anacapa Passage): a bulletin exists, but the station is not in
+activestations.xml and has no yearly, monthly or realtime file for 2024-2026. 46285 and
+46275 (Capistrano Beach and Red Beach Nearshore, 11-13 km from Trestles): nearshore
+CDIP buoys without a bulletin. 46042 (Monterey) and 46013 (Bodega Bay), 79-109 km from
+the San Francisco spots, were not added: 46026, 46237 and 46214 already cover the
+offshore, bar and upstream positions there. No other spot of the 50 has any station
+listed in activestations.xml (2026-10-12) within 150 km; the nearest NDBC-listed
+stations of the other spots are 200 km or more away (for example the Gascogne buoy
+62001, 273 km from Mundaka).
+
+### 11.3 Results (`verify backtest`, raw GFS-Wave bulletins vs NDBC Hm0)
+
+Rolling origin, 5 folds, gap 312 h; test blocks 2025-02-11 to 2026-10-12 (fold 1
+2025-02-11 to 06-11, 2: 06-13 to 10-11, 3: 2025-10-13 to 2026-02-10, 4: 02-12 to 06-12,
+5: 06-14 to 10-12), cycle-block bootstrap with 1,000 replicates, seed 20261010, 90 %
+intervals. Lead buckets as in section 2. "LT clim" is the long-term monthly climatology
+of each station's QC'd Hm0 from 2019-10-12 to 2024-10-11 (`--lt-climatology-before
+2024-10-12`; 12 months x 10 stations, 5 years per month, all before the first tested
+cycle, every tested row covered). "SS clim (folds)" is the implemented training-fold
+climatology (its sample size in brackets); with two years of data it now covers
+58 % of the rows and has an RMSE of 0.655 m, against 0.581 m for the long-term one.
+
+**Pooled, all ten stations**: 409,344 test pairs, 305 cycles.
+
+| lead h | n | cycles | bias m [90 % CI] | MAE m | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | RMSE persistence | SS clim (folds) (n) | SS LT clim [90 % CI] | RMSE LT clim |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| all | 409344 | 305 | -0.23 [-0.24, -0.22] | 0.33 | 0.437 [0.426, 0.447] | 0.21 | 0.26 | 0.87 | 0.59 [0.56, 0.62] | 0.682 | 0.54 (237754) | 0.43 [0.41, 0.46] | 0.581 |
+| 24 | 33791 | 304 | -0.25 [-0.26, -0.24] | 0.30 | 0.376 [0.364, 0.389] | 0.16 | 0.23 | 0.93 | 0.47 [0.42, 0.52] | 0.519 | 0.66 (19511) | 0.58 [0.53, 0.62] | 0.580 |
+| 48 | 33801 | 304 | -0.24 [-0.25, -0.23] | 0.30 | 0.376 [0.364, 0.389] | 0.16 | 0.23 | 0.92 | 0.71 [0.67, 0.74] | 0.694 | 0.66 (19600) | 0.58 [0.54, 0.61] | 0.578 |
+| 72 | 33687 | 303 | -0.24 [-0.25, -0.22] | 0.30 | 0.385 [0.371, 0.397] | 0.17 | 0.23 | 0.91 | 0.72 [0.70, 0.75] | 0.731 | 0.64 (19511) | 0.56 [0.52, 0.60] | 0.580 |
+| 120 | 43922 | 302 | -0.22 [-0.24, -0.21] | 0.32 | 0.425 [0.407, 0.442] | 0.20 | 0.26 | 0.88 | 0.67 [0.63, 0.70] | 0.734 | 0.57 (25522) | 0.46 [0.41, 0.51] | 0.580 |
+| 168 | 23191 | 301 | -0.20 [-0.22, -0.18] | 0.37 | 0.508 [0.488, 0.530] | 0.26 | 0.31 | 0.79 | 0.55 [0.49, 0.60] | 0.758 | 0.39 (13519) | 0.23 [0.16, 0.30] | 0.580 |
+| 240 | 12851 | 300 | -0.21 [-0.25, -0.18] | 0.47 | 0.642 [0.610, 0.677] | 0.34 | 0.40 | 0.64 | 0.26 [0.16, 0.35] | 0.745 | -0.03 (7532) | -0.28 [-0.41, -0.16] | 0.568 |
+
+**Pooled, the five offshore references of the paired spots** (51201, 51205, 46026,
+46224, 46053; the buoy that stands for each spot's offshore swell): 210,878 test pairs,
+305 cycles.
+
+| lead h | n | cycles | bias m [90 % CI] | MAE m | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | RMSE persistence | SS clim (folds) (n) | SS LT clim [90 % CI] | RMSE LT clim |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| all | 210878 | 305 | -0.23 [-0.24, -0.22] | 0.30 | 0.399 [0.388, 0.410] | 0.21 | 0.28 | 0.87 | 0.53 [0.50, 0.57] | 0.583 | 0.43 (127704) | 0.38 [0.35, 0.42] | 0.508 |
+| 24 | 17404 | 304 | -0.24 [-0.26, -0.23] | 0.28 | 0.355 [0.339, 0.370] | 0.17 | 0.25 | 0.92 | 0.33 [0.25, 0.40] | 0.434 | 0.56 (10486) | 0.51 [0.46, 0.56] | 0.507 |
+| 48 | 17394 | 304 | -0.23 [-0.25, -0.22] | 0.28 | 0.361 [0.346, 0.376] | 0.18 | 0.25 | 0.91 | 0.63 [0.58, 0.67] | 0.593 | 0.55 (10535) | 0.49 [0.44, 0.54] | 0.505 |
+| 72 | 17365 | 303 | -0.23 [-0.25, -0.22] | 0.29 | 0.367 [0.351, 0.381] | 0.18 | 0.26 | 0.90 | 0.65 [0.61, 0.69] | 0.621 | 0.52 (10486) | 0.48 [0.42, 0.53] | 0.507 |
+| 120 | 22651 | 302 | -0.23 [-0.24, -0.21] | 0.30 | 0.389 [0.372, 0.405] | 0.20 | 0.28 | 0.87 | 0.62 [0.58, 0.66] | 0.633 | 0.46 (13723) | 0.41 [0.35, 0.47] | 0.508 |
+| 168 | 11965 | 301 | -0.21 [-0.23, -0.19] | 0.33 | 0.447 [0.427, 0.469] | 0.25 | 0.32 | 0.80 | 0.53 [0.47, 0.58] | 0.646 | 0.29 (7259) | 0.23 [0.14, 0.30] | 0.508 |
+| 240 | 6630 | 300 | -0.22 [-0.25, -0.19] | 0.40 | 0.550 [0.521, 0.582] | 0.33 | 0.40 | 0.65 | 0.29 [0.18, 0.38] | 0.650 | -0.14 (4037) | -0.22 [-0.36, -0.11] | 0.497 |
+
+**Per station** (90 % CIs; reference RMSEs are in the pooled tables). Station order: by
+spot group (Hawaii, San Francisco, Trestles, Rincon), as in the pairing table.
+
+*All leads (3-240 h)*
+
+| station | n | cycles | bias m [90 % CI] | MAE m | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ndbc:51201 | 42782 | 280 | -0.28 [-0.29, -0.27] | 0.31 | 0.418 [0.400, 0.437] | 0.18 | 0.27 | 0.90 | 0.59 [0.52, 0.65] | 0.40 [0.34, 0.45] |
+| ndbc:51205 | 36697 | 240 | -0.43 [-0.44, -0.41] | 0.45 | 0.540 [0.518, 0.560] | 0.16 | 0.31 | 0.83 | 0.22 [0.13, 0.30] | 0.11 [0.04, 0.17] |
+| ndbc:51101 | 32357 | 233 | -0.11 [-0.13, -0.09] | 0.27 | 0.412 [0.388, 0.436] | 0.16 | 0.18 | 0.88 | 0.78 [0.74, 0.81] | 0.63 [0.59, 0.66] |
+| ndbc:46026 | 40788 | 265 | -0.15 [-0.17, -0.13] | 0.30 | 0.418 [0.401, 0.435] | 0.21 | 0.24 | 0.81 | 0.70 [0.66, 0.73] | 0.61 [0.57, 0.65] |
+| ndbc:46237 | 41924 | 273 | -0.30 [-0.31, -0.28] | 0.36 | 0.459 [0.442, 0.476] | 0.21 | 0.31 | 0.80 | 0.52 [0.45, 0.57] | 0.34 [0.28, 0.40] |
+| ndbc:46214 | 38271 | 255 | -0.05 [-0.08, -0.03] | 0.37 | 0.540 [0.522, 0.556] | 0.21 | 0.22 | 0.80 | 0.75 [0.72, 0.77] | 0.62 [0.58, 0.65] |
+| ndbc:46224 | 47533 | 305 | -0.22 [-0.23, -0.21] | 0.25 | 0.305 [0.295, 0.315] | 0.21 | 0.35 | 0.74 | 0.29 [0.16, 0.39] | 0.06 [-0.04, 0.14] |
+| ndbc:46086 | 43339 | 303 | -0.27 [-0.29, -0.26] | 0.32 | 0.405 [0.388, 0.423] | 0.20 | 0.30 | 0.77 | 0.41 [0.34, 0.48] | 0.36 [0.30, 0.41] |
+| ndbc:46053 | 43829 | 290 | -0.12 [-0.13, -0.10] | 0.22 | 0.298 [0.288, 0.308] | 0.24 | 0.28 | 0.76 | 0.63 [0.58, 0.67] | 0.48 [0.44, 0.53] |
+| ndbc:46054 | 45236 | 301 | -0.37 [-0.38, -0.35] | 0.42 | 0.527 [0.512, 0.542] | 0.19 | 0.30 | 0.82 | 0.49 [0.43, 0.54] | 0.35 [0.30, 0.40] |
+
+*Lead 24 h*
+
+| station | n | cycles | bias m [90 % CI] | MAE m | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ndbc:51201 | 3538 | 274 | -0.29 [-0.31, -0.26] | 0.31 | 0.396 [0.363, 0.427] | 0.16 | 0.26 | 0.93 | 0.39 [0.23, 0.51] | 0.46 [0.36, 0.54] |
+| ndbc:51205 | 3024 | 233 | -0.41 [-0.43, -0.38] | 0.42 | 0.500 [0.466, 0.536] | 0.15 | 0.28 | 0.87 | -0.31 [-0.60, -0.10] | 0.26 [0.08, 0.39] |
+| ndbc:51101 | 2681 | 222 | -0.12 [-0.14, -0.09] | 0.21 | 0.295 [0.266, 0.324] | 0.11 | 0.13 | 0.95 | 0.84 [0.79, 0.88] | 0.80 [0.75, 0.84] |
+| ndbc:46026 | 3375 | 260 | -0.17 [-0.19, -0.15] | 0.24 | 0.305 [0.288, 0.321] | 0.14 | 0.18 | 0.91 | 0.62 [0.54, 0.69] | 0.79 [0.74, 0.82] |
+| ndbc:46237 | 3467 | 267 | -0.31 [-0.33, -0.28] | 0.34 | 0.415 [0.390, 0.442] | 0.17 | 0.28 | 0.88 | 0.27 [0.11, 0.39] | 0.47 [0.36, 0.55] |
+| ndbc:46214 | 3159 | 243 | -0.12 [-0.15, -0.09] | 0.26 | 0.355 [0.326, 0.387] | 0.13 | 0.15 | 0.93 | 0.82 [0.79, 0.85] | 0.84 [0.81, 0.86] |
+| ndbc:46224 | 3926 | 302 | -0.25 [-0.26, -0.23] | 0.25 | 0.291 [0.278, 0.306] | 0.16 | 0.34 | 0.86 | -0.07 [-0.45, 0.19] | 0.14 [-0.03, 0.28] |
+| ndbc:46086 | 3568 | 280 | -0.30 [-0.31, -0.28] | 0.31 | 0.371 [0.351, 0.390] | 0.15 | 0.28 | 0.87 | 0.08 [-0.13, 0.25] | 0.45 [0.34, 0.53] |
+| ndbc:46053 | 3628 | 280 | -0.14 [-0.16, -0.12] | 0.20 | 0.261 [0.243, 0.280] | 0.19 | 0.23 | 0.86 | 0.62 [0.52, 0.70] | 0.65 [0.57, 0.71] |
+| ndbc:46054 | 3730 | 289 | -0.39 [-0.41, -0.36] | 0.40 | 0.483 [0.458, 0.506] | 0.14 | 0.27 | 0.91 | 0.23 [0.09, 0.34] | 0.45 [0.37, 0.53] |
+
+*Lead 48 h*
+
+| station | n | cycles | bias m [90 % CI] | MAE m | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ndbc:51201 | 3526 | 272 | -0.29 [-0.31, -0.27] | 0.30 | 0.391 [0.359, 0.423] | 0.15 | 0.25 | 0.93 | 0.67 [0.58, 0.74] | 0.45 [0.33, 0.55] |
+| ndbc:51205 | 3025 | 234 | -0.42 [-0.45, -0.39] | 0.43 | 0.512 [0.479, 0.544] | 0.15 | 0.29 | 0.87 | 0.24 [0.09, 0.35] | 0.15 [0.00, 0.27] |
+| ndbc:51101 | 2683 | 222 | -0.13 [-0.16, -0.11] | 0.22 | 0.314 [0.281, 0.347] | 0.12 | 0.13 | 0.94 | 0.87 [0.84, 0.90] | 0.79 [0.73, 0.83] |
+| ndbc:46026 | 3366 | 260 | -0.16 [-0.19, -0.14] | 0.25 | 0.329 [0.306, 0.351] | 0.15 | 0.19 | 0.91 | 0.82 [0.79, 0.85] | 0.77 [0.73, 0.81] |
+| ndbc:46237 | 3469 | 267 | -0.29 [-0.32, -0.27] | 0.34 | 0.409 [0.388, 0.430] | 0.17 | 0.27 | 0.88 | 0.63 [0.55, 0.69] | 0.49 [0.39, 0.57] |
+| ndbc:46214 | 3169 | 245 | -0.09 [-0.12, -0.06] | 0.27 | 0.352 [0.328, 0.377] | 0.14 | 0.14 | 0.92 | 0.90 [0.88, 0.92] | 0.83 [0.80, 0.86] |
+| ndbc:46224 | 3930 | 303 | -0.23 [-0.25, -0.22] | 0.25 | 0.289 [0.273, 0.305] | 0.17 | 0.34 | 0.82 | 0.34 [0.19, 0.46] | 0.11 [-0.05, 0.23] |
+| ndbc:46086 | 3566 | 280 | -0.29 [-0.31, -0.27] | 0.30 | 0.370 [0.350, 0.389] | 0.16 | 0.27 | 0.86 | 0.52 [0.40, 0.59] | 0.45 [0.35, 0.53] |
+| ndbc:46053 | 3616 | 280 | -0.09 [-0.11, -0.07] | 0.21 | 0.266 [0.251, 0.281] | 0.22 | 0.24 | 0.81 | 0.70 [0.64, 0.75] | 0.58 [0.51, 0.65] |
+| ndbc:46054 | 3741 | 291 | -0.36 [-0.39, -0.34] | 0.38 | 0.465 [0.442, 0.486] | 0.14 | 0.26 | 0.90 | 0.60 [0.52, 0.66] | 0.48 [0.40, 0.55] |
+
+*Lead 72 h*
+
+| station | n | cycles | bias m [90 % CI] | MAE m | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ndbc:51201 | 3525 | 273 | -0.30 [-0.32, -0.27] | 0.31 | 0.402 [0.373, 0.432] | 0.16 | 0.26 | 0.93 | 0.67 [0.58, 0.73] | 0.44 [0.34, 0.53] |
+| ndbc:51205 | 3024 | 233 | -0.43 [-0.46, -0.40] | 0.44 | 0.522 [0.487, 0.558] | 0.15 | 0.30 | 0.87 | 0.38 [0.25, 0.49] | 0.19 [0.00, 0.33] |
+| ndbc:51101 | 2668 | 221 | -0.12 [-0.15, -0.09] | 0.23 | 0.333 [0.297, 0.372] | 0.13 | 0.14 | 0.93 | 0.86 [0.82, 0.89] | 0.75 [0.69, 0.79] |
+| ndbc:46026 | 3362 | 259 | -0.14 [-0.16, -0.11] | 0.25 | 0.318 [0.298, 0.338] | 0.16 | 0.19 | 0.89 | 0.83 [0.80, 0.86] | 0.76 [0.71, 0.80] |
+| ndbc:46237 | 3454 | 266 | -0.29 [-0.32, -0.27] | 0.34 | 0.416 [0.387, 0.449] | 0.18 | 0.28 | 0.86 | 0.67 [0.60, 0.72] | 0.45 [0.34, 0.54] |
+| ndbc:46214 | 3146 | 242 | -0.07 [-0.10, -0.03] | 0.28 | 0.381 [0.352, 0.414] | 0.15 | 0.15 | 0.91 | 0.89 [0.87, 0.91] | 0.81 [0.78, 0.84] |
+| ndbc:46224 | 3913 | 301 | -0.24 [-0.25, -0.22] | 0.24 | 0.288 [0.273, 0.302] | 0.17 | 0.33 | 0.84 | 0.46 [0.31, 0.56] | 0.16 [-0.01, 0.29] |
+| ndbc:46086 | 3555 | 279 | -0.27 [-0.29, -0.25] | 0.29 | 0.359 [0.336, 0.381] | 0.16 | 0.27 | 0.85 | 0.60 [0.50, 0.68] | 0.48 [0.38, 0.57] |
+| ndbc:46053 | 3615 | 279 | -0.10 [-0.12, -0.08] | 0.22 | 0.281 [0.263, 0.299] | 0.22 | 0.25 | 0.81 | 0.72 [0.66, 0.77] | 0.59 [0.51, 0.65] |
+| ndbc:46054 | 3717 | 288 | -0.36 [-0.38, -0.33] | 0.39 | 0.480 [0.454, 0.505] | 0.16 | 0.27 | 0.88 | 0.65 [0.58, 0.70] | 0.46 [0.37, 0.54] |
+
+*Lead 120 h*
+
+| station | n | cycles | bias m [90 % CI] | MAE m | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ndbc:51201 | 4585 | 272 | -0.28 [-0.30, -0.25] | 0.30 | 0.399 [0.366, 0.432] | 0.17 | 0.26 | 0.91 | 0.69 [0.60, 0.74] | 0.47 [0.37, 0.55] |
+| ndbc:51205 | 3956 | 233 | -0.44 [-0.47, -0.41] | 0.45 | 0.534 [0.500, 0.567] | 0.15 | 0.31 | 0.86 | 0.38 [0.26, 0.49] | 0.16 [0.00, 0.28] |
+| ndbc:51101 | 3458 | 223 | -0.11 [-0.15, -0.07] | 0.28 | 0.427 [0.358, 0.498] | 0.17 | 0.18 | 0.87 | 0.80 [0.74, 0.86] | 0.60 [0.46, 0.71] |
+| ndbc:46026 | 4375 | 258 | -0.14 [-0.18, -0.11] | 0.30 | 0.413 [0.378, 0.450] | 0.22 | 0.24 | 0.79 | 0.74 [0.69, 0.79] | 0.60 [0.50, 0.66] |
+| ndbc:46237 | 4494 | 265 | -0.30 [-0.33, -0.27] | 0.37 | 0.459 [0.427, 0.492] | 0.21 | 0.31 | 0.80 | 0.57 [0.49, 0.64] | 0.31 [0.18, 0.42] |
+| ndbc:46214 | 4102 | 242 | -0.03 [-0.08, 0.01] | 0.39 | 0.524 [0.483, 0.568] | 0.21 | 0.21 | 0.81 | 0.78 [0.73, 0.82] | 0.64 [0.56, 0.70] |
+| ndbc:46224 | 5099 | 300 | -0.20 [-0.22, -0.19] | 0.24 | 0.302 [0.281, 0.324] | 0.22 | 0.34 | 0.74 | 0.40 [0.27, 0.50] | 0.11 [-0.07, 0.24] |
+| ndbc:46086 | 4659 | 281 | -0.25 [-0.27, -0.23] | 0.30 | 0.390 [0.358, 0.419] | 0.20 | 0.29 | 0.78 | 0.54 [0.43, 0.62] | 0.42 [0.33, 0.50] |
+| ndbc:46053 | 4710 | 279 | -0.10 [-0.12, -0.08] | 0.21 | 0.285 [0.269, 0.302] | 0.24 | 0.27 | 0.77 | 0.73 [0.67, 0.77] | 0.54 [0.46, 0.61] |
+| ndbc:46054 | 4844 | 289 | -0.34 [-0.37, -0.31] | 0.40 | 0.505 [0.474, 0.536] | 0.19 | 0.29 | 0.83 | 0.61 [0.53, 0.67] | 0.40 [0.30, 0.49] |
+
+*Lead 168 h*
+
+| station | n | cycles | bias m [90 % CI] | MAE m | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ndbc:51201 | 2429 | 272 | -0.26 [-0.30, -0.23] | 0.33 | 0.470 [0.424, 0.517] | 0.23 | 0.30 | 0.81 | 0.59 [0.48, 0.67] | 0.26 [0.10, 0.39] |
+| ndbc:51205 | 2083 | 232 | -0.42 [-0.45, -0.38] | 0.45 | 0.568 [0.527, 0.608] | 0.19 | 0.32 | 0.76 | 0.32 [0.19, 0.43] | 0.05 [-0.14, 0.21] |
+| ndbc:51101 | 1827 | 222 | -0.08 [-0.13, -0.02] | 0.36 | 0.521 [0.467, 0.577] | 0.21 | 0.22 | 0.80 | 0.69 [0.58, 0.77] | 0.40 [0.24, 0.53] |
+| ndbc:46026 | 2309 | 257 | -0.09 [-0.14, -0.05] | 0.38 | 0.517 [0.478, 0.555] | 0.28 | 0.30 | 0.64 | 0.62 [0.53, 0.69] | 0.36 [0.23, 0.46] |
+| ndbc:46237 | 2371 | 264 | -0.26 [-0.29, -0.22] | 0.38 | 0.496 [0.456, 0.533] | 0.26 | 0.34 | 0.68 | 0.54 [0.44, 0.61] | 0.19 [0.04, 0.31] |
+| ndbc:46214 | 2162 | 241 | 0.04 [-0.03, 0.10] | 0.56 | 0.757 [0.699, 0.810] | 0.30 | 0.31 | 0.60 | 0.60 [0.50, 0.67] | 0.24 [0.09, 0.36] |
+| ndbc:46224 | 2690 | 299 | -0.20 [-0.22, -0.18] | 0.25 | 0.331 [0.302, 0.359] | 0.27 | 0.38 | 0.63 | 0.32 [0.18, 0.44] | -0.10 [-0.31, 0.08] |
+| ndbc:46086 | 2455 | 280 | -0.24 [-0.27, -0.21] | 0.34 | 0.465 [0.419, 0.513] | 0.26 | 0.34 | 0.62 | 0.35 [0.18, 0.50] | 0.17 [0.00, 0.32] |
+| ndbc:46053 | 2484 | 278 | -0.10 [-0.13, -0.08] | 0.26 | 0.332 [0.314, 0.351] | 0.27 | 0.31 | 0.67 | 0.61 [0.54, 0.67] | 0.37 [0.27, 0.46] |
+| ndbc:46054 | 2561 | 288 | -0.34 [-0.38, -0.31] | 0.43 | 0.561 [0.526, 0.593] | 0.22 | 0.32 | 0.73 | 0.54 [0.45, 0.61] | 0.28 [0.16, 0.38] |
+
+*Lead 240 h*
+
+| station | n | cycles | bias m [90 % CI] | MAE m | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ndbc:51201 | 1344 | 270 | -0.29 [-0.33, -0.24] | 0.40 | 0.553 [0.498, 0.612] | 0.28 | 0.37 | 0.69 | 0.42 [0.27, 0.54] | -0.14 [-0.33, 0.02] |
+| ndbc:51205 | 1150 | 230 | -0.43 [-0.48, -0.38] | 0.51 | 0.648 [0.596, 0.698] | 0.24 | 0.38 | 0.56 | 0.13 [-0.04, 0.28] | -0.36 [-0.63, -0.14] |
+| ndbc:51101 | 1010 | 212 | -0.13 [-0.21, -0.06] | 0.49 | 0.725 [0.625, 0.824] | 0.29 | 0.31 | 0.60 | 0.41 [0.21, 0.57] | -0.10 [-0.34, 0.11] |
+| ndbc:46026 | 1277 | 256 | -0.13 [-0.20, -0.06] | 0.51 | 0.677 [0.618, 0.737] | 0.36 | 0.40 | 0.39 | 0.37 [0.22, 0.50] | -0.07 [-0.27, 0.09] |
+| ndbc:46237 | 1314 | 263 | -0.30 [-0.36, -0.24] | 0.48 | 0.645 [0.587, 0.702] | 0.34 | 0.45 | 0.37 | 0.21 [0.01, 0.36] | -0.32 [-0.57, -0.12] |
+| ndbc:46214 | 1196 | 241 | -0.00 [-0.10, 0.10] | 0.74 | 0.968 [0.891, 1.041] | 0.38 | 0.40 | 0.32 | 0.24 [0.07, 0.39] | -0.37 [-0.65, -0.14] |
+| ndbc:46224 | 1491 | 299 | -0.19 [-0.22, -0.16] | 0.28 | 0.377 [0.342, 0.412] | 0.33 | 0.43 | 0.39 | 0.10 [-0.13, 0.27] | -0.48 [-0.76, -0.24] |
+| ndbc:46086 | 1359 | 275 | -0.24 [-0.29, -0.20] | 0.42 | 0.552 [0.508, 0.598] | 0.33 | 0.41 | 0.41 | 0.18 [-0.01, 0.33] | -0.17 [-0.39, 0.01] |
+| ndbc:46053 | 1376 | 276 | -0.07 [-0.12, -0.03] | 0.34 | 0.471 [0.435, 0.507] | 0.43 | 0.47 | 0.33 | 0.17 [0.00, 0.32] | -0.34 [-0.61, -0.10] |
+| ndbc:46054 | 1426 | 286 | -0.31 [-0.37, -0.25] | 0.55 | 0.726 [0.671, 0.778] | 0.34 | 0.42 | 0.35 | 0.15 [-0.03, 0.29] | -0.34 [-0.56, -0.13] |
+
+**Seasons** (valid time; winter = October to March, summer = April to September; the
+split was fixed in the code before any result was computed, `--by-season`). Every
+fold except fold 3 (2025-10-13 to 2026-02-10, all winter) contains both seasons.
+
+*Pooled, all ten stations, winter* (159,267 pairs):
+
+| lead h | n | bias m [90 % CI] | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|
+| all | 159267 | -0.30 [-0.32, -0.29] | 0.509 [0.496, 0.522] | 0.20 | 0.27 | 0.88 | 0.61 [0.57, 0.65] | 0.48 [0.44, 0.52] |
+| 24 | 13229 | -0.31 [-0.33, -0.29] | 0.451 [0.431, 0.471] | 0.16 | 0.24 | 0.93 | 0.54 [0.46, 0.59] | 0.59 [0.53, 0.64] |
+| 48 | 13220 | -0.31 [-0.33, -0.29] | 0.445 [0.425, 0.464] | 0.16 | 0.24 | 0.93 | 0.72 [0.67, 0.76] | 0.60 [0.55, 0.65] |
+| 72 | 13125 | -0.30 [-0.33, -0.28] | 0.460 [0.439, 0.482] | 0.17 | 0.25 | 0.92 | 0.72 [0.68, 0.76] | 0.58 [0.52, 0.63] |
+| 120 | 17023 | -0.28 [-0.31, -0.26] | 0.498 [0.469, 0.525] | 0.20 | 0.27 | 0.88 | 0.68 [0.63, 0.73] | 0.50 [0.43, 0.57] |
+| 168 | 8944 | -0.29 [-0.32, -0.26] | 0.574 [0.537, 0.612] | 0.25 | 0.31 | 0.83 | 0.59 [0.51, 0.66] | 0.34 [0.24, 0.43] |
+| 240 | 4935 | -0.30 [-0.36, -0.23] | 0.748 [0.701, 0.796] | 0.34 | 0.42 | 0.65 | 0.31 [0.16, 0.43] | -0.14 [-0.34, 0.02] |
+
+*Pooled, all ten stations, summer* (250,077 pairs):
+
+| lead h | n | bias m [90 % CI] | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|
+| all | 250077 | -0.19 [-0.20, -0.18] | 0.384 [0.373, 0.397] | 0.20 | 0.25 | 0.85 | 0.57 [0.53, 0.60] | 0.37 [0.33, 0.41] |
+| 24 | 20562 | -0.21 [-0.23, -0.20] | 0.320 [0.308, 0.332] | 0.15 | 0.21 | 0.92 | 0.36 [0.28, 0.43] | 0.56 [0.50, 0.61] |
+| 48 | 20581 | -0.19 [-0.21, -0.18] | 0.325 [0.312, 0.337] | 0.16 | 0.21 | 0.91 | 0.69 [0.64, 0.72] | 0.54 [0.48, 0.60] |
+| 72 | 20562 | -0.19 [-0.21, -0.18] | 0.328 [0.316, 0.339] | 0.16 | 0.22 | 0.90 | 0.73 [0.69, 0.76] | 0.54 [0.47, 0.59] |
+| 120 | 26899 | -0.19 [-0.20, -0.17] | 0.372 [0.354, 0.391] | 0.20 | 0.25 | 0.86 | 0.64 [0.59, 0.69] | 0.41 [0.33, 0.48] |
+| 168 | 14247 | -0.14 [-0.17, -0.12] | 0.462 [0.436, 0.485] | 0.27 | 0.30 | 0.75 | 0.51 [0.43, 0.59] | 0.08 [-0.03, 0.19] |
+| 240 | 7916 | -0.16 [-0.20, -0.13] | 0.567 [0.526, 0.611] | 0.34 | 0.38 | 0.61 | 0.19 [0.06, 0.30] | -0.47 [-0.63, -0.32] |
+
+*Pooled, five offshore references, winter* (81,237 pairs):
+
+| lead h | n | bias m [90 % CI] | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|
+| all | 81237 | -0.30 [-0.31, -0.29] | 0.481 [0.467, 0.495] | 0.21 | 0.30 | 0.88 | 0.56 [0.51, 0.61] | 0.42 [0.38, 0.46] |
+| 24 | 6747 | -0.31 [-0.33, -0.29] | 0.433 [0.408, 0.459] | 0.17 | 0.27 | 0.92 | 0.39 [0.28, 0.48] | 0.52 [0.44, 0.59] |
+| 48 | 6730 | -0.31 [-0.33, -0.29] | 0.437 [0.412, 0.463] | 0.17 | 0.27 | 0.93 | 0.66 [0.59, 0.71] | 0.51 [0.44, 0.58] |
+| 72 | 6708 | -0.30 [-0.32, -0.28] | 0.441 [0.415, 0.467] | 0.18 | 0.28 | 0.91 | 0.68 [0.62, 0.72] | 0.50 [0.42, 0.57] |
+| 120 | 8698 | -0.29 [-0.31, -0.27] | 0.463 [0.436, 0.490] | 0.20 | 0.29 | 0.89 | 0.65 [0.59, 0.70] | 0.46 [0.37, 0.53] |
+| 168 | 4582 | -0.29 [-0.32, -0.26] | 0.520 [0.481, 0.558] | 0.24 | 0.33 | 0.83 | 0.57 [0.49, 0.65] | 0.32 [0.20, 0.43] |
+| 240 | 2532 | -0.29 [-0.35, -0.22] | 0.684 [0.635, 0.734] | 0.35 | 0.44 | 0.64 | 0.28 [0.13, 0.42] | -0.18 [-0.37, -0.02] |
+
+*Pooled, five offshore references, summer* (129,641 pairs):
+
+| lead h | n | bias m [90 % CI] | RMSE m [90 % CI] | SI | HH | CC | SS vs persistence [90 % CI] | SS LT clim [90 % CI] |
+|---|---|---|---|---|---|---|---|---|
+| all | 129641 | -0.19 [-0.20, -0.18] | 0.337 [0.328, 0.348] | 0.20 | 0.26 | 0.84 | 0.49 [0.45, 0.53] | 0.33 [0.29, 0.37] |
+| 24 | 10657 | -0.20 [-0.21, -0.19] | 0.295 [0.282, 0.308] | 0.15 | 0.23 | 0.91 | 0.23 [0.11, 0.31] | 0.50 [0.42, 0.57] |
+| 48 | 10664 | -0.18 [-0.20, -0.17] | 0.304 [0.290, 0.318] | 0.17 | 0.23 | 0.88 | 0.57 [0.52, 0.62] | 0.45 [0.39, 0.51] |
+| 72 | 10657 | -0.19 [-0.21, -0.18] | 0.311 [0.298, 0.324] | 0.17 | 0.24 | 0.88 | 0.61 [0.56, 0.65] | 0.44 [0.36, 0.51] |
+| 120 | 13953 | -0.19 [-0.20, -0.17] | 0.335 [0.319, 0.352] | 0.20 | 0.27 | 0.84 | 0.58 [0.52, 0.63] | 0.34 [0.25, 0.41] |
+| 168 | 7383 | -0.16 [-0.18, -0.14] | 0.394 [0.375, 0.416] | 0.26 | 0.31 | 0.73 | 0.47 [0.39, 0.54] | 0.09 [-0.05, 0.21] |
+| 240 | 4098 | -0.17 [-0.20, -0.15] | 0.447 [0.420, 0.478] | 0.30 | 0.36 | 0.63 | 0.29 [0.18, 0.39] | -0.29 [-0.44, -0.14] |
+
+*Per station, all leads 3-240 h and the 168 h bucket*:
+
+| station | winter n | winter bias m | winter RMSE m | winter SS LT clim [90 % CI] | summer n | summer bias m | summer RMSE m | summer SS LT clim [90 % CI] | RMSE 168 h winter / summer | SS LT clim 168 h winter / summer |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ndbc:51201 | 16737 | -0.37 | 0.544 | 0.39 [0.32, 0.45] | 26045 | -0.22 | 0.312 | 0.41 [0.33, 0.47] | 0.601 / 0.363 | 0.28 / 0.22 |
+| ndbc:51205 | 15255 | -0.52 | 0.642 | 0.07 [-0.02, 0.14] | 21442 | -0.36 | 0.454 | 0.17 [0.06, 0.26] | 0.680 / 0.472 | -0.02 / 0.13 |
+| ndbc:51101 | 17130 | -0.13 | 0.497 | 0.61 [0.55, 0.65] | 15227 | -0.09 | 0.286 | 0.70 [0.63, 0.74] | 0.634 / 0.356 | 0.37 / 0.49 |
+| ndbc:46026 | 15832 | -0.24 | 0.485 | 0.68 [0.63, 0.72] | 24956 | -0.09 | 0.369 | 0.50 [0.44, 0.56] | 0.542 / 0.501 | 0.55 / 0.08 |
+| ndbc:46237 | 17656 | -0.38 | 0.539 | 0.47 [0.41, 0.53] | 24268 | -0.24 | 0.390 | -0.01 [-0.12, 0.10] | 0.578 / 0.428 | 0.38 / -0.36 |
+| ndbc:46214 | 12515 | -0.15 | 0.549 | 0.72 [0.68, 0.76] | 25756 | -0.01 | 0.535 | 0.53 [0.48, 0.58] | 0.754 / 0.758 | 0.48 / 0.04 |
+| ndbc:46224 | 18920 | -0.22 | 0.336 | 0.19 [0.08, 0.30] | 28613 | -0.22 | 0.283 | -0.12 [-0.25, 0.01] | 0.363 / 0.309 | 0.09 / -0.35 |
+| ndbc:46086 | 16989 | -0.31 | 0.467 | 0.46 [0.38, 0.53] | 26350 | -0.25 | 0.360 | 0.18 [0.08, 0.27] | 0.513 / 0.431 | 0.36 / -0.13 |
+| ndbc:46053 | 15295 | -0.18 | 0.352 | 0.54 [0.47, 0.60] | 28534 | -0.08 | 0.265 | 0.42 [0.36, 0.47] | 0.374 / 0.308 | 0.51 / 0.20 |
+| ndbc:46054 | 16401 | -0.44 | 0.613 | 0.40 [0.32, 0.47] | 28835 | -0.33 | 0.472 | 0.29 [0.22, 0.35] | 0.662 / 0.495 | 0.31 / 0.24 |
+
+### 11.4 Sensitivity: QC'd observations only
+
+The same pooled backtest (all ten stations) with the last cycle on 2026-08-21 00Z
+(`--end`), so that every valid time is before 2026-09-01 and every observation comes
+from NDBC's QC'd archive. The folds are recut on the shorter period: test blocks
+2025-02-03 to 2026-08-21, 383,495 pairs over 283 cycles.
+
+| lead h | n (main / QC'd only) | bias m, main | bias m, QC'd only | RMSE m, main | RMSE m, QC'd only | SS vs persistence, main / QC'd only | SS LT clim, main | SS LT clim, QC'd only |
+|---|---|---|---|---|---|---|---|---|
+| all | 409344 / 383495 | -0.23 [-0.24, -0.22] | -0.23 [-0.25, -0.22] | 0.437 [0.426, 0.447] | 0.441 [0.430, 0.453] | 0.59 / 0.59 | 0.43 [0.41, 0.46] | 0.43 [0.40, 0.46] |
+| 24 | 33791 / 31546 | -0.25 [-0.26, -0.24] | -0.25 [-0.27, -0.24] | 0.376 [0.364, 0.389] | 0.380 [0.368, 0.394] | 0.47 / 0.48 | 0.58 [0.53, 0.62] | 0.57 [0.53, 0.61] |
+| 48 | 33801 / 31529 | -0.24 [-0.25, -0.23] | -0.24 [-0.26, -0.23] | 0.376 [0.364, 0.389] | 0.381 [0.368, 0.393] | 0.71 / 0.71 | 0.58 [0.54, 0.61] | 0.57 [0.53, 0.61] |
+| 72 | 33687 / 31539 | -0.24 [-0.25, -0.22] | -0.24 [-0.25, -0.22] | 0.385 [0.371, 0.397] | 0.388 [0.375, 0.403] | 0.72 / 0.72 | 0.56 [0.52, 0.60] | 0.55 [0.51, 0.60] |
+| 120 | 43922 / 41280 | -0.22 [-0.24, -0.21] | -0.22 [-0.24, -0.20] | 0.425 [0.407, 0.442] | 0.431 [0.413, 0.449] | 0.67 / 0.66 | 0.46 [0.41, 0.51] | 0.45 [0.40, 0.50] |
+| 168 | 23191 / 21859 | -0.20 [-0.22, -0.18] | -0.20 [-0.22, -0.18] | 0.508 [0.488, 0.530] | 0.511 [0.490, 0.535] | 0.55 / 0.55 | 0.23 [0.16, 0.30] | 0.23 [0.15, 0.30] |
+| 240 | 12851 / 12150 | -0.21 [-0.25, -0.18] | -0.21 [-0.25, -0.17] | 0.642 [0.610, 0.677] | 0.643 [0.609, 0.679] | 0.26 / 0.27 | -0.28 [-0.41, -0.16] | -0.25 [-0.39, -0.11] |
+
+Leaving out the realtime (`not_qc`) observations of September and October 2026 changes
+no RMSE by more than 0.006 m and no skill score by more than 0.03, well inside the
+bootstrap intervals.
+
+### 11.5 Comparison with the Western Australian (AODN) backtest (section 3)
+
+| | WA, AODN delayed-QC, 3 buoys pooled | NDBC, 10 buoys pooled | NDBC, 5 offshore references |
+| --- | --- | --- | --- |
+| test period, cycles | 2021-05-10 to 2021-12-31, 472 cycles (00Z and 12Z daily) | 2025-02-11 to 2026-10-12, 305 cycles (00Z every second day) | same |
+| test pairs | 209,658 | 409,344 | 210,878 |
+| mean observed Hm0 | 2.3-2.9 m (Esperance 1.9 m) | 0.93-2.43 m by station | 0.93-1.99 m |
+| analysis time: median observed / model | 1.08-1.13 | 1.05-1.35 | 1.13-1.35 |
+| bias, all leads [90 % CI] | -0.23 [-0.24, -0.22] m | -0.23 [-0.24, -0.22] m | -0.23 [-0.24, -0.22] m |
+| RMSE 24 / 72 / 168 / 240 h | 0.401 / 0.465 / 0.748 / 1.012 m | 0.376 / 0.385 / 0.508 / 0.642 m | 0.355 / 0.367 / 0.447 / 0.550 m |
+| SI 24 / 240 h | 0.12 / 0.36 | 0.16 / 0.34 | 0.17 / 0.33 |
+| HH 24 / 240 h | 0.16 / 0.39 | 0.23 / 0.40 | 0.25 / 0.40 |
+| CC 24 / 240 h | 0.96 / 0.63 | 0.93 / 0.64 | 0.92 / 0.65 |
+| SS vs persistence 24 / 168 / 240 h | 0.83 / 0.72 / 0.51 | 0.47 / 0.55 / 0.26 | 0.33 / 0.53 / 0.29 |
+| SS vs long-term climatology 24 / 168 / 240 h | 0.84 / 0.47 / 0.03 [-0.09, 0.15] | 0.58 / 0.23 / -0.28 [-0.41, -0.16] | 0.51 / 0.23 / -0.22 [-0.36, -0.11] |
+| RMSE of persistence at 24 h / of the long-term climatology | 0.964 / 1.016 m | 0.519 / 0.581 m | 0.434 / 0.508 m |
+
+### 11.6 Reading the NDBC backtest
+
+* **The same low bias as in Western Australia.** Pooled, the raw bulletin forecast is
+  0.20-0.25 m below the buoys at every lead (CI excluding zero), exactly the pooled WA
+  value of -0.23 m, now in another ocean, hemisphere, set of buoy operators and model
+  year. Relative to the smaller NDBC sea states it is larger: observed Hm0 is 5-35 %
+  above the model at analysis time (median ratio by station), against 8-13 % in WA. The
+  bias is smallest at the deep-water and open-shelf buoys (46214 -0.05 m, 51101 -0.11 m,
+  46053 -0.12 m, 46026 -0.15 m) and largest at 51205 (-0.43 m), 46054 (-0.37 m), 46237
+  (-0.30 m) and 51201 (-0.28 m). It is larger in winter (pooled -0.30 m) than in summer
+  (-0.19 m).
+* **Errors grow with lead, more slowly than in WA in metres.** Pooled RMSE 0.38 m at
+  24-72 h, 0.43 m at 120 h, 0.51 m at 168 h and 0.64 m at 240 h; correlation falls from
+  0.93 to 0.64. SI and HH are similar to WA's or larger at short leads (SI 0.16 against
+  0.12 at 24 h): the absolute errors are smaller because the waves are smaller, not
+  because the forecast is relatively better.
+* **Skill against references is lower than in WA, because the references are better
+  here.** Persistence (RMSE 0.52 m at 24 h) and the long-term climatology (0.58 m) are
+  much closer to the observations than at the WA buoys (0.96 and 1.02 m). Against
+  persistence the raw forecast keeps positive skill at every lead pooled (0.26-0.72),
+  lowest at 24 h (0.47) and 240 h (0.26). Against the long-term monthly climatology it
+  has skill to 120 h (0.58 at 24 h, 0.46 at 120 h), little at 168 h (0.23 [0.16, 0.30])
+  and is **worse than climatology at 240 h** (-0.28 [-0.41, -0.16]); WA had about zero
+  at 240 h.
+* **Stations where the raw forecast barely beats the simple references.**
+  * 51205 (Pe'ahi): worse than persistence at 24 h (-0.31 [-0.60, -0.10]) and only
+    0.11 [0.04, 0.17] better than climatology over all leads (none at 168 h, 0.05
+    [-0.14, 0.21]); bias -0.43 m, 22 % of the mean observed Hm0 (1.99 m over the
+    pairs). In winter the skill over climatology is 0.07 [-0.02, 0.14].
+  * 46224 (offshore reference for Trestles): no skill over climatology at any lead
+    (all leads 0.06 [-0.04, 0.14]; 24 h 0.14 [-0.03, 0.28]; 240 h -0.48) and no clear
+    skill over persistence at 24 h (-0.07 [-0.45, 0.19]); bias -0.22 m on a mean of
+    0.93 m. In summer (April to September, when southern-hemisphere swell reaches
+    southern California) it is worse than climatology over all leads (-0.12 [-0.25,
+    0.01]).
+  * 46086 (upstream of Trestles): skill over persistence at 24 h 0.08 [-0.13, 0.25].
+  * 46237 (SF Bar, 17 m): no skill over climatology in summer (-0.01 [-0.12, 0.10]).
+* **Where it works best:** the open-ocean and shelf-edge buoys 51101, 46214 and 46026
+  (skill over climatology 0.61-0.63 over all leads, 0.79-0.84 at 24 h). 46214 has almost
+  no bias, but the largest long-lead errors (RMSE 0.76 m at 168 h, 0.97 m at 240 h) in
+  the largest sea states (mean 2.43 m).
+* **Seasons.** Winter has larger errors (pooled RMSE 0.51 m over all leads against 0.38
+  m) and a larger bias, but also more skill over climatology (0.48 against 0.37; 0.34
+  against 0.08 at 168 h), because winter sea states vary more. In summer the raw forecast
+  beats climatology only to about 120 h (168 h 0.08 [-0.03, 0.19], 240 h -0.47); at
+  46224, 46237 and 46086 the summer skill at 168 h is negative.
+* **The offshore references alone** (the five buoys that stand for the spots' offshore
+  swell) give the same picture: bias -0.23 m, RMSE 0.36 m at 24 h and 0.55 m at 240 h,
+  skill over climatology 0.51 at 24 h, 0.23 at 168 h, -0.22 at 240 h.
+* **Training-fold climatology.** With two years of data the implemented reference is no
+  longer degenerate (RMSE 0.655 m, 58 % of the rows), and it agrees with the long-term
+  one in sign at every lead (pooled SS 0.66 at 24 h, -0.03 at 240 h). The long-term one
+  is still the comparison quoted, because it covers every row and is fully out of sample.
+* **Not comparable one to one with WA.** Different years (2021 vs 2025-2026), regions,
+  buoy networks (Datawell Waveriders of DoT WA vs CDIP Waveriders and NDBC discus and
+  2.1-m hulls) and cycle sampling. Whether NCEP changed GFS-Wave during 2024-10 to
+  2026-10 was not checked; a change would be mixed into these numbers.
+
+### 11.7 Consequences for the application
+
+* **No change to the ML decision (ADR-013).** The shipped candidate correction covers
+  only the three spots paired with Cape Naturaliste; nothing here tests it. The NDBC
+  results show the same systematic low bias of the raw bulletins in a second region,
+  which makes a bias correction for the Hawaiian and Californian spots worth testing on
+  these pairs with the unchanged pre-registered criteria (follow-up; not done here).
+* **No change to the forecast-confidence thresholds or the uncertainty ranges.** This
+  backtest scores the raw station bulletins at the buoys, not the gridded forecasts at
+  the spots that forecast confidence reads (`forecast_accuracy_metrics` of the gridded
+  sources), and not our 80 % ranges, whose coverage was not tested. Nothing was tuned on
+  these numbers.
+* **What a user should take from it.** Off Pe'ahi (51205) the raw offshore model is
+  only slightly better than a monthly climatology of the same buoy (skill 0.05-0.26 at
+  24-168 h) and off Trestles (46224) not distinguishably better at any lead; both are
+  biased low by 0.2-0.4 m. Off the North Shore (51201), San Francisco (46026) and
+  Rincon (46053) it has clear skill to at least five days (0.47-0.60 at 120 h) and less
+  at seven (0.26-0.37 at 168 h). At ten days (228-252 h) it has no skill over
+  climatology at any of the ten buoys. These are offshore Hm0 statements; surf height
+  was not validated.
+
+### 11.8 Verified live vs not
+
+* **Live:** every number in this section: NDBC yearly, monthly and realtime files and
+  activestations.xml, CDIP THREDDS files for the checks in docs/observations.md, NOAA
+  NODD bulletins and listings, the repository's `obs ingest`, `obs collect-forecasts`,
+  `verify pair --full` and `verify backtest` on that data.
+* **Unit and integration tests only:** the long-term climatology and seasonal options of
+  `verify backtest` on synthetic data (`tests/integration/test_verification.py`,
+  `tests/unit/test_backtest_seasons.py`); they were then run live as above.
+* **Not done:** 12Z cycles and odd days (not archived); the September 2026 QC'd monthly
+  files (the realtime files were used, see 11.4); a model-version check of GFS-Wave over
+  the window; any ML correction or calibration at these buoys; gridded GFS-Wave at the
+  buoys; surf height.
+
+### 11.9 Reproduction
+
+Own database (`DATABASE_URL=...swell_ndbc_live`), from `backend/`:
+
+```
+python -m app.cli init-db
+python -m app.cli obs seed-stations
+python -m app.cli obs ingest --provider ndbc \
+    --since 2024-10-12T00:00:00Z --until 2026-10-12T12:00:00Z         # 11 active stations
+python -m app.cli obs ingest --provider ndbc --since 2019-10-12T00:00:00Z \
+    --until 2024-10-12T00:00:00Z --station ndbc:51201 --station ndbc:51205 \
+    --station ndbc:51101 --station ndbc:46026 --station ndbc:46237 --station ndbc:46214 \
+    --station ndbc:46224 --station ndbc:46086 --station ndbc:46053 --station ndbc:46054
+# 00Z bulletins on every second day from 2024-10-12 to 2026-10-12 (one call per day):
+FORECAST_DAYS=10 python -m app.cli obs collect-forecasts --start DAYT00:00:00Z \
+    --end DAYT00:00:00Z --cycles 0 --station ndbc:51201 ... --station ndbc:46054
+python -m app.cli verify pair --full
+python -m app.cli verify backtest --source gfswave_bulletin --hs-kind spectral_hm0 \
+    --folds 5 --boot 1000 --lt-climatology-before 2024-10-12T00:00:00Z --by-season --json \
+    --station ndbc:51201                       # each station, the five, and all ten
+python -m app.cli verify backtest ... --end 2026-08-21T00:00:00Z --no-write   # 11.4
+```
+
+The analysis-time check (11.2) used the repository's loaders and `match_observations`
+on leads 0-2 h, as in section 1; it is a one-off query, not a command.
