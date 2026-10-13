@@ -44,7 +44,9 @@ condition holds (``OffshoreCalibration.applies``): the spread comes from the lea
 deterministic family it was fitted on (GFS-Wave, ``ncep_gfs``; not a blend and not
 ML-corrected, since the factors absorb the raw model's low bias), the lead lies within the
 validated 3-240 h, and the spot is one whose paired offshore buoy confirmed the range in
-its own held-out data (``spot_slugs``). Then the breaking range uses k_lo · σ_off for its
+its own held-out data over all leads and at every lead bucket (``spot_slugs``: jaws-peahi
+and trestles; the range was validated on station bulletins at the buoys, not on the
+gridded values the spots receive). Then the breaking range uses k_lo · σ_off for its
 lower and k_hi · σ_off for its upper bound, the central value is unchanged, and
 ``offshore_kind`` is "calibrated" while ``kind`` keeps the heuristic label: the
 translation share σ_m (the larger part of the breaking range) is still an assumption.
@@ -155,9 +157,11 @@ def _interp(x: float, xs: tuple[float, ...], ys: tuple[float, ...]) -> float:
 
 
 # Spots whose paired offshore buoy (data/observation_stations.json) had held-out coverage
-# consistent with 80 %: 51205 (85.5 %) -> jaws-peahi; 46026 (79.4 %) -> mavericks,
-# ocean-beach-sf; 46224 (76.7 %) -> trestles. Not listed: the 51201 spots (90.8 %, too
-# wide) and rincon (46053, 69.3 %, too narrow), although they were part of the pooled fit.
+# consistent with 80 % over all leads AND at every lead bucket (no 90 % CI entirely
+# outside 75-85 %, ranges.station_consistency): 51205 (85.5 % all leads) -> jaws-peahi;
+# 46224 (76.7 %) -> trestles. Not listed, although part of the pooled fit: the 51201 spots
+# (90.8 %, too wide), rincon (46053, 69.3 %, too narrow), and mavericks / ocean-beach-sf
+# (46026: 79.4 % over all leads but 69.1 % [64.2, 73.9] at 240 h, removed in review).
 OFFSHORE_CALIBRATION = OffshoreCalibration(
     version=OFFSHORE_CALIBRATION_VERSION,
     sigma_source="lead_table",
@@ -167,7 +171,7 @@ OFFSHORE_CALIBRATION = OffshoreCalibration(
     k_hi=(1.9384, 1.6650, 1.3346, 1.0678, 0.9726, 0.9488),
     lead_min_h=3.0,
     lead_max_h=240.0,
-    spot_slugs=frozenset({"jaws-peahi", "mavericks", "ocean-beach-sf", "trestles"}),
+    spot_slugs=frozenset({"jaws-peahi", "trestles"}),
 )
 
 

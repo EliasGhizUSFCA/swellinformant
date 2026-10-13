@@ -34,9 +34,11 @@ the pooled row ("all", every lead >= 3 h) and the leads between and below the bu
 ("other", e.g. 3-17 h and 31-41 h); neither is part of the decision.
 
 ``station_consistency`` (added after the pre-registered plan, used only to NARROW where
-the label is applied): a station whose all-leads TEST coverage has a CI entirely outside
-COVERAGE_BAND contradicts an 80 % range at its own location, so spots paired with it are
-not labelled calibrated even when the pooled decision passes.
+the label is applied): a station whose TEST coverage has a CI entirely outside
+COVERAGE_BAND, over all leads or at any lead bucket with at least MIN_BUCKET_N pairs,
+contradicts an 80 % range at its own location, so spots paired with it are not labelled
+calibrated even when the pooled decision passes. (The builder's version checked the
+all-leads row only; the per-bucket rows were added in review, 2026-10-13.)
 """
 
 from __future__ import annotations
@@ -293,25 +295,55 @@ def coverage_decision(
     }
 
 
+def _ci_verdict(row: dict[str, Any], band: tuple[float, float]) -> str | None:
+    lo, hi = row["coverage_ci"]
+    if hi is not None and hi < band[0]:
+        return "too_narrow"
+    if lo is not None and lo > band[1]:
+        return "too_wide"
+    return None
+
+
 def station_consistency(
-    by_station: dict[str, list[dict[str, Any]]], band: tuple[float, float] = COVERAGE_BAND
+    by_station: dict[str, list[dict[str, Any]]],
+    band: tuple[float, float] = COVERAGE_BAND,
+    min_n: int = MIN_BUCKET_N,
 ) -> dict[str, dict[str, Any]]:
-    """Per station: all-leads coverage, its CI, and ``contradicts`` = "too_narrow" /
-    "too_wide" when the whole CI lies below / above ``band`` (else None)."""
+    """Per station: all-leads coverage and CI, the rows whose CI lies entirely below
+    ("too_narrow") or above ("too_wide") ``band`` (``contradicting``: the all-leads row
+    and every lead bucket with n >= ``min_n``, the station-level form of the
+    pre-registered per-bucket rule), and ``contradicts``: None, the one verdict, or
+    "mixed".
+
+    The per-bucket rows were added in the review of 2026-10-13: 46026 had an all-leads CI
+    inside the band but 69.1 % [64.2, 73.9] at 240 h, which the all-leads check missed.
+    """
     out: dict[str, dict[str, Any]] = {}
     for code, table in by_station.items():
         row = next(r for r in table if r["bucket"] == "all")
-        lo, hi = row["coverage_ci"]
-        verdict = None
-        if hi is not None and hi < band[0]:
-            verdict = "too_narrow"
-        elif lo is not None and lo > band[1]:
-            verdict = "too_wide"
+        checked = [row, *(r for r in table if isinstance(r["bucket"], int) and r["n"] >= min_n)]
+        contradicting = [
+            {
+                "bucket": r["bucket"],
+                "n": r["n"],
+                "coverage": r["coverage"],
+                "coverage_ci": list(r["coverage_ci"]),
+                "verdict": verdict,
+            }
+            for r in checked
+            if (verdict := _ci_verdict(r, band)) is not None
+        ]
+        verdicts = {c["verdict"] for c in contradicting}
         out[code] = {
             "n": row["n"],
             "coverage": row["coverage"],
-            "coverage_ci": [lo, hi],
-            "contradicts": verdict,
+            "coverage_ci": list(row["coverage_ci"]),
+            "contradicts": None
+            if not verdicts
+            else verdicts.pop()
+            if len(verdicts) == 1
+            else "mixed",
+            "contradicting": contradicting,
         }
     return out
 

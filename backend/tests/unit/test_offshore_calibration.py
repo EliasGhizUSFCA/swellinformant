@@ -71,6 +71,9 @@ def test_calibrated_offshore_component_at_a_validated_spot() -> None:
     [
         (OffshoreContext("rincon", ("ncep_gfs",), False), 24.0, {}),  # buoy: too narrow
         (OffshoreContext("pipeline", ("ncep_gfs",), False), 24.0, {}),  # buoy: too wide
+        # 46026: all leads 79.4 %, but 240 h 69.1 % [64.2, 73.9] (review, 2026-10-13).
+        (OffshoreContext("mavericks", ("ncep_gfs",), False), 24.0, {}),
+        (OffshoreContext("ocean-beach-sf", ("ncep_gfs",), False), 240.0, {}),
         (OffshoreContext("trestles", ("ncep_gfs", "ecmwf_ifs"), False), 24.0, {}),  # blend
         (OffshoreContext("trestles", ("ecmwf_ifs",), False), 24.0, {}),  # other model
         (OffshoreContext("trestles", ("ncep_gfs",), True), 24.0, {}),  # ML-corrected Hs
@@ -91,6 +94,13 @@ def test_calibration_applies_only_where_it_was_validated(
         None,
     )
     assert unc.offshore_kind != "calibrated"
+
+
+def test_labelled_spots_are_those_whose_buoy_agrees_at_every_lead_bucket() -> None:
+    """Held-out coverage of the fitted range at each spot's own buoy (TEST, 90 % CI,
+    docs/ml-evaluation.md 12.2): a spot is labelled only if neither the all-leads CI nor
+    the CI of any lead bucket lies entirely outside 75-85 % (ranges.station_consistency)."""
+    assert frozenset({"jaws-peahi", "trestles"}) == OFFSHORE_CALIBRATION.spot_slugs
 
 
 def test_factors_are_constant_outside_the_centres() -> None:

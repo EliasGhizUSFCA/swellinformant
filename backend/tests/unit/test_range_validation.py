@@ -175,3 +175,36 @@ def test_other_leads_row_and_station_consistency() -> None:
     assert out["synthetic:narrow"]["contradicts"] == "too_narrow"
     assert out["synthetic:wide"]["contradicts"] == "too_wide"
     assert out["synthetic:edge"]["contradicts"] is None
+
+
+def test_station_consistency_checks_every_lead_bucket() -> None:
+    """A station whose all-leads CI overlaps the band but whose CI at one lead bucket
+    (n >= MIN_BUCKET_N) lies entirely outside it contradicts the range at that lead (the
+    pattern of 46026 at 240 h); a bucket with too few pairs is not checked. SYNTHETIC
+    coverage rows."""
+
+    def r(bucket: object, cov: float, ci: tuple[float, float], n: int = 900) -> dict[str, object]:
+        return {"bucket": bucket, "n": n, "coverage": cov, "coverage_ci": list(ci)}
+
+    ok = [r("all", 0.80, (0.79, 0.81)), r(24, 0.80, (0.77, 0.83)), r(240, 0.76, (0.72, 0.80))]
+    long_lead_narrow = [*ok[:2], r(240, 0.69, (0.64, 0.74))]
+    mixed = [r("all", 0.80, (0.79, 0.81)), r(24, 0.90, (0.87, 0.93)), r(240, 0.69, (0.64, 0.74))]
+    sparse = [*ok[:2], r(240, 0.40, (0.20, 0.60), n=ranges.MIN_BUCKET_N - 1)]
+    out = ranges.station_consistency(
+        {"s:ok": ok, "s:long": long_lead_narrow, "s:mixed": mixed, "s:sparse": sparse}
+    )
+    assert out["s:ok"]["contradicts"] is None and out["s:ok"]["contradicting"] == []
+    assert out["s:long"]["contradicts"] == "too_narrow"
+    assert out["s:long"]["coverage"] == 0.80  # the all-leads row is still reported
+    assert out["s:long"]["contradicting"] == [
+        {
+            "bucket": 240,
+            "n": 900,
+            "coverage": 0.69,
+            "coverage_ci": [0.64, 0.74],
+            "verdict": "too_narrow",
+        }
+    ]
+    assert out["s:mixed"]["contradicts"] == "mixed"
+    assert [c["bucket"] for c in out["s:mixed"]["contradicting"]] == [24, 240]
+    assert out["s:sparse"]["contradicts"] is None
