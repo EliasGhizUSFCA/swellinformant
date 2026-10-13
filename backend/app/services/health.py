@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session
@@ -83,6 +83,8 @@ OVERDUE_FACTOR = 2  # missed runs tolerated before a job counts as overdue
 OVERDUE_GRACE = timedelta(minutes=30)  # queueing behind long jobs (2 worker slots)
 STUCK_GRACE = timedelta(minutes=15)
 RECENT_LOGS = 25  # job log rows read per job (newest first)
+# Runs that finished with a result; "skipped" (the job lock was held) and "running" are not.
+REAL_RESULTS = (JobStatus.SUCCESS, JobStatus.FAILED)
 
 
 @dataclass(frozen=True)
@@ -126,7 +128,9 @@ def ago(delta: timedelta) -> str:
 
 
 def stamp(when: datetime) -> str:
-    return when.strftime("%Y-%m-%d %H:%M UTC")
+    """'2026-10-12 06:00 UTC'. Converted first: psycopg returns ``timestamptz`` values in
+    the session's time zone, which is UTC on the Compose server but need not be elsewhere."""
+    return when.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
 # --------------------------------------------------------------------------- sources
@@ -321,10 +325,22 @@ def _job_health(
             .limit(RECENT_LOGS)
         ).all()
     )
-    finished = [r for r in rows if r.status != JobStatus.RUNNING]
-    real = [r for r in finished if r.status in (JobStatus.SUCCESS, JobStatus.FAILED)]
+    real = [r for r in rows if r.status in REAL_RESULTS]
+    if not real and rows:
+        # Only skipped (lock held) or running rows in the window: look further back.
+        real = list(
+            db.scalars(
+                select(BackgroundJobLog)
+                .where(
+                    BackgroundJobLog.job_name == job.name,
+                    BackgroundJobLog.status.in_(REAL_RESULTS),
+                )
+                .order_by(BackgroundJobLog.started_at.desc(), BackgroundJobLog.id.desc())
+                .limit(RECENT_LOGS)
+            ).all()
+        )
     success = next((r for r in real if r.status == JobStatus.SUCCESS), None)
-    if success is None and rows:
+    if success is None and real:
         success = db.scalar(
             select(BackgroundJobLog)
             .where(
@@ -342,47 +358,55 @@ def _job_health(
     overdue_after = (
         job.max_gap * OVERDUE_FACTOR + OVERDUE_GRACE if job.max_gap is not None else None
     )
-    newest = rows[0] if rows else None
-    last = finished[0] if finished else None
+    latest = real[0] if real else None  # the newest run that finished with a result
+    # The run in progress: the newest "running" row that started after that result. A
+    # duplicate that beat or the chain queued meanwhile is logged "skipped" (the job lock
+    # is held) after it, so the newest row alone would hide the run (seen live: a false
+    # "overdue" for forecasts.acquire while it was downloading after an outage). Older
+    # "running" rows are left behind by killed worker processes and are ignored.
+    active = next(
+        (
+            r
+            for r in rows
+            if r.status == JobStatus.RUNNING
+            and (latest is None or r.started_at > latest.started_at)
+        ),
+        None,
+    )
+    last = next((r for r in rows if r.status != JobStatus.RUNNING), None)
     stuck_after = timedelta(seconds=TASK_TIME_LIMIT_SECONDS) + STUCK_GRACE
 
     status: str = "ok"
     problem: Problem | None = None
-    if (
-        newest is not None
-        and newest.status == JobStatus.RUNNING
-        and now - newest.started_at > stuck_after
-    ):
+    if active is not None and now - active.started_at > stuck_after:
         status = "stuck"
         problem = Problem(
             f"job_stuck:{job.name}",
             "degraded",
-            f"Job {job.name} has been 'running' since {stamp(newest.started_at)} "
-            f"({ago(now - newest.started_at)}), past the {TASK_TIME_LIMIT_SECONDS // 60}-minute "
+            f"Job {job.name} has been 'running' since {stamp(active.started_at)} "
+            f"({ago(now - active.started_at)}), past the {TASK_TIME_LIMIT_SECONDS // 60}-minute "
             "task time limit: the worker process was probably killed (e.g. out of memory).",
         )
-    elif real and real[0].status == JobStatus.FAILED:
+    elif latest is not None and latest.status == JobStatus.FAILED:
         status = "failed"
         since = (
             f"last success {ago(now - success.started_at)} ago"
             if success is not None
             else "it has not succeeded yet"
         )
-        more = "+" if failures == len(real) and len(rows) == RECENT_LOGS else ""
+        more = "+" if failures == len(real) and RECENT_LOGS in (len(rows), len(real)) else ""
         runs = f"{failures}{more} run{'' if failures == 1 and not more else 's'}"
         problem = Problem(
             f"job_failed:{job.name}",
             "degraded",
-            f"Job {job.name} failed at {stamp(real[0].started_at)} ({runs} in a row; {since}).",
-            detail=real[0].error_message,
+            f"Job {job.name} failed at {stamp(latest.started_at)} ({runs} in a row; {since}).",
+            detail=latest.error_message,
         )
     elif overdue_after is not None:
         # A run in progress (and not stuck, checked above) counts as a run: the job did
         # start. This also keeps ops.data_health from calling itself overdue while it runs
         # for the first time after an outage.
-        starts = [r.started_at for r in real[:1]]
-        if newest is not None and newest.status == JobStatus.RUNNING:
-            starts.append(newest.started_at)
+        starts = [r.started_at for r in (latest, active) if r is not None]
         reference = max(starts) if starts else None
         if reference is not None and now - reference > overdue_after:
             status = "overdue"
@@ -406,9 +430,9 @@ def _job_health(
                 status = "never_run"
         elif reference is None:
             status = "never_run"
-    elif not real:
+    elif latest is None and active is None:
         status = "never_run"
-    if status == "ok" and newest is not None and newest.status == JobStatus.RUNNING:
+    if status == "ok" and active is not None:
         status = "running"
 
     out = JobHealthOut(

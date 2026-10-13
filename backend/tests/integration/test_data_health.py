@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -280,6 +280,62 @@ def test_job_that_never_ran_becomes_overdue_once_monitoring_is_old_enough(db: Se
     report = data_health(db)
     assert by_job(report.out.jobs, "maintenance.cleanup").status == "overdue"
     assert "job_overdue:maintenance.cleanup" in {p.key for p in report.problems}
+
+
+def test_skipped_duplicates_do_not_hide_a_run_in_progress(db: Session) -> None:
+    """Seen live after a 13.5 h outage: beat's catch-up and BEAT_RUN_ON_START both queued
+    forecasts.acquire; the second copy was logged "skipped" (lock held) while the first was
+    still downloading, and the check called the running job overdue."""
+    run(db, "demo", 1)
+    heartbeat(db)
+    job_log(db, "forecasts.acquire", JobStatus.SUCCESS, 60 * 13.5)  # before the outage
+    job_log(db, "forecasts.acquire", JobStatus.RUNNING, 1)  # the catch-up run
+    job_log(db, "forecasts.acquire", JobStatus.SKIPPED, 0.5)  # its duplicate
+    report = data_health(db)
+    acquire = by_job(report.out.jobs, "forecasts.acquire")
+    assert acquire.status == "running" and acquire.last_status == "skipped"
+    assert "job_overdue:forecasts.acquire" not in {p.key for p in report.problems}
+
+    # A worker killed mid-job leaves its row "running"; the duplicates beat sends while
+    # the dead run's lock lingers are skipped. That is still a stuck job.
+    job_log(db, "quality.predict", JobStatus.SUCCESS, 120)
+    job_log(db, "quality.predict", JobStatus.RUNNING, 50)  # hard time limit 30 min + 15
+    for minutes in (40, 10):
+        job_log(db, "quality.predict", JobStatus.SKIPPED, minutes)
+    report = data_health(db)
+    assert by_job(report.out.jobs, "quality.predict").status == "stuck"
+    assert "job_stuck:quality.predict" in {p.key for p in report.problems}
+
+    # A "running" row older than the newest result was left by a killed process earlier
+    # and says nothing about now.
+    job_log(db, "quality.predict", JobStatus.SUCCESS, 5)
+    assert by_job(data_health(db).out.jobs, "quality.predict").status == "ok"
+
+
+def test_a_window_of_skipped_runs_looks_back_to_the_last_result(db: Session) -> None:
+    run(db, "demo", 1)
+    heartbeat(db)
+    job_log(db, "matching.match", JobStatus.FAILED, 80, error="RuntimeError: synthetic")
+    for i in range(30):  # more skipped rows than the window of 25 rows read per job
+        job_log(db, "matching.match", JobStatus.SKIPPED, 60 - i)
+    match = by_job(data_health(db).out.jobs, "matching.match")
+    assert match.status == "failed" and match.consecutive_failures == 1
+    assert match.last_status == "skipped"
+
+
+def test_times_in_messages_are_utc_whatever_the_session_time_zone(db: Session) -> None:
+    now = utcnow().replace(second=0, microsecond=0)
+    run(db, "demo", 1, now=now)
+    heartbeat(db, now=now)
+    job_log(db, "detection.detect", JobStatus.FAILED, 30, now=now, error="synthetic")
+    db.expire_all()  # read the rows back from the database, not from the session
+    db.execute(text("SET LOCAL TIME ZONE 'America/Los_Angeles'"))
+    try:
+        failed = next(p for p in data_health(db, now=now).problems if p.key.startswith("job_"))
+    finally:
+        db.rollback()
+    when = (now - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M UTC")
+    assert f"failed at {when}" in failed.message
 
 
 def test_heartbeat_detects_a_dead_worker_or_scheduler(db: Session) -> None:
