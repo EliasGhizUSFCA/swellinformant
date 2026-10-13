@@ -363,7 +363,15 @@ only and adopted only if it passes on TEST.
 * **forecast-v1.1** removes High for such hours (`single_source_no_ensemble`), the only
   candidate that passed on TRAIN. On TEST its two classes are distinct (Low − Moderate RMSE
   0.146 m [0.123, 0.169]; medians 0.25 vs 0.29 m). Because the candidate has no High, its
-  test is the same test on the two classes that exist.
+  test is the same test on the two classes that exist. That held-out check was not blind:
+  the candidates and the rule choosing among them were written after forecast-v1's TEST
+  scores had been computed, and the new classes merge forecast-v1's High and Moderate.
+* **By lead** (TEST, RMSE; table with medians and p90 in ml-evaluation.md 12.3): single
+  source 0.378 m at 24 h, 0.383 at 48 h, 0.392 at 72 h, 0.415 at 120 h (Moderate in
+  v1.1), 0.476 at 168 h and 0.603 at 240 h (Low). Without an ensemble the class of a
+  complete hour is a function of its lead, so this validates the lead caps, not a separate
+  certainty signal. With a GEFS-Wave spread: High 0.333-0.338 m at 24-72 h, Moderate 0.358
+  at 72 h rising to 0.630 at 240 h, Low 0.675-0.887 at 168-240 h (59-88 pairs).
 * **Effect on the live system:** rescoring the real 2026-10-11 runs with forecast-v1.1 (a
   scratch copy of `swell_live2`), the new rule fired on 0 of 4,050 NOAA GFS hours and 0 of
   4,050 blend hours, because every hour had a GEFS-Wave row. It changes classes only when

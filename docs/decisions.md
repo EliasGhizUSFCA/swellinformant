@@ -298,7 +298,9 @@ were distinct.
 and no ensemble row means at most Moderate at every lead (method `forecast-v1.1`). Chosen
 on the training year only (the one candidate that passed there), confirmed on the held-out
 year (Low − Moderate RMSE 0.146 m [0.123, 0.169]); the test on the held-out year used the
-two classes that exist.
+two classes that exist. The candidates and the choice rule were written after forecast-v1's
+held-out scores had been computed, and the new classes merge forecast-v1's, so that
+confirmation was not blind (docs/ml-evaluation.md 12.3).
 **Alternatives.** Keep v1 (contradicted on the training year); move the lead boundary
 (no boundary passed); let verification rows restore High (they did not separate the
 classes on the training year).
@@ -307,7 +309,7 @@ GEFS-Wave row); it matters when the ensemble or the second family is missing. Th
 is for GFS-Wave; the rule also caps an ECMWF-only hour, which is untested. Rows scored
 earlier keep `forecast-v1`.
 
-## ADR-020 The NDBC-trained correction is activated at seven US spots
+## ADR-020 The NDBC-trained correction is approved for activation at seven US spots
 
 **Context.** `ml train` on spectral Hm0 at five NDBC buoys and three AODN delayed-QC buoys
 (docs/ml-evaluation.md 12.4) gave three candidates that passed criteria (a)-(f) on a

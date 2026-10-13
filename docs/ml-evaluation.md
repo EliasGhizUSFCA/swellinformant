@@ -54,17 +54,22 @@ decides a correction trained on them.
   p90: the model is biased low); a lead-dependent two-tail scale fitted on the older year
   covers 75.1-80.2 % at every lead bucket pooled over five buoys, so the offshore
   component is implemented as calibrated (`ndbc-offshore-v1`), labelled so only at the
-  four spots whose own buoy agrees (69-91 % by buoy). The ensemble-based range stays
-  unvalidated. forecast-v1's High and Moderate single-source classes had equal median
+  four spots whose own buoy agrees (69-91 % by buoy) and not yet passed in by the
+  prediction job, so no prediction carries the label today. The ensemble-based range
+  stays unvalidated. forecast-v1's High and Moderate single-source classes had equal median
   errors on the training year; forecast-v1.1 drops High for single-source hours without
   an ensemble, and its classes (with and without a GEFS-Wave spread) are ordered by
-  realised error on the held-out year.
-* **Correction activated for seven US spots** (12.4): a random forest trained on the NDBC
-  and AODN pairs cut held-out RMSE from 0.427 to 0.320 m (-25 %) at five NDBC buoys, passed
+  realised error on the held-out year (that held-out check of the new rule was not blind,
+  12.3).
+* **Correction approved for activation at seven US spots** (12.4): a random forest
+  trained on the NDBC and AODN pairs cut held-out RMSE from 0.427 to 0.320 m (-25 %) at
+  five NDBC buoys, passed
   criteria (a)-(f) and the transfer check on the live gridded run, and ships as
   `offshore_hs_residual` v6 for jaws-peahi, mavericks, ocean-beach-sf, pipeline,
   sunset-beach, trestles and waimea-bay (not rincon: no benefit at its buoy; not the WA
-  spots: never tested).
+  spots: never tested). Activating it in a deployment is the operator step of section 12.4
+  (`ml import-manifest`, `ml activate`); it was activated and checked end to end only in a
+  scratch copy of the real 2026-10-11 runs.
 
 ## 1. Data inventory
 
@@ -1343,12 +1348,15 @@ only if the version passes (a)-(f) and the transfer check, only at the spots tha
 and that are paired with a buoy that has held-out TEST pairs, and only at the trained
 leads; otherwise the reasons are recorded.
 
-**Deviations from this plan, all decided after results were seen and all only narrowing
-a claim or its use** (each is repeated where it applies): the station-consistency rule
-for where the calibrated range label is used (12.2); the two-class form of the test for
-the one boundary candidate that has no High class (12.3); excluding rincon from the
-correction (12.4); and re-running the identical training with the final registry code so
-that the registered applicability is the one the code now computes (12.4).
+**Deviations from this plan, all decided after results were seen** (each is repeated
+where it applies). Three only narrow a claim or its use: the station-consistency rule for
+where the calibrated range label is used (12.2); excluding rincon from the correction
+(12.4); and re-running the identical training with the final registry code so that the
+registered applicability is the one the code now computes (12.4). One does not: the
+boundary candidates, the rule choosing among them and the two-class form of the test for
+the one candidate without a High class were written after the forecast-v1 TEST scores had
+been computed, and they led to forecast-v1.1 (12.3, "How blind that TEST confirmation
+is").
 
 ### 12.1 Data
 
@@ -1495,9 +1503,31 @@ RMSE(Moderate) - RMSE(High): TRAIN V0 0.017 [-0.010, 0.043], TRAIN V1 0.019 [-0.
 0.043], TEST V0 0.024 [0.009, 0.037], TEST V1 0.044 [0.029, 0.059]. RMSE(Low) - RMSE(Moderate):
 0.100 [0.065, 0.138] on TRAIN, 0.137 [0.112, 0.163] on TEST. The test **fails on TRAIN**
 (V0 and V1: equal medians, Moderate - High CI includes zero) and on TEST in V0 (equal
-medians); V1 passes on TEST, but by the plan a change is decided on TRAIN. Single-source High is reached only at leads up to 52 h (index 70), so the High /
-Moderate split is a lead split; by lead bucket on TEST (V0): High 24 h RMSE 0.378, 48 h
-0.380; Moderate 48 h 0.398, 72 h 0.392, 120 h 0.415; Low 168 h 0.476, 240 h 0.603.
+medians); V1 passes on TEST, but by the plan a change is decided on TRAIN. Single-source
+High is reached only at leads up to 52 h (index 70), so the High / Moderate split is a lead
+split.
+
+**Realised error by class and lead bucket, TEST** (pairs; median |error| / p90 |error| /
+RMSE, m; offshore Hs at the buoy). Cells with fewer than 50 pairs are left out: Low
+single-source hours with a missing partition-1 swell at 24, 72 and 120 h (5-6 pairs each)
+and, with a GEFS-Wave spread, Moderate at 24 and 48 h (2 and 13), Low at 72 h (3) and
+120 h (34).
+
+| Lead | forecast-v1, single source (OFF5, V0) | forecast-v1.1, single source (OFF5) | v1 = v1.1 with a GEFS-Wave spread (GEFS6) |
+|---|---|---|---|
+| 24 h | High 11,268: 0.24 / 0.58 / 0.378 | Moderate 11,268: 0.24 / 0.58 / 0.378 | High 1,438: 0.25 / 0.53 / 0.333 |
+| 48 h | High 9,549: 0.25 / 0.60 / 0.380; Moderate 1,736: 0.24 / 0.61 / 0.398 | Moderate 11,285: 0.25 / 0.60 / 0.383 | High 1,431: 0.25 / 0.53 / 0.336 |
+| 72 h | Moderate 11,203: 0.25 / 0.61 / 0.392 | as v1 | High 825: 0.24 / 0.54 / 0.338; Moderate 587: 0.25 / 0.58 / 0.358 |
+| 120 h | Moderate 14,566: 0.25 / 0.64 / 0.415 | as v1 | Moderate 2,474: 0.28 / 0.63 / 0.403 |
+| 168 h | Low 7,670: 0.27 / 0.74 / 0.476 | as v1 | Moderate 2,404: 0.31 / 0.79 / 0.502; Low 59: 0.57 / 1.00 / 0.887 |
+| 240 h | Low 4,239: 0.33 / 0.97 / 0.603 | as v1 | Moderate 1,256: 0.38 / 0.96 / 0.630; Low 88: 0.41 / 1.06 / 0.675 |
+
+Without an ensemble the class of a complete single-source hour is a function of its lead
+time, so the single-source ordering Moderate < Low validates the lead caps (beyond 7 days
+the error is larger), not a separate certainty signal; inside one lead bucket there is
+nothing to compare. With a GEFS-Wave spread the class also separates hours at the same
+lead (72 h: High 0.338 vs Moderate 0.358 m RMSE; 168 and 240 h: Low above Moderate, on few
+Low pairs).
 
 **Boundary scan (TRAIN only, `--scan-boundaries`).** Every High / Moderate boundary b1 =
 24, 30, ..., 72 h fails on TRAIN (median 0.23 m in both classes for every b1; Moderate -
@@ -1505,9 +1535,18 @@ High RMSE between 0.008 and 0.020 m, every CI includes zero). The only passing c
 is C2, "no High without an ensemble or a second family" (Moderate RMSE 0.397, median 0.23,
 p90 0.57 vs Low 0.504 / 0.26 / 0.77; gap 0.107 [0.073, 0.145]). C2 has no High class, so
 it was tested in the two-class form (Moderate < Low on all three statistics and the gap CI
-above zero); the choice rule (passing b1 nearest the current boundary, else C2) was fixed
-before TEST was read. **On TEST, C2 passes:** Moderate 110,554 pairs, RMSE 0.396, median
-0.25, p90 0.62; Low 25,543, 0.543 / 0.29 / 0.86; gap 0.146 [0.123, 0.169].
+above zero); the choice rule (passing b1 nearest the current boundary, else C2) picks the
+candidate from TRAIN results only, before the chosen one is scored on TEST. **On TEST, C2
+passes:** Moderate 110,554 pairs, RMSE 0.396, median 0.25, p90 0.62; Low 25,543, 0.543 /
+0.29 / 0.86; gap 0.146 [0.123, 0.169].
+
+*How blind that TEST confirmation is.* The forecast-v1 TEST table above was computed, as
+the plan requires, before the boundary scan, its candidates and its choice rule were
+written (they are not in the pre-registered plan). C2's TEST classes are a merge of
+forecast-v1's TEST High and Moderate classes, with Low unchanged, so C2's TEST result could
+be anticipated from that table. The candidate is derived from TRAIN statistics and the
+TEST rows were never used to fit anything, but the TEST check of C2 is not blind, so it is
+weaker evidence than a held-out test whose outcome was unknown when the rule was chosen.
 
 **forecast-v1.1 = forecast-v1 + C2** (`single_source_no_ensemble`). Its single-source
 classes on OFF5 are exactly C2 (TRAIN and TEST as above; V1 = V0, because the verification
@@ -1630,6 +1669,8 @@ about 23 %) is not validated, since breaking heights are not observed.
 | GEFS-Wave station statistics download, parse, archive | live (115 cycles, 0 errors) |
 | Range coverage and fitted scale, class scores, boundary scan | live data, repository commands |
 | Shipped calibration constants reproduce the TEST coverage | live data (identical table) |
+| Re-run of `verify ranges` (OFF5, GEFS6) and `verify confidence-classes` (OFF5 v1 with the boundary scan, OFF5 v1.1, GEFS6) on 2026-10-13 with commit 5ddfe2a | live data: every table and JSON result identical to the ones reported here |
+| Shipped v6 / v4 manifests import, verify (sha256), apply only at their spots and leads | integration test on the real files (`test_shipped_ml_manifests.py`) |
 | Calibrated offshore label in `breaking_uncertainty` | unit tests only; not wired into the prediction job |
 | Correction training, criteria, per-buoy scores | live data |
 | Transfer check, activation, NOAA rescoring, blend rebuild | live data (scratch copy of the real 2026-10-11 runs) |
