@@ -120,6 +120,26 @@ def test_retention_by_count_and_age(tools: None, tmp_path: Path) -> None:
     assert "retention: 3 removed, 3 kept" in result.stderr
 
 
+def test_backups_are_never_picked_up_by_git(tools: None, tmp_path: Path) -> None:
+    """The default BACKUP_DIR is ./backups, inside the checkout when run from the
+    repository root (as documented), and backups hold every account: `git add -A` staged
+    the dump and its checksum before the backup directory ignored itself."""
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    git = ["git", "-C", str(tmp_path)]
+    subprocess.run([*git, "init", "-q"], check=True)  # noqa: S603 - fixed arguments
+    result = run("backup-db.sh", "--dir", str(tmp_path / "backups"))
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()).exists()
+    status = subprocess.run(  # noqa: S603 - fixed arguments
+        [*git, "status", "--porcelain", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert status == ""
+
+
 def test_failed_backup_leaves_no_file(tools: None, tmp_path: Path) -> None:
     url = make_url(get_settings().database_url).set(database="swell_no_such_database_ops")
     result = run(
