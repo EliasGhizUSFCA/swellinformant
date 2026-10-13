@@ -1,4 +1,4 @@
-"""Research confidence, methodology "research-v1.1" (docs/research-confidence.md).
+"""Research confidence, methodology "research-v1.2" (docs/research-confidence.md).
 
 Research confidence says how well a break's ideal conditions are understood: how strong
 and how independent the published evidence for each researched variable is, and whether
@@ -10,7 +10,10 @@ Per variable (``RESEARCH_VARIABLES``):
 * Sources are grouped into independent sources: two sources with the same publisher, or
   pages of the same web host, count once. A group's tier is the best tier among its
   sources (A: survey_data, peer_reviewed, official; B: guidebook, encyclopedia,
-  surf_forecast_site, magazine; C: community).
+  surf_forecast_site, magazine; C: community). "official" means a government agency with
+  a coastal or marine mandate, a national surfing reserve, or a government geological or
+  hydrographic survey; tourism boards and World Surf League editorial pages are
+  "magazine" (tier B).
 * Agreement with the profile is recomputed from structured values
   (:mod:`app.services.research.values`); without one the researcher's flag is used.
   Supporting = agrees; for the descriptive variables (bathymetry, local_behavior) a
@@ -29,6 +32,9 @@ Per variable (``RESEARCH_VARIABLES``):
   page, not the page itself) is capped at Moderate (rule ``cap:search_only``), applied
   after the rules above; its summary then ends "(based on search summaries; source pages
   not read in full)". So overall High needs some directly read evidence.
+* research-v1.2: swell-size values are compared bound by bound (values.compare_value):
+  a stated maximum more than 25 % above the profile's maximum, or a stated minimum more
+  than 25 % below its minimum, contradicts. Everything else is unchanged from v1.1.
 
 Overall: Low if swell direction or wind is Low or 4+ variables are Low; High only if
 swell direction, size and wind are High and none of tide, bathymetry and local behaviour
@@ -70,7 +76,7 @@ from app.services.research.values import (
 
 logger = logging.getLogger(__name__)
 
-METHODOLOGY_VERSION = "research-v1.1"
+METHODOLOGY_VERSION = "research-v1.2"
 
 HIGH, MODERATE, LOW = "high", "moderate", "low"
 _DOWNGRADE = {HIGH: MODERATE, MODERATE: LOW, LOW: LOW}
@@ -194,9 +200,10 @@ def _host(url: str | None) -> str:
     return host
 
 
-def independence_groups(sources: Sequence[EvidenceSource]) -> dict[str, int]:
-    """source key -> group id; same publisher (case/space-insensitive) or host = one group."""
-    parent = list(range(len(sources)))
+def publisher_groups(items: Sequence[tuple[str, str, str | None]]) -> dict[str, int]:
+    """(key, publisher, url) -> key: group id; same publisher (case/space-insensitive) or
+    the same web host (ignoring a leading www. / m.) = one group."""
+    parent = list(range(len(items)))
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -205,16 +212,21 @@ def independence_groups(sources: Sequence[EvidenceSource]) -> dict[str, int]:
         return i
 
     seen: dict[tuple[str, str], int] = {}
-    for i, s in enumerate(sources):
+    for i, (_key, publisher, url) in enumerate(items):
         for kind, value in (
-            ("publisher", " ".join(s.publisher.casefold().split())),
-            ("host", _host(s.url)),
+            ("publisher", " ".join(publisher.casefold().split())),
+            ("host", _host(url)),
         ):
             if not value:
                 continue
             j = seen.setdefault((kind, value), i)
             parent[find(i)] = find(j)
-    return {s.key: find(i) for i, s in enumerate(sources)}
+    return {key: find(i) for i, (key, _publisher, _url) in enumerate(items)}
+
+
+def independence_groups(sources: Sequence[EvidenceSource]) -> dict[str, int]:
+    """source key -> group id; same publisher (case/space-insensitive) or host = one group."""
+    return publisher_groups([(s.key, s.publisher, s.url) for s in sources])
 
 
 @dataclass
@@ -576,7 +588,7 @@ class ComputedAssessment:
 def compute_assessment(
     sources: Sequence[EvidenceSource], profile: dict[str, Any]
 ) -> ComputedAssessment:
-    """Pure research-v1.1 assessment of one spot from its evidence and profile values.
+    """Pure research-v1.2 assessment of one spot from its evidence and profile values.
 
     The age of evidence is measured against the year of the newest ``accessed_at`` (when
     the research was done), not the clock, so an assessment only changes when the

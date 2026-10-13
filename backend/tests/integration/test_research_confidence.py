@@ -158,7 +158,7 @@ def test_assessment_history(db: Session, tmp_path: Path, monkeypatch: pytest.Mon
     sync_evidence(db, load_evidence(db, _evidence_file(tmp_path)))
     first, created = assess_spot(db, pipeline)
     db.commit()
-    assert created and first.is_current and first.methodology_version == "research-v1.1"
+    assert created and first.is_current and first.methodology_version == "research-v1.2"
     assert first.overall_class == "high"
     season = first.per_variable["seasonality"]
     assert season["class"] == "low" and season["agreement"]["contradicting"] == 1
@@ -264,7 +264,7 @@ def test_api_detail_and_summaries(app_client: ApiClient, db: Session, tmp_path: 
     detail = app_client.get("/api/spots/pipeline").json()
     research = detail["research"]
     assert detail["research_class"] == research["research_class"] == "high"
-    assert research["methodology_version"] == "research-v1.1"
+    assert research["methodology_version"] == "research-v1.2"
     assert {s["retrieval"] for s in research["sources"]} == {"fetched"}  # the default
     assert [v["label"] for v in research["variables"]] == [
         "Swell direction",
@@ -403,7 +403,7 @@ def test_methodology_change_adds_a_history_row_and_keeps_the_old_one(
     pipeline = _spot(db, "pipeline")
     sync_evidence(db, load_evidence(db, _evidence_file(tmp_path)))
     with monkeypatch.context() as m:
-        m.setattr(assess, "METHODOLOGY_VERSION", "research-v1")  # the previous methodology
+        m.setattr(assess, "METHODOLOGY_VERSION", "research-v1.1")  # the previous methodology
         old, _ = assess_spot(db, pipeline)
         db.commit()
     new, created = assess_spot(db, pipeline)
@@ -415,8 +415,8 @@ def test_methodology_change_adds_a_history_row_and_keeps_the_old_one(
         .order_by(SpotResearchAssessment.id)
     ).all()
     assert [(r.methodology_version, r.is_current) for r in rows] == [
-        ("research-v1", False),
-        ("research-v1.1", True),
+        ("research-v1.1", False),
+        ("research-v1.2", True),
     ]
 
 
@@ -440,7 +440,7 @@ def test_committed_evidence_file_loads_and_search_only_support_is_capped(db: Ses
     assert out["research_evidence_spots"] == 50 and out["research_sources_created"] == 449
     current = current_assessments(db)
     assert len(current) == 50
-    assert all(a.methodology_version == "research-v1.1" for a in current.values())
+    assert all(a.methodology_version == "research-v1.2" for a in current.values())
     for a in current.values():
         for entry in a.per_variable.values():
             if entry["sources"] and entry["search_only"]:

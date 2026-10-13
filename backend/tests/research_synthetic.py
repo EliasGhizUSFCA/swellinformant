@@ -29,10 +29,11 @@ SYNTHETIC_PROFILE: dict[str, Any] = {
 }
 
 # Structured values that agree with SYNTHETIC_PROFILE (and with the real Pipeline profile,
-# 295-320 deg, offshore 135 deg, 4-15 ft, 11-15 s, Nov-Mar; tide aside).
+# 295-320 deg, offshore 135 deg, 4-15 ft, 11-15 s, Nov-Mar; tide aside). The size maximum
+# stays within research-v1.2's 25 % bound tolerance (15 ft * 1.25 = 18.75 ft).
 AGREEING_VALUES: dict[str, dict[str, Any] | None] = {
     "swell_direction": {"min": 290, "max": 330},
-    "swell_size": {"min_ft": 6, "max_ft": 20},
+    "swell_size": {"min_ft": 6, "max_ft": 18},
     "swell_period": {"min_s": 12, "max_s": 18},
     "wind": {"offshore_from_deg": 120},
     "tide": {"tide": "mid"},

@@ -5130,7 +5130,7 @@
      "published_year": null,
      "accessed_at": "2026-10-12",
      "retrieval": "fetched",
-     "notes": "Read directly on 2026-10-12. Date basis: no publication or modification date in page metadata (user-edited spot page).",
+     "notes": "Read directly on 2026-10-12. Date basis: no publication or modification date in page metadata (user-edited spot page). 2026-10-13 (research-v1.2): value {\"min_ft\": 12} of the swell_size claim removed: the claim itself says it cannot be compared with the profile.",
      "claims": [
       {
        "variable": "local_behavior",
@@ -5161,9 +5161,7 @@
       {
        "variable": "swell_size",
        "claim": "Starts working at over 12 ft and holds 16 ft and over. The scale is not stated (probably swell height, not faces), so it cannot be compared with the profile min of 20 ft faces.",
-       "value": {
-        "min_ft": 12
-       },
+       "value": null,
        "excerpt": "Swell sizeStarts working at Over 3.5m / 12ft and holds up to 5m / 16 ft and over",
        "agrees": null
       },
@@ -8236,7 +8234,7 @@
      "published_year": 2024,
      "accessed_at": "2026-10-12",
      "retrieval": "fetched",
-     "notes": "Read directly on 2026-10-12. Date basis: dateModified 2024-03-07.",
+     "notes": "Read directly on 2026-10-12. Date basis: dateModified 2024-03-07. 2026-10-13 (research-v1.2): value {\"months\": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]} of the seasonality claim removed: the claim itself says it cannot be compared with the profile.",
      "claims": [
       {
        "variable": "swell_direction",
@@ -8269,22 +8267,7 @@
       {
        "variable": "seasonality",
        "claim": "Best time of year: year-round (no best season singled out, so not comparable with the profile's April-October).",
-       "value": {
-        "months": [
-         1,
-         2,
-         3,
-         4,
-         5,
-         6,
-         7,
-         8,
-         9,
-         10,
-         11,
-         12
-        ]
-       },
+       "value": null,
        "excerpt": "Best time of year: Macaronis: Year-round",
        "agrees": null
       },
@@ -8480,7 +8463,7 @@
      "title": "Surfers Point - The Margaret River Region",
      "url": "https://www.margaretriver.com/things-to-do/attractions/beaches/surfers-point/",
      "publisher": "The Margaret River Region (margaretriver.com)",
-     "source_type": "official",
+     "source_type": "magazine",
      "published_year": null,
      "accessed_at": "2026-10-11",
      "retrieval": "web_search",
@@ -8492,14 +8475,15 @@
        "excerpt": "It's a powerful, deepwater left and right-hand reef break.",
        "agrees": null
       }
-     ]
+     ],
+     "notes": "2026-10-13 (research-v1.2): source_type official -> magazine: a tourism board is not an agency with a coastal or marine mandate (tier rule in docs/research-confidence.md)."
     },
     {
      "key": "margaretriver-locals-guide",
      "title": "The Margaret River Region's surf breaks: a local's guide",
      "url": "https://www.margaretriver.com/things-to-do/attractions/surfing/the-margaret-river-regions-surf-breaks-a-locals-guide/",
      "publisher": "The Margaret River Region (margaretriver.com)",
-     "source_type": "official",
+     "source_type": "magazine",
      "published_year": null,
      "accessed_at": "2026-10-11",
      "retrieval": "web_search",
@@ -8511,7 +8495,8 @@
        "excerpt": "A local guide calls it easily one of the most consistent waves on the entire coast, but a humbling one.",
        "agrees": null
       }
-     ]
+     ],
+     "notes": "2026-10-13 (research-v1.2): source_type official -> magazine: a tourism board is not an agency with a coastal or marine mandate (tier rule in docs/research-confidence.md)."
     },
     {
      "key": "surfertoday-margaret-river",
@@ -9001,7 +8986,7 @@
      "published_year": null,
      "accessed_at": "2026-10-12",
      "retrieval": "fetched",
-     "notes": "Read directly on 2026-10-12. Date basis: no publication or modification date in page metadata (user-edited spot page).",
+     "notes": "Read directly on 2026-10-12. Date basis: no publication or modification date in page metadata (user-edited spot page). 2026-10-13 (research-v1.2): value {\"min_ft\": 8} of the swell_size claim removed: the claim itself says it cannot be compared with the profile.",
      "claims": [
       {
        "variable": "local_behavior",
@@ -9041,9 +9026,7 @@
       {
        "variable": "swell_size",
        "claim": "Starts working at 8-10 ft and holds 16 ft and over. The scale is not stated (probably swell height), so it cannot be compared with the profile min of 15 ft faces.",
-       "value": {
-        "min_ft": 8
-       },
+       "value": null,
        "excerpt": "Swell sizeStarts working at 2.5m-3m / 8ft-10ft and holds up to 5m / 16 ft and over",
        "agrees": null
       }
@@ -9201,13 +9184,12 @@
       {
        "variable": "swell_size",
        "claim": "Storm swells (January 2014, Hurricane Epsilon in October 2020) produced waves of about 60 ft.",
-       "value": {
-        "max_ft": 60
-       },
+       "value": null,
        "excerpt": "A January 2014 swell and Hurricane Epsilon in late October 2020 created 60-foot giants.",
        "agrees": null
       }
-     ]
+     ],
+     "notes": "2026-10-13 (research-v1.2): value {\"max_ft\": 60} of the swell_size claim removed: heights of named storm events are record waves, not a working range."
     },
     {
      "key": "wannasurf-mullaghmore",
@@ -11972,7 +11954,7 @@
      "title": "Ehukai Beach Park (Banzai Pipeline)",
      "url": "https://www.gohawaii.com/islands/oahu/things-to-do/beaches/ehukai-beach-park-banzai-pipeline",
      "publisher": "GoHawaii.com (Hawaii tourism site)",
-     "source_type": "official",
+     "source_type": "magazine",
      "published_year": null,
      "accessed_at": "2026-10-11",
      "retrieval": "web_search",
@@ -11984,7 +11966,8 @@
        "excerpt": "The break is known for powerful waves that break over a sharp reef no more than a few feet from the surface.",
        "agrees": null
       }
-     ]
+     ],
+     "notes": "2026-10-13 (research-v1.2): source_type official -> magazine: a tourism board is not an agency with a coastal or marine mandate (tier rule in docs/research-confidence.md)."
     },
     {
      "key": "wsl-pipeline-essentials-2022",
@@ -12914,7 +12897,7 @@
      "title": "Puerto Escondido, Oaxaca",
      "url": "https://visitmexico.com/en/destino/2181/puerto-escondido-oaxaca",
      "publisher": "Visit Mexico (official tourism portal)",
-     "source_type": "official",
+     "source_type": "magazine",
      "published_year": null,
      "accessed_at": "2026-10-11",
      "retrieval": "web_search",
@@ -12928,7 +12911,8 @@
        "excerpt": "Zicatela is described as having waves up to 19 feet high.",
        "agrees": true
       }
-     ]
+     ],
+     "notes": "2026-10-13 (research-v1.2): source_type official -> magazine: a tourism board is not an agency with a coastal or marine mandate (tier rule in docs/research-confidence.md)."
     }
    ]
   },
@@ -18117,7 +18101,7 @@
      "title": "Sunset Beach",
      "url": "https://www.gohawaii.com/islands/oahu/things-to-do/beaches/sunset-beach",
      "publisher": "GoHawaii.com (Hawaii tourism site)",
-     "source_type": "official",
+     "source_type": "magazine",
      "published_year": null,
      "accessed_at": "2026-10-11",
      "retrieval": "web_search",
@@ -18151,7 +18135,8 @@
        "excerpt": "Winter is the big-wave season there, and the same page puts swells up to 30 feet tall.",
        "agrees": false
       }
-     ]
+     ],
+     "notes": "2026-10-13 (research-v1.2): source_type official -> magazine: a tourism board is not an agency with a coastal or marine mandate (tier rule in docs/research-confidence.md)."
     },
     {
      "key": "hawaiisurf-sunset",
@@ -19502,7 +19487,7 @@
      "title": "The Box - The Margaret River Region",
      "url": "https://www.margaretriver.com/things-to-do/attractions/beaches/the-box/",
      "publisher": "The Margaret River Region (margaretriver.com)",
-     "source_type": "official",
+     "source_type": "magazine",
      "published_year": null,
      "accessed_at": "2026-10-11",
      "retrieval": "web_search",
@@ -19523,7 +19508,8 @@
        "excerpt": "a specialty wave that lurches up out of deep water to break on a shallow jagged reef and is best on an easterly wind",
        "agrees": true
       }
-     ]
+     ],
+     "notes": "2026-10-13 (research-v1.2): source_type official -> magazine: a tourism board is not an agency with a coastal or marine mandate (tier rule in docs/research-confidence.md)."
     },
     {
      "key": "wannasurf-the-box",
@@ -21021,15 +21007,12 @@
      "published_year": 2018,
      "accessed_at": "2026-10-12",
      "retrieval": "fetched",
-     "notes": "Read directly on 2026-10-12. Date basis: Crossref published-online 2018-09-10 (vol. 5 no. 1; DOI 10.24843/jmas.2019.v05.i01.p15); English abstract read via the Crossref API (the publisher site did not respond).",
+     "notes": "Read directly on 2026-10-12. Date basis: Crossref published-online 2018-09-10 (vol. 5 no. 1; DOI 10.24843/jmas.2019.v05.i01.p15); English abstract read via the Crossref API (the publisher site did not respond). 2026-10-13 (research-v1.2): value {\"min\": 270, \"max\": 270} of the swell_direction claim removed: the claim itself says it cannot be compared with the profile.",
      "claims": [
       {
        "variable": "swell_direction",
        "claim": "A wind-wave hindcast (SMB method, 2001-2010 BMKG Ngurah Rai wind data) finds waves at Uluwatu beach dominated by the west. This is locally generated wind sea, not the distant groundswell the profile describes, so it is not comparable.",
-       "value": {
-        "min": 270,
-        "max": 270
-       },
+       "value": null,
        "excerpt": "Wave calculation result in Uluwatu Beach dominated by wave that coming from west side with significant wave height (Hs) of 0.98 m and significant wave period (Ts) of 5.21 s",
        "agrees": null
       },
@@ -21218,7 +21201,7 @@
      "title": "Waimea Bay Beach Park - North Shore",
      "url": "https://www.gohawaii.com/islands/oahu/regions/north-shore/waimea-bay",
      "publisher": "GoHawaii.com (Hawaii tourism site)",
-     "source_type": "official",
+     "source_type": "magazine",
      "published_year": null,
      "accessed_at": "2026-10-11",
      "retrieval": "web_search",
@@ -21240,7 +21223,8 @@
        "excerpt": "Summers find Waimea Bay quiet and gentle",
        "agrees": true
       }
-     ]
+     ],
+     "notes": "2026-10-13 (research-v1.2): source_type official -> magazine: a tourism board is not an agency with a coastal or marine mandate (tier rule in docs/research-confidence.md)."
     },
     {
      "key": "wannasurf-waimea",

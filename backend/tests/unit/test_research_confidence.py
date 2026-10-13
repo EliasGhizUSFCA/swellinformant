@@ -1,4 +1,4 @@
-"""Research confidence: evidence validation, agreement and the research-v1.1 rules.
+"""Research confidence: evidence validation, agreement and the research-v1.2 rules.
 
 All evidence here is SYNTHETIC (tests/research_synthetic.py); no real source is cited.
 """
@@ -23,7 +23,12 @@ from app.services.research.assess import (
     overall_class,
 )
 from app.services.research.evidence import EvidenceValidationError, parse_evidence
-from app.services.research.values import compare_value, is_sand_bottom, validate_value
+from app.services.research.values import (
+    compare_value,
+    is_sand_bottom,
+    size_bounds_contradicted,
+    validate_value,
+)
 from app.services.seed import SeedValidationError
 from tests.research_synthetic import (
     AGREEING_VALUES,
@@ -201,7 +206,7 @@ def test_wind_tide_ranges_and_months() -> None:
     assert compare_value("tide", {"tide": "all"}, _profile(tide_preference="all")).agrees
     assert compare_value("tide", {"tide": "low"}, _profile(tide_preference=None)).agrees is None
 
-    assert compare_value("swell_size", {"min_ft": 15, "max_ft": 30}, p).agrees is True
+    assert compare_value("swell_size", {"min_ft": 15, "max_ft": 18}, p).agrees is True
     assert compare_value("swell_size", {"min_ft": 16, "max_ft": None}, p).agrees is False
     assert compare_value("swell_size", {"min_ft": None, "max_ft": 5}, p).agrees is True
     assert compare_value("swell_size", {"min_ft": 4, "max_ft": 15}, p).exact is True
@@ -571,6 +576,40 @@ def test_fingerprint_includes_retrieval() -> None:
     )
 
 
-def test_methodology_version_is_research_v1_1() -> None:
-    assert assess.METHODOLOGY_VERSION == "research-v1.1"
-    assert _assess([]).methodology_version == "research-v1.1"
+def test_methodology_version_is_research_v1_2() -> None:
+    assert assess.METHODOLOGY_VERSION == "research-v1.2"
+    assert _assess([]).methodology_version == "research-v1.2"
+
+
+def test_size_bounds_are_compared_separately_research_v1_2() -> None:
+    """research-v1.2: a stated maximum more than 25 % above the profile maximum, or a stated
+    minimum more than 25 % below the profile minimum, contradicts that bound even when the
+    ranges overlap; a one-bound value is compared only on the bound it states."""
+    p = _profile(wave_height_min_ft=4.0, wave_height_max_ft=12.0)  # tolerance: 3 .. 15 ft
+    # Overlapping ranges whose maximum is far above the profile's: contradicts (v1.1 agreed).
+    assert compare_value("swell_size", {"min_ft": 4, "max_ft": 30}, p).agrees is False
+    assert compare_value("swell_size", {"min_ft": 4, "max_ft": 15}, p).agrees is True  # +25 %
+    assert compare_value("swell_size", {"min_ft": 4, "max_ft": 15.5}, p).agrees is False
+    # A minimum far below the profile's contradicts; within 25 % it agrees.
+    assert compare_value("swell_size", {"min_ft": 2, "max_ft": 10}, p).agrees is False
+    assert compare_value("swell_size", {"min_ft": 3, "max_ft": 10}, p).agrees is True  # -25 %
+    # One stated bound: only that bound is compared.
+    assert compare_value("swell_size", {"max_ft": 30}, p).agrees is False
+    assert compare_value("swell_size", {"max_ft": 14}, p).agrees is True
+    assert compare_value("swell_size", {"min_ft": 2}, p).agrees is False
+    assert compare_value("swell_size", {"min_ft": 6}, p).agrees is True
+    # A narrower range (maximum below, minimum above the profile's) does not contradict.
+    assert compare_value("swell_size", {"min_ft": 5, "max_ft": 8}, p).agrees is True
+    # Non-overlapping ranges still disagree, and exact matches are unchanged.
+    assert compare_value("swell_size", {"min_ft": 13, "max_ft": 14}, p).agrees is False
+    assert compare_value("swell_size", {"min_ft": 4, "max_ft": 12}, p).exact is True
+    assert size_bounds_contradicted(2.0, 30.0, 4.0, 12.0) == (True, True)
+    assert size_bounds_contradicted(None, 15.0, 4.0, 12.0) == (False, False)
+    # In an assessment the contradicted maximum is a conflict like any other.
+    sources = [
+        synthetic_source("g", "guidebook", [synthetic_claim("swell_size", {"max_ft": 40})]),
+        synthetic_source("e", "encyclopedia", _claims("swell_size")),
+    ]
+    entry = _var(sources, "swell_size")
+    assert entry["independent_contradicting"] == 1
+    assert "conflict:same_tier" in entry["rules"]
