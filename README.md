@@ -59,7 +59,12 @@ variables.
 * Breaking height from linear wave theory + Komar–Gaughan per swell partition, with
   directional spreading, shore normal, shadowing and a focusing prior; spot physical
   profiles carry a provenance flag for every parameter.
-* An 80% range (p10–p90) labelled heuristic (or ensemble-based) until it is verified.
+* An 80% range (p10–p90) labelled heuristic (or ensemble-based) until it is verified. Its
+  offshore part was checked against NDBC buoys: it held the observed wave height 53 % of the
+  time at 24 h and 85-89 % beyond 5 days instead of 80 % (most misses were above the range:
+  the raw model runs low). A buoy-fitted offshore range (`ndbc-offshore-v1`) exists in the
+  code but is not used by the prediction job yet
+  ([`docs/ml-evaluation.md`](docs/ml-evaluation.md) §12.2).
 * A documented 0–100 quality score kept separate from height and from forecast confidence
   (shown as "Excellent Surf — 8.9/10" with a "Why this rating?" breakdown).
 * Daylight-only windows from NOAA sunrise and sunset.
@@ -78,7 +83,8 @@ variables.
   [`data/surf_spots/profile_decisions.json`](data/surf_spots/profile_decisions.json)), a
   value changes only when two independent, directly read publishers outrank all direct
   support for the old one, and `python -m app.cli research lint` flags unexplained
-  geometry. Where sources disagree about which wind is offshore, every forecast hour says so.
+  geometry. Where sources disagree about which wind is offshore, every forecast hour says so,
+  and the app shows that note next to the wind.
 * *Forecast confidence* per forecast hour: lead time, ensemble spread, disagreement between
   independent model families only, run-to-run change, data completeness, staleness and
   source; plus *local confidence* at the break, which can be no better than how well the
@@ -421,8 +427,9 @@ tile policy). For more traffic on that basemap use a tile provider:
 
 The map's global layers (offshore significant wave height, not surf height; peak period
 and direction; 10 m wind; sea-level pressure) are NOAA GFS-Wave and GFS model output,
-regridded to 0.5° and served by `GET /api/map/fields`. Without them the index says what
-to set and the map shows the spots only.
+regridded to 0.5° and served by `GET /api/map/fields`. Without them the map shows the
+spots only, with a one-line notice; its legend repeats the index's message saying what to
+set.
 
 ```env
 # With live NOAA spot forecasts the layers come with every NOAA acquisition (automatic):
@@ -484,12 +491,21 @@ python -m app.cli ml import-manifest DIR/manifest.json
 ```
 
 **Result so far** ([`docs/ml-evaluation.md`](docs/ml-evaluation.md)): against QC'd
-spectral Hm0 at three Western Australian buoys (2021), raw GFS-Wave has RMSE 0.40 m at
-24 h and 1.01 m at 240 h, biased low by about 0.23 m. A ridge correction cut held-out
-RMSE at Cape Naturaliste by 8 % and passed every deployment criterion; it is shipped in
-`backend/ml_models/` as a candidate but **not active by default**, because at the spots
-its inputs (gridded GFS-Wave) differ from the station bulletins it was validated on.
-Random forest and gradient boosting were rejected.
+spectral Hm0, raw GFS-Wave is biased low by about 0.23 m both at three Western Australian
+buoys (2021; RMSE 0.40 m at 24 h, 1.01 m at 240 h) and at ten NDBC buoys off Hawaii and
+California (2025-02 to 2026-10; RMSE 0.38 m at 24 h, 0.64 m at 240 h). Two corrections
+are shipped in `backend/ml_models/offshore_hs_residual/`, and **neither is active by
+default**:
+
+* v6, a random forest trained on the NDBC and AODN pairs: held-out RMSE at five NDBC buoys
+  0.427 → 0.320 m (-25 %); it passed every deployment criterion and the transfer check on
+  a live gridded run and is approved for activation at seven US spots (Jaws, Mavericks,
+  Ocean Beach, Pipeline, Sunset Beach, Trestles, Waimea Bay). Activating it is an operator
+  step (`ml import-manifest`, then `ml activate`; docs/ml-evaluation.md §12.4).
+* v4, a ridge trained at Cape Naturaliste (Western Australia): held-out RMSE -8 %; kept
+  inactive because at the spots its inputs (gridded GFS-Wave) differ from the station
+  bulletins it was validated on. In that run random forest and gradient boosting were
+  rejected.
 
 A correction is applied only at spots paired with its training buoys, only within its
 trained lead range and only to the model family it was trained on (in multi-model mode it
@@ -757,21 +773,34 @@ Checklist:
   dropping out after 18 h).
 * Email to Mailpit, end to end (verification and alert emails, including the 15-step
   scenario).
+* NOAA NDBC buoys, on 2026-10-12 (`www.ndbc.noaa.gov` reachable since that day): 11 active
+  Hawaii and California stations, positions matching NDBC's station list, a 24-month
+  backfill of 337,400 spectral Hm0 records and the realtime files with 0 errors, then the
+  GFS-Wave bulletins at the 10 stations that have one and the NDBC backtest
+  ([`docs/observations.md`](docs/observations.md), "Live verification of NDBC";
+  [`docs/ml-evaluation.md`](docs/ml-evaluation.md) §11).
 
 **Known limits of the confidence assessments**
 
 * Research evidence comes from two passes: a first one on 2026-10-11 through
   domain-restricted web searches, and a second on 2026-10-12 that re-read every source it
   could open (384 of 449 read directly; the 65 behind bot protection remain search
-  summaries, capped at Moderate). No spot is High overall: tide evidence conflicts at the
-  two spots whose swell direction, size and wind are all High, and most spots have no
-  measured bathymetry (only four US spots, from NOAA BlueTopo).
+  summaries). With the 19 NOAA BlueTopo tiles added on 2026-10-13 that is 468 sources, 403
+  read directly. A condition supported only by search summaries is capped at Moderate;
+  that no longer happens anywhere, since every supported condition has a directly read
+  source. No spot is High overall: tide evidence conflicts at the two spots whose swell
+  direction, size and wind are all High, and most spots have no measured bathymetry (only
+  four US spots, from NOAA BlueTopo).
 * Eleven offshore wind directions are disputed by the evidence and were not changed (the rule
   needs two directly read publishers that outrank every direct source of the old value);
   forecasts at 15 spots carry "Sources disagree about which wind is offshore here." The
   score still uses the profile's direction.
 * Forecast and research confidence classes are documented heuristics; they have not been
-  calibrated against observed surf (no nearshore observations exist yet).
+  calibrated against observed surf (no nearshore observations exist yet). The forecast
+  classes were checked against NDBC buoys for the offshore wave height: with a GEFS-Wave
+  spread they are ordered by the size of the error; without one, High and Moderate from a
+  single model were not clearly different ([`docs/ml-evaluation.md`](docs/ml-evaluation.md)
+  §12.3).
 
 **Implemented but not verified against the real services** (outbound network to these
 APIs was blocked in the build environment). Each adapter is unit-tested against
@@ -785,7 +814,6 @@ documented response shapes with mocked HTTP. Expect to adjust details on first l
 | Resend | `RESEND_API_KEY` |
 | SendGrid | `SENDGRID_API_KEY` |
 | Twilio | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
-| NDBC buoys (observations) | nothing (public), but `www.ndbc.noaa.gov` was unreachable from the build environment; parsers are tested against NDBC's documented formats only |
 
 SMTP is verified end to end: the Docker stack delivered a verification email to Mailpit.
 
