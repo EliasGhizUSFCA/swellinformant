@@ -1,4 +1,8 @@
-# Forecast confidence and local confidence (methodology `forecast-v1`)
+# Forecast confidence and local confidence (methodology `forecast-v1.1`)
+
+`forecast-v1.1` is `forecast-v1` plus the disputed-wind note of §3a, which changes no class;
+everything else below is unchanged from forecast-v1. Predictions scored with forecast-v1 are
+rescored once when their run is shown to users (§4).
 
 Every forecast hour carries two confidence classes, each **High**, **Moderate** or **Low**
 with short plain-language reasons:
@@ -165,10 +169,56 @@ Consequences: a well-researched break never gets more local confidence than the 
 allows (a 9-day forecast stays Moderate at best), and a break without research evidence
 never gets High local confidence, however good the forecast is.
 
+## 3a. Disputed offshore wind (forecast-v1.1)
+
+Wind carries 0.30 of the quality score plus a gate, and the wind relation ("offshore",
+"cross-shore", ...) is computed against the profile's offshore direction. Research
+confidence knows when the sources disagree about that direction, but local confidence does
+not use the wind (its basis is swell direction, size, bathymetry and local behaviour), so a
+disputed offshore direction used to reach users without a warning.
+
+**Rule.** An hour is flagged when the spot's current research assessment fires a conflict
+rule on wind (`conflict:same_tier`, `conflict:stronger` or `conflict:unsupported`,
+[research-confidence.md](research-confidence.md) §3) **or** its record in
+`data/surf_spots/profile_decisions.json` says the offshore wind direction is `disputed`
+(ADR-018). Then:
+
+* the reason **"Sources disagree about which wind is offshore here."** is added to the
+  hour's `confidence_reasons` (after the forecast reasons, before the local reason) and a
+  `wind_dispute` entry to its `confidence_inputs`: `profile_offshore_deg`,
+  `alternative_offshore_deg`, `basis` (the conflict rules and/or `decision:disputed`),
+  `sources` (the contradicting evidence keys), `relation`, `relation_alternative`,
+  `differs`, `reason`;
+* the wind relation is computed under the profile's direction **and** under the main
+  contradicting direction (the value stated by a contradicting source that the most
+  independent contradicting publishers agree with; `research.decisions.wind_dispute`), and
+  stored in `components.wind_dispute`;
+* when the two relations differ, the explanation names both, e.g. "wind 15 km/h from SSE,
+  offshore or cross-shore: sources disagree" instead of "offshore wind 15 km/h from SSE".
+
+**What it does not change.** The score, `wind_relation` (used by saved-search wind filters)
+and both confidence classes are computed exactly as in forecast-v1, with the profile's
+direction; local confidence semantics are unchanged (it is still min(forecast class, research
+basis)). The note is information about the evidence, not a forecast error estimate, and it
+is not calibrated.
+
+**Live effect** (the real 2026-10-11 blend run, 81 hours per spot, rescored on a re-seeded
+clone of `swell_live2`): 15 spots carry the note on every hour, 1,215 hours in all: Anchor
+Point, Chicama, Cloudbreak, Desert Point, Dungeons, Jaws, Jeffreys Bay, Lakey Peak, Lobitos,
+Mullaghmore Head, Rifles, Skeleton Bay, Supertubos, Teahupoo and Uluwatu. All 15 fire a wind
+conflict rule in their assessment; for the 10 of them whose decision record says
+`disputed` the basis lists both. On 1,101 of the 1,215 hours the relation under the
+contradicting direction differed from the profile's, so the explanation names both.
+Compared with the run as stored in `swell_live2` the forecast class was unchanged on all
+4,050 hours, and at these 15 spots score and `wind_relation` were unchanged on every hour
+except Cloudbreak's scores (its working range changed, ADR-018). Local classes moved at many
+spots, through the research basis (research-v1.2 and the second evidence pass), not
+through the note; that the note itself changes no class or score is covered by tests.
+
 ## 4. Where the classes are stored and shown
 
 * `surf_quality_predictions`: `forecast_confidence_class`, `local_confidence_class`,
-  `confidence_method` ("forecast-v1"), `confidence_inputs`, `issued_at`, `lead_hours`,
+  `confidence_method` ("forecast-v1.1"; "forecast-v1" before the disputed-wind note), `confidence_inputs`, `issued_at`, `lead_hours`,
   `research_assessment_id`; the legacy `confidence` (index) and `confidence_label` (index
   class) are unchanged.
 * `prediction_archive` (immutable): `forecast_confidence_class`, `local_confidence_class`,
@@ -178,7 +228,8 @@ never gets High local confidence, however good the forecast is.
   its original rows (in the 2026-10-11 live clone: 3,850 such rows).
 * API: `Conditions` and `ForecastPoint` (map snapshot, spot summaries `current` /
   `best_upcoming`, spot detail, spot forecast) have `forecast_confidence_class`,
-  `local_confidence_class`, `confidence_reasons` (forecast reasons first, then the research
+  `local_confidence_class`, `confidence_reasons` (forecast reasons first, then the disputed-wind
+  note of §3a when it applies, then the research
   reason), `lead_hours` and `local_confidence_reason`; `EventOut` has the classes, reasons and
   local reason of the event's peak hour (stored at detection, with the read-time staleness cap
   below); `DailySummary` the classes of the day's best hour.
@@ -211,8 +262,10 @@ never gets High local confidence, however good the forecast is.
 `run_change_ratio`, `verification` [{`scope`, `key`, `source`, `bucket_h`, `n`, `si`,
 `ss_persistence`, `near_spot`, `poor`}], `missing`, `stale`, `stale_after_h`, `rules`
 (e.g. `"cap:moderate:lead_7_10d"`, `"downgrade:run_change"`, `"note:spread_small"`),
-`class`, `reasons`, and `local` {`class`, `reason`, `basis`, `research_class`,
-`assessment_id`, `variables`}.
+`class`, `reasons`, `local` {`class`, `reason`, `basis`, `research_class`,
+`assessment_id`, `variables`} and, only when §3a applies, `wind_dispute` {`profile_offshore_deg`,
+`alternative_offshore_deg`, `basis`, `sources`, `relation`, `relation_alternative`,
+`differs`, `reason`}.
 
 ## 5. Per-source staleness
 
@@ -303,3 +356,8 @@ file; blend, predictions (rescoring), archive and detection run at a fixed "now"
   evidence is one season (2021) of GFS v16 at three buoys in one region.
 * Local confidence uses the research assessment only; the uncalibrated breaking-height
   translation (σ_m = 0.30, [SURF_SCORING.md](SURF_SCORING.md)) is not yet a separate factor.
+* The disputed-wind note (§3a) warns but does not quantify: the score keeps the profile's
+  offshore direction, and the frontend's one-line rating reason still names the profile's
+  relation (it reads `wind_relation`); the note is in the confidence details and in the
+  explanation. A decision record changed on its own (without new evidence or a new
+  assessment) takes effect at the next rescoring of the run.

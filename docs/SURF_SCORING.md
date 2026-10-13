@@ -39,8 +39,10 @@ partition i (swells 1–3 and wind sea):
 1. **Deep-water equivalent.** If the depth h at the wave-model extraction point is known and
    shallower than half the deep-water wavelength: `H0 = H / Ks`, `Ks = sqrt(Cg0 / Cg(h))`,
    with the wavenumber from Fenton & McKee (1990) refined by Newton iterations on
-   `ω² = g·k·tanh(k·h)`. Unknown depth (all spots today) → deep water assumed (up to ~9 %
-   error for long swell over a 50–200 m deep grid point; documented assumption).
+   `ω² = g·k·tanh(k·h)`. Unknown depth (46 spots) → deep water assumed (up to ~9 % error
+   for long swell over a 50–200 m deep grid point; documented assumption). Measured
+   forecast-point depths (NOAA BlueTopo) exist for Mavericks (57.9 m), Ocean Beach
+   (36.4 m), Trestles (758.7 m) and Rincon (96.5 m).
 2. **Directional factor** `R = Σ D(θ)·max(cos(θ − β), 0)·T(θ)·Δθ`: a wrapped-Gaussian
    spreading D (σ = 10° for T ≥ 13 s, 15° for 9–13 s, 30° for wind sea and shorter swell —
    assumptions, since GFS-Wave publishes no spread), the shore normal β and the energy
@@ -64,6 +66,36 @@ tested but not yet fed by station-spectrum ingestion.
 optimal swell window, Kf_ref = `height_factor`, κ = 0, depths unknown, no shadow table, and
 each of these is flagged `estimated` or `unknown` in `data_quality`. No bathymetry is
 invented.
+
+**Measured values (NOAA BlueTopo, 2026-10-13).** `scripts/bathymetry_profiles.py` samples
+the BlueTopo tiles on the transect from each continental-US break to its forecast point and
+writes `physical_profiles.json` with `data_quality: "measured"` and a provenance object.
+Its rules: the forecast-point depth is the median within 25 m of the point; β is the
+downslope azimuth of a plane fitted to the underwater survey cells within 250 m of the break,
+used only with at least 200 cells, R² ≥ 0.5, at least half of them measured depths (not
+interpolations between soundings), and only when every direction of the optimal swell
+window stays within 90° of it (the cos(θ − β) term assumes straight contours: a β that the
+documented best swells cannot reach means the contours turn around a point faster than this
+model can represent); the controlling depth is the depth at the break coordinate, used only
+when it is under water with no cell at or above 0 m NAVD88 within 100 m. Outcome: four
+forecast-point depths, one shore normal (Trestles, 210.9° instead of the estimated 197.5°),
+no controlling depth (every break coordinate is a shoreline position). Effect on the real
+2026-10-11 blend run (81 hours each; scores re-computed by the prediction job on a re-seeded
+clone, identical to `scripts/profile_sensitivity.py rescore --physical`):
+
+| Spot | Changed | Mean central breaking height (ft) | Mean \|Δ score\| | Labels changed |
+|---|---|---|---:|---:|
+| Mavericks | forecast-point depth 57.9 m | 9.48 → 9.82 | 1.40 | 1 |
+| Ocean Beach | forecast-point depth 36.4 m | 8.14 → 8.60 | 0.21 | 1 |
+| Trestles | depth 758.7 m (deep: no effect), β 197.5° → 210.9° | 5.77 → 5.72 | 0.06 | 0 |
+| Rincon | forecast-point depth 96.5 m | 1.08 → 1.09 | 0 | 0 |
+
+Why: de-shoaling a 13-17 s swell from 36-58 m to deep water raises H0 by a few per cent
+(Ks < 1 at those depths), so breaking heights rise by about 4-6 % at Mavericks and Ocean
+Beach; at 96.5 m (Rincon) only the longest periods are affected, and 758.7 m is deep water
+for every period; Trestles' measured β turns the shore normal 13° towards the west, which
+favours SW swells and disfavours S ones (cos(θ − β)); on this run the mean moved by
+−0.05 ft.
 
 **Calibrated model** (only when `surf_spots.calibration` has `a`, `b`, `c`):
 `Hb_ft = a·H0^b·T^c·R^d` (d defaults to 0.4).
@@ -137,6 +169,9 @@ relation (glassy / offshore / cross-offshore / cross-shore / cross-onshore / ons
 and a plain-English explanation, e.g.
 *"1.8 m @ 15 s SW swell, well aligned with the break; offshore wind 12 km/h from NE;
 approx. 5–8 ft faces vs. a working range of 3–12 ft; favourable tide."*
+Where sources disagree about which wind is offshore (forecast-confidence.md §3a) and the two
+directions give different relations, the wind part reads *"wind 12 km/h from NE, offshore or
+cross-shore: sources disagree"*; the score and `wind_relation` keep the profile's direction.
 
 ## 4. Daylight
 

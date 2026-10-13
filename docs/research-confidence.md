@@ -4,8 +4,9 @@ Source: `backend/app/services/research/` (`values.py`, `evidence.py`, `assess.py
 `views.py`, `cli.py`). Tables: `spot_research_sources`, `spot_research_claims`,
 `spot_research_assessments` (migration `0004_confidence_map_fields`;
 `spot_research_sources.retrieval` from `0005_research_retrieval`).
-Methodology version: `research-v1.1` (stored on every assessment row; section 3 lists what
-changed from `research-v1`).
+Methodology version: `research-v1.2` (stored on every assessment row; section 3 lists what
+changed from `research-v1` and `research-v1.1`). Profile decisions built on it: section 10
+and `data/surf_spots/profile_decisions.json` (ADR-018).
 
 ## 1. What it is, and what it is not
 
@@ -48,9 +49,26 @@ problem at once; the sync into the tables is idempotent (section 6).
 
 | Tier | `source_type` | Why |
 |------|---------------|-----|
-| A | `survey_data`, `peer_reviewed`, `official` | Measured, reviewed, or published by an accountable authority (government, harbour, marine park, event organiser). |
+| A | `survey_data`, `peer_reviewed`, `official` | Measured, reviewed, or published by an accountable authority with a mandate for the coast (see below). |
 | B | `guidebook`, `encyclopedia`, `surf_forecast_site`, `magazine` | Edited publications with a reputation to keep, but usually unreferenced and often copying each other. |
 | C | `community` | Forums, blogs and user-generated spot pages: useful leads, not confirmation. |
+
+Tier decisions applied in the evidence (written down in research-v1.2; the second research
+pass already applied them to the sources it read):
+
+* **`official`** means a government agency with a coastal or marine mandate (a city council
+  that manages its beaches, a sand-bypassing authority, a marine park), a national surfing
+  reserve, or a government geological or hydrographic survey (e.g. the U.S. Geological
+  Survey, Geological Survey Ireland). Measured survey products themselves (bathymetry
+  tiles, multibeam surveys) are `survey_data`.
+* **Tourism boards are `magazine` (tier B)**, even when they are government bodies: their
+  mandate is promotion, not the coast (e.g. Visit Half Moon Bay, Tourism Fiji, El Salvador
+  Travel, Visit Costa Rica). In research-v1.2 the seven first-pass tourism sources that
+  were still `official` (GoHawaii.com ×3, The Margaret River Region ×3, Visit Mexico; all
+  `web_search`) were reclassified to `magazine`; each says so in its `notes`.
+* **World Surf League editorial pages are `magazine` (tier B)**: event previews, "Break
+  Breakdown" and "Essentials" articles are journalism by the event organiser, not an
+  accountable statement about the coast.
 
 ### Independence
 
@@ -70,7 +88,7 @@ value (`values.py`):
 | `swell_direction` | `{"min", "max"}` degrees FROM, clockwise, may wrap through north; one bound may be omitted (`{"min": 320}`, "320° or more") | the window overlaps the profile's optimal window widened by 30° on each side; a one-bound value is compared as that single direction (the open side of a circular range is undefined) and is never exact |
 | `wind` | `{"offshore_from_deg"}` | within 45° of the profile's offshore wind direction |
 | `tide` | `{"tide"}` (`low`, `low_to_mid`, `mid`, `mid_to_high`, `high`, `all`) | same class, or adjacent on low → low_to_mid → mid → mid_to_high → high; `all` matches only `all`; not comparable when the profile has no tide preference |
-| `swell_size` | `{"min_ft", "max_ft"}` breaking **face** height in feet (one bound may be null or omitted) | the range overlaps the profile's working range |
+| `swell_size` | `{"min_ft", "max_ft"}` breaking **face** height in feet (one bound may be null or omitted) | the range overlaps the profile's working range **and** (research-v1.2) no stated bound is beyond 25 %: a stated maximum more than 25 % above the profile's maximum, or a stated minimum more than 25 % below the profile's minimum, contradicts that bound; a one-bound value is compared only on the bound it states; a narrower range (a maximum below, a minimum above the profile's) does not contradict |
 | `swell_period` | `{"min_s", "max_s"}` seconds (one bound may be null or omitted) | the range overlaps the profile's `min_swell_period_s` .. `ideal_swell_period_s` |
 | `seasonality` | `{"months": [..]}` | at least one month in common with `best_months`; not comparable when the profile lists none |
 | `bathymetry`, `local_behavior` | `null` (descriptive) | the researcher's flag; `null` counts as a supporting description |
@@ -82,13 +100,19 @@ structured value uses the researcher's flag (`null` = descriptive / not comparab
 
 Sizes must be breaking face heights. Offshore significant wave height and Hawaiian-scale
 numbers are not the same quantity; such a claim gets `value: null` unless the source
-itself states face heights.
+itself states face heights. **Record waves are not working ranges**: "the biggest wave
+ridden here was 80 ft" or the height of a named storm's waves says nothing about the sizes
+at which the break works, so such a claim gets `value: null` (research-v1.2; the one such
+value in the file, Mullaghmore's "about 60 ft" in two named storms, was removed). Likewise a
+claim whose own text says it cannot be compared with the profile (e.g. "scale not stated,
+probably swell height") carries no value: four such values were removed in research-v1.2,
+each noted on its source.
 
 An **exact** match (needed for one rule below) is stricter: direction-window ends and the
 offshore direction within 11.25° (the same 16-point compass name), the same tide class,
 both range bounds within 0.5 ft / 0.5 s, the same set of months.
 
-## 3. Per-variable rules (research-v1.1)
+## 3. Per-variable rules (research-v1.2)
 
 *Supporting* = the claim agrees (or, for `bathymetry` and `local_behavior`, describes
 without a judgement). *Contradicting* = it disagrees.
@@ -133,6 +157,13 @@ format accepts one-bound values (above). Rules 1-4 and the overall rule are unch
 Because the methodology version changed, the next assessment run inserts a new row for every
 spot and keeps the research-v1 rows as history (section 5).
 
+`research-v1.1` → `research-v1.2`: swell-size values are compared bound by bound (the 25 %
+tolerance in section 2; `values.SIZE_BOUND_TOLERANCE`), so a source that says a break holds
+30 ft no longer "agrees" with a 4-12 ft working range just because the ranges overlap. The
+tier decisions and the record-height rule above are written down (they change no code).
+Rules 1-5, the search-only cap and the overall rule are unchanged; the version bump again
+inserts one new assessment row per spot.
+
 Each variable stores (`spot_research_assessments.per_variable[<variable>]`): `class`,
 `label`, `sources` (pages), `independent_sources`, `independent_supporting`,
 `independent_contradicting`, `strongest_source_type` (of the supporting sources),
@@ -171,8 +202,12 @@ A variable without evidence gets a fixed gap sentence:
   sources of equal standing is a real uncertainty, and contradiction by stronger evidence
   means the profile itself may be wrong.
 * **Bathymetry needs measurement**: "shallow reef" in a guide is a description, not a
-  depth; the nearshore model has no measured depths for any spot today
-  (`SURF_SCORING.md`, physical profiles).
+  depth. Measured depths exist for four US spots only (NOAA BlueTopo, section 9): their
+  forecast-point depths and Trestles' shore normal feed the nearshore model; no spot has a
+  measured controlling depth (`SURF_SCORING.md`, physical profiles).
+* **Each size bound counts** (research-v1.2): overlap alone let "holds 30 ft" agree with a
+  12 ft maximum; a 25 % tolerance on each stated bound keeps the usual rounding of face
+  heights ("3-4 ft", "double overhead") from counting as disagreement.
 * **Recency only where the bottom moves**: a lava reef does not change in 15 years; a
   sandbar can change in one winter.
 
@@ -223,6 +258,12 @@ assessment run then adds one new row per spot.
 * `python -m app.cli research assess [--slug S] [--force]`: re-assess from the stored
   evidence (`--force` inserts a new row even when nothing changed).
 * `python -m app.cli research show SLUG`: per-variable classes, sources and gaps.
+* `python -m app.cli research lint [--decisions P] [--max-gap DEG]`: lists spots whose
+  offshore wind is more than 60° from straight offshore (the shore normal the model uses
+  + 180°) without a recorded reason, profile fields with contradicting evidence but no
+  decision record, kept or disputed records the rule no longer gives, and problems in
+  `profile_decisions.json` (exit 0 when nothing is listed, 1 with issues, 2 for an invalid
+  file). Section 10.
 
 Sync semantics: sources are upserted by (spot, `key`); a source's claims are replaced
 only when they changed; sources no longer in the file (including every source of a spot
@@ -250,7 +291,9 @@ exactly the ones it used.
    spelling every time, so pages of one publisher count once.
 3. Give a structured `value` only when the source states one: directions as degrees FROM
    (a named direction such as "W–NW" becomes `{"min": 270, "max": 315}`), sizes only as
-   face heights in feet, periods in seconds. Otherwise use `null`.
+   face heights in feet and only as a working range (never a record wave or a named
+   storm's waves), periods in seconds. Otherwise use `null`. A claim you judge not
+   comparable with the profile gets `null`, not a value with `agrees: null`.
 4. Set `agrees` to your own judgement against the profile (`true` / `false` / `null`).
    The code recomputes it where a value exists; differences are kept for review.
 5. Record gaps and conflicts you found in the spot's `notes`.
@@ -311,41 +354,126 @@ Validation (all problems are reported together; nothing is written when there is
   `agrees` (`true` / `false` / `null`);
 * unknown fields are rejected, so typos do not pass silently.
 
-## 9. The committed evidence file (2026-10-11)
+## 9. The committed evidence file
 
-`data/surf_spots/research_evidence.json` holds the evidence assembled on 2026-10-11 for all
-50 spots: 259 sources and 805 claims from domain-restricted web searches (one publisher per
-query), every source and claim re-checked by an independent verifier with its own searches.
-Direct page access was blocked by the research environment's network policy, so **every
-source has `"retrieval": "web_search"`**: the excerpts are the search tool's text about the
-pages, not quotations from the pages. Source types: 60 magazine, 60 official, 52 surf
-forecast site, 39 community, 38 encyclopedia, 5 peer-reviewed, 4 guidebook, 2 survey data.
-Sixteen claims state only one bound (e.g. "up to 30 ft", "320° or more"), which the format
-accepts since research-v1.1.
+`data/surf_spots/research_evidence.json` holds two research passes and the measured
+bathymetry:
 
-Loaded with `research load` on a fresh database (2026-10-12, research-v1.1):
+* **First pass (2026-10-11).** 259 sources and 805 claims from domain-restricted web
+  searches while direct page access was blocked, all `retrieval: web_search` (ADR-016).
+* **Second pass (2026-10-12).** Every source that could be read was re-read: 449 sources,
+  384 read directly (`fetched`; excerpts confirmed verbatim on the page, every claim judged
+  by an independent verifier: supported, correctly encoded, correct agreement), 1,711
+  claims. The 65 sources behind bot protection are kept unchanged from the first pass as
+  `web_search`. Publication years come from page metadata or visible dates (the
+  last-modified year for continuously edited pages), `null` when the page has none.
+  Assessed with research-v1.1: 34 spots Moderate, 16 Low, none High.
+* **Research-v1.2 corrections (2026-10-13)**, each noted on its source: seven first-pass
+  tourism sources `official` → `magazine` (section 2), values removed from four claims
+  whose own text says they cannot be compared (two "scale not stated, probably swell
+  height" sizes, a year-round "best season", a wind-sea hindcast direction at Uluwatu) and
+  one record height (Mullaghmore).
+* **NOAA BlueTopo bathymetry (2026-10-13).** 19 tiles for Mavericks, Ocean Beach, Trestles
+  and Rincon, each a `survey_data` source read directly (the GeoTIFF and its raster
+  attribute table, checksums verified against the BlueTopo tile scheme) with a bathymetry
+  claim stating the measured depths; the excerpt is verbatim on the BlueTopo
+  specifications page and in each tile's ImageDescription tag
+  (`scripts/bathymetry_profiles.py`, `SURF_SCORING.md` physical profiles).
 
-| Variable | High | Moderate | Low | `cap:search_only` fired |
-|---|---:|---:|---:|---:|
-| Swell direction | 0 | 43 | 7 | 19 |
-| Swell size | 0 | 25 | 25 | 15 |
-| Swell period | 0 | 12 | 38 | 3 |
-| Wind | 0 | 32 | 18 | 10 |
-| Tide | 0 | 16 | 34 | 6 |
-| Bottom / bathymetry | 0 | 30 | 20 | 3 |
-| Season | 0 | 29 | 21 | 12 |
-| How the wave breaks | 0 | 36 | 14 | 20 |
-| **Overall** | **0** | **18** | **32** | |
+Totals now: **468 sources, 403 read directly, 65 search summaries, 1,730 claims**. Source
+types: 176 magazine, 147 community, 55 surf forecast site, 41 encyclopedia, 20 survey data,
+12 official, 10 peer-reviewed, 7 guidebook.
 
-**No spot is High overall**, because rule 5 caps every variable at Moderate when all of its
-support is search-only, and in this file all of it is. Without the cap (the research-v1
-rules on the same evidence) Jaws, Sunset Beach and The Box would be High overall (and 19
-spots High on swell direction). Examples: Jaws is Moderate (swell direction, size, wind,
-bathymetry, season and local behaviour capped from High; gaps: swell period supported by
-only one forecast-site source (Low), and swell direction, wind and size seen only as search
-summaries); Pipeline is Moderate (no
-swell-size claim, a single source for wind, tide, period and season, bathymetry capped as
-unmeasured); Nazaré is Low (a single forecast-site source for swell direction, no evidence
-for size, period, bathymetry or local behaviour, and no listed tide preference to compare
-with).
+Loaded with `research load` on a fresh database (2026-10-13, research-v1.2, with the profile
+changes of section 10); the research-v1.1 column is the second pass before this work:
 
+| Variable | High | Moderate | Low | research-v1.1 (H / M / L) |
+|---|---:|---:|---:|---|
+| Swell direction | 25 | 23 | 2 | 24 / 23 / 3 |
+| Swell size | 4 | 23 | 23 | 11 / 30 / 9 |
+| Swell period | 4 | 16 | 30 | 4 / 16 / 30 |
+| Wind | 11 | 26 | 13 | 11 / 26 / 13 |
+| Tide | 4 | 14 | 32 | 4 / 12 / 34 |
+| Bottom / bathymetry | 11 | 36 | 3 | 9 / 38 / 3 |
+| Season | 24 | 23 | 3 | 24 / 23 / 3 |
+| How the wave breaks | 38 | 10 | 2 | 38 / 10 / 2 |
+| **Overall** | **0** | **35** | **15** | 0 / 34 / 16 |
+
+What moved, step by step (each measured with the assessment code on the files):
+
+1. the size bound rule alone changed 16 swell-size classes (Sunset Beach, Cloudbreak,
+   Jeffreys Bay and Supertubos High → Low, Jaws High → Moderate, 11 spots Moderate → Low):
+   size evidence now contradicts the profile at 25 spots instead of 1, and a conflict rule
+   fires at 19 instead of 0;
+2. the evidence corrections lifted Uluwatu's swell direction from Low to High (the
+   wind-sea hindcast no longer counts against the groundswell window), and the tourism
+   reclassification lowered Waimea Bay's and Puerto Escondido's swell size from High to
+   Moderate (their tier-A support had been a tourism board);
+3. BlueTopo made bathymetry High at Trestles and Rincon;
+4. the profile changes made Ocean Beach's and Punta Roca's tide and Cloudbreak's size Low →
+   Moderate, which lifted Ocean Beach from Low to Moderate overall (the only change of an
+   overall class). Snapper Rocks' tide stays Low: after the change to `all`, a search
+   summary of the same tier (Surfer Today, low to mid) still contradicts.
+
+Research basis for local confidence (`forecast-confidence.md` §3): High 8 → 3, Moderate
+30 → 23, Low 12 → 24 spots, almost entirely through the size rule.
+
+The search-only cap (rule 5) fires for no variable: every variable with supporting evidence
+has at least one directly read supporting source. **No spot is High overall**: only Rincon
+and Kirra have swell direction, size and wind all High, and both have a Low tide (an
+unresolved same-tier conflict about the tide).
+
+## 10. Profile decisions and `research lint` (ADR-018)
+
+The assessment says where the evidence contradicts a profile; `profile_decisions.json`
+records what was done about it, one record per spot and profile field (offshore wind
+direction, optimal swell window, working size range, tide preference, best months) whose
+current assessment has a contradicting source:
+
+```json
+{"slug": "chicama", "field": "offshore_wind_direction", "old_value": 150.0,
+ "new_value": null, "decision": "disputed", "alternative": 67.5,
+ "sources": ["chicamasurftrips-about", "..."], "rationale": "...",
+ "decided_at": "2026-10-13", "sensitivity": {"...": "..."}, "model_wind": {"...": "..."}}
+```
+
+The rule (`app.services.research.decisions.propose`, applied mechanically):
+
+* **changed** only when at least two independent publishers whose pages were read directly
+  state values that contradict the profile and agree with one new value within the
+  agreement tolerances of section 2, and every directly read source supporting the old
+  value is of a strictly lower tier than both of them. The new value is one a source
+  states (the most central of the agreeing ones), never an average; a single direction
+  never becomes a new swell window;
+* **kept** when only search summaries contradict, when the directly read contradicting
+  sources are of a lower tier than the directly read supporting ones, or when one publisher
+  contradicts and at least two directly read publishers of the same or a higher tier
+  support the profile;
+* **disputed** otherwise (the contradiction is real but not resolved).
+
+For the offshore wind every record also reports the model wind at the forecast point (GFS
+and ECMWF 10-day forecasts of 2026-10-11 in the read-only database `swell_live2`): its
+vector-mean direction and the share of hours within 45° of the profile's direction and of
+the main contradicting one. That is a short sample 15-20 km offshore, not a climatology, and
+it says which winds blow, not which are offshore; it bears on the question only where a
+directly read source says the prevailing wind is offshore (`supports_change`), and it never
+decides. Every record with a candidate value carries the before/after effect on the real
+2026-10-11 blend run (`scripts/profile_sensitivity.py`, read-only).
+
+Result (2026-10-13): **82 records: 4 changed, 45 disputed, 33 kept**, plus 6 geometry notes.
+No wind record met the rule (10 disputed, 10 kept); the changes are Ocean Beach, Snapper
+Rocks and Punta Roca tide → `all` and Cloudbreak's working range 4-20 → 2-20 ft. Where the
+assessment fires a conflict rule on wind, or a record says the wind is disputed, every
+forecast hour says "Sources disagree about which wind is offshore here."
+(`forecast-confidence.md`, forecast-v1.1).
+
+`research lint` also lists spots whose offshore wind is more than 60° from straight
+offshore for the shore normal the model uses (the measured one, else the centre of the
+optimal swell window) unless a record covers the offshore wind: a decision record, or a
+geometry note with reason `wave_face` (at a point or wrapping reef the offshore wind is for
+the wave face, and a directly read source supports the profile's direction) or
+`stated_orientation` (a directly read source or a measurement gives the break's
+orientation). Of the 19 spots over 60°, 12 have wind decision records and 6 have notes
+(Rincon, Punta de Lobos, Padang Padang, Burleigh Heads, Safi: `wave_face`; Bells Beach:
+`stated_orientation`); **Restaurants** remains listed, because no source describes the
+reef's orientation or the wave wrapping.
