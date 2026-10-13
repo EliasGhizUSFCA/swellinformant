@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.core.config import get_settings
+from app.services.surf_quality.forecast_confidence import lead_phrase
 
 LABELS = {
     "poor": "Poor",
@@ -98,12 +99,46 @@ def _height(s: dict[str, Any]) -> str:
     return text
 
 
+CONFIDENCE_WORDS = {"high": "High", "moderate": "Moderate", "low": "Low"}
+
+
+def _forecast_confidence(s: dict[str, Any]) -> str:
+    """'Moderate — about 6 days away' (forecast-v1 class at the event's peak hour, as in
+    the API; the distance is from when the alert was built). Older snapshots without the
+    class show the 0-100 index as before."""
+    cls = s.get("forecast_confidence_class")
+    if not cls:
+        return f"{s['confidence_label'].title()} ({s['confidence']}/100)"
+    text = CONFIDENCE_WORDS.get(str(cls), str(cls).title())
+    ahead = s.get("peak_in_hours")
+    lead = lead_phrase(ahead if ahead is not None else s.get("confidence_lead_hours"))
+    return f"{text} — {lead}" if lead else text
+
+
+def _local_confidence(s: dict[str, Any]) -> str | None:
+    """'Low — How this break responds ...': the reason only when local confidence is
+    lower than forecast confidence (``local_confidence_reason``, as in the API)."""
+    cls = s.get("local_confidence_class")
+    if not cls:
+        return None
+    text = CONFIDENCE_WORDS.get(str(cls), str(cls).title())
+    reason = s.get("local_confidence_reason")
+    return f"{text} — {reason}" if reason else text
+
+
 def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
     swell = (
         f"{s['swell_height_m']} m @ {s['swell_period_s']} s from {s['swell_direction']}"
         if s.get("swell_height_m") is not None
         else "—"
     )
+    # Forecast confidence (the offshore forecast) and confidence at this break (the
+    # breaking-wave estimate, which also depends on spot research) are separate rows and
+    # are never merged into one number.
+    local = _local_confidence(s)
+    confidence = [("Forecast confidence", _forecast_confidence(s))]
+    if local:
+        confidence.append(("Confidence at this break", local))
     rows = [
         ("Destination", f"{s['spot_name']}, {s['country']}"),
         ("Swell dates", s["window_label"]),
@@ -117,7 +152,7 @@ def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
             "Predicted quality",
             f"{LABELS.get(s['peak_label'], s['peak_label'])} ({s['peak_score']}/100)",
         ),
-        ("Forecast confidence", f"{s['confidence_label'].title()} ({s['confidence']}/100)"),
+        *confidence,
         (
             "Forecast updated",
             fmt_utc(s.get("forecast_issued"))

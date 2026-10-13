@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.database import utcnow
 from app.models import (
@@ -42,10 +42,13 @@ from app.schemas.spots import (
     SpotMini,
     SpotSummary,
 )
-from app.services.forecasts.queries import USABLE, is_stale, latest_runs_by_spot
+from app.services.forecasts.queries import USABLE, is_stale, latest_runs_by_spot, run_id_is_stale
 from app.services.forecasts.registry import configured_source_codes
+from app.services.research.views import research_classes, research_out
 from app.services.surf_quality.breaking import dominant_component
+from app.services.surf_quality.forecast_confidence import api_fields
 from app.services.surf_quality.scoring import label_for_score
+from app.services.swell_detection.service import peak_confidence
 
 MODEL_SERIES_STEP_HOURS = 3
 
@@ -70,6 +73,9 @@ def event_out(
     event: SwellEvent, now: datetime | None = None, include_history: bool = False
 ) -> EventOut:
     now = now or utcnow()
+    # The read-time staleness rule, as for the same hour in the forecast (_conditions).
+    db = object_session(event)
+    stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
     return EventOut(
         id=event.id,
         spot=spot_mini(event.spot),
@@ -98,12 +104,19 @@ def event_out(
         is_demo=event.is_demo,
         source_code=event.source_code,
         history=event.history if include_history else [],
+        **peak_confidence(event, stale=stale),
     )
 
 
 def _conditions(
-    p: SurfQualityPrediction, f: WaveForecast, run: ForecastRun | None = None
+    p: SurfQualityPrediction,
+    f: WaveForecast,
+    run: ForecastRun | None = None,
+    *,
+    stale: bool = False,
 ) -> Conditions:
+    """One forecast hour. ``stale``: the run has gone stale since it was scored, so the
+    stored confidence classes are capped at Moderate (forecast_confidence.api_fields)."""
     source = run.source if run is not None else None
     main = dominant_component(p, f)  # the component that drives the surf, not "swell 1"
     return Conditions(
@@ -134,6 +147,7 @@ def _conditions(
         confidence=p.confidence,
         confidence_label=p.confidence_label.value,
         is_daylight=p.is_daylight,
+        **api_fields(p, stale=stale),
     )
 
 
@@ -159,6 +173,7 @@ def spot_summaries(
     spots = db.scalars(select(SurfSpot).where(SurfSpot.is_active).order_by(SurfSpot.name)).all()
     runs = latest_runs_by_spot(db, now)
     run_ids = {r.id for r in runs.values()}
+    stale = {r.id: is_stale(r, now) for r in runs.values()}
 
     current: dict[int, Conditions] = {}
     best: dict[int, Conditions] = {}
@@ -176,10 +191,11 @@ def spot_summaries(
         for p, f in rows:
             if runs.get(p.spot_id) is None or runs[p.spot_id].id != p.run_id:
                 continue
+            run = runs[p.spot_id]
             if p.spot_id not in current and p.valid_time >= now - timedelta(minutes=30):
-                current[p.spot_id] = _conditions(p, f, runs[p.spot_id])
+                current[p.spot_id] = _conditions(p, f, run, stale=stale[run.id])
             if p.is_daylight and (p.spot_id not in best or p.score > best[p.spot_id].score):
-                best[p.spot_id] = _conditions(p, f, runs[p.spot_id])
+                best[p.spot_id] = _conditions(p, f, run, stale=stale[run.id])
 
     events: dict[int, list[SwellEvent]] = defaultdict(list)
     for e in db.scalars(
@@ -189,6 +205,7 @@ def spot_summaries(
     ).all():
         events[e.spot_id].append(e)
 
+    research = research_classes(db)  # one query for all spots
     out: list[SpotSummary] = []
     for s in spots:
         upcoming = events.get(s.id, [])
@@ -199,6 +216,7 @@ def spot_summaries(
                 best_upcoming=best.get(s.id),
                 next_event=event_out(upcoming[0], now) if upcoming else None,
                 upcoming_event_count=len(upcoming),
+                research_class=research.get(s.id),
             )
         )
     return out
@@ -207,8 +225,11 @@ def spot_summaries(
 def spot_detail(db: Session, spot: SurfSpot, now: datetime | None = None) -> SpotDetail:
     summary = next((s for s in spot_summaries(db, now) if s.id == spot.id), None)
     base = summary.model_dump() if summary else _summary_fields(spot)
+    research = research_out(db, spot.id)
+    base["research_class"] = research.research_class if research else None
     return SpotDetail(
         **base,
+        research=research,
         forecast_latitude=spot.forecast_latitude,
         forecast_longitude=spot.forecast_longitude,
         swell_window_min=spot.swell_window_min,
@@ -277,13 +298,21 @@ def daily_summaries(points: list[ForecastPoint], tz: str) -> list[DailySummary]:
                 avg_wind_kmh=round(sum(winds) / len(winds), 1) if winds else None,
                 good_hours=sum(1 for p in items if p.score >= 57),
                 confidence=round(sum(p.confidence for p in items) / len(items)),
+                forecast_confidence_class=top.forecast_confidence_class,
+                local_confidence_class=top.local_confidence_class,
             )
         )
     return out
 
 
 def forecast_points(
-    db: Session, run_id: int, spot_id: int, start: datetime, end: datetime
+    db: Session,
+    run_id: int,
+    spot_id: int,
+    start: datetime,
+    end: datetime,
+    *,
+    stale: bool = False,
 ) -> list[ForecastPoint]:
     rows = db.execute(
         select(SurfQualityPrediction, WaveForecast)
@@ -338,6 +367,7 @@ def forecast_points(
             wind_relation=p.wind_relation,
             explanation=p.explanation,
             components=p.components,
+            **api_fields(p, stale=stale),
         )
         for p, f in rows
     ]
@@ -505,7 +535,8 @@ def spot_forecast(
         )
     start = now - timedelta(hours=3)
     end = now + timedelta(days=days)
-    points = forecast_points(db, run.id, spot.id, start, end)
+    stale = is_stale(run, now)
+    points = forecast_points(db, run.id, spot.id, start, end, stale=stale)
     source = run.source
     # Report the method the stored predictions actually used.
     method = points[0].breaking_height_method if points else None
@@ -530,7 +561,7 @@ def spot_forecast(
             atmosphere_model_run_at=run.atmosphere_model_run_at,
             status=run.status.value,
         ),
-        stale=is_stale(run, now),
+        stale=stale,
         breaking_height_method=method,
         algorithm_version=points[0].algorithm_version if points else None,
         calibrated=bool(spot.calibration),
@@ -592,6 +623,7 @@ def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) 
     target = target.replace(minute=0, second=0, microsecond=0)
 
     conditions: dict[int, Conditions] = {}
+    stale = {r.id: is_stale(r, now) for r in runs.values()}
     if run_ids:
         window = timedelta(minutes=90)
         rows = db.execute(
@@ -611,7 +643,7 @@ def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) 
             gap = abs((p.valid_time - target).total_seconds())
             if gap < best_gap.get(p.spot_id, float("inf")):
                 best_gap[p.spot_id] = gap
-                conditions[p.spot_id] = _conditions(p, f, run)
+                conditions[p.spot_id] = _conditions(p, f, run, stale=stale[run.id])
 
     covering: dict[int, int] = defaultdict(int)
     upcoming: dict[int, int] = defaultdict(int)

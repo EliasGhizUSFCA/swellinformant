@@ -25,18 +25,11 @@ from app.models import BackgroundJobLog
 from app.models.enums import JobStatus
 from app.services.http import TransientProviderError
 from app.workers.celery_app import celery_app
+from app.workers.schedule import DATA_HEALTH_TASK, NEXT_STAGE
 
 logger = logging.getLogger(__name__)
 
-NEXT_STAGE = {
-    "forecasts.acquire": "forecasts.blend",
-    "forecasts.blend": "quality.predict",
-    "quality.predict": "detection.detect",
-    "detection.detect": "matching.match",
-    "matching.match": "flights.discover",
-    "flights.discover": "alerts.generate",
-    "alerts.generate": "notifications.deliver",
-}
+__all__ = ["NEXT_STAGE", "run_job"]
 
 
 def run_job(
@@ -211,6 +204,32 @@ def acquire_ensemble_task(self: Task) -> dict[str, Any]:
     )
 
 
+@celery_app.task(
+    name="forecasts.map_fields",
+    bind=True,
+    autoretry_for=(TransientProviderError,),
+    retry_backoff=120,
+    max_retries=2,
+)
+def acquire_map_fields_task(self: Task) -> dict[str, Any]:
+    """Global map fields on their own (standalone mode only; otherwise a no-op).
+
+    In "with_noaa" mode the NOAA acquisition stores the fields itself; with "off" nothing
+    is fetched (see app.services.map_fields.map_fields_mode).
+    """
+    from app.core.config import get_settings
+    from app.services.forecasts.ingestion import acquire_map_fields
+    from app.services.map_fields import map_fields_mode
+
+    def job(db: Session) -> dict[str, Any]:
+        mode = map_fields_mode(get_settings())
+        if mode != "standalone":
+            return {"skipped": f"map fields mode is {mode!r}, not 'standalone'"}
+        return acquire_map_fields(db)
+
+    return run_job("forecasts.map_fields", job, task_id=self.request.id, lock_ttl=3600, chain=False)
+
+
 @celery_app.task(name="observations.ingest", bind=True)
 def ingest_observations(self: Task) -> dict[str, Any]:
     """Buoy observations for verification and training (OBSERVATIONS_ENABLED)."""
@@ -247,6 +266,16 @@ def check_staleness(self: Task) -> dict[str, Any]:
         return {"stale_sources": stale}
 
     return run_job("forecasts.check_staleness", check, task_id=self.request.id, chain=False)
+
+
+@celery_app.task(name=DATA_HEALTH_TASK, bind=True)
+def data_health_task(self: Task) -> dict[str, Any]:
+    """Data-health check; emails admin users when it degrades and when it recovers."""
+    from app.services.notifications.ops_alerts import run_data_health_check
+
+    return run_job(
+        DATA_HEALTH_TASK, run_data_health_check, task_id=self.request.id, lock_ttl=600, chain=False
+    )
 
 
 # ---------------------------------------------------------------- transactional messages

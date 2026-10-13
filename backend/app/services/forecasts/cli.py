@@ -1,6 +1,8 @@
 """``python -m app.cli engine ...``: forecast-engine commands (see app.cli.PLUGIN_GROUPS).
 
 python -m app.cli engine ensemble [--force] [--members]   # GEFS-Wave mean/spread, prints JSON
+python -m app.cli engine map-fields [--cycle YYYYMMDDHH] [--max-lead-hours N] [--force]
+    # global map fields (ocean layers) of the newest complete GFS cycle, prints JSON
 
 To add a subcommand, write ``_add_<name>(subparsers)`` that adds its parser and sets
 ``handler`` with ``set_defaults``, then append the function to SUBCOMMANDS.
@@ -11,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 GROUP = "engine"
@@ -51,11 +54,73 @@ def _add_ensemble(sub: SubParsers) -> None:
     p.set_defaults(handler=_run_ensemble)
 
 
-SUBCOMMANDS: list[Callable[[SubParsers], None]] = [_add_ensemble]
+def _cycle(text: str) -> datetime:
+    try:
+        return datetime.strptime(text, "%Y%m%d%H").replace(tzinfo=UTC)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected YYYYMMDDHH, got {text!r}") from exc
+
+
+def _lead_hours(text: str) -> int:
+    value = int(text)
+    if not 0 <= value <= 384:
+        raise argparse.ArgumentTypeError("--max-lead-hours must be between 0 and 384")
+    return value
+
+
+def _run_map_fields(args: argparse.Namespace) -> int:
+    from app.core.config import get_settings
+    from app.core.database import SessionLocal
+    from app.services.forecasts.ingestion import acquire_map_fields
+    from app.services.map_fields import map_fields_mode
+
+    mode = map_fields_mode(get_settings())
+    if mode == "off":
+        print(
+            json.dumps(
+                {
+                    "status": "off",
+                    "message": "map fields are off: set MAP_FIELDS_ENABLED=true, or leave it "
+                    "unset and add noaa_gfs to FORECAST_PROVIDERS",
+                }
+            )
+        )
+        return 1
+    with SessionLocal() as db:
+        result = acquire_map_fields(
+            db, cycle=args.cycle, max_lead_hours=args.max_lead_hours, force=args.force
+        )
+    print(json.dumps({"mode": mode, **result}, indent=2, default=str))
+    return 1 if result.get("status") == "failed" else 0
+
+
+def _add_map_fields(sub: SubParsers) -> None:
+    p = sub.add_parser(
+        "map-fields",
+        help="fetch the global map fields (ocean layers) of the newest complete GFS cycle",
+        description=(
+            "Reads HTSGW, PERPW and DIRPW (GFS-Wave global.0p25) and 10 m wind and MSL "
+            "pressure (GFS pgrb2.0p25) for every map hour, regrids them to "
+            "MAP_FIELD_RESOLUTION_DEG and stores them under the source noaa_gfs_fields. "
+            "Works in every map-fields mode except off; skips a cycle whose fields are "
+            "already stored. Prints counts, bytes and the duration as JSON."
+        ),
+    )
+    p.add_argument("--cycle", type=_cycle, help="GFS cycle YYYYMMDDHH (default: newest complete)")
+    p.add_argument(
+        "--max-lead-hours",
+        type=_lead_hours,
+        help="last forecast hour (default MAP_FIELD_MAX_LEAD_HOURS)",
+    )
+    p.add_argument("--force", action="store_true", help="re-fetch fields that are already stored")
+    p.set_defaults(handler=_run_map_fields)
+
+
+SUBCOMMANDS: list[Callable[[SubParsers], None]] = [_add_ensemble, _add_map_fields]
 
 
 def register(subparsers: SubParsers) -> None:
-    parser = subparsers.add_parser(GROUP, help="ensemble, blending and spot profiles")
+    parser = subparsers.add_parser(GROUP, help="ensemble, map fields, blending and spot profiles")
     nested = parser.add_subparsers(dest="engine_cmd", required=True)
     for add in SUBCOMMANDS:
         add(nested)

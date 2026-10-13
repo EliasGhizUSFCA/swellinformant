@@ -19,10 +19,10 @@ limitations.
 | 11 | Matching and ranking | Per-search sub-windows, 5–10 day lead time, opportunity score, ranking profiles |
 | 12 | Email and SMS alerts | Console/SMTP/Resend/SendGrid and console/Twilio, dedup, follow-ups, daily cap, unsubscribe, STOP |
 | 13 | Frontend | Landing, auth, dashboard, wizard, live map, spot detail, opportunity detail, search management, notification history, settings, status |
-| 14 | Database | 24 tables, one Alembic migration, round-trip tested (upgrade → downgrade → upgrade, plus model/migration diff) |
+| 14 | Database | 41 tables, five Alembic migrations (0001-0005), round-trip tested (upgrade → downgrade → upgrade, plus model/migration diff) |
 | 15 | Background jobs | Jobs A–H, beat schedule, chaining, Redis locks, retries, job log, startup kick-off |
 | 16 | Security | Argon2id, opaque sessions, CSRF, rate limits, lockout, CSP and headers, log redaction, no secrets in client bundle |
-| 18 | Tests | 171 backend (unit + integration), 29 frontend unit, 5 Playwright e2e. See below |
+| 18 | Tests | 171 backend (unit + integration), 29 frontend unit, 5 Playwright e2e at the first build (2026-10-09); later counts in UPGRADE_REPORT.md. See below |
 | 19 | Docker | `docker compose up --build` verified: all services healthy, worker runs jobs and delivers alerts, Mailpit profile delivers SMTP |
 | 20 | README | Sections A–K. Every command was run against this repository (Docker and non-Docker paths, from a fresh clone) |
 

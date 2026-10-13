@@ -236,6 +236,29 @@ class TestTemplates:
             assert expected in text, expected
         assert "https://app/u?t=1" in html and "https://app/settings#alerts" in html
 
+    def test_forecast_and_local_confidence_in_words(self) -> None:
+        snap = {
+            **SNAP,
+            "forecast_confidence_class": "moderate",
+            "local_confidence_class": "low",
+            "confidence_lead_hours": 146.0,
+            "local_confidence_reason": "How this break responds to swell is not well documented yet.",
+        }
+        _, text, html = render_alert_email(snap, LINKS)
+        assert "Forecast confidence: Moderate — about 6 days away" in text
+        assert (
+            "Confidence at this break: Low — How this break responds to swell is not well "
+            "documented yet." in text
+        )
+        assert "60/100" not in text and "Moderate — about 6 days away" in html
+        # The distance is measured from when the alert was built, when that is known.
+        _, sent_later, _ = render_alert_email({**snap, "peak_in_hours": 130.0}, LINKS)
+        assert "Forecast confidence: Moderate — about 5 days away" in sent_later
+        # Snapshots from before forecast-v1 keep the index wording.
+        _, legacy, _ = render_alert_email(SNAP, LINKS)
+        assert "Forecast confidence: Moderate (60/100)" in legacy
+        assert "Confidence at this break" not in legacy
+
     def test_demo_and_mock_are_labelled(self) -> None:
         demo = {**SNAP, "is_demo_forecast": True, "is_mock_flight": True}
         subject, text, _ = render_alert_email(demo, LINKS)

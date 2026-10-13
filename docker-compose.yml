@@ -24,6 +24,12 @@ x-backend-env: &backend-env
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000}}
   COOKIE_SECURE: ${COOKIE_SECURE:-false}
   RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  # Reverse proxies in front of the API that set or append X-Forwarded-For (rate limits use
+  # the client IP they forward). The frontend's /api proxy passes the header on unchanged
+  # and adds no entry, so it does not count: 1 = the TLS proxy (Caddy, nginx with
+  # $proxy_add_x_forwarded_for) in front of the frontend. Without such a proxy the header
+  # is whatever the client sent.
+  TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
   FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-demo}
   FORECAST_DAYS: ${FORECAST_DAYS:-16}
   FORECAST_REFRESH_MINUTES: ${FORECAST_REFRESH_MINUTES:-180}
@@ -43,7 +49,21 @@ x-backend-env: &backend-env
   VERIFICATION_ENABLED: ${VERIFICATION_ENABLED:-false}
   ML_CORRECTIONS_ENABLED: ${ML_CORRECTIONS_ENABLED:-true}
   ML_ARTIFACT_DIR: /var/lib/swell-ml
+  # Map ocean layers: empty = automatic (on with noaa_gfs), true = standalone, false = off.
+  MAP_FIELDS_ENABLED: ${MAP_FIELDS_ENABLED:-}
+  # Retention (maintenance.cleanup, daily 03:30 UTC); sizes per day in docs/operations.md.
+  RETENTION_FORECAST_DAYS: ${RETENTION_FORECAST_DAYS:-10}
+  RETENTION_FLIGHT_DAYS: ${RETENTION_FLIGHT_DAYS:-30}
+  RETENTION_JOB_LOG_DAYS: ${RETENTION_JOB_LOG_DAYS:-30}
+  RETENTION_NOTIFICATION_DAYS: ${RETENTION_NOTIFICATION_DAYS:-365}
   RETENTION_ARCHIVE_DAYS: ${RETENTION_ARCHIVE_DAYS:-730}
+  # Data health (GET /api/health/data, job ops.data_health) and the admin email alerts.
+  DATA_HEALTH_CHECK_MINUTES: ${DATA_HEALTH_CHECK_MINUTES:-15}
+  DATA_HEALTH_ALERTS_ENABLED: ${DATA_HEALTH_ALERTS_ENABLED:-true}
+  DATA_HEALTH_ALERT_REPEAT_HOURS: ${DATA_HEALTH_ALERT_REPEAT_HOURS:-12}
+  DATA_HEALTH_HEARTBEAT_MINUTES: ${DATA_HEALTH_HEARTBEAT_MINUTES:-30}
+  DATA_HEALTH_OBSERVATION_STALE_HOURS: ${DATA_HEALTH_OBSERVATION_STALE_HOURS:-}
+  DATA_HEALTH_DATABASE_MAX_GB: ${DATA_HEALTH_DATABASE_MAX_GB:-}
   DETECTION_LEAD_MIN_DAYS: ${DETECTION_LEAD_MIN_DAYS:-5}
   DETECTION_LEAD_MAX_DAYS: ${DETECTION_LEAD_MAX_DAYS:-10}
   FLIGHT_PROVIDER: ${FLIGHT_PROVIDER:-demo}
@@ -80,7 +100,8 @@ x-backend: &backend
   build:
     context: .
     dockerfile: backend/Dockerfile
-  image: swell-travel-agent/backend:local
+  # Override BACKEND_IMAGE / FRONTEND_IMAGE to run a pinned, pre-built release tag.
+  image: ${BACKEND_IMAGE:-swell-travel-agent/backend:local}
   environment: *backend-env
   volumes:
     # Console email/SMS providers write here; shared so the API's /api/dev/outbox can read it.
@@ -162,13 +183,21 @@ services:
       retries: 3
       start_period: 30s
 
-  # Celery beat: the job scheduler (starts once the schema exists).
+  # Celery beat: the job scheduler (starts once the schema exists). Run exactly one.
   beat:
     <<: *backend
     command: ["beat"]
     depends_on:
       backend:
         condition: service_healthy
+    # Beat rewrites its schedule file whenever it sends tasks (notifications.deliver every
+    # 2 min, synced at least every 3 min); a file untouched for 10 min means beat is stuck.
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp -maxdepth 1 -name 'celerybeat-schedule*' -mmin -10 | grep -q ."]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   frontend:
     build:
@@ -181,7 +210,7 @@ services:
         NEXT_PUBLIC_MAP_TILE_URL: ${NEXT_PUBLIC_MAP_TILE_URL:-}
         NEXT_PUBLIC_MAP_ATTRIBUTION: ${NEXT_PUBLIC_MAP_ATTRIBUTION:-}
         MAP_TILE_HOSTS: ${MAP_TILE_HOSTS:-}
-    image: swell-travel-agent/frontend:local
+    image: ${FRONTEND_IMAGE:-swell-travel-agent/frontend:local}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
@@ -204,7 +233,61 @@ services:
       - "${MAILPIT_SMTP_PORT:-1025}:1025"
     restart: unless-stopped  # the image ships its own health check
 
+  # Scheduled database backups (opt-in profile):
+  #   docker compose --profile backup up -d backup
+  # pg_dump (custom format) on start and then every BACKUP_INTERVAL_HOURS, keeping the
+  # BACKUP_KEEP newest and at most BACKUP_MAX_AGE_DAYS days (scripts/backup-db.sh). Files go
+  # to the "db-backups" volume, or to a host directory with BACKUP_HOST_DIR=/srv/swell-backups.
+  # Copy them off the server too. Restore: scripts/restore-db.sh --compose FILE.dump.
+  backup:
+    image: postgres:16-alpine
+    profiles: ["backup"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-swell}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-swell}
+      PGDATABASE: ${POSTGRES_DB:-swell}
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      BACKUP_MAX_AGE_DAYS: ${BACKUP_MAX_AGE_DAYS:-30}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_RETRY_MINUTES: ${BACKUP_RETRY_MINUTES:-30}
+    volumes:
+      - ./scripts:/scripts:ro
+      - ${BACKUP_HOST_DIR:-db-backups}:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    # After a reboot or a Docker restart, restart policies start every container at once,
+    # ignoring depends_on: wait for PostgreSQL (up to 10 min) before each backup, and retry
+    # a failed backup after BACKUP_RETRY_MINUTES instead of skipping a whole interval.
+    command:
+      - |
+        echo "database backups every $${BACKUP_INTERVAL_HOURS} h into /backups"
+        while true; do
+          tries=0
+          until pg_isready -q || [ $$tries -ge 60 ]; do tries=$$((tries + 1)); sleep 10; done
+          if /scripts/backup-db.sh; then
+            sleep $$((BACKUP_INTERVAL_HOURS * 3600))
+          else
+            echo "backup FAILED; next attempt in $${BACKUP_RETRY_MINUTES} min" >&2
+            sleep $$((BACKUP_RETRY_MINUTES * 60))
+          fi
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Unhealthy when the newest backup is older than the interval plus an hour.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - find /backups -maxdepth 1 -name 'swell-*.dump' -mmin -$$((BACKUP_INTERVAL_HOURS * 60 + 60)) | grep -q .
+      interval: 5m
+      timeout: 30s
+      retries: 1
+      start_period: 10m
+    restart: unless-stopped
+
 volumes:
   pgdata:
   outbox:
   ml-artifacts:
+  db-backups:

@@ -118,9 +118,8 @@ docker compose exec backend python -m app.cli make-admin you@example.com   # acc
 * Flights: `DUFFEL_ACCESS_TOKEN` (or Amadeus Enterprise credentials).
 * SMS: Twilio credentials and the STOP webhook.
 * Map: a tile provider key for more than light use.
-* Observations: network access to `www.ndbc.noaa.gov` to verify NDBC; newer AODN
-  delayed-mode Hm0 (2022+) to re-evaluate the correction; any nearshore surf-height
-  observations to validate breaking heights.
+* Observations: any nearshore surf-height observations to validate breaking heights (NDBC
+  was verified live in phase 3, §16).
 
 ## 8. Recommended next steps (by expected impact)
 
@@ -133,6 +132,240 @@ docker compose exec backend python -m app.cli make-admin you@example.com   # acc
    bathymetry) for the most-alerted spots.
 4. **Calibrate the quality score and the 80 % range** once observations exist (coverage
    check before calling it `calibrated`).
-5. Verify NDBC live and add NDBC-paired spots (Hawaii, California) to verification.
+5. ~~Verify NDBC live and add NDBC-paired spots (Hawaii, California) to verification.~~
+   Done in phase 3 (§16).
 6. Add an ECMWF/GEFS date check, a total ECMWF retry budget, and an advisory lock for
    concurrent `ml train` runs (review residuals).
+
+---
+
+# Phase 2: map redesign, simplified frontend, research and forecast confidence
+
+Branch `claude/funny-hamilton-49k2m3`, 2026-10-11 to 2026-10-12. Each part was built, then
+adversarially reviewed and fixed before it was merged.
+
+## 9. Interactive map ([`map-layers.md`](map-layers.md))
+
+* **Look and controls** (as in the reference screenshot): full-screen dark map (Natural
+  Earth land and borders, country and city labels), ocean colour field with animated
+  particles, layer tabs *Wind Speed / Wave Height / Wave Energy / Wave Period*, a
+  *Pressure* toggle (isobars every 4 hPa), *Settings* (units, particles, dark or street
+  basemap, every spot filter), a *Legend* drawer, locate-me, and a bottom timeline with day
+  labels, 3-hour ticks, a local-time bubble and play. Spot markers, the ranked list
+  ("Best spots now") and the spot panel are kept; on phones the panel is a bottom sheet.
+* **Data**: NOAA GFS-Wave (global 0.25°) and GFS fields, regridded to 0.5° (area-weighted
+  box means, directions as unit vectors), quantised to bytes and served by
+  `GET /api/map/fields`. They come with every NOAA acquisition, or from a standalone job
+  (`MAP_FIELDS_ENABLED=true`) next to demo spot forecasts. Measured on the real 12Z cycle of
+  2026-10-11: 81 steps to 240 h, 380 MB downloaded, 66 s, 39 MB stored; served wave height
+  equals an independent box mean of the raw NOAA cells within 0.05 m.
+* **Honesty**: the legend says these are offshore model values, not surf height; wave
+  energy is labelled as the deep-water approximation 0.49·Hs²·Te. Colour-field redraw at
+  1440×900: median 13.5 ms.
+* Review fixes included a phone attribution overlay that caught taps, run-keyed field
+  caching, trail fading, prefetch bandwidth, the job's skip and retention rules, and the
+  API middleware that stopped browsers from caching the fields.
+
+## 10. Simplified frontend
+
+* Primary information always visible: our breaking-height prediction with its 80 % range,
+  the rating ("Excellent Surf — 8.9/10") with a one-line reason derived from the actual
+  factors, the best upcoming window, wind, swell period and direction, and forecast
+  confidence. Secondary information (model comparison, tide and secondary swells, research
+  detail, scoring method, technical spot data, sources) sits behind "Why this rating?" and
+  other expandable sections or "Learn more" popovers that work by mouse, keyboard and touch.
+* Applied to the dashboard, spot list and detail pages, charts, travel opportunities, saved
+  searches, notifications and the map panel. A before/after inventory confirmed that every
+  measurement is still reachable; nothing needed for travel decisions was removed.
+
+## 11. Research confidence ([`research-confidence.md`](research-confidence.md))
+
+* Per spot and per condition: how well the break's ideal conditions are documented
+  (methodology `research-v1.1`). Source tiers (survey, peer-reviewed, official; guidebook,
+  encyclopedia, forecast-site guide, magazine; community), independence by publisher,
+  agreement computed against the spot profile, conflicts, recency at sand breaks; the
+  overall class is not an average and never rises with the number of filled fields.
+  Assessments are history rows (never updated), so earlier assessments stay available.
+* **Evidence**: `data/surf_spots/research_evidence.json`, all 50 spots, 259 sources and 805
+  claims, each re-checked by an independent verifier. Web pages could not be opened in the
+  build environment, so the evidence came from domain-restricted web searches and every
+  source is marked `retrieval: web_search`; such evidence is capped at Moderate
+  (ADR-016). Result: 18 spots Moderate, 32 Low, none High. Without the cap three spots
+  would be High.
+* **Second pass (2026-10-12)**: with direct page access every source that could be read was
+  re-read: 449 sources, 384 read directly (excerpts confirmed verbatim on the page, every
+  claim judged by an independent verifier), 1,711 claims; 65 sources behind bot protection
+  stay `web_search`. Result (research-v1.1): 34 Moderate, 16 Low, none High. Section 14
+  builds on it.
+
+## 12. Forecast confidence ([`forecast-confidence.md`](forecast-confidence.md))
+
+* Per forecast hour (`forecast-v1`): the 0–100 index class adjusted by lead time (at most
+  Moderate beyond 7 days, Low beyond 10, High at 3–7 days only with a small ensemble
+  spread), GEFS spread, disagreement between independent model families only (GFS and
+  GEFS share NCEP forcing and never confirm each other), run-to-run change, missing
+  variables, per-source staleness, verification where it exists and demo data. Plain
+  reasons are stored and shown; the classes are not probabilities.
+* *Local confidence* at the break = min(forecast class, research basis), with its own
+  reason. Research and forecast confidence are stored and shown separately and never
+  combined into one number; both are archived with every prediction.
+* **Staleness defect fixed** (ADR-015): with one 18 h limit, ECMWF (12-hourly, published
+  ~8 h after the cycle) dropped out of the blend for several hours every day. Limits are
+  now per source (NOAA 16 h, GEFS 18.5 h, ECMWF 25 h). On the real 2026-10-11 runs ECMWF
+  stayed in the blend 18 of 19 hours instead of 11.
+* Live distribution (2026-10-11 runs, 4,050 hours, High/Moderate/Low): 0–1 day
+  159/86/5, 1–3 days 544/239/17, 3–7 days 811/715/74, 7–10 days 0/920/280, beyond 10 days
+  0/0/200.
+
+## 13. Test results (2026-10-12, integrated branch)
+
+| Command | Result |
+|---|---|
+| `ruff check`, `ruff format`, `mypy app` | pass (150 files) |
+| `alembic upgrade head && alembic check` (to 0005) | pass, no drift |
+| `pytest tests/unit` / `pytest tests/integration` (separate processes) | **500 passed** / **186 passed** |
+| `npx tsc --noEmit && npx eslint . && npx vitest run` | pass, 147 tests |
+| `./scripts/run-e2e.sh` (production build, demo backend) | **51 passed** |
+
+Not verified: research classes against observed surf, forecast-confidence calibration
+(no nearshore observations), Safari/Firefox rendering of the map particles, and a
+long-running Celery beat refreshing the map fields.
+
+---
+
+# Phase 3: evidence-based spot profiles
+
+Branch `wf/spot-profiles`, 2026-10-13 ([`decisions.md`](decisions.md) ADR-018).
+
+## 14. Research-v1.2, profile decisions, measured bathymetry, disputed winds
+
+* **research-v1.2** ([`research-confidence.md`](research-confidence.md) §3, §9): swell-size
+  values are compared bound by bound (a stated maximum more than 25 % above the profile's,
+  or a minimum more than 25 % below, contradicts), record waves are not working ranges, and
+  the tier rules are written down (tourism boards and World Surf League editorial pages are
+  magazine). Seven tourism sources were reclassified and five values removed, each noted on
+  its source. On a fresh database: **35 Moderate, 15 Low, none High** (research-v1.1 on the
+  second pass: 34 / 16); swell size is now contradicted at 25 spots instead of 1, and the
+  research basis of local confidence falls (High 8 → 3, Low 12 → 24 spots).
+* **Profile decisions** (`data/surf_spots/profile_decisions.json`): 82 records for every
+  contradicted field (4 changed, 48 disputed, 30 kept) and 6 geometry notes, each with its
+  sources, rationale and before/after effect on the real 2026-10-11 run
+  (`scripts/profile_sensitivity.py`, read-only). A value changes only when two independent,
+  directly read publishers agree on it and outrank every direct source of the old value; no
+  offshore wind met that (11 disputed, 9 kept). Changed: Ocean Beach, Snapper Rocks and
+  Punta Roca tide → all, Cloudbreak 4-20 → 2-20 ft. Wind records report the model wind at
+  the forecast point (e.g. Chicama: from 163°, 99 % of hours within 45° of the profile's
+  150°, none within 45° of the disputed 67.5°); it never decides.
+* **Disputed winds** (forecast-v1.1, [`forecast-confidence.md`](forecast-confidence.md)
+  §3a): on the real run 15 spots carry "Sources disagree about which wind is offshore here."
+  on every hour (1,215 hours), and on 1,101 of them the explanation names both relations;
+  scores, `wind_relation` and both classes are unchanged by it.
+* **Measured bathymetry** (NOAA BlueTopo, `scripts/bathymetry_profiles.py`,
+  [`SURF_SCORING.md`](SURF_SCORING.md) physical profiles): survey depths at the forecast
+  points of Mavericks (57.9 m), Ocean Beach (36.4 m) and Rincon (96.5 m) and a measured
+  shore normal at Trestles (210.9°); Trestles' forecast point lies in BlueTopo's NBS
+  Generalization surface (no survey), so its depth stays unknown (deep water either way);
+  the other three contour normals failed the
+  documented acceptance rules and are kept in the provenance; no controlling depth, because
+  every break coordinate is a shoreline position. On the real run: Mavericks' mean central
+  breaking height 9.48 → 9.82 ft (mean |Δ score| 1.4), Ocean Beach 8.14 → 8.60 ft (0.21),
+  Trestles 5.77 → 5.72 ft (0.06), Rincon 1.08 → 1.09 ft (0). 19 tiles were added as
+  `survey_data` sources: 468 sources (403 read directly), 1,730 claims.
+* **`python -m app.cli research lint`**: of the 19 spots whose offshore wind is more than
+  60° from the estimated straight-offshore direction, 18 now have a decision record or a
+  geometry note; Restaurants stays listed (no source describes its orientation).
+
+Not verified: whether any changed, kept or disputed value is right at the break (no
+nearshore observations), the BlueTopo depths at the take-off zones (no surveyed lineup
+positions), and the model wind as a climatology (one 10-day October sample).
+
+**Review (2026-10-13, branch `wf/spot-profiles-review`).** Re-run independently: research
+load + assess on a fresh database (35 Moderate, 15 Low; research basis High 3, Moderate
+23, Low 24), `research lint` (Restaurants only), the sensitivity and model-wind tables
+(all records reproduced except Cloudbreak's wind record, 20.14 → 20.31, whose baseline now
+has the changed size range), the bathymetry script (byte-identical output from the
+cached tiles, whose checksums match a fresh download of the tile scheme and of three
+tiles), an independent sampling of the tiles (same depths and plane-fit azimuths without
+the meridian-convergence step), the four changed fields against their pages (every
+directly read excerpt found again, two independent directly read publishers each) and the prediction job on a
+re-seeded clone (the numbers above). Fixed: a publisher that both supports and contradicts
+a value no longer outweighs its own contradiction (Anchor Point's wind, Lobitos' swell
+window and Waimea Bay's size range kept → disputed; no prediction changes, Anchor Point
+already carried the note), and Trestles' 758.7 m forecast-point depth, an NBS
+Generalization cell outside any survey, is no longer labelled measured (no prediction
+changes: deep water either way).
+
+## 15. Second research pass (2026-10-12)
+
+With direct page access all 50 spots were re-researched: every readable source was re-read,
+its excerpts replaced by verbatim page text (checked mechanically on the page) and every
+claim judged by an independent verifier. 449 sources (384 read directly; 65 behind bot
+protection kept from the first, search-only pass) and 1,711 claims; 41 claims were rejected
+by the verifiers (e.g. record or contest heights encoded as working ranges, a Surfline
+forecast quoted in a WSL post). Research classes moved from 18 Moderate / 32 Low to
+34 / 16 (35 / 15 after research-v1.2 and the BlueTopo sources, §14).
+
+## 16. Validation against buoys ([`ml-evaluation.md`](ml-evaluation.md) §11-12, ADR-017)
+
+* **NDBC verified live** (formats, missing-value codes, WVHT = spectral Hm0, matched against
+  CDIP files) and paired with the 8 US spots (10 buoys). Raw GFS-Wave vs NDBC Hm0, 24
+  months, 409,344 pairs: bias -0.23 m; RMSE 0.38 m at 24 h, 0.51 m at 168 h, 0.64 m at
+  240 h; skill vs the long-term climatology 0.58 at 24 h, 0.23 at 168 h, negative at 240 h.
+* **80 % range**: the app's single-model range covers 53 % at 24 h (too narrow; misses
+  mostly above p90 because the model is low). A lead-dependent scale fitted on the older
+  year covers 75-80 % on the held-out year pooled; it is labelled calibrated only where the
+  spot's own buoy agrees at every lead (Jaws, Trestles) and is not yet wired into the
+  prediction job. The ensemble range and the breaking range stay heuristic.
+* **Confidence classes**: with a GEFS-Wave spread the three classes are ordered by realised
+  error on both years (RMSE 0.34 / 0.49 / 0.75 m); single-model hours without an ensemble
+  show no High-vs-Moderate difference. A cap fixing that ("C2") was rejected in review
+  because its test was written after seeing the results; forecast-v1 classes stay, and the
+  gap is documented. Live hours all have ensemble data.
+* **ML correction**: a random forest trained on NDBC + AODN spectral Hm0 passed the
+  unchanged pre-registered criteria (held-out RMSE 0.43 → 0.32 m) and the transfer check,
+  and is approved for 7 spots, leads 3-240 h. It is **not activated**: activation is an
+  operator step, and the review found its features mean slightly different things at the
+  spots (expected benefit smaller than at the buoys) and a post-correction bias of
+  +0.09 m.
+* Not validated: breaking heights (no nearshore observations), rules needing two
+  independent model families, gridded values at the spots.
+
+## 17. Production operations ([`operations.md`](operations.md))
+
+* **CI**: GitHub Actions (backend lint, types, migrations, unit and integration tests;
+  frontend tsc, eslint, vitest, build; e2e). First run on GitHub, 2026-10-13: success.
+* **Data health**: `/api/health/data` and the status page report each source against its
+  own staleness limit and each scheduled job; a beat job emails admins once per problem
+  (de-duplicated) and sends a recovery notice.
+* **Backups**: `scripts/backup-db.sh`, `restore-db.sh` (refuses a schema-revision mismatch),
+  `restore-drill.sh`, a compose `backup` profile; restore drill: 42 tables and 34,800 rows
+  identical.
+* **Live Docker run**: downloads from inside the Docker network (NOAA 18Z 213 MB in 65 s,
+  GEFS at its own cron time), a 30-minute soak with 63 jobs and 0 failures, peak memory
+  worker 849 MiB / API 471 MiB / PostgreSQL 187 MiB; a backup race after a daemon restart
+  was found live and fixed.
+* Date- and time-of-day-dependent tests found in review were made deterministic.
+
+## 18. Test results (2026-10-13, integrated branch `0c42bc6`)
+
+| Command | Result |
+|---|---|
+| `ruff format --check`, `ruff check`, `mypy app` | pass (159 files) |
+| `alembic upgrade head && alembic check` (to 0005) | pass, no drift |
+| `pytest tests/unit` / `pytest tests/integration` (separate processes) | **635 passed** / **229 passed** |
+| `npx tsc --noEmit && npx eslint . && npx vitest run` | pass, 156 tests |
+| `./scripts/run-e2e.sh` | 50 passed + the timeline test fixed and re-run (26 map tests passed) |
+| GitHub Actions CI run 1 | success |
+
+**Final sweep (2026-10-13).** Security, code-health and product reviews of the integrated
+tree, each fixing only demonstrated issues with tests: secrets and tokens no longer reach
+logs through tracebacks or the access log; a client-written X-Forwarded-For can no longer
+bypass per-IP rate limits (`--no-proxy-headers`); backup dumps cannot be staged by git; CI
+actions are pinned to commits without persisted credentials; two inputs that caused 500s
+or a loader crash are handled; concurrent test runs no longer collide on fixed scratch
+database names; the spot page's hour view keeps the local-confidence reason; the
+disputed-wind note is shown next to the wind instead of only inside collapsed details;
+map markers open from the keyboard; the status page fits a phone; demo data is no longer
+called "live" on the landing page. Final run on the integrated tree: ruff, mypy and
+`alembic check` pass; **644 unit**, **233 integration**, **160 vitest** and **62 e2e**
+tests pass.

@@ -2,7 +2,8 @@
 
 Run with ``python -m app.cli seed``. Re-running updates rows in place (upsert by IATA
 code / slug), so the curated JSON files are the single source of truth and new spots can
-be added without schema changes.
+be added without schema changes. The last step loads the optional research evidence file
+and assesses research confidence (app.services.research).
 """
 
 from __future__ import annotations
@@ -62,7 +63,11 @@ SPOT_FIELDS = (
 
 # Optional curated physical parameters per spot (data/surf_spots/physical_profiles.json):
 # {"<slug>": {"shore_normal_deg": ..., "forecast_point_depth_m": ..., ...,
-#             "data_quality": {"<field>": "measured" | "literature" | ...}, "notes": "..."}}
+#             "data_quality": {"<field>": "measured" | "literature" | ...}, "notes": "...",
+#             "provenance": {...}}}
+# ``provenance`` (how the values were measured: source tiles, checksums, method) is
+# validated as an object and kept in the file only; ``notes`` carries its summary into the
+# database (there is no provenance column).
 PROFILE_FIELDS = (
     "shore_normal_deg",
     "forecast_point_depth_m",
@@ -217,6 +222,11 @@ def seed_reference_data(db: Session, data_dir: str | Path | None = None) -> dict
             link.notes = a.get("notes", "")
         db.flush()
     profiles = seed_physical_profiles(db, directory)
+    # Research evidence (optional research_evidence.json) and research confidence of every
+    # spot; imported here because the research package builds on this module.
+    from app.services.research.assess import seed_research
+
+    research = seed_research(db, directory)
     db.commit()
     logger.info("Seeded %d airports, %d new spots, %d updated", len(airports_raw), created, updated)
     return {
@@ -224,6 +234,7 @@ def seed_reference_data(db: Session, data_dir: str | Path | None = None) -> dict
         "spots_created": created,
         "spots_updated": updated,
         **profiles,
+        **research,
     }
 
 
@@ -263,9 +274,22 @@ def derived_profile_values(spot: SurfSpot) -> dict[str, Any]:
 
 def validate_profile(slug: str, raw: dict[str, Any]) -> list[str]:
     problems: list[str] = []
-    unknown = set(raw) - {*PROFILE_FIELDS, "data_quality", "notes"}
+    unknown = set(raw) - {*PROFILE_FIELDS, "data_quality", "notes", "provenance"}
     if unknown:
         problems.append(f"{slug}: unknown profile fields {sorted(unknown)}")
+    if "provenance" in raw and not isinstance(raw["provenance"], dict):
+        problems.append(f"{slug}: provenance must be an object")
+    for depth in ("forecast_point_depth_m", "controlling_depth_m"):
+        value = raw.get(depth)
+        if value is not None and (
+            not isinstance(value, int | float) or isinstance(value, bool) or value <= 0
+        ):
+            problems.append(f"{slug}: {depth} must be a positive number or null")
+    normal = raw.get("shore_normal_deg")
+    if normal is not None and (
+        not isinstance(normal, int | float) or isinstance(normal, bool) or not 0 <= normal < 360
+    ):
+        problems.append(f"{slug}: shore_normal_deg must be in [0, 360)")
     table = raw.get("shadow_table")
     if table is not None and (
         len(table) != 36 or not all(isinstance(v, int | float) and 0 <= v <= 1 for v in table)
@@ -298,6 +322,8 @@ def seed_physical_profiles(db: Session, directory: Path) -> dict[str, int]:
             created += 1
         if entry:
             for key, value in entry.items():
+                if key == "provenance":
+                    continue  # file-only (see PROFILE_FIELDS)
                 if key == "data_quality":
                     row.data_quality = {**(row.data_quality or {}), **value}
                 else:

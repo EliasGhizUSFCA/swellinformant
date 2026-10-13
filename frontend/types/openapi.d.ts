@@ -38,6 +38,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/health/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data Health Report
+         * @description Data freshness and background-job health (ok / degraded / failing, with reasons).
+         *
+         *     Public on purpose, like /api/system/status: it holds operational metadata only (run
+         *     keys, ages, limits, job statuses, reasons written by the service; no personal data,
+         *     no raw error text), and an external uptime monitor must be able to read it without
+         *     credentials, because a dead worker cannot send its own alert. Rate limited per IP.
+         */
+        get: operations["data_health_report_api_health_data_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/status": {
         parameters: {
             query?: never;
@@ -899,6 +924,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/map/fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fields Index
+         * @description Which global fields exist for the current model run, and their valid times.
+         */
+        get: operations["fields_index_api_map_fields_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/map/fields/{variable}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Field Data
+         * @description One field as zlib-compressed uint8 bytes; decoding parameters in X-Field-Meta.
+         */
+        get: operations["field_data_api_map_fields__variable__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dev/simulate-swell": {
         parameters: {
             query?: never;
@@ -1151,6 +1216,19 @@ export interface components {
             uncertainty_kind?: string | null;
             /** Ml Model Version */
             ml_model_version?: string | null;
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: string | null;
+            /** Local Confidence Class */
+            local_confidence_class?: string | null;
+            /**
+             * Confidence Reasons
+             * @default []
+             */
+            confidence_reasons: string[];
+            /** Lead Hours */
+            lead_hours?: number | null;
+            /** Local Confidence Reason */
+            local_confidence_reason?: string | null;
         };
         /** DailyStat */
         DailyStat: {
@@ -1191,6 +1269,38 @@ export interface components {
             good_hours: number;
             /** Confidence */
             confidence: number;
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: string | null;
+            /** Local Confidence Class */
+            local_confidence_class?: string | null;
+        };
+        /** DataHealthOut */
+        DataHealthOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "degraded" | "failing";
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /**
+             * Reasons
+             * @description Plain reasons, the most severe first
+             */
+            reasons: string[];
+            /** Problems */
+            problems: components["schemas"]["HealthProblemOut"][];
+            /** Forecast Sources */
+            forecast_sources: components["schemas"]["SourceHealthOut"][];
+            /** Jobs */
+            jobs: components["schemas"]["JobHealthOut"][];
+            map_fields: components["schemas"]["MapFieldsHealthOut"];
+            observations: components["schemas"]["ObservationsHealthOut"];
+            heartbeat: components["schemas"]["HeartbeatOut"];
+            storage: components["schemas"]["StorageOut"];
         };
         /**
          * DateMode
@@ -1335,6 +1445,17 @@ export interface components {
             history: {
                 [key: string]: unknown;
             }[];
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: string | null;
+            /** Local Confidence Class */
+            local_confidence_class?: string | null;
+            /**
+             * Confidence Reasons
+             * @default []
+             */
+            confidence_reasons: string[];
+            /** Local Confidence Reason */
+            local_confidence_reason?: string | null;
         };
         /** ExperimentSummary */
         ExperimentSummary: {
@@ -1355,6 +1476,52 @@ export interface components {
             finished_at: string | null;
             /** Conclusion */
             conclusion: string;
+        };
+        /** FieldIndexOut */
+        FieldIndexOut: {
+            /** Available */
+            available: boolean;
+            /** Message */
+            message?: string | null;
+            source?: components["schemas"]["FieldSourceOut"] | null;
+            /** Run Key */
+            run_key?: string | null;
+            /** Cycle Time */
+            cycle_time?: string | null;
+            /**
+             * Valid Times
+             * @default []
+             */
+            valid_times: string[];
+            /**
+             * Variables
+             * @default []
+             */
+            variables: components["schemas"]["FieldVariableOut"][];
+        };
+        /** FieldSourceOut */
+        FieldSourceOut: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Attribution */
+            attribution: string;
+            /** Is Demo */
+            is_demo: boolean;
+        };
+        /** FieldVariableOut */
+        FieldVariableOut: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /** Unit */
+            unit: string;
+            /** Display Min */
+            display_min: number;
+            /** Display Max */
+            display_max: number;
         };
         /** ForecastPoint */
         ForecastPoint: {
@@ -1443,6 +1610,19 @@ export interface components {
             components: {
                 [key: string]: unknown;
             };
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: string | null;
+            /** Local Confidence Class */
+            local_confidence_class?: string | null;
+            /**
+             * Confidence Reasons
+             * @default []
+             */
+            confidence_reasons: string[];
+            /** Lead Hours */
+            lead_hours?: number | null;
+            /** Local Confidence Reason */
+            local_confidence_reason?: string | null;
         };
         /** ForecastRunOut */
         ForecastRunOut: {
@@ -1490,6 +1670,33 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HealthProblemOut */
+        HealthProblemOut: {
+            /**
+             * Key
+             * @description Stable identifier, e.g. forecast_stale:noaa_gfs_direct
+             */
+            key: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "degraded" | "failing";
+            /** Message */
+            message: string;
+        };
+        /**
+         * HeartbeatOut
+         * @description Newest finished background job of any kind (the data-health job excluded).
+         */
+        HeartbeatOut: {
+            /** Last Job Finished At */
+            last_job_finished_at?: string | null;
+            /** Age Minutes */
+            age_minutes?: number | null;
+            /** Limit Minutes */
+            limit_minutes: number;
+        };
         /** HistogramBin */
         HistogramBin: {
             /** Lo */
@@ -1498,6 +1705,35 @@ export interface components {
             hi: number;
             /** Count */
             count: number;
+        };
+        /** JobHealthOut */
+        JobHealthOut: {
+            /** Job */
+            job: string;
+            /** Schedule */
+            schedule: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "failed" | "overdue" | "stuck" | "running" | "never_run";
+            /** Last Status */
+            last_status?: string | null;
+            /** Last Started At */
+            last_started_at?: string | null;
+            /** Last Finished At */
+            last_finished_at?: string | null;
+            /** Last Duration Ms */
+            last_duration_ms?: number | null;
+            /** Last Success At */
+            last_success_at?: string | null;
+            /**
+             * Consecutive Failures
+             * @default 0
+             */
+            consecutive_failures: number;
+            /** Overdue After Minutes */
+            overdue_after_minutes?: number | null;
         };
         /** LinkOut */
         LinkOut: {
@@ -1515,6 +1751,34 @@ export interface components {
             email: string;
             /** Password */
             password: string;
+        };
+        /** MapFieldsHealthOut */
+        MapFieldsHealthOut: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "with_noaa" | "standalone" | "off";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "stale" | "missing" | "off";
+            /** Run Key */
+            run_key?: string | null;
+            /** Cycle Time */
+            cycle_time?: string | null;
+            /** Age Hours */
+            age_hours?: number | null;
+            /** Stale After Hours */
+            stale_after_hours?: number | null;
+            /**
+             * Complete Valid Times
+             * @default 0
+             */
+            complete_valid_times: number;
+            /** Last Valid Time */
+            last_valid_time?: string | null;
         };
         /**
          * MapSnapshotOut
@@ -2028,6 +2292,34 @@ export interface components {
             /** Sms Service Available */
             sms_service_available: boolean;
         };
+        /** ObservationProviderHealthOut */
+        ObservationProviderHealthOut: {
+            /** Provider */
+            provider: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "stale" | "missing";
+            /**
+             * Active Stations
+             * @default 0
+             */
+            active_stations: number;
+            /** Newest Observed At */
+            newest_observed_at?: string | null;
+            /** Age Hours */
+            age_hours?: number | null;
+            /** Stale After Hours */
+            stale_after_hours: number;
+        };
+        /** ObservationsHealthOut */
+        ObservationsHealthOut: {
+            /** Enabled */
+            enabled: boolean;
+            /** Providers */
+            providers?: components["schemas"]["ObservationProviderHealthOut"][];
+        };
         /** OfferOut */
         OfferOut: {
             /**
@@ -2224,6 +2516,63 @@ export interface components {
              * Format: email
              */
             email: string;
+        };
+        /**
+         * ResearchOut
+         * @description How well the spot's ideal conditions are understood (not forecast confidence).
+         */
+        ResearchOut: {
+            /** Research Class */
+            research_class: string;
+            /** Summary */
+            summary: string;
+            /** Gaps */
+            gaps: string[];
+            /** Variables */
+            variables: components["schemas"]["ResearchVariableOut"][];
+            /** Sources */
+            sources: components["schemas"]["ResearchSourceOut"][];
+            /** Methodology Version */
+            methodology_version: string;
+            /**
+             * Assessed At
+             * Format: date-time
+             */
+            assessed_at: string;
+            /** Research Updated At */
+            research_updated_at: string | null;
+        };
+        /** ResearchSourceOut */
+        ResearchSourceOut: {
+            /** Title */
+            title: string;
+            /** Url */
+            url: string | null;
+            /** Publisher */
+            publisher: string;
+            /** Source Type */
+            source_type: string;
+            /** Published Year */
+            published_year: number | null;
+            /** Accessed At */
+            accessed_at: string | null;
+            /** Retrieval */
+            retrieval?: string | null;
+        };
+        /** ResearchVariableOut */
+        ResearchVariableOut: {
+            /** Variable */
+            variable: string;
+            /** Label */
+            label: string;
+            /** Research Class */
+            research_class: string;
+            /** Summary */
+            summary: string;
+            /** Gaps */
+            gaps: string[];
+            /** Source Count */
+            source_count: number;
         };
         /** ResetPasswordIn */
         ResetPasswordIn: {
@@ -2498,6 +2847,35 @@ export interface components {
             /** Segments */
             segments: components["schemas"]["SegmentOut"][];
         };
+        /** SourceHealthOut */
+        SourceHealthOut: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "forecast" | "blend" | "ensemble";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "stale" | "missing";
+            /** Newest Run Key */
+            newest_run_key?: string | null;
+            /** Newest Issued At */
+            newest_issued_at?: string | null;
+            /** Age Hours */
+            age_hours?: number | null;
+            /** Stale After Hours */
+            stale_after_hours?: number | null;
+            /** Latest Attempt Status */
+            latest_attempt_status?: string | null;
+            /** Latest Attempt Started At */
+            latest_attempt_started_at?: string | null;
+        };
         /** SpotAirportOut */
         SpotAirportOut: {
             airport: components["schemas"]["AirportOut"];
@@ -2556,6 +2934,8 @@ export interface components {
              * @default 0
              */
             upcoming_event_count: number;
+            /** Research Class */
+            research_class?: string | null;
             /** Forecast Latitude */
             forecast_latitude: number;
             /** Forecast Longitude */
@@ -2591,6 +2971,7 @@ export interface components {
             /** Airports */
             airports: components["schemas"]["SpotAirportOut"][];
             physical_profile?: components["schemas"]["PhysicalProfileOut"] | null;
+            research?: components["schemas"]["ResearchOut"] | null;
         };
         /** SpotForecastOut */
         SpotForecastOut: {
@@ -2711,6 +3092,8 @@ export interface components {
              * @default 0
              */
             upcoming_event_count: number;
+            /** Research Class */
+            research_class?: string | null;
         };
         /** StationSummary */
         StationSummary: {
@@ -2734,6 +3117,13 @@ export interface components {
             latest_observation: string | null;
             /** Pairs */
             pairs: number;
+        };
+        /** StorageOut */
+        StorageOut: {
+            /** Database Bytes */
+            database_bytes: number;
+            /** Database Max Gb */
+            database_max_gb?: number | null;
         };
         /** TokenIn */
         TokenIn: {
@@ -3015,6 +3405,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    data_health_report_api_health_data_get: {
+        parameters: {
+            query?: {
+                /** @description Answer 503 instead of 200 when the status is 'failing' */
+                strict?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataHealthOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -4542,6 +4964,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PairsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fields_index_api_map_fields_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldIndexOut"];
+                };
+            };
+        };
+    };
+    field_data_api_map_fields__variable__get: {
+        parameters: {
+            query?: {
+                /** @description Valid time (ISO 8601); default now */
+                at?: string | null;
+            };
+            header?: never;
+            path: {
+                variable: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
                 };
             };
             /** @description Validation Error */

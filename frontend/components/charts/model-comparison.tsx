@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
+import { InfoPopover } from "@/components/info-popover";
+import { Disclosure } from "@/components/ui/disclosure";
 import { cn } from "@/lib/utils";
 import type { EnsemblePoint, ModelSeries } from "@/types/api";
 
@@ -119,21 +121,24 @@ export function ModelComparisonChart({ series, ensemble, tz }: { series: ModelSe
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <ul className="mt-2 space-y-0.5 text-[11px] text-muted-foreground" data-testid="model-roles">
-        {series.map((s, i) => (
-          <li key={`${s.source_code}-role-${i}`}>
-            <span className="font-medium" style={{ color: PALETTE[i % PALETTE.length] }}>
-              {s.name}
-            </span>{" "}
-            · {ROLE_LABEL[s.role] ?? s.role} · run {new Date(s.run_issued_at).toISOString().slice(0, 13).replace("T", " ")}Z
-            {metric === "tp" && s.period_kind && s.period_kind !== "tp" ? " · period is not a peak period, hidden" : ""}
-          </li>
-        ))}
-      </ul>
-      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-        Raw output of each numerical model at the offshore forecast point. These are open-water values, not surf heights, and differences between
-        models are expected: they are a measure of forecast uncertainty, not errors.
+      <p className="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+        Open-water model values at the offshore point, not surf heights.
+        <InfoPopover term="modelComparison" />
+        {ensemble.length > 0 && <InfoPopover term="ensemble" />}
       </p>
+      <Disclosure summary="Model roles and runs" className="mt-1">
+        <ul className="space-y-0.5 text-[11px] text-muted-foreground" data-testid="model-roles">
+          {series.map((s, i) => (
+            <li key={`${s.source_code}-role-${i}`}>
+              <span className="font-medium" style={{ color: PALETTE[i % PALETTE.length] }}>
+                {s.name}
+              </span>{" "}
+              · {ROLE_LABEL[s.role] ?? s.role} · run {new Date(s.run_issued_at).toISOString().slice(0, 13).replace("T", " ")}Z
+              {metric === "tp" && s.period_kind && s.period_kind !== "tp" ? " · period is not a peak period, hidden" : ""}
+            </li>
+          ))}
+        </ul>
+      </Disclosure>
     </div>
   );
 }

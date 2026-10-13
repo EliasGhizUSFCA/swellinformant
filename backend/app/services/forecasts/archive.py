@@ -5,7 +5,10 @@ values a model forecast at a given lead time cannot be reconstructed later. So a
 prediction job, the authoritative run of every spot is copied into ``prediction_archive``
 at 3-hourly valid times up to ARCHIVE_MAX_LEAD_HOURS ahead, with the offshore inputs, our
 breaking-height estimate and its uncertainty, the score and confidence, and the versions
-that produced them. Rows are never updated (ON CONFLICT DO NOTHING): rescoring a run
+that produced them. Both confidence assessments are archived as issued: the forecast and
+local confidence classes, the overall research class local confidence used, the
+methodology and every input and rule (``confidence_inputs``), so they can be evaluated
+against observations later. Rows are never updated (ON CONFLICT DO NOTHING): rescoring a run
 after an algorithm upgrade does not rewrite what was issued. The archive has its own
 retention (RETENTION_ARCHIVE_DAYS) and is what breaking-height verification will use once
 nearshore observations exist.
@@ -39,6 +42,12 @@ OFFSHORE_FIELDS = (
     "wind_speed_kmh",
     "wind_direction_deg",
 )
+
+
+def _research_class(inputs: dict[str, Any] | None) -> str | None:
+    """The overall research class local confidence used (None: no assessment existed)."""
+    value = ((inputs or {}).get("local") or {}).get("research_class")
+    return str(value) if value else None
 
 
 def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str, int]:
@@ -86,6 +95,11 @@ def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str,
                     "method": pred.breaking_height_method,
                     "algorithm_version": pred.algorithm_version,
                     "ml_model_version": pred.ml_model_version,
+                    "forecast_confidence_class": pred.forecast_confidence_class,
+                    "local_confidence_class": pred.local_confidence_class,
+                    "research_class": _research_class(pred.confidence_inputs),
+                    "confidence_method": pred.confidence_method,
+                    "confidence_inputs": pred.confidence_inputs,
                 }
             )
         # RETURNING counts the rows actually inserted (conflicts return nothing).

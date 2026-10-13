@@ -11,6 +11,7 @@ from app.models.forecast import (
 from app.models.forecast_engine import (
     ForecastComparison,
     ForecastEnsembleStat,
+    MapField,
     PredictionArchive,
     SpotPhysicalProfile,
 )
@@ -32,6 +33,11 @@ from app.models.opportunity import (
     Notification,
     OpportunityMatch,
     OpportunityOffer,
+)
+from app.models.research import (
+    SpotResearchAssessment,
+    SpotResearchClaim,
+    SpotResearchSource,
 )
 from app.models.search import SavedSearch, SearchDestination, SearchOrigin, TravelPreference
 from app.models.spot import Airport, SpotAirport, SurfSpot
@@ -59,6 +65,7 @@ __all__ = [
     "ForecastSource",
     "MLExperiment",
     "MLModelVersion",
+    "MapField",
     "NearshoreObservation",
     "Notification",
     "NotificationPreference",
@@ -72,6 +79,9 @@ __all__ = [
     "SearchOrigin",
     "SpotAirport",
     "SpotPhysicalProfile",
+    "SpotResearchAssessment",
+    "SpotResearchClaim",
+    "SpotResearchSource",
     "SurfQualityPrediction",
     "SurfSpot",
     "SwellEvent",

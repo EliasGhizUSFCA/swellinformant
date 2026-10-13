@@ -44,7 +44,19 @@ function DemoRibbon() {
   );
 }
 
-export function AppShell({ children, wide = false }: { children: React.ReactNode; wide?: boolean }) {
+/**
+ * `fullBleed`: the page fills the viewport below the header (no padding, max width or
+ * footer, no page scroll); used by the full-screen map.
+ */
+export function AppShell({
+  children,
+  wide = false,
+  fullBleed = false,
+}: {
+  children: React.ReactNode;
+  wide?: boolean;
+  fullBleed?: boolean;
+}) {
   const { data: user } = useMe();
   const pathname = usePathname();
   const router = useRouter();
@@ -63,7 +75,7 @@ export function AppShell({ children, wide = false }: { children: React.ReactNode
   }
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className={cn("flex flex-col", fullBleed ? "h-dvh overflow-hidden" : "min-h-dvh")}>
       <DemoRibbon />
       <header className="sticky top-0 z-40 border-b bg-card/85 backdrop-blur supports-[backdrop-filter]:bg-card/70">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4 sm:px-6">
@@ -150,8 +162,16 @@ export function AppShell({ children, wide = false }: { children: React.ReactNode
           </nav>
         )}
       </header>
-      <main className={cn("mx-auto w-full flex-1 px-4 py-8 sm:px-6", wide ? "max-w-[1600px]" : "max-w-7xl")}>{children}</main>
-      <SiteFooter />
+      <main
+        className={cn(
+          "mx-auto w-full flex-1 px-4 py-8 sm:px-6",
+          wide ? "max-w-[1600px]" : "max-w-7xl",
+          fullBleed && "relative min-h-0 max-w-none p-0 sm:p-0",
+        )}
+      >
+        {children}
+      </main>
+      {!fullBleed && <SiteFooter />}
     </div>
   );
 }

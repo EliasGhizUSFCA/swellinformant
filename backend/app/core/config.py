@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = 15
     email_verification_ttl_hours: int = 48
     password_reset_ttl_minutes: int = 60
+    # Proxies in front of the API that set or append X-Forwarded-For (app.core.ratelimit).
+    # The Next.js /api proxy forwards the header unchanged and adds no entry (verified with
+    # Next.js 16.4), so it does not count; 0 = use the socket peer.
     trusted_proxy_count: int = 1
 
     # ------------------------------------------------------------------ forecasts
@@ -130,6 +133,13 @@ class Settings(BaseSettings):
     ml_artifact_dir: str = "/tmp/swell-ml"  # noqa: S108  (use a persistent volume in production)
     # Apply ACTIVE ML corrections (only models that passed the deployment criteria).
     ml_corrections_enabled: bool = True
+    # Map ocean layers (downsampled GFS-Wave + GFS global grids). None = automatic: on
+    # when "noaa_gfs" is a forecast provider (the grids are extracted from files that
+    # provider downloads anyway); True also fetches them in other modes; False = off.
+    map_fields_enabled: bool | None = None
+    map_field_resolution_deg: float = Field(default=0.5, ge=0.25, le=2.0)
+    map_field_max_lead_hours: int = Field(default=240, ge=24, le=384)
+    map_field_step_hours: int = Field(default=3, ge=1, le=12)
     windy_api_key: str | None = None
     # Demo provider only: false = calm background seas, so only simulated swells create
     # events (used by the end-to-end tests for deterministic results).
@@ -209,6 +219,25 @@ class Settings(BaseSettings):
     # The prediction archive and verification pairs are kept much longer than forecast
     # runs: they are the only record of what was forecast at each lead time.
     retention_archive_days: int = 730
+
+    # ------------------------------------------------------------------ data health
+    # The ``ops.data_health`` beat job (app.services.health) checks forecast, map-field,
+    # observation and job freshness every DATA_HEALTH_CHECK_MINUTES and emails admin
+    # users when the status degrades: at most one alert per problem per
+    # DATA_HEALTH_ALERT_REPEAT_HOURS, plus a recovery notice once a problem clears.
+    data_health_check_minutes: int = Field(default=15, ge=5, le=1440)
+    data_health_alerts_enabled: bool = True
+    data_health_alert_repeat_hours: float = Field(default=12.0, ge=1.0, le=24.0 * 7)
+    # No finished job of any kind for this long = the worker or the scheduler is down
+    # (notifications.deliver alone runs every 2 minutes).
+    data_health_heartbeat_minutes: int = Field(default=30, ge=10, le=24 * 60)
+    # A provider without a new buoy observation for this long is stale. None = the
+    # ingestion look-back window (OBSERVATION_LOOKBACK_HOURS): beyond it, the hourly job
+    # can no longer fill the gap by itself.
+    data_health_observation_stale_hours: float | None = Field(default=None, gt=0)
+    # Degraded once the database is larger than this (GB). None = no limit. Size it from
+    # the disk and the growth per day in docs/operations.md ("Capacity").
+    data_health_database_max_gb: float | None = Field(default=None, gt=0)
 
     @field_validator("app_base_url", "api_base_url")
     @classmethod

@@ -299,6 +299,8 @@ def ingest_range(
         totals["unchanged"] += upsert.unchanged
         totals["errors"] += len(fetched.errors)
     result["requests"] = fetch.requests
+    if fetch.bytes_downloaded:
+        result["bytes_downloaded"] = fetch.bytes_downloaded
     result["totals"] = totals
     if fetch.warnings:
         result["warnings"] = fetch.warnings[:20]

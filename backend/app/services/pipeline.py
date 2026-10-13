@@ -43,7 +43,7 @@ def run_pipeline(
             lambda: [o.as_dict() for o in acquire_all(db, now=now, force=force_acquire)],
         )
     stage("blending", lambda: build_blend(db, now).as_dict())
-    stage("predictions", lambda: compute_pending_predictions(db))
+    stage("predictions", lambda: compute_pending_predictions(db, now))
     stage("detection", lambda: detect_events(db, now).as_dict())
     stage("matching", lambda: match_all(db, now).as_dict())
     stage("flights", lambda: discover_flights(db, now).as_dict())

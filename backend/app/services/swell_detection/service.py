@@ -6,6 +6,10 @@ appended to ``history``). Clusters overlapping several events merge them (the ex
 CANCELLED with ``merged_into_id``). Active events that the latest run no longer supports
 are DOWNGRADED; events whose end time has passed become PASSED. A per-spot transaction
 plus the deferred exclusion constraint guarantee no duplicate overlapping active events.
+
+The peak hour's forecast and local confidence classes, reasons and lead time
+(forecast-v1) are stored in each history snapshot; the newest snapshot is the event's
+current assessment (``peak_confidence``), so no extra column is needed.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from statistics import mean
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -25,6 +30,7 @@ from app.models.enums import QualityLabel, SwellEventStatus
 from app.services.forecasts.queries import latest_runs_by_spot
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.confidence import confidence_label
+from app.services.surf_quality.forecast_confidence import api_fields, cap_for_staleness
 from app.services.surf_quality.scoring import label_for_score
 from app.services.swell_detection.clustering import Cluster, Step, cluster_steps, overlaps
 
@@ -64,6 +70,37 @@ def load_steps(db: Session, spot_id: int, run_id: int, since: datetime) -> list[
     ]
 
 
+# Peak-hour confidence fields of EventOut, and what each history snapshot stores.
+EVENT_CONFIDENCE_KEYS = (
+    "forecast_confidence_class",
+    "local_confidence_class",
+    "confidence_reasons",
+    "local_confidence_reason",
+)
+SNAPSHOT_CONFIDENCE_KEYS = (*EVENT_CONFIDENCE_KEYS, "lead_hours")
+
+
+def _confidence_snapshot(peak: SurfQualityPrediction) -> dict[str, Any]:
+    """Forecast-v1 confidence of the event's peak hour (empty for older predictions)."""
+    if peak.forecast_confidence_class is None:
+        return {}
+    fields = api_fields(peak)
+    return {
+        "confidence_method": peak.confidence_method,
+        **{k: fields[k] for k in SNAPSHOT_CONFIDENCE_KEYS},
+    }
+
+
+def peak_confidence(event: SwellEvent, *, stale: bool = False) -> dict[str, Any]:
+    """EventOut's peak-hour confidence fields from the newest history snapshot (may be empty
+    for events last updated before forecast-v1). ``stale``: the event's run has gone stale
+    since detection, so the read-time staleness rule applies, exactly as for the same hour
+    in the forecast (``forecast_confidence.cap_for_staleness``)."""
+    latest = (event.history or [])[-1:] or [{}]
+    fields = {k: latest[0][k] for k in EVENT_CONFIDENCE_KEYS if k in latest[0]}
+    return cap_for_staleness(fields) if stale else fields
+
+
 def _apply_cluster(event: SwellEvent, cluster: Cluster, run: ForecastRun, keep_start: bool) -> None:
     peak_pred, peak_fc = cluster.peak.payload
     preds = [s.payload[0] for s in cluster.steps]
@@ -99,6 +136,7 @@ def _apply_cluster(event: SwellEvent, cluster: Cluster, run: ForecastRun, keep_s
         "peak_score": event.peak_score,
         "peak_height_ft": [event.peak_breaking_height_min_ft, event.peak_breaking_height_max_ft],
         "confidence": event.confidence,
+        **_confidence_snapshot(peak_pred),
     }
     event.history = [*(event.history or [])[-19:], snapshot]
 

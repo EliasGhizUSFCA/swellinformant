@@ -39,8 +39,10 @@ partition i (swells 1–3 and wind sea):
 1. **Deep-water equivalent.** If the depth h at the wave-model extraction point is known and
    shallower than half the deep-water wavelength: `H0 = H / Ks`, `Ks = sqrt(Cg0 / Cg(h))`,
    with the wavenumber from Fenton & McKee (1990) refined by Newton iterations on
-   `ω² = g·k·tanh(k·h)`. Unknown depth (all spots today) → deep water assumed (up to ~9 %
-   error for long swell over a 50–200 m deep grid point; documented assumption).
+   `ω² = g·k·tanh(k·h)`. Unknown depth (47 spots) → deep water assumed (up to ~9 % error
+   for long swell over a 50–200 m deep grid point; documented assumption). Forecast-point
+   depths from NOAA BlueTopo surveys exist for Mavericks (57.9 m), Ocean Beach (36.4 m) and
+   Rincon (96.5 m); Trestles' forecast point lies outside any survey (see below).
 2. **Directional factor** `R = Σ D(θ)·max(cos(θ − β), 0)·T(θ)·Δθ`: a wrapped-Gaussian
    spreading D (σ = 10° for T ≥ 13 s, 15° for 9–13 s, 30° for wind sea and shorter swell —
    assumptions, since GFS-Wave publishes no spread), the shore normal β and the energy
@@ -64,6 +66,42 @@ tested but not yet fed by station-spectrum ingestion.
 optimal swell window, Kf_ref = `height_factor`, κ = 0, depths unknown, no shadow table, and
 each of these is flagged `estimated` or `unknown` in `data_quality`. No bathymetry is
 invented.
+
+**Measured values (NOAA BlueTopo, 2026-10-13).** `scripts/bathymetry_profiles.py` samples
+the BlueTopo tiles on the transect from each continental-US break to its forecast point and
+writes `physical_profiles.json` with `data_quality: "measured"` and a provenance object. Its
+rules: the forecast-point depth is the median of the survey cells within 25 m of the point,
+used only when at least half of the cells there come from a survey (BlueTopo's "NBS
+Generalization" cells are a best-guess surface outside any survey with unknown uncertainty,
+not a measurement); β is the downslope azimuth of a plane fitted to the underwater survey
+cells within 250 m of the break, used only with at least 200 cells, R² ≥ 0.5, at least half
+of them measured depths (not interpolations between soundings), and only when every
+direction of the optimal swell window stays within 90° of it (the cos(θ − β) term assumes
+straight contours: a β that the documented best swells cannot reach means the contours turn
+around a point faster than this model can represent); the controlling depth is the depth at
+the break coordinate, used only when it is under water with no cell at or above 0 m NAVD88
+within 100 m. Outcome: three forecast-point depths (Mavericks' and Rincon's are
+interpolations between the soundings of 1934 and 1977 surveys, Ocean Beach's measured depths
+of a 2009 survey), one shore normal (Trestles, 210.9° instead of the estimated 197.5°), no
+controlling depth (every break coordinate is a shoreline position). Trestles' forecast point
+lies in NBS Generalization cells (758.7 m there, kept under `provenance.not_applied`; review
+of 2026-10-13: the first run had written it as "measured"); at that depth every period is
+deep water, so leaving it unknown changes nothing. Effect on the real 2026-10-11 blend run
+(81 hours each; scores re-computed by the prediction job on a re-seeded clone, identical to
+`scripts/profile_sensitivity.py rescore --physical`):
+
+| Spot | Changed | Mean central breaking height (ft) | Mean \|Δ score\| | Labels changed |
+|---|---|---|---:|---:|
+| Mavericks | forecast-point depth 57.9 m | 9.48 → 9.82 | 1.40 | 1 |
+| Ocean Beach | forecast-point depth 36.4 m | 8.14 → 8.60 | 0.21 | 1 |
+| Trestles | β 197.5° → 210.9° (forecast-point depth not set) | 5.77 → 5.72 | 0.06 | 0 |
+| Rincon | forecast-point depth 96.5 m | 1.08 → 1.09 | 0 | 0 |
+
+Why: de-shoaling a 13-17 s swell from 36-58 m to deep water raises H0 by a few per cent
+(Ks < 1 at those depths), so breaking heights rise by about 4-6 % at Mavericks and Ocean Beach;
+at 96.5 m (Rincon) only the longest periods are affected; Trestles' measured β turns the
+shore normal 13° towards the west, which favours SW swells and disfavours S ones
+(cos(θ − β)); on this run the mean moved by −0.05 ft.
 
 **Calibrated model** (only when `surf_spots.calibration` has `a`, `b`, `c`):
 `Hb_ft = a·H0^b·T^c·R^d` (d defaults to 0.4).
@@ -137,32 +175,61 @@ relation (glassy / offshore / cross-offshore / cross-shore / cross-onshore / ons
 and a plain-English explanation, e.g.
 *"1.8 m @ 15 s SW swell, well aligned with the break; offshore wind 12 km/h from NE;
 approx. 5–8 ft faces vs. a working range of 3–12 ft; favourable tide."*
+Where sources disagree about which wind is offshore (forecast-confidence.md §3a) and the two
+directions give different relations, the wind part reads *"wind 12 km/h from NE, offshore or
+cross-shore: sources disagree"*; the score and `wind_relation` keep the profile's direction.
 
 ## 4. Daylight
 
 Sunrise and sunset come from the NOAA solar position approximation (±2 min), extended by
 20 minutes of twilight at each end. Only daylight steps count toward events and matches.
 
-## 5. Forecast confidence (0–100), separate from quality
+## 5. Confidence, separate from quality
 
-Confidence answers *"how much should I trust this offshore forecast?"*, not *"how good is
-it?"*. It is an index, not a probability:
+Confidence answers *"how much should I trust this forecast?"*, not *"how good is it?"*. Every
+forecast hour carries three things, none of them a probability:
+
+**The 0–100 confidence index** (`confidence`, `confidence_label`; the "index" in the code and
+docs, unchanged and still stored on every prediction, event and match):
 
 ```
 confidence = 100·exp(−σ_f / 0.4)              # σ_f from §2a: ensemble spread, lead table,
                                                # or between-model disagreement
            × (0.6 + 0.4 · completeness)        # share of key variables present
-           × (0.8 if the model run is stale)
+           × (0.8 if the model run is stale)   # stale per source (ADR-015)
 ```
 
-Labels: High ≥ 70, Moderate ≥ 45, Low below. Without an ensemble a complete forecast is High
-for about two days, Moderate to about day six and Low beyond — matching the published loss
+Index classes: High ≥ 70, Moderate ≥ 45, Low below. Without an ensemble a complete forecast is
+High for about two days, Moderate to about day six and Low beyond — matching the published loss
 of wave-forecast skill between days 4 and 10. With GEFS-Wave the index varies with the
 situation (spread varies about fivefold at a fixed lead).
 
-Run-to-run change is stored as a diagnostic (`components.run_agreement`) but is not a
-confidence factor: it predicted error much more weakly than ensemble spread in the research
-analysis. Nearshore translation is reported separately as uncalibrated.
+**Forecast confidence** (`forecast_confidence_class`, methodology `forecast-v1.1`: forecast-v1
+plus a disputed-wind note that changes no class): starts from
+the index class and applies documented caps and downgrades — lead time (beyond 7 days at most
+Moderate, beyond 10 days Low, 3–7 days High only with a small ensemble spread), large GEFS-Wave
+spread, disagreement between *independent* model families only (GFS vs ECMWF; GFS-Wave and
+GEFS-Wave share NCEP forcing and never confirm each other), a large run-to-run change
+(heuristic), poor verification against buoys, missing variables, staleness, demo data and a
+single model beyond 3 days. A rule can only lower the class. Each hour stores the class, short
+reasons ("An 8-day forecast — forecasts this far out often change.", "GFS and ECMWF disagree on
+swell size.") and every input and rule (`confidence_inputs`).
+
+**Local confidence** (`local_confidence_class`): confidence in the *breaking-wave* prediction
+at this break = min(forecast confidence, research basis), research basis = min(swell
+direction, swell size, max(bathymetry, local behaviour)) from the spot's research assessment;
+no assessment gives Low ("How this break responds to swell is not well documented yet.").
+When it is lower than forecast confidence, that one research sentence is also returned as
+`local_confidence_reason`, so the UI never has to pick it out of `confidence_reasons`.
+
+Rules, thresholds and the evidence behind them: [forecast-confidence.md](forecast-confidence.md).
+Research confidence (how well the break is documented) is a separate assessment
+([research-confidence.md](research-confidence.md)); the three are never merged into one number.
+
+Run-to-run change is stored as a diagnostic (`components.run_agreement`) and is not an index
+factor: it predicted error much more weakly than ensemble spread in the research analysis. It
+enters forecast confidence only as a one-class downgrade for a large change (factor 1.4),
+labelled heuristic. Nearshore translation is reported separately as uncalibrated.
 
 ## 6. Swell events (`swell_detection/`)
 
@@ -175,8 +242,9 @@ analysis. Nearshore translation is reported separately as uncalibrated.
   daylight hours, e.g. a full day of onshore wind splits two swells.
 * An event needs at least `SWELL_EVENT_MIN_HOURS` (3) qualifying hours.
 * Each event stores start/end, peak time/score/label, estimated face-height range,
-  average quality, confidence, dominant swell height/period/direction, wind summary and
-  the forecast run that produced it.
+  average quality, confidence (index), dominant swell height/period/direction, wind summary
+  and the forecast run that produced it; the newest `history` snapshot also holds the peak
+  hour's forecast and local confidence classes, reasons and lead time.
 
 **Lifecycle on every new run:**
 

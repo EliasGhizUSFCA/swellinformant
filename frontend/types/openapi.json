@@ -50,6 +50,52 @@
     }
    }
   },
+  "/api/health/data": {
+   "get": {
+    "tags": [
+     "system"
+    ],
+    "summary": "Data Health Report",
+    "description": "Data freshness and background-job health (ok / degraded / failing, with reasons).\n\nPublic on purpose, like /api/system/status: it holds operational metadata only (run\nkeys, ages, limits, job statuses, reasons written by the service; no personal data,\nno raw error text), and an external uptime monitor must be able to read it without\ncredentials, because a dead worker cannot send its own alert. Rate limited per IP.",
+    "operationId": "data_health_report_api_health_data_get",
+    "parameters": [
+     {
+      "name": "strict",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "description": "Answer 503 instead of 200 when the status is 'failing'",
+       "default": false,
+       "title": "Strict"
+      },
+      "description": "Answer 503 instead of 200 when the status is 'failing'"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/DataHealthOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/system/status": {
    "get": {
     "tags": [
@@ -2311,6 +2357,87 @@
     }
    }
   },
+  "/api/map/fields": {
+   "get": {
+    "tags": [
+     "map"
+    ],
+    "summary": "Fields Index",
+    "description": "Which global fields exist for the current model run, and their valid times.",
+    "operationId": "fields_index_api_map_fields_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FieldIndexOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/map/fields/{variable}": {
+   "get": {
+    "tags": [
+     "map"
+    ],
+    "summary": "Field Data",
+    "description": "One field as zlib-compressed uint8 bytes; decoding parameters in X-Field-Meta.",
+    "operationId": "field_data_api_map_fields__variable__get",
+    "parameters": [
+     {
+      "name": "variable",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^(hs|tp|wave_dir|wind_u|wind_v|pressure)$",
+       "title": "Variable"
+      }
+     },
+     {
+      "name": "at",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date-time"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Valid time (ISO 8601); default now",
+       "title": "At"
+      },
+      "description": "Valid time (ISO 8601); default now"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/octet-stream": {}
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/dev/simulate-swell": {
    "post": {
     "tags": [
@@ -3011,6 +3138,58 @@
        }
       ],
       "title": "Ml Model Version"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Confidence Reasons",
+      "default": []
+     },
+     "lead_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lead Hours"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -3120,6 +3299,28 @@
      "confidence": {
       "type": "integer",
       "title": "Confidence"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
      }
     },
     "type": "object",
@@ -3135,6 +3336,79 @@
      "confidence"
     ],
     "title": "DailySummary"
+   },
+   "DataHealthOut": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "degraded",
+       "failing"
+      ],
+      "title": "Status"
+     },
+     "checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Checked At"
+     },
+     "reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Reasons",
+      "description": "Plain reasons, the most severe first"
+     },
+     "problems": {
+      "items": {
+       "$ref": "#/components/schemas/HealthProblemOut"
+      },
+      "type": "array",
+      "title": "Problems"
+     },
+     "forecast_sources": {
+      "items": {
+       "$ref": "#/components/schemas/SourceHealthOut"
+      },
+      "type": "array",
+      "title": "Forecast Sources"
+     },
+     "jobs": {
+      "items": {
+       "$ref": "#/components/schemas/JobHealthOut"
+      },
+      "type": "array",
+      "title": "Jobs"
+     },
+     "map_fields": {
+      "$ref": "#/components/schemas/MapFieldsHealthOut"
+     },
+     "observations": {
+      "$ref": "#/components/schemas/ObservationsHealthOut"
+     },
+     "heartbeat": {
+      "$ref": "#/components/schemas/HeartbeatOut"
+     },
+     "storage": {
+      "$ref": "#/components/schemas/StorageOut"
+     }
+    },
+    "type": "object",
+    "required": [
+     "status",
+     "checked_at",
+     "reasons",
+     "problems",
+     "forecast_sources",
+     "jobs",
+     "map_fields",
+     "observations",
+     "heartbeat",
+     "storage"
+    ],
+    "title": "DataHealthOut"
    },
    "DateMode": {
     "type": "string",
@@ -3478,6 +3752,47 @@
       "type": "array",
       "title": "History",
       "default": []
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Confidence Reasons",
+      "default": []
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -3562,6 +3877,141 @@
      "conclusion"
     ],
     "title": "ExperimentSummary"
+   },
+   "FieldIndexOut": {
+    "properties": {
+     "available": {
+      "type": "boolean",
+      "title": "Available"
+     },
+     "message": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Message"
+     },
+     "source": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/FieldSourceOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Key"
+     },
+     "cycle_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle Time"
+     },
+     "valid_times": {
+      "items": {
+       "type": "string",
+       "format": "date-time"
+      },
+      "type": "array",
+      "title": "Valid Times",
+      "default": []
+     },
+     "variables": {
+      "items": {
+       "$ref": "#/components/schemas/FieldVariableOut"
+      },
+      "type": "array",
+      "title": "Variables",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "available"
+    ],
+    "title": "FieldIndexOut"
+   },
+   "FieldSourceOut": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "attribution": {
+      "type": "string",
+      "title": "Attribution"
+     },
+     "is_demo": {
+      "type": "boolean",
+      "title": "Is Demo"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "attribution",
+     "is_demo"
+    ],
+    "title": "FieldSourceOut"
+   },
+   "FieldVariableOut": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "unit": {
+      "type": "string",
+      "title": "Unit"
+     },
+     "display_min": {
+      "type": "number",
+      "title": "Display Min"
+     },
+     "display_max": {
+      "type": "number",
+      "title": "Display Max"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "label",
+     "unit",
+     "display_min",
+     "display_max"
+    ],
+    "title": "FieldVariableOut"
    },
    "ForecastPoint": {
     "properties": {
@@ -3929,6 +4379,58 @@
       "additionalProperties": true,
       "type": "object",
       "title": "Components"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Confidence Reasons",
+      "default": []
+     },
+     "lead_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lead Hours"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -4104,6 +4606,71 @@
     "type": "object",
     "title": "HTTPValidationError"
    },
+   "HealthProblemOut": {
+    "properties": {
+     "key": {
+      "type": "string",
+      "title": "Key",
+      "description": "Stable identifier, e.g. forecast_stale:noaa_gfs_direct"
+     },
+     "severity": {
+      "type": "string",
+      "enum": [
+       "degraded",
+       "failing"
+      ],
+      "title": "Severity"
+     },
+     "message": {
+      "type": "string",
+      "title": "Message"
+     }
+    },
+    "type": "object",
+    "required": [
+     "key",
+     "severity",
+     "message"
+    ],
+    "title": "HealthProblemOut"
+   },
+   "HeartbeatOut": {
+    "properties": {
+     "last_job_finished_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Job Finished At"
+     },
+     "age_minutes": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Minutes"
+     },
+     "limit_minutes": {
+      "type": "integer",
+      "title": "Limit Minutes"
+     }
+    },
+    "type": "object",
+    "required": [
+     "limit_minutes"
+    ],
+    "title": "HeartbeatOut",
+    "description": "Newest finished background job of any kind (the data-health job excluded)."
+   },
    "HistogramBin": {
     "properties": {
      "lo": {
@@ -4126,6 +4693,111 @@
      "count"
     ],
     "title": "HistogramBin"
+   },
+   "JobHealthOut": {
+    "properties": {
+     "job": {
+      "type": "string",
+      "title": "Job"
+     },
+     "schedule": {
+      "type": "string",
+      "title": "Schedule"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "failed",
+       "overdue",
+       "stuck",
+       "running",
+       "never_run"
+      ],
+      "title": "Status"
+     },
+     "last_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Status"
+     },
+     "last_started_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Started At"
+     },
+     "last_finished_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Finished At"
+     },
+     "last_duration_ms": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Duration Ms"
+     },
+     "last_success_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Success At"
+     },
+     "consecutive_failures": {
+      "type": "integer",
+      "title": "Consecutive Failures",
+      "default": 0
+     },
+     "overdue_after_minutes": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Overdue After Minutes"
+     }
+    },
+    "type": "object",
+    "required": [
+     "job",
+     "schedule",
+     "status"
+    ],
+    "title": "JobHealthOut"
    },
    "LinkOut": {
     "properties": {
@@ -4165,6 +4837,97 @@
      "password"
     ],
     "title": "LoginIn"
+   },
+   "MapFieldsHealthOut": {
+    "properties": {
+     "mode": {
+      "type": "string",
+      "enum": [
+       "with_noaa",
+       "standalone",
+       "off"
+      ],
+      "title": "Mode"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "stale",
+       "missing",
+       "off"
+      ],
+      "title": "Status"
+     },
+     "run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Key"
+     },
+     "cycle_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle Time"
+     },
+     "age_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Hours"
+     },
+     "stale_after_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stale After Hours"
+     },
+     "complete_valid_times": {
+      "type": "integer",
+      "title": "Complete Valid Times",
+      "default": 0
+     },
+     "last_valid_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Valid Time"
+     }
+    },
+    "type": "object",
+    "required": [
+     "mode",
+     "status"
+    ],
+    "title": "MapFieldsHealthOut"
    },
    "MapSnapshotOut": {
     "properties": {
@@ -5693,6 +6456,82 @@
     ],
     "title": "NotificationPrefsOut"
    },
+   "ObservationProviderHealthOut": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "stale",
+       "missing"
+      ],
+      "title": "Status"
+     },
+     "active_stations": {
+      "type": "integer",
+      "title": "Active Stations",
+      "default": 0
+     },
+     "newest_observed_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Newest Observed At"
+     },
+     "age_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Hours"
+     },
+     "stale_after_hours": {
+      "type": "number",
+      "title": "Stale After Hours"
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider",
+     "status",
+     "stale_after_hours"
+    ],
+    "title": "ObservationProviderHealthOut"
+   },
+   "ObservationsHealthOut": {
+    "properties": {
+     "enabled": {
+      "type": "boolean",
+      "title": "Enabled"
+     },
+     "providers": {
+      "items": {
+       "$ref": "#/components/schemas/ObservationProviderHealthOut"
+      },
+      "type": "array",
+      "title": "Providers"
+     }
+    },
+    "type": "object",
+    "required": [
+     "enabled"
+    ],
+    "title": "ObservationsHealthOut"
+   },
    "OfferOut": {
     "properties": {
      "id": {
@@ -6358,6 +7197,185 @@
      "email"
     ],
     "title": "RegisterIn"
+   },
+   "ResearchOut": {
+    "properties": {
+     "research_class": {
+      "type": "string",
+      "title": "Research Class"
+     },
+     "summary": {
+      "type": "string",
+      "title": "Summary"
+     },
+     "gaps": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Gaps"
+     },
+     "variables": {
+      "items": {
+       "$ref": "#/components/schemas/ResearchVariableOut"
+      },
+      "type": "array",
+      "title": "Variables"
+     },
+     "sources": {
+      "items": {
+       "$ref": "#/components/schemas/ResearchSourceOut"
+      },
+      "type": "array",
+      "title": "Sources"
+     },
+     "methodology_version": {
+      "type": "string",
+      "title": "Methodology Version"
+     },
+     "assessed_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Assessed At"
+     },
+     "research_updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Updated At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "research_class",
+     "summary",
+     "gaps",
+     "variables",
+     "sources",
+     "methodology_version",
+     "assessed_at",
+     "research_updated_at"
+    ],
+    "title": "ResearchOut",
+    "description": "How well the spot's ideal conditions are understood (not forecast confidence)."
+   },
+   "ResearchSourceOut": {
+    "properties": {
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Url"
+     },
+     "publisher": {
+      "type": "string",
+      "title": "Publisher"
+     },
+     "source_type": {
+      "type": "string",
+      "title": "Source Type"
+     },
+     "published_year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published Year"
+     },
+     "accessed_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Accessed At"
+     },
+     "retrieval": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Retrieval"
+     }
+    },
+    "type": "object",
+    "required": [
+     "title",
+     "url",
+     "publisher",
+     "source_type",
+     "published_year",
+     "accessed_at"
+    ],
+    "title": "ResearchSourceOut"
+   },
+   "ResearchVariableOut": {
+    "properties": {
+     "variable": {
+      "type": "string",
+      "title": "Variable"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "research_class": {
+      "type": "string",
+      "title": "Research Class"
+     },
+     "summary": {
+      "type": "string",
+      "title": "Summary"
+     },
+     "gaps": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Gaps"
+     },
+     "source_count": {
+      "type": "integer",
+      "title": "Source Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "variable",
+     "label",
+     "research_class",
+     "summary",
+     "gaps",
+     "source_count"
+    ],
+    "title": "ResearchVariableOut"
    },
    "ResetPasswordIn": {
     "properties": {
@@ -7128,6 +8146,112 @@
     ],
     "title": "SliceOut"
    },
+   "SourceHealthOut": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "role": {
+      "type": "string",
+      "enum": [
+       "forecast",
+       "blend",
+       "ensemble"
+      ],
+      "title": "Role"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "stale",
+       "missing"
+      ],
+      "title": "Status"
+     },
+     "newest_run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Newest Run Key"
+     },
+     "newest_issued_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Newest Issued At"
+     },
+     "age_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Hours"
+     },
+     "stale_after_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stale After Hours"
+     },
+     "latest_attempt_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Attempt Status"
+     },
+     "latest_attempt_started_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Latest Attempt Started At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "role",
+     "status"
+    ],
+    "title": "SourceHealthOut"
+   },
    "SpotAirportOut": {
     "properties": {
      "airport": {
@@ -7279,6 +8403,17 @@
       "title": "Upcoming Event Count",
       "default": 0
      },
+     "research_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Class"
+     },
      "forecast_latitude": {
       "type": "number",
       "title": "Forecast Latitude"
@@ -7361,6 +8496,16 @@
       "anyOf": [
        {
         "$ref": "#/components/schemas/PhysicalProfileOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "research": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ResearchOut"
        },
        {
         "type": "null"
@@ -7717,6 +8862,17 @@
       "type": "integer",
       "title": "Upcoming Event Count",
       "default": 0
+     },
+     "research_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Class"
      }
     },
     "type": "object",
@@ -7817,6 +8973,30 @@
      "pairs"
     ],
     "title": "StationSummary"
+   },
+   "StorageOut": {
+    "properties": {
+     "database_bytes": {
+      "type": "integer",
+      "title": "Database Bytes"
+     },
+     "database_max_gb": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Database Max Gb"
+     }
+    },
+    "type": "object",
+    "required": [
+     "database_bytes"
+    ],
+    "title": "StorageOut"
    },
    "TokenIn": {
     "properties": {

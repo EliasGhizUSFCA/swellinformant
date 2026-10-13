@@ -49,6 +49,8 @@ test.describe("spot page forecast", () => {
 
   test("model comparison lists every model with its role and switches variables", async ({ page }) => {
     await page.goto("/spots/pipeline");
+    // Model comparison is secondary detail: collapsed until asked for.
+    await page.getByRole("button", { name: /Compare forecast models/ }).click();
     const cmp = page.getByTestId("model-comparison");
     await expect(cmp).toBeVisible();
     await expect(cmp.getByTestId("model-roles")).toContainText("used for our prediction");

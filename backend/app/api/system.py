@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import check_database, get_db
+from app.core.ratelimit import rate_limit
 from app.core.redis import check_redis
 from app.models import BackgroundJobLog
+from app.schemas.health import DataHealthOut
 from app.services.forecasts.queries import forecast_status
+from app.services.health import data_health
 from app.services.spot_views import event_counts
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -32,6 +35,7 @@ JOB_NAMES = [
     "verification.collect_point_forecasts",
     "verification.run",
     "maintenance.cleanup",
+    "ops.data_health",
 ]
 
 
@@ -53,6 +57,32 @@ def ready() -> JSONResponse:
     return JSONResponse(
         {"status": "ok" if ok else "degraded", "checks": checks}, status_code=200 if ok else 503
     )
+
+
+@router.get(
+    "/health/data",
+    response_model=DataHealthOut,
+    dependencies=[Depends(rate_limit("health-data", 60, 60))],
+)
+def data_health_report(
+    response: Response,
+    strict: bool = Query(
+        False, description="Answer 503 instead of 200 when the status is 'failing'"
+    ),
+    db: Session = Depends(get_db),
+) -> DataHealthOut:
+    """Data freshness and background-job health (ok / degraded / failing, with reasons).
+
+    Public on purpose, like /api/system/status: it holds operational metadata only (run
+    keys, ages, limits, job statuses, reasons written by the service; no personal data,
+    no raw error text), and an external uptime monitor must be able to read it without
+    credentials, because a dead worker cannot send its own alert. Rate limited per IP.
+    """
+    report = data_health(db)
+    response.headers["Cache-Control"] = "no-store"
+    if strict and report.status == "failing":
+        response.status_code = 503
+    return report.out
 
 
 @router.get("/system/status")

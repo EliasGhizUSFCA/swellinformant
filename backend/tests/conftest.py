@@ -48,6 +48,10 @@ from app.core.database import SessionLocal, get_engine  # noqa: E402
 from app.core.redis import get_redis  # noqa: E402
 
 MUTABLE_TABLES = [
+    "map_fields",
+    "spot_research_claims",
+    "spot_research_sources",
+    "spot_research_assessments",
     "prediction_validation",
     "forecast_accuracy_metrics",
     "ml_model_versions",
@@ -136,6 +140,19 @@ def few_spots(db: Session) -> list[str]:
     db.execute(text("UPDATE surf_spots SET is_active = (slug = ANY(:keep))"), {"keep": keep})
     db.commit()
     return keep
+
+
+@pytest.fixture
+def only_simulated_swells(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Natural demo swells off (as in the e2e tests): only the swells a test simulates exist.
+
+    Natural demo swells follow fixed calendar slots, so on some dates one merges with a
+    simulated swell into an event that starts inside DETECTION_LEAD_MIN_DAYS (no new
+    match) or replaces the event whose match a test checks (that match is expired as
+    "merged into another event"). Tests that simulate a swell and check its matches or
+    alerts use this fixture so they pass on every date (review, 2026-10-13).
+    """
+    monkeypatch.setattr(get_settings(), "demo_natural_swells", False)
 
 
 class ApiClient:

@@ -59,9 +59,45 @@ variables.
 * Breaking height from linear wave theory + Komar–Gaughan per swell partition, with
   directional spreading, shore normal, shadowing and a focusing prior; spot physical
   profiles carry a provenance flag for every parameter.
-* An 80% range (p10–p90) labelled heuristic (or ensemble-based) until it is verified.
-* A documented 0–100 quality score kept separate from height and from forecast confidence.
+* An 80% range (p10–p90) labelled heuristic (or ensemble-based) until it is verified. Its
+  offshore part was checked against NDBC buoys: it held the observed wave height 53 % of the
+  time at 24 h and 85-89 % beyond 5 days instead of 80 % (most misses were above the range:
+  the raw model runs low). A buoy-fitted offshore range (`ndbc-offshore-v1`) exists in the
+  code but is not used by the prediction job yet
+  ([`docs/ml-evaluation.md`](docs/ml-evaluation.md) §12.2).
+* A documented 0–100 quality score kept separate from height and from forecast confidence
+  (shown as "Excellent Surf — 8.9/10" with a "Why this rating?" breakdown).
 * Daylight-only windows from NOAA sunrise and sunset.
+
+**Two separate confidence assessments** (never merged into one number)
+
+* *Research confidence* per spot and per condition (swell direction, size, period, wind,
+  tide, bottom, season, how the wave breaks): High / Moderate / Low from cited sources,
+  their independence, type, agreement and age, with the gaps in plain language
+  ([`docs/research-confidence.md`](docs/research-confidence.md), methodology research-v1.2).
+  The committed evidence covers all 50 spots: 468 sources (403 read directly, 65 seen only
+  as search summaries), 1,730 claims, including NOAA BlueTopo bathymetry for four US spots;
+  35 spots are Moderate and 15 Low, none High.
+* *Evidence-based spot profiles*: every profile value contradicted by the evidence has a
+  decision record (changed / kept / disputed, with sources and the effect on a real run;
+  [`data/surf_spots/profile_decisions.json`](data/surf_spots/profile_decisions.json)), a
+  value changes only when two independent, directly read publishers outrank all direct
+  support for the old one, and `python -m app.cli research lint` flags unexplained
+  geometry. Where sources disagree about which wind is offshore, every forecast hour says so,
+  and the app shows that note next to the wind.
+* *Forecast confidence* per forecast hour: lead time, ensemble spread, disagreement between
+  independent model families only, run-to-run change, data completeness, staleness and
+  source; plus *local confidence* at the break, which can be no better than how well the
+  break is researched ([`docs/forecast-confidence.md`](docs/forecast-confidence.md)).
+  Documented classes, not calibrated probabilities. Every assessment is kept with the
+  prediction archive.
+
+**Interactive map**
+
+* Full-screen dark map with NOAA ocean layers: wave height, wave energy, wave period and
+  wind speed as colour fields with animated particles, optional isobars, a timeline over
+  the model's valid times, a legend, settings (units, particles, dark or street basemap,
+  spot filters) and locate-me. Spot markers stay coloured by our surf prediction.
 
 **Verification and ML post-processing**
 
@@ -173,10 +209,11 @@ Compose 5.6. Allocate at least 4 GB of memory to Docker.
 
 | Tool | Version | macOS install |
 |------|---------|---------------|
-| Python | 3.12 or newer (verified with 3.12 in Docker and 3.13 locally) | `brew install python@3.12` |
+| Python | 3.12 or newer (the Docker image, CI and local development use 3.13) | `brew install python@3.13` |
 | Node.js | 22 LTS (verified 22.22/22.23; Next.js 16 needs ≥ 20.9) | `brew install node@22` |
 | PostgreSQL | 16 (needs the bundled `btree_gist` extension) | `docker compose up -d postgres` or `brew install postgresql@16` |
 | Redis | 7 | `docker compose up -d redis` or `brew install redis` |
+| PostgreSQL client tools | 16 (`pg_dump`, `pg_restore`, `psql`), only for the backup scripts outside Docker | `brew install libpq` (or use `scripts/backup-db.sh --compose`) |
 
 ## E. Installation
 
@@ -221,7 +258,7 @@ docker compose up -d postgres redis
 
 # backend
 cd backend
-python3.12 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 python -m app.cli init-db          # create schema (Alembic) and seed spots/airports
@@ -263,14 +300,16 @@ docker compose ps                    # health of every service
 docker compose logs -f worker beat   # watch the jobs
 docker compose down                  # stop (keeps the database volume)
 docker compose down -v               # stop and delete all data
+docker compose --profile backup up -d backup   # optional: daily pg_dump backups (docs/operations.md)
+scripts/check-health.sh              # data health from a shell: exit 0 ok, 1 degraded, 2 failing
 ```
 
 | What | URL |
 |------|-----|
 | Web app | http://localhost:3000 |
-| Backend API | http://localhost:8000 (health: `/api/health`, readiness: `/api/health/ready`) |
+| Backend API | http://localhost:8000 (health: `/api/health`, readiness: `/api/health/ready`, data health: `/api/health/data`) |
 | API documentation (OpenAPI / Swagger UI) | http://localhost:8000/docs |
-| System status (jobs, data freshness, provider modes) | http://localhost:3000/status |
+| System status (data health, every job's state, provider modes) | http://localhost:3000/status |
 | Development inbox (Mailpit) — every email the stack sends | http://localhost:8025 |
 | Forecast accuracy dashboard (admin accounts) | http://localhost:3000/status/accuracy |
 
@@ -371,8 +410,10 @@ DNS); Mailpit delivery is verified end to end.
 
 ### Map configuration
 
-The map works without configuration (OpenStreetMap tiles, attribution shown, light use
-only under the OSM tile policy). For more traffic use a tile provider:
+The map works without configuration: the default basemap is a dark vector map drawn from
+Natural Earth data bundled with the app (no tile server). The "Streets" basemap in the
+map's settings uses OpenStreetMap tiles (attribution shown, light use only under the OSM
+tile policy). For more traffic on that basemap use a tile provider:
 
 * CARTO: `NEXT_PUBLIC_CARTO_API_KEY=<key>` (free keys at carto.com/basemaps/apikey;
   key-less CARTO raster tiles now show "API KEY REQUIRED").
@@ -381,6 +422,38 @@ only under the OSM tile policy). For more traffic use a tile provider:
 * These are build-time variables: run `docker compose build frontend` after changing them.
   The tile host is added to the Content-Security-Policy automatically; extra hosts go in
   `MAP_TILE_HOSTS`.
+
+### Map ocean layers
+
+The map's global layers (offshore significant wave height, not surf height; peak period
+and direction; 10 m wind; sea-level pressure) are NOAA GFS-Wave and GFS model output,
+regridded to 0.5° and served by `GET /api/map/fields`. Without them the map shows the
+spots only, with a one-line notice; its legend repeats the index's message saying what to
+set.
+
+```env
+# With live NOAA spot forecasts the layers come with every NOAA acquisition (automatic):
+FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs
+# Real ocean layers with demo (or any other) spot forecasts: the standalone mode.
+MAP_FIELDS_ENABLED=true
+# MAP_FIELDS_ENABLED=false switches them off. Tuning (defaults):
+MAP_FIELD_RESOLUTION_DEG=0.5
+MAP_FIELD_MAX_LEAD_HOURS=240
+MAP_FIELD_STEP_HOURS=3
+```
+
+* In the standalone mode the job `forecasts.map_fields` reads only the global fields of
+  the newest complete GFS cycle (every 3 h, under the separate source
+  `noaa_gfs_fields`, never used for spot forecasts). Measured live on 2026-10-11:
+  about 380 MB download, 66 s and 39 MB stored per cycle (f000 to f240 every 3 h). With
+  `noaa_gfs` as a provider the fields come from the files it reads anyway, plus at most
+  1.8 MB per forecast hour (none with the default spots, two of which use the global
+  wave grid).
+* Fetch them now: `python -m app.cli engine map-fields [--cycle YYYYMMDDHH]
+  [--max-lead-hours N] [--force]` (any mode except off).
+* Encoding, sources, licence, measurements and limitations:
+  [`docs/map-layers.md`](docs/map-layers.md). Model output, not observations, and not
+  for navigation.
 
 ### Observations, verification and ML post-processing
 
@@ -418,12 +491,21 @@ python -m app.cli ml import-manifest DIR/manifest.json
 ```
 
 **Result so far** ([`docs/ml-evaluation.md`](docs/ml-evaluation.md)): against QC'd
-spectral Hm0 at three Western Australian buoys (2021), raw GFS-Wave has RMSE 0.40 m at
-24 h and 1.01 m at 240 h, biased low by about 0.23 m. A ridge correction cut held-out
-RMSE at Cape Naturaliste by 8 % and passed every deployment criterion; it is shipped in
-`backend/ml_models/` as a candidate but **not active by default**, because at the spots
-its inputs (gridded GFS-Wave) differ from the station bulletins it was validated on.
-Random forest and gradient boosting were rejected.
+spectral Hm0, raw GFS-Wave is biased low by about 0.23 m both at three Western Australian
+buoys (2021; RMSE 0.40 m at 24 h, 1.01 m at 240 h) and at ten NDBC buoys off Hawaii and
+California (2025-02 to 2026-10; RMSE 0.38 m at 24 h, 0.64 m at 240 h). Two corrections
+are shipped in `backend/ml_models/offshore_hs_residual/`, and **neither is active by
+default**:
+
+* v6, a random forest trained on the NDBC and AODN pairs: held-out RMSE at five NDBC buoys
+  0.427 → 0.320 m (-25 %); it passed every deployment criterion and the transfer check on
+  a live gridded run and is approved for activation at seven US spots (Jaws, Mavericks,
+  Ocean Beach, Pipeline, Sunset Beach, Trestles, Waimea Bay). Activating it is an operator
+  step (`ml import-manifest`, then `ml activate`; docs/ml-evaluation.md §12.4).
+* v4, a ridge trained at Cape Naturaliste (Western Australia): held-out RMSE -8 %; kept
+  inactive because at the spots its inputs (gridded GFS-Wave) differ from the station
+  bulletins it was validated on. In that run random forest and gradient boosting were
+  rejected.
 
 A correction is applied only at spots paired with its training buoys, only within its
 trained lead range and only to the model family it was trained on (in multi-model mode it
@@ -482,13 +564,27 @@ migrations on a scratch database:
 ```bash
 cd backend
 source .venv/bin/activate
-pytest                          # all tests
 pytest tests/unit               # pure unit tests, no database needed
+pytest tests/integration        # PostgreSQL + Redis (run as a separate process, as CI does)
 ruff check . && ruff format --check .
 mypy app
+alembic upgrade head && alembic check
 ```
 
-Override the test database with `TEST_DATABASE_URL` / `TEST_REDIS_URL` if needed.
+Override the test database with `TEST_DATABASE_URL` / `TEST_REDIS_URL` if needed. Read
+exit codes directly, not through a pipe (`pytest … | tail` reports `tail`'s exit code; see
+docs/debug-audit.md on the ecCodes / psycopg crash this once hid). The backup-script tests
+(`tests/integration/test_backup_scripts.py`) need the PostgreSQL 16 client tools and are
+skipped without them.
+
+**Continuous integration** (`.github/workflows/ci.yml`, GitHub Actions) runs on every
+push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python 3.13:
+`ruff format --check`, `ruff check`, `mypy app`, shellcheck of the operations scripts,
+`alembic upgrade head` + `alembic check`, then `pytest tests/unit` and
+`pytest tests/integration` as separate steps) and a frontend job (Node 22: `tsc`,
+`eslint`, `vitest`, `next build`). The end-to-end job (Playwright with Chromium, through
+`scripts/run-e2e.sh` against the job's own services) runs on pushes and on demand
+(Actions → CI → Run workflow). pip, npm and the Playwright browser are cached.
 
 **Frontend:**
 
@@ -561,7 +657,10 @@ dependencies installed. If Chromium is installed somewhere else, set
 | Opportunity says "quoted in EUR (no FX rate configured)" | Offers in another currency are never guessed into your budget. Set `FX_RATES_USD_JSON`, or use the budget currency the provider quotes |
 | Backend exits with `ValidationError` on start | A setting is invalid (e.g. `APP_ENV=production` with the default `SECRET_KEY`, `demo` mixed with live providers, or an unknown provider). The message names the field |
 | `Bind for 0.0.0.0:5432 failed: port is already allocated` | Another Postgres, Redis or app is using the port. Change the host port in `.env` (`POSTGRES_PORT`, `REDIS_PORT`, `BACKEND_PORT`, `FRONTEND_PORT`), or stop the local service (`brew services stop postgresql@16`) |
-| Background jobs not executing | `docker compose ps` should show `worker` healthy and `beat` up. `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate `celery … worker` and `celery … beat` processes |
+| `/status` or `/api/health/data` says *degraded* or *failing* | Each reason names the source, job or layer and its limit. Follow the incident playbook in [`docs/operations.md`](docs/operations.md); `scripts/check-health.sh` prints the same reasons from a shell |
+| No data-health alert email although the status is degraded | Alerts go to active admin accounts with a verified address only (`python -m app.cli make-admin you@example.com`); the `ops.data_health` job log says `no active admin account …` otherwise. Each problem is emailed once, then every `DATA_HEALTH_ALERT_REPEAT_HOURS` (12 h); `DATA_HEALTH_ALERTS_ENABLED=false` switches them off |
+| `beat` shows *unhealthy* | Its schedule file has not been written for 10 minutes: beat is stuck or cannot reach Redis. `docker compose logs beat`, then `docker compose restart beat` (run exactly one beat) |
+| Background jobs not executing | `docker compose ps` should show `worker` and `beat` healthy. `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate `celery … worker` and `celery … beat` processes |
 | No verification / alert email | In Docker, open Mailpit (http://localhost:8025). Console mode writes to the outbox file. The dashboard banner and `/notifications` show each email's status: `failed`/`rejected` carry the provider's reason; `accepted` means the provider took it but has not confirmed delivery (check the provider's logs, your domain's SPF/DKIM/DMARC, and spam folders) |
 | `noaa_gfs` run fails with "no complete NOAA GFS cycle" | The newest cycles are still uploading (f240 lands ~5 h after the cycle) or NOAA changed the file layout (GFS v17: 404 on every file). Check one URL from the error in a browser; adjust `NOAA_GFS_WAVE_PATH_TEMPLATE` / `NOAA_GFS_ATMOS_PATH_TEMPLATE` after a layout change |
 | ECMWF logs `503 SlowDown` | The ECMWF bucket throttles bursts. The provider paces and retries; occasional 503s are normal. Persistent ones: lower `GRIB_DOWNLOAD_WORKERS` |
@@ -596,12 +695,24 @@ Checklist:
 * Secrets come from the platform's secret manager as environment variables.
 * Use commercial terms for Open-Meteo, live Duffel or Amadeus Enterprise, a verified
   sending domain (SPF/DKIM) for email, and a registered Twilio sender.
-* Monitoring:
-  * `/api/health/ready` for load balancers;
-  * `background_job_logs` and `/api/system/status` for job health;
-  * alert on `forecasts.acquire` failures and on stale data.
-* Backups: managed Postgres snapshots. Redis holds only transient state (queue, locks,
-  counters).
+* Monitoring ([`docs/operations.md`](docs/operations.md)):
+  * `/api/health/ready` for load balancers (database and Redis reachable);
+  * `/api/health/data` for data health: every forecast source's age against its own
+    stale limit, every scheduled job's last result (failed, overdue, stuck), map-layer
+    and buoy freshness, and a job heartbeat, summed up as `ok` / `degraded` / `failing`
+    with reasons. Public (operational metadata only, rate limited); `?strict=true`
+    answers 503 when failing. `scripts/check-health.sh URL` wraps it for cron (exit 0 / 1
+    / 2 / 3);
+  * the `ops.data_health` job emails every active, verified admin account when a problem
+    appears, again at most every 12 h while it lasts, and once more when it clears. A
+    stopped worker cannot send that email, so also poll `/api/health/data` from outside.
+* Backups: `scripts/backup-db.sh` (pg_dump custom format, checksummed, retention by count
+  and age) from cron or the compose `backup` profile (`docker compose --profile backup up
+  -d backup`), `scripts/restore-db.sh` to restore, and `scripts/restore-drill.sh` to prove
+  a backup restores (exact row counts per table). With managed PostgreSQL, keep its
+  snapshots as well. Redis holds only transient state (queue, locks, counters).
+* Capacity, bandwidth and retention for a single small server: docs/operations.md
+  "Capacity".
 
 ## K. Limitations
 
@@ -614,6 +725,9 @@ Checklist:
 * All Celery jobs, plus the web app and its pages.
 * The Docker Compose stack: verified building and running, including a real Celery
   worker delivering alerts.
+* Data-health monitoring (`/api/health/data`, the status page, the `ops.data_health`
+  admin alerts with de-duplication and recovery notices), the backup, restore and
+  restore-drill scripts and the compose `backup` profile (docs/operations.md).
 
 **Demo-only**
 
@@ -625,13 +739,68 @@ Checklist:
 
 **Verified live**
 
+* Unattended operation in Docker Compose, 2026-10-12 and 2026-10-13, with live providers
+  and every download made from inside the Docker network: NOAA GFS-Wave + GFS 00Z
+  (1,908 MB, 2.5 min), ECMWF IFS 00Z (about 0.9 GB, 8.5 min, in parallel) and GEFS-Wave
+  00Z (201.5 MB, 41 s), all 50 spots with 0 errors, then the blend, 11,350 predictions, the
+  archive and the rest of the chain, all started by hand and run by the worker container.
+  After each of two later outages of the Docker daemon (3.8 h and 3.7 h), beat itself sent
+  the jobs that had fallen due, and the worker ran them: the GEFS-Wave 12Z acquisition
+  (201.4 MB) and, with lead times limited to 24 h to stay within the sandbox's download
+  budget, the NOAA and ECMWF 12Z and the NOAA 18Z acquisitions and the whole chain; beat
+  also fired the GEFS-Wave 18Z acquisition at its own cron time. The running beat held all
+  11 expected schedule entries each time; in three soaks (about 64, 65 and 30 min,
+  the last on the final code) every job due ran without an error. The data-health job
+  emailed the admin account (Mailpit) when the NOAA run passed its 16 h limit, then a new
+  problem without repeating the first, then a recovery notice; after an outage, the
+  overdue jobs (without repeating what had been sent before it), and once everything was
+  fresh again, one "all checks ok" notice. Memory, durations, table growth and what was not
+  verified: [`docs/operations.md`](docs/operations.md) §6 and §8. The sandbox needed only
+  its TLS-proxy CA mounted into the containers.
+* Backups: restore drills on a copy of the real 2026-10-11 runs (42 tables, 34,800 rows
+  identical), a restore into the Compose database, and the compose `backup` service,
+  including its first backup after a Docker daemon restart (it waits for PostgreSQL).
 * NOAA GFS-Wave + GFS direct, ECMWF IFS open data and GEFS-Wave statistics, on
   2026-10-11: all 50 spots, 0 errors (4,050 + 3,250 records and 2,050 ensemble rows),
   then the blend, 11,350 predictions, the archive and swell detection
   ([`docs/FORECAST_SOURCES.md`](docs/FORECAST_SOURCES.md)).
 * Open-Meteo (NOAA GFS + GFS-Wave), on 2026-10-09: 19,200 records, 0 errors.
+* Map ocean layers from the real GFS cycle 2026-10-11 12Z (all 81 steps to 240 h),
+  served over HTTP and rendered by the map; values cross-checked against the NOAA point
+  samples ([`docs/map-layers.md`](docs/map-layers.md)).
+* Forecast confidence on the real 2026-10-11 NOAA / ECMWF / GEFS runs, and the
+  per-source staleness fix (ECMWF stays in the blend until its run is 25 h old instead of
+  dropping out after 18 h).
 * Email to Mailpit, end to end (verification and alert emails, including the 15-step
   scenario).
+* NOAA NDBC buoys, on 2026-10-12 (`www.ndbc.noaa.gov` reachable since that day): 11 active
+  Hawaii and California stations, positions matching NDBC's station list, a 24-month
+  backfill of 337,400 spectral Hm0 records and the realtime files with 0 errors, then the
+  GFS-Wave bulletins at the 10 stations that have one and the NDBC backtest
+  ([`docs/observations.md`](docs/observations.md), "Live verification of NDBC";
+  [`docs/ml-evaluation.md`](docs/ml-evaluation.md) §11).
+
+**Known limits of the confidence assessments**
+
+* Research evidence comes from two passes: a first one on 2026-10-11 through
+  domain-restricted web searches, and a second on 2026-10-12 that re-read every source it
+  could open (384 of 449 read directly; the 65 behind bot protection remain search
+  summaries). With the 19 NOAA BlueTopo tiles added on 2026-10-13 that is 468 sources, 403
+  read directly. A condition supported only by search summaries is capped at Moderate;
+  that no longer happens anywhere, since every supported condition has a directly read
+  source. No spot is High overall: tide evidence conflicts at the two spots whose swell
+  direction, size and wind are all High, and most spots have no measured bathymetry (only
+  four US spots, from NOAA BlueTopo).
+* Eleven offshore wind directions are disputed by the evidence and were not changed (the rule
+  needs two directly read publishers that outrank every direct source of the old value);
+  forecasts at 15 spots carry "Sources disagree about which wind is offshore here." The
+  score still uses the profile's direction.
+* Forecast and research confidence classes are documented heuristics; they have not been
+  calibrated against observed surf (no nearshore observations exist yet). The forecast
+  classes were checked against NDBC buoys for the offshore wave height: with a GEFS-Wave
+  spread they are ordered by the size of the error; without one, High and Moderate from a
+  single model were not clearly different ([`docs/ml-evaluation.md`](docs/ml-evaluation.md)
+  §12.3).
 
 **Implemented but not verified against the real services** (outbound network to these
 APIs was blocked in the build environment). Each adapter is unit-tested against
@@ -645,9 +814,13 @@ documented response shapes with mocked HTTP. Expect to adjust details on first l
 | Resend | `RESEND_API_KEY` |
 | SendGrid | `SENDGRID_API_KEY` |
 | Twilio | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
-| NDBC buoys (observations) | nothing (public), but `www.ndbc.noaa.gov` was unreachable from the build environment; parsers are tested against NDBC's documented formats only |
 
 SMTP is verified end to end: the Docker stack delivered a verification email to Mailpit.
+
+The GitHub Actions workflow (`.github/workflows/ci.yml`) has not run on GitHub yet: it
+was validated with actionlint and every step's commands except the Playwright browser
+installation were run locally. Admin data-health emails were verified with the console
+and Mailpit capture providers only, not through a real email provider.
 
 **Not implemented**
 
@@ -666,7 +839,9 @@ SMTP is verified end to end: the Docker stack delivered a verification email to 
 * Wave forecasts 5–10 days ahead routinely shift in timing (± a day) and size.
   Confidence is shown separately from quality for this reason.
 * Breaking heights come from a physical model with estimated spot profiles (shore normal,
-  shadowing, focusing; no bathymetry). They are unvalidated against surf observations and
+  shadowing, focusing; survey depths at the forecast points of three US spots and one
+  measured shore normal, at Trestles; no measured depth at any break, because the break coordinates
+  are shoreline positions). They are unvalidated against surf observations and
   can be wrong by a factor of 2 at reef and point breaks with unusual bathymetry. The 80%
   range is a heuristic, not a calibrated probability.
 * Quality-score weights, thresholds and labels are reasoned defaults, not fitted to

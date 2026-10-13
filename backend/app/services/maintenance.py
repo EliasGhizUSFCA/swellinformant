@@ -2,6 +2,10 @@
 
 * forecast runs older than RETENTION_FORECAST_DAYS are deleted (their wave forecasts and
   predictions cascade), always keeping the two newest usable runs per source;
+* map fields (the map's ocean layers, about 0.1 MB per field and 0.5 deg) are kept for the
+  two best servable runs only (:func:`prune_map_fields`, also run after every acquisition
+  that stores fields); other map_fields rows are deleted (a deleted forecast run also
+  takes its fields with it);
 * flight searches older than RETENTION_FLIGHT_DAYS are deleted unless an offer is still
   referenced by an open opportunity;
 * matches whose surf window has passed become EXPIRED;
@@ -38,14 +42,37 @@ from app.models import (
     UserToken,
 )
 from app.models.enums import ForecastRunStatus, MatchStatus
+from app.models.forecast_engine import MapField
+from app.services.map_fields import servable_runs_query
 
 logger = logging.getLogger(__name__)
+
+MAP_FIELD_RUNS_KEPT = 2
+
+
+def prune_map_fields(db: Session, keep: int = MAP_FIELD_RUNS_KEPT) -> int:
+    """Delete the map fields of every run but the ``keep`` best servable ones.
+
+    "Best" is the read side's order (``map_fields.servable_runs``: newest cycle, then the
+    most complete valid times, then the newer run), so the served run is always kept.
+    Rows of runs without a single complete valid time are never served and go too
+    (a failed fields run that is retried re-fetches every hour anyway). Returns the
+    number of rows deleted; the caller commits.
+
+    One statement, so the runs kept and the rows deleted come from the same snapshot:
+    fields another acquisition commits meanwhile are neither seen nor deleted.
+    """
+    best = servable_runs_query(limit=keep).subquery()
+    stmt = delete(MapField).where(MapField.run_id.notin_(select(best.c.run_id)))
+    return db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
 
 
 def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
     s = get_settings()
     now = now or utcnow()
     out: dict[str, int] = {}
+
+    out["map_fields"] = prune_map_fields(db)
 
     keep_ids: set[int] = set()
     for source_id in db.scalars(select(ForecastRun.source_id).distinct()).all():

@@ -270,8 +270,6 @@ class DisabledSmsProvider(SmsProvider):
 
 class TwilioSmsProvider(SmsProvider):
     name = "twilio"
-    # Twilio error codes that will never succeed on retry.
-    PERMANENT_CODES = {21211, 21408, 21610, 21612, 21614}
     OPTED_OUT_CODE = 21610
 
     def __init__(

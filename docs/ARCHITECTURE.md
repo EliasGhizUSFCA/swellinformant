@@ -35,7 +35,9 @@
 ```
 
 Monitoring runs entirely in the Celery worker + beat processes. Nothing recurring
-runs in the browser or inside a web request handler.
+runs in the browser or inside a web request handler. The worker also watches the stack
+itself (job O1 below); because a stopped worker cannot report its own failure, an external
+monitor should poll `GET /api/health/data` too (docs/operations.md).
 
 ## 2. Pipeline (jobs A–H)
 
@@ -43,17 +45,27 @@ runs in the browser or inside a web request handler.
 |-----|-----------|---------|--------------|
 | A | `forecasts.acquire` | beat (every 3 h) | Centralised fetch of wave + wind + sea level for all active spots (batched multi-point requests), one `forecast_runs` row per source/model run. Skips runs already ingested. |
 | A2 | `forecasts.blend` | chained after A | With two or more independent model families, builds a blend run (one member per family, correlated-error weights, an active ML correction applied to its validated member) and per-hour `forecast_comparisons`. |
-| A3 | `forecasts.acquire_ensemble` | beat 4×/day when `GEFS_ENABLED` | GEFS-Wave ensemble mean/spread at every spot → `forecast_ensemble_stats` (uncertainty only). |
-| B | `quality.predict` | chained after A2, beat hourly safety net | Breaking height (nearshore model v2), 80 % range and quality score for every new timestep → `surf_quality_predictions`; the authoritative run is copied to `prediction_archive`. |
+| A3 | `forecasts.acquire_ensemble` | beat 4×/day (01:40, 07:40, 13:40, 19:40 UTC) when `GEFS_ENABLED` | GEFS-Wave ensemble mean/spread at every spot → `forecast_ensemble_stats` (uncertainty only). |
+| A4 | `forecasts.map_fields` | beat every `FORECAST_REFRESH_MINUTES` (3 h) and at beat start, standalone map-fields mode only | Global ocean-layer fields (GFS-Wave Hs/Tp/direction, GFS 10 m wind and MSL pressure) of the newest complete GFS cycle, regridded to 0.5° and quantised → `map_fields`, under the fields-only source `noaa_gfs_fields` that no spot job reads. A no-op otherwise: with `noaa_gfs` as a provider, job A stores the fields on its NOAA run. See docs/map-layers.md. |
+| B | `quality.predict` | chained after A2, beat every 30 min (safety net) | Breaking height (nearshore model v2), 80 % range and quality score for every new timestep → `surf_quality_predictions`; the authoritative run is copied to `prediction_archive`. |
 | C | `detection.detect` | chained after B, beat hourly | Clusters daylight timesteps into `swell_events`; updates / downgrades / expires existing events. |
 | D | `matching.match` | chained after C, beat every 30 min | Evaluates every active saved search against candidate events → `opportunity_matches`. |
 | E | `flights.discover` | chained after D, beat hourly | Searches flights only for surf-matched opportunities; shared cache across users; buffer + tz logic; stores `flight_offers`. |
 | F | `alerts.generate` | chained after E, beat every 15 min | Decides whether an alert is due (new / improved / price drop), dedups, queues `notifications`. |
 | G | `notifications.deliver` | chained after F, beat every 2 min | Claims queued notifications (`FOR UPDATE SKIP LOCKED`), sends via provider, retries transient failures. |
-| H | `maintenance.cleanup` | beat daily | Retention: old forecasts/predictions/flight searches, expired tokens/sessions, job logs; marks stale data. The prediction archive is kept `RETENTION_ARCHIVE_DAYS`. |
+| H | `maintenance.cleanup` | beat daily 03:30 UTC | Retention: old forecasts/predictions/flight searches, expired tokens/sessions, job logs; marks stale data. The prediction archive is kept `RETENTION_ARCHIVE_DAYS`; map fields only for the two best servable runs (also pruned right after every acquisition that stores fields). |
 | V1 | `observations.ingest` | beat hourly when `OBSERVATIONS_ENABLED` | Buoy observations (AODN, Met Office, NDBC) → `buoy_observations`. |
-| V2 | `verification.collect_point_forecasts` | beat 4×/day when `VERIFICATION_ENABLED` | GFS-Wave station bulletins (forecasts as issued) at the buoys → `point_forecasts`. |
-| V3 | `verification.run` | beat daily when `VERIFICATION_ENABLED` | Pairs forecasts with observations (`prediction_validation`) and computes rolling `forecast_accuracy_metrics`. |
+| V2 | `verification.collect_point_forecasts` | beat 4×/day (00:50, 06:50, 12:50, 18:50 UTC) when `VERIFICATION_ENABLED` | GFS-Wave station bulletins (forecasts as issued) at the buoys → `point_forecasts`. |
+| V3 | `verification.run` | beat daily 04:10 UTC when `VERIFICATION_ENABLED` | Pairs forecasts with observations (`prediction_validation`) and computes rolling `forecast_accuracy_metrics`. |
+| S | `forecasts.check_staleness` | beat hourly | Logs a warning naming every configured source whose newest run is past its stale limit (kept for log-based monitoring; alerting is O1). |
+| O1 | `ops.data_health` | beat every `DATA_HEALTH_CHECK_MINUTES` (15 min) | Builds the data-health report (`services/health.py`: per-source freshness against each source's own stale limit, every scheduled job's last result, overdue and stuck jobs, map-field and buoy freshness, a job heartbeat → ok / degraded / failing with reasons) and emails verified admin accounts when a problem appears or escalates, at most once per problem per `DATA_HEALTH_ALERT_REPEAT_HOURS`, with a recovery notice (`services/notifications/ops_alerts.py`). Its de-duplication state lives in its own job-log rows. |
+
+The schedule itself (entries, intervals, the A→G chain) is built in
+`app/workers/schedule.py`, so the data-health report checks exactly the jobs the current
+settings schedule. Outside Celery: `GET /api/health/data` serves the same report (public:
+operational metadata only, rate limited; `?strict=true` answers 503 when failing, for
+external monitors), and the opt-in compose profile `backup` runs `scripts/backup-db.sh`
+every `BACKUP_INTERVAL_HOURS` (docs/operations.md).
 
 Reliability: Redis job locks (one instance of each job at a time), `acks_late` +
 `task_reject_on_worker_lost`, idempotent upserts guarded by unique constraints,
@@ -76,10 +88,17 @@ backend/app
 │   ├── swell_detection/ clustering + event lifecycle
 │   ├── flights/        provider adapters (duffel, amadeus, demo), travel windows, filters, ranking
 │   ├── matching/       search ↔ event evaluation, opportunity scoring
-│   └── notifications/  email (resend, sendgrid, smtp, console), sms (twilio, console), templates, dedup
-├── workers/        Celery app, beat schedule, task wrappers, locks
+│   ├── notifications/  email (resend, sendgrid, smtp, console), sms (twilio, console), templates, dedup,
+│   │                   admin data-health alerts (ops_alerts)
+│   ├── health.py       data-health report (GET /api/health/data, job ops.data_health)
+│   └── maintenance.py  retention (job H)
+├── workers/        Celery app, beat schedule (schedule.py), task wrappers, locks
 └── main.py
 ```
+
+Operations tooling lives in `scripts/` (`backup-db.sh`, `restore-db.sh`, `restore-drill.sh`,
+`check-health.sh`, `run-e2e.sh`) and `.github/workflows/ci.yml` (backend, frontend and
+end-to-end jobs); see docs/operations.md.
 
 Business logic lives in `services/`; API routes and Celery tasks are thin wrappers so
 the same code is exercised by tests, the API, the dev "run pipeline" endpoint and the

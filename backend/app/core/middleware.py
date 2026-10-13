@@ -104,7 +104,11 @@ class SecurityHeadersMiddleware:
                     extra.append(
                         (b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'")
                     )
-                if path.startswith("/api/"):
+                # API responses are private by default; an endpoint that sets its own
+                # Cache-Control (the public map fields) keeps it.
+                if path.startswith("/api/") and not any(
+                    k.lower() == b"cache-control" for k, _ in headers
+                ):
                     extra.append((b"cache-control", b"no-store"))
                 if secure:
                     extra.append(

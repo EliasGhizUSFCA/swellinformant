@@ -1,350 +1,145 @@
 "use client";
 
-import { ArrowRight, ChevronLeft, ChevronRight, Clock, MapPin, Plane, SlidersHorizontal, X } from "lucide-react";
+import "./map.css";
+
+import { Info, LocateFixed, Loader2 } from "lucide-react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { toast } from "sonner";
 
-import { ConditionsSummary } from "@/components/conditions";
-import { ForecastBreakdown } from "@/components/forecast-breakdown";
 import { AppShell } from "@/components/layout/app-shell";
+import type { ParticleMode } from "@/components/map/forecast-map";
+import { LayerTabs } from "@/components/map/layer-tabs";
+import { LegendDrawer, LegendTab } from "@/components/map/legend-drawer";
+import { FOCUS, GLASS } from "@/components/map/map-ui";
+import { SettingsPopover } from "@/components/map/settings-popover";
+import { NO_FILTERS, passes, type Filters } from "@/components/map/spot-filters";
+import { SpotList } from "@/components/map/spot-list";
+import { SpotPanel } from "@/components/map/spot-panel";
 import type { MarkerState } from "@/components/map/surf-map";
-import { PageHeader } from "@/components/page-header";
-import { DemoBadge, MatchStatusBadge, QualityBadge } from "@/components/quality";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
-import { useMapConditions, useMe, useSpotEvents, useSpotOpportunities, useSpots } from "@/hooks/queries";
-import { formatMoney, formatRange, fromUnits, heightRange, leadLabel, titleCase, type Units } from "@/lib/format";
-import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_LABELS, QUALITY_OPTIONS } from "@/lib/quality";
+import { Timeline } from "@/components/map/timeline";
+import { useCityAirports, useFieldGrids, useFieldIndex } from "@/hooks/map-fields";
+import { useMediaQuery, usePageVisible, usePrefersReducedMotion } from "@/hooks/map-media";
+import { useMapSettings } from "@/hooks/map-settings";
+import { useMapConditions, useMe, useSpots } from "@/hooks/queries";
+import { formatDateTime, heightRange, type Units } from "@/lib/format";
+import type { FieldVariableName } from "@/lib/map-fields";
+import { isobarsFor } from "@/lib/map-geo";
+import { layerDef, layerScale, type DisplayUnits } from "@/lib/map-layers";
+import { bubbleLabel, longTimeLabel, nearestStepIndex, timelineSteps } from "@/lib/map-time";
+import { QUALITY_LABELS } from "@/lib/quality";
 import { cn } from "@/lib/utils";
-import type { Conditions, MapSpot, QualityLabel, SpotSummary } from "@/types/api";
+import type { QualityLabel } from "@/types/api";
 
-const SurfMap = dynamic(() => import("@/components/map/surf-map"), {
+const ForecastMap = dynamic(() => import("@/components/map/forecast-map"), {
   ssr: false,
-  loading: () => <Skeleton className="h-full w-full rounded-2xl" />,
+  loading: () => <div className="absolute inset-0 bg-[#151a21]" />,
 });
 
-const LEGEND: Array<{ label: string; color: string }> = [
-  { label: "No usable forecast", color: NO_FORECAST_COLOR },
-  ...(Object.keys(QUALITY_COLORS) as QualityLabel[]).map((q) => ({ label: QUALITY_LABELS[q], color: QUALITY_COLORS[q] })),
-];
-
-interface Filters {
-  region: string;
-  country: string;
-  breakType: string;
-  minHeight: string; // in the user's units; "" = any
-  minQuality: string; // QualityLabel or ""
-  eventsOnly: boolean;
-}
-const NO_FILTERS: Filters = { region: "All", country: "All", breakType: "any", minHeight: "", minQuality: "", eventsOnly: false };
-
-function hourLabel(iso: string, tz: string): string {
-  return new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", month: "short", day: "numeric", hour: "numeric" }).format(new Date(iso));
-}
-
-/** Forecast-time control: 3-hourly steps across the cached forecast range. */
-function TimeControl({
-  start,
-  end,
-  stepHours,
-  value,
-  onChange,
-  tz,
-}: {
-  start: string;
-  end: string;
-  stepHours: number;
-  value: number;
-  onChange: (i: number) => void;
-  tz: string;
-}) {
-  const steps = Math.max(0, Math.floor((new Date(end).getTime() - new Date(start).getTime()) / (stepHours * 3_600_000)));
-  const at = new Date(new Date(start).getTime() + value * stepHours * 3_600_000).toISOString();
-  return (
-    <div className="flex flex-wrap items-center gap-2 rounded-2xl border bg-card px-3 py-2 shadow-sm" data-testid="time-control">
-      <Clock className="size-4 text-ocean" />
-      <span className="text-sm font-medium" data-testid="time-label">
-        {hourLabel(at, tz)}
-      </span>
-      <span className="text-xs text-muted-foreground">({tz.replaceAll("_", " ")})</span>
-      <div className="ml-auto flex flex-1 items-center gap-2 sm:min-w-[320px]">
-        <Button size="icon" variant="ghost" aria-label="Earlier" disabled={value <= 0} onClick={() => onChange(Math.max(0, value - 1))}>
-          <ChevronLeft />
-        </Button>
-        <input
-          type="range"
-          min={0}
-          max={steps}
-          step={1}
-          value={Math.min(value, steps)}
-          onChange={(e) => onChange(Number(e.target.value))}
-          aria-label="Forecast time"
-          className="h-2 flex-1 cursor-pointer accent-[var(--color-ocean,#0e7490)]"
-        />
-        <Button size="icon" variant="ghost" aria-label="Later" disabled={value >= steps} onClick={() => onChange(Math.min(steps, value + 1))}>
-          <ChevronRight />
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => onChange(0)} disabled={value === 0}>
-          Now
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function FilterBar({
-  spots,
-  filters,
-  setFilters,
-  units,
-}: {
-  spots: SpotSummary[];
-  filters: Filters;
-  setFilters: (f: Filters) => void;
-  units: Units;
-}) {
-  const regions = useMemo(() => ["All", ...[...new Set(spots.map((s) => s.region_group))].sort()], [spots]);
-  const countries = useMemo(
-    () => ["All", ...[...new Set(spots.filter((s) => filters.region === "All" || s.region_group === filters.region).map((s) => s.country))].sort()],
-    [spots, filters.region],
-  );
-  const breakTypes = useMemo(() => [...new Set(spots.map((s) => s.break_type))].sort(), [spots]);
-  const set = (patch: Partial<Filters>) => setFilters({ ...filters, ...patch });
-  const select = "h-9 rounded-lg border bg-card px-2 text-sm";
-  return (
-    <div className="space-y-3" data-testid="map-filters">
-      <div className="flex flex-wrap items-center gap-2">
-        {regions.map((r) => (
-          <button
-            key={r}
-            onClick={() => set({ region: r, country: "All" })}
-            aria-pressed={filters.region === r}
-            className={cn("rounded-full border px-3 py-1 text-sm transition", filters.region === r ? "border-ink bg-ink text-white" : "bg-card hover:border-ink/40")}
-          >
-            {r}
-          </button>
-        ))}
-      </div>
-      <div className="flex flex-wrap items-end gap-3 text-sm">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">Country</span>
-          <select className={select} value={filters.country} onChange={(e) => set({ country: e.target.value })} aria-label="Country">
-            {countries.map((c) => (
-              <option key={c} value={c}>
-                {c === "All" ? "All countries" : c}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">Break type</span>
-          <select className={select} value={filters.breakType} onChange={(e) => set({ breakType: e.target.value })} aria-label="Break type">
-            <option value="any">Any break</option>
-            {breakTypes.map((b) => (
-              <option key={b} value={b}>
-                {titleCase(b)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">Min. breaking height ({units})</span>
-          <input
-            type="number"
-            min={0}
-            step={units === "m" ? 0.5 : 1}
-            inputMode="decimal"
-            className={cn(select, "w-28")}
-            value={filters.minHeight}
-            onChange={(e) => set({ minHeight: e.target.value })}
-            aria-label="Minimum breaking wave height"
-            placeholder="Any"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">Min. quality</span>
-          <select className={select} value={filters.minQuality} onChange={(e) => set({ minQuality: e.target.value })} aria-label="Minimum quality">
-            <option value="">Any quality</option>
-            {QUALITY_OPTIONS.map((q) => (
-              <option key={q.value} value={q.value}>
-                {q.label} ({q.min}+)
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex h-9 items-center gap-2">
-          <input type="checkbox" checked={filters.eventsOnly} onChange={(e) => set({ eventsOnly: e.target.checked })} className="size-4 accent-[#0e7490]" />
-          Swell event at this time
-        </label>
-        {JSON.stringify(filters) !== JSON.stringify(NO_FILTERS) && (
-          <Button size="sm" variant="ghost" onClick={() => setFilters(NO_FILTERS)}>
-            <X /> Clear filters
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SpotPanel({
-  spot,
-  at,
-  units,
-  signedIn,
-  onClose,
-}: {
-  spot: SpotSummary;
-  at: Conditions | null;
-  units: Units;
-  signedIn: boolean;
-  onClose: () => void;
-}) {
-  const events = useSpotEvents(spot.slug);
-  const opps = useSpotOpportunities(spot.slug, signedIn);
-  return (
-    <Card className="h-full overflow-auto" data-testid="map-spot-panel">
-      <CardContent className="space-y-4 p-5">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <div className="text-xs text-muted-foreground">
-              {spot.region} · <span data-testid="panel-country">{spot.country}</span>
-            </div>
-            <h2 className="font-display text-2xl font-semibold text-ink" data-testid="panel-spot-name">
-              {spot.name}
-            </h2>
-            <div className="mt-1 text-xs text-muted-foreground">
-              <span className="capitalize">
-                {spot.break_type} break · {spot.wave_direction} · {spot.skill_level}
-              </span>{" "}
-              · fly into {spot.primary_airport ?? "—"}
-            </div>
-          </div>
-          <Button size="icon" variant="ghost" aria-label="Close spot details" onClick={onClose}>
-            <X />
-          </Button>
-        </div>
-
-        {at ? (
-          <ForecastBreakdown c={at} tz={spot.timezone} units={units} />
-        ) : (
-          <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground" data-testid="no-forecast">
-            No usable forecast for this spot at the selected time.
-          </p>
-        )}
-
-        {spot.best_upcoming && <ConditionsSummary c={spot.best_upcoming} tz={spot.timezone} units={units} title="Best surf window, next 7 days" />}
-
-        <div>
-          <div className="mb-2 text-sm font-semibold">Upcoming swell events</div>
-          {events.isLoading && <Skeleton className="h-16" />}
-          {(events.data ?? []).length === 0 && !events.isLoading && <p className="text-sm text-muted-foreground">None detected.</p>}
-          <ul className="space-y-2">
-            {(events.data ?? []).map((e) => (
-              <li key={e.id} className="flex items-center justify-between gap-2 rounded-lg border p-2.5 text-sm">
-                <span>
-                  {formatRange(e.start_time, e.end_time, e.spot.timezone)} <span className="text-muted-foreground">· {leadLabel(e.lead_days)}</span>
-                  <br />
-                  <span className="text-muted-foreground">{heightRange(e.peak_breaking_height_min_ft, e.peak_breaking_height_max_ft, units)}</span>
-                </span>
-                <span className="flex flex-col items-end gap-1">
-                  <QualityBadge label={e.peak_label} score={e.peak_score} />
-                  {e.is_demo && <DemoBadge />}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div>
-          <div className="mb-2 text-sm font-semibold">Your travel opportunities</div>
-          {!signedIn ? (
-            <p className="text-sm text-muted-foreground" data-testid="opps-signed-out">
-              <Link href={`/login?next=/map`} className="text-ocean hover:underline">
-                Sign in
-              </Link>{" "}
-              to see trips matched to your saved searches.
-            </p>
-          ) : (opps.data ?? []).length === 0 ? (
-            <p className="text-sm text-muted-foreground">None for this spot yet.</p>
-          ) : (
-            <ul className="space-y-2">
-              {(opps.data ?? []).map((m) => (
-                <li key={m.id}>
-                  <Link href={`/opportunities/${m.id}`} className="flex items-center justify-between gap-2 rounded-lg border p-2.5 text-sm hover:bg-muted">
-                    <span className="flex items-center gap-2">
-                      <Plane className="size-3.5 text-ocean" />
-                      {m.best_price ? formatMoney(m.best_price, m.currency) : "Surf only"} · {formatRange(m.window_start, m.window_end, m.spot.timezone)}
-                    </span>
-                    <MatchStatusBadge status={m.status} />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <Button asChild className="w-full">
-          <Link href={`/spots/${spot.slug}`}>
-            Full forecast & charts <ArrowRight />
-          </Link>
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
-
-function passes(s: SpotSummary, m: MapSpot | undefined, f: Filters, units: Units): boolean {
-  if (f.region !== "All" && s.region_group !== f.region) return false;
-  if (f.country !== "All" && s.country !== f.country) return false;
-  if (f.breakType !== "any" && s.break_type !== f.breakType) return false;
-  const c = m?.conditions;
-  if (f.minHeight !== "" && Number(f.minHeight) > 0) {
-    if (!c) return false;
-    const mid = (c.breaking_height_min_ft + c.breaking_height_max_ft) / 2;
-    if (mid < fromUnits(Number(f.minHeight), units)) return false;
-  }
-  if (f.minQuality) {
-    const min = QUALITY_OPTIONS.find((q) => q.value === f.minQuality)?.min ?? 0;
-    if (!c || c.score < min) return false;
-  }
-  if (f.eventsOnly && !m?.event_at_time) return false;
-  return true;
-}
-
-/** Sort key for the "best at the selected time" list: daylight hours above night ones. */
-function rankKey(c: Conditions | null | undefined): number {
-  if (!c) return -1;
-  return (c.is_daylight ? 1000 : 0) + c.score;
-}
+/** A spot prediction is shown for a step only if the server found one within this window. */
+const PREDICTION_WINDOW_MS = 90 * 60_000;
 
 export default function MapPage() {
   const { data: spots = [], isLoading, isError } = useSpots();
   const { data: user } = useMe();
-  const units = (user?.profile.units as Units) ?? "ft";
+  const [settings, updateSettings] = useMapSettings();
+  const heightUnits: Units = settings.heightUnits ?? (user?.profile.units as Units | undefined) ?? "ft";
+  const units: DisplayUnits = useMemo(() => ({ height: heightUnits, wind: settings.windUnits }), [heightUnits, settings.windUnits]);
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
+  const reducedMotion = usePrefersReducedMotion();
+  const pageVisible = usePageVisible();
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+
   const [selected, setSelected] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
-  const [stepIndex, setStepIndex] = useState(0);
-  const [debouncedIndex, setDebouncedIndex] = useState(0);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const [listOpen, setListOpen] = useState<boolean | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [zoom, setZoom] = useState(2);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lon: number; key: number } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [selectedTime, setSelectedTime] = useState<string | null>(null); // null = the server's "now"
 
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedIndex(stepIndex), 250);
-    return () => clearTimeout(t);
-  }, [stepIndex]);
-  // The "now" snapshot (cached) defines the scrubbable range; other hours are separate queries.
+  // --- forecast time --------------------------------------------------------------------
+  const fieldIndex = useFieldIndex();
+  const index = fieldIndex.data;
+  const fieldsAvailable = !!index?.available && index.valid_times.length > 0;
+  // The "now" snapshot (cached) defines the spot range and the server's current hour.
   const nowSnapshot = useMapConditions(null);
-  // Step 0 is the server's "now" hour (the hour the default snapshot shows), so the label
-  // and the markers always describe the same time.
   const range = useMemo(() => {
     const d = nowSnapshot.data;
-    return d?.valid_time && d.range_end ? { start: d.valid_time, end: d.range_end, step: d.step_hours } : null;
+    return d?.valid_time && d.range_end ? { start: d.valid_time, end: d.range_end, stepHours: d.step_hours } : null;
   }, [nowSnapshot.data]);
-  const at = range && debouncedIndex > 0 ? new Date(new Date(range.start).getTime() + debouncedIndex * range.step * 3_600_000).toISOString() : null;
-  const snapshot = useMapConditions(at);
+  const steps = useMemo(() => timelineSteps(fieldsAvailable ? index.valid_times : null, range), [fieldsAvailable, index, range]);
+  // Without ocean layers, step 0 is the server's "now" hour (the default snapshot); with them,
+  // the valid time closest to it.
+  const nowIndex = fieldsAvailable ? nearestStepIndex(steps, nowSnapshot.data?.valid_time) : 0;
+  const stepIndex = selectedTime ? nearestStepIndex(steps, selectedTime) : nowIndex;
+  const at = steps[stepIndex] ?? null;
+  const snapshotWanted = fieldsAvailable || stepIndex > 0 ? at : null;
 
-  const bySlug = useMemo(() => new Map((snapshot.data?.spots ?? []).map((m) => [m.slug, m])), [snapshot.data]);
-  const visible = useMemo(() => spots.filter((s) => passes(s, bySlug.get(s.slug), filters, units)), [spots, bySlug, filters, units]);
+  const [debounced, setDebounced] = useState<{ snapshot: string | null; field: string | null }>({ snapshot: null, field: null });
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced({ snapshot: snapshotWanted, field: fieldsAvailable ? at : null }), 250);
+    return () => clearTimeout(t);
+  }, [snapshotWanted, at, fieldsAvailable]);
+
+  const snapshot = useMapConditions(debounced.snapshot);
+  // keepPreviousData shows the last hour while the next loads; only a settled answer whose
+  // time is far from the requested one means "no spot predictions at this time".
+  const predictionsCover = useMemo(() => {
+    const d = snapshot.data;
+    if (!d?.valid_time || snapshot.isPlaceholderData || !debounced.snapshot) return true;
+    return Math.abs(Date.parse(d.valid_time) - Date.parse(debounced.snapshot)) <= PREDICTION_WINDOW_MS;
+  }, [snapshot.data, snapshot.isPlaceholderData, debounced.snapshot]);
+  const bySlug = useMemo(
+    () => new Map(predictionsCover ? (snapshot.data?.spots ?? []).map((m) => [m.slug, m]) : []),
+    [snapshot.data, predictionsCover],
+  );
+
+  // Playback holds while the tab is hidden (no downloads nobody sees) and resumes when shown.
+  useEffect(() => {
+    if (!playing || !pageVisible) return;
+    const t = setTimeout(() => {
+      if (stepIndex >= steps.length - 1) setPlaying(false);
+      else setSelectedTime(steps[stepIndex + 1] ?? null);
+    }, 1100);
+    return () => clearTimeout(t);
+  }, [playing, pageVisible, stepIndex, steps]);
+
+  // --- ocean layers ---------------------------------------------------------------------
+  const layer = settings.layer;
+  const def = layerDef(layer);
+  const offered = useMemo(() => new Set((index?.variables ?? []).map((v) => v.name)), [index]);
+  const layerVars = useMemo(() => def.needs.filter((v) => offered.size === 0 || offered.has(v)), [def, offered]);
+  const pressureVars = useMemo<FieldVariableName[]>(() => (settings.pressure && offered.has("pressure") ? ["pressure"] : []), [settings.pressure, offered]);
+  // Prefetch around the settled (debounced) time only, never around steps passed while scrubbing.
+  const neighbours = useMemo(() => {
+    const i = debounced.field ? steps.indexOf(debounced.field) : -1;
+    return i < 0 ? [] : [steps[i + 1], steps[i - 1]].filter((s): s is string => !!s);
+  }, [steps, debounced.field]);
+  const runKey = fieldsAvailable ? (index.run_key ?? null) : null;
+  const layerFields = useFieldGrids(layerVars, debounced.field, neighbours, runKey);
+  const pressureField = useFieldGrids(pressureVars, debounced.field, neighbours, runKey);
+  const pressureGrid = settings.pressure ? (pressureField.grids?.pressure ?? null) : null;
+  const isobars = useMemo(() => (pressureGrid ? isobarsFor(pressureGrid) : null), [pressureGrid]);
+  const scale = useMemo(() => layerScale(layer, index), [layer, index]);
+  const particleMode: ParticleMode = !settings.particles || !pageVisible ? "off" : reducedMotion ? "static" : "animated";
+  const cities = useCityAirports(zoom >= 4 && settings.basemap === "dark");
+  const cityLabels = useMemo(() => {
+    const seen = new Set<string>();
+    return (cities.data ?? [])
+      .filter((a) => {
+        const k = `${a.city}|${a.country_code}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .map((a) => ({ name: a.city, lat: a.latitude, lon: a.longitude }));
+  }, [cities.data]);
+
+  // --- spots ----------------------------------------------------------------------------
+  const visible = useMemo(() => spots.filter((s) => passes(s, bySlug.get(s.slug), filters, heightUnits)), [spots, bySlug, filters, heightUnits]);
   const markers = useMemo(() => {
     const out: Record<string, MarkerState> = {};
     for (const s of spots) {
@@ -352,106 +147,241 @@ export default function MapPage() {
       out[s.slug] = c
         ? {
             score: c.score,
-            tooltip: `${QUALITY_LABELS[c.label as QualityLabel] ?? c.label} ${c.score}/100 · ${heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, units)}`,
+            tooltip: `${QUALITY_LABELS[c.label as QualityLabel] ?? c.label} ${c.score}/100 · ${heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, heightUnits)} surf (our prediction)`,
             highlight: !!bySlug.get(s.slug)?.event_at_time,
           }
-        : { score: null, tooltip: "No usable forecast at this time" };
+        : { score: null, tooltip: predictionsCover ? "No usable forecast at this time" : "No surf prediction this far ahead" };
     }
     return out;
-  }, [spots, bySlug, units]);
+  }, [spots, bySlug, heightUnits, predictionsCover]);
   const selectedSpot = spots.find((s) => s.slug === selected);
-  const noForecastAnywhere = snapshot.data && !snapshot.data.valid_time;
+  const noForecastAnywhere = nowSnapshot.data && !nowSnapshot.data.valid_time;
+  const predictionNote = predictionsCover
+    ? null
+    : range
+      ? `No surf predictions for this time: ours run from ${formatDateTime(range.start, tz)} to ${formatDateTime(range.end, tz)}. The ocean layers cover a longer period.`
+      : "No spot predictions for this time.";
+
+  const locate = () => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      toast.error("This browser cannot share your location.");
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocating(false);
+        setUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude, key: Date.now() });
+      },
+      (err) => {
+        setLocating(false);
+        toast.error(
+          err.code === err.PERMISSION_DENIED
+            ? "Location access was denied. Allow it for this site in your browser to jump to where you are."
+            : "Your location is not available right now.",
+        );
+      },
+      { enableHighAccuracy: false, timeout: 10_000, maximumAge: 300_000 },
+    );
+  };
+
+  // Leaflet's own bottom controls (zoom, attribution) sit just above the timeline.
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const [bottomInset, setBottomInset] = useState(96);
+  useEffect(() => {
+    const el = bottomRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBottomInset(Math.round(el.getBoundingClientRect().height)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const listIsOpen = listOpen ?? isDesktop;
+  const timeText = at ? bubbleLabel(at, tz) : "";
+  // The canvas keeps the previous step's field until the next one arrives: describe what it shows.
+  const fieldTime = layerFields.at ?? at;
+  const fieldTimeText = fieldTime ? longTimeLabel(fieldTime, tz) : "";
+  // One short line for everyone; the backend's setup message (for whoever runs the site) is in
+  // the legend. Its full text covered a block of the map on phones and ran under the spot list.
+  const notice = !fieldIndex.isLoading && !fieldsAvailable ? "Ocean layers are unavailable right now." : null;
+
+  const spotList = (
+    <SpotList
+      spots={visible}
+      total={spots.length}
+      conditions={(slug) => bySlug.get(slug)?.conditions}
+      onSelect={setSelected}
+      open={listIsOpen}
+      onOpenChange={setListOpen}
+      updating={snapshot.isFetching}
+      note={predictionNote}
+      className={isDesktop ? "max-h-full" : "max-h-[45dvh]"}
+    />
+  );
 
   return (
-    <AppShell wide>
-      <PageHeader
-        eyebrow="Live surf map"
-        title="Where the swell is heading"
-        description="Each marker is a monitored break, coloured by our predicted surf quality at the selected forecast time. Click one for the offshore model data and our breaking-wave prediction."
-      />
-      <div className="mb-4 space-y-3">
-        {range ? (
-          <TimeControl start={range.start} end={range.end} stepHours={range.step} value={stepIndex} onChange={setStepIndex} tz={tz} />
-        ) : (
-          <Skeleton className="h-12 w-full rounded-2xl" />
+    <AppShell fullBleed>
+      <h1 className="sr-only">Surf map</h1>
+      <div
+        className="map-root absolute inset-0 overflow-hidden bg-[#151a21]"
+        style={{ isolation: "isolate", "--map-bottom-inset": `${bottomInset}px` } as CSSProperties}
+      >
+        {/* Top: layer tabs + pressure on the left, settings on the right. */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-[1100] flex items-start gap-2 p-2 sm:p-3">
+          <div className="min-w-0 flex-1 space-y-2">
+            <div className="pointer-events-auto w-fit max-w-full">
+              <LayerTabs layer={layer} onLayer={(l) => updateSettings({ layer: l })} pressure={settings.pressure} onPressure={(p) => updateSettings({ pressure: p })} />
+            </div>
+            {(notice || isError || noForecastAnywhere || layerFields.error) && (
+              <div className="pointer-events-auto flex w-fit max-w-full flex-col gap-1.5 pl-1">
+                {notice && (
+                  <p role="status" data-testid="fields-notice" className={cn("flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs", GLASS)}>
+                    <Info className="size-3.5 shrink-0 text-[#c4ec4a]" aria-hidden />
+                    {notice}
+                  </p>
+                )}
+                {layerFields.error && (
+                  <p role="status" className={cn("rounded-full px-3 py-1.5 text-xs", GLASS)}>
+                    This ocean layer could not be loaded for the selected time.
+                  </p>
+                )}
+                {isError && <p className="rounded-xl bg-red-950/85 px-3 py-1.5 text-xs text-red-100">Could not load the surf spots. Is the backend running?</p>}
+                {noForecastAnywhere && (
+                  <p className="max-w-md rounded-xl bg-amber-950/85 px-3 py-1.5 text-xs text-amber-100">
+                    No forecast has been ingested yet. Markers are grey until the first forecast run completes (see the status page).
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="pointer-events-auto shrink-0 p-1">
+            <SettingsPopover
+              settings={settings}
+              onSettings={updateSettings}
+              heightUnits={heightUnits}
+              reducedMotion={reducedMotion}
+              spots={spots}
+              filters={filters}
+              setFilters={setFilters}
+              matching={visible.length}
+            />
+          </div>
+        </div>
+
+        {/* Left edge: legend tab and drawer. */}
+        <div className="pointer-events-none absolute top-1/2 left-0 z-[1100] -translate-y-1/2">
+          <div className="pointer-events-auto">
+            <LegendTab open={legendOpen} onToggle={() => setLegendOpen((o) => !o)} />
+          </div>
+        </div>
+        {/* The drawer opens beside the tab, which stays visible to close it again. */}
+        {legendOpen && (
+          <div className="absolute top-16 left-9 z-[1150]" style={{ bottom: bottomInset + 12 }}>
+            <LegendDrawer
+              layer={layer}
+              scale={scale}
+              units={units}
+              pressure={settings.pressure}
+              index={index}
+              particles={particleMode}
+              onClose={() => setLegendOpen(false)}
+            />
+          </div>
         )}
-        <details className="group rounded-2xl border bg-card p-3 shadow-sm" open>
-          <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-medium md:hidden">
-            <SlidersHorizontal className="size-4" /> Filters
-          </summary>
-          <div className="mt-3 md:mt-0">
-            <FilterBar spots={spots} filters={filters} setFilters={setFilters} units={units} />
-          </div>
-        </details>
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-          <span data-testid="visible-count">
-            Showing {visible.length} of {spots.length} spots
-            {snapshot.isFetching && " · updating…"}
-          </span>
-          <div className="flex flex-wrap items-center gap-3" aria-label="Legend" data-testid="map-legend">
-            {LEGEND.map((l) => (
-              <span key={l.label} className="flex items-center gap-1.5">
-                <span className="size-2.5 rounded-full" style={{ backgroundColor: l.color }} />
-                {l.label}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-      {isError && <p className="mb-3 text-sm text-destructive">Could not load the surf spots. Is the backend running?</p>}
-      {noForecastAnywhere && (
-        <p className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          No forecast has been ingested yet. Markers are grey until the first forecast run completes (see the status page).
-        </p>
-      )}
-      <div className="grid gap-4 lg:grid-cols-[1fr_400px]">
-        <div className="h-[60vh] min-h-[380px] overflow-hidden rounded-2xl border shadow-sm lg:h-[70vh]">
-          {isLoading ? (
-            <Skeleton className="h-full w-full" />
+
+        {/* Right column on large screens: the spot panel, or the best spots. */}
+        {isDesktop &&
+          (selectedSpot ? (
+            // Ends above Leaflet's zoom buttons and attribution (about 100 px over the timeline),
+            // so both stay usable while a spot is open.
+            <div className="absolute top-16 right-3 z-[1100] flex w-[400px]" style={{ bottom: bottomInset + 104 }}>
+              <SpotPanel
+                spot={selectedSpot}
+                at={bySlug.get(selectedSpot.slug)?.conditions ?? null}
+                units={heightUnits}
+                signedIn={!!user}
+                onClose={() => setSelected(null)}
+                className="w-full"
+              />
+            </div>
           ) : (
-            <SurfMap spots={visible} selected={selected} onSelect={setSelected} markers={markers} />
-          )}
+            <div
+              className="absolute top-16 right-3 z-[1100] flex w-[340px] flex-col"
+              // About ten rows: enough to compare the best spots without hiding the map.
+              style={{ maxHeight: `min(420px, calc(100% - ${bottomInset + 190}px))` }}
+            >
+              {spotList}
+            </div>
+          ))}
+
+        {/* Bottom: locate, (small screens) best spots, and the timeline. */}
+        <div ref={bottomRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-[1100] flex flex-col gap-2 p-2 sm:p-3">
+          <div className="pointer-events-auto w-fit">
+            <button
+              type="button"
+              onClick={locate}
+              aria-label="Show my location"
+              className={cn("flex size-11 items-center justify-center rounded-full hover:bg-[#23292f]/90", GLASS, FOCUS)}
+            >
+              {locating ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <LocateFixed className="size-5" aria-hidden />}
+            </button>
+          </div>
+          {!isDesktop && !selectedSpot && <div className="pointer-events-auto flex flex-col">{spotList}</div>}
+          <div className="pointer-events-auto">
+            <Timeline
+              steps={steps}
+              index={stepIndex}
+              nowIndex={nowIndex}
+              onChange={(i) => setSelectedTime(i === nowIndex ? null : (steps[i] ?? null))}
+              playing={playing}
+              onPlaying={setPlaying}
+              tz={tz}
+              busy={layerFields.loading || snapshot.isFetching}
+            />
+          </div>
         </div>
-        <div className="lg:h-[70vh]">
-          {selectedSpot ? (
+
+        {/* Small screens: the spot panel is a bottom sheet over the timeline. */}
+        {!isDesktop && selectedSpot && (
+          <div className="absolute inset-x-0 bottom-0 z-[1200] flex max-h-[72%] p-1.5">
             <SpotPanel
               spot={selectedSpot}
               at={bySlug.get(selectedSpot.slug)?.conditions ?? null}
-              units={units}
+              units={heightUnits}
               signedIn={!!user}
               onClose={() => setSelected(null)}
+              className="w-full rounded-b-xl"
             />
-          ) : (
-            <Card className="h-full">
-              <CardContent className="flex h-full flex-col p-5">
-                <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
-                  <MapPin className="size-4 text-ocean" /> Best at the selected time
-                </div>
-                <ul className="flex-1 space-y-1 overflow-auto" data-testid="top-spots">
-                  {[...visible]
-                    // Daylight first: a high score at night is not surf anyone can ride.
-                    .sort((a, b) => rankKey(bySlug.get(b.slug)?.conditions) - rankKey(bySlug.get(a.slug)?.conditions))
-                    .slice(0, 15)
-                    .map((s) => {
-                      const c = bySlug.get(s.slug)?.conditions;
-                      return (
-                        <li key={s.slug}>
-                          <button onClick={() => setSelected(s.slug)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-muted">
-                            <span className="min-w-0 truncate">
-                              {s.name} <span className="text-muted-foreground">· {s.country}</span>
-                            </span>
-                            {c && !c.is_daylight && <span className="shrink-0 text-xs text-muted-foreground" data-testid="night-tag">night</span>}
-                            {c ? <QualityBadge label={c.label} score={c.score} /> : <span className="text-xs text-muted-foreground">no data</span>}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  {visible.length === 0 && <li className="px-2 py-2 text-sm text-muted-foreground">No spots match these filters at this time.</li>}
-                </ul>
-              </CardContent>
-            </Card>
-          )}
-        </div>
+          </div>
+        )}
+
+        {/* The map comes last in the DOM, so keyboard users reach the controls above (layers,
+            settings, legend, best spots, timeline) before its 50 markers. The controls stay on
+            top by their z-index. */}
+        {!isLoading && (
+          <ForecastMap
+            spots={visible}
+            markers={markers}
+            selected={selected}
+            onSelect={setSelected}
+            basemap={settings.basemap}
+            layer={layer}
+            fields={fieldsAvailable ? layerFields.grids : null}
+            fieldsAt={layerFields.at}
+            pressure={pressureGrid}
+            isobars={isobars}
+            scale={scale}
+            particles={particleMode}
+            units={units}
+            cities={cityLabels.length ? cityLabels : null}
+            onZoom={setZoom}
+            userLocation={userLocation}
+            fieldLabel={fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : `Ocean layers unavailable, ${timeText}`}
+            // The map's credit strip names the source; its full attribution sentence is in the
+            // legend (on a phone the sentence alone covered three lines of the map, and markers).
+            fieldAttribution={index?.source?.name ?? index?.source?.attribution}
+          />
+        )}
       </div>
     </AppShell>
   );

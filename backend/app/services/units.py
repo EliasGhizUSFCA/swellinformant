@@ -13,14 +13,6 @@ def ft_to_m(ft: float) -> float:
     return ft * M_PER_FT
 
 
-def kmh_to_knots(kmh: float) -> float:
-    return kmh / 1.852
-
-
-def kmh_to_mph(kmh: float) -> float:
-    return kmh / 1.609344
-
-
 def ms_to_kmh(ms: float) -> float:
     return ms * 3.6
 
