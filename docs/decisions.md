@@ -273,11 +273,15 @@ the only two GEFS buoys that are offshore references of spots.
 **Decision.** Implement the fitted scale as the calibrated OFFSHORE component
 `ndbc-offshore-v1` (`surf_quality/uncertainty.py`), used only for raw single-family
 GFS-Wave hours whose spread comes from the lead table, at leads 3-240 h, and only at spots
-whose paired offshore buoy's own held-out coverage has a CI overlapping 75-85 %
-(jaws-peahi, mavericks, ocean-beach-sf, trestles). The breaking range keeps
-`uncertainty_kind` heuristic and records `offshore_kind: calibrated` beside it, because
-its translation share is not calibrated. The ensemble range stays `ensemble_heuristic`.
-The per-buoy rule was added after the results and only narrows the claim.
+whose paired offshore buoy's own held-out coverage has a CI overlapping 75-85 % over all
+leads and at every lead bucket with at least 200 pairs (jaws-peahi, trestles). The
+breaking range keeps `uncertainty_kind` heuristic and records `offshore_kind: calibrated`
+beside it, because its translation share is not calibrated. The ensemble range stays
+`ensemble_heuristic`. The per-buoy rule was added after the results and only narrows the
+claim. **Review (2026-10-13):** the builder's rule checked all leads together only and
+also labelled mavericks and ocean-beach-sf; their buoy 46026 covers 79.4 % over all leads
+but 69.1 % [64.3, 74.1] at 240 h (77.5 % at 120 h, 75.0 % at 168 h), so the rule now
+checks every lead bucket and those two spots are not labelled.
 **Alternatives.** Label every paired spot (pooled pass): contradicted at two buoys by
 their own data. Apply the scale everywhere: in Western Australia it put 18 % below p10 and
 3 % above p90. A new `uncertainty_kind` value: needs a migration and frontend labels for a
@@ -330,7 +334,14 @@ and the transfer gate); include rincon as the plan allowed (no evidence of benef
 the ridge (fails the transfer check at 9 of 11 spots).
 **Consequences.** Offshore Hs at the seven spots rises by a factor 1.10-1.61 on the live
 run, and breaking heights with it (about +23 % at a factor 1.3), which is not validated
-because breaking heights are not observed. The held-out bias after correction is +0.09 m.
+because breaking heights are not observed. The held-out bias after correction is +0.09 m;
+review traced it to the metre scale (1.1, at its clamp) chosen with the WA-only train
+part and kept after the refit that includes the NDBC year (docs/ml-evaluation.md 12.4),
+a pipeline follow-up, not a reason to retune the shipped model on its test year. The swell
+features are the bulletin's first listed partition (the wind sea in 16 % of the test
+rows) but the spots' gridded primary swell; with the swell partition substituted, the
+held-out RMSE is 0.342 m instead of 0.320 m (raw 0.427), so the benefit at the spots is
+probably nearer -20 % than -25 % (docs/ml-evaluation.md 12.4).
 With the correction active, the heuristic offshore range around the corrected value
 covered 80-94 % by lead at the buoys and stays labelled heuristic. Deactivating
 (`ml deactivate offshore_hs_residual`) returns every spot to raw forecasts.

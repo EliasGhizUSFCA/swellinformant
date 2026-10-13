@@ -27,6 +27,11 @@ trust. Import verifies the sha256 and registers a model as CANDIDATE, never as A
   3.7 MB instead of 9.8 MB); the manifest records the registry's original sha256 as
   `source_sha256`, and the compressed model gives the same factors (checked on a probe
   matrix and on the live run).
+* Review caveats (2026-10-13, docs/ml-evaluation.md 12.4): the held-out bias of +0.086 m
+  comes from the metre scale (1.1, at its clamp) chosen before the refit; and the swell
+  features were the bulletin's first listed partition (the wind sea in 16 % of the test
+  rows) while the spots supply the gridded primary swell. With the swell partition
+  substituted the held-out RMSE is 0.342 m instead of 0.320 m (raw 0.427 m).
 * Written with scikit-learn 1.9.1 (recorded in the manifest); an import under another
   version logs a warning, and the model should then be re-evaluated before activation.
 

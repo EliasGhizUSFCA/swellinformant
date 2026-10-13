@@ -359,7 +359,10 @@ only and adopted only if it passes on TEST.
   the same median error on TRAIN and an RMSE difference of 0.017 m [−0.010, 0.043]; the
   same on TEST for the medians. No High / Moderate lead boundary between 24 and 72 h
   separated them on TRAIN. Low (single source beyond 150 h, or swell missing) was clearly
-  worse in every split.
+  worse in every split. The held-out year is less clear-cut than TRAIN: there High's RMSE
+  was 0.024 m [0.009, 0.037] below Moderate's (0.044 m [0.029, 0.059] with verification
+  rows, where forecast-v1 passes the full test), so v1.1 gives up a small separation
+  that TEST shows; it follows the plan, which decides on TRAIN (review note, 2026-10-13).
 * **forecast-v1.1** removes High for such hours (`single_source_no_ensemble`), the only
   candidate that passed on TRAIN. On TEST its two classes are distinct (Low − Moderate RMSE
   0.146 m [0.123, 0.169]; medians 0.25 vs 0.29 m). Because the candidate has no High, its
@@ -390,7 +393,8 @@ only and adopted only if it passes on TEST.
   covered 75.1-80.2 % at every TEST lead bucket pooled over the five buoys (69 % at 46053
   and 91 % at 51201). It is implemented as the calibrated offshore component
   `ndbc-offshore-v1` in `uncertainty.py`, applied only to raw single-family GFS-Wave hours
-  without an ensemble at jaws-peahi, mavericks, ocean-beach-sf and trestles (the spots
-  whose buoy agrees), and not yet wired into the prediction job. The breaking range keeps
+  without an ensemble at jaws-peahi and trestles (the spots whose buoy agrees over all
+  leads and at every lead bucket; mavericks and ocean-beach-sf were removed in review
+  because 46026 covers 69 % at 240 h), and not yet wired into the prediction job. The breaking range keeps
   its heuristic label, and the ensemble-based range stays unvalidated (pooled pass, but too
   wide at both paired buoys). The confidence index itself (σ_f) is unchanged.

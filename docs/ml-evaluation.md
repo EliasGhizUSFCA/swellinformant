@@ -54,8 +54,10 @@ decides a correction trained on them.
   p90: the model is biased low); a lead-dependent two-tail scale fitted on the older year
   covers 75.1-80.2 % at every lead bucket pooled over five buoys, so the offshore
   component is implemented as calibrated (`ndbc-offshore-v1`), labelled so only at the
-  four spots whose own buoy agrees (69-91 % by buoy) and not yet passed in by the
-  prediction job, so no prediction carries the label today. The ensemble-based range
+  two spots whose own buoy agrees over all leads and at every lead bucket (jaws-peahi,
+  trestles; 69-91 % by buoy; mavericks and ocean-beach-sf were dropped in review because
+  46026 covers only 69 % at 240 h) and not yet passed in by the prediction job, so no
+  prediction carries the label today. The ensemble-based range
   stays unvalidated. forecast-v1's High and Moderate single-source classes had equal median
   errors on the training year; forecast-v1.1 drops High for single-source hours without
   an ensemble, and its classes (with and without a GEFS-Wave spread) are ordered by
@@ -1356,7 +1358,9 @@ registered applicability is the one the code now computes (12.4). One does not: 
 boundary candidates, the rule choosing among them and the two-class form of the test for
 the one candidate without a High class were written after the forecast-v1 TEST scores had
 been computed, and they led to forecast-v1.1 (12.3, "How blind that TEST confirmation
-is").
+is"). A fifth, added in the adversarial review of 2026-10-13 and also only narrowing:
+the station-consistency rule checks every lead bucket of the station, not only all leads
+together, which removes mavericks and ocean-beach-sf from the calibrated label (12.2).
 
 ### 12.1 Data
 
@@ -1446,13 +1450,41 @@ summer.
 **Decision.** The pre-registered criterion is met by the fitted lead-table range and by
 the fitted ensemble range, pooled. Added after seeing the per-station results, and used
 only to narrow where the word "calibrated" is applied: a spot gets the calibrated label
-only if its paired offshore buoy's own TEST coverage has a CI that overlaps 75-85 %
-(`ranges.station_consistency`). That leaves, for the lead-table range, **jaws-peahi
-(51205), mavericks and ocean-beach-sf (46026) and trestles (46224)**; pipeline,
-sunset-beach and waimea-bay (51201, too wide) and rincon (46053, too narrow) are not
-labelled. For the ensemble range no spot qualifies, so **the ensemble-based range remains
-`ensemble_heuristic` and is recorded as not validated** (pooled pass, contradicted at both
-paired buoys).
+only if its paired offshore buoy's own TEST coverage has a CI that overlaps 75-85 %, over
+all leads and at every lead bucket with at least 200 pairs (`ranges.station_consistency`;
+the station-level form of the pre-registered per-bucket rule). That leaves, for the
+lead-table range, **jaws-peahi (51205) and trestles (46224)**; pipeline, sunset-beach and
+waimea-bay (51201, too wide), rincon (46053, too narrow) and mavericks and ocean-beach-sf
+(46026, too narrow at 240 h) are not labelled. For the ensemble range no spot qualifies,
+so **the ensemble-based range remains `ensemble_heuristic` and is recorded as not
+validated** (pooled pass, contradicted at both paired buoys).
+
+*Fitted range by buoy and lead bucket* (TEST, coverage % [90 % CI], from the `verify
+ranges` by-station tables; an independent re-derivation in review on 2026-10-13, with raw
+SQL pairing, its own formulas and its own bootstrap, gave the same coverages within 0.1
+point and CI bounds within 0.6 point):
+
+| Buoy (spots) | all | 24 h | 48 h | 72 h | 120 h | 168 h | 240 h |
+|---|---|---|---|---|---|---|---|
+| 51201 (pipeline, sunset-beach, waimea-bay) | 90.8 [89.7, 91.8] | 90.7 [88.1, 93.0] | 92.8 [90.4, 95.2] | 91.4 [88.6, 93.9] | 91.3 [89.0, 93.2] | 88.5 [85.4, 91.5] | 85.7 [81.8, 89.1] |
+| 51205 (jaws-peahi) | 85.5 [83.8, 87.2] | 86.2 [82.9, 89.2] | 85.5 [82.2, 88.7] | 85.7 [82.4, 88.9] | 84.9 [81.9, 87.9] | 84.2 [81.3, 87.5] | 82.9 [79.0, 86.6] |
+| 46026 (mavericks, ocean-beach-sf) | 79.4 [78.0, 80.8] | 80.1 [76.8, 83.0] | 84.5 [81.5, 87.4] | 80.8 [77.6, 83.7] | 77.5 [74.0, 80.9] | 75.0 [71.3, 78.6] | **69.1 [64.3, 74.1]** |
+| 46224 (trestles) | 76.7 [74.6, 78.8] | 74.9 [71.2, 78.8] | 77.8 [74.0, 81.2] | 74.3 [70.1, 78.2] | 76.0 [72.2, 79.5] | 78.7 [74.9, 82.7] | 78.6 [74.4, 82.5] |
+| 46053 (rincon) | 69.3 [67.4, 71.1] | 68.1 [64.4, 71.9] | 62.6 [58.4, 66.6] | 67.1 [62.8, 71.3] | 69.8 [66.2, 73.3] | 73.2 [69.7, 76.8] | 60.9 [56.0, 66.2] |
+
+(n per buoy and bucket 711-3,059.) By point estimate no buoy is inside 75-85 % at every
+bucket: 51205 is slightly too wide inside 3 days (85.5-86.2 %) and 46224 slightly too
+narrow at 24 and 72 h (74.9, 74.3 %), but their CIs overlap the band, so those two keep
+the label. At 46026 coverage falls with lead (77.5, 75.0, 69.1 %) and the 240 h CI lies
+entirely below 75 %, so labelling its spots calibrated would contradict their own
+held-out data at long leads; the builder's all-leads rule (79.4 %) missed this. Both
+versions of the rule were chosen after the per-buoy numbers were seen; they only remove
+spots, and which spots survive is itself a TEST-informed choice, so the two remaining
+labels rest on the pooled pass plus "not contradicted at the spot's own buoy", not on an
+independent per-spot test. These CIs resample whole cycles, but cycles 48 h apart share
+valid times and weather, so they are probably too narrow, which makes the rule exclude
+more readily than correctly sized intervals would. The range was validated on station
+bulletins at the buoys, not on the gridded values the spots receive.
 
 **Implemented** (`surf_quality/uncertainty.py`, `OFFSHORE_CALIBRATION`, version
 `ndbc-offshore-v1`): the TRAIN-fitted k_lo / k_hi (4 decimals; scored on TEST they give
@@ -1460,7 +1492,8 @@ exactly the coverages above). `breaking_uncertainty` applies them to the offshor
 the breaking range, and `offshore_range` to the offshore range itself, only when the
 caller passes an `OffshoreContext` and the hour's spread comes from the lead table, its
 central value is a raw single-family GFS-Wave value (not a blend, not ML-corrected), the
-lead lies in 3-240 h, and the spot is one of the four above. Then
+lead lies in 3-240 h, and the spot is one of the two above (four in the builder's
+version; mavericks and ocean-beach-sf removed in review). Then
 `components.uncertainty.offshore_kind` = `calibrated` with `offshore_calibration` =
 `ndbc-offshore-v1`, while the breaking range's `uncertainty_kind` stays `heuristic`: its
 translation share σ_m = 0.30 (larger than the offshore share) is still an assumption, and
@@ -1588,7 +1621,10 @@ but lower at longer leads (e.g. 120 h 0.259 vs 0.422).
 log, partition-1 height / period / direction, month and hour). Chronological split by
 cycles with 312 h gaps: train 236,813 pairs, validation 106,682, **test 139,257 (cycles
 2025-10-05 to 2026-10-12, NDBC only; the WA data all fall in the development part)**.
-Climatology reference from the development period only.
+The train part is the three WA buoys only (valid times 2021-03-23 to 2021-12-15); the
+validation part is the WA tail plus the first NDBC year (to 2025-09-22), and the final
+model is refit on both (checked in review). Climatology reference from the development
+period only.
 
 | Candidate | validation RMSE | test RMSE (raw 0.427) | change | 90 % CI of the difference (m) | bias (raw -0.256) | HH (raw 0.287) | criteria |
 |---|---:|---:|---:|---|---:|---:|---|
@@ -1604,6 +1640,20 @@ WA), -8.3 % (2021-12 to 2025-09, NDBC); ridge was worse than raw in fold 1 (+14 
 gradient boosting too (+4.7 %). Criteria (a)-(f) of `ml/registry.py`, unchanged, pass for
 all three; auto-activation would pick the lowest validation RMSE, **the random forest**.
 The correction overshoots slightly (bias +0.09 m instead of -0.26 m).
+
+*Why it overshoots (review, 2026-10-13; diagnostic only, nothing was changed).* `ml train`
+chooses the hyperparameters and the metre scale with a model fitted on the train part and
+scored on validation, then refits on train + validation and keeps that scale. In M1 the
+train part is WA only, so the WA-trained model under-corrected the NDBC validation rows
+and the least-squares scale hit its upper clamp (`metre_scale` 1.1, limits 0.9-1.1); the
+refit model has seen the NDBC year and corrects the NDBC bias itself, and the extra x1.1
+then pushes it above the observations. Scored with the shipped model: validation bias
++0.119 m with the scale against -0.023 m without it (validation is in-sample for the
+refit model), test bias +0.086 m against -0.057 m and test RMSE 0.320 against 0.315 m.
+The test figures are not a reason to change the shipped model (that would tune on the
+test year); the pipeline's scale step is a follow-up for the next pre-registered run
+(estimate the scale on out-of-sample predictions of the refit model, e.g. the rolling
+folds).
 
 **Per buoy (held-out test, random forest; diagnostic):**
 
@@ -1652,6 +1702,20 @@ of 81 hours at each of the seven spots (lead 0 is outside 3-240 h) and changed n
 the other 43 spots, including rincon and the WA spots; rebuilding the GFS + ECMWF blend
 corrected the GFS member at the same 560 spot-hours (`wave_forecasts.extra.ml_corrections`)
 and no others.
+
+**A feature that means something else at the spots (review, 2026-10-13; diagnostic
+only).** The swell features (`swell1_*`) come from the bulletin's first partition as
+listed, which is the local wind sea in 16 % of the held-out test rows (4.5 % at 46224,
+11 % at 46053, 17 % at 46026, 20 % at 51201, 29 % at 51205); at the spots they come from
+the gridded GFS-Wave primary swell (SWELL 1), which is never the wind sea. Re-scoring the
+shipped model on the same test rows with `swell1_*` replaced by the bulletin's first
+non-wind-sea partition (the closest stand-in for what the spots receive; 1,504 rows with
+no swell partition are then left raw): RMSE 0.342 m instead of 0.320 m (raw 0.427), bias
++0.104 m instead of +0.086 m; on the affected rows the factor changes by x0.86 / x1.06 /
+x1.24 (p5 / p50 / p95). So the held-out benefit at the spots is probably closer to
+-20 % than -25 %, still well clear of raw; the transfer check cannot see this, because it
+compares factor distributions, not feature meanings. The next pre-registered run should
+train on the swell partition the spots receive.
 
 **Caveats.** The model is trained and tested on station bulletins, not on the gridded
 values the spots receive; the transfer check shows that the live factors lie inside the
@@ -1710,3 +1774,73 @@ end-to-end activation check were one-off scripts over the repository's functions
 (`ml.dataset.chronological_split`, `registry.load_artifact`, `ml.hook.RunCorrector`,
 `surf_quality.predict.compute_predictions_for_run`, `forecasts.blend.build_blend`), not
 commands.
+
+### 12.7 Adversarial review (2026-10-13)
+
+Re-run on `swell_revval_live`, a copy of `swell_fval_live`, with the committed code;
+one-off review scripts kept outside the repository.
+
+**Reproduced.** An independent re-derivation of the OFF5 coverage table and the
+forecast-v1 class table, with raw SQL pairing (nearest spectral Hm0 within 30 min), its
+own sigma, bucket, class and bootstrap code, gave the same pair counts (251,103; TRAIN
+108,356; TEST 136,097), the same app-range and fitted-range coverages, the same refitted
+k_lo / k_hi as the shipped constants, and the same class counts, medians, p90s and
+RMSEs. `verify confidence-classes` (forecast-v1 with the boundary scan, v1.1, GEFS6)
+gave JSON identical to the builder's; `verify ranges` OFF5 gave identical results apart
+from the station-consistency change below. The pooled ten-buoy backtest of section 11
+(409,344 pairs) gave the same table (bias -0.234 m; RMSE 0.376 / 0.508 / 0.642 m at 24 /
+168 / 240 h; skill vs the long-term climatology 0.578 / 0.233 / -0.278 [-0.414, -0.157]).
+The transfer check of the shipped v6, imported into a fresh migrated copy of `swell_live2`:
+test factors p5 / p50 / p95 1.0867 / 1.3095 / 1.6146, 80 of 81 hours corrected at each of
+the seven spots (lead 0 is outside 3-240 h), 0 % outside p5-p95, no hour corrected at any
+other spot.
+
+**Re-checked against the live services.** `activestations.xml` (2026-10-13): every NDBC
+catalog position equal; station pages: the water depths of 46277, 46224, 51205, 46053,
+46086, 51101 and 46237 equal. CDIP THREDDS 106 (= 51201) against the stored records:
+monthly QC'd NDBC Hm0 equal to CDIP `waveHs` exactly (4,838 records, late May to
+September 2026), Tp and Ta within 0.005 s, Dp within 0.5 degree, NDBC time = CDIP sample
+start + 26 min; realtime records within the 0.1 m / 1 s rounding of realtime files.
+Folding of realtime copies (ADR-017) against the QC'd September 2026 files: 46026 2,500
+wave rows -> 1,404 records, 1,397 on an archived time and 7 within 2 min, |dHs| <= 0.05
+m; 46053 2,023 -> 1,376, all on archived times; 51201 1,440, all on archived times.
+Missing files (monthly gz of March / April 2026 at 51201, `51201h2026.txt.gz`,
+`view_text_file.php` for a missing year) answer 404.
+
+**Deviations from the plan, verdicts.**
+
+* *Per-station label rule* (12.2): defensible only as a narrowing, and the builder's
+  version was too lenient: it looked at all leads together and kept 46026, whose 240 h
+  coverage CI [64.3, 74.1] lies below the band. Fixed: every bucket is checked, mavericks
+  and ocean-beach-sf are no longer labelled. The remaining labels (jaws-peahi, trestles)
+  rest on the pooled pass plus "not contradicted at the own buoy"; by point estimate 51205
+  is just above the band at 24-72 h and 46224 just below it at 24 and 72 h.
+* *Two-class test for forecast-v1.1* (12.3): defensible as a conservative cap (it can only
+  lower classes), not as strong evidence. The candidate set and the two-class form were
+  written after forecast-v1's TEST scores, C2's TEST classes are a merge of v1's, and on
+  TEST v1's High was in fact 0.024 m [0.009, 0.037] better than Moderate in RMSE (0.044
+  with verification rows, where v1 passes the full test). The plan decides on TRAIN, where
+  v1 failed, so v1.1 follows the plan; what TEST confirms is the lead caps (Moderate <
+  Low), not that High was misplaced.
+* *Rincon exclusion* (12.4): defensible. Per lead bucket at 46053 (review script, shipped
+  artifact, own cycle-block bootstrap) the correction is worse
+  than raw at 48, 72 and 120 h (+4.1 %, +2.9 %, +3.6 %; criterion (c), if applied to this
+  buoy alone, would fail at 48 and 120 h), no bucket's improvement CI excludes zero, and
+  the bias moves from -0.12 to +0.16 m. At the four buoys of the seven approved spots no
+  bucket gets worse (worst -1.8 % at 46026, 168 h; improvement CIs include zero at 46026
+  72 and 168 h and 46224 240 h).
+* *Criteria and activation scope*: `git diff` of `ml/registry.py` from d2b7e42 touches
+  no line of `evaluate_deployment` or its constants; the shipped manifest applies to the
+  seven spots, leads 3-240 h, `ncep_gfs`, and imports as CANDIDATE.
+
+**New findings, documented, not acted on** (acting on test-year numbers would be tuning):
+the metre-scale overshoot and the wind-sea swell feature (12.4).
+
+**Test flake.** `test_paused_search_does_not_generate_notifications` failed depending on
+the date and the microsecond: natural demo swells follow calendar slots, the simulated
+swell merges into one that starts 4-5 days ahead, and a search with no earlier match gets
+no new match inside `DETECTION_LEAD_MIN_DAYS`. The test now runs without natural demo
+swells and checks more (event inside the matching window, no match while paused, the
+alert belongs to the simulated swell). A clock-shift sweep (freezegun, 0-45 days for this
+test; 45-800 days for the unit suite; several shifts for the integration suite) found no
+other date-dependent test.

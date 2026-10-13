@@ -13,6 +13,9 @@ only cut, never edited; the .gz excerpts were re-compressed after cutting.
   https://www.ndbc.noaa.gov/data/realtime2/51201.txt and .../51201.spec
 * ndbc_51201_20260829.stdmet_aug2026.txt.gz: the same hours of
   https://www.ndbc.noaa.gov/data/stdmet/Aug/5120182026.txt.gz
+* ndbc_51101_20261009.realtime2.txt / .spec: the 2026-10-09 00:00-01:59 rows of
+  https://www.ndbc.noaa.gov/data/realtime2/51101.txt and .../51101.spec (provenance line
+  added in review; the excerpt itself is unchanged since commit 35ca28f)
 * ndbc_51201h2025.head.txt.gz: the first 10 lines of
   https://www.ndbc.noaa.gov/data/historical/stdmet/51201h2025.txt.gz
 * ndbc_51201_sep2026.latest_month.txt: header, first row and last two rows of
