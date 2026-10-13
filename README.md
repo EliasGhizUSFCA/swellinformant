@@ -196,10 +196,11 @@ Compose 5.6. Allocate at least 4 GB of memory to Docker.
 
 | Tool | Version | macOS install |
 |------|---------|---------------|
-| Python | 3.12 or newer (verified with 3.12 in Docker and 3.13 locally) | `brew install python@3.12` |
+| Python | 3.12 or newer (the Docker image, CI and local development use 3.13) | `brew install python@3.13` |
 | Node.js | 22 LTS (verified 22.22/22.23; Next.js 16 needs ≥ 20.9) | `brew install node@22` |
 | PostgreSQL | 16 (needs the bundled `btree_gist` extension) | `docker compose up -d postgres` or `brew install postgresql@16` |
 | Redis | 7 | `docker compose up -d redis` or `brew install redis` |
+| PostgreSQL client tools | 16 (`pg_dump`, `pg_restore`, `psql`), only for the backup scripts outside Docker | `brew install libpq` (or use `scripts/backup-db.sh --compose`) |
 
 ## E. Installation
 
@@ -244,7 +245,7 @@ docker compose up -d postgres redis
 
 # backend
 cd backend
-python3.12 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 python -m app.cli init-db          # create schema (Alembic) and seed spots/airports
@@ -286,14 +287,16 @@ docker compose ps                    # health of every service
 docker compose logs -f worker beat   # watch the jobs
 docker compose down                  # stop (keeps the database volume)
 docker compose down -v               # stop and delete all data
+docker compose --profile backup up -d backup   # optional: daily pg_dump backups (docs/operations.md)
+scripts/check-health.sh              # data health from a shell: exit 0 ok, 1 degraded, 2 failing
 ```
 
 | What | URL |
 |------|-----|
 | Web app | http://localhost:3000 |
-| Backend API | http://localhost:8000 (health: `/api/health`, readiness: `/api/health/ready`) |
+| Backend API | http://localhost:8000 (health: `/api/health`, readiness: `/api/health/ready`, data health: `/api/health/data`) |
 | API documentation (OpenAPI / Swagger UI) | http://localhost:8000/docs |
-| System status (jobs, data freshness, provider modes) | http://localhost:3000/status |
+| System status (data health, every job's state, provider modes) | http://localhost:3000/status |
 | Development inbox (Mailpit) — every email the stack sends | http://localhost:8025 |
 | Forecast accuracy dashboard (admin accounts) | http://localhost:3000/status/accuracy |
 
@@ -538,13 +541,27 @@ migrations on a scratch database:
 ```bash
 cd backend
 source .venv/bin/activate
-pytest                          # all tests
 pytest tests/unit               # pure unit tests, no database needed
+pytest tests/integration        # PostgreSQL + Redis (run as a separate process, as CI does)
 ruff check . && ruff format --check .
 mypy app
+alembic upgrade head && alembic check
 ```
 
-Override the test database with `TEST_DATABASE_URL` / `TEST_REDIS_URL` if needed.
+Override the test database with `TEST_DATABASE_URL` / `TEST_REDIS_URL` if needed. Read
+exit codes directly, not through a pipe (`pytest … | tail` reports `tail`'s exit code; see
+docs/debug-audit.md on the ecCodes / psycopg crash this once hid). The backup-script tests
+(`tests/integration/test_backup_scripts.py`) need the PostgreSQL 16 client tools and are
+skipped without them.
+
+**Continuous integration** (`.github/workflows/ci.yml`, GitHub Actions) runs on every
+push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python 3.13:
+`ruff format --check`, `ruff check`, `mypy app`, shellcheck of the operations scripts,
+`alembic upgrade head` + `alembic check`, then `pytest tests/unit` and
+`pytest tests/integration` as separate steps) and a frontend job (Node 22: `tsc`,
+`eslint`, `vitest`, `next build`). The end-to-end job (Playwright with Chromium, through
+`scripts/run-e2e.sh` against the job's own services) runs on pushes and on demand
+(Actions → CI → Run workflow). pip, npm and the Playwright browser are cached.
 
 **Frontend:**
 
@@ -617,7 +634,10 @@ dependencies installed. If Chromium is installed somewhere else, set
 | Opportunity says "quoted in EUR (no FX rate configured)" | Offers in another currency are never guessed into your budget. Set `FX_RATES_USD_JSON`, or use the budget currency the provider quotes |
 | Backend exits with `ValidationError` on start | A setting is invalid (e.g. `APP_ENV=production` with the default `SECRET_KEY`, `demo` mixed with live providers, or an unknown provider). The message names the field |
 | `Bind for 0.0.0.0:5432 failed: port is already allocated` | Another Postgres, Redis or app is using the port. Change the host port in `.env` (`POSTGRES_PORT`, `REDIS_PORT`, `BACKEND_PORT`, `FRONTEND_PORT`), or stop the local service (`brew services stop postgresql@16`) |
-| Background jobs not executing | `docker compose ps` should show `worker` healthy and `beat` up. `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate `celery … worker` and `celery … beat` processes |
+| `/status` or `/api/health/data` says *degraded* or *failing* | Each reason names the source, job or layer and its limit. Follow the incident playbook in [`docs/operations.md`](docs/operations.md); `scripts/check-health.sh` prints the same reasons from a shell |
+| No data-health alert email although the status is degraded | Alerts go to active admin accounts with a verified address only (`python -m app.cli make-admin you@example.com`); the `ops.data_health` job log says `no active admin account …` otherwise. Each problem is emailed once, then every `DATA_HEALTH_ALERT_REPEAT_HOURS` (12 h); `DATA_HEALTH_ALERTS_ENABLED=false` switches them off |
+| `beat` shows *unhealthy* | Its schedule file has not been written for 10 minutes: beat is stuck or cannot reach Redis. `docker compose logs beat`, then `docker compose restart beat` (run exactly one beat) |
+| Background jobs not executing | `docker compose ps` should show `worker` and `beat` healthy. `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate `celery … worker` and `celery … beat` processes |
 | No verification / alert email | In Docker, open Mailpit (http://localhost:8025). Console mode writes to the outbox file. The dashboard banner and `/notifications` show each email's status: `failed`/`rejected` carry the provider's reason; `accepted` means the provider took it but has not confirmed delivery (check the provider's logs, your domain's SPF/DKIM/DMARC, and spam folders) |
 | `noaa_gfs` run fails with "no complete NOAA GFS cycle" | The newest cycles are still uploading (f240 lands ~5 h after the cycle) or NOAA changed the file layout (GFS v17: 404 on every file). Check one URL from the error in a browser; adjust `NOAA_GFS_WAVE_PATH_TEMPLATE` / `NOAA_GFS_ATMOS_PATH_TEMPLATE` after a layout change |
 | ECMWF logs `503 SlowDown` | The ECMWF bucket throttles bursts. The provider paces and retries; occasional 503s are normal. Persistent ones: lower `GRIB_DOWNLOAD_WORKERS` |
@@ -652,12 +672,24 @@ Checklist:
 * Secrets come from the platform's secret manager as environment variables.
 * Use commercial terms for Open-Meteo, live Duffel or Amadeus Enterprise, a verified
   sending domain (SPF/DKIM) for email, and a registered Twilio sender.
-* Monitoring:
-  * `/api/health/ready` for load balancers;
-  * `background_job_logs` and `/api/system/status` for job health;
-  * alert on `forecasts.acquire` failures and on stale data.
-* Backups: managed Postgres snapshots. Redis holds only transient state (queue, locks,
-  counters).
+* Monitoring ([`docs/operations.md`](docs/operations.md)):
+  * `/api/health/ready` for load balancers (database and Redis reachable);
+  * `/api/health/data` for data health: every forecast source's age against its own
+    stale limit, every scheduled job's last result (failed, overdue, stuck), map-layer
+    and buoy freshness, and a job heartbeat, summed up as `ok` / `degraded` / `failing`
+    with reasons. Public (operational metadata only, rate limited); `?strict=true`
+    answers 503 when failing. `scripts/check-health.sh URL` wraps it for cron (exit 0 / 1
+    / 2 / 3);
+  * the `ops.data_health` job emails every active, verified admin account when a problem
+    appears, again at most every 12 h while it lasts, and once more when it clears. A
+    stopped worker cannot send that email, so also poll `/api/health/data` from outside.
+* Backups: `scripts/backup-db.sh` (pg_dump custom format, checksummed, retention by count
+  and age) from cron or the compose `backup` profile (`docker compose --profile backup up
+  -d backup`), `scripts/restore-db.sh` to restore, and `scripts/restore-drill.sh` to prove
+  a backup restores (exact row counts per table). With managed PostgreSQL, keep its
+  snapshots as well. Redis holds only transient state (queue, locks, counters).
+* Capacity, bandwidth and retention for a single small server: docs/operations.md
+  "Capacity".
 
 ## K. Limitations
 
@@ -670,6 +702,9 @@ Checklist:
 * All Celery jobs, plus the web app and its pages.
 * The Docker Compose stack: verified building and running, including a real Celery
   worker delivering alerts.
+* Data-health monitoring (`/api/health/data`, the status page, the `ops.data_health`
+  admin alerts with de-duplication and recovery notices), the backup, restore and
+  restore-drill scripts and the compose `backup` profile (docs/operations.md).
 
 **Demo-only**
 
@@ -681,6 +716,27 @@ Checklist:
 
 **Verified live**
 
+* Unattended operation in Docker Compose, 2026-10-12 and 2026-10-13, with live providers
+  and every download made from inside the Docker network: NOAA GFS-Wave + GFS 00Z
+  (1,908 MB, 2.5 min), ECMWF IFS 00Z (about 0.9 GB, 8.5 min, in parallel) and GEFS-Wave
+  00Z (201.5 MB, 41 s), all 50 spots with 0 errors, then the blend, 11,350 predictions, the
+  archive and the rest of the chain, all started by hand and run by the worker container.
+  After each of two later outages of the Docker daemon (3.8 h and 3.7 h), beat itself sent
+  the jobs that had fallen due, and the worker ran them: the GEFS-Wave 12Z acquisition
+  (201.4 MB) and, with lead times limited to 24 h to stay within the sandbox's download
+  budget, the NOAA and ECMWF 12Z and the NOAA 18Z acquisitions and the whole chain; beat
+  also fired the GEFS-Wave 18Z acquisition at its own cron time. The running beat held all
+  11 expected schedule entries each time; in three soaks (about 64, 65 and 30 min,
+  the last on the final code) every job due ran without an error. The data-health job
+  emailed the admin account (Mailpit) when the NOAA run passed its 16 h limit, then a new
+  problem without repeating the first, then a recovery notice; after an outage, the
+  overdue jobs (without repeating what had been sent before it), and once everything was
+  fresh again, one "all checks ok" notice. Memory, durations, table growth and what was not
+  verified: [`docs/operations.md`](docs/operations.md) §6 and §8. The sandbox needed only
+  its TLS-proxy CA mounted into the containers.
+* Backups: restore drills on a copy of the real 2026-10-11 runs (42 tables, 34,800 rows
+  identical), a restore into the Compose database, and the compose `backup` service,
+  including its first backup after a Docker daemon restart (it waits for PostgreSQL).
 * NOAA GFS-Wave + GFS direct, ECMWF IFS open data and GEFS-Wave statistics, on
   2026-10-11: all 50 spots, 0 errors (4,050 + 3,250 records and 2,050 ensemble rows),
   then the blend, 11,350 predictions, the archive and swell detection
@@ -720,6 +776,11 @@ documented response shapes with mocked HTTP. Expect to adjust details on first l
 | NDBC buoys (observations) | nothing (public), but `www.ndbc.noaa.gov` was unreachable from the build environment; parsers are tested against NDBC's documented formats only |
 
 SMTP is verified end to end: the Docker stack delivered a verification email to Mailpit.
+
+The GitHub Actions workflow (`.github/workflows/ci.yml`) has not run on GitHub yet: it
+was validated with actionlint and every step's commands except the Playwright browser
+installation were run locally. Admin data-health emails were verified with the console
+and Mailpit capture providers only, not through a real email provider.
 
 **Not implemented**
 
