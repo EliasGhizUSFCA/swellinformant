@@ -50,6 +50,7 @@ def seen_client(args: list[str], peer: str, forwarded_for: str) -> str:
         proxy_headers=params["proxy_headers"],
         forwarded_allow_ips=params["forwarded_allow_ips"],
         lifespan="off",
+        log_config=None,  # leave this process's logging configuration alone
     )
     config.load()
     scope = {
