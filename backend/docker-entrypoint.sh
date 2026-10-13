@@ -26,7 +26,10 @@ case "$1" in
     if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
       python -m app.cli init-db
     fi
-    exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*" --workers "${API_WORKERS:-2}"
+    # --no-proxy-headers: uvicorn would otherwise replace the client address with the
+    # left-most X-Forwarded-For entry, which the client writes itself. Client IPs (rate
+    # limits, sessions) come from app.core.ratelimit.client_ip and TRUSTED_PROXY_COUNT.
+    exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers --workers "${API_WORKERS:-2}"
     ;;
   worker)
     wait_for
