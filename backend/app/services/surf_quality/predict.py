@@ -1,9 +1,18 @@
 """Job B — score every forecast timestep of a model run.
 
-Every prediction also gets its two confidence classes (methodology forecast-v1,
+Every prediction also gets its two confidence classes (methodology forecast-v1.1,
 ``forecast_confidence``): forecast confidence of the offshore forecast and local
 confidence of the breaking-wave estimate at the break, with the inputs and rules used,
 the run's issue time, the lead time and the research assessment local confidence used.
+
+Where sources disagree about which wind is offshore (the spot's research assessment
+fires a conflict rule on wind, or data/surf_spots/profile_decisions.json records the
+offshore direction as disputed), the hour also stores the wind relation under the main
+contradicting direction (``components.wind_dispute``, ``confidence_inputs.wind_dispute``),
+its explanation names both relations when they differ, and its confidence reasons say
+"Sources disagree about which wind is offshore here." The score keeps the profile's
+direction. Decision records are read from the data directory once per run; a change to
+that file alone takes effect at the next rescoring.
 """
 
 from __future__ import annotations
@@ -11,6 +20,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
+from typing import Any
 
 import pandas as pd
 from sqlalchemy import select
@@ -29,6 +39,13 @@ from app.models import (
 )
 from app.models.enums import ForecastRunStatus
 from app.services.ml.hook import RunCorrector
+from app.services.research.decisions import (
+    DecisionValidationError,
+    WindDispute,
+    load_decisions,
+    record_for,
+    wind_dispute,
+)
 from app.services.surf_quality.confidence import completeness, confidence_label, run_agreement
 from app.services.surf_quality.confidence_context import RunConfidenceContext, station_codes
 from app.services.surf_quality.forecast_confidence import (
@@ -37,13 +54,19 @@ from app.services.surf_quality.forecast_confidence import (
 from app.services.surf_quality.forecast_confidence import (
     EnsembleSignal,
     ForecastInputs,
+    ResearchBasisInput,
     classify_forecast,
     classify_local,
     confidence_inputs,
     run_change_ratio,
+    wind_dispute_inputs,
 )
 from app.services.surf_quality.models import SeaState, SpotParams
-from app.services.surf_quality.scoring import ALGORITHM_VERSION, evaluate
+from app.services.surf_quality.scoring import (
+    ALGORITHM_VERSION,
+    disputed_wind_relation,
+    evaluate,
+)
 from app.services.surf_quality.sun import is_daylight
 from app.services.surf_quality.uncertainty import (
     EnsembleInfo,
@@ -127,6 +150,27 @@ def _nearest_ensemble(
     return best[1] if best else None
 
 
+def _profile_decisions() -> dict[str, list[dict[str, Any]]]:
+    """The profile decision records (slug -> records); empty when the file is missing or
+    invalid (an invalid file is logged, never fatal for scoring)."""
+    try:
+        return load_decisions()
+    except (DecisionValidationError, OSError, ValueError) as exc:
+        logger.warning("Profile decisions not used: %s", exc)
+        return {}
+
+
+def spot_wind_dispute(
+    spot: SurfSpot,
+    research: ResearchBasisInput | None,
+    decisions: dict[str, list[dict[str, Any]]],
+) -> WindDispute | None:
+    """Whether sources disagree about the offshore wind at ``spot`` (see the docstring)."""
+    record = record_for(decisions, spot.slug, "offshore_wind_direction")
+    per_variable = {"wind": research.wind} if research is not None and research.wind else None
+    return wind_dispute(per_variable, spot.offshore_wind_direction, record)
+
+
 def _missing_swell(f: WaveForecast) -> bool:
     """No period or no direction for the swell (nor the bulk sea the model falls back to)."""
     period = f.primary_swell_period_s if f.primary_swell_period_s is not None else f.wave_period_s
@@ -157,6 +201,7 @@ def compute_predictions_for_run(
     # corrected before blending, so a blend run is never corrected again here.
     corrector = None if run.source.kind == "blend" else RunCorrector.for_run(db, run)
     spots = {s.id: s for s in db.scalars(select(SurfSpot)).all()}
+    decisions = _profile_decisions()
     by_spot: dict[int, list[WaveForecast]] = defaultdict(list)
     for row in db.scalars(
         select(WaveForecast)
@@ -173,6 +218,8 @@ def compute_predictions_for_run(
         params = SpotParams.from_orm(spot)
         stations = station_codes(spot)
         research = ctx.research.get(spot_id)
+        dispute = spot_wind_dispute(spot, research, decisions)
+        alternative = dispute.alternative_offshore_deg if dispute is not None else None
         stages = tide_stages([f.valid_time for f in forecasts], [f.sea_level_m for f in forecasts])
         for f, stage in zip(forecasts, stages, strict=True):
             sea = SeaState.from_orm(f, tide_stage=stage)
@@ -182,7 +229,18 @@ def compute_predictions_for_run(
                 if hit is not None:
                     sea = sea.scaled(hit[0])
                     ml_label, ml_info = corrector.label, hit[1]
-            result = evaluate(sea, params)
+            result = evaluate(sea, params, alternative_offshore_deg=alternative)
+            dispute_entry = (
+                None
+                if dispute is None
+                else wind_dispute_inputs(
+                    dispute,
+                    result.wind_relation,
+                    disputed_wind_relation(
+                        sea.wind_speed_kmh, sea.wind_direction_deg, params, alternative
+                    ),
+                )
+            )
             lead_hours = (f.valid_time - run.issued_at).total_seconds() / 3600.0
             values = {
                 k: getattr(f, k)
@@ -257,6 +315,21 @@ def compute_predictions_for_run(
                         "tide_stage": stage,
                         "uncertainty": unc.as_dict(),
                         **({"ml_correction": ml_info} if ml_info else {}),
+                        **(
+                            {
+                                "wind_dispute": {
+                                    k: dispute_entry[k]
+                                    for k in (
+                                        "alternative_offshore_deg",
+                                        "relation",
+                                        "relation_alternative",
+                                        "differs",
+                                    )
+                                }
+                            }
+                            if dispute_entry is not None
+                            else {}
+                        ),
                         "breaking": {
                             "partitions": result.breaking.partitions,
                             "assumptions": result.breaking.assumptions,
@@ -271,7 +344,9 @@ def compute_predictions_for_run(
                     "forecast_confidence_class": forecast_conf.cls,
                     "local_confidence_class": local_conf.cls,
                     "confidence_method": CONFIDENCE_METHOD,
-                    "confidence_inputs": confidence_inputs(forecast_conf, local_conf),
+                    "confidence_inputs": confidence_inputs(
+                        forecast_conf, local_conf, wind_dispute=dispute_entry
+                    ),
                     "issued_at": run.issued_at,
                     "lead_hours": round(lead_hours, 2),
                     "research_assessment_id": local_conf.assessment_id,

@@ -6,8 +6,15 @@
                                       (re)assess from the stored evidence; --force inserts a
                                       new assessment even if nothing changed
   research show SLUG                  per-variable classes, sources and gaps
+  research lint [--decisions P] [--max-gap DEG]
+                                      list spots whose offshore wind is more than DEG
+                                      (default 60) from straight offshore (shore normal +
+                                      180) without a recorded reason, contradicted profile
+                                      fields without a decision record, records the rule no
+                                      longer gives, and problems in profile_decisions.json
 
-Exit codes: 0 ok, 1 unknown spot or missing file, 2 evidence validation errors.
+Exit codes: 0 ok, 1 unknown spot or missing file (lint: issues listed), 2 evidence or
+decision-file validation errors.
 """
 
 from __future__ import annotations
@@ -42,6 +49,15 @@ def register(subparsers: Any) -> None:
     )
     show = sub.add_parser("show", help="print a spot's research confidence")
     show.add_argument("slug")
+    lint = sub.add_parser(
+        "lint", help="check spot profiles against the evidence and the decision records"
+    )
+    lint.add_argument(
+        "--decisions",
+        default=None,
+        help="decision file (default: profile_decisions.json next to spots.json)",
+    )
+    lint.add_argument("--max-gap", type=float, default=None, help="degrees (default 60)")
 
 
 def run(args: argparse.Namespace) -> int:
@@ -54,7 +70,86 @@ def run(args: argparse.Namespace) -> int:
             return _assess(db, args.slug, args.force)
         if args.research_cmd == "show":
             return _show(db, args.slug)
+        if args.research_cmd == "lint":
+            return _lint(db, args.decisions, args.max_gap)
     return 2
+
+
+def _lint(db: Any, path: str | None, max_gap: float | None) -> int:
+    from pathlib import Path
+
+    from app.models import SpotPhysicalProfile, SpotResearchSource, SurfSpot
+    from app.services.geo import window_center
+    from app.services.research import current_assessments
+    from app.services.research.decisions import (
+        GEOMETRY_LINT_DEG,
+        default_decisions_path,
+        lint,
+        validate_decisions,
+    )
+    from app.services.seed import SPOT_FIELDS
+
+    file = Path(path) if path else default_decisions_path()
+    if path and not file.exists():
+        print(f"research lint: no such file: {file}", file=sys.stderr)
+        return 1
+    raw = json.loads(file.read_text(encoding="utf-8")) if file.exists() else None
+    rows = db.scalars(select(SurfSpot).where(SurfSpot.is_active).order_by(SurfSpot.slug)).all()
+    spots = {s.slug: _spot_mapping(s, SPOT_FIELDS) for s in rows}
+    normals: dict[str, float] = {}
+    profiles = {p.spot_id: p for p in db.scalars(select(SpotPhysicalProfile)).all()}
+    for s in rows:
+        prof = profiles.get(s.id)
+        normals[s.slug] = (
+            float(prof.shore_normal_deg)
+            if prof is not None
+            else window_center(s.optimal_swell_direction_min, s.optimal_swell_direction_max)
+        )
+    keys: dict[str, set[str]] = {}
+    slug_of = {s.id: s.slug for s in rows}
+    for spot_id, key in db.execute(
+        select(SpotResearchSource.spot_id, SpotResearchSource.source_key)
+    ):
+        if spot_id in slug_of:
+            keys.setdefault(slug_of[spot_id], set()).add(key)
+    if raw is not None:
+        problems = validate_decisions(raw, spots, keys)
+        if problems:
+            print(f"research lint: {len(problems)} problem(s) in {file.name}:", file=sys.stderr)
+            for p in problems:
+                print(f"  - {p}", file=sys.stderr)
+            return 2
+    decisions: dict[str, list[dict[str, Any]]] = {}
+    for rec in (raw or {}).get("decisions", []):
+        decisions.setdefault(rec["slug"], []).append(rec)
+    assessments = {
+        slug_of[spot_id]: a.per_variable or {}
+        for spot_id, a in current_assessments(db).items()
+        if spot_id in slug_of
+    }
+    issues = lint(
+        spots,
+        normals,
+        assessments,
+        decisions,
+        GEOMETRY_LINT_DEG if max_gap is None else max_gap,
+    )
+    for issue in issues:
+        print(f"{issue.slug}: [{issue.kind}] {issue.message}")
+    print(
+        f"research lint: {len(issues)} issue(s); {len(spots)} spots, "
+        f"{sum(len(v) for v in decisions.values())} decision records"
+    )
+    return 1 if issues else 0
+
+
+def _spot_mapping(spot: Any, fields: tuple[str, ...]) -> dict[str, Any]:
+    """A spots.json-like mapping of a SurfSpot row (enums as their string values)."""
+    out: dict[str, Any] = {}
+    for f in fields:
+        v = getattr(spot, f)
+        out[f] = v.value if hasattr(v, "value") else v
+    return out
 
 
 def _load(db: Any, path: str | None) -> int:

@@ -9,6 +9,7 @@ starting point, NOT statistically calibrated values. See docs/SURF_SCORING.md.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from app.models.enums import QualityLabel
 from app.services.geo import angular_diff, compass_label, window_distance
@@ -124,6 +125,24 @@ def wind_relation(speed: float | None, direction: float | None, spot: SpotParams
     return "onshore"
 
 
+def disputed_wind_relation(
+    speed: float | None,
+    direction: float | None,
+    spot: SpotParams,
+    alternative_offshore_deg: float | None,
+) -> str | None:
+    """The wind relation if the offshore direction were ``alternative_offshore_deg`` (the
+    main direction of sources that contradict the profile), or None without one.
+
+    Used only to describe disputed winds; the score always uses the profile's direction.
+    """
+    if alternative_offshore_deg is None:
+        return None
+    return wind_relation(
+        speed, direction, replace(spot, offshore_wind_direction=float(alternative_offshore_deg))
+    )
+
+
 def score_wind(speed: float | None, direction: float | None, spot: SpotParams) -> float | None:
     if speed is None:
         return None
@@ -163,7 +182,12 @@ def score_consistency(sea: SeaState) -> float | None:
     return _clamp(swell_e / total)
 
 
-def evaluate(sea: SeaState, spot: SpotParams) -> QualityResult:
+def evaluate(
+    sea: SeaState, spot: SpotParams, alternative_offshore_deg: float | None = None
+) -> QualityResult:
+    """Score one hour. ``alternative_offshore_deg`` (sources disagree about which wind is
+    offshore) only changes the explanation, which then names both wind relations when
+    they differ; the score and ``wind_relation`` use the profile's offshore direction."""
     breaking = estimate_breaking_height(sea, spot)
     direction = (
         sea.primary_swell_direction_deg
@@ -200,8 +224,19 @@ def evaluate(sea: SeaState, spot: SpotParams) -> QualityResult:
     components["wind_gate"] = round(wind_gate, 3)
 
     relation = wind_relation(sea.wind_speed_kmh, sea.wind_direction_deg, spot)
+    alternative = disputed_wind_relation(
+        sea.wind_speed_kmh, sea.wind_direction_deg, spot, alternative_offshore_deg
+    )
     label = label_for_score(score)
-    explanation = build_explanation(sea, spot, breaking.min_ft, breaking.max_ft, relation, raw)
+    explanation = build_explanation(
+        sea,
+        spot,
+        breaking.min_ft,
+        breaking.max_ft,
+        relation,
+        raw,
+        alternative_relation=alternative,
+    )
     return QualityResult(
         score=score,
         label=label.value,
@@ -230,7 +265,12 @@ def build_explanation(
     hmax: float,
     relation: str,
     raw: dict[str, float | None],
+    *,
+    alternative_relation: str | None = None,
 ) -> str:
+    """One sentence per factor. With ``alternative_relation`` (the wind relation under the
+    direction that contradicting sources call offshore) different from ``relation``, the
+    wind part reads "wind 12 km/h from E, offshore or cross-shore: sources disagree"."""
     parts: list[str] = []
     h = sea.primary_swell_height_m or sea.sig_wave_height_m
     t = sea.primary_swell_period_s or sea.wave_period_s
@@ -253,6 +293,15 @@ def build_explanation(
     if sea.wind_speed_kmh is not None:
         if relation == "glassy":
             parts.append("glassy, near-calm wind")
+        elif alternative_relation is not None and alternative_relation not in (
+            relation,
+            "unknown",
+        ):
+            parts.append(
+                f"wind {sea.wind_speed_kmh:.0f} km/h from "
+                f"{compass_label(sea.wind_direction_deg)}, {relation} or "
+                f"{alternative_relation}: sources disagree"
+            )
         else:
             parts.append(
                 f"{relation} wind {sea.wind_speed_kmh:.0f} km/h from "
