@@ -308,9 +308,10 @@ file; blend, predictions (rescoring), archive and detection run at a fixed "now"
   Median GEFS-Wave relative spread at these hours: 0.025 / 0.034 / 0.084 / 0.153 / 0.229.
   The forecast classes were identical before and after the research evidence was loaded
   (forecast confidence never reads research).
-* **Local confidence.** Without evidence: Low for all 4,050 hours. With the committed
-  evidence file (research-v1.1: 18 spots Moderate, 32 Low overall; research basis Moderate at
-  19 spots, Low at 31) and the run rescored: High 0, Moderate 1,313, Low 2,737 (by lead
+* **Local confidence.** Without evidence: Low for all 4,050 hours. With the evidence file
+  committed at the time (the first research pass, research-v1.1: 18 spots Moderate, 32 Low
+  overall; research basis Moderate at 19 spots, Low at 31; the current file and its classes
+  are in [research-confidence.md](research-confidence.md) §9) and the run rescored: High 0, Moderate 1,313, Low 2,737 (by lead
   0-1 / 1-3 / 3-7 / 7-10 / > 10 days: Moderate 90 / 290 / 572 / 361 / 0). No spot can be High
   locally while no research variable is High. `local_confidence_reason` was set on 2,593
   hours ("… not well documented yet." 2,161, "… only partly documented." 432) and empty on
