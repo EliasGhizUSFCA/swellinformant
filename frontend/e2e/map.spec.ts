@@ -594,9 +594,12 @@ test.describe("ocean layers (synthetic fields)", () => {
       await expect(label).toHaveText(bubble(now, tz));
       await expect(slider).toHaveAttribute("aria-valuenow", String(nowIndex));
       await expect(slider).toHaveAttribute("aria-valuemax", String(mock.validTimes.length - 1));
-      // day labels in local time under the ticks
+      // day labels in local time under the ticks. The first and last days can be partial (a few
+      // hours) and are labelled only when wide enough, so check a day in the middle of the range,
+      // which is always whole: the test then holds at every time of day.
       const weekday = (iso: string) => new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(new Date(iso));
-      await expect(page.getByTestId("time-control")).toContainText(weekday(mock.validTimes.at(-1)!));
+      const middle = mock.validTimes[Math.floor(mock.validTimes.length / 2)]!;
+      await expect(page.getByTestId("time-control")).toContainText(weekday(middle));
       await shot(page, "desktop-1440x900-synthetic-timeline-los-angeles");
 
       // Arrow key: one step later → new ?at= for the layer fields and the spot snapshot.

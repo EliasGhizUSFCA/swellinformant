@@ -38,6 +38,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/health/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data Health Report
+         * @description Data freshness and background-job health (ok / degraded / failing, with reasons).
+         *
+         *     Public on purpose, like /api/system/status: it holds operational metadata only (run
+         *     keys, ages, limits, job statuses, reasons written by the service; no personal data,
+         *     no raw error text), and an external uptime monitor must be able to read it without
+         *     credentials, because a dead worker cannot send its own alert. Rate limited per IP.
+         */
+        get: operations["data_health_report_api_health_data_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/status": {
         parameters: {
             query?: never;
@@ -1249,6 +1274,34 @@ export interface components {
             /** Local Confidence Class */
             local_confidence_class?: string | null;
         };
+        /** DataHealthOut */
+        DataHealthOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "degraded" | "failing";
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /**
+             * Reasons
+             * @description Plain reasons, the most severe first
+             */
+            reasons: string[];
+            /** Problems */
+            problems: components["schemas"]["HealthProblemOut"][];
+            /** Forecast Sources */
+            forecast_sources: components["schemas"]["SourceHealthOut"][];
+            /** Jobs */
+            jobs: components["schemas"]["JobHealthOut"][];
+            map_fields: components["schemas"]["MapFieldsHealthOut"];
+            observations: components["schemas"]["ObservationsHealthOut"];
+            heartbeat: components["schemas"]["HeartbeatOut"];
+            storage: components["schemas"]["StorageOut"];
+        };
         /**
          * DateMode
          * @enum {string}
@@ -1617,6 +1670,33 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HealthProblemOut */
+        HealthProblemOut: {
+            /**
+             * Key
+             * @description Stable identifier, e.g. forecast_stale:noaa_gfs_direct
+             */
+            key: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "degraded" | "failing";
+            /** Message */
+            message: string;
+        };
+        /**
+         * HeartbeatOut
+         * @description Newest finished background job of any kind (the data-health job excluded).
+         */
+        HeartbeatOut: {
+            /** Last Job Finished At */
+            last_job_finished_at?: string | null;
+            /** Age Minutes */
+            age_minutes?: number | null;
+            /** Limit Minutes */
+            limit_minutes: number;
+        };
         /** HistogramBin */
         HistogramBin: {
             /** Lo */
@@ -1625,6 +1705,35 @@ export interface components {
             hi: number;
             /** Count */
             count: number;
+        };
+        /** JobHealthOut */
+        JobHealthOut: {
+            /** Job */
+            job: string;
+            /** Schedule */
+            schedule: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "failed" | "overdue" | "stuck" | "running" | "never_run";
+            /** Last Status */
+            last_status?: string | null;
+            /** Last Started At */
+            last_started_at?: string | null;
+            /** Last Finished At */
+            last_finished_at?: string | null;
+            /** Last Duration Ms */
+            last_duration_ms?: number | null;
+            /** Last Success At */
+            last_success_at?: string | null;
+            /**
+             * Consecutive Failures
+             * @default 0
+             */
+            consecutive_failures: number;
+            /** Overdue After Minutes */
+            overdue_after_minutes?: number | null;
         };
         /** LinkOut */
         LinkOut: {
@@ -1642,6 +1751,34 @@ export interface components {
             email: string;
             /** Password */
             password: string;
+        };
+        /** MapFieldsHealthOut */
+        MapFieldsHealthOut: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "with_noaa" | "standalone" | "off";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "stale" | "missing" | "off";
+            /** Run Key */
+            run_key?: string | null;
+            /** Cycle Time */
+            cycle_time?: string | null;
+            /** Age Hours */
+            age_hours?: number | null;
+            /** Stale After Hours */
+            stale_after_hours?: number | null;
+            /**
+             * Complete Valid Times
+             * @default 0
+             */
+            complete_valid_times: number;
+            /** Last Valid Time */
+            last_valid_time?: string | null;
         };
         /**
          * MapSnapshotOut
@@ -2154,6 +2291,34 @@ export interface components {
             max_alerts_per_day: number;
             /** Sms Service Available */
             sms_service_available: boolean;
+        };
+        /** ObservationProviderHealthOut */
+        ObservationProviderHealthOut: {
+            /** Provider */
+            provider: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "stale" | "missing";
+            /**
+             * Active Stations
+             * @default 0
+             */
+            active_stations: number;
+            /** Newest Observed At */
+            newest_observed_at?: string | null;
+            /** Age Hours */
+            age_hours?: number | null;
+            /** Stale After Hours */
+            stale_after_hours: number;
+        };
+        /** ObservationsHealthOut */
+        ObservationsHealthOut: {
+            /** Enabled */
+            enabled: boolean;
+            /** Providers */
+            providers?: components["schemas"]["ObservationProviderHealthOut"][];
         };
         /** OfferOut */
         OfferOut: {
@@ -2682,6 +2847,35 @@ export interface components {
             /** Segments */
             segments: components["schemas"]["SegmentOut"][];
         };
+        /** SourceHealthOut */
+        SourceHealthOut: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "forecast" | "blend" | "ensemble";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "stale" | "missing";
+            /** Newest Run Key */
+            newest_run_key?: string | null;
+            /** Newest Issued At */
+            newest_issued_at?: string | null;
+            /** Age Hours */
+            age_hours?: number | null;
+            /** Stale After Hours */
+            stale_after_hours?: number | null;
+            /** Latest Attempt Status */
+            latest_attempt_status?: string | null;
+            /** Latest Attempt Started At */
+            latest_attempt_started_at?: string | null;
+        };
         /** SpotAirportOut */
         SpotAirportOut: {
             airport: components["schemas"]["AirportOut"];
@@ -2923,6 +3117,13 @@ export interface components {
             latest_observation: string | null;
             /** Pairs */
             pairs: number;
+        };
+        /** StorageOut */
+        StorageOut: {
+            /** Database Bytes */
+            database_bytes: number;
+            /** Database Max Gb */
+            database_max_gb?: number | null;
         };
         /** TokenIn */
         TokenIn: {
@@ -3204,6 +3405,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    data_health_report_api_health_data_get: {
+        parameters: {
+            query?: {
+                /** @description Answer 503 instead of 200 when the status is 'failing' */
+                strict?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataHealthOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
