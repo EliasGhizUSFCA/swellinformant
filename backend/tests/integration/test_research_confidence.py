@@ -420,31 +420,32 @@ def test_methodology_change_adds_a_history_row_and_keeps_the_old_one(
     ]
 
 
-def test_committed_evidence_file_loads_and_no_spot_is_high(db: Session) -> None:
-    """The REAL research_evidence.json (not synthetic): it validates, seeding loads it, and
-    because every source was read only through search summaries no spot is High."""
+def test_committed_evidence_file_loads_and_search_only_support_is_capped(db: Session) -> None:
+    """The REAL research_evidence.json (not synthetic): it validates and seeding loads it.
+    Sources read directly and sources seen only through search summaries are both present,
+    and a variable whose support is search-only is never High (research-v1.1 cap)."""
     _clear_assessments(db)
     path = DEFAULT_DATA_DIR / EVIDENCE_FILENAME
     assert path.exists()
     evidence = load_evidence(db, path)
     assert evidence is not None
     sources = [s for spot in evidence.spots.values() for s in spot.sources]
-    assert len(evidence.spots) == 50 and len(sources) == 259
-    assert sum(len(s.claims) for s in sources) == 805
-    assert {s.retrieval for s in sources} == {"web_search"}
+    assert len(evidence.spots) == 50 and len(sources) == 449
+    assert sum(len(s.claims) for s in sources) == 1711
+    assert {s.retrieval for s in sources} == {"fetched", "web_search"}
+    assert sum(s.retrieval == "fetched" for s in sources) == 384
 
     out = seed_reference_data(db)  # the default data directory, with the file present
     db.commit()
-    assert out["research_evidence_spots"] == 50 and out["research_sources_created"] == 259
+    assert out["research_evidence_spots"] == 50 and out["research_sources_created"] == 449
     current = current_assessments(db)
     assert len(current) == 50
     assert all(a.methodology_version == "research-v1.1" for a in current.values())
-    assert all(a.overall_class != "high" for a in current.values())
     for a in current.values():
         for entry in a.per_variable.values():
-            assert entry["class"] != "high"
-            if entry["sources"]:
-                assert entry["search_only"] and entry["summary"].endswith(SEARCH_ONLY_NOTE)
+            if entry["sources"] and entry["search_only"]:
+                assert entry["class"] != "high"
+                assert entry["summary"].endswith(SEARCH_ONLY_NOTE)
     # Seeding again changes nothing.
     again = seed_reference_data(db)
     assert again["research_assessments_created"] == 0 and again["research_sources_created"] == 0
