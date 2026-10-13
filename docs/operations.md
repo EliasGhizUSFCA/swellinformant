@@ -88,7 +88,7 @@ rebuild after a code-only change took 1.6 s (the dependency layer is cached).
 | All forecast sources at once | none of them is fresh: forecasts, events and alerts run on stale data | **failing** |
 | Blend (two or more independent families) | stale or missing although every member is fresh and no `forecasts.acquire` / `forecasts.blend` run is in progress (`forecasts.blend` broken; during an acquisition the blend trails its first refreshed member until the chained blend stage runs) | degraded |
 | GEFS-Wave (`GEFS_ENABLED`) | older than 18.5 h or missing (uncertainty only) | degraded |
-| Every scheduled job | last real run failed (with the number in a row); no run started for 2 × its longest interval + 30 min (overdue; a run in progress counts); still "running" 15 min past the 30-min hard time limit (stuck: worker killed, e.g. out of memory) | degraded |
+| Every scheduled job | last real run failed (with the number in a row); no run started for 2 × its longest interval + 30 min (overdue; a run in progress counts, also when a duplicate was logged "skipped" after it); still "running" 15 min past the 30-min hard time limit (stuck: worker killed, e.g. out of memory) | degraded |
 | Heartbeat | no job of any kind finished for `DATA_HEALTH_HEARTBEAT_MINUTES` (30; `notifications.deliver` alone runs every 2 min): worker or beat down | **failing** |
 | Map ocean layers (unless off) | served GFS cycle older than the NOAA limit (16 h), or no complete field set | degraded |
 | Buoy observations (`OBSERVATIONS_ENABLED`) | newest observation of a provider older than `DATA_HEALTH_OBSERVATION_STALE_HOURS` (default: the 48 h ingestion look-back, beyond which the hourly job cannot fill the gap) | degraded |
@@ -544,6 +544,53 @@ all). In the third session the running containers' `app/` directory was byte-ide
   with the final scripts), a restore into the Compose database and one into a new database
   on the Compose server (§4).
 
+**Review re-run (2026-10-13, 16:12-16:45 UTC).** The same images (their `app/` and
+`alembic/` byte-identical to the code before the review's fixes, `diff -r`), a separate
+Compose project with the default `BEAT_RUN_ON_START=true`, every lead time limited to 24 h
+(sandbox budget), after a 13.5 h stop of the Docker daemon (02:46-16:12):
+
+* Restart policies brought all eight containers back. PostgreSQL ran crash recovery and
+  accepted connections at 16:13:06; the `backup` container (up at 16:12:42) waited for it
+  and backed up at 16:13:13: 53,115,353 bytes in 27 s.
+* Beat sent every entry that had fallen due at 16:13:15. `forecasts.acquire` (75.7 s):
+  NOAA 06Z, 9 steps, 91 requests, 213.3 MB, 0 spot errors; ECMWF 00Z, 9 steps, 64
+  requests, 122.0 MB in 17.8 s, no 503 SlowDown; then the blend (0.4 s) and 3 × 450
+  predictions. GEFS-Wave 06Z: 5 steps, 49 requests, 23.9 MB, 19.7 s. The worker received
+  375 MB in all (docker stats).
+* **A defect found live and fixed in the review:** the first `ops.data_health` run
+  (16:13:48) emailed "Job forecasts.acquire has not run for 13.6 h" while that job had
+  been running since 16:13:18: the start-up kick-off had queued a second copy, logged
+  "skipped" (lock held), and the overdue check read only the newest row. The run in
+  progress now counts whatever was skipped after it (and a killed run followed by skipped
+  copies is still reported as stuck). The other four problems of that email were real
+  (both forecast sources and the map layers past their limits, hence `failing`). At
+  16:28:15 one recovery notice, "Data health recovered: all checks ok", followed;
+  `GET /api/health/data` and `scripts/check-health.sh` then said ok (exit 0).
+* The beat schedule file held all 11 entries, with next runs `notification-delivery`
+  every 2 min, `data-health` and `alert-generation` 16:28:15, `user-matching` and
+  `quality-prediction-safety-net` 16:43:15, the hourly jobs 17:13:15,
+  `forecast-acquisition` 19:13:15, `ensemble-acquisition` 19:39:59, `maintenance-cleanup`
+  03:29:59. `data-health` ran at 16:13:15, 16:28:15 and 16:43:15.
+* 31-minute soak (16:12:30-16:44): 65 job runs of 12 jobs, 0 failed, 1 skipped (the
+  duplicate acquisition), none left running; no error line in any app container's log;
+  every container healthy. Peak memory (sampled every minute): worker 839 MiB, API
+  287 MiB, PostgreSQL 190 MiB, beat 97 MiB, backup 53 MiB, frontend 45 MiB.
+* `GET /api/health/data` (5,694 bytes): no address, credential, URL or error text in it;
+  `Cache-Control: no-store`; 64 requests in a burst gave 58 × 200 and 6 × 429 (60 per
+  minute; two requests had been made just before). The database grew from 110.2 MB (02:43) to
+  120.6 MB with this one set of 24-hour runs.
+* On a separate test database, a forced stale source and a failing job (synthetic rows)
+  run through the real `ops.data_health` task produced exactly one problem email, nothing
+  on the next run, one recovery notice once fixed, and nothing after it; the error text
+  appeared in the email only.
+* A restore drill of a fresh copy of `swell_live2` (row counts checked identical first):
+  backup 47,858,041 bytes in 7 s, restore 3 s, 42 tables and 34,800 rows identical,
+  restored database 96 MB.
+
+The fixed code was not rebuilt into images (the sandbox disk was full); it ran from the
+host against the stack's live database at 16:44 (`python -m app.services.health`: ok, the
+same as the API) and in the tests. The stack was stopped at 16:45.
+
 **Run locally, not on GitHub:** every command of `.github/workflows/ci.yml` except the
 Playwright browser installation: actionlint 1.7.12 (with shellcheck 0.11.0) on the
 workflow; a fresh Python 3.13 virtualenv with `pip install -e ".[dev]"` (1 min 21 s), then
@@ -561,7 +608,14 @@ only the step it settles on" (16 field requests instead of at most 4, a timing-d
 check). `e2e/map.spec.ts` alone then passed 26 of 26 both times it was rerun (2026-10-12
 21:00 and 2026-10-13 02:25 UTC). The last full run used Chromium from
 `PLAYWRIGHT_CHROMIUM_PATH`, since the sandbox's Playwright browser cache is older than the
-installed Playwright.
+installed Playwright. The review's full run (2026-10-13, about 16:26-16:33 UTC) passed 50
+of 51; the failure was again "in Los Angeles time" (the last day's label was not drawn).
+On 2026-10-13, `tests/integration` had one failure that does not come from this change:
+`test_pipeline.py::test_paused_search_does_not_generate_notifications` failed in every run
+(three of three at the base commit `d2b7e42` as well). It depends on the date: the demo
+provider's natural Jeffreys Bay swell (from 2026-10-17 16:00 UTC that day) overlaps the
+swell the test simulates seven days ahead, detection merges the two into one event
+starting four days ahead, and the unpaused search does not match it.
 
 **Not verified**
 
