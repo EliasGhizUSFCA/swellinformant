@@ -175,8 +175,11 @@ def test_window_cycles_are_unique() -> None:
 
 def test_candidate_c2_is_forecast_v1_plus_one_cap() -> None:
     """forecast-v1 gives High to complete single-source hours up to 52 h; candidate C2
-    (evaluated, not adopted) caps them at Moderate and changes nothing else."""
-    assert cc.METHODS == (METHOD, cc.CANDIDATE_C2) and METHOD == "forecast-v1"
+    (evaluated, not adopted) caps them at Moderate and changes nothing else. The shipped
+    method is forecast-v1.1, which only adds the disputed-wind note and no class rule, so the
+    validated classes are those of forecast-v1."""
+    assert cc.METHODS == (cc.METHOD, cc.CANDIDATE_C2) and cc.METHOD == "forecast-v1"
+    assert METHOD == "forecast-v1.1" and METHOD in cc.SAME_CLASS_RULES
     assert cc.lead_table_high_limit() == 52.0
     frame = _frame([6.0, 24.0, 52.0, 53.0, 100.0, 160.0, 250.0], ["synthetic:a"], 2)
     v1, rules1 = cc.classify_frame(frame)
@@ -190,8 +193,10 @@ def test_candidate_c2_is_forecast_v1_plus_one_cap() -> None:
     a, _ = cc.classify_frame(ens, ensemble=True)
     b, _ = cc.classify_frame(ens, ensemble=True, method=cc.CANDIDATE_C2)
     assert list(a) == list(b) and a[0] == HIGH
+    same, _ = cc.classify_frame(frame, method="forecast-v1.1")  # no class rule added
+    assert list(same) == list(v1)
     with pytest.raises(ValueError, match="unknown method"):
-        cc.classify_frame(frame, method="forecast-v1.1")
+        cc.classify_frame(frame, method="forecast-v2")
 
 
 def test_class_with_caps_recomputes_caps_and_downgrades() -> None:

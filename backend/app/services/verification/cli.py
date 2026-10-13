@@ -9,7 +9,7 @@
                 [--check-station CODE ...] [--start ISO] [--boot N] [--json PATH]
   verify confidence-classes --station CODE ... --test-start ISO [--source S]
                 [--ensemble-source E] [--start ISO] [--window-days N] [--boot N]
-                [--method forecast-v1|candidate-c2] [--scan-boundaries] [--json PATH]
+                [--method forecast-v1|forecast-v1.1|candidate-c2] [--scan-boundaries] [--json PATH]
 
 ``ranges`` scores the coverage of the app's offshore 80 % range against buoys and fits
 the lead-dependent scale on the TRAIN period; ``confidence-classes`` scores the realised
@@ -91,16 +91,16 @@ def register(subparsers: Any) -> None:
                 help="also score these stations with the TRAIN-fitted scale (never fitted on)",
             )
         else:
-            # forecast_confidence is a light, pure module (confidence_classes needs pandas).
-            from app.services.surf_quality.forecast_confidence import METHOD
-
+            # The class rules under test are forecast-v1's; the shipped forecast-v1.1 adds only
+            # the disputed-wind note (confidence_classes.SAME_CLASS_RULES), not a class rule.
             p.add_argument("--window-days", type=int, default=90)
             p.add_argument(
                 "--method",
-                choices=(METHOD, "candidate-c2"),
-                default=METHOD,
-                help="the app's method, or candidate C2 (forecast-v1 + no High from one model "
-                "without an ensemble; evaluated, not adopted)",
+                choices=("forecast-v1", "forecast-v1.1", "candidate-c2"),
+                default="forecast-v1",
+                help="the app's class rules (forecast-v1; forecast-v1.1 has the same), or "
+                "candidate C2 (forecast-v1 + no High from one model without an ensemble; "
+                "evaluated, not adopted)",
             )
             p.add_argument(
                 "--scan-boundaries",

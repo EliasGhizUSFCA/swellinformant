@@ -59,7 +59,6 @@ from app.services.surf_quality.forecast_confidence import (
     INDEX_HIGH,
     LEAD_SHORT_H,
     LOW,
-    METHOD,
     MODERATE,
     EnsembleSignal,
     ForecastConfidence,
@@ -80,6 +79,10 @@ from app.services.verification.ranges import log_error
 
 CLASSES = (HIGH, MODERATE, LOW)
 _BY_RANK = {rank(c): c for c in CLASSES}
+# The class rules validated here are forecast-v1's. The shipped method forecast-v1.1 adds
+# only the disputed-wind note (no class rule), so it is accepted as the same rules.
+METHOD = "forecast-v1"
+SAME_CLASS_RULES = ("forecast-v1.1",)
 # The candidate of section 12.3 (not adopted): forecast-v1 plus the cap C2_RULE.
 CANDIDATE_C2 = "candidate-c2"
 METHODS = (METHOD, CANDIDATE_C2)
@@ -170,7 +173,7 @@ def _classify_cached(h: HourInputs, method: str) -> tuple[str, tuple[str, ...]]:
     inp = forecast_inputs(h)
     fc = classify_forecast(inp)
     fired = tuple(r.as_str() for r in fc.rules if r.effect != "note")
-    if method == METHOD:
+    if method == METHOD or method in SAME_CLASS_RULES:
         return fc.cls, fired
     if method == CANDIDATE_C2:
         if not c2_applies(inp):
@@ -200,6 +203,8 @@ def classify_frame(
     (station_code, cycle_time, lead bucket) to the row the job would have produced.
     ``method``: one of :data:`METHODS`.
     """
+    if method in SAME_CLASS_RULES:
+        method = METHOD
     if method not in METHODS:
         raise ValueError(f"unknown method {method!r}; one of {METHODS}")
     lead = frame["lead_hours"].to_numpy(dtype=float)
