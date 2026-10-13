@@ -121,9 +121,9 @@ def parse_timestamp(value: Any) -> datetime | None:
             d = date.fromisoformat(text)
             return datetime(d.year, d.month, d.day, tzinfo=UTC)
         t = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
+        return t.replace(tzinfo=UTC) if t.tzinfo is None else t.astimezone(UTC)
+    except (ValueError, OverflowError):  # e.g. 9999-12-31T23:59-23:59 is after year 9999 in UTC
         return None
-    return t.replace(tzinfo=UTC) if t.tzinfo is None else t.astimezone(UTC)
 
 
 def _text(

@@ -24,7 +24,11 @@ x-backend-env: &backend-env
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000}}
   COOKIE_SECURE: ${COOKIE_SECURE:-false}
   RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
-  # Reverse proxies in front of the API (rate limits use the client IP they forward).
+  # Reverse proxies in front of the API that set or append X-Forwarded-For (rate limits use
+  # the client IP they forward). The frontend's /api proxy passes the header on unchanged
+  # and adds no entry, so it does not count: 1 = the TLS proxy (Caddy, nginx with
+  # $proxy_add_x_forwarded_for) in front of the frontend. Without such a proxy the header
+  # is whatever the client sent.
   TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
   FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-demo}
   FORECAST_DAYS: ${FORECAST_DAYS:-16}

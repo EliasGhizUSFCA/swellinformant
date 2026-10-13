@@ -150,6 +150,29 @@ def test_malformed_urls_are_listed_problems_not_crashes() -> None:
     assert "source_type 'blog'" in text
 
 
+def test_out_of_range_timestamps_are_listed_problems_not_crashes() -> None:
+    """A valid ISO date-time whose UTC equivalent falls outside year 1..9999 raised
+    OverflowError from astimezone() instead of being listed (SYNTHETIC sources)."""
+    raw = synthetic_file(
+        {
+            "pipeline": [
+                {
+                    **synthetic_source("late", "guidebook", _claims("wind")),
+                    "accessed_at": "9999-12-31T23:59:59-23:59",
+                },
+                synthetic_source("blog", "blog", _claims("wind")),
+            ]
+        }
+    )
+    raw["generated_at"] = "0001-01-01T00:00:00+01:00"
+    with pytest.raises(EvidenceValidationError) as info:
+        parse_evidence(raw, {"pipeline"})
+    text = "\n".join(info.value.problems)
+    assert "generated_at must be an ISO date-time" in text
+    assert "pipeline source 'late': accessed_at must be a date" in text
+    assert "source_type 'blog'" in text
+
+
 def test_valid_file_parses() -> None:
     raw = synthetic_file({"pipeline": [synthetic_source("a", "guidebook", _claims("wind"))]})
     parsed = parse_evidence(raw, {"pipeline"})

@@ -11,8 +11,11 @@ from app.core.config import get_settings
 _REDACTIONS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)(authorization:\s*)(bearer|basic)\s+[^\s'\"]+"), r"\1\2 [REDACTED]"),
     (
+        # key=value, JSON ("key": "value") and Python reprs ('key': 'value', as in the
+        # "[parameters: ...]" of a SQLAlchemy error); a quoted value is removed whole.
         re.compile(
-            r"(?i)(\"?(password|token|secret|api_key|apikey|access_token)\"?\s*[:=]\s*)\"?[^\s,'\"}]+"
+            r"(?i)([\"']?(password_hash|password|token|secret|api_key|apikey|access_token)"
+            r"[\"']?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,'\"}]+)"
         ),
         r"\1[REDACTED]",
     ),
@@ -29,23 +32,50 @@ def redact(message: str) -> str:
 
 
 class RedactingFilter(logging.Filter):
-    """Scrubs tokens, passwords, emails and phone numbers from every log record."""
+    """Scrubs tokens, passwords, emails and phone numbers from every log record.
+
+    The text of a logged exception is scrubbed too: tracebacks quote error messages, and
+    those can hold an address, a token or a password hash (PostgreSQL's "Key (email)=(...)
+    already exists", SQLAlchemy's "[parameters: ...]", SMTP recipient errors).
+
+    ``keep_args``: redact each string argument in place instead of merging the arguments
+    into the message, for formatters that read ``record.args`` themselves (uvicorn's access
+    log formatter unpacks them into the client address, request line and status).
+    """
+
+    def __init__(self, keep_args: bool = False) -> None:
+        super().__init__()
+        self.keep_args = keep_args
 
     def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            msg = record.getMessage()
-        except Exception:  # pragma: no cover - malformed record
-            return True
-        record.msg = redact(msg)
-        record.args = ()
+        if self.keep_args and isinstance(record.args, tuple):
+            record.msg = redact(str(record.msg))
+            record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
+        else:
+            try:
+                msg = record.getMessage()
+            except Exception:  # pragma: no cover - malformed record
+                return True
+            record.msg = redact(msg)
+            record.args = ()
+        if record.exc_info and not record.exc_text:
+            # Formatters reuse a record's exc_text instead of formatting the exception again.
+            record.exc_text = _EXCEPTION_FORMATTER.formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = redact(record.exc_text)
+        if record.stack_info:
+            record.stack_info = redact(record.stack_info)
         return True
 
 
-def install_redaction(logger: logging.Logger) -> None:
+_EXCEPTION_FORMATTER = logging.Formatter()
+
+
+def install_redaction(logger: logging.Logger, keep_args: bool = False) -> None:
     """Attach the redacting filter to every handler of ``logger`` (idempotent)."""
     for handler in logger.handlers:
         if not any(isinstance(f, RedactingFilter) for f in handler.filters):
-            handler.addFilter(RedactingFilter())
+            handler.addFilter(RedactingFilter(keep_args=keep_args))
 
 
 def configure_logging(add_handler: bool = True) -> None:
@@ -64,6 +94,11 @@ def configure_logging(add_handler: bool = True) -> None:
         handler._swell = True  # type: ignore[attr-defined]
         root.addHandler(handler)
     install_redaction(root)
+    # Under uvicorn: its error log (which prints the traceback of every exception that
+    # escapes the app) and its access log (request lines with their query strings, e.g. the
+    # unsubscribe token) have their own handlers. No-ops when uvicorn is not running.
+    install_redaction(logging.getLogger("uvicorn"))
+    install_redaction(logging.getLogger("uvicorn.access"), keep_args=True)
     # httpx logs full request URLs (which can contain API keys) at INFO.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)

@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = 15
     email_verification_ttl_hours: int = 48
     password_reset_ttl_minutes: int = 60
+    # Proxies in front of the API that set or append X-Forwarded-For (app.core.ratelimit).
+    # The Next.js /api proxy forwards the header unchanged and adds no entry (verified with
+    # Next.js 16.4), so it does not count; 0 = use the socket peer.
     trusted_proxy_count: int = 1
 
     # ------------------------------------------------------------------ forecasts

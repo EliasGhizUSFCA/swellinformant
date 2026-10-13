@@ -18,6 +18,7 @@
 # .partial file and only renamed once pg_dump succeeded and `pg_restore --list` can read the
 # archive, so a failed run never leaves a file that looks like a backup. Retention only
 # considers files of the same prefix and database and never deletes the backup just made.
+# DIR gets a .gitignore (unless it has one), so git never offers the dumps for a commit.
 # Restore with scripts/restore-db.sh; rehearse with scripts/restore-drill.sh.
 #
 # Credentials: the DATABASE_URL password is passed to pg_dump through PGPASSWORD, never on
@@ -92,6 +93,9 @@ else
 fi
 mv "$PARTIAL" "$FILE"
 trap - EXIT INT TERM
+# The default ./backups is inside the checkout when run from the repository root: keep
+# git from ever offering the dumps for a commit (an existing .gitignore is left alone).
+[ -e "$DIR/.gitignore" ] || printf '%s\n' '# backups hold personal data; never commit them' '*' >"$DIR/.gitignore"
 printf '%s  %s\n' "$(sha256_of "$FILE")" "$(basename -- "$FILE")" >"$FILE.sha256"
 BYTES=$(wc -c <"$FILE" | tr -d ' ')
 log "backup complete: $BYTES bytes in $(($(date +%s) - START)) s"
