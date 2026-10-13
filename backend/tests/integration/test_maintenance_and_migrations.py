@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
@@ -57,12 +58,14 @@ def test_migrations_upgrade_downgrade_and_match_models() -> None:
     from app.core.database import Base
 
     base_url = make_url(os.environ["DATABASE_URL"])
-    scratch = base_url.set(database="swell_migration_check")
+    # One scratch database per run: test runs on the same server (each with its own test
+    # database) dropped each other's fixed-name scratch database mid-migration.
+    name = f"{(base_url.database or 'swell')[:40]}_migcheck_{uuid.uuid4().hex[:8]}"
+    scratch = base_url.set(database=name)
     admin = create_engine(base_url, isolation_level="AUTOCOMMIT")
     try:
         with admin.connect() as conn:
-            conn.execute(text("DROP DATABASE IF EXISTS swell_migration_check"))
-            conn.execute(text("CREATE DATABASE swell_migration_check"))
+            conn.execute(text(f'CREATE DATABASE "{name}"'))
     except Exception as exc:  # pragma: no cover - depends on DB privileges
         pytest.skip(f"cannot create scratch database: {exc}")
     cfg = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
@@ -96,5 +99,5 @@ def test_migrations_upgrade_downgrade_and_match_models() -> None:
         os.environ["DATABASE_URL"] = previous
         get_settings.cache_clear()
         with admin.connect() as conn:
-            conn.execute(text("DROP DATABASE IF EXISTS swell_migration_check"))
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
         admin.dispose()

@@ -23,8 +23,6 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from app.services.geo import haversine_km
-
 ARRIVAL_FLEX_DAYS = 1
 DEPARTURE_FLEX_DAYS = 1
 MIN_BOOKING_LEAD = timedelta(hours=24)
@@ -153,7 +151,3 @@ def outbound_query_dates(
     candidates = [first + timedelta(days=i) for i in range((last - first).days + 1)]
     candidates.sort(key=lambda d: (abs((d - preferred).days), -d.toordinal()))
     return candidates[:max_dates]
-
-
-def great_circle_km(a: tuple[float, float], b: tuple[float, float]) -> float:
-    return haversine_km(a[0], a[1], b[0], b[1])

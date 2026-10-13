@@ -56,6 +56,16 @@ def test_single_source_classes_follow_the_lead_table(
     assert not inp.missing_wind and not inp.stale and inp.verification == ()
 
 
+def test_recorded_stale_limit_is_the_apps_noaa_limit() -> None:
+    """NOAA_STALE_AFTER_H restates queries.stale_after_hours for the app's NOAA source."""
+    from app.core.config import Settings
+    from app.services.forecasts import queries
+    from app.services.forecasts.registry import NOAA_GFS_CODE
+
+    assert queries.stale_after_hours(NOAA_GFS_CODE, Settings()) == cc.NOAA_STALE_AFTER_H
+    assert cc.forecast_inputs(_hour(24.0)).stale_after_hours == cc.NOAA_STALE_AFTER_H
+
+
 def test_missing_swell_and_wind_counted_present() -> None:
     assert classify_forecast(cc.forecast_inputs(_hour(24.0, swell_tp=None))).cls == LOW
     # Wind is counted present (the app's NOAA source always has it): index at 24 h is

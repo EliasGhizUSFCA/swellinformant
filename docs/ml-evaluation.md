@@ -1944,6 +1944,7 @@ and, with every fix, at +10 and +46 days. Every NDBC adapter test
 pins `now`; a grep of the tests for `date.today()` and `datetime.now(` finds only relative
 uses. `test_public_and_opportunity_api.py::test_forecast_and_events_after_pipeline` still
 expects at least one natural demo event among five spots within 12 days, which held at
-every shift tried. (`test_maintenance_and_migrations.py` uses a fixed scratch database
-name, `swell_migration_check`, so two concurrent runs of it collide; the review's parallel
-shift runs hit that once. Not date-dependent; a follow-up.)
+every shift tried. (`test_maintenance_and_migrations.py` used a fixed scratch database
+name, `swell_migration_check`, so two concurrent runs of it collided; the review's parallel
+shift runs hit that once. Not date-dependent; since fixed: every run names its own scratch
+database, as `test_backup_scripts.py` now does too.)

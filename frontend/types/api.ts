@@ -8,14 +8,13 @@ import type { components } from "./openapi";
 type S = components["schemas"];
 
 /**
- * Forecast-confidence fields the backend is adding to swell events and daily summaries
- * (typed here as optional until openapi.d.ts is regenerated). An absent field means the API
- * does not provide it; null means "not assessed yet". Classes are "high" | "moderate" | "low".
+ * The forecast-confidence class for responses whose API contract does not carry it yet
+ * (opportunities and notifications, below; swell events, daily summaries and forecast hours
+ * have their confidence fields in the generated schema). An absent field means the API does
+ * not provide it; null means "not assessed yet". Classes are "high" | "moderate" | "low".
  */
 export interface ForecastConfidenceFields {
   forecast_confidence_class?: string | null;
-  local_confidence_class?: string | null;
-  confidence_reasons?: string[];
 }
 
 export type User = S["UserOut"];
@@ -33,10 +32,10 @@ export type SpotSummary = S["SpotSummary"];
 export type SpotDetail = S["SpotDetail"];
 export type SpotAirport = S["SpotAirportOut"];
 export type Conditions = S["Conditions"];
-export type SwellEvent = S["EventOut"] & ForecastConfidenceFields;
+export type SwellEvent = S["EventOut"];
 export type SpotForecast = S["SpotForecastOut"];
 export type ForecastPoint = S["ForecastPoint"];
-export type DailySummary = S["DailySummary"] & Pick<ForecastConfidenceFields, "forecast_confidence_class" | "local_confidence_class">;
+export type DailySummary = S["DailySummary"];
 export type MapSnapshot = S["MapSnapshotOut"];
 export type MapSpot = S["MapSpotOut"];
 export type ModelSeries = S["ModelSeries"];

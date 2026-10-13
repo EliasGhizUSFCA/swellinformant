@@ -28,6 +28,7 @@ from app.services.research.evidence import (
     load_evidence,
     sync_evidence,
 )
+from app.services.research.views import research_view
 from app.services.seed import DEFAULT_DATA_DIR, SeedValidationError, seed_reference_data
 from app.services.spot_views import spot_summaries
 from tests.conftest import ApiClient
@@ -391,6 +392,9 @@ def test_search_only_evidence_is_moderate_and_a_retrieval_change_is_new_history(
         assert entry["summary"].endswith(SEARCH_ONLY_NOTE)
     db.refresh(read)
     assert read.is_current is False and read.overall_class == "high"  # history kept
+    # The API's source list reports how each assessment's sources were read.
+    assert {s.retrieval for s in research_view(capped).sources} == {"web_search"}
+    assert {s.retrieval for s in research_view(read).sources} == {"fetched"}
     report = format_assessment("Pipeline", "pipeline", capped)
     assert report.count("; search summary only)") == 3
     assert "were seen only as search summaries, not read in full." in report

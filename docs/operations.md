@@ -615,7 +615,10 @@ On 2026-10-13, `tests/integration` had one failure that does not come from this 
 (three of three at the base commit `d2b7e42` as well). It depends on the date: the demo
 provider's natural Jeffreys Bay swell (from 2026-10-17 16:00 UTC that day) overlaps the
 swell the test simulates seven days ahead, detection merges the two into one event
-starting four days ahead, and the unpaused search does not match it.
+starting four days ahead, and the unpaused search does not match it. Both have since been
+fixed: the pipeline tests turn the natural demo swells off (fixture
+`only_simulated_swells`), and the Los Angeles timeline test checks a whole day in the
+middle of the range.
 
 **Not verified**
 

@@ -56,7 +56,6 @@ DEFAULT_LOOKBACK = timedelta(days=14)
 PERSISTENCE_MAX_AGE = timedelta(hours=1)
 RAW_MODEL_VERSION = "raw"
 PAIR_VARIABLES = ("hs", "tp", "dir")
-HS_KINDS = ("spectral_hm0", "h_third", "unknown")
 WRITE_CHUNK = 2000
 KEY_CHUNK = 500
 

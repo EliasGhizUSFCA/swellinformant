@@ -204,7 +204,8 @@ High for about two days, Moderate to about day six and Low beyond — matching t
 of wave-forecast skill between days 4 and 10. With GEFS-Wave the index varies with the
 situation (spread varies about fivefold at a fixed lead).
 
-**Forecast confidence** (`forecast_confidence_class`, methodology `forecast-v1`): starts from
+**Forecast confidence** (`forecast_confidence_class`, methodology `forecast-v1.1`: forecast-v1
+plus a disputed-wind note that changes no class): starts from
 the index class and applies documented caps and downgrades — lead time (beyond 7 days at most
 Moderate, beyond 10 days Low, 3–7 days High only with a small ensemble spread), large GEFS-Wave
 spread, disagreement between *independent* model families only (GFS vs ECMWF; GFS-Wave and

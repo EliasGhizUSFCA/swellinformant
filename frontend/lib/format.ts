@@ -61,12 +61,6 @@ export function formatDateTime(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
-export function formatTime(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-US", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false }).format(
-    new Date(iso),
-  );
-}
-
 /** Plain calendar dates ("2026-07-10") rendered without any timezone shifting. */
 export function formatCalendarDate(value: string | null | undefined, opts: Intl.DateTimeFormatOptions = {}): string {
   if (!value) return "—";

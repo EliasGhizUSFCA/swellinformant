@@ -36,8 +36,6 @@ WIND_SEA_FACTOR = 0.7  # version 1 only
 METHOD_APPROX_V1 = "komar_gaughan_v1_uncalibrated"
 METHOD_PHYSICAL = nearshore.METHOD
 METHOD_CALIBRATED = "calibrated_power_law"
-# Kept for code that still refers to the previous name.
-METHOD_APPROX = METHOD_APPROX_V1
 
 komar_gaughan_m = nearshore.komar_gaughan_m
 

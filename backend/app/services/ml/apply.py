@@ -97,9 +97,6 @@ class Correction:
             return False
         return family is None or family in self.families
 
-    def applies_to_station(self, station_code: str, lead_hours: float) -> bool:
-        return station_code in self.station_codes and self.in_lead_range(float(lead_hours))
-
     def correct_hs(
         self, features: Mapping[str, float | None]
     ) -> tuple[float | None, dict[str, Any]]:
