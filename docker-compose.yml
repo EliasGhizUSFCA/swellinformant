@@ -247,16 +247,26 @@ services:
       BACKUP_KEEP: ${BACKUP_KEEP:-7}
       BACKUP_MAX_AGE_DAYS: ${BACKUP_MAX_AGE_DAYS:-30}
       BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_RETRY_MINUTES: ${BACKUP_RETRY_MINUTES:-30}
     volumes:
       - ./scripts:/scripts:ro
       - ${BACKUP_HOST_DIR:-db-backups}:/backups
     entrypoint: ["/bin/sh", "-c"]
+    # After a reboot or a Docker restart, restart policies start every container at once,
+    # ignoring depends_on: wait for PostgreSQL (up to 10 min) before each backup, and retry
+    # a failed backup after BACKUP_RETRY_MINUTES instead of skipping a whole interval.
     command:
       - |
         echo "database backups every $${BACKUP_INTERVAL_HOURS} h into /backups"
         while true; do
-          /scripts/backup-db.sh || echo "backup FAILED; next attempt in $${BACKUP_INTERVAL_HOURS} h" >&2
-          sleep $$((BACKUP_INTERVAL_HOURS * 3600))
+          tries=0
+          until pg_isready -q || [ $$tries -ge 60 ]; do tries=$$((tries + 1)); sleep 10; done
+          if /scripts/backup-db.sh; then
+            sleep $$((BACKUP_INTERVAL_HOURS * 3600))
+          else
+            echo "backup FAILED; next attempt in $${BACKUP_RETRY_MINUTES} min" >&2
+            sleep $$((BACKUP_RETRY_MINUTES * 60))
+          fi
         done
     depends_on:
       postgres:
