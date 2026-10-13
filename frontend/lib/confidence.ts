@@ -13,8 +13,6 @@
 
 export type ConfidenceClass = "high" | "moderate" | "low";
 
-export const CONFIDENCE_CLASSES: readonly ConfidenceClass[] = ["high", "moderate", "low"];
-
 export const CONFIDENCE_LABEL: Record<ConfidenceClass, string> = {
   high: "High",
   moderate: "Moderate",
