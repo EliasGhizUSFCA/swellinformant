@@ -198,9 +198,9 @@ compressed, everything else compressed about 5:1.
 ### Restore
 
 ```bash
-docker compose stop backend worker beat frontend     # nothing may write during a restore
+docker compose stop backend worker beat frontend backup   # nothing may write during a restore
 scripts/restore-db.sh --compose backups/swell-swell-20261012T105652Z.dump
-docker compose up -d                                  # migrations newer than the dump run on start
+docker compose up -d
 ```
 
 The script checks the `.sha256`, reads the archive, shows the target and asks you to type
@@ -208,6 +208,31 @@ its name (`--yes` skips this; without a terminal it refuses). It drops and re-cr
 object in the archive in one transaction: on any error nothing changes. `--create
 --target-db NAME` restores into a new database instead (for inspection or a drill), and
 `DATABASE_URL=...` targets any server.
+
+**A backup from before a migration** (e.g. rolling back a release that added tables): an
+in-place restore only replaces what the archive holds, so the tables a later migration
+added would stay behind, block the drop of the tables they reference and make the next
+`alembic upgrade` fail. The script therefore compares the Alembic revision of the backup
+with the target's and refuses, changing nothing, when they differ. Restore into a new
+database and swap it in; the backend then migrates it to the current schema on start:
+
+```bash
+docker compose stop backend worker beat frontend backup
+scripts/restore-db.sh --compose --create --target-db swell_restored backups/swell-swell-20261012T105652Z.dump
+docker compose exec postgres psql -U swell -d postgres \
+  -c 'ALTER DATABASE swell RENAME TO swell_before_restore' \
+  -c 'ALTER DATABASE swell_restored RENAME TO swell'
+docker compose up -d     # RUN_MIGRATIONS=true: alembic upgrade head on the restored database
+# once everything checks out: docker compose exec postgres dropdb -U swell swell_before_restore
+```
+
+(Use your `POSTGRES_USER` / `POSTGRES_DB` if they are not `swell`.) Checked on
+2026-10-13: a backup at revision `0003_forecast_engine` restored in place over a database at
+`0005_research_retrieval` failed before this check existed ("cannot drop constraint
+pk_surf_spots ... other objects depend on it", rolled back), and is now refused up front;
+restored with `--create`, renamed in and migrated, it reached `0005_research_retrieval` and
+`alembic check` found no drift. The renames were run in the Compose PostgreSQL on scratch
+databases, not on the live one.
 
 ### Restore drill
 

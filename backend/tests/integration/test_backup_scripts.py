@@ -150,3 +150,63 @@ def test_restore_refuses_without_confirmation_and_on_a_bad_checksum(
             text("SELECT count(*) FROM pg_database WHERE datname = 'swell_ops_never_created'")
         ).scalar_one()
     assert exists == 0
+
+
+def test_in_place_restore_refuses_another_schema_revision(tools: None, tmp_path: Path) -> None:
+    """An older backup over a migrated database would leave the newer tables behind (they
+    block the drop of the tables they reference, or make the next migration fail): the
+    script compares Alembic revisions first. The revision written here is synthetic."""
+    backup = run("backup-db.sh", "--dir", str(tmp_path))
+    assert backup.returncode == 0, backup.stderr
+    archive = backup.stdout.strip()
+    scratch = "swell_ops_revision_check"
+    url = make_url(get_settings().database_url)
+    scratch_url = url.set(database=scratch).render_as_string(hide_password=False)
+    with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text(f"DROP DATABASE IF EXISTS {scratch}"))
+    try:
+        created = run("restore-db.sh", "--yes", "--create", "--target-db", scratch, archive)
+        assert created.returncode == 0, created.stderr
+        marker = (
+            "UPDATE alembic_version SET version_num = 'synthetic_later_revision'; "
+            "CREATE TABLE synthetic_later_table (spot_id integer REFERENCES surf_spots (id))"
+        )
+        psql = ["psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", scratch, "-c"]
+        env = {"DATABASE_URL": scratch_url}
+        assert run_cmd([*psql, marker], env).returncode == 0
+
+        refused = run("restore-db.sh", "--yes", archive, env=env)
+        assert refused.returncode != 0
+        assert "schema revision synthetic_later_revision" in refused.stderr
+        assert "Nothing was changed" in refused.stderr and "--create" in refused.stderr
+        left = run_cmd(
+            [*psql, "SELECT version_num FROM alembic_version, synthetic_later_table LIMIT 1"],
+            env,
+        )
+        assert left.returncode == 0  # both still there: nothing was touched
+
+        same = "DROP TABLE synthetic_later_table; UPDATE alembic_version SET version_num = '{}'"
+        head = run_cmd(["pg_restore", "--data-only", "--table=alembic_version", "-f-", archive])
+        revision = head.stdout.split("FROM stdin;\n", 1)[1].split("\n", 1)[0]
+        assert run_cmd([*psql, same.format(revision)], env).returncode == 0
+        in_place = run("restore-db.sh", "--yes", archive, env=env)
+        assert in_place.returncode == 0, in_place.stderr
+        assert f"schema revision: backup {revision}, target {revision}" in in_place.stderr
+    finally:
+        with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS {scratch}"))
+
+
+def run_cmd(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """A PostgreSQL client tool with the connection settings of ``env``'s DATABASE_URL."""
+    url = make_url((env or {}).get("DATABASE_URL", get_settings().database_url))
+    pg = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PGHOST": url.host or "localhost",
+        "PGPORT": str(url.port or 5432),
+        "PGUSER": url.username or "",
+        "PGPASSWORD": url.password or "",
+    }
+    return subprocess.run(  # noqa: S603 - fixed client tools, test-built arguments
+        args, capture_output=True, text=True, env=pg, timeout=120, check=False
+    )

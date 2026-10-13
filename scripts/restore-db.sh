@@ -18,6 +18,11 @@
 # write to the target first (docker compose stop backend worker beat), then start them again:
 # the backend applies any newer migrations on start (RUN_MIGRATIONS=true).
 #
+# Without --create, the target and the backup must be at the same Alembic schema revision
+# (an older backup over a migrated database would leave the newer tables behind); if they
+# differ the script refuses: restore into a new database with --create and swap it in
+# (docs/operations.md, "Restore").
+#
 # Safety: the archive is read (pg_restore --list) and its .sha256 checked, if present, before
 # anything is touched; then the target is shown and you must type its name, unless --yes.
 # Without a terminal and without --yes the script refuses.
@@ -101,6 +106,45 @@ if [ "$CREATE" = 1 ]; then
   log "target: $TARGET (will be CREATED)"
 else
   log "target: $TARGET (every object in the archive will be DROPPED and re-created)"
+fi
+
+# ------------------------------------------------------------------ schema revision
+# --clean drops and re-creates only what the archive holds. Over a database that later
+# migrations have changed, the tables they added stay behind: they block the drop of the
+# tables they reference (the restore then fails and changes nothing) or make the next
+# `alembic upgrade` fail on "already exists". So an in-place restore needs the same Alembic
+# revision on both sides; otherwise restore into a new database and swap it in.
+target_sql() {
+  if [ "$COMPOSE" = 1 ]; then
+    compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$1" -X -A -t -v ON_ERROR_STOP=1 -c "$2"' sh "$TARGET_DB" "$1"
+  else
+    psql -X -A -t -v ON_ERROR_STOP=1 -d "$TARGET_DB" -c "$1"
+  fi
+}
+archive_revision() {
+  _data=$(mktemp)
+  if [ "$COMPOSE" = 1 ]; then
+    compose exec -T postgres pg_restore --data-only --table=alembic_version --file=- <"$FILE" >"$_data"
+  else
+    pg_restore --data-only --table=alembic_version --file=- "$FILE" >"$_data"
+  fi || { rm -f "$_data"; die "cannot read the schema revision from $FILE"; }
+  awk '/^COPY public\.alembic_version /{ on = 1; next } /^\\\.$/{ on = 0 } on' "$_data" | LC_ALL=C sort | paste -sd, -
+  rm -f "$_data"
+}
+if [ "$CREATE" != 1 ]; then
+  has_revision=$(target_sql "SELECT to_regclass('public.alembic_version') IS NOT NULL") ||
+    die "cannot read the target database ($TARGET): does it exist? --create restores into a new one"
+  TARGET_REVISION=
+  if [ "$has_revision" = t ]; then
+    TARGET_REVISION=$(target_sql "SELECT string_agg(version_num, ',' ORDER BY version_num) FROM alembic_version") ||
+      die "cannot read the schema revision of the target database"
+  fi
+  ARCHIVE_REVISION=$(archive_revision)
+  log "schema revision: backup ${ARCHIVE_REVISION:-none}, target ${TARGET_REVISION:-none}"
+  if [ -n "$ARCHIVE_REVISION" ] && [ -n "$TARGET_REVISION" ] && [ "$ARCHIVE_REVISION" != "$TARGET_REVISION" ]; then
+    if [ "$COMPOSE" = 1 ]; then how="--compose --create"; else how="--create"; fi
+    die "the target database is at schema revision $TARGET_REVISION and the backup at $ARCHIVE_REVISION; a restore over it would leave behind every object the backup does not have. Nothing was changed. Restore into a new database and swap it in instead: $0 $how --target-db NEW_NAME $FILE (docs/operations.md, \"Restore\")"
+  fi
 fi
 
 if [ "$YES" != 1 ]; then
