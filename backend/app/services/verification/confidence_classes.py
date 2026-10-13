@@ -25,13 +25,19 @@ on RMSE and on the RMSE differences between consecutive classes. ``monotonicity`
 the pre-registered test: RMSE, median |error| and p90 |error| increase strictly
 High < Moderate < Low, and both consecutive RMSE-difference CIs exclude zero.
 
-Methods: ``forecast-v1.1`` is the current ``classify_forecast``. ``forecast-v1`` is
-derived from the same evaluation by leaving out the one rule v1.1 added
-(:data:`V11_RULES`); since that rule is a cap and the class is ``max(Low, min(index
-class, caps) - downgrades)``, this reproduces forecast-v1 exactly.
+Methods: ``forecast-v1`` is the current ``classify_forecast``. :data:`CANDIDATE_C2` is
+the candidate the boundary scan found on TRAIN, "no High from a single model without an
+ensemble": forecast-v1 plus one cap, ``single_source_no_ensemble`` (:func:`c2_applies`,
+inside 3 days, fewer than two independent families, no ensemble spread, not demo; beyond
+3 days forecast-v1 already caps such hours). Since the class is ``max(Low, min(index
+class, caps) - downgrades)``, adding the cap to the rules that fired
+(:func:`class_with_caps`) gives exactly the class ``classify_forecast`` would give with
+that rule. The candidate was NOT adopted (docs/ml-evaluation.md section 12.3): having no
+High class it cannot pass the pre-registered three-class test on TEST, and on TEST
+forecast-v1's single-source High hours did have a lower RMSE than its Moderate hours.
 
 :func:`boundary_scan` is the TRAIN-only search for a better High / Moderate boundary of
-single-source hours that led to forecast-v1.1 (docs/ml-evaluation.md section 12.3).
+single-source hours (docs/ml-evaluation.md section 12.3).
 """
 
 from __future__ import annotations
@@ -60,6 +66,7 @@ from app.services.surf_quality.forecast_confidence import (
     ForecastInputs,
     Verification,
     classify_forecast,
+    independent_family_count,
     lower,
     rank,
 )
@@ -73,10 +80,10 @@ from app.services.verification.ranges import log_error
 
 CLASSES = (HIGH, MODERATE, LOW)
 _BY_RANK = {rank(c): c for c in CLASSES}
-METHOD_V1 = "forecast-v1"
-METHODS = (METHOD, METHOD_V1)
-# Rules added by forecast-v1.1; forecast-v1 is the same evaluation without them.
-V11_RULES = frozenset({"single_source_no_ensemble"})
+# The candidate of section 12.3 (not adopted): forecast-v1 plus the cap C2_RULE.
+CANDIDATE_C2 = "candidate-c2"
+METHODS = (METHOD, CANDIDATE_C2)
+C2_RULE = "single_source_no_ensemble"
 FAMILIES = ("ncep_gfs",)
 SOURCE_CODE = "noaa_gfs"
 NOAA_STALE_AFTER_H = 16.0
@@ -133,29 +140,42 @@ def forecast_inputs(h: HourInputs) -> ForecastInputs:
     )
 
 
-def class_without(fc: ForecastConfidence, drop: frozenset[str]) -> str:
-    """The class ``classify_forecast`` gives when the rules in ``drop`` do not fire."""
+def class_with_caps(fc: ForecastConfidence, caps: Sequence[str] = ()) -> str:
+    """The class ``classify_forecast`` gives when the extra ``caps`` (class names) fire
+    besides the rules that did: max(Low, min(index class, every cap) - downgrades)."""
     cls = fc.index_class
-    downgrades = 0
     for r in fc.rules:
-        if r.rule in drop:
-            continue
         if r.effect.startswith("cap:"):
             cls = lower(cls, r.effect.split(":", 1)[1])
-        elif r.effect == "downgrade":
-            downgrades += 1
+    for to in caps:
+        cls = lower(cls, to)
+    downgrades = sum(1 for r in fc.rules if r.effect == "downgrade")
     return _BY_RANK[max(0, rank(cls) - downgrades)]
+
+
+def c2_applies(inp: ForecastInputs) -> bool:
+    """Would the candidate cap C2_RULE fire: lead <= 3 days, fewer than two independent
+    families, no usable ensemble spread (none, or a flat-sea mean), not demo."""
+    rel = inp.ensemble.rel_spread if inp.ensemble is not None else None
+    return (
+        inp.lead_hours <= LEAD_SHORT_H
+        and rel is None
+        and independent_family_count(inp.families) < 2
+        and not inp.is_demo
+    )
 
 
 @lru_cache(maxsize=65536)
 def _classify_cached(h: HourInputs, method: str) -> tuple[str, tuple[str, ...]]:
-    fc = classify_forecast(forecast_inputs(h))
+    inp = forecast_inputs(h)
+    fc = classify_forecast(inp)
+    fired = tuple(r.as_str() for r in fc.rules if r.effect != "note")
     if method == METHOD:
-        return fc.cls, tuple(r.as_str() for r in fc.rules if r.effect != "note")
-    if method == METHOD_V1:
-        return class_without(fc, V11_RULES), tuple(
-            r.as_str() for r in fc.rules if r.effect != "note" and r.rule not in V11_RULES
-        )
+        return fc.cls, fired
+    if method == CANDIDATE_C2:
+        if not c2_applies(inp):
+            return fc.cls, fired
+        return class_with_caps(fc, (MODERATE,)), (*fired, f"cap:{MODERATE}:{C2_RULE}")
     raise ValueError(f"unknown method {method!r}; one of {METHODS}")
 
 
@@ -389,8 +409,9 @@ def evaluate_classes(
         "by_bucket": by_bucket,
     }
     if counts[HIGH] == 0 and counts[MODERATE] and counts[LOW]:
-        # No High at all (e.g. forecast-v1.1 without an ensemble): the same test on the two
-        # classes that exist, reported next to the (then failing) three-class test.
+        # No High at all (e.g. candidate C2 without an ensemble): the same test on the two
+        # classes that exist, reported next to the (then failing) three-class test. It is a
+        # diagnostic: the pre-registered test is the three-class one.
         out["monotonicity_present_classes"] = moderate_low_monotonicity(
             scores, gaps["low_minus_moderate"]
         )
@@ -400,7 +421,8 @@ def evaluate_classes(
 def moderate_low_monotonicity(
     scores: dict[str, dict[str, Any]], gap: dict[str, Any]
 ) -> dict[str, Any]:
-    """The pre-registered test restricted to Moderate < Low."""
+    """The pre-registered test restricted to Moderate < Low (diagnostic, not the
+    pre-registered decision: that is the three-class test of :func:`monotonicity`)."""
     m, lo = scores.get(MODERATE, {}), scores.get(LOW, {})
     checks: dict[str, bool] = {}
     for metric in ("rmse", "median_abs_error", "p90_abs_error"):
@@ -492,12 +514,16 @@ def boundary_scan(
     relabelled for every b1 in :data:`SCAN_BOUNDARIES_H` (:func:`relabel_boundary`) and
     for C2 (no High without an ensemble or a second family); each candidate gets the
     pre-registered test on TRAIN (C2 the two-class form, since it has no High). The
-    choice, fixed before TEST is read: the passing b1 closest to forecast-v1's boundary
-    (:func:`lead_table_high_limit`), else C2 if it passes, else no change. Only the
-    chosen candidate is scored on ``test``.
+    choice: the passing b1 closest to forecast-v1's boundary (:func:`lead_table_high_limit`),
+    else C2 if it passes, else no change. (The candidates and this rule are not in the
+    pre-registered plan; they were written after forecast-v1's TEST scores were known.)
+    Only the chosen candidate is scored on ``test``, with the pre-registered three-class
+    test (``test.monotonicity``) and, for a candidate without High, the two-class form as a
+    diagnostic (``test.monotonicity_present_classes``). ``adoptable`` applies the plan's
+    adoption rule: the chosen candidate passes the pre-registered test on TEST.
     """
     lead_train = train["lead_hours"].to_numpy(dtype=float)
-    v1_train, _ = classify_frame(train, None, method=METHOD_V1)
+    v1_train, _ = classify_frame(train, None, method=METHOD)
     current = lead_table_high_limit()
     out: dict[str, Any] = {
         "train_rows": len(train),
@@ -531,12 +557,11 @@ def boundary_scan(
     out["choice"] = choice
     if test is not None and choice is not None:
         lead_test = test["lead_hours"].to_numpy(dtype=float)
-        v1_test, _ = classify_frame(test, None, method=METHOD_V1)
+        v1_test, _ = classify_frame(test, None, method=METHOD)
         b1 = out["candidates"][choice]["b1_h"]
         labels = relabel_boundary(v1_test, lead_test, b1)
-        if b1 is None:
-            out["test"] = two_class_test(test, labels, n_boot=n_boot, seed=seed)
-        else:
-            ev = evaluate_classes(test, labels, n_boot=n_boot, seed=seed, buckets=())
-            out["test"] = {k: ev[k] for k in ("counts", "scores", "rmse_gaps", "monotonicity")}
+        ev = evaluate_classes(test, labels, n_boot=n_boot, seed=seed, buckets=())
+        keys = ("counts", "scores", "rmse_gaps", "monotonicity", "monotonicity_present_classes")
+        out["test"] = {k: ev[k] for k in keys if k in ev}
+    out["adoptable"] = bool(out.get("test", {}).get("monotonicity", {}).get("passed", False))
     return out

@@ -281,7 +281,12 @@ beside it, because its translation share is not calibrated. The ensemble range s
 claim. **Review (2026-10-13):** the builder's rule checked all leads together only and
 also labelled mavericks and ocean-beach-sf; their buoy 46026 covers 79.4 % over all leads
 but 69.1 % [64.3, 74.1] at 240 h (77.5 % at 120 h, 75.0 % at 168 h), so the rule now
-checks every lead bucket and those two spots are not labelled.
+checks every lead bucket and those two spots are not labelled. "Calibrated" refers to the
+pre-registered measure, the coverage of the interval: at both remaining buoys one bound is
+off on its own (46224: 18.6 % [16.5, 20.9] above p90, 4.7 % below p10; 51205: 2.3 %
+[1.8, 2.7] below p10, 12.2 % above p90), and no paired buoy has both tails near 10 %.
+Before the prediction job passes the context (a follow-up), a pre-registered tail check
+at the spots' buoys should decide whether the bounds may be shown as p10 / p90.
 **Alternatives.** Label every paired spot (pooled pass): contradicted at two buoys by
 their own data. Apply the scale everywhere: in Western Australia it put 18 % below p10 and
 3 % above p90. A new `uncertainty_kind` value: needs a migration and frontend labels for a
@@ -291,27 +296,36 @@ whether ML-corrected) for the label to appear; until then predictions are unchan
 the correction of ADR-020 active the central value is no longer raw, so the label does not
 apply at the corrected spots.
 
-## ADR-019 forecast-v1.1: no High from a single model without an ensemble
+## ADR-019 forecast-v1 stays: the TRAIN-found single-source cap was not adopted
 
 **Context.** At five NDBC buoys forecast-v1's single-source High (leads up to 52 h) and
 Moderate classes had the same median offshore error on the training year and an RMSE
-difference whose CI included zero; no High / Moderate lead boundary between 24 and 72 h
-separated them (docs/ml-evaluation.md 12.3). With a GEFS-Wave spread all three classes
-were distinct.
-**Decision.** Add the cap `single_source_no_ensemble`: fewer than two independent families
-and no ensemble row means at most Moderate at every lead (method `forecast-v1.1`). Chosen
-on the training year only (the one candidate that passed there), confirmed on the held-out
-year (Low − Moderate RMSE 0.146 m [0.123, 0.169]); the test on the held-out year used the
-two classes that exist. The candidates and the choice rule were written after forecast-v1's
-held-out scores had been computed, and the new classes merge forecast-v1's, so that
-confirmation was not blind (docs/ml-evaluation.md 12.3).
-**Alternatives.** Keep v1 (contradicted on the training year); move the lead boundary
-(no boundary passed); let verification rows restore High (they did not separate the
-classes on the training year).
-**Consequences.** On the real 2026-10-11 runs the rule fired on no hour (every hour had a
-GEFS-Wave row); it matters when the ensemble or the second family is missing. The evidence
-is for GFS-Wave; the rule also caps an ECMWF-only hour, which is untested. Rows scored
-earlier keep `forecast-v1`.
+difference whose CI included zero, so the pre-registered test failed there; no High /
+Moderate lead boundary between 24 and 72 h separated them (docs/ml-evaluation.md 12.3).
+The only candidate that passed on the training year, in a two-class form, was C2: no High
+from a single model family without an ensemble. With a GEFS-Wave spread all three classes
+were distinct on both years.
+**Decision.** Keep forecast-v1. The plan adopts a change only if the changed classes pass
+the same (three-class) test on the held-out year; C2 has no High class, so it cannot, and
+the two-class form it passed (Low − Moderate RMSE 0.146 m [0.123, 0.169]) was written
+after forecast-v1's held-out scores were known and tests the Low boundary C2 does not
+change. The held-out year also does not repeat the training-year finding: High's RMSE was
+0.024 m [0.009, 0.037] below Moderate's, and with verification rows forecast-v1 passed the
+full test (difference 0.044 m [0.029, 0.059]). C2 stays available for analysis (`verify
+confidence-classes --method candidate-c2`).
+**Review (2026-10-13).** The builder had adopted C2 as method `forecast-v1.1` on the
+two-class form; the review reverted it, because changing the adoption test after the
+held-out scores were seen is changing a pre-registered criterion. No stored prediction
+carried `forecast-v1.1` outside scratch databases, and on the real 2026-10-11 runs the cap
+would have fired on no hour (every hour had a GEFS-Wave row).
+**Alternatives.** Adopt C2 as a conservative cap (it can only lower classes): not
+supported by the held-out year, where High was better than Moderate, and not allowed by
+the plan; move the lead boundary (no boundary passed on the training year); let
+verification rows decide (they separated the classes on the held-out year only).
+**Consequences.** A single-family hour without an ensemble can still be High inside 52 h;
+its held-out RMSE is lower than Moderate's but its median error is the same, which the
+docs state (forecast-confidence.md §8). The question is open for a new pre-registered
+test, ideally on gridded forecasts at the buoys rather than station bulletins.
 
 ## ADR-020 The NDBC-trained correction is approved for activation at seven US spots
 

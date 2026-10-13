@@ -9,12 +9,13 @@
                 [--check-station CODE ...] [--start ISO] [--boot N] [--json PATH]
   verify confidence-classes --station CODE ... --test-start ISO [--source S]
                 [--ensemble-source E] [--start ISO] [--window-days N] [--boot N]
-                [--method forecast-v1.1|forecast-v1] [--scan-boundaries] [--json PATH]
+                [--method forecast-v1|candidate-c2] [--scan-boundaries] [--json PATH]
 
 ``ranges`` scores the coverage of the app's offshore 80 % range against buoys and fits
 the lead-dependent scale on the TRAIN period; ``confidence-classes`` scores the realised
-error of the forecast-confidence classes (current method, or the earlier forecast-v1) and
-optionally runs the TRAIN-only boundary scan (docs/ml-evaluation.md section 12).
+error of the forecast-confidence classes (the current forecast-v1, or the candidate C2
+that was evaluated and not adopted) and optionally runs the TRAIN-only boundary scan
+(docs/ml-evaluation.md section 12).
 
 These commands run whether or not VERIFICATION_ENABLED is set (that flag only gates
 the scheduled job).
@@ -94,7 +95,13 @@ def register(subparsers: Any) -> None:
             from app.services.surf_quality.forecast_confidence import METHOD
 
             p.add_argument("--window-days", type=int, default=90)
-            p.add_argument("--method", choices=(METHOD, "forecast-v1"), default=METHOD)
+            p.add_argument(
+                "--method",
+                choices=(METHOD, "candidate-c2"),
+                default=METHOD,
+                help="the app's method, or candidate C2 (forecast-v1 + no High from one model "
+                "without an ensemble; evaluated, not adopted)",
+            )
             p.add_argument(
                 "--scan-boundaries",
                 action="store_true",

@@ -162,6 +162,8 @@ def _interp(x: float, xs: tuple[float, ...], ys: tuple[float, ...]) -> float:
 # 46224 (76.7 %) -> trestles. Not listed, although part of the pooled fit: the 51201 spots
 # (90.8 %, too wide), rincon (46053, 69.3 %, too narrow), and mavericks / ocean-beach-sf
 # (46026: 79.4 % over all leads but 69.1 % [64.2, 73.9] at 240 h, removed in review).
+# "Calibrated" is the interval's coverage: at both listed buoys one bound is off on its
+# own (46224: 18.6 % above p90; 51205: 2.3 % below p10; docs/decisions.md ADR-018).
 OFFSHORE_CALIBRATION = OffshoreCalibration(
     version=OFFSHORE_CALIBRATION_VERSION,
     sigma_source="lead_table",

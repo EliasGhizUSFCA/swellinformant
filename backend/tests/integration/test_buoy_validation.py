@@ -202,9 +202,10 @@ def test_verify_confidence_classes_cli(
     assert "V0_no_verification test" in capsys.readouterr().out
     result = json.loads(out.read_text())
     v0 = result["variants"]["V0_no_verification"]["test"]
-    # forecast-v1.1: one model and no ensemble is never High.
-    assert v0["counts"]["high"] == 0 and v0["counts"]["moderate"] > 0
-    assert "cap:moderate:single_source_no_ensemble" in v0["rules_fired"]
+    # forecast-v1: complete single-source hours are High up to 52 h, Moderate to 72 h.
+    assert result["method"] == "forecast-v1"
+    assert v0["counts"]["high"] > 0 and v0["counts"]["moderate"] > 0
+    assert not any("single_source_no_ensemble" in r for r in v0["rules_fired"])
     assert result["verification_rows"] > 0  # 60-day windows with >= 200 pairs exist
     v1 = result["variants"]["V1_causal_verification"]["test"]
     assert "verification_poor_effect" in v1
@@ -212,3 +213,14 @@ def test_verify_confidence_classes_cli(
     assert cli_main([*args, "--ensemble-source", "synthetic_ens", "--json", str(ens_out)]) == 0
     ens = json.loads(ens_out.read_text())["variants"]["V0_no_verification"]["test"]
     assert ens["counts"]["high"] > 0  # a 10 % spread allows High inside 3 days
+    # The candidate C2 (evaluated, not adopted): no High from one model without an
+    # ensemble; the boundary scan reports whether its choice is adoptable under the plan.
+    c2_out = tmp_path / "c2.json"
+    c2_args = [*args, "--method", "candidate-c2", "--scan-boundaries", "--json", str(c2_out)]
+    assert cli_main(c2_args) == 0
+    assert "adoptable under the plan" in capsys.readouterr().out
+    c2 = json.loads(c2_out.read_text())
+    c2_v0 = c2["variants"]["V0_no_verification"]["test"]
+    assert c2["method"] == "candidate-c2" and c2_v0["counts"]["high"] == 0
+    assert "cap:moderate:single_source_no_ensemble" in c2_v0["rules_fired"]
+    assert isinstance(c2["boundary_scan"]["adoptable"], bool)

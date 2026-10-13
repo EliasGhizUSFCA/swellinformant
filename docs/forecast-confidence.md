@@ -1,4 +1,4 @@
-# Forecast confidence and local confidence (methodology `forecast-v1.1`)
+# Forecast confidence and local confidence (methodology `forecast-v1`)
 
 Every forecast hour carries two confidence classes, each **High**, **Moderate** or **Low**
 with short plain-language reasons:
@@ -16,18 +16,20 @@ that defines local confidence (ADR-014 in [decisions.md](decisions.md)).
 **These are documented classifications, not calibrated probabilities.** "High" does not mean
 "x % likely to verify". The thresholds below come from the evidence cited next to each one,
 most of it measured against the model's own analysis or at buoys. The OFFSHORE classes of
-single-source GFS-Wave hours, with and without a GEFS-Wave spread, were checked against
-held-out NDBC buoy observations in 2026 (§8): their realised offshore errors are ordered
-High < Moderate < Low. Neither class has been validated against observed surf, and the
-rules for several independent model families have not been validated at all. Every input
-and rule is archived (`prediction_archive.confidence_inputs`) so they can be evaluated
-further as observations accumulate.
+single-family GFS-Wave hours, with and without a GEFS-Wave spread, were checked against
+held-out NDBC buoy observations in 2026 (§8). With a GEFS-Wave spread their realised
+offshore errors are ordered High < Moderate < Low on every statistic; for single-source
+hours without an ensemble the RMSE is ordered on the held-out year but High and Moderate
+have the same median error, so the pre-registered test fails there (§8). Neither class has
+been validated against observed surf, and the rules for several independent model families
+have not been validated at all. Every input and rule is archived
+(`prediction_archive.confidence_inputs`) so they can be evaluated further as observations
+accumulate.
 
-**forecast-v1.1** (2026-10-12) differs from forecast-v1 in one rule,
-`single_source_no_ensemble`: without an ensemble row and without a second independent model
-family an hour is at most Moderate at every lead (before: only beyond 3 days). Against the
-buoys, forecast-v1's High and Moderate single-source hours had the same median error on the
-training year and no distinguishable RMSE (§8).
+A candidate change found on the training year, "no High from a single model without an
+ensemble" (C2), was evaluated and **not adopted**: it cannot pass the pre-registered test
+on the held-out year, and on that year forecast-v1's single-source High hours did have a
+lower RMSE than its Moderate hours (§8, ADR-019).
 
 Code: `backend/app/services/surf_quality/forecast_confidence.py` (pure rules),
 `confidence_context.py` (database inputs, read once per model run), `predict.py` (writes
@@ -69,7 +71,6 @@ agreement.
 | `lead_7_10d` | 168 h < lead ≤ 240 h | at most Moderate | "An 8-day forecast — forecasts this far out often change." |
 | `lead_3_7d_no_ensemble` | 72 h < lead ≤ 168 h, no ensemble | at most Moderate | "A 5-day forecast with no ensemble data to check it." |
 | `lead_3_7d_spread_not_small` | 72 h < lead ≤ 168 h, spread / mean > 0.15 | at most Moderate | "A 5-day forecast, and ensemble members do not agree closely." |
-| `single_source_no_ensemble` (v1.1) | lead ≤ 72 h, fewer than two independent model families and no ensemble row (or a flat-sea ensemble, mean ≤ 0.05 m) | at most Moderate | "Only one forecast model and no ensemble data to check it." |
 | `single_source_over_3d` | lead > 72 h and fewer than two independent model families | at most Moderate | "Only one independent forecast model is available this far out." |
 | `spread_large` | GEFS-Wave spread / mean > 0.30 | one class down | "Ensemble members disagree on swell size." |
 | `spread_very_large` | spread / mean > 0.40 | Low | "Ensemble members disagree widely on swell size." |
@@ -81,8 +82,8 @@ agreement.
 | `verification_poor` | the matching verification row has scatter index > 0.5 or MSE skill vs persistence ≤ 0 | at most Moderate | "Recent checks against buoys show large errors." |
 | `stale` | the run is older than its source's stale-after age (§5) | at most Moderate | "Forecast data is out of date; a newer model run is overdue." |
 
-Notes that never change the class: "No ensemble data for this hour." (inside 3 days with
-two independent families: a reason, not a penalty), "Not yet checked against buoys near this spot." (no verification row
+Notes that never change the class: "No ensemble data for this hour." (inside 3 days: a
+reason, not a penalty), "Not yet checked against buoys near this spot." (no verification row
 for a buoy paired with the spot), "Ensemble members agree closely." (spread / mean ≤ 0.15),
 "GFS and ECMWF agree on swell size." (independent families within 15 % and no flags), "A
 2-day forecast." (the lead), and why the index itself is below High ("Typical forecast error
@@ -153,12 +154,6 @@ the API appends the local-confidence reason last.
 * **Single deterministic source beyond 3 days.** Without a second, independent model nothing
   can reveal a forecast that has gone wrong in the 3-10 day range, where wind-forcing errors
   for storms that have not formed yet dominate (research notes §13).
-* **Single deterministic source without an ensemble inside 3 days** (v1.1). At five NDBC
-  buoys (§8) such GFS-Wave hours with a High index (leads up to 52 h) and with a Moderate
-  index (52-150 h) had the same median offshore error (0.23 m) and an RMSE difference of
-  0.017 m [90 % CI −0.010, 0.043] on the training year, and no High / Moderate lead
-  boundary inside 3 days separated them. With nothing that indicates how certain the hour
-  is, the lead time alone does not support High.
 * **Demo data** is synthetic and is always Low.
 
 ## 3. Local confidence
@@ -185,8 +180,7 @@ never gets High local confidence, however good the forecast is.
 ## 4. Where the classes are stored and shown
 
 * `surf_quality_predictions`: `forecast_confidence_class`, `local_confidence_class`,
-  `confidence_method` ("forecast-v1.1"; "forecast-v1" on rows scored before 2026-10-12),
-  `confidence_inputs`, `issued_at`, `lead_hours`,
+  `confidence_method` ("forecast-v1"), `confidence_inputs`, `issued_at`, `lead_hours`,
   `research_assessment_id`; the legacy `confidence` (index) and `confidence_label` (index
   class) are unchanged.
 * `prediction_archive` (immutable): `forecast_confidence_class`, `local_confidence_class`,
@@ -242,7 +236,7 @@ With the old single 18 h limit, ECMWF's newest 12-hourly cycle (published about 
 the cycle and fetched by the next 3-hourly acquisition) was stale for several hours every
 day and silently dropped out of the blend.
 
-## 6. Live check (real 2026-10-11 runs, re-run 2026-10-12 with the forecast-v1 code)
+## 6. Live check (real 2026-10-11 runs, re-run 2026-10-12 with the final code)
 
 A fresh clone of the live database (`swell_live_d`, created from `swell_live`, which is never
 modified) with the real runs NOAA GFS `noaa-gfs:2026101100`, ECMWF IFS `ecmwf-ifs:2026101012`
@@ -314,18 +308,18 @@ file; blend, predictions (rescoring), archive and detection run at a fixed "now"
 ## 7. Limitations and next steps
 
 * All thresholds are heuristics anchored on the cited numbers. The offshore classes of
-  single-source GFS-Wave hours (with and without a GEFS-Wave spread) are ordered by
-  realised error at held-out NDBC buoys (§8); the rules that need two independent families
-  (disagreement, agreement), run-to-run change at the app's 6-hourly cycle, staleness and
-  the ECMWF-only case have no held-out evidence, and no class has been validated against
-  observed surf. The archive keeps every input so that, once verification pairs
+  single-family GFS-Wave hours with a GEFS-Wave spread are ordered by realised error at
+  held-out NDBC buoys, and without one only by RMSE (equal medians for High and Moderate,
+  §8); the rules that need two independent families (disagreement, agreement), run-to-run
+  change at the app's 6-hourly cycle, staleness and the ECMWF-only case have no held-out
+  evidence, and no class has been validated against observed surf. The archive keeps every input so that, once verification pairs
   accumulate, the classes can be checked for reliability and the thresholds recalibrated.
 * The spread evidence is 7 weeks of GEFS-Wave against its own analysis; the lead-time
   evidence is one season (2021) of GFS v16 at three buoys in one region.
 * Local confidence uses the research assessment only; the uncalibrated breaking-height
   translation (σ_m = 0.30, [SURF_SCORING.md](SURF_SCORING.md)) is not yet a separate factor.
 
-## 8. Validation against buoys (2026-10-12)
+## 8. Validation against buoys (2026-10-12, reviewed 2026-10-13)
 
 Full method, plan (fixed before any result) and tables: [ml-evaluation.md](ml-evaluation.md)
 section 12. Data: raw GFS-Wave station bulletins (00Z every second day, 2024-10-12 to
@@ -344,49 +338,53 @@ historically: ECMWF (no second family), run-to-run change at 6-hourly cycles, st
 **Pre-registered test:** RMSE, median and p90 of |error| increase strictly High < Moderate
 < Low, and the 90 % cycle-block bootstrap CIs of both RMSE differences exclude zero; a
 boundary counts as misplaced only if the test fails on TRAIN, a change is derived on TRAIN
-only and adopted only if it passes on TEST.
+only and adopted only if the changed classes pass the same test on TEST; otherwise
+forecast-v1 stays.
 
 | | High | Moderate | Low |
 |---|---|---|---|
 | forecast-v1, single source, TRAIN (V0) | RMSE 0.387, median 0.23, p90 0.54 | 0.404, 0.23, 0.58 | 0.504, 0.26, 0.77 |
 | forecast-v1, single source, TEST (V0) | 0.382, 0.25, 0.60 | 0.406, 0.25, 0.63 | 0.543, 0.29, 0.86 |
-| forecast-v1.1, single source, TEST | — (no High) | 0.396, 0.25, 0.62 | 0.543, 0.29, 0.86 |
-| v1 = v1.1 with GEFS-Wave spread, TEST | 0.340, 0.25, 0.54 | 0.490, 0.30, 0.77 | 0.752, 0.48, 1.06 |
+| forecast-v1, single source, TEST (V1, with verification rows) | 0.364, 0.22, 0.58 | 0.408, 0.26, 0.63 | 0.543, 0.29, 0.86 |
+| candidate C2 (not adopted), single source, TEST | — (no High) | 0.396, 0.25, 0.62 | 0.543, 0.29, 0.86 |
+| forecast-v1 with GEFS-Wave spread, TEST | 0.340, 0.25, 0.54 | 0.490, 0.30, 0.77 | 0.752, 0.48, 1.06 |
 
-(metres; n per class 25,543-110,554 for single source, 390-15,131 with an ensemble.)
+(metres; n per class 20,362-110,554 for single source, 390-15,131 with an ensemble.)
 
-* **forecast-v1 fails for single-source hours.** High (leads up to 52 h) and Moderate had
-  the same median error on TRAIN and an RMSE difference of 0.017 m [−0.010, 0.043]; the
-  same on TEST for the medians. No High / Moderate lead boundary between 24 and 72 h
-  separated them on TRAIN. Low (single source beyond 150 h, or swell missing) was clearly
-  worse in every split. The held-out year is less clear-cut than TRAIN: there High's RMSE
-  was 0.024 m [0.009, 0.037] below Moderate's (0.044 m [0.029, 0.059] with verification
-  rows, where forecast-v1 passes the full test), so v1.1 gives up a small separation
-  that TEST shows; it follows the plan, which decides on TRAIN (review note, 2026-10-13).
-* **forecast-v1.1** removes High for such hours (`single_source_no_ensemble`), the only
-  candidate that passed on TRAIN. On TEST its two classes are distinct (Low − Moderate RMSE
-  0.146 m [0.123, 0.169]; medians 0.25 vs 0.29 m). Because the candidate has no High, its
-  test is the same test on the two classes that exist. That held-out check was not blind:
-  the candidates and the rule choosing among them were written after forecast-v1's TEST
-  scores had been computed, and the new classes merge forecast-v1's High and Moderate.
+* **Single-source hours fail the test on TRAIN.** High (leads up to 52 h) and Moderate had
+  the same median error (0.23 m) and an RMSE difference of 0.017 m [−0.010, 0.043]; no
+  High / Moderate lead boundary between 24 and 72 h separated them on TRAIN. Low (single
+  source beyond 150 h, or swell missing) was clearly worse in every split.
+* **The candidate found on TRAIN was not adopted.** The only candidate that passed on TRAIN
+  (in a two-class form) was C2, "no High from a single model without an ensemble": it
+  merges High into Moderate. The plan adopts a change only if the changed classes pass the
+  same three-class test on TEST, which a scheme without High cannot do. TEST also does not
+  repeat the TRAIN finding: there High's RMSE was 0.024 m [0.009, 0.037] below Moderate's
+  (V0; medians still equal at 0.25 m), and with verification rows forecast-v1 passes the
+  full test (High 0.364, Moderate 0.408 m; difference 0.044 m [0.029, 0.059]; medians
+  0.22 vs 0.26 m). C2's own TEST check (Moderate < Low, 0.146 m [0.123, 0.169]) tests the
+  Low boundary it did not change, and it was not blind (the candidates and the rule choosing
+  among them were written after forecast-v1's TEST scores were known). **forecast-v1
+  stays.** An earlier version of this work had adopted C2 as "forecast-v1.1" on the
+  two-class form; the review of 2026-10-13 reverted it because that form is not the
+  pre-registered test (ADR-019).
 * **By lead** (TEST, RMSE; table with medians and p90 in ml-evaluation.md 12.3): single
-  source 0.378 m at 24 h, 0.383 at 48 h, 0.392 at 72 h, 0.415 at 120 h (Moderate in
-  v1.1), 0.476 at 168 h and 0.603 at 240 h (Low). Without an ensemble the class of a
-  complete hour is a function of its lead, so this validates the lead caps, not a separate
-  certainty signal. With a GEFS-Wave spread: High 0.333-0.338 m at 24-72 h, Moderate 0.358
-  at 72 h rising to 0.630 at 240 h, Low 0.675-0.887 at 168-240 h (59-88 pairs).
-* **Effect on the live system:** rescoring the real 2026-10-11 runs with forecast-v1.1 (a
-  scratch copy of `swell_live2`), the new rule fired on 0 of 4,050 NOAA GFS hours and 0 of
-  4,050 blend hours, because every hour had a GEFS-Wave row. It changes classes only when
-  the ensemble is missing and a single model family is available.
+  source 0.378 m at 24 h, 0.383 at 48 h, 0.392 at 72 h, 0.415 at 120 h, 0.476 at 168 h and
+  0.603 at 240 h. Without an ensemble the class of a complete hour is a function of its
+  lead, so the single-source result is about the lead boundaries (High to 52 h, Moderate
+  to 150 h, Low beyond), not a separate certainty signal. With a GEFS-Wave spread: High
+  0.333-0.338 m at 24-72 h, Moderate 0.358 at 72 h rising to 0.630 at 240 h, Low
+  0.675-0.887 at 168-240 h (59-88 pairs).
 * **With a GEFS-Wave spread** the three classes are distinct on TRAIN and TEST, with and
   without verification rows (Moderate − High 0.150 m [0.125, 0.174], Low − Moderate 0.262 m
-  [0.144, 0.368] on TEST). v1.1 does not change these hours.
-* **Validated:** the ordering of offshore errors of single-family GFS-Wave hours by class,
-  with and without an ensemble spread, at buoys off Hawaii and California. **Not
-  validated:** every rule that needs two independent families (disagreement, agreement),
-  ECMWF-only hours, run-to-run change, staleness, local confidence, and any probability:
-  the classes remain ordinal labels.
+  [0.144, 0.368] on TEST): forecast-v1 passes the pre-registered test there. On the real
+  2026-10-11 runs every NOAA GFS and blend hour had a GEFS-Wave row, so the live classes
+  are of this kind (C2 would have changed none of them).
+* **Validated:** the ordering of offshore errors of single-family GFS-Wave hours by class
+  with a GEFS-Wave spread, and the RMSE ordering (not the median ordering) without one, at
+  buoys off Hawaii and California. **Not validated:** every rule that needs two independent
+  families (disagreement, agreement), ECMWF-only hours, run-to-run change, staleness, local
+  confidence, and any probability: the classes remain ordinal labels.
 * **80 % range** (same data, [ml-evaluation.md](ml-evaluation.md) 12.2). The app's offshore
   range for a single source covered 53 % at 24 h, 62 % at 48 h, 73 % at 72 h and 85-89 %
   beyond 5 days (most misses above p90). A lead-dependent two-tail scale fitted on TRAIN
@@ -395,6 +393,9 @@ only and adopted only if it passes on TEST.
   `ndbc-offshore-v1` in `uncertainty.py`, applied only to raw single-family GFS-Wave hours
   without an ensemble at jaws-peahi and trestles (the spots whose buoy agrees over all
   leads and at every lead bucket; mavericks and ocean-beach-sf were removed in review
-  because 46026 covers 69 % at 240 h), and not yet wired into the prediction job. The breaking range keeps
-  its heuristic label, and the ensemble-based range stays unvalidated (pooled pass, but too
+  because 46026 covers 69 % at 240 h), and not yet wired into the prediction job.
+  "Calibrated" means the 80 % coverage of the interval: at the two labelled buoys the
+  bounds are not each a 10 % quantile (46224: 18.6 % [16.5, 20.9] above p90, 4.7 % below
+  p10; 51205: 2.3 % [1.8, 2.7] below p10, 12.2 % above p90). The breaking range keeps its
+  heuristic label, and the ensemble-based range stays unvalidated (pooled pass, but too
   wide at both paired buoys). The confidence index itself (σ_f) is unchanged.

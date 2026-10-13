@@ -396,13 +396,15 @@ python -m app.cli ml restrict VERSION_ID --exclude-spot SLUG [--exclude-spot SLU
 python -m app.cli verify ranges --station CODE ... --test-start ISO [--ensemble-source E]
                                 [--check-station CODE ...] [--boot N] [--json PATH]
 python -m app.cli verify confidence-classes --station CODE ... --test-start ISO
-                                [--ensemble-source E] [--method forecast-v1.1|forecast-v1]
+                                [--ensemble-source E] [--method forecast-v1|candidate-c2]
                                 [--scan-boundaries] [--window-days N] [--boot N] [--json PATH]
 ```
 
 `verify ranges` scores the coverage of the app's offshore 80 % range at buoys and fits
 the lead-dependent scale on the TRAIN period; `verify confidence-classes` scores the
-realised error of the forecast-confidence classes (docs/ml-evaluation.md section 12).
+realised error of the forecast-confidence classes (the app's forecast-v1, or the candidate
+C2 that was evaluated and not adopted; `--scan-boundaries` reports whether the TRAIN-chosen
+candidate is adoptable under the pre-registered test; docs/ml-evaluation.md section 12).
 
 `verify backtest` prints a per-lead table with these columns:
 

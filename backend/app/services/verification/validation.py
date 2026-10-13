@@ -196,5 +196,11 @@ def format_class_table(result: dict[str, Any]) -> str:
             f"passing {scan['passing_on_train']}, choice {scan['choice']}"
         )
         if "test" in scan:
-            lines.append(f"  choice on TEST: {scan['test']['monotonicity']}")
+            lines.append(f"  choice on TEST (pre-registered test): {scan['test']['monotonicity']}")
+            if "monotonicity_present_classes" in scan["test"]:
+                lines.append(
+                    f"  choice on TEST (two-class diagnostic): "
+                    f"{scan['test']['monotonicity_present_classes']}"
+                )
+        lines.append(f"  adoptable under the plan: {scan.get('adoptable')}")
     return "\n".join(lines)

@@ -14,7 +14,9 @@ import pytest
 from app.services.surf_quality.forecast_confidence import (
     HIGH,
     LOW,
+    METHOD,
     MODERATE,
+    EnsembleSignal,
     ForecastInputs,
     Verification,
     classify_forecast,
@@ -33,8 +35,8 @@ def _hour(lead: float, **kw: object) -> cc.HourInputs:
 @pytest.mark.parametrize(
     ("lead", "index_class", "expected"),
     [
-        (12.0, HIGH, MODERATE),  # forecast-v1.1: one model, no ensemble -> at most Moderate
-        (52.0, HIGH, MODERATE),  # lead-table index 70 (High under forecast-v1)
+        (12.0, HIGH, HIGH),  # forecast-v1: inside 3 days the index class stands
+        (52.0, HIGH, HIGH),  # lead-table index 70
         (53.0, MODERATE, MODERATE),  # index 69
         (100.0, MODERATE, MODERATE),  # single source beyond 3 days, no ensemble: capped
         (150.0, MODERATE, MODERATE),  # index 45
@@ -47,9 +49,9 @@ def test_single_source_classes_follow_the_lead_table(
 ) -> None:
     fc = classify_forecast(cc.forecast_inputs(_hour(lead)))
     assert fc.index_class == index_class and fc.cls == expected
-    if lead <= 72.0:
-        assert any(r.rule == "single_source_no_ensemble" for r in fc.rules)
+    assert all(r.rule != cc.C2_RULE for r in fc.rules)  # the candidate is not a rule
     inp = cc.forecast_inputs(_hour(lead))
+    assert cc.c2_applies(inp) == (lead <= 72.0)
     assert inp.families == ("ncep_gfs",) and inp.sigma_source == "lead_table"
     assert not inp.missing_wind and not inp.stale and inp.verification == ()
 
@@ -159,7 +161,7 @@ def test_classify_frame_and_rule_effect() -> None:
     assert classes[0] == LOW and any("missing_swell" in r for r in rules[0])
     assert set(classes[frame["lead_hours"] == 160.0]) == {LOW}
     assert any("single_source_over_3d" in r for r in rules[2])
-    assert any("single_source_no_ensemble" in r for r in rules[1])
+    assert not any(cc.C2_RULE in r for rs in rules for r in rs)
     effect = cc.rule_effect_by_bucket(frame, rules, "missing_swell", n_boot=20, seed=1)
     assert effect["24"]["fired"]["n"] == 1 and effect["24"]["not_fired"]["n"] == 4
 
@@ -171,31 +173,32 @@ def test_window_cycles_are_unique() -> None:
     assert timedelta(days=2) == out["cycle_time"].max() - out["cycle_time"].min()
 
 
-def test_forecast_v1_is_v1_1_without_the_new_cap() -> None:
-    """forecast-v1 (derived) gives High to complete single-source hours up to 52 h."""
+def test_candidate_c2_is_forecast_v1_plus_one_cap() -> None:
+    """forecast-v1 gives High to complete single-source hours up to 52 h; candidate C2
+    (evaluated, not adopted) caps them at Moderate and changes nothing else."""
+    assert cc.METHODS == (METHOD, cc.CANDIDATE_C2) and METHOD == "forecast-v1"
     assert cc.lead_table_high_limit() == 52.0
     frame = _frame([6.0, 24.0, 52.0, 53.0, 100.0, 160.0, 250.0], ["synthetic:a"], 2)
-    v11, rules11 = cc.classify_frame(frame)
-    v1, rules1 = cc.classify_frame(frame, method=cc.METHOD_V1)
+    v1, rules1 = cc.classify_frame(frame)
+    c2, rules2 = cc.classify_frame(frame, method=cc.CANDIDATE_C2)
     assert list(v1[:7]) == [HIGH, HIGH, HIGH, MODERATE, MODERATE, LOW, LOW]
-    assert list(v11[:7]) == [MODERATE, MODERATE, MODERATE, MODERATE, MODERATE, LOW, LOW]
-    assert not any("single_source_no_ensemble" in r for rs in rules1 for r in rs)
-    assert any("single_source_no_ensemble" in r for r in rules11[0])
-    # With a small ensemble spread both methods agree (the new cap needs "no ensemble").
+    assert list(c2[:7]) == [MODERATE, MODERATE, MODERATE, MODERATE, MODERATE, LOW, LOW]
+    assert not any(cc.C2_RULE in r for rs in rules1 for r in rs)
+    assert f"cap:moderate:{cc.C2_RULE}" in rules2[0] and cc.C2_RULE not in str(rules2[4])
+    # With a small ensemble spread both agree (the candidate cap needs "no ensemble").
     ens = frame.assign(ens_mean_m=2.0, ens_spread_m=0.1)
     a, _ = cc.classify_frame(ens, ensemble=True)
-    b, _ = cc.classify_frame(ens, ensemble=True, method=cc.METHOD_V1)
+    b, _ = cc.classify_frame(ens, ensemble=True, method=cc.CANDIDATE_C2)
     assert list(a) == list(b) and a[0] == HIGH
     with pytest.raises(ValueError, match="unknown method"):
-        cc.classify_frame(frame, method="forecast-v0")
+        cc.classify_frame(frame, method="forecast-v1.1")
 
 
-def test_class_without_recomputes_caps_and_downgrades() -> None:
+def test_class_with_caps_recomputes_caps_and_downgrades() -> None:
     poor = Verification("station", "synthetic:a", "gfswave_bulletin", 24, 300, 0.6, 0.2, True)
     fc = classify_forecast(cc.forecast_inputs(_hour(24.0, verification=poor)))
-    assert fc.cls == MODERATE  # both the v1.1 cap and verification_poor
-    assert cc.class_without(fc, cc.V11_RULES) == MODERATE  # verification_poor still caps
-    assert cc.class_without(fc, frozenset({"single_source_no_ensemble", "verification_poor"}))
+    assert fc.cls == MODERATE and cc.class_with_caps(fc) == MODERATE  # verification_poor
+    assert cc.class_with_caps(fc, (LOW,)) == LOW
     changed = classify_forecast(
         ForecastInputs(
             index=90,
@@ -207,21 +210,44 @@ def test_class_without_recomputes_caps_and_downgrades() -> None:
         )
     )
     assert changed.cls == MODERATE and any(r.effect == "downgrade" for r in changed.rules)
-    assert cc.class_without(changed, frozenset({"run_change"})) == HIGH
-    assert cc.class_without(changed, cc.V11_RULES) == MODERATE  # two families: no new cap
+    assert cc.class_with_caps(changed) == MODERATE
+    # A cap acts before the downgrade, as in classify_forecast: min(High, Moderate) - 1.
+    assert cc.class_with_caps(changed, (MODERATE,)) == LOW
+    assert not cc.c2_applies(changed.inputs)  # two independent families
 
 
-def test_relabel_boundary_and_c2_equal_v1_1() -> None:
+def test_c2_applies_only_to_one_family_without_an_ensemble_inside_3_days() -> None:
+    def inputs(**kw: object) -> ForecastInputs:
+        base: dict[str, object] = {
+            "index": 90,
+            "sigma_source": "lead_table",
+            "lead_hours": 24.0,
+            "source_code": "synthetic",
+            "families": ("ncep_gfs",),
+        }
+        base.update(kw)
+        return ForecastInputs(**base)  # type: ignore[arg-type]
+
+    assert cc.c2_applies(inputs())
+    assert cc.c2_applies(inputs(families=("ncep_gfs", "ncep_gefs")))  # same chain
+    assert cc.c2_applies(inputs(ensemble=EnsembleSignal(0.04, 0.01)))  # flat sea: no spread
+    assert not cc.c2_applies(inputs(ensemble=EnsembleSignal(2.0, 0.1)))
+    assert not cc.c2_applies(inputs(lead_hours=80.0))  # forecast-v1 caps beyond 3 days
+    assert not cc.c2_applies(inputs(families=("ncep_gfs", "ecmwf_ifs")))
+    assert not cc.c2_applies(inputs(is_demo=True))
+
+
+def test_relabel_boundary_and_c2() -> None:
     frame = _frame([12.0, 30.0, 48.0, 60.0, 72.0, 100.0], ["synthetic:a"], 3)
     frame.loc[frame.index[0], "swell1_dir_sin"] = np.nan  # missing direction: Low
-    v1, _ = cc.classify_frame(frame, method=cc.METHOD_V1)
+    v1, _ = cc.classify_frame(frame)
     lead = frame["lead_hours"].to_numpy(dtype=float)
     at36 = cc.relabel_boundary(v1, lead, 36.0)
     assert at36[0] == LOW  # Low hours keep Low
     assert list(at36[1:6]) == [HIGH, MODERATE, MODERATE, MODERATE, MODERATE]
     assert list(cc.relabel_boundary(v1, lead, 72.0)[1:6]) == [HIGH] * 4 + [MODERATE]
-    v11, _ = cc.classify_frame(frame)
-    assert list(cc.relabel_boundary(v1, lead, None)) == list(v11)  # C2 is forecast-v1.1
+    c2, _ = cc.classify_frame(frame, method=cc.CANDIDATE_C2)
+    assert list(cc.relabel_boundary(v1, lead, None)) == list(c2)
 
 
 def test_boundary_scan_on_synthetic_errors() -> None:
@@ -243,6 +269,29 @@ def test_boundary_scan_on_synthetic_errors() -> None:
     c2 = out["candidates"][cc.NO_HIGH_WITHOUT_ENSEMBLE]
     assert c2["counts"][HIGH] == 0 and c2["monotonicity"]["passed"]
     assert out["choice"] == cc.NO_HIGH_WITHOUT_ENSEMBLE
-    assert out["test"]["monotonicity"]["passed"]
+    # On TEST the pre-registered (three-class) test fails for a candidate without High;
+    # the two-class form passes, but it is a diagnostic: C2 is not adoptable.
+    assert not out["test"]["monotonicity"]["passed"]
+    assert out["test"]["monotonicity_present_classes"]["passed"]
+    assert out["adoptable"] is False
     two = cc.two_class_test(test, np.full(len(test), MODERATE, dtype=object), n_boot=20, seed=1)
     assert not two["monotonicity"]["passed"]  # no Low rows
+
+
+def test_boundary_scan_adopts_a_boundary_only_if_it_passes_the_preregistered_test() -> None:
+    """SYNTHETIC: |error| 0.1 m up to 24 h, 0.2 m at 48-72 h, 0.6 m for the Low hours.
+    Boundaries 24-42 h pass on TRAIN; the one nearest forecast-v1's 52 h (42 h) is chosen
+    and passes the three-class test on TEST, so it is adoptable."""
+    frame = _frame([6.0, 24.0, 48.0, 60.0, 72.0, 168.0], ["synthetic:a"], 60)
+    err = frame["lead_hours"].map({6.0: 0.1, 24.0: 0.1, 48.0: 0.2, 60.0: 0.2, 72.0: 0.2})
+    err = err.fillna(0.6).to_numpy()
+    sign = np.where(np.arange(len(frame)) % 2 == 0, 1.0, -1.0)
+    frame["obs_hs_m"] = frame["model_hs_m"] + sign * err
+    frame.loc[frame["lead_hours"] == 168.0, "swell1_tp_s"] = np.nan  # Low
+    train, test = frame[frame["cycle_time"] < START + pd.Timedelta(days=40)], frame
+    out = cc.boundary_scan(train, test, n_boot=40, seed=2)
+    assert {"b1=24", "b1=30", "b1=36", "b1=42"} <= set(out["passing_on_train"])
+    assert "b1=48" not in out["passing_on_train"]
+    assert out["choice"] == "b1=42"
+    assert out["test"]["monotonicity"]["passed"] and out["adoptable"] is True
+    assert "monotonicity_present_classes" not in out["test"]

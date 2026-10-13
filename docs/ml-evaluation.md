@@ -57,12 +57,16 @@ decides a correction trained on them.
   two spots whose own buoy agrees over all leads and at every lead bucket (jaws-peahi,
   trestles; 69-91 % by buoy; mavericks and ocean-beach-sf were dropped in review because
   46026 covers only 69 % at 240 h) and not yet passed in by the prediction job, so no
-  prediction carries the label today. The ensemble-based range
-  stays unvalidated. forecast-v1's High and Moderate single-source classes had equal median
-  errors on the training year; forecast-v1.1 drops High for single-source hours without
-  an ensemble, and its classes (with and without a GEFS-Wave spread) are ordered by
-  realised error on the held-out year (that held-out check of the new rule was not blind,
-  12.3).
+  prediction carries the label today ("calibrated" refers to the interval's coverage; at
+  both labelled buoys one bound is off: 18.6 % above p90 at 46224, 2.3 % below p10 at
+  51205). The ensemble-based range stays unvalidated. Confidence classes: with a GEFS-Wave
+  spread forecast-v1's classes are ordered by realised error on both years. Without one,
+  single-source High and Moderate had equal median errors on both years and an RMSE
+  difference distinguishable from zero only on the held-out year; the candidate found on
+  the training year (no High from one model without an ensemble) cannot pass the
+  pre-registered test on the held-out year and was not adopted, so **forecast-v1 stays**
+  (the builder had adopted it as forecast-v1.1 on a two-class test written after the
+  held-out scores were seen; reverted in review, 12.3).
 * **Correction approved for activation at seven US spots** (12.4): a random forest
   trained on the NDBC and AODN pairs cut held-out RMSE from 0.427 to 0.320 m (-25 %) at
   five NDBC buoys, passed
@@ -1357,8 +1361,10 @@ where the calibrated range label is used (12.2); excluding rincon from the corre
 registered applicability is the one the code now computes (12.4). One does not: the
 boundary candidates, the rule choosing among them and the two-class form of the test for
 the one candidate without a High class were written after the forecast-v1 TEST scores had
-been computed, and they led to forecast-v1.1 (12.3, "How blind that TEST confirmation
-is"). A fifth, added in the adversarial review of 2026-10-13 and also only narrowing:
+been computed; the builder adopted that candidate as forecast-v1.1 on the two-class form,
+and the review of 2026-10-13 reverted it, because the plan adopts a change only if it
+passes the pre-registered three-class test on TEST (12.3). A fifth, added in the
+adversarial review of 2026-10-13 and only narrowing:
 the station-consistency rule checks every lead bucket of the station, not only all leads
 together, which removes mavericks and ocean-beach-sf from the calibrated label (12.2).
 
@@ -1486,6 +1492,17 @@ valid times and weather, so they are probably too narrow, which makes the rule e
 more readily than correctly sized intervals would. The range was validated on station
 bulletins at the buoys, not on the gridded values the spots receive.
 
+*Tails at the buoys* (review, TEST, fitted range, all leads; % below p10 / above p90 with
+90 % CIs): 51201 4.4 [3.7, 5.0] / 4.9 [4.1, 5.7]; 51205 2.3 [1.8, 2.7] / 12.2 [10.5,
+13.9]; 46026 17.2 [15.8, 18.9] / 3.4 [2.8, 4.0]; 46224 4.7 [3.8, 5.6] / 18.6 [16.5,
+20.9]; 46053 21.9 [20.1, 23.8] / 8.8 [7.5, 10.4]. Pooled the two tails balance (10.3 /
+9.8 %) because the buoys err in opposite directions; at no buoy are both near 10 %. The
+pre-registered criterion is coverage, so the label stands where coverage is not
+contradicted, but it means the coverage of the interval, not two calibrated quantiles: at
+trestles' buoy the upper bound is exceeded almost twice as often as a p90 should be. Leads
+between the buckets (TEST, pooled, diagnostic): 3-17 h 84.1 %, 31-41 h 81.5 %, 55-65 h
+82.7 %, 79-107 h 79.2 %, 133-155 h 79.8 %, 181-227 h 77.1 %.
+
 **Implemented** (`surf_quality/uncertainty.py`, `OFFSHORE_CALIBRATION`, version
 `ndbc-offshore-v1`): the TRAIN-fitted k_lo / k_hi (4 decimals; scored on TEST they give
 exactly the coverages above). `breaking_uncertainty` applies them to the offshore part of
@@ -1546,7 +1563,7 @@ single-source hours with a missing partition-1 swell at 24, 72 and 120 h (5-6 pa
 and, with a GEFS-Wave spread, Moderate at 24 and 48 h (2 and 13), Low at 72 h (3) and
 120 h (34).
 
-| Lead | forecast-v1, single source (OFF5, V0) | forecast-v1.1, single source (OFF5) | v1 = v1.1 with a GEFS-Wave spread (GEFS6) |
+| Lead | forecast-v1, single source (OFF5, V0) | candidate C2 (not adopted), single source (OFF5) | forecast-v1 with a GEFS-Wave spread (GEFS6; C2 identical) |
 |---|---|---|---|
 | 24 h | High 11,268: 0.24 / 0.58 / 0.378 | Moderate 11,268: 0.24 / 0.58 / 0.378 | High 1,438: 0.25 / 0.53 / 0.333 |
 | 48 h | High 9,549: 0.25 / 0.60 / 0.380; Moderate 1,736: 0.24 / 0.61 / 0.398 | Moderate 11,285: 0.25 / 0.60 / 0.383 | High 1,431: 0.25 / 0.53 / 0.336 |
@@ -1570,8 +1587,9 @@ p90 0.57 vs Low 0.504 / 0.26 / 0.77; gap 0.107 [0.073, 0.145]). C2 has no High c
 it was tested in the two-class form (Moderate < Low on all three statistics and the gap CI
 above zero); the choice rule (passing b1 nearest the current boundary, else C2) picks the
 candidate from TRAIN results only, before the chosen one is scored on TEST. **On TEST, C2
-passes:** Moderate 110,554 pairs, RMSE 0.396, median 0.25, p90 0.62; Low 25,543, 0.543 /
-0.29 / 0.86; gap 0.146 [0.123, 0.169].
+fails the pre-registered test**, which needs three classes, and passes only the two-class
+form: Moderate 110,554 pairs, RMSE 0.396, median 0.25, p90 0.62; Low 25,543, 0.543 / 0.29
+/ 0.86; gap 0.146 [0.123, 0.169].
 
 *How blind that TEST confirmation is.* The forecast-v1 TEST table above was computed, as
 the plan requires, before the boundary scan, its candidates and its choice rule were
@@ -1581,10 +1599,21 @@ be anticipated from that table. The candidate is derived from TRAIN statistics a
 TEST rows were never used to fit anything, but the TEST check of C2 is not blind, so it is
 weaker evidence than a held-out test whose outcome was unknown when the rule was chosen.
 
-**forecast-v1.1 = forecast-v1 + C2** (`single_source_no_ensemble`). Its single-source
-classes on OFF5 are exactly C2 (TRAIN and TEST as above; V1 = V0, because the verification
-cap cannot lower a Moderate hour further). With a GEFS-Wave spread the rule does not fire,
-and v1.1 = v1 (identical classes, checked):
+**Decision: forecast-v1 stays; C2 is not adopted** (review, 2026-10-13). The builder had
+adopted C2 as method `forecast-v1.1` (`single_source_no_ensemble`) on the two-class form.
+The plan adopts a change only if "the changed classes pass the same test on TEST", and the
+same test is the three-class one; a two-class form written after forecast-v1's TEST scores
+were known is a changed criterion. It also tests the Low boundary, which C2 does not move,
+not the merge of High into Moderate that C2 makes, and TEST does not support that merge:
+High's RMSE is 0.024 m [0.009, 0.037] below Moderate's (V0), and with verification rows
+forecast-v1 passes the full test on TEST (0.044 m [0.029, 0.059]; medians 0.22 vs 0.26 m).
+What remains is that in V0 High and Moderate have the same median error on both years. C2
+stays available as `verify confidence-classes --method candidate-c2` (its single-source
+classes on OFF5 are exactly those above; V1 = V0 for it, because the verification cap
+cannot lower a Moderate hour further), and `--scan-boundaries` now reports `adoptable`
+(false for C2). Re-run in review with the committed code (`swell_revval_live`): the
+forecast-v1 and C2 tables above, the boundary scan and the GEFS6 table below are
+unchanged. With a GEFS-Wave spread C2's cap does not fire, so C2 = forecast-v1 there:
 
 | GEFS6, ensemble TEST | n | median abs. error | p90 | RMSE [90 % CI] |
 |---|---:|---:|---:|---|
@@ -1598,13 +1627,15 @@ High 0.322, Moderate 0.474, Low 0.752). By lead on TEST, High occurs at 24-72 h 
 0.333-0.338) and Moderate from 72 h (0.358 at 72 h, 0.403 at 120 h, 0.502 at 168 h, 0.630
 at 240 h).
 
-On the real 2026-10-11 runs (rescored with v1.1 in a scratch copy of `swell_live2`) the
-new rule fired on 0 of 4,050 NOAA GFS and 0 of 4,050 blend hours: every hour had a
-GEFS-Wave row.
+On the real 2026-10-11 runs (rescored by the builder with C2 as forecast-v1.1 in a scratch
+copy of `swell_live2`) the cap fired on 0 of 4,050 NOAA GFS and 0 of 4,050 blend hours:
+every hour had a GEFS-Wave row. Reverting it therefore changes no class of those runs.
 
 **What this validates:** the ordering of the offshore error of single-family GFS-Wave
-hours by class, without (Moderate < Low) and with a GEFS-Wave spread (High < Moderate <
-Low), at buoys off Hawaii and California, 2024-2026. **What it cannot:** any rule that
+hours by class with a GEFS-Wave spread (High < Moderate < Low, the pre-registered test
+passes), and without one the RMSE ordering on the held-out year but not the median
+ordering (High and Moderate tie; the pre-registered test fails, with no adoptable change),
+at buoys off Hawaii and California, 2024-2026. **What it cannot:** any rule that
 needs two independent families (disagreement, agreement, `single_source_over_3d` vs a real
 second model), ECMWF-only hours, run-to-run change at the app's 6-hourly cycles, staleness,
 and breaking (local) confidence. It also says nothing about how a class translates into a
@@ -1734,6 +1765,7 @@ about 23 %) is not validated, since breaking heights are not observed.
 | Range coverage and fitted scale, class scores, boundary scan | live data, repository commands |
 | Shipped calibration constants reproduce the TEST coverage | live data (identical table) |
 | Re-run of `verify ranges` (OFF5, GEFS6) and `verify confidence-classes` (OFF5 v1 with the boundary scan, OFF5 v1.1, GEFS6) on 2026-10-13 with commit 5ddfe2a | live data: every table and JSON result identical to the ones reported here |
+| Review re-run of `verify confidence-classes` after the revert to forecast-v1 (OFF5 v1 with the boundary scan, OFF5 `--method candidate-c2`, GEFS6) and of the ten-buoy `verify backtest`, 2026-10-13 | live data: classes, scan candidates and backtest table identical; the scan now reports `adoptable: false` for C2 |
 | Shipped v6 / v4 manifests import, verify (sha256), apply only at their spots and leads | integration test on the real files (`test_shipped_ml_manifests.py`) |
 | Calibrated offshore label in `breaking_uncertainty` | unit tests only; not wired into the prediction job |
 | Correction training, criteria, per-buoy scores | live data |
@@ -1758,8 +1790,9 @@ python -m app.cli verify ranges $OFF5 --test-start 2025-10-12T00:00:00Z \
 python -m app.cli verify ranges $GEFS6 --test-start 2026-06-20T00:00:00Z \
     --ensemble-source gefswave_station --json ranges_gefs6.json
 python -m app.cli verify confidence-classes $OFF5 --test-start 2025-10-12T00:00:00Z \
-    --method forecast-v1 --scan-boundaries --json classes_off5_v1.json
-python -m app.cli verify confidence-classes $OFF5 --test-start 2025-10-12T00:00:00Z --json classes_off5_v11.json
+    --scan-boundaries --json classes_off5_v1.json
+python -m app.cli verify confidence-classes $OFF5 --test-start 2025-10-12T00:00:00Z \
+    --method candidate-c2 --json classes_off5_c2.json   # the builder's forecast-v1.1
 python -m app.cli verify confidence-classes $GEFS6 --test-start 2026-06-20T00:00:00Z \
     --ensemble-source gefswave_station --json classes_gefs6.json
 python -m app.cli ml build-dataset --source gfswave_bulletin $OFF5 --station aodn:cape-naturaliste \
@@ -1785,8 +1818,17 @@ forecast-v1 class table, with raw SQL pairing (nearest spectral Hm0 within 30 mi
 own sigma, bucket, class and bootstrap code, gave the same pair counts (251,103; TRAIN
 108,356; TEST 136,097), the same app-range and fitted-range coverages, the same refitted
 k_lo / k_hi as the shipped constants, and the same class counts, medians, p90s and
-RMSEs. `verify confidence-classes` (forecast-v1 with the boundary scan, v1.1, GEFS6)
-gave JSON identical to the builder's; `verify ranges` OFF5 gave identical results apart
+RMSEs. A second independent re-derivation (third review pass: raw SQL `LATERAL` nearest
+observation, its own sigma table, buckets, fit and bootstrap; nothing imported from the
+app) gave the same again: OFF5 k_lo / k_hi equal to the shipped constants to four
+decimals, app range 53.2 / 62.3 / 73.3 / 84.9 / 88.5 / 85.4 % and fitted range 79.6 /
+80.2 / 79.5 / 79.5 / 79.6 / 75.1 % at 24-240 h; the ensemble range at GEFS6 (42,378
+pairs, TRAIN 16,598, TEST 22,380) app 61.2 %, fitted 81.5 %, 51201 89.5 %, 51205 88.4 %;
+forecast-v1 classes TRAIN / TEST counts, medians, p90s and RMSEs as in 12.3, Moderate -
+High RMSE CI [-0.012, 0.045] on TRAIN and [0.008, 0.037] on TEST with its own bootstrap.
+`verify confidence-classes` (forecast-v1 with the boundary scan, v1.1, GEFS6)
+gave JSON identical to the builder's (and, after the revert below, forecast-v1 with the
+scan, `--method candidate-c2` and GEFS6 again identical); `verify ranges` OFF5 gave identical results apart
 from the station-consistency change below. The pooled ten-buoy backtest of section 11
 (409,344 pairs) gave the same table (bias -0.234 m; RMSE 0.376 / 0.508 / 0.642 m at 24 /
 168 / 240 h; skill vs the long-term climatology 0.578 / 0.233 / -0.278 [-0.414, -0.157]).
@@ -1807,6 +1849,21 @@ m; 46053 2,023 -> 1,376, all on archived times; 51201 1,440, all on archived tim
 Missing files (monthly gz of March / April 2026 at 51201, `51201h2026.txt.gz`,
 `view_text_file.php` for a missing year) answer 404.
 
+Third pass, 2026-10-13 15:10-15:30 UTC, fresh downloads (about 3 MB): realtime 46026,
+3,810 wave rows -> 2,151 records, every one on a `.spec` time; 51201, 2,168 rows -> 2,189
+records (`.spec` reports without a `.txt` row kept); against the stored records of the
+same times |dHs| <= 0.05 m. `Sep/51201.txt` (newest month, uncompressed; the `.gz` name
+and `Oct/51201.txt` answer 404) has the same 1,440 times as the stored (realtime) records
+within 0.05 m. CDIP 106 THREDDS (2026-07-24 to 2026-10-13) against the stored 51201
+records at NDBC time = CDIP time + 26 min: 1,841 QC'd monthly records with Hs equal
+exactly, Tp and Ta within 0.005 s, Dp within 0.5 degree; 1,988 realtime records within
+the realtime rounding (Hs 0.05 m, DPD 0.5 s). `activestations.xml`: all twelve catalog
+positions equal; station pages: 46026 53 m, 46237 16.76 m, 51201 200 m, 46214 600 m, as
+in the catalog. The 46026, 51201 and 51101 realtime fixtures are unedited excerpts of
+today's live files (every line found). wavecalc.shtml states WVHT = 4 sqrt(m0) from the
+non-directional spectrum and APD = sqrt(m0/m2) for NDBC's systems; measdes.shtml: MWD is
+the direction from which the waves at DPD are coming, times in UTC.
+
 **Deviations from the plan, verdicts.**
 
 * *Per-station label rule* (12.2): defensible only as a narrowing, and the builder's
@@ -1815,13 +1872,22 @@ Missing files (monthly gz of March / April 2026 at 51201, `51201h2026.txt.gz`,
   and ocean-beach-sf are no longer labelled. The remaining labels (jaws-peahi, trestles)
   rest on the pooled pass plus "not contradicted at the own buoy"; by point estimate 51205
   is just above the band at 24-72 h and 46224 just below it at 24 and 72 h.
-* *Two-class test for forecast-v1.1* (12.3): defensible as a conservative cap (it can only
-  lower classes), not as strong evidence. The candidate set and the two-class form were
-  written after forecast-v1's TEST scores, C2's TEST classes are a merge of v1's, and on
-  TEST v1's High was in fact 0.024 m [0.009, 0.037] better than Moderate in RMSE (0.044
-  with verification rows, where v1 passes the full test). The plan decides on TRAIN, where
-  v1 failed, so v1.1 follows the plan; what TEST confirms is the lead caps (Moderate <
-  Low), not that High was misplaced.
+* *Two-class test for forecast-v1.1* (12.3): **not defensible; reverted.** (An earlier
+  pass of this review called it a defensible conservative cap; on a closer reading of the
+  plan it is not.) The plan adopts a change only if "the changed classes pass the same
+  test on TEST", and that test is the three-class one, which C2 fails by construction;
+  the two-class form was written after forecast-v1's TEST scores were known, i.e. a
+  criterion changed after the result. It checks Moderate < Low, a boundary C2 does not
+  move, and TEST contradicts the premise of the merge: forecast-v1's High was 0.024 m
+  [0.009, 0.037] better than Moderate in RMSE (0.044 m with verification rows, where v1
+  passes the full test). The app is back to forecast-v1 (`forecast_confidence.py` and its
+  tests as at d2b7e42); C2 remains an analysis option (`--method candidate-c2`) and the
+  boundary scan reports `adoptable` (false). No class of the real 2026-10-11 runs changes.
+* *Calibrated label at the two remaining spots*: kept, because the pre-registered measure
+  is coverage, but documented as interval coverage only: at 46224 the fitted upper bound
+  is exceeded 18.6 % [16.5, 20.9] of the time and at 51205 the lower bound only 2.3 %
+  [1.8, 2.7] (tails table in 12.2), and no paired buoy has both tails near 10 %. A tail
+  check should be pre-registered before the prediction job is wired to pass the context.
 * *Rincon exclusion* (12.4): defensible. Per lead bucket at 46053 (review script, shipped
   artifact, own cycle-block bootstrap) the correction is worse
   than raw at 48, 72 and 120 h (+4.1 %, +2.9 %, +3.6 %; criterion (c), if applied to this
@@ -1836,11 +1902,48 @@ Missing files (monthly gz of March / April 2026 at 51201, `51201h2026.txt.gz`,
 **New findings, documented, not acted on** (acting on test-year numbers would be tuning):
 the metre-scale overshoot and the wind-sea swell feature (12.4).
 
-**Test flake.** `test_paused_search_does_not_generate_notifications` failed depending on
-the date and the microsecond: natural demo swells follow calendar slots, the simulated
-swell merges into one that starts 4-5 days ahead, and a search with no earlier match gets
-no new match inside `DETECTION_LEAD_MIN_DAYS`. The test now runs without natural demo
-swells and checks more (event inside the matching window, no match while paused, the
-alert belongs to the simulated swell). A clock-shift sweep (freezegun, 0-45 days for this
-test; 45-800 days for the unit suite; several shifts for the integration suite) found no
-other date-dependent test.
+**Test flake and other date-dependent tests.** `test_paused_search_does_not_generate_notifications`
+failed depending on the date and the microsecond: natural demo swells follow calendar
+slots, the simulated swell merges into one that starts 4-5 days ahead, and a search with no
+earlier match gets no new match inside `DETECTION_LEAD_MIN_DAYS`. The earlier pass turned
+natural swells off in that test and made it check more (event inside the matching window,
+no match while paused, the alert belongs to the simulated swell). Re-checked in the third
+pass: the d2b7e42 version failed 6 of 6 runs at 15:10 UTC; a diagnostic copy showed the
+merged active event at Jeffreys Bay starting 4.0-4.5 days ahead (`DETECTION_LEAD_MIN_DAYS`
+5) and no match for the resumed search; the committed version passed 6 of 6.
+
+The earlier pass's claim that a clock-shift sweep "found no other date-dependent test" did
+not hold: its freezegun sweep of the integration suite never completed (freezegun breaks
+pydantic v1's `ConstrainedDate` and FastAPI's response types), so it showed nothing. The
+third pass shifted the application clock instead (`app.core.database.utcnow` and the few
+direct `datetime.now(UTC)` calls; PostgreSQL's `now()` unshifted) and checked that the
+shift reaches the code (the d2b7e42 paused test then failed at +8 and +20 days and passed
+at 12 other shifts). It found, and the review fixed:
+
+* the same natural-swell interference in **9 more tests of `test_pipeline.py`** (failing
+  at +10 days: the simulated swell merged into a natural event, its match was expired as
+  "merged into another event" or no new match was made) and in
+  `test_public_and_opportunity_api.py::test_opportunity_endpoints_and_ownership` and
+  `test_forecast_confidence.py::test_demo_data_is_low_in_predictions_events_and_alerts`
+  (no opportunity / no alert on some dates between +43 and +55 days). They now use the
+  fixture `only_simulated_swells` (tests/conftest.py; all of `test_pipeline.py` through
+  `pytestmark`), as the e2e tests do with `DEMO_NATURAL_SWELLS=false`; what they assert
+  about the simulated swell is unchanged;
+* a time bomb in `test_map_fields.py`: `test_retention_never_deletes_the_served_fields`
+  and `test_retention_keeps_the_most_complete_run_of_the_served_cycle` build runs that
+  start at a fixed 2026-10-10 23:40 UTC but called `cleanup()` with the real clock, so from
+  2026-10-20 23:40 UTC the 10-day run retention would delete the served run first and both
+  would fail (they did at +8, +12 and +20 days). They now pass the fixtures' clock
+  (`cleanup(db, now=NOW)`), which keeps what they check (map-field pruning).
+
+After the fixes the three natural-swell tests passed at +0, +8, +10, +20, +25, +43, +44,
++46, +48, +54, +55 and +60 days, and the whole suites with the application clock shifted:
+unit (569 tests) at +10, +30, +120 and +400 days; integration (199 tests) at +30, +120
+and +400 days (run before the natural-swell fix; those shifts happen not to trigger it)
+and, with every fix, at +10 and +46 days. Every NDBC adapter test
+pins `now`; a grep of the tests for `date.today()` and `datetime.now(` finds only relative
+uses. `test_public_and_opportunity_api.py::test_forecast_and_events_after_pipeline` still
+expects at least one natural demo event among five spots within 12 days, which held at
+every shift tried. (`test_maintenance_and_migrations.py` uses a fixed scratch database
+name, `swell_migration_check`, so two concurrent runs of it collide; the review's parallel
+shift runs hit that once. Not date-dependent; a follow-up.)
