@@ -356,3 +356,16 @@ forecast quoted in a WSL post). Research classes moved from 18 Moderate / 32 Low
 | `npx tsc --noEmit && npx eslint . && npx vitest run` | pass, 156 tests |
 | `./scripts/run-e2e.sh` | 50 passed + the timeline test fixed and re-run (26 map tests passed) |
 | GitHub Actions CI run 1 | success |
+
+**Final sweep (2026-10-13).** Security, code-health and product reviews of the integrated
+tree, each fixing only demonstrated issues with tests: secrets and tokens no longer reach
+logs through tracebacks or the access log; a client-written X-Forwarded-For can no longer
+bypass per-IP rate limits (`--no-proxy-headers`); backup dumps cannot be staged by git; CI
+actions are pinned to commits without persisted credentials; two inputs that caused 500s
+or a loader crash are handled; concurrent test runs no longer collide on fixed scratch
+database names; the spot page's hour view keeps the local-confidence reason; the
+disputed-wind note is shown next to the wind instead of only inside collapsed details;
+map markers open from the keyboard; the status page fits a phone; demo data is no longer
+called "live" on the landing page. Final run on the integrated tree: ruff, mypy and
+`alembic check` pass; **644 unit**, **233 integration**, **160 vitest** and **62 e2e**
+tests pass.
