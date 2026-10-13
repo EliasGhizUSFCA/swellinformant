@@ -161,6 +161,9 @@ operator step after a shadow evaluation on gridded inputs.
 **Consequences.** User-facing forecasts are uncorrected. The criteria are unchanged; the
 gate added here is "validated on the inputs it will receive", which the next training run
 (gridded GFS-Wave archived at the buoys) is designed to satisfy.
+**Update (2026-10-12).** For the US spots superseded by ADR-020: an NDBC-trained version
+passed the same transfer check and ships for activation there. This version (v4) stays an
+inactive candidate for the Western Australian spots.
 
 ## ADR-014 Research confidence and forecast confidence are separate assessments
 
@@ -233,4 +236,127 @@ it: a summary can compress or misattribute what the page says); a separate sourc
 32 Low). The methodology change adds one assessment row per spot and keeps the research-v1
 rows. Local confidence, which uses the research basis, is at most Moderate everywhere for
 now.
+
+## ADR-017 NDBC: one record per wave report, APD defined per station
+
+**Context.** Checked against the live service on 2026-10-12 (docs/observations.md), the
+NDBC adapter stored each 20-minute wave report of NDBC's own buoys two or three times,
+because realtime `.txt` prints it on the 10-minute meteorological rows around the wave
+time (3,793 wave rows for 2,139 reports at 46026). It also stored every average period as
+the undefined `apd`, although NDBC documents APD as Tm02 for its own systems and Tm01 for
+CDIP buoys (confirmed against CDIP `waveTa` within 0.005 s at six buoys).
+**Decision.** Copies of one report (same height within one 0.1 m rounding step, same APD
+and MWD, within 15 min) become one record at the `.spec` time, which is also the time of
+the QC'd archive; each value comes from the closest copy that has it, and
+`parse.duplicates_merged` counts the folded rows. The catalog states `apd_kind` per
+station (`tm02` NDBC, `tm01` CDIP) and `tm_kind` is stored from it; a station without it
+keeps `apd`. Yearly and monthly archive records (`probably_good`) supersede realtime ones
+(`not_qc`) of the same report.
+**Alternatives.** Keeping every row (inflates pair counts and weights NDBC buoys two to
+three times in pooled scores); keeping only the row at the `.spec` time (often loses DPD,
+which NDBC prints on one copy only); storing APD as `apd` everywhere (mixes Tm01 and Tm02
+in one column).
+**Consequences.** One record per report, matching the archive (on the August 2026
+overlap, 191 of 192 merged records at 46026 fall on an archived time, the last one minute
+off, and all 192 at 51201; heights within 0.05 m). Copies stored before this change would
+stay, since re-ingesting does not delete rows at other times; none were stored outside
+scratch databases, because NDBC was unreachable before 2026-10-12.
+
+## ADR-018 A calibrated offshore range only where the spot's own buoy agrees
+
+**Context.** Against five NDBC buoys (docs/ml-evaluation.md 12.2) the app's offshore 80 %
+range for one deterministic source covered 53 % at 24 h and 85-89 % beyond 5 days. A
+lead-dependent two-tail scale fitted on the older year covered 75.1-80.2 % at every lead
+bucket on the held-out year, pooled, which meets the pre-registered criterion; by buoy it
+covered 69 % (46053) to 91 % (51201). The ensemble range passed pooled but was 88-90 % at
+the only two GEFS buoys that are offshore references of spots.
+**Decision.** Implement the fitted scale as the calibrated OFFSHORE component
+`ndbc-offshore-v1` (`surf_quality/uncertainty.py`), used only for raw single-family
+GFS-Wave hours whose spread comes from the lead table, at leads 3-240 h, and only at spots
+whose paired offshore buoy's own held-out coverage has a CI overlapping 75-85 % over all
+leads and at every lead bucket with at least 200 pairs (jaws-peahi, trestles). The
+breaking range keeps `uncertainty_kind` heuristic and records `offshore_kind: calibrated`
+beside it, because its translation share is not calibrated. The ensemble range stays
+`ensemble_heuristic`. The per-buoy rule was added after the results and only narrows the
+claim. **Review (2026-10-13):** the builder's rule checked all leads together only and
+also labelled mavericks and ocean-beach-sf; their buoy 46026 covers 79.4 % over all leads
+but 69.1 % [64.3, 74.1] at 240 h (77.5 % at 120 h, 75.0 % at 168 h), so the rule now
+checks every lead bucket and those two spots are not labelled. "Calibrated" refers to the
+pre-registered measure, the coverage of the interval: at both remaining buoys one bound is
+off on its own (46224: 18.6 % [16.5, 20.9] above p90, 4.7 % below p10; 51205: 2.3 %
+[1.8, 2.7] below p10, 12.2 % above p90), and no paired buoy has both tails near 10 %.
+Before the prediction job passes the context (a follow-up), a pre-registered tail check
+at the spots' buoys should decide whether the bounds may be shown as p10 / p90.
+**Alternatives.** Label every paired spot (pooled pass): contradicted at two buoys by
+their own data. Apply the scale everywhere: in Western Australia it put 18 % below p10 and
+3 % above p90. A new `uncertainty_kind` value: needs a migration and frontend labels for a
+breaking range that is still mostly heuristic.
+**Consequences.** The prediction job must pass an `OffshoreContext` (spot, families,
+whether ML-corrected) for the label to appear; until then predictions are unchanged. With
+the correction of ADR-020 active the central value is no longer raw, so the label does not
+apply at the corrected spots.
+
+## ADR-019 forecast-v1 stays: the TRAIN-found single-source cap was not adopted
+
+**Context.** At five NDBC buoys forecast-v1's single-source High (leads up to 52 h) and
+Moderate classes had the same median offshore error on the training year and an RMSE
+difference whose CI included zero, so the pre-registered test failed there; no High /
+Moderate lead boundary between 24 and 72 h separated them (docs/ml-evaluation.md 12.3).
+The only candidate that passed on the training year, in a two-class form, was C2: no High
+from a single model family without an ensemble. With a GEFS-Wave spread all three classes
+were distinct on both years.
+**Decision.** Keep forecast-v1. The plan adopts a change only if the changed classes pass
+the same (three-class) test on the held-out year; C2 has no High class, so it cannot, and
+the two-class form it passed (Low − Moderate RMSE 0.146 m [0.123, 0.169]) was written
+after forecast-v1's held-out scores were known and tests the Low boundary C2 does not
+change. The held-out year also does not repeat the training-year finding: High's RMSE was
+0.024 m [0.009, 0.037] below Moderate's, and with verification rows forecast-v1 passed the
+full test (difference 0.044 m [0.029, 0.059]). C2 stays available for analysis (`verify
+confidence-classes --method candidate-c2`).
+**Review (2026-10-13).** The builder had adopted C2 as method `forecast-v1.1` on the
+two-class form; the review reverted it, because changing the adoption test after the
+held-out scores were seen is changing a pre-registered criterion. No stored prediction
+carried `forecast-v1.1` outside scratch databases, and on the real 2026-10-11 runs the cap
+would have fired on no hour (every hour had a GEFS-Wave row).
+**Alternatives.** Adopt C2 as a conservative cap (it can only lower classes): not
+supported by the held-out year, where High was better than Moderate, and not allowed by
+the plan; move the lead boundary (no boundary passed on the training year); let
+verification rows decide (they separated the classes on the held-out year only).
+**Consequences.** A single-family hour without an ensemble can still be High inside 52 h;
+its held-out RMSE is lower than Moderate's but its median error is the same, which the
+docs state (forecast-confidence.md §8). The question is open for a new pre-registered
+test, ideally on gridded forecasts at the buoys rather than station bulletins.
+
+## ADR-020 The NDBC-trained correction is approved for activation at seven US spots
+
+**Context.** `ml train` on spectral Hm0 at five NDBC buoys and three AODN delayed-QC buoys
+(docs/ml-evaluation.md 12.4) gave three candidates that passed criteria (a)-(f) on a
+held-out year (2025-10 to 2026-10, 139,257 pairs). The lowest validation RMSE, the random
+forest, cut test RMSE from 0.427 to 0.320 m; its factors on the real gridded run at the
+spots all lay inside the central 90 % of its test factors (ADR-013's transfer check). At
+46053 (Rincon) it brought no measurable benefit and moved the bias from -0.12 to
++0.16 m; the WA buoys' data were all in the training part.
+**Decision.** Ship `offshore_hs_residual` v6 (random forest, compressed to 3.7 MB) in
+`backend/ml_models/` for activation at jaws-peahi, mavericks, ocean-beach-sf, pipeline,
+sunset-beach, trestles and waimea-bay, leads 3-240 h, `ncep_gfs` forecasts. The registry
+excludes spots whose stations have no held-out test pairs (`no_held_out_test_pairs`), and
+rincon was excluded with `ml restrict` after the per-buoy results (a narrowing, not a
+criterion change). Activation remains an operator step (`ml import-manifest`, `ml
+activate`).
+**Alternatives.** Keep everything raw (rejects a correction that passed every criterion
+and the transfer gate); include rincon as the plan allowed (no evidence of benefit there);
+the ridge (fails the transfer check at 9 of 11 spots).
+**Consequences.** Offshore Hs at the seven spots rises by a factor 1.10-1.61 on the live
+run, and breaking heights with it (about +23 % at a factor 1.3), which is not validated
+because breaking heights are not observed. The held-out bias after correction is +0.09 m;
+review traced it to the metre scale (1.1, at its clamp) chosen with the WA-only train
+part and kept after the refit that includes the NDBC year (docs/ml-evaluation.md 12.4),
+a pipeline follow-up, not a reason to retune the shipped model on its test year. The swell
+features are the bulletin's first listed partition (the wind sea in 16 % of the test
+rows) but the spots' gridded primary swell; with the swell partition substituted, the
+held-out RMSE is 0.342 m instead of 0.320 m (raw 0.427), so the benefit at the spots is
+probably nearer -20 % than -25 % (docs/ml-evaluation.md 12.4).
+With the correction active, the heuristic offshore range around the corrected value
+covered 80-94 % by lead at the buoys and stays labelled heuristic. Deactivating
+(`ml deactivate offshore_hs_residual`) returns every spot to raw forecasts.
 

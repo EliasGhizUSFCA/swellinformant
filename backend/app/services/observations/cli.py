@@ -6,6 +6,10 @@
   obs list                                      stations with observation / forecast counts
   obs collect-forecasts --start ISO --end ISO [--cycles 0,12] [--station CODE ...]
                         [--bulletin-id ID  (one --station; proxy bulletin, diagnostics only)]
+                        [--source gfswave_bulletin|gefswave_station]
+
+``--source gefswave_station`` archives the GEFS-Wave ensemble mean and spread at the
+stations (verification.gefs_bulletins; cycles from 2026-02-26 only, the first with spreads).
 
 ``obs ingest`` runs regardless of OBSERVATIONS_ENABLED (an operator asked for it); without
 ``--since`` it ingests the last OBSERVATION_LOOKBACK_HOURS. Times without a zone are UTC.
@@ -73,6 +77,13 @@ def register(subparsers: Any) -> None:
         help="archive this bulletin for the one --station instead of its catalog bulletin; "
         "stored as source gfswave_bulletin_proxy (diagnostics only) unless it is the catalog id",
     )
+    collect.add_argument(
+        "--source",
+        choices=("gfswave_bulletin", "gefswave_station"),
+        default="gfswave_bulletin",
+        help="gfswave_bulletin (deterministic GFS-Wave, default) or gefswave_station "
+        "(GEFS-Wave ensemble mean and spread)",
+    )
 
 
 def _print(data: Any) -> None:
@@ -97,6 +108,18 @@ def run(args: argparse.Namespace) -> int:
             if args.start >= args.end:
                 print("--start must be before --end", file=sys.stderr)
                 return 2
+            if args.source == "gefswave_station":
+                from app.services.verification import gefs_bulletins
+
+                if args.bulletin_id:
+                    print("--bulletin-id applies to gfswave_bulletin only", file=sys.stderr)
+                    return 2
+                _print(
+                    gefs_bulletins.collect_range(
+                        db, args.start, args.end, args.cycles, args.station
+                    )
+                )
+                return 0
             try:
                 out = collect_range(
                     db,

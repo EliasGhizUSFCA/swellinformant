@@ -541,208 +541,463 @@
       "code": "ndbc:51201",
       "provider": "ndbc",
       "provider_id": "51201",
-      "name": "NDBC 51201 Waimea Bay",
-      "latitude": 21.67,
-      "longitude": -158.12,
-      "water_depth_m": null,
-      "position_source": "gfswave_bulletin_header: header of gfswave.51201.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
-      "position_verified": false,
+      "name": "NDBC 51201 Waimea Bay, HI (CDIP 106)",
+      "latitude": 21.671,
+      "longitude": -158.118,
+      "water_depth_m": 200,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2023-08-04 (NDBC stationmetadata.xml). Water depth: 200 m (NDBC station page; CDIP 106p1 metaWaterDepth 200.0)",
+      "position_verified": true,
       "is_active": true,
       "licence": "Public domain (US Government)",
-      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
-      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/). Wave data from the Coastal Data Information Program (CDIP), Scripps Institution of Oceanography, UCSD, relayed by NDBC; CDIP's realtime files state: \"These data may be redistributed and used without restriction.\" Acknowledgment from the CDIP file (106p1_rt.nc): \"CDIP is primarily supported by the U.S. Army Corps of Engineers (USACE). Station partner: PACIOOS ; Field operator: PACIOOS/UH\"",
+      "operator": "Pacific Islands Ocean Observing System (PacIOOS); CDIP station 106",
+      "platform": "Datawell DWR-M3 directional Waverider (CDIP 106p1 summary attribute)",
+      "apd_kind": "tm01",
+      "apd_kind_source": "CDIP buoy: APD = m0/m1 (NDBC wavecalc.shtml: 'Average periods (APD) for Scripps's buoys are derived from the zeroth moment divided by the first moment'); live check 2026-10-12: NDBC APD = CDIP waveTa within 0.005 s on 881 reports",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD (Tm01), MWD (peak direction FROM), no wind; swell / wind-sea split (.spec, realtime only)",
       "bulletin_id": "51201",
       "bulletin_position": {
         "latitude": 21.67,
         "longitude": -158.12,
-        "distance_km": 0.0,
-        "source": "header of gfswave.51201.bull, GFS-Wave cycle 2026-10-10 00Z"
+        "distance_km": 0.2,
+        "source": "header of gfswave.51201.bull, GFS-Wave cycle 2026-10-11 00Z"
       },
+      "bulletin_note": "WW3 depth at the output point 472.7 m (gfswave.51201.spec point line, 2026-10-11 00Z) against 200 m at the mooring.",
       "paired_spots": [
         {
           "slug": "pipeline",
           "relation": "offshore_reference",
-          "distance_km": 6.9,
+          "distance_km": 6.7,
           "forecast_point_distance_km": 15.7,
-          "note": "Deep-water buoy off Waimea Bay (GFS-Wave point depth 473 m), directly offshore of the North Shore reefs and exposed to the same NW-N swell; the reefs add strong refraction/focusing (cf. Caldwell & Aucan 2007), so buoy Hs is not surf height."
+          "note": "CDIP Waverider in 200 m off Waimea Bay, 6.7 km from the break, in the same NW-N exposure as the North Shore reefs (the buoy bears W (275 deg) from the break). It measures the offshore swell before the reefs refract and focus it (cf. Caldwell & Aucan 2007), so its Hs is an offshore reference, not surf height. At 200 m long-period swell (20 s, deep-water wavelength 625 m) is already slightly in intermediate depth."
         },
         {
           "slug": "sunset-beach",
           "relation": "offshore_reference",
-          "distance_km": 8.0,
-          "forecast_point_distance_km": 14.6,
-          "note": "Deep-water buoy off Waimea Bay (GFS-Wave point depth 473 m), directly offshore of the North Shore reefs and exposed to the same NW-N swell; the reefs add strong refraction/focusing (cf. Caldwell & Aucan 2007), so buoy Hs is not surf height."
+          "distance_km": 7.8,
+          "forecast_point_distance_km": 14.5,
+          "note": "CDIP Waverider in 200 m off Waimea Bay, 7.8 km from the break, in the same NW-N exposure as the North Shore reefs (the buoy bears W (263 deg) from the break). It measures the offshore swell before the reefs refract and focus it (cf. Caldwell & Aucan 2007), so its Hs is an offshore reference, not surf height. At 200 m long-period swell (20 s, deep-water wavelength 625 m) is already slightly in intermediate depth."
         },
         {
           "slug": "waimea-bay",
           "relation": "offshore_reference",
-          "distance_km": 6.2,
+          "distance_km": 6.0,
           "forecast_point_distance_km": 11.3,
-          "note": "Deep-water buoy off Waimea Bay (GFS-Wave point depth 473 m), directly offshore of the North Shore reefs and exposed to the same NW-N swell; the reefs add strong refraction/focusing (cf. Caldwell & Aucan 2007), so buoy Hs is not surf height."
+          "note": "CDIP Waverider in 200 m off Waimea Bay, 6.0 km from the break, in the same NW-N exposure as the North Shore reefs (the buoy bears WNW (300 deg) from the break). It measures the offshore swell before the reefs refract and focus it (cf. Caldwell & Aucan 2007), so its Hs is an offshore reference, not surf height. At 200 m long-period swell (20 s, deep-water wavelength 625 m) is already slightly in intermediate depth."
         }
-      ]
+      ],
+      "notes": "No wind sensor (WDIR/WSPD missing). Archive gaps: no monthly files for March and April 2026 (HTTP 404 on 2026-10-12)."
     },
     {
       "code": "ndbc:51205",
       "provider": "ndbc",
       "provider_id": "51205",
-      "name": "NDBC 51205",
-      "latitude": 21.02,
-      "longitude": -156.42,
-      "water_depth_m": null,
-      "position_source": "gfswave_bulletin_header: header of gfswave.51205.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
-      "position_verified": false,
+      "name": "NDBC 51205 Pauwela, Maui, HI (CDIP 187)",
+      "latitude": 21.018,
+      "longitude": -156.421,
+      "water_depth_m": 200,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2019-08-01 (NDBC stationmetadata.xml). Water depth: 200 m (NDBC station page; CDIP 187p1 metaWaterDepth 200.0)",
+      "position_verified": true,
       "is_active": true,
       "licence": "Public domain (US Government)",
-      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
-      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/). Wave data from the Coastal Data Information Program (CDIP), Scripps Institution of Oceanography, UCSD, relayed by NDBC; CDIP's realtime files state: \"These data may be redistributed and used without restriction.\" Acknowledgment from the CDIP file (187p1_rt.nc): \"CDIP is primarily supported by the U.S. Army Corps of Engineers (USACE). Station partner: PACIOOS ; Field operator: PACIOOS/UH\"",
+      "operator": "Pacific Islands Ocean Observing System (PacIOOS); CDIP station 187",
+      "platform": "Datawell DWR-M3 directional Waverider (CDIP 187p1 summary attribute)",
+      "apd_kind": "tm01",
+      "apd_kind_source": "CDIP buoy: APD = m0/m1 (NDBC wavecalc.shtml: 'Average periods (APD) for Scripps's buoys are derived from the zeroth moment divided by the first moment'); live check 2026-10-12: NDBC APD = CDIP waveTa within 0.005 s on 902 reports",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD (Tm01), MWD (peak direction FROM), no wind; swell / wind-sea split (.spec, realtime only)",
       "bulletin_id": "51205",
       "bulletin_position": {
         "latitude": 21.02,
         "longitude": -156.42,
-        "distance_km": 0.0,
-        "source": "header of gfswave.51205.bull, GFS-Wave cycle 2026-10-10 00Z"
+        "distance_km": 0.2,
+        "source": "header of gfswave.51205.bull, GFS-Wave cycle 2026-10-11 00Z"
       },
+      "bulletin_note": "WW3 depth at the output point 242.7 m (gfswave.51205.spec point line, 2026-10-11 00Z) against 200 m at the mooring.",
       "paired_spots": [
         {
           "slug": "jaws-peahi",
           "relation": "offshore_reference",
-          "distance_km": 15.4,
-          "forecast_point_distance_km": 11.5,
-          "note": "Buoy off Maui's north shore, upstream of Pe'ahi for N-NW swell; Pe'ahi's reef focuses big swell strongly."
+          "distance_km": 15.3,
+          "forecast_point_distance_km": 11.7,
+          "note": "CDIP Waverider in 200 m off Pauwela, 15 km WNW of Pe'ahi (bears 303 deg), on the same open north coast of Maui and exposed to the same N-NW swell. Pe'ahi's reef and the submarine ridge focus big swell strongly, so buoy Hs is an offshore reference, not surf height."
         }
-      ]
+      ],
+      "notes": "No wind sensor (WDIR/WSPD missing)."
+    },
+    {
+      "code": "ndbc:51101",
+      "provider": "ndbc",
+      "provider_id": "51101",
+      "name": "NDBC 51101 Northwestern Hawaii Two",
+      "latitude": 24.34,
+      "longitude": -162.073,
+      "water_depth_m": 4847,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2026-09-20 (previous deployment 2021-04-12 to 2026-09-08 at 24.359N 162.081W) (NDBC stationmetadata.xml). Water depth: 4847 m (NDBC station page)",
+      "position_verified": true,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/).",
+      "operator": "NDBC",
+      "platform": "NDBC moored buoy (hull 3D74 since 2026-09-20, 3DV49 before; stationmetadata.xml)",
+      "apd_kind": "tm02",
+      "apd_kind_source": "NDBC-processed buoy: APD = sqrt(m0/m2) (NDBC wavecalc.shtml); not reproduced exactly from the realtime .data_spec densities, which are rounded to 3 decimals",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD, MWD (direction FROM at DPD), wind when the buoy has an anemometer (stdmet); swell / wind-sea split (.spec, realtime only)",
+      "bulletin_id": "51101",
+      "bulletin_position": {
+        "latitude": 24.32,
+        "longitude": -162.06,
+        "distance_km": 2.6,
+        "source": "header of gfswave.51101.bull, GFS-Wave cycle 2026-10-11 00Z"
+      },
+      "bulletin_note": "WW3 depth at the output point 4715.7 m (gfswave.51101.spec point line, 2026-10-11 00Z) against 4847 m at the mooring.",
+      "paired_spots": [
+        {
+          "slug": "pipeline",
+          "relation": "upstream_regional",
+          "distance_km": 507.6,
+          "forecast_point_distance_km": 488.2,
+          "note": "Deep-ocean buoy 186 NM NW of Kauai on the path of the North Pacific NW swell (bears 306 deg from the North Shore). 15 s swell needs about 9-10 h to travel the ~510 km to Oahu, so it gives timing and size context; never compare same-time values for spot calibration."
+        },
+        {
+          "slug": "sunset-beach",
+          "relation": "upstream_regional",
+          "distance_km": 507.5,
+          "forecast_point_distance_km": 491.5,
+          "note": "Deep-ocean buoy 186 NM NW of Kauai on the path of the North Pacific NW swell (bears 306 deg from the North Shore). 15 s swell needs about 9-10 h to travel the ~510 km to Oahu, so it gives timing and size context; never compare same-time values for spot calibration."
+        },
+        {
+          "slug": "waimea-bay",
+          "relation": "upstream_regional",
+          "distance_km": 507.9,
+          "forecast_point_distance_km": 491.7,
+          "note": "Deep-ocean buoy 186 NM NW of Kauai on the path of the North Pacific NW swell (bears 306 deg from the North Shore). 15 s swell needs about 9-10 h to travel the ~510 km to Oahu, so it gives timing and size context; never compare same-time values for spot calibration."
+        }
+      ],
+      "notes": "Open-ocean reference for the raw model, far from coastal effects. 51001 (15 km away) is not used: its GFS-Wave output point (23.43N 162.21W) is 118 km from the current mooring. 51000 (NE of Oahu) is not used either: it lies outside the NW-N swell windows of the Hawaiian spots and its output point is 31 km from the buoy."
     },
     {
       "code": "ndbc:46026",
       "provider": "ndbc",
       "provider_id": "46026",
-      "name": "NDBC 46026",
+      "name": "NDBC 46026 San Francisco",
       "latitude": 37.75,
-      "longitude": -122.82,
-      "water_depth_m": null,
-      "position_source": "gfswave_bulletin_header: header of gfswave.46026.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
-      "position_verified": false,
+      "longitude": -122.838,
+      "water_depth_m": 53,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2025-05-20 (NDBC stationmetadata.xml). Water depth: 53 m (NDBC station page)",
+      "position_verified": true,
       "is_active": true,
       "licence": "Public domain (US Government)",
-      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
-      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/).",
+      "operator": "NDBC",
+      "platform": "NDBC 3-m discus buoy, SCOOP payload (hull 3DV40 since 2025-05-20)",
+      "apd_kind": "tm02",
+      "apd_kind_source": "NDBC-processed buoy: APD = sqrt(m0/m2) (NDBC wavecalc.shtml); not reproduced exactly from the realtime .data_spec densities, which are rounded to 3 decimals",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD, MWD (direction FROM at DPD), wind when the buoy has an anemometer (stdmet); swell / wind-sea split (.spec, realtime only)",
       "bulletin_id": "46026",
       "bulletin_position": {
         "latitude": 37.75,
         "longitude": -122.82,
-        "distance_km": 0.0,
-        "source": "header of gfswave.46026.bull, GFS-Wave cycle 2026-10-10 00Z"
+        "distance_km": 1.6,
+        "source": "header of gfswave.46026.bull, GFS-Wave cycle 2026-10-11 00Z"
       },
+      "bulletin_note": "WW3 depth at the output point 53.0 m (gfswave.46026.spec point line, 2026-10-11 00Z) against 53 m at the mooring.",
       "paired_spots": [
         {
           "slug": "ocean-beach-sf",
           "relation": "offshore_reference",
-          "distance_km": 27.1,
-          "forecast_point_distance_km": 11.1,
-          "note": "Offshore of the Golden Gate; waves reaching Ocean Beach are modified by the San Francisco Bar (ebb-tidal delta)."
+          "distance_km": 28.6,
+          "forecast_point_distance_km": 12.6,
+          "note": "Moored 3-m discus in 53 m, 18 NM west of the Golden Gate (bears 268 deg from the beach), in the same W-NW exposure on the open shelf. Waves reaching Ocean Beach are then modified by the San Francisco Bar (ebb-tidal delta) and the tidal current, so buoy Hs is an offshore reference, not surf height."
         },
         {
           "slug": "mavericks",
           "relation": "offshore_reference",
-          "distance_km": 40.2,
-          "forecast_point_distance_km": 24.6,
-          "note": "NW of Mavericks; the Pillar Point reef focuses long-period NW swell."
+          "distance_km": 41.3,
+          "forecast_point_distance_km": 25.3,
+          "note": "Moored 3-m discus in 53 m, 41 km NW of Mavericks (bears 314 deg), exposed to the same W-NW swell; Point Reyes shelters it slightly more from NW swell than Pillar Point is, and the reef focuses long-period swell, so buoy Hs is an offshore reference, not surf height."
         }
-      ]
+      ],
+      "notes": "Wave reports every 30 min (:10 and :40). 46012 (Half Moon Bay), the traditional Mavericks buoy, is an uncrewed surface vehicle since 2023-08 (see ndbc:46012)."
     },
     {
-      "code": "ndbc:46012",
+      "code": "ndbc:46237",
       "provider": "ndbc",
-      "provider_id": "46012",
-      "name": "NDBC 46012",
-      "latitude": 37.36,
-      "longitude": -122.88,
-      "water_depth_m": null,
-      "position_source": "gfswave_bulletin_header: header of gfswave.46012.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
-      "position_verified": false,
+      "provider_id": "46237",
+      "name": "NDBC 46237 San Francisco Bar, CA (CDIP 142)",
+      "latitude": 37.788,
+      "longitude": -122.634,
+      "water_depth_m": 16.76,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2019-11-19 (NDBC stationmetadata.xml). Water depth: 16.76 m (NDBC station page; CDIP 142p1 metaWaterDepth 16.46)",
+      "position_verified": true,
       "is_active": true,
       "licence": "Public domain (US Government)",
-      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
-      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
-      "bulletin_id": "46012",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/). Wave data from the Coastal Data Information Program (CDIP), Scripps Institution of Oceanography, UCSD, relayed by NDBC; CDIP's realtime files state: \"These data may be redistributed and used without restriction.\" Acknowledgment from the CDIP file (142p1_rt.nc): \"CDIP is primarily supported by the U.S. Army Corps of Engineers (USACE). Field operator: CDIP\"",
+      "operator": "Scripps Institution of Oceanography (CDIP station 142)",
+      "platform": "Datawell DWR-M4 directional Waverider (CDIP 142p1 summary attribute)",
+      "apd_kind": "tm01",
+      "apd_kind_source": "CDIP buoy: APD = m0/m1 (NDBC wavecalc.shtml: 'Average periods (APD) for Scripps's buoys are derived from the zeroth moment divided by the first moment'); live check 2026-10-12: NDBC APD = CDIP waveTa within 0.05 s (realtime 0.1 s rounding) on 449 reports",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD, MWD (direction FROM at DPD), wind when the buoy has an anemometer (stdmet); swell / wind-sea split (.spec, realtime only)",
+      "bulletin_id": "46237",
       "bulletin_position": {
-        "latitude": 37.36,
-        "longitude": -122.88,
-        "distance_km": 0.0,
-        "source": "header of gfswave.46012.bull, GFS-Wave cycle 2026-10-10 00Z"
+        "latitude": 37.79,
+        "longitude": -122.63,
+        "distance_km": 0.4,
+        "source": "header of gfswave.46237.bull, GFS-Wave cycle 2026-10-11 00Z"
       },
+      "bulletin_note": "WW3 depth at the output point 26.7 m (gfswave.46237.spec point line, 2026-10-11 00Z) against 16.76 m at the mooring. The grid resolves the bar only roughly (output point 26.7 m deep).",
       "paired_spots": [
+        {
+          "slug": "ocean-beach-sf",
+          "relation": "nearshore_reference",
+          "distance_km": 11.1,
+          "forecast_point_distance_km": 9.5,
+          "note": "Shallow Waverider (17 m) on the San Francisco Bar, 11 km WNW of Ocean Beach (bears 286 deg): the swell there is already shoaled and refracted by the bar and modulated by the tidal current, which is what reaches the beach, but it is not open-ocean model truth."
+        }
+      ],
+      "notes": "Nearshore context for Ocean Beach. Not paired with Mavericks: 35 km away, on the bar, in other exposure. CDIP's own realtime file for 142p1 begins 2026-10-02 (new deployment record), while NDBC's archive continues."
+    },
+    {
+      "code": "ndbc:46214",
+      "provider": "ndbc",
+      "provider_id": "46214",
+      "name": "NDBC 46214 Point Reyes, CA (CDIP 029)",
+      "latitude": 37.944,
+      "longitude": -123.466,
+      "water_depth_m": 600,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2026-01-26 (NDBC stationmetadata.xml). Water depth: 600 m (NDBC station page; CDIP 029p1 metaWaterDepth 600.0)",
+      "position_verified": true,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/). Wave data from the Coastal Data Information Program (CDIP), Scripps Institution of Oceanography, UCSD, relayed by NDBC; CDIP's realtime files state: \"These data may be redistributed and used without restriction.\" Acknowledgment from the CDIP file (029p1_rt.nc): \"CDIP is primarily supported by the U.S. Army Corps of Engineers (USACE). Station partner: CDBW ; Field operator: CDIP\"",
+      "operator": "Scripps Institution of Oceanography (CDIP station 029)",
+      "platform": "Datawell DWR-M3 directional Waverider (CDIP 029p1 summary attribute)",
+      "apd_kind": "tm01",
+      "apd_kind_source": "CDIP buoy: APD = m0/m1 (NDBC wavecalc.shtml: 'Average periods (APD) for Scripps's buoys are derived from the zeroth moment divided by the first moment'); live check 2026-10-12: NDBC APD = CDIP waveTa within 0.005 s on 902 reports",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD, MWD (direction FROM at DPD), wind when the buoy has an anemometer (stdmet); swell / wind-sea split (.spec, realtime only)",
+      "bulletin_id": "46214",
+      "bulletin_position": {
+        "latitude": 37.94,
+        "longitude": -123.46,
+        "distance_km": 0.7,
+        "source": "header of gfswave.46214.bull, GFS-Wave cycle 2026-10-11 00Z"
+      },
+      "bulletin_note": "WW3 depth at the output point 818.8 m (gfswave.46214.spec point line, 2026-10-11 00Z) against 600 m at the mooring.",
+      "paired_spots": [
+        {
+          "slug": "ocean-beach-sf",
+          "relation": "upstream_regional",
+          "distance_km": 86.2,
+          "forecast_point_distance_km": 71.7,
+          "note": "Deep-water Waverider (600 m) 86 km WNW of Ocean Beach (bears 284 deg), outside the Gulf of the Farallones and upstream for W-NW swell (about 2 h ahead at 15 s). Timing and size context only."
+        },
         {
           "slug": "mavericks",
-          "relation": "offshore_reference",
-          "distance_km": 36.5,
-          "forecast_point_distance_km": 26.4,
-          "note": "SW of Half Moon Bay in deep water; exposed to the same W-NW swell as Mavericks, whose reef focuses it."
+          "relation": "upstream_regional",
+          "distance_km": 98.6,
+          "forecast_point_distance_km": 80.3,
+          "note": "Deep-water Waverider (600 m) 99 km NW of Mavericks (bears 301 deg), upstream for W-NW swell. Timing and size context only."
         }
-      ]
-    },
-    {
-      "code": "ndbc:46053",
-      "provider": "ndbc",
-      "provider_id": "46053",
-      "name": "NDBC 46053",
-      "latitude": 34.24,
-      "longitude": -119.85,
-      "water_depth_m": null,
-      "position_source": "gfswave_bulletin_header: header of gfswave.46053.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
-      "position_verified": false,
-      "is_active": true,
-      "licence": "Public domain (US Government)",
-      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
-      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
-      "bulletin_id": "46053",
-      "bulletin_position": {
-        "latitude": 34.24,
-        "longitude": -119.85,
-        "distance_km": 0.0,
-        "source": "header of gfswave.46053.bull, GFS-Wave cycle 2026-10-10 00Z"
-      },
-      "paired_spots": [
-        {
-          "slug": "rincon",
-          "relation": "offshore_reference",
-          "distance_km": 37.3,
-          "forecast_point_distance_km": 18.7,
-          "note": "In the Santa Barbara Channel, partly sharing the Channel Islands / Point Conception shadow with Rincon; the point's refraction is not represented."
-        }
-      ]
+      ],
+      "notes": "Open-shelf-edge reference for the raw model off central California."
     },
     {
       "code": "ndbc:46224",
       "provider": "ndbc",
       "provider_id": "46224",
-      "name": "NDBC 46224",
-      "latitude": 33.18,
-      "longitude": -117.47,
-      "water_depth_m": null,
-      "position_source": "gfswave_bulletin_header: header of gfswave.46224.bull (GFS-Wave cycle 2026-10-10 00Z), i.e. NCEP's output point for this WMO id; NOT the buoy's own reported position (www.ndbc.noaa.gov unreachable when the catalog was built). Replaced from NDBC activestations.xml on the first successful NDBC ingest.",
-      "position_verified": false,
+      "name": "NDBC 46224 Oceanside Offshore, CA (CDIP 045)",
+      "latitude": 33.178,
+      "longitude": -117.472,
+      "water_depth_m": 238,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2017-01-31 (NDBC stationmetadata.xml). Water depth: 238 m (NDBC station page; CDIP 045p1 metaWaterDepth 223.0)",
+      "position_verified": true,
       "is_active": true,
       "licence": "Public domain (US Government)",
-      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain. Stations operated by NDBC partners should also credit the operator named in NDBC station metadata.",
-      "measured": "WVHT, DPD, APD, MWD, wind (stdmet); swell / wind-sea split (.spec)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/). Wave data from the Coastal Data Information Program (CDIP), Scripps Institution of Oceanography, UCSD, relayed by NDBC; CDIP's realtime files state: \"These data may be redistributed and used without restriction.\" Acknowledgment from the CDIP file (045p1_rt.nc): \"CDIP is primarily supported by the U.S. Army Corps of Engineers (USACE). Station partner: CDBW ; Field operator: CDIP\"",
+      "operator": "Scripps Institution of Oceanography (CDIP station 045)",
+      "platform": "Datawell DWR-M3 directional Waverider (CDIP 045p1 summary attribute)",
+      "apd_kind": "tm01",
+      "apd_kind_source": "CDIP buoy: APD = m0/m1 (NDBC wavecalc.shtml: 'Average periods (APD) for Scripps's buoys are derived from the zeroth moment divided by the first moment'); live check 2026-10-12: NDBC APD = CDIP waveTa within 0.005 s on 902 reports",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD, MWD (direction FROM at DPD), wind when the buoy has an anemometer (stdmet); swell / wind-sea split (.spec, realtime only)",
       "bulletin_id": "46224",
       "bulletin_position": {
         "latitude": 33.18,
         "longitude": -117.47,
-        "distance_km": 0.0,
-        "source": "header of gfswave.46224.bull, GFS-Wave cycle 2026-10-10 00Z"
+        "distance_km": 0.3,
+        "source": "header of gfswave.46224.bull, GFS-Wave cycle 2026-10-11 00Z"
       },
+      "bulletin_note": "WW3 depth at the output point 361.3 m (gfswave.46224.spec point line, 2026-10-11 00Z) against 238 m at the mooring.",
       "paired_spots": [
         {
           "slug": "trestles",
           "relation": "offshore_reference",
-          "distance_km": 25.1,
-          "forecast_point_distance_km": 24.1,
-          "note": "About 25 km SSE of Trestles off the north San Diego County coast, inside the Southern California Bight: like Trestles it is partly shadowed from W-NW swell by the Channel Islands and open to S-SW swell, so it is the closest comparable exposure. The cobblestone points at Trestles refract and focus swell, and island shadowing changes over short distances with direction, so buoy Hs is an offshore reference, not surf height. Position is the GFS-Wave output point until NDBC metadata replaces it."
+          "distance_km": 25.2,
+          "forecast_point_distance_km": 24.0,
+          "note": "Waverider in 238 m, 25 km SSE of Trestles (bears 154 deg) off the north San Diego County coast, inside the Southern California Bight: like Trestles it is partly shadowed from W-NW swell by the Channel Islands and open to S-SW swell. Island shadowing changes over short distances with direction, and the cobblestone points refract and focus swell, so buoy Hs is an offshore reference, not surf height."
         }
-      ]
+      ],
+      "notes": ""
+    },
+    {
+      "code": "ndbc:46277",
+      "provider": "ndbc",
+      "provider_id": "46277",
+      "name": "NDBC 46277 Green Beach Offshore, CA (CDIP 271)",
+      "latitude": 33.336,
+      "longitude": -117.659,
+      "water_depth_m": 303,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2023-05-30 (NDBC stationmetadata.xml). Water depth: 303 m (NDBC station page; CDIP 271p1 metaWaterDepth 303.0)",
+      "position_verified": true,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/). Wave data from the Coastal Data Information Program (CDIP), Scripps Institution of Oceanography, UCSD, relayed by NDBC; CDIP's realtime files state: \"These data may be redistributed and used without restriction.\" Acknowledgment from the CDIP file (271p1_rt.nc): \"CDIP is primarily supported by the U.S. Army Corps of Engineers (USACE). Station partner: USMC ; Field operator: CDIP\"",
+      "operator": "Scripps Institution of Oceanography (CDIP station 271)",
+      "platform": "Datawell DWR-M4 directional Waverider (CDIP 271p1 summary attribute)",
+      "apd_kind": "tm01",
+      "apd_kind_source": "CDIP buoy: APD = m0/m1 (NDBC wavecalc.shtml: 'Average periods (APD) for Scripps's buoys are derived from the zeroth moment divided by the first moment'); live check 2026-10-12: NDBC APD = CDIP waveTa within 0.001 s on 901 reports",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD, MWD (direction FROM at DPD), wind when the buoy has an anemometer (stdmet); swell / wind-sea split (.spec, realtime only)",
+      "paired_spots": [
+        {
+          "slug": "trestles",
+          "relation": "offshore_reference",
+          "distance_km": 8.3,
+          "forecast_point_distance_km": 7.3,
+          "note": "Waverider in 303 m, 8 km SW of Trestles (bears 232 deg), directly offshore in the same S-SW exposure and the same Channel Islands shadow for W-NW swell. The closest offshore measurement for Trestles, but there is no GFS-Wave station bulletin for it, so it cannot be used in the bulletin backtest. Buoy Hs is an offshore reference, not surf height."
+        }
+      ],
+      "notes": "No GFS-Wave station bulletin exists for 46277 (bulls.t00z listing of 2026-10-11), so it has no bulletin_id; its observations can verify gridded forecasts later. NDBC time = CDIP sample start + 30 min here (+26 min at the other CDIP buoys)."
+    },
+    {
+      "code": "ndbc:46086",
+      "provider": "ndbc",
+      "provider_id": "46086",
+      "name": "NDBC 46086 San Clemente Basin",
+      "latitude": 32.504,
+      "longitude": -118.029,
+      "water_depth_m": 1862,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2025-05-17 (NDBC stationmetadata.xml). Water depth: 1862 m (NDBC station page)",
+      "position_verified": true,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/).",
+      "operator": "NDBC",
+      "platform": "NDBC 2.1-m buoy (hull 2.1D01 since 2025-05-17), SCOOP payload",
+      "apd_kind": "tm02",
+      "apd_kind_source": "NDBC-processed buoy: APD = sqrt(m0/m2) (NDBC wavecalc.shtml); not reproduced exactly from the realtime .data_spec densities, which are rounded to 3 decimals",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD, MWD (direction FROM at DPD), wind when the buoy has an anemometer (stdmet); swell / wind-sea split (.spec, realtime only)",
+      "bulletin_id": "46086",
+      "bulletin_position": {
+        "latitude": 32.5,
+        "longitude": -118.0,
+        "distance_km": 2.8,
+        "source": "header of gfswave.46086.bull, GFS-Wave cycle 2026-10-11 00Z"
+      },
+      "bulletin_note": "WW3 depth at the output point 1513.2 m (gfswave.46086.spec point line, 2026-10-11 00Z) against 1862 m at the mooring.",
+      "paired_spots": [
+        {
+          "slug": "trestles",
+          "relation": "upstream_regional",
+          "distance_km": 106.0,
+          "forecast_point_distance_km": 91.6,
+          "note": "Deep-water buoy 27 NM SE of San Clemente Island, 106 km SSW of Trestles (bears 203 deg, the middle of the S-SW window), outside the island shadow: southern-hemisphere swell passes it 2-3 h before Trestles. Timing and size context only."
+        }
+      ],
+      "notes": ""
+    },
+    {
+      "code": "ndbc:46053",
+      "provider": "ndbc",
+      "provider_id": "46053",
+      "name": "NDBC 46053 East Santa Barbara",
+      "latitude": 34.246,
+      "longitude": -119.842,
+      "water_depth_m": 417,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2026-04-12 (NDBC stationmetadata.xml). Water depth: 417 m (NDBC station page)",
+      "position_verified": true,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/).",
+      "operator": "NDBC",
+      "platform": "NDBC 3-m discus buoy (hull 3DV14 since 2026-04-12), SCOOP payload",
+      "apd_kind": "tm02",
+      "apd_kind_source": "NDBC-processed buoy: APD = sqrt(m0/m2) (NDBC wavecalc.shtml); not reproduced exactly from the realtime .data_spec densities, which are rounded to 3 decimals",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD, MWD (direction FROM at DPD), wind when the buoy has an anemometer (stdmet); swell / wind-sea split (.spec, realtime only)",
+      "bulletin_id": "46053",
+      "bulletin_position": {
+        "latitude": 34.24,
+        "longitude": -119.85,
+        "distance_km": 1.0,
+        "source": "header of gfswave.46053.bull, GFS-Wave cycle 2026-10-11 00Z"
+      },
+      "bulletin_note": "WW3 depth at the output point 283.2 m (gfswave.46053.spec point line, 2026-10-11 00Z) against 417 m at the mooring.",
+      "paired_spots": [
+        {
+          "slug": "rincon",
+          "relation": "offshore_reference",
+          "distance_km": 36.3,
+          "forecast_point_distance_km": 17.8,
+          "note": "Moored buoy in 417 m in the Santa Barbara Channel, 36 km WSW of Rincon (bears 247 deg, at the edge of the W window): W swell reaches both through the channel past Point Conception and the northern Channel Islands. The point's refraction is not represented, so buoy Hs is an offshore reference, not surf height."
+        }
+      ],
+      "notes": "The station page showed 'No Recent Reports' on 2026-10-12; the realtime file ends 2026-10-06 05:50 UTC."
+    },
+    {
+      "code": "ndbc:46054",
+      "provider": "ndbc",
+      "provider_id": "46054",
+      "name": "NDBC 46054 West Santa Barbara",
+      "latitude": 34.274,
+      "longitude": -120.468,
+      "water_depth_m": 454,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2021-05-05 (NDBC stationmetadata.xml). Water depth: 454 m (NDBC station page)",
+      "position_verified": true,
+      "is_active": true,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/).",
+      "operator": "NDBC",
+      "platform": "NDBC 3-m discus buoy (hull 3D89 since 2021-05-05), SCOOP payload",
+      "apd_kind": "tm02",
+      "apd_kind_source": "NDBC-processed buoy: APD = sqrt(m0/m2) (NDBC wavecalc.shtml); not reproduced exactly from the realtime .data_spec densities, which are rounded to 3 decimals",
+      "measured": "WVHT (spectral Hm0), DPD (Tp), APD, MWD (direction FROM at DPD), wind when the buoy has an anemometer (stdmet); swell / wind-sea split (.spec, realtime only)",
+      "bulletin_id": "46054",
+      "bulletin_position": {
+        "latitude": 34.27,
+        "longitude": -120.45,
+        "distance_km": 1.7,
+        "source": "header of gfswave.46054.bull, GFS-Wave cycle 2026-10-11 00Z"
+      },
+      "bulletin_note": "WW3 depth at the output point 290.6 m (gfswave.46054.spec point line, 2026-10-11 00Z) against 454 m at the mooring.",
+      "paired_spots": [
+        {
+          "slug": "rincon",
+          "relation": "upstream_regional",
+          "distance_km": 91.6,
+          "forecast_point_distance_km": 74.3,
+          "note": "At the western entrance of the Santa Barbara Channel, 92 km W of Rincon (bears 263 deg, inside the 250-300 deg window), upstream for the W swell that runs down the channel. Timing and size context only."
+        }
+      ],
+      "notes": ""
+    },
+    {
+      "code": "ndbc:46012",
+      "provider": "ndbc",
+      "provider_id": "46012",
+      "name": "NDBC 46012 Half Moon Bay (uncrewed surface vehicle)",
+      "latitude": 37.356,
+      "longitude": -122.881,
+      "water_depth_m": 208.8,
+      "position_source": "NDBC activestations.xml (created 2026-10-12T09:55:13UTC); current deployment since 2023-08-22 (no hull since then; type 'usv' in activestations.xml) (NDBC stationmetadata.xml). Water depth: 208.8 m at the nominal site (NDBC station page; watch circle radius 20253.7 yards)",
+      "position_verified": true,
+      "is_active": false,
+      "licence": "Public domain (US Government)",
+      "attribution": "NOAA National Data Buoy Center (NDBC). US Government data, public domain (https://www.ndbc.noaa.gov/).",
+      "operator": "NDBC",
+      "platform": "Uncrewed surface vehicle (station page: 'Uncrewed Surface Vehicle', data provided by @Orchard; earlier Saildrone SD-1073, SD-1077, SD-1063 from 2023-09 to 2025-08)",
+      "apd_kind": "apd",
+      "apd_kind_source": "the 2026 files carry no APD (99.00) and no MWD (999)",
+      "measured": "WVHT, DPD, wind (2026 monthly files); no APD, no MWD",
+      "paired_spots": [],
+      "notes": "NOT a moored buoy since 2023-08: a vehicle moving within a ~18.5 km watch circle, with no position in the stdmet files, no APD and no MWD, and no yearly archive files for 2024 or 2025 (HTTP 404; the Saildrone records are under their own ids). It is kept in the catalog, inactive and unpaired, so that the reason is on record. A GFS-Wave bulletin exists for 46012, but comparing it with a moving platform would mix model error with position changes."
     }
   ]
 }

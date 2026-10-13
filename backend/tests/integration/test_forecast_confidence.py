@@ -285,7 +285,7 @@ def test_every_prediction_stores_both_classes_lead_and_issue_time(
         assert run is not None
         assert p.forecast_confidence_class in CLASSES and p.local_confidence_class in CLASSES
         assert fc.rank(p.local_confidence_class) <= fc.rank(p.forecast_confidence_class)
-        assert p.confidence_method == "forecast-v1"
+        assert p.confidence_method == fc.METHOD
         assert p.issued_at == run.issued_at
         assert p.lead_hours == pytest.approx((p.valid_time - run.issued_at).total_seconds() / 3600)
         inputs = p.confidence_inputs or {}
@@ -331,7 +331,7 @@ def test_requirement_1_research_and_forecast_confidence_are_stored_separately(
         spot_rows = [r for (sid, _), r in rows.items() if sid == _spot(db, slug).id]
         assert spot_rows and {r.research_class for r in spot_rows} == {research}
         for r in spot_rows:
-            assert r.confidence_method == "forecast-v1" and r.confidence_inputs
+            assert r.confidence_method == fc.METHOD and r.confidence_inputs
             assert r.forecast_confidence_class == r.confidence_inputs["class"]
             assert r.local_confidence_class == r.confidence_inputs["local"]["class"]
     # API: separate fields.
@@ -603,8 +603,11 @@ def test_api_outputs(db: Session, scored: dict[str, Any], app_client: ApiClient)
 
 # --------------------------------------------------------------------------- demo, events, alerts
 def test_demo_data_is_low_in_predictions_events_and_alerts(
-    db: Session, few_spots: list[str], app_client: ApiClient
+    db: Session, few_spots: list[str], app_client: ApiClient, only_simulated_swells: None
 ) -> None:
+    # Without natural demo swells (tests/conftest.py): with them the simulated swell merged
+    # into a natural one on some dates and no alert was sent (seen in the review's
+    # clock-shift sweep between +43 and +55 days).
     user = make_user(db)
     make_search(db, user)
     from app.services.pipeline import run_pipeline

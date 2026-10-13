@@ -256,6 +256,66 @@ def test_run_verification_writes_rolling_metrics(
     assert db.scalar(select(func.count()).select_from(ForecastAccuracyMetric)) == before
 
 
+def test_backtest_long_term_climatology_and_seasons(
+    db: Session, synthetic_bias: dict[str, int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SYNTHETIC case (southern-hemisphere test stations, January to mid-March 2025)."""
+    plain = run_backtest(db, source="synthetic_gfswave", folds=3, n_boot=50, write=False)
+    first_tested = min(datetime.fromisoformat(f["test_start"]) for f in plain.folds)
+    # The long-term climatology may only use observations before the first tested cycle.
+    with pytest.raises(ValueError, match="first tested cycle"):
+        run_backtest(
+            db,
+            source="synthetic_gfswave",
+            folds=3,
+            n_boot=50,
+            write=False,
+            lt_climatology_before=first_tested + timedelta(days=1),
+        )
+    result = run_backtest(
+        db,
+        source="synthetic_gfswave",
+        folds=3,
+        n_boot=50,
+        lt_climatology_before=first_tested,
+        by_season=True,
+    )
+    assert result.lt_climatology is not None
+    assert result.lt_climatology["entries"] > 0
+    assert result.lt_climatology["period_end"] < first_tested.isoformat()
+    pooled = next(r for r in result.table if r["lead_bucket_h"] == vm.ALL_LEADS_BUCKET)
+    assert pooled["n_climatology_lt"] > 0 and pooled["skill_vs_climatology_lt"] is not None
+    assert pooled["skill_vs_climatology_lt_ci"][0] <= pooled["skill_vs_climatology_lt"]
+    # Same tested rows and raw scores as without the extra reference.
+    assert result.rows == plain.rows and pooled["rmse"] == plain.table[0]["rmse"]
+    # January-March at latitude -30 is the southern summer half-year.
+    assert set(result.seasons) == {"summer"} and result.seasons["summer"]["rows"] == result.rows
+    versions = set(db.scalars(select(ForecastAccuracyMetric.model_version).distinct()))
+    assert "climatology_lt" in versions
+    text = format_table(result)
+    assert "SS_clim_lt" in text and "Season summer" in text
+    assert (
+        cli_main(
+            [
+                "verify",
+                "backtest",
+                "--source",
+                "synthetic_gfswave",
+                "--folds",
+                "3",
+                "--boot",
+                "20",
+                "--no-write",
+                "--by-season",
+                "--lt-climatology-before",
+                (first_tested + timedelta(days=1)).isoformat(),
+            ]
+        )
+        == 1
+    )
+    assert "first tested cycle" in capsys.readouterr().err
+
+
 def test_backtest_and_cli(
     db: Session, synthetic_bias: dict[str, int], capsys: pytest.CaptureFixture[str]
 ) -> None:

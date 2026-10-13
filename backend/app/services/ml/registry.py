@@ -102,6 +102,14 @@ MODEL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
 # so a correction learned there is not applied at the spot. Entries without a relation
 # (plain slugs) are taken as offshore references.
 TRANSFERABLE_RELATIONS = ("offshore_reference", "historical_reference")
+# Recorded in applicability.excluded_spots for a spot whose paired station contributed
+# training rows but no held-out TEST pairs: the correction was never tested there.
+NO_TEST_PAIRS = "no_held_out_test_pairs"
+# Compression used by ``export_manifest(compress=True)`` (the model itself is unchanged).
+EXPORT_COMPRESSION = ("zlib", 3)
+# Largest factor difference allowed between a re-serialised artifact and the original on
+# the probe matrix (tree ensembles predict in parallel; the sum order varies at ~1e-16).
+RESERIALISE_TOLERANCE = 1e-9
 
 
 class RegistryError(RuntimeError):
@@ -419,6 +427,59 @@ def paired_spots(
     return sorted(slugs)
 
 
+def applicable_spots(
+    db: Session,
+    station_codes: list[str],
+    test_station_codes: list[str],
+    *,
+    excluded: dict[str, str] | None = None,
+) -> list[str]:
+    """Spots a correction may be applied to: paired (offshore relation) with a training
+    station that also has held-out TEST pairs. A spot reachable only through stations
+    without test pairs is recorded in ``excluded`` as :data:`NO_TEST_PAIRS`; non-offshore
+    pairings are recorded with their relation (:func:`paired_spots`)."""
+    tested = [c for c in station_codes if c in set(test_station_codes)]
+    slugs = paired_spots(db, tested, excluded=excluded)
+    untested = [c for c in station_codes if c not in set(tested)]
+    if excluded is not None and untested:
+        for slug in paired_spots(db, untested):
+            if slug not in slugs:
+                excluded[slug] = NO_TEST_PAIRS
+    return slugs
+
+
+def restrict_applicability(
+    db: Session, version_id: int, exclude: dict[str, str], *, now: datetime | None = None
+) -> MLModelVersion:
+    """Remove spots from a version's applicability, each with a reason; never adds any.
+
+    For decisions taken after a version was registered (e.g. no held-out benefit at the
+    buoy of one spot). Refused for an ACTIVE version, because running processes cache
+    the applicability of the active correction: deactivate, restrict, then activate.
+    """
+    version = db.get(MLModelVersion, version_id)
+    if version is None:
+        raise LookupError(f"no model version {version_id}")
+    if version.status == MLModelStatus.ACTIVE:
+        raise RegistryError(f"{version.label} is active; deactivate it before restricting it")
+    app = dict(version.applicability or {})
+    current = list(app.get("spot_slugs") or [])
+    unknown = sorted(set(exclude) - set(current))
+    if unknown:
+        raise RegistryError(f"{version.label} does not apply to {unknown}; nothing to restrict")
+    if not exclude or any(not str(reason).strip() for reason in exclude.values()):
+        raise RegistryError("give at least one spot and a reason for every excluded spot")
+    app["spot_slugs"] = [s for s in current if s not in exclude]
+    app["excluded_spots"] = {**dict(app.get("excluded_spots") or {}), **exclude}
+    app["restrictions"] = [
+        *list(app.get("restrictions") or []),
+        {"at": (now or utcnow()).isoformat(), "excluded": dict(exclude)},
+    ]
+    version.applicability = app
+    db.commit()
+    return version
+
+
 def register_version(
     db: Session,
     *,
@@ -628,12 +689,16 @@ def record_training_run(
     validate_model_name(name)
     training = _training_info(report)
     stations = training["stations"]
+    test_stations = sorted(report.split.test["station_code"].unique().tolist())
     excluded_spots: dict[str, str] = {}
+    spot_slugs = applicable_spots(db, stations, test_stations, excluded=excluded_spots)
     applicability = {
         "station_codes": stations,
-        "spot_slugs": paired_spots(db, stations, excluded=excluded_spots),
+        "test_station_codes": test_stations,
+        "spot_slugs": spot_slugs,
         # Paired with a training station, but not as an offshore reference (see
-        # TRANSFERABLE_RELATIONS): the correction is not applied there.
+        # TRANSFERABLE_RELATIONS), or only with stations that have no held-out test pairs
+        # (NO_TEST_PAIRS): the correction is not applied there.
         "excluded_spots": excluded_spots,
         "lead_min_h": float(report.split.development["lead_hours"].min()),
         "lead_max_h": float(report.split.development["lead_hours"].max()),
@@ -765,17 +830,71 @@ def _experiment_record(e: MLExperiment | None) -> dict[str, Any] | None:
     }
 
 
-def export_manifest(db: Session, version_id: int, directory: str | Path) -> Path:
-    """Copy a version's verified artifact plus its registry record into ``directory``."""
+def _probe_matrix(model: TrainedCorrection, rows: int = 2000) -> np.ndarray:
+    """Seeded feature rows spanning the trained lead range (for equivalence checks)."""
+    rng = np.random.default_rng(vm.DEFAULT_BOOTSTRAP_SEED)
+    X = rng.uniform(-1.0, 4.0, size=(rows, len(model.feature_names)))
+    names = list(model.feature_names)
+    X[:, names.index("lead_hours")] = rng.uniform(model.lead_min, model.lead_max, rows)
+    hs = rng.uniform(0.2, 6.0, rows)
+    X[:, names.index("model_hs_m")] = hs
+    if "log_model_hs" in names:
+        X[:, names.index("log_model_hs")] = np.log(hs)
+    return X
+
+
+def recompress_artifact(data: bytes, label: str) -> bytes:
+    """The same artifact payload re-serialised with :data:`EXPORT_COMPRESSION`.
+
+    ``data`` must already be verified. The re-serialised model is loaded back and must
+    give the original's factors on a seeded probe matrix (within RESERIALISE_TOLERANCE);
+    otherwise RegistryError. joblib detects the compression when loading.
+    """
+    try:
+        payload = joblib.load(io.BytesIO(data))
+    except Exception as exc:  # pickle raises many types for bytes that are not a payload
+        raise ArtifactIntegrityError(f"{label}: unreadable artifact ({exc!r})") from exc
+    if not isinstance(payload, dict) or payload.get("format") != ARTIFACT_FORMAT:
+        raise ArtifactIntegrityError(f"{label}: unexpected artifact format")
+    model = payload["model"]
+    if not isinstance(model, TrainedCorrection):
+        raise ArtifactIntegrityError(f"{label}: artifact holds no TrainedCorrection")
+    buf = io.BytesIO()
+    joblib.dump(payload, buf, compress=EXPORT_COMPRESSION)
+    compressed = buf.getvalue()
+    again = joblib.load(io.BytesIO(compressed))["model"]
+    X = _probe_matrix(model)
+    diff = float(np.max(np.abs(model.factors(X)[0] - again.factors(X)[0])))
+    if not diff <= RESERIALISE_TOLERANCE:
+        raise RegistryError(f"{label}: re-serialised model differs (max factor change {diff})")
+    return compressed
+
+
+def export_manifest(
+    db: Session, version_id: int, directory: str | Path, *, compress: bool = False
+) -> Path:
+    """Copy a version's verified artifact plus its registry record into ``directory``.
+
+    ``compress`` re-serialises the same model with joblib compression
+    (:func:`recompress_artifact`) to make it smaller to ship; the manifest then records
+    the new file's sha256 and the registry's original one (``source_sha256``).
+    """
     version = db.get(MLModelVersion, version_id)
     if version is None:
         raise LookupError(f"no model version {version_id}")
     data = read_verified(registered_artifact(version), version.artifact_sha256)
+    artifact_info: dict[str, Any] = {}
+    if compress:
+        data = recompress_artifact(data, version.label)
+        artifact_info = {
+            "compression": f"joblib {EXPORT_COMPRESSION[0]} level {EXPORT_COMPRESSION[1]}",
+            "source_sha256": version.artifact_sha256,
+        }
     out = Path(directory)
     out.mkdir(parents=True, exist_ok=True)
     stem = f"{version.name}-v{version.version}"
     artifact_file = out / f"{stem}.joblib"
-    write_artifact(data, artifact_file)
+    digest = write_artifact(data, artifact_file)
     manifest = {
         "format": MANIFEST_FORMAT,
         "exported_at": utcnow().isoformat(),
@@ -783,8 +902,9 @@ def export_manifest(db: Session, version_id: int, directory: str | Path) -> Path
         "experiment": _experiment_record(version.experiment),
         "artifact": {
             "file": artifact_file.name,
-            "sha256": version.artifact_sha256,
+            "sha256": digest,
             "bytes": len(data),
+            **artifact_info,
         },
         "environment": _environment(),
     }
@@ -810,11 +930,16 @@ def import_manifest(
     if Path(file_name).name != file_name or file_name in ("", ".", ".."):
         raise RegistryError(f"{manifest_path}: artifact file {file_name!r} is not a bare name")
     data = read_verified(manifest_path.parent / file_name, art["sha256"])
+    # A compressed export carries the registry's original sha256 as source_sha256.
+    known = [str(art["sha256"]), *([str(art["source_sha256"])] if art.get("source_sha256") else [])]
     existing = db.scalar(
-        select(MLModelVersion).where(
+        select(MLModelVersion)
+        .where(
             MLModelVersion.name == record["name"],
-            MLModelVersion.artifact_sha256 == art["sha256"],
+            MLModelVersion.artifact_sha256.in_(known),
         )
+        .order_by(MLModelVersion.id)
+        .limit(1)
     )
     if existing is not None:
         return existing
