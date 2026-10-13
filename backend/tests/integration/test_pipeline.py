@@ -49,7 +49,11 @@ from app.services.pipeline import run_pipeline
 from app.services.swell_detection.service import detect_events
 from tests.conftest import search_payload
 
-pytestmark = pytest.mark.integration
+# Every test here runs without natural demo swells (tests/conftest.py): with the
+# application clock shifted by 10 days, 9 tests of this file failed because a natural swell
+# merged with the simulated one (review, 2026-10-13), and the paused-search test failed on
+# 2026-10-13 itself.
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("only_simulated_swells")]
 
 
 def make_user(db: Session, email: str = "surfer@example.com", verified: bool = True) -> User:
@@ -151,18 +155,16 @@ def test_qualifying_swell_produces_flight_opportunity_and_alert(
     assert alert_count(db) == before
 
 
-def test_paused_search_does_not_generate_notifications(
-    db: Session, few_spots: list[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_paused_search_does_not_generate_notifications(db: Session, few_spots: list[str]) -> None:
     """A paused search gets no alert for a qualifying swell; once resumed it gets one.
 
-    Natural demo swells are switched off (as in the e2e tests): they follow the calendar,
-    and on some dates one starts 4-5 days ahead at Jeffreys Bay, the simulated swell merges
-    into it, and the merged event then starts inside DETECTION_LEAD_MIN_DAYS, where a search
-    that had no match yet (paused during the first run) correctly gets no new match. With
-    only the simulated swell the event starts 7 days ahead on every date.
+    Natural demo swells are off (``only_simulated_swells``, tests/conftest.py): with them,
+    on some dates one starts 4-5 days ahead at Jeffreys Bay, the simulated swell merges
+    into it, and the merged event then starts inside DETECTION_LEAD_MIN_DAYS, where a
+    search that had no match yet (paused during the first run) correctly gets no new
+    match. With only the simulated swell the event starts 7 days ahead on every date.
     """
-    monkeypatch.setattr(get_settings(), "demo_natural_swells", False)
+    assert not get_settings().demo_natural_swells
     settings = get_settings()
     user = make_user(db)
     search = make_search(db, user)

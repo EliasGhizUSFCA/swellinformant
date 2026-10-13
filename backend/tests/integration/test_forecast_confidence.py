@@ -603,8 +603,11 @@ def test_api_outputs(db: Session, scored: dict[str, Any], app_client: ApiClient)
 
 # --------------------------------------------------------------------------- demo, events, alerts
 def test_demo_data_is_low_in_predictions_events_and_alerts(
-    db: Session, few_spots: list[str], app_client: ApiClient
+    db: Session, few_spots: list[str], app_client: ApiClient, only_simulated_swells: None
 ) -> None:
+    # Without natural demo swells (tests/conftest.py): with them the simulated swell merged
+    # into a natural one on some dates and no alert was sent (seen in the review's
+    # clock-shift sweep between +43 and +55 days).
     user = make_user(db)
     make_search(db, user)
     from app.services.pipeline import run_pipeline

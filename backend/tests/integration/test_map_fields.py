@@ -607,7 +607,9 @@ def test_retention_never_deletes_the_served_fields(db: Session, fields_run: Fore
         _copy_fields(db, no_hs, f"no-hs-{back}", CYCLE + timedelta(hours=back))
     assert len(stored(db)) == 18 + 2 * 15
 
-    out = cleanup(db)
+    # At the fixtures' own clock (runs started at NOW): with the real clock, from
+    # 2026-10-20 23:40 UTC the 10-day run retention would delete the served run first.
+    out = cleanup(db, now=NOW)
 
     # The newest two runs by cycle are the useless ones; the served run keeps its fields.
     assert out["map_fields"] == 2 * 15
@@ -625,7 +627,7 @@ def test_retention_keeps_the_most_complete_run_of_the_served_cycle(
         _copy_fields(db, first, key, CYCLE)
     assert map_fields_service.field_index(db).run_key == fields_run.run_key  # 3 times beat 1
 
-    out = cleanup(db)
+    out = cleanup(db, now=NOW)  # the fixtures' clock (see the test above)
 
     assert out["map_fields"] == 6  # copy-a goes; copy-b is the second best
     assert {r.run_key for r in stored(db)} == {fields_run.run_key, "copy-b"}

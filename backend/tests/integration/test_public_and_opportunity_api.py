@@ -77,8 +77,11 @@ def test_system_status(app_client: ApiClient) -> None:
 
 
 def test_opportunity_endpoints_and_ownership(
-    make_client, db: Session, few_spots: list[str]
+    make_client, db: Session, few_spots: list[str], only_simulated_swells: None
 ) -> None:  # type: ignore[no-untyped-def]
+    # Without natural demo swells (tests/conftest.py): with them the simulated swell merged
+    # into a natural one on some dates and no opportunity was created (seen in the review's
+    # clock-shift sweep between +43 and +55 days).
     owner: ApiClient = make_client()
     owner.register("owner@example.com")
     assert owner.post("/api/searches", search_payload()).status_code == 201
