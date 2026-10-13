@@ -8,13 +8,13 @@
       "field": "offshore_wind_direction",
       "old_value": 45.0,
       "new_value": null,
-      "decision": "kept",
+      "decision": "disputed",
       "sources": [
         "surf-forecast-anchor-point",
         "surfatlas-morocco-surf-season",
         "surfatlas-surfing-morocco"
       ],
-      "rationale": "Current offshore wind direction: 45 deg. Supporting: Surf-Forecast.com (B); Surf Atlas (thesurfatlas.com) (B). Contradicting: Surf Atlas (thesurfatlas.com) (B). Main contradicting value: 112 deg (stated by Surf Atlas (thesurfatlas.com) (B); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 32 (20 in daylight) | mean |delta score| 11.15 | mean delta score -10.31 | max |delta score| 42 | mean breaking height 5.38 -> 5.38 ft | wind relation changed in 68 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 125 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 345 deg (resultant 0.62), 10 % of hours within 45 deg of the profile's 45 deg and 18 % within 45 deg of 112 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
+      "rationale": "Current offshore wind direction: 45 deg. Supporting: Surf-Forecast.com (B); Surf Atlas (thesurfatlas.com) (B). Contradicting: Surf Atlas (thesurfatlas.com) (B). Main contradicting value: 112 deg (stated by Surf Atlas (thesurfatlas.com) (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Surf Atlas (thesurfatlas.com) both supports (E, 90 deg, at the edge of the 45 deg tolerance) and contradicts (E-SE, 112 deg) the profile's 45 deg; a publisher's own support does not outweigh its contradiction, so Surf-Forecast.com is the only other directly read support and the same-tier conflict is unresolved. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 32 (20 in daylight) | mean |delta score| 11.15 | mean delta score -10.31 | max |delta score| 42 | mean breaking height 5.38 -> 5.38 ft | wind relation changed in 68 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 125 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 345 deg (resultant 0.62), 10 % of hours within 45 deg of the profile's 45 deg and 18 % within 45 deg of 112 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
       "decided_at": "2026-10-13",
       "alternative": 112.0,
       "sensitivity": {
@@ -401,7 +401,7 @@
         "surfforecast-cloudbreak",
         "yeeew-cloudbreak"
       ],
-      "rationale": "Current offshore wind direction: 135 deg. Supporting: Yeeew! (B); Perfect Wave Travel (C). Contradicting: Surf-Forecast.com (B). Main contradicting value: 225 deg (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 74 (44 in daylight) | mean |delta score| 20.14 | mean delta score -20.14 | max |delta score| 35 | mean breaking height 6.92 -> 6.92 ft | wind relation changed in 81 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 145 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 128 deg (resultant 0.97), 99 % of hours within 45 deg of the profile's 135 deg and 0 % within 45 deg of 225 deg. A directly read source says the prevailing wind here is offshore (Perfect Wave Travel); the model's prevailing wind matches the profile's direction, so the model sample does not support the contradicting value. The only contradicting publisher, Surf-Forecast.com, contradicts itself (best wind southwest in one sentence, east-northeast offshore in another; templated text).",
+      "rationale": "Current offshore wind direction: 135 deg. Supporting: Yeeew! (B); Perfect Wave Travel (C). Contradicting: Surf-Forecast.com (B). Main contradicting value: 225 deg (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 74 (44 in daylight) | mean |delta score| 20.31 | mean delta score -20.31 | max |delta score| 35 | mean breaking height 6.92 -> 6.92 ft | wind relation changed in 81 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 145 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 128 deg (resultant 0.97), 99 % of hours within 45 deg of the profile's 135 deg and 0 % within 45 deg of 225 deg. A directly read source says the prevailing wind here is offshore (Perfect Wave Travel); the model's prevailing wind matches the profile's direction, so the model sample does not support the contradicting value. The only contradicting publisher, Surf-Forecast.com, contradicts itself (best wind southwest in one sentence, east-northeast offshore in another; templated text).",
       "decided_at": "2026-10-13",
       "alternative": 225.0,
       "sensitivity": {
@@ -410,9 +410,9 @@
         "hours": 81,
         "labels_changed": 74,
         "labels_changed_daylight": 44,
-        "mean_abs_delta_score": 20.14,
+        "mean_abs_delta_score": 20.31,
         "max_abs_delta_score": 35,
-        "mean_delta_score": -20.14,
+        "mean_delta_score": -20.31,
         "wind_relations_changed": 81,
         "mean_breaking_mid_ft": [
           6.92,
@@ -1391,7 +1391,7 @@
         "max": 235.0
       },
       "new_value": null,
-      "decision": "kept",
+      "decision": "disputed",
       "sources": [
         "latamsurfing-lobitos",
         "realsurftravel-lobitos",
@@ -1401,7 +1401,7 @@
         "surfingwaves-lobitos",
         "wannasurf-lobitos"
       ],
-      "rationale": "Current optimal swell window: 200-235 deg. Supporting: Surf-Forecast.com (B); WannaSurf (C); LatAm Surfing (C); Real Surf Travel (C); Surfing-Waves.com (C); Surfing Lobitos (WordPress blog) (C); Surf Atlas (thesurfatlas.com) (B). Contradicting: Surf-Forecast.com (B). Main contradicting value: 315-315 deg (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 81 (41 in daylight) | mean |delta score| 21.02 | mean delta score -21.02 | max |delta score| 22 | mean breaking height 7.14 -> 7.14 ft.",
+      "rationale": "Current optimal swell window: 200-235 deg. Supporting: Surf-Forecast.com (B); WannaSurf (C); LatAm Surfing (C); Real Surf Travel (C); Surfing-Waves.com (C); Surfing Lobitos (WordPress blog) (C); Surf Atlas (thesurfatlas.com) (B). Contradicting: Surf-Forecast.com (B). Main contradicting value: 315-315 deg (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Surf-Forecast.com both supports (south-southwest in its best-conditions line) and contradicts (northwest in its guide text) the current window; a publisher's own support does not outweigh its contradiction, so only one other directly read publisher of the same or a higher tier (Surf Atlas) supports the window and the contradiction is recorded as unresolved, although the five community sources read directly all support the window. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 81 (41 in daylight) | mean |delta score| 21.02 | mean delta score -21.02 | max |delta score| 22 | mean breaking height 7.14 -> 7.14 ft.",
       "decided_at": "2026-10-13",
       "alternative": {
         "min": 315.0,
@@ -3079,14 +3079,14 @@
         "max": 45.0
       },
       "new_value": null,
-      "decision": "kept",
+      "decision": "disputed",
       "sources": [
         "gohawaii-waimea",
         "hawaiisurf-waimea",
         "surfer-waimea-eddie",
         "wannasurf-waimea"
       ],
-      "rationale": "Current working size range: 15-45 ft. Supporting: GoHawaii.com (Hawaii tourism site) (B, search summary); WannaSurf (C); SURFER (B, search summary); hawaii.surf (C). Contradicting: WannaSurf (C). Main contradicting value: 3-45 ft (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 35 (18 in daylight) | mean |delta score| 36.27 | mean delta score +36.27 | max |delta score| 79 | mean breaking height 6.65 -> 6.65 ft.",
+      "rationale": "Current working size range: 15-45 ft. Supporting: GoHawaii.com (Hawaii tourism site) (B, search summary); WannaSurf (C); SURFER (B, search summary); hawaii.surf (C). Contradicting: WannaSurf (C). Main contradicting value: 3-45 ft (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. WannaSurf both supports (its text: 15 ft is a small day) and contradicts (its template field: starts working at 3 ft) the current range; a publisher's own support does not outweigh its contradiction, so only hawaii.surf supports the range among the other directly read publishers and the contradiction is recorded as unresolved. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 35 (18 in daylight) | mean |delta score| 36.27 | mean delta score +36.27 | max |delta score| 79 | mean breaking height 6.65 -> 6.65 ft.",
       "decided_at": "2026-10-13",
       "alternative": {
         "min": 3.0,

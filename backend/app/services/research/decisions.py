@@ -15,8 +15,10 @@ decision rests on and why. The rule (``propose``) is applied mechanically:
   resolution). V is the value stated by one of those sources (never an average);
 * **kept** when no directly read source contradicts (only search summaries do), when the
   directly read contradicting sources are of a lower tier than the directly read
-  supporting ones, or when a single publisher contradicts while two or more directly read
-  publishers of the same or a higher tier support the profile;
+  supporting ones, or when a single publisher contradicts while two or more other directly
+  read publishers of the same or a higher tier support the profile. In both "kept" tests a
+  publisher that both supports and contradicts the value (one page or sentence each way)
+  counts only as contradicting: its own support does not outweigh its contradiction;
 * **disputed** otherwise.
 
 The main contradicting value (``alternative``) is the value stated by a contradicting
@@ -337,6 +339,9 @@ def propose(variable: str, entries: Sequence[Entry], profile: dict[str, Any]) ->
     supporting = [e for e in entries if e.agrees is True]
     sup_f = _group_tiers([e for e in supporting if e.retrieval == FETCHED], groups)
     con_f = _group_tiers([e for e in contradicting if e.retrieval == FETCHED], groups)
+    # A publisher that both supports and contradicts the value (one page each way) does not
+    # outweigh its own contradiction: only the other publishers count as support below.
+    sup_other = {g: t for g, t in sup_f.items() if g not in con_f}
     ranked = _rank_candidates(variable, entries, profile, groups)
     best = ranked[0] if ranked else None
     proposal = Proposal(
@@ -367,9 +372,9 @@ def propose(variable: str, entries: Sequence[Entry], profile: dict[str, Any]) ->
             return proposal
     if not con_f:
         proposal.reason = "search_only_contradiction"
-    elif sup_f and min(con_f.values()) > min(sup_f.values()):
+    elif sup_other and min(con_f.values()) > min(sup_other.values()):
         proposal.reason = "outweighed_by_direct_support"
-    elif len(con_f) == 1 and sum(t <= min(con_f.values()) for t in sup_f.values()) >= 2:
+    elif len(con_f) == 1 and sum(t <= min(con_f.values()) for t in sup_other.values()) >= 2:
         proposal.reason = "single_publisher_contradicts"
     else:
         proposal.decision = "disputed"

@@ -111,6 +111,36 @@ def test_kept_when_outweighed_or_a_single_publisher_contradicts() -> None:
     assert lone.reason == "fewer_than_two_direct_publishers_agree"
 
 
+def test_a_publisher_does_not_outweigh_its_own_contradiction() -> None:
+    # Publisher "One Site" supports on one page and contradicts on another; with one other
+    # same-tier supporter that is not "two publishers support the profile" (anchor-point's
+    # wind, Lobitos' swell window and Waimea's size range in the committed records).
+    entries = [
+        entry("a1", wind(120), True, B, publisher="One Site"),
+        entry("a2", wind(60), False, B, publisher="One Site"),
+        entry("b", wind(150), True, B),
+    ]
+    p = propose("wind", entries, P)
+    assert p is not None and p.decision == "disputed"
+    assert p.reason == "fewer_than_two_direct_publishers_agree"
+    # Two OTHER same-tier supporters still keep the profile.
+    kept = propose("wind", [*entries, entry("c", wind(140), True, B)], P)
+    assert kept is not None and (kept.decision, kept.reason) == (
+        "kept",
+        "single_publisher_contradicts",
+    )
+    # Its own better-tier support does not outweigh its lower-tier contradiction either.
+    mixed = [
+        entry("d1", wind(150), True, A, publisher="Mixed Agency"),
+        entry("d2", wind(60), False, C, publisher="Mixed Agency"),
+    ]
+    q = propose("wind", mixed, P)
+    assert q is not None and q.decision == "disputed"
+    outweighed = propose("wind", [*mixed, entry("e", wind(140), True, B)], P)
+    assert outweighed is not None
+    assert (outweighed.decision, outweighed.reason) == ("kept", "outweighed_by_direct_support")
+
+
 def test_pages_of_one_publisher_count_once() -> None:
     same = [
         entry("a1", wind(67.5), False, B, publisher="One Site"),
