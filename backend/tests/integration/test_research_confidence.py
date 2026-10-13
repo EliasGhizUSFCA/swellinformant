@@ -423,21 +423,26 @@ def test_methodology_change_adds_a_history_row_and_keeps_the_old_one(
 def test_committed_evidence_file_loads_and_search_only_support_is_capped(db: Session) -> None:
     """The REAL research_evidence.json (not synthetic): it validates and seeding loads it.
     Sources read directly and sources seen only through search summaries are both present,
-    and a variable whose support is search-only is never High (research-v1.1 cap)."""
+    and a variable whose support is search-only is never High (research-v1.1 cap, kept in
+    research-v1.2). Counts: the second research pass (449 sources, 384 read directly, 1,711
+    claims) plus the 19 NOAA BlueTopo survey_data sources of 2026-10-13, one claim each."""
     _clear_assessments(db)
     path = DEFAULT_DATA_DIR / EVIDENCE_FILENAME
     assert path.exists()
     evidence = load_evidence(db, path)
     assert evidence is not None
     sources = [s for spot in evidence.spots.values() for s in spot.sources]
-    assert len(evidence.spots) == 50 and len(sources) == 449
-    assert sum(len(s.claims) for s in sources) == 1711
+    assert len(evidence.spots) == 50 and len(sources) == 449 + 19
+    assert sum(len(s.claims) for s in sources) == 1711 + 19
     assert {s.retrieval for s in sources} == {"fetched", "web_search"}
-    assert sum(s.retrieval == "fetched" for s in sources) == 384
+    assert sum(s.retrieval == "fetched" for s in sources) == 384 + 19
+    bluetopo = [s for s in sources if s.key.startswith("bluetopo-")]
+    assert len(bluetopo) == 19
+    assert all(s.source_type == "survey_data" and s.retrieval == "fetched" for s in bluetopo)
 
     out = seed_reference_data(db)  # the default data directory, with the file present
     db.commit()
-    assert out["research_evidence_spots"] == 50 and out["research_sources_created"] == 449
+    assert out["research_evidence_spots"] == 50 and out["research_sources_created"] == 468
     current = current_assessments(db)
     assert len(current) == 50
     assert all(a.methodology_version == "research-v1.2" for a in current.values())
