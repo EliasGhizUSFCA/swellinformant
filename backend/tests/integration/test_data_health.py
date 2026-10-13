@@ -339,11 +339,12 @@ def test_times_in_messages_are_utc_whatever_the_session_time_zone(db: Session) -
 
 
 def test_heartbeat_detects_a_dead_worker_or_scheduler(db: Session) -> None:
-    run(db, "demo", 1)
-    assert "jobs_never_ran" in keys(db)
-    job_log(db, "notifications.deliver", JobStatus.SUCCESS, 45)
-    job_log(db, DATA_HEALTH_TASK, JobStatus.SUCCESS, 1)  # the check's own runs do not count
-    report = data_health(db)
+    now = utcnow()  # one clock for the rows and the report: the age is exact on any machine
+    run(db, "demo", 1, now=now)
+    assert "jobs_never_ran" in keys(db, now)
+    job_log(db, "notifications.deliver", JobStatus.SUCCESS, 45, now=now)
+    job_log(db, DATA_HEALTH_TASK, JobStatus.SUCCESS, 1, now=now)  # its own runs do not count
+    report = data_health(db, now=now)
     assert report.status == "failing"
     assert report.problems[0].key == "jobs_not_running"
     assert report.out.heartbeat.age_minutes == pytest.approx(45 - 5 / 60, abs=0.1)
@@ -629,3 +630,31 @@ def test_beat_runs_the_task_through_the_worker_path(db: Session) -> None:
     assert log is not None and log.status == JobStatus.SUCCESS
     assert set(log.details["alert_state"]) == {"forecasts_unavailable", "forecast_stale:demo"}
     assert len(ops_emails()) == 1
+
+
+def test_consecutive_beat_runs_share_their_alert_state(db: Session) -> None:
+    """Beat sends ops.data_health every DATA_HEALTH_CHECK_MINUTES. Each run, through the
+    task as the worker runs it, reads the state the previous run left in its job log: a
+    persisting problem is emailed once, its recovery once, and nothing after that."""
+    make_user(db, "ops-admin@example.com", admin=True, verified=True)
+    run(db, "demo", 20)
+    heartbeat(db)
+    first = tasks.data_health_task.delay().get()
+    assert first["alerts"] == ["new:forecasts_unavailable", "new:forecast_stale:demo"]
+    again = tasks.data_health_task.delay().get()
+    assert again["status"] == "failing" and again["alerts"] == []
+    assert len(ops_emails()) == 1
+
+    run(db, "demo", 1)  # a fresh (synthetic) run arrives
+    recovered = tasks.data_health_task.delay().get()
+    assert sorted(recovered["alerts"]) == [  # type: ignore[type-var]
+        "recovered:forecast_stale:demo",
+        "recovered:forecasts_unavailable",
+    ]
+    assert tasks.data_health_task.delay().get()["alerts"] == []
+    assert len(ops_emails()) == 2
+    db.expire_all()
+    statuses = db.scalars(
+        select(BackgroundJobLog.status).where(BackgroundJobLog.job_name == DATA_HEALTH_TASK)
+    ).all()
+    assert statuses == [JobStatus.SUCCESS] * 4
