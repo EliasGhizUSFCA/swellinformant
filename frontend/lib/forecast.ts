@@ -34,6 +34,7 @@ export function pointToConditions(p: ForecastPoint, fc: SpotForecast): Condition
     local_confidence_class: p.local_confidence_class ?? null,
     confidence_reasons: p.confidence_reasons ?? [],
     lead_hours: p.lead_hours ?? null,
+    local_confidence_reason: p.local_confidence_reason ?? null,
   };
 }
 
