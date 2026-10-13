@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ConfidenceBadge } from "@/components/confidence";
 import { DemoBadge } from "@/components/quality";
 import { RatingHeadline } from "@/components/rating";
+import { WindDisputeNote } from "@/components/wind-dispute";
 import { compass, formatRange, heightRange, kmh, leadLabel, metres, seconds, type Units } from "@/lib/format";
 import { colorForScore, WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingReason } from "@/lib/rating";
@@ -75,6 +76,7 @@ export function EventCard({
           {event.peak_wind_speed_kmh != null ? ` · ${kmh(event.peak_wind_speed_kmh)}` : ""}
         </div>
       </div>
+      <WindDisputeNote reasons={event.confidence_reasons} className="mt-1.5" />
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         <ConfidenceBadge value={event.forecast_confidence_class} />
         {event.is_demo && <DemoBadge />}

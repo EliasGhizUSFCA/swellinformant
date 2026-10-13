@@ -201,7 +201,9 @@ export default function MapPage() {
   // The canvas keeps the previous step's field until the next one arrives: describe what it shows.
   const fieldTime = layerFields.at ?? at;
   const fieldTimeText = fieldTime ? longTimeLabel(fieldTime, tz) : "";
-  const notice = !fieldIndex.isLoading && !fieldsAvailable ? (index?.message ?? "Ocean layers are not available.") : null;
+  // One short line for everyone; the backend's setup message (for whoever runs the site) is in
+  // the legend. Its full text covered a block of the map on phones and ran under the spot list.
+  const notice = !fieldIndex.isLoading && !fieldsAvailable ? "Ocean layers are unavailable right now." : null;
 
   const spotList = (
     <SpotList
@@ -224,31 +226,6 @@ export default function MapPage() {
         className="map-root absolute inset-0 overflow-hidden bg-[#151a21]"
         style={{ isolation: "isolate", "--map-bottom-inset": `${bottomInset}px` } as CSSProperties}
       >
-        {!isLoading && (
-          <ForecastMap
-            spots={visible}
-            markers={markers}
-            selected={selected}
-            onSelect={setSelected}
-            basemap={settings.basemap}
-            layer={layer}
-            fields={fieldsAvailable ? layerFields.grids : null}
-            fieldsAt={layerFields.at}
-            pressure={pressureGrid}
-            isobars={isobars}
-            scale={scale}
-            particles={particleMode}
-            units={units}
-            cities={cityLabels.length ? cityLabels : null}
-            onZoom={setZoom}
-            userLocation={userLocation}
-            fieldLabel={fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : `Ocean layers unavailable, ${timeText}`}
-            // The map's credit strip names the source; its full attribution sentence is in the
-            // legend (on a phone the sentence alone covered three lines of the map, and markers).
-            fieldAttribution={index?.source?.name ?? index?.source?.attribution}
-          />
-        )}
-
         {/* Top: layer tabs + pressure on the left, settings on the right. */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[1100] flex items-start gap-2 p-2 sm:p-3">
           <div className="min-w-0 flex-1 space-y-2">
@@ -376,6 +353,34 @@ export default function MapPage() {
               className="w-full rounded-b-xl"
             />
           </div>
+        )}
+
+        {/* The map comes last in the DOM, so keyboard users reach the controls above (layers,
+            settings, legend, best spots, timeline) before its 50 markers. The controls stay on
+            top by their z-index. */}
+        {!isLoading && (
+          <ForecastMap
+            spots={visible}
+            markers={markers}
+            selected={selected}
+            onSelect={setSelected}
+            basemap={settings.basemap}
+            layer={layer}
+            fields={fieldsAvailable ? layerFields.grids : null}
+            fieldsAt={layerFields.at}
+            pressure={pressureGrid}
+            isobars={isobars}
+            scale={scale}
+            particles={particleMode}
+            units={units}
+            cities={cityLabels.length ? cityLabels : null}
+            onZoom={setZoom}
+            userLocation={userLocation}
+            fieldLabel={fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : `Ocean layers unavailable, ${timeText}`}
+            // The map's credit strip names the source; its full attribution sentence is in the
+            // legend (on a phone the sentence alone covered three lines of the map, and markers).
+            fieldAttribution={index?.source?.name ?? index?.source?.attribution}
+          />
         )}
       </div>
     </AppShell>

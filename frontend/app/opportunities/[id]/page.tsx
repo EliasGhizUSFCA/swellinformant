@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Disclosure } from "@/components/ui/disclosure";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WindDisputeNote } from "@/components/wind-dispute";
 import { qk, useOpportunity } from "@/hooks/queries";
 import { errorMessage, post } from "@/lib/api";
 import { hasField, legacyIndexText } from "@/lib/confidence";
@@ -245,6 +246,7 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                     {e.peak_wind_speed_kmh != null ? `${Math.round(e.peak_wind_speed_kmh)} km/h` : "—"} from {compass(e.peak_wind_direction_deg)} ·{" "}
                     {WIND_RELATION_LABEL[e.peak_wind_relation] ?? e.peak_wind_relation}
                   </span>
+                  <WindDisputeNote reasons={e.confidence_reasons} className="mt-1 font-normal" />
                 </Measure>
               </dl>
               <p className="text-xs text-muted-foreground">

@@ -794,7 +794,8 @@ test.describe("ocean layers (synthetic fields)", () => {
       if (/\/api\/map\/fields\/[a-z_]+\?/.test(r.url())) fieldRequests.push(r.url());
     });
     const { errors } = await openMap(page);
-    await expect(page.getByTestId("fields-notice")).toHaveText("Ocean layers need live NOAA data");
+    // A short line on the map; the backend's own message is in the legend (checked below).
+    await expect(page.getByTestId("fields-notice")).toHaveText("Ocean layers are unavailable right now.");
     await expect(field(page)).toHaveAttribute("data-painted", "0");
     await expect(field(page)).toHaveAttribute("aria-label", /Ocean layers unavailable/);
     await expect(page.locator("canvas.map-basemap-canvas")).toHaveAttribute("data-land", "1");

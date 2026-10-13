@@ -198,7 +198,7 @@ export function JobTable({ jobs }: { jobs: JobHealth[] }) {
         {jobs.map((j) => (
           <tr key={j.job} className="border-b align-top last:border-0">
             <td className="py-2">
-              <div className="font-mono text-xs">{j.job}</div>
+              <div className="font-mono text-xs wrap-anywhere">{j.job}</div>
               <div className="text-xs text-muted-foreground">{j.schedule}</div>
             </td>
             <td className="py-2">

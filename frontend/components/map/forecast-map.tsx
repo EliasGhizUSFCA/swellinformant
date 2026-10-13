@@ -501,7 +501,17 @@ export default function ForecastMap(props: ForecastMapProps) {
               pathOptions={{ color: "#ffffff", weight: isSel ? 3 : 1.5, fillColor: colorForScore(score), fillOpacity: 0.95 }}
               // Set at creation (Leaflet ignores className changes in later setStyle calls).
               className={`spot-marker spot-${s.slug}`}
-              eventHandlers={{ click: () => onSelect(s.slug) }}
+              eventHandlers={{
+                click: () => onSelect(s.slug),
+                // Leaflet makes markers focusable (their tooltip opens on focus): Enter or Space
+                // opens the spot, as a click does.
+                keydown: (e) => {
+                  if (e.originalEvent.key === "Enter" || e.originalEvent.key === " ") {
+                    e.originalEvent.preventDefault();
+                    onSelect(s.slug);
+                  }
+                },
+              }}
             >
               <Tooltip direction="top" offset={[0, -6]}>
                 <strong>{s.name}</strong>

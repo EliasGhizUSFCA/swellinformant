@@ -84,7 +84,7 @@ export default function StatusPage() {
                   <tbody>
                     {data.jobs.map((j) => (
                       <tr key={j.job} className="border-b last:border-0">
-                        <td className="py-2 font-mono text-xs">{j.job}</td>
+                        <td className="py-2 font-mono text-xs wrap-anywhere">{j.job}</td>
                         <td className="py-2">
                           <Badge variant={j.status === "success" ? "good" : j.status === "failed" ? "danger" : "muted"}>{titleCase(j.status)}</Badge>
                         </td>
