@@ -79,6 +79,16 @@ def test_notification_preferences_and_unsubscribe(app_client: ApiClient) -> None
     )
 
 
+def test_unsubscribe_rejects_json_that_is_not_an_object(app_client: ApiClient) -> None:
+    """A JSON array or string body was an unhandled AttributeError (500, and a traceback
+    in the log for every such request); it is a missing token like any other."""
+    anon = app_client.client
+    for body in ([], ["token"], "token", 7, None):
+        r = anon.post("/api/notifications/unsubscribe", json=body)
+        assert r.status_code == 400, (body, r.status_code)
+        assert r.json()["error"]["code"] == "invalid_token"
+
+
 def test_phone_verification_flow(app_client: ApiClient) -> None:
     app_client.register()
     assert (

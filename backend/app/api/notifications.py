@@ -52,9 +52,9 @@ async def unsubscribe(
     if token is None and request.headers.get("content-type", "").startswith("application/json"):
         try:
             body = await request.json()
-            token = str(body.get("token") or "")[:100]
         except ValueError:
-            token = None
+            body = None
+        token = str(body.get("token") or "")[:100] if isinstance(body, dict) else None
     if not token:
         raise AppError("Missing unsubscribe token.", code="invalid_token")
     prefs = db.scalar(
