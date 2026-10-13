@@ -30,8 +30,11 @@ def test_seeded_profiles_carry_the_measured_bathymetry(db: Session) -> None:
     trestles = _profile(db, "trestles")
     assert trestles.shore_normal_deg == pytest.approx(210.9)
     assert trestles.data_quality["shore_normal_deg"] == "measured"
-    assert trestles.forecast_point_depth_m == pytest.approx(758.7)
-    assert "BlueTopo" in trestles.notes
+    # Trestles' forecast point lies in NBS Generalization cells (no survey): its depth is
+    # not a measurement, so it stays unknown (deep water assumed).
+    assert trestles.forecast_point_depth_m is None
+    assert trestles.data_quality["forecast_point_depth_m"] == "unknown"
+    assert "BlueTopo" in trestles.notes and "NBS Generalization" in trestles.notes
     for slug, depth in (("mavericks", 57.9), ("ocean-beach-sf", 36.4), ("rincon", 96.5)):
         row = _profile(db, slug)
         assert row.forecast_point_depth_m == pytest.approx(depth)

@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from app.services.seed import DEFAULT_DATA_DIR, validate_profile
 
 PROFILES = DEFAULT_DATA_DIR / "physical_profiles.json"
@@ -61,6 +63,30 @@ def test_measured_values_not_applied_are_kept_with_a_reason() -> None:
         else:
             assert skipped["shore_normal_deg"]["reason"]
             assert 0 <= skipped["shore_normal_deg"]["value"] < 360
+
+
+def test_forecast_point_depths_come_from_survey_cells_only() -> None:
+    """A depth from "NBS Generalization" cells (BlueTopo's best-guess surface outside any
+    survey, uncertainty unknown) is not a measurement: it is never written as a "measured"
+    forecast-point depth, only kept under not_applied (Trestles' forecast point)."""
+    profiles = _load(PROFILES)
+    for slug, entry in profiles.items():
+        prov = entry["provenance"]
+        surveys = [c["survey"] for c in prov["forecast_point_contributors"]]
+        if "forecast_point_depth_m" in entry:
+            assert prov["forecast_point_survey_share"] >= 0.5, slug
+            assert surveys and "NBS Generalization" not in surveys[:1], slug
+            assert "(survey " in entry["notes"], slug
+        else:
+            skipped = prov["not_applied"]["forecast_point_depth_m"]
+            assert "NBS Generalization" in skipped["reason"] and skipped["value"] > 0
+            assert prov["forecast_point_survey_share"] < 0.5
+    assert "forecast_point_depth_m" not in profiles["trestles"]
+    assert profiles["trestles"]["provenance"]["not_applied"]["forecast_point_depth_m"][
+        "value"
+    ] == pytest.approx(758.7)
+    for slug, depth in (("mavericks", 57.9), ("ocean-beach-sf", 36.4), ("rincon", 96.5)):
+        assert profiles[slug]["forecast_point_depth_m"] == pytest.approx(depth)
 
 
 def test_every_bluetopo_tile_is_a_read_survey_source_with_a_verbatim_excerpt() -> None:

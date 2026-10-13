@@ -41,8 +41,15 @@ For each spot (default: mavericks, ocean-beach-sf, trestles, rincon) the script
      SHORELINE_CLEARANCE_M of the break is at or above 0 m NAVD88: otherwise the
      coordinate marks the shoreline position of the break, not the take-off zone, and the
      depth there says nothing about where the waves break (the parameter stays unknown);
-   * ``forecast_point_depth_m``: the depth at the forecast point (median within
-     BREAK_RADIUS_M), when the point is inside the tile coverage and under water;
+   * ``forecast_point_depth_m``: the depth at the forecast point (median of the survey
+     cells within BREAK_RADIUS_M), when the point is inside the tile coverage and under
+     water, and at least MIN_SURVEY_SHARE of those cells come from a survey: cells of
+     "NBS Generalization" are a best-guess surface outside any survey (RAT
+     ``data_assessment`` 3, uncertainties unknown), not a measurement, so a depth taken
+     from them is kept in the provenance (``not_applied``) and the parameter stays unknown.
+     The contributing surveys (id, year, measured or interpolated) are recorded. This rule
+     was added in review, after the first committed run had labelled Trestles' 758.7 m
+     (an NBS Generalization cell) "measured";
 
 4. prints a JSON report (transect depths, fits, contributing surveys) and, with
    ``--write``, writes ``data/surf_spots/physical_profiles.json`` (the format
@@ -105,6 +112,7 @@ STABILITY_RADII_M = (100.0, 500.0, 1000.0)
 MIN_FIT_CELLS = 200
 MIN_FIT_R2 = 0.5
 MIN_MEASURED_SHARE = 0.5
+MIN_SURVEY_SHARE = 0.5
 MAX_INCIDENCE_DEG = 90.0
 GENERALIZATION_ID = "NBS Generalization"
 REPORT_DISTANCES_M = (250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0)
@@ -382,6 +390,22 @@ def disc_median(tile: Tile, lat: float, lon: float, radius_m: float) -> float | 
     return float(np.median(d["z"])) if d["z"].size else None
 
 
+def survey_depth(
+    tile: Tile, lat: float, lon: float, radius_m: float
+) -> tuple[float | None, float, float]:
+    """(median elevation of the survey cells, share of survey cells, share of measured
+    cells among them) within ``radius_m``; NBS Generalization cells are not survey cells."""
+    d = tile.disc(lat, lon, radius_m)
+    if not d["z"].size:
+        return None, 0.0, 0.0
+    survey = _survey(tile, d["ids"])
+    share = float(survey.mean())
+    if not survey.any():
+        return None, share, 0.0
+    measured = float(_measured(tile, d["ids"][survey]).mean())
+    return float(np.median(d["z"][survey])), share, measured
+
+
 def nearest_exposed_m(tile: Tile, lat: float, lon: float, radius_m: float) -> float | None:
     """Distance (m) to the nearest cell at or above 0 m NAVD88 within ``radius_m``."""
     d = tile.disc(lat, lon, radius_m)
@@ -581,12 +605,41 @@ def analyse(spot: dict[str, Any], store: TileStore) -> SpotResult:
     if ftile is not None and ftile.sample(flat, flon) is not None:
         remember(ftile, "forecast_point")
         fz = disc_median(ftile, flat, flon, BREAK_RADIUS_M)
+        sz, survey_share, measured_share = survey_depth(ftile, flat, flon, BREAK_RADIUS_M)
+        fp_contributors = contributors(ftile, flat, flon, BREAK_RADIUS_M)
         report["forecast_point_tile"] = ftile.ref.tile
         report["forecast_point_elevation_m"] = None if fz is None else round(fz, 2)
-        if fz is not None and fz < 0.0:
-            profile["forecast_point_depth_m"] = round(-fz, 1)
+        report["forecast_point_survey_share"] = round(survey_share, 3)
+        report["forecast_point_contributors"] = fp_contributors[:6]
+        if fz is not None and fz < 0.0 and survey_share < MIN_SURVEY_SHARE:
+            reason = (
+                f"{100 * (1 - survey_share):.0f} % of the cells within {BREAK_RADIUS_M:.0f} m "
+                f"are {GENERALIZATION_ID} (a best-guess surface outside any survey, "
+                "uncertainty unknown), not survey depths"
+            )
+            not_applied["forecast_point_depth_m"] = {"value": round(-fz, 1), "reason": reason}
+            notes.append(
+                f"Forecast point depth not set: BlueTopo gives {-fz:.1f} m below NAVD88 there, "
+                f"but {reason}."
+            )
+        elif sz is not None and sz < 0.0:
+            profile["forecast_point_depth_m"] = round(-sz, 1)
             quality["forecast_point_depth_m"] = "measured"
-            notes.append(f"Forecast point depth {-fz:.1f} m below NAVD88.")
+            if measured_share >= 1.0:
+                kind = "all cells measured depths"
+            elif measured_share <= 0.0:
+                kind = "cells interpolated between the survey's soundings"
+            else:
+                kind = (
+                    f"{100 * measured_share:.0f} % of the cells measured depths, the rest "
+                    "interpolated within the survey"
+                )
+            names = ", ".join(
+                f"{c['survey']} ({(c['start'] or '')[:4]})"
+                for c in fp_contributors
+                if c["survey"] and c["survey"] != GENERALIZATION_ID
+            )
+            notes.append(f"Forecast point depth {-sz:.1f} m below NAVD88 (survey {names}; {kind}).")
     else:
         report["forecast_point_status"] = "outside BlueTopo coverage"
         notes.append("Forecast point outside BlueTopo coverage: its depth stays unknown.")
@@ -606,13 +659,17 @@ def analyse(spot: dict[str, Any], store: TileStore) -> SpotResult:
                 f"plane fit within {NORMAL_RADIUS_M:.0f} m (underwater survey cells), break "
                 f"depth = median within {BREAK_RADIUS_M:.0f} m when no cell at or above 0 m "
                 f"lies within {SHORELINE_CLEARANCE_M:.0f} m, forecast-point depth = median "
-                f"within {BREAK_RADIUS_M:.0f} m"
+                f"of the survey cells within {BREAK_RADIUS_M:.0f} m when at least "
+                f"{100 * MIN_SURVEY_SHARE:.0f} % of the cells there are survey cells (not "
+                f"{GENERALIZATION_ID})"
             ),
             "vertical_datum": "NAVD88",
             "tiles": [prov_tiles[t] for t in sorted(prov_tiles)],
             "break_elevation_m": report.get("break_elevation_m"),
             "nearest_exposed_cell_m": report.get("nearest_exposed_cell_m"),
             "fits": report.get("fits", []),
+            "forecast_point_survey_share": report.get("forecast_point_survey_share"),
+            "forecast_point_contributors": report.get("forecast_point_contributors", []),
             "not_applied": not_applied,
         }
     return SpotResult(spot["slug"], report, profile, {t: used[t] for t in prov_tiles})
@@ -652,9 +709,15 @@ def evidence_source(r: SpotResult, tile: Tile, accessed: str) -> dict[str, Any]:
         ][:3]
         if surveys:
             parts.append("main surveys " + ", ".join(surveys))
-    if "forecast_point" in role and rep.get("forecast_point_elevation_m") is not None:
+    if "forecast_point" in role and r.profile.get("forecast_point_depth_m") is not None:
         parts.append(
-            f"depth at the forecast point {-rep['forecast_point_elevation_m']:.1f} m below NAVD88"
+            f"depth at the forecast point {r.profile['forecast_point_depth_m']:.1f} m below NAVD88"
+        )
+    elif "forecast_point" in role and rep.get("forecast_point_elevation_m") is not None:
+        parts.append(
+            f"the forecast point lies in {GENERALIZATION_ID} cells (elevation "
+            f"{rep['forecast_point_elevation_m']:+.1f} m NAVD88, a best-guess surface outside "
+            "any survey, not a measured depth)"
         )
     if role == ["transect"]:
         parts.append("covers part of the transect from the break to the forecast point")

@@ -20689,7 +20689,7 @@
      "claims": [
       {
        "variable": "bathymetry",
-       "claim": "BlueTopo tile BH46R59V (4 m cells); depth at the forecast point 758.7 m below NAVD88.",
+       "claim": "BlueTopo tile BH46R59V (4 m cells); the forecast point lies in NBS Generalization cells (elevation -758.7 m NAVD88, a best-guess surface outside any survey, not a measured depth).",
        "value": null,
        "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
        "agrees": null

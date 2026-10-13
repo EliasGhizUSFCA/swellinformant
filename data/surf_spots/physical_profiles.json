@@ -4,10 +4,10 @@
     "data_quality": {
       "forecast_point_depth_m": "measured"
     },
-    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). The contours near the break face 227 deg (the downslope azimuth of a plane fitted to 4493 underwater survey cells within 250 m of the break; R2 0.86, 16 % measured depths, the rest interpolated within the surveys). This is not used as the shore normal: only 16 % of the fitted cells are measured depths (below 50 %); the rest are interpolated between soundings. Controlling depth not set: the break coordinate is -4.3 m NAVD88, 80 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 57.9 m below NAVD88.",
+    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). The contours near the break face 227 deg (the downslope azimuth of a plane fitted to 4493 underwater survey cells within 250 m of the break; R2 0.86, 16 % measured depths, the rest interpolated within the surveys). This is not used as the shore normal: only 16 % of the fitted cells are measured depths (below 50 %); the rest are interpolated between soundings. Controlling depth not set: the break coordinate is -4.3 m NAVD88, 80 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 57.9 m below NAVD88 (survey H05395.interpolated (1934); cells interpolated between the survey's soundings).",
     "provenance": {
       "source": "NOAA Office of Coast Survey BlueTopo",
-      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median within 25 m",
+      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median of the survey cells within 25 m when at least 50 % of the cells there are survey cells (not NBS Generalization)",
       "vertical_datum": "NAVD88",
       "tiles": [
         {
@@ -106,6 +106,17 @@
           "r2": 0.846
         }
       ],
+      "forecast_point_survey_share": 1.0,
+      "forecast_point_contributors": [
+        {
+          "cells": 69,
+          "survey": "H05395.interpolated",
+          "institution": "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+          "start": "1934-01-01",
+          "end": "1934-01-01",
+          "measured": false
+        }
+      ],
       "not_applied": {
         "shore_normal_deg": {
           "value": 227.0,
@@ -119,10 +130,10 @@
     "data_quality": {
       "forecast_point_depth_m": "measured"
     },
-    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). The contours near the break face 288 deg (the downslope azimuth of a plane fitted to 4544 underwater survey cells within 250 m of the break; R2 0.16, 75 % measured depths, the rest interpolated within the surveys). This is not used as the shore normal: the plane fit explains too little of the depth (R2 0.16 < 0.5). Controlling depth not set: the break coordinate is +2.3 m NAVD88, 1 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 36.4 m below NAVD88.",
+    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). The contours near the break face 288 deg (the downslope azimuth of a plane fitted to 4544 underwater survey cells within 250 m of the break; R2 0.16, 75 % measured depths, the rest interpolated within the surveys). This is not used as the shore normal: the plane fit explains too little of the depth (R2 0.16 < 0.5). Controlling depth not set: the break coordinate is +2.3 m NAVD88, 1 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 36.4 m below NAVD88 (survey H12109_MB_2m_MLLW_2of2 (2009); all cells measured depths).",
     "provenance": {
       "source": "NOAA Office of Coast Survey BlueTopo",
-      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median within 25 m",
+      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median of the survey cells within 25 m when at least 50 % of the cells there are survey cells (not NBS Generalization)",
       "vertical_datum": "NAVD88",
       "tiles": [
         {
@@ -221,6 +232,17 @@
           "r2": 0.928
         }
       ],
+      "forecast_point_survey_share": 1.0,
+      "forecast_point_contributors": [
+        {
+          "cells": 72,
+          "survey": "H12109_MB_2m_MLLW_2of2",
+          "institution": "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+          "start": "2009-06-14",
+          "end": "2009-07-02",
+          "measured": true
+        }
+      ],
       "not_applied": {
         "shore_normal_deg": {
           "value": 288.5,
@@ -231,15 +253,13 @@
   },
   "trestles": {
     "shore_normal_deg": 210.9,
-    "forecast_point_depth_m": 758.7,
     "data_quality": {
-      "shore_normal_deg": "measured",
-      "forecast_point_depth_m": "measured"
+      "shore_normal_deg": "measured"
     },
-    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). Shore normal 210.9 deg: the downslope azimuth of a plane fitted to 5923 underwater survey cells within 250 m of the break; R2 0.85, 94 % measured depths, the rest interpolated within the surveys. Controlling depth not set: the break coordinate is +0.5 m NAVD88, 1 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 758.7 m below NAVD88.",
+    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). Shore normal 210.9 deg: the downslope azimuth of a plane fitted to 5923 underwater survey cells within 250 m of the break; R2 0.85, 94 % measured depths, the rest interpolated within the surveys. Controlling depth not set: the break coordinate is +0.5 m NAVD88, 1 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth not set: BlueTopo gives 758.7 m below NAVD88 there, but 100 % of the cells within 25 m are NBS Generalization (a best-guess surface outside any survey, uncertainty unknown), not survey depths.",
     "provenance": {
       "source": "NOAA Office of Coast Survey BlueTopo",
-      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median within 25 m",
+      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median of the survey cells within 25 m when at least 50 % of the cells there are survey cells (not NBS Generalization)",
       "vertical_datum": "NAVD88",
       "tiles": [
         {
@@ -338,7 +358,23 @@
           "r2": 0.729
         }
       ],
-      "not_applied": {}
+      "forecast_point_survey_share": 0.0,
+      "forecast_point_contributors": [
+        {
+          "cells": 123,
+          "survey": "NBS Generalization",
+          "institution": "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+          "start": "1807-02-10",
+          "end": "1807-02-10",
+          "measured": false
+        }
+      ],
+      "not_applied": {
+        "forecast_point_depth_m": {
+          "value": 758.7,
+          "reason": "100 % of the cells within 25 m are NBS Generalization (a best-guess surface outside any survey, uncertainty unknown), not survey depths"
+        }
+      }
     }
   },
   "rincon": {
@@ -346,10 +382,10 @@
     "data_quality": {
       "forecast_point_depth_m": "measured"
     },
-    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). The contours near the break face 196 deg (the downslope azimuth of a plane fitted to 2441 underwater survey cells within 250 m of the break; R2 0.66, 72 % measured depths, the rest interpolated within the surveys). This is not used as the shore normal: the documented optimal swell window (270-290 deg) reaches 94 deg from it, and the model's straight-contour refraction would treat those swells as unable to reach the break (the contours turn around the point faster than the model represents). Controlling depth not set: the break coordinate is +5.6 m NAVD88, 2 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 96.5 m below NAVD88.",
+    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). The contours near the break face 196 deg (the downslope azimuth of a plane fitted to 2441 underwater survey cells within 250 m of the break; R2 0.66, 72 % measured depths, the rest interpolated within the surveys). This is not used as the shore normal: the documented optimal swell window (270-290 deg) reaches 94 deg from it, and the model's straight-contour refraction would treat those swells as unable to reach the break (the contours turn around the point faster than the model represents). Controlling depth not set: the break coordinate is +5.6 m NAVD88, 2 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 96.5 m below NAVD88 (survey H09732.interpolated (1977); cells interpolated between the survey's soundings).",
     "provenance": {
       "source": "NOAA Office of Coast Survey BlueTopo",
-      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median within 25 m",
+      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median of the survey cells within 25 m when at least 50 % of the cells there are survey cells (not NBS Generalization)",
       "vertical_datum": "NAVD88",
       "tiles": [
         {
@@ -435,6 +471,17 @@
           "azimuth_deg": 224.1,
           "slope": 0.0129,
           "r2": 0.681
+        }
+      ],
+      "forecast_point_survey_share": 1.0,
+      "forecast_point_contributors": [
+        {
+          "cells": 126,
+          "survey": "H09732.interpolated",
+          "institution": "DOC/NOAA/NOS/OCS -- Office of Coast Survey",
+          "start": "1977-01-01",
+          "end": "1977-01-01",
+          "measured": false
         }
       ],
       "not_applied": {
