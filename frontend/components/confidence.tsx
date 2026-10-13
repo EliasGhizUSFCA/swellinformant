@@ -143,7 +143,8 @@ export function ForecastConfidence({
 
 /**
  * Confidence in the breaking-wave estimate at the break. Shown only when it differs from the
- * forecast class; the reason is the API's own (passed in, or the first reason about the break).
+ * forecast class; the reason is the API's own (`local_confidence_reason`, passed in), or when
+ * the response has none, the last reason about the break (pickLocalReason).
  */
 export function LocalConfidence({
   value,
