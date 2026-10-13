@@ -118,9 +118,8 @@ docker compose exec backend python -m app.cli make-admin you@example.com   # acc
 * Flights: `DUFFEL_ACCESS_TOKEN` (or Amadeus Enterprise credentials).
 * SMS: Twilio credentials and the STOP webhook.
 * Map: a tile provider key for more than light use.
-* Observations: network access to `www.ndbc.noaa.gov` to verify NDBC; newer AODN
-  delayed-mode Hm0 (2022+) to re-evaluate the correction; any nearshore surf-height
-  observations to validate breaking heights.
+* Observations: any nearshore surf-height observations to validate breaking heights (NDBC
+  was verified live in phase 3, §16).
 
 ## 8. Recommended next steps (by expected impact)
 
@@ -133,7 +132,8 @@ docker compose exec backend python -m app.cli make-admin you@example.com   # acc
    bathymetry) for the most-alerted spots.
 4. **Calibrate the quality score and the 80 % range** once observations exist (coverage
    check before calling it `calibrated`).
-5. Verify NDBC live and add NDBC-paired spots (Hawaii, California) to verification.
+5. ~~Verify NDBC live and add NDBC-paired spots (Hawaii, California) to verification.~~
+   Done in phase 3 (§16).
 6. Add an ECMWF/GEFS date check, a total ECMWF retry budget, and an advisory lock for
    concurrent `ml train` runs (review residuals).
 
