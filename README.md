@@ -710,7 +710,7 @@ Checklist:
   summaries, capped at Moderate). No spot is High overall: tide evidence conflicts at the
   two spots whose swell direction, size and wind are all High, and most spots have no
   measured bathymetry (only four US spots, from NOAA BlueTopo).
-* Ten offshore wind directions are disputed by the evidence and were not changed (the rule
+* Eleven offshore wind directions are disputed by the evidence and were not changed (the rule
   needs two directly read publishers that outrank every direct source of the old value);
   forecasts at 15 spots carry "Sources disagree about which wind is offshore here." The
   score still uses the profile's direction.
@@ -750,8 +750,8 @@ SMTP is verified end to end: the Docker stack delivered a verification email to 
 * Wave forecasts 5–10 days ahead routinely shift in timing (± a day) and size.
   Confidence is shown separately from quality for this reason.
 * Breaking heights come from a physical model with estimated spot profiles (shore normal,
-  shadowing, focusing; measured forecast-point depths at four US spots and one measured
-  shore normal, at Trestles; no measured depth at any break, because the break coordinates
+  shadowing, focusing; survey depths at the forecast points of three US spots and one
+  measured shore normal, at Trestles; no measured depth at any break, because the break coordinates
   are shoreline positions). They are unvalidated against surf observations and
   can be wrong by a factor of 2 at reef and point breaks with unusual bathymetry. The 80%
   range is a heuristic, not a calibrated probability.

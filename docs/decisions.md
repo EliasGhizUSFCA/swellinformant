@@ -64,9 +64,10 @@ shadow table with a provenance flag each (`measured`, `literature`, `calibrated`
 no depth limit, saying so in the prediction's assumptions.
 **Consequences.** Until 2026-10-13 all 50 spots ran on estimated profiles, shown on the spot
 page. Since ADR-018 four US spots carry measured values from NOAA BlueTopo
-(`data/surf_spots/physical_profiles.json`, provenance per value): forecast-point depths at
-Mavericks, Ocean Beach, Trestles and Rincon and Trestles' shore normal; no spot has a
-measured controlling depth.
+(`data/surf_spots/physical_profiles.json`, provenance per value): survey depths at the
+forecast points of Mavericks, Ocean Beach and Rincon and Trestles' shore normal (Trestles'
+forecast point lies in BlueTopo's NBS Generalization surface, outside any survey, so its
+depth stays unknown); no spot has a measured controlling depth.
 
 ## ADR-006 Uncertainty as labelled ranges, not probabilities
 
@@ -266,7 +267,8 @@ disputed (local confidence does not use the wind).
   independent publishers whose pages were read directly agree on a stated new value, within
   the methodology's agreement tolerances, and every directly read source supporting the old
   value is of a strictly lower tier than both of them; otherwise the record says kept or
-  disputed with the reason. Every contradicted field of the current assessment has a
+  disputed with the reason (a publisher that both supports and contradicts the value
+  does not outweigh its own contradiction). Every contradicted field of the current assessment has a
   record with its sources, rationale and the before/after effect on the real 2026-10-11 run
   (`scripts/profile_sensitivity.py`, read-only). For wind the record reports the model wind
   at the forecast point, which never decides.
@@ -276,8 +278,8 @@ disputed (local confidence does not use the wind).
   changes.
 * **Measured bathymetry** (NOAA BlueTopo, public domain) for the four continental US spots
   where it exists, under documented acceptance rules (`scripts/bathymetry_profiles.py`);
-  measured values that the straight-contour model cannot use are kept in the provenance,
-  not applied.
+  measured values that the straight-contour model cannot use, and depths from BlueTopo's
+  NBS Generalization surface (no survey), are kept in the provenance, not applied.
 * **`research lint`** lists unexplained offshore/shore-normal gaps over 60°, contradicted
   fields without a record and records the rule no longer gives.
 **Alternatives.** Changing a profile when the best contradicting source outranks the best
@@ -288,7 +290,7 @@ way), and at Chicama the sources that say the wind is "consistently offshore" an
 model's prevailing SSE wind both point the other way. Deciding by model wind (it shows which
 winds blow 15-20 km offshore, not which are offshore at the lineup). Averaging the sources'
 directions (would invent values nobody states).
-**Consequences.** No wind profile met the rule (10 disputed, 10 kept); four values changed
+**Consequences.** No wind profile met the rule (11 disputed, 9 kept); four values changed
 (three tides to `all`, Cloudbreak's range to 2-20 ft). Research: 35 Moderate, 15 Low, none
 High; the research basis of local confidence falls (High 8 → 3, Low 12 → 24 spots), almost
 entirely through the size rule. 15 spots carry the disputed-wind note on every hour of the

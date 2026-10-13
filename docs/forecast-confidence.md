@@ -206,8 +206,9 @@ is not calibrated.
 clone of `swell_live2`): 15 spots carry the note on every hour, 1,215 hours in all: Anchor
 Point, Chicama, Cloudbreak, Desert Point, Dungeons, Jaws, Jeffreys Bay, Lakey Peak, Lobitos,
 Mullaghmore Head, Rifles, Skeleton Bay, Supertubos, Teahupoo and Uluwatu. All 15 fire a wind
-conflict rule in their assessment; for the 10 of them whose decision record says
-`disputed` the basis lists both. On 1,101 of the 1,215 hours the relation under the
+conflict rule in their assessment; for the 11 of them whose decision record says
+`disputed` the basis lists both (re-run in review on a fresh clone, after Anchor
+Point's record became `disputed`: the same 15 spots, 1,215 and 1,101 hours). On 1,101 of the 1,215 hours the relation under the
 contradicting direction differed from the profile's, so the explanation names both.
 Compared with the run as stored in `swell_live2` the forecast class was unchanged on all
 4,050 hours, and at these 15 spots score and `wind_relation` were unchanged on every hour

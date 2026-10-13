@@ -202,9 +202,10 @@ A variable without evidence gets a fixed gap sentence:
   sources of equal standing is a real uncertainty, and contradiction by stronger evidence
   means the profile itself may be wrong.
 * **Bathymetry needs measurement**: "shallow reef" in a guide is a description, not a
-  depth. Measured depths exist for four US spots only (NOAA BlueTopo, section 9): their
-  forecast-point depths and Trestles' shore normal feed the nearshore model; no spot has a
-  measured controlling depth (`SURF_SCORING.md`, physical profiles).
+  depth. Measured values exist for four US spots only (NOAA BlueTopo, section 9): the
+  survey depths at the forecast points of Mavericks, Ocean Beach and Rincon and Trestles'
+  shore normal feed the nearshore model (Trestles' forecast point lies outside any survey);
+  no spot has a measured controlling depth (`SURF_SCORING.md`, physical profiles).
 * **Each size bound counts** (research-v1.2): overlap alone let "holds 30 ft" agree with a
   12 ft maximum; a 25 % tolerance on each stated bound keeps the usual rounding of face
   heights ("3-4 ft", "double overhead") from counting as disagreement.
@@ -376,7 +377,8 @@ bathymetry:
 * **NOAA BlueTopo bathymetry (2026-10-13).** 19 tiles for Mavericks, Ocean Beach, Trestles
   and Rincon, each a `survey_data` source read directly (the GeoTIFF and its raster
   attribute table, checksums verified against the BlueTopo tile scheme) with a bathymetry
-  claim stating the measured depths; the excerpt is verbatim on the BlueTopo
+  claim stating the depths (and, at Trestles' forecast point, that the cells are NBS
+  Generalization, not survey depths); the excerpt is verbatim on the BlueTopo
   specifications page and in each tile's ImageDescription tag
   (`scripts/bathymetry_profiles.py`, `SURF_SCORING.md` physical profiles).
 
@@ -447,8 +449,11 @@ The rule (`app.services.research.decisions.propose`, applied mechanically):
   never becomes a new swell window;
 * **kept** when only search summaries contradict, when the directly read contradicting
   sources are of a lower tier than the directly read supporting ones, or when one publisher
-  contradicts and at least two directly read publishers of the same or a higher tier
-  support the profile;
+  contradicts and at least two other directly read publishers of the same or a higher tier
+  support the profile. A publisher that both supports and contradicts the value (one page
+  or sentence each way) counts only as contradicting in these two tests: its own support
+  does not outweigh its contradiction (review of 2026-10-13; this turned Anchor Point's
+  wind, Lobitos' swell window and Waimea Bay's size range from kept to disputed);
 * **disputed** otherwise (the contradiction is real but not resolved).
 
 For the offshore wind every record also reports the model wind at the forecast point (GFS
@@ -460,8 +465,8 @@ directly read source says the prevailing wind is offshore (`supports_change`), a
 decides. Every record with a candidate value carries the before/after effect on the real
 2026-10-11 blend run (`scripts/profile_sensitivity.py`, read-only).
 
-Result (2026-10-13): **82 records: 4 changed, 45 disputed, 33 kept**, plus 6 geometry notes.
-No wind record met the rule (10 disputed, 10 kept); the changes are Ocean Beach, Snapper
+Result (2026-10-13): **82 records: 4 changed, 48 disputed, 30 kept**, plus 6 geometry notes.
+No wind record met the rule (11 disputed, 9 kept); the changes are Ocean Beach, Snapper
 Rocks and Punta Roca tide → `all` and Cloudbreak's working range 4-20 → 2-20 ft. Where the
 assessment fires a conflict rule on wind, or a record says the wind is disputed, every
 forecast hour says "Sources disagree about which wind is offshore here."

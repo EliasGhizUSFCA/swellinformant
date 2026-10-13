@@ -248,11 +248,11 @@ Branch `wf/spot-profiles`, 2026-10-13 ([`decisions.md`](decisions.md) ADR-018).
   second pass: 34 / 16); swell size is now contradicted at 25 spots instead of 1, and the
   research basis of local confidence falls (High 8 → 3, Low 12 → 24 spots).
 * **Profile decisions** (`data/surf_spots/profile_decisions.json`): 82 records for every
-  contradicted field (4 changed, 45 disputed, 33 kept) and 6 geometry notes, each with its
+  contradicted field (4 changed, 48 disputed, 30 kept) and 6 geometry notes, each with its
   sources, rationale and before/after effect on the real 2026-10-11 run
   (`scripts/profile_sensitivity.py`, read-only). A value changes only when two independent,
   directly read publishers agree on it and outrank every direct source of the old value; no
-  offshore wind met that (10 disputed, 10 kept). Changed: Ocean Beach, Snapper Rocks and
+  offshore wind met that (11 disputed, 9 kept). Changed: Ocean Beach, Snapper Rocks and
   Punta Roca tide → all, Cloudbreak 4-20 → 2-20 ft. Wind records report the model wind at
   the forecast point (e.g. Chicama: from 163°, 99 % of hours within 45° of the profile's
   150°, none within 45° of the disputed 67.5°); it never decides.
@@ -261,9 +261,11 @@ Branch `wf/spot-profiles`, 2026-10-13 ([`decisions.md`](decisions.md) ADR-018).
   on every hour (1,215 hours), and on 1,101 of them the explanation names both relations;
   scores, `wind_relation` and both classes are unchanged by it.
 * **Measured bathymetry** (NOAA BlueTopo, `scripts/bathymetry_profiles.py`,
-  [`SURF_SCORING.md`](SURF_SCORING.md) physical profiles): forecast-point depths for
-  Mavericks (57.9 m), Ocean Beach (36.4 m), Trestles (758.7 m) and Rincon (96.5 m) and a
-  measured shore normal at Trestles (210.9°); the other three contour normals failed the
+  [`SURF_SCORING.md`](SURF_SCORING.md) physical profiles): survey depths at the forecast
+  points of Mavericks (57.9 m), Ocean Beach (36.4 m) and Rincon (96.5 m) and a measured
+  shore normal at Trestles (210.9°); Trestles' forecast point lies in BlueTopo's NBS
+  Generalization surface (no survey), so its depth stays unknown (deep water either way);
+  the other three contour normals failed the
   documented acceptance rules and are kept in the provenance; no controlling depth, because
   every break coordinate is a shoreline position. On the real run: Mavericks' mean central
   breaking height 9.48 → 9.82 ft (mean |Δ score| 1.4), Ocean Beach 8.14 → 8.60 ft (0.21),
@@ -276,3 +278,19 @@ Branch `wf/spot-profiles`, 2026-10-13 ([`decisions.md`](decisions.md) ADR-018).
 Not verified: whether any changed, kept or disputed value is right at the break (no
 nearshore observations), the BlueTopo depths at the take-off zones (no surveyed lineup
 positions), and the model wind as a climatology (one 10-day October sample).
+
+**Review (2026-10-13, branch `wf/spot-profiles-review`).** Re-run independently: research
+load + assess on a fresh database (35 Moderate, 15 Low; research basis High 3, Moderate
+23, Low 24), `research lint` (Restaurants only), the sensitivity and model-wind tables
+(all records reproduced except Cloudbreak's wind record, 20.14 → 20.31, whose baseline now
+has the changed size range), the bathymetry script (byte-identical output from the
+cached tiles, whose checksums match a fresh download of the tile scheme and of three
+tiles), an independent sampling of the tiles (same depths and plane-fit azimuths without
+the meridian-convergence step), the four changed fields against their pages (every
+directly read excerpt found again, two independent directly read publishers each) and the prediction job on a
+re-seeded clone (the numbers above). Fixed: a publisher that both supports and contradicts
+a value no longer outweighs its own contradiction (Anchor Point's wind, Lobitos' swell
+window and Waimea Bay's size range kept → disputed; no prediction changes, Anchor Point
+already carried the note), and Trestles' 758.7 m forecast-point depth, an NBS
+Generalization cell outside any survey, is no longer labelled measured (no prediction
+changes: deep water either way).
