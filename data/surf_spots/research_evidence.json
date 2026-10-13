@@ -9076,6 +9076,106 @@
        "agrees": null
       }
      ]
+    },
+    {
+     "key": "bluetopo-bh44b5cz",
+     "title": "BlueTopo bathymetry tile BH44B5CZ (delivered 2026-08-27)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44B5CZ/BlueTopo_BH44B5CZ_20260820.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44B5CZ (4 m cells); depth at the forecast point 57.9 m below NAVD88.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh44c5cz",
+     "title": "BlueTopo bathymetry tile BH44C5CZ (delivered 2026-08-27)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44C5CZ/BlueTopo_BH44C5CZ_20260820.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44C5CZ (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh44d5cz",
+     "title": "BlueTopo bathymetry tile BH44D5CZ (delivered 2026-08-27)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44D5CZ/BlueTopo_BH44D5CZ_20260820.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44D5CZ (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh44f5cx",
+     "title": "BlueTopo bathymetry tile BH44F5CX (delivered 2026-08-27)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44F5CX/BlueTopo_BH44F5CX_20260820.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44F5CX (4 m cells); covers the break: elevation -4.3 m NAVD88 at the break coordinate; the depth contours within 250 m face 227 deg (plane fit, R2 0.86, 16 % of cells measured depths); main surveys H04978.interpolated (1929), west_coast_2016_el_nino_dem_J1337041tR49_C14 (2016), H05365.interpolated (1932).",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh44f5cz",
+     "title": "BlueTopo bathymetry tile BH44F5CZ (delivered 2026-09-17)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44F5CZ/BlueTopo_BH44F5CZ_20260915.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44F5CZ (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
     }
    ]
   },
@@ -10652,6 +10752,106 @@
        "claim": "A heavy, dynamic beach break whose shifting sandbars can change the lineup within a single session.",
        "value": null,
        "excerpt": "one of the heaviest, most dynamic beachbreaks in the world. The sandbars shift often, so the lineup can change within a single session.",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh44b5d4",
+     "title": "BlueTopo bathymetry tile BH44B5D4 (delivered 2026-09-17)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44B5D4/BlueTopo_BH44B5D4_20260915.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44B5D4 (4 m cells); depth at the forecast point 36.4 m below NAVD88.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh44c5d4",
+     "title": "BlueTopo bathymetry tile BH44C5D4 (delivered 2026-08-27)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44C5D4/BlueTopo_BH44C5D4_20260820.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44C5D4 (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh44c5d5",
+     "title": "BlueTopo bathymetry tile BH44C5D5 (delivered 2026-08-27)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44C5D5/BlueTopo_BH44C5D5_20260820.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44C5D5 (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh44d5d5",
+     "title": "BlueTopo bathymetry tile BH44D5D5 (delivered 2026-08-27)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44D5D5/BlueTopo_BH44D5D5_20260820.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44D5D5 (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh44f5d5",
+     "title": "BlueTopo bathymetry tile BH44F5D5 (delivered 2026-09-17)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44F5D5/BlueTopo_BH44F5D5_20260915.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH44F5D5 (4 m cells); covers the break: elevation +2.3 m NAVD88 at the break coordinate; the depth contours within 250 m face 288 deg (plane fit, R2 0.16, 75 % of cells measured depths); main surveys ca2014_usace_ncmp_ca_dem_J1392745tR6_C0 (2014), west_coast_2016_el_nino_dem_J1337041tR51_C14 (2016), H08028.interpolated (1956).",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
        "agrees": null
       }
      ]
@@ -15383,6 +15583,86 @@
        "claim": "Long rights, plus a fast left around the opposite side of the point on south swells.",
        "value": null,
        "excerpt": "Rincon is known for long right-handers, though it can also offer up a fast left-hand wave breaking around the opposite side of the point, especially on south swells.",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh45s5bf",
+     "title": "BlueTopo bathymetry tile BH45S5BF (delivered 2026-09-10)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45S5BF/BlueTopo_BH45S5BF_20260825.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH45S5BF (4 m cells); depth at the forecast point 96.5 m below NAVD88.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh45t5bf",
+     "title": "BlueTopo bathymetry tile BH45T5BF (delivered 2026-09-10)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45T5BF/BlueTopo_BH45T5BF_20260825.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH45T5BF (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh45v5bf",
+     "title": "BlueTopo bathymetry tile BH45V5BF (delivered 2026-09-10)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45V5BF/BlueTopo_BH45V5BF_20260825.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH45V5BF (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh45v5bg",
+     "title": "BlueTopo bathymetry tile BH45V5BG (delivered 2026-09-10)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45V5BG/BlueTopo_BH45V5BG_20260825.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH45V5BG (4 m cells); covers the break: elevation +5.6 m NAVD88 at the break coordinate; the depth contours within 250 m face 196 deg (plane fit, R2 0.66, 72 % of cells measured depths); main surveys usace2009_ca_dem_J1337040tR10_C11 (2009), H05498.interpolated (1933), H09752.interpolated (1978).",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
        "agrees": null
       }
      ]
@@ -20393,6 +20673,106 @@
        },
        "excerpt": "if there's a whiff of a south swell, it will wrap into the joint",
        "agrees": true
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh46r59v",
+     "title": "BlueTopo bathymetry tile BH46R59V (delivered 2026-10-07)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46R59V/BlueTopo_BH46R59V_20260929.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH46R59V (4 m cells); depth at the forecast point 758.7 m below NAVD88.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh46r59w",
+     "title": "BlueTopo bathymetry tile BH46R59W (delivered 2026-10-07)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46R59W/BlueTopo_BH46R59W_20260929.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH46R59W (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh46s59w",
+     "title": "BlueTopo bathymetry tile BH46S59W (delivered 2026-10-07)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46S59W/BlueTopo_BH46S59W_20260929.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH46S59W (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh46t59w",
+     "title": "BlueTopo bathymetry tile BH46T59W (delivered 2026-09-11)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46T59W/BlueTopo_BH46T59W_20260908.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH46T59W (4 m cells); covers part of the transect from the break to the forecast point.",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
+      }
+     ]
+    },
+    {
+     "key": "bluetopo-bh46t59x",
+     "title": "BlueTopo bathymetry tile BH46T59X (delivered 2026-09-11)",
+     "url": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46T59X/BlueTopo_BH46T59X_20260908.tiff",
+     "publisher": "NOAA Office of Coast Survey",
+     "source_type": "survey_data",
+     "published_year": 2026,
+     "accessed_at": "2026-10-13",
+     "retrieval": "fetched",
+     "notes": "Read directly: GeoTIFF elevation and contributor layers and the raster attribute table, checksums verified against the BlueTopo tile scheme; depths sampled by scripts/bathymetry_profiles.py. The excerpt is verbatim in the tile's TIFF ImageDescription tag and on https://nauticalcharts.noaa.gov/data/bluetopo_specs.html.",
+     "claims": [
+      {
+       "variable": "bathymetry",
+       "claim": "BlueTopo tile BH46T59X (4 m cells); covers the break: elevation +0.5 m NAVD88 at the break coordinate; the depth contours within 250 m face 211 deg (plane fit, R2 0.85, 94 % of cells measured depths); main surveys ca2014_usace_ncmp_ca_dem_J1337037tR04_C22 (2014), usace2009_ca_dem_J1337040tR04_C20 (2009), H09276.interpolated (1972).",
+       "value": null,
+       "excerpt": "This dataset is a multi-layered raster and part of NOAA Office of Coast Survey BlueTopo bathymetry...The vertical coordinate reference system for this product is NAVD88",
+       "agrees": null
       }
      ]
     }

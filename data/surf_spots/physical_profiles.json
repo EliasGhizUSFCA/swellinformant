@@ -1,0 +1,448 @@
+{
+  "mavericks": {
+    "forecast_point_depth_m": 57.9,
+    "data_quality": {
+      "forecast_point_depth_m": "measured"
+    },
+    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). The contours near the break face 227 deg (the downslope azimuth of a plane fitted to 4493 underwater survey cells within 250 m of the break; R2 0.86, 16 % measured depths, the rest interpolated within the surveys). This is not used as the shore normal: only 16 % of the fitted cells are measured depths (below 50 %); the rest are interpolated between soundings. Controlling depth not set: the break coordinate is -4.3 m NAVD88, 80 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 57.9 m below NAVD88.",
+    "provenance": {
+      "source": "NOAA Office of Coast Survey BlueTopo",
+      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median within 25 m",
+      "vertical_datum": "NAVD88",
+      "tiles": [
+        {
+          "tile": "BH44B5CZ",
+          "delivered": "2026-08-27 21:01:38",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44B5CZ/BlueTopo_BH44B5CZ_20260820.tiff",
+          "geotiff_sha256": "c36a4491dd39eb8e1475188d9b4888468b397726aef31af7da6e9b09afc8efa3",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44B5CZ/BlueTopo_BH44B5CZ_20260820.tiff.aux.xml",
+          "roles": [
+            "forecast_point"
+          ]
+        },
+        {
+          "tile": "BH44C5CZ",
+          "delivered": "2026-08-27 21:01:18",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44C5CZ/BlueTopo_BH44C5CZ_20260820.tiff",
+          "geotiff_sha256": "a6310029551765e6683f1d501bc437d0dc119afe7d940c654b808a8f8b348179",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44C5CZ/BlueTopo_BH44C5CZ_20260820.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH44D5CZ",
+          "delivered": "2026-08-27 21:01:33",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44D5CZ/BlueTopo_BH44D5CZ_20260820.tiff",
+          "geotiff_sha256": "2dc619cf7fb9ae02941a1f380a77d2a96ad2e40fa368a2aa021d39aaf2891b9e",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44D5CZ/BlueTopo_BH44D5CZ_20260820.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH44F5CX",
+          "delivered": "2026-08-27 21:01:03",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44F5CX/BlueTopo_BH44F5CX_20260820.tiff",
+          "geotiff_sha256": "4a7f5749811f7da0b24e25da233f4cfd6970d3d0d2d806e06b93f076deb38b75",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44F5CX/BlueTopo_BH44F5CX_20260820.tiff.aux.xml",
+          "roles": [
+            "break"
+          ]
+        },
+        {
+          "tile": "BH44F5CZ",
+          "delivered": "2026-09-17 18:22:08",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44F5CZ/BlueTopo_BH44F5CZ_20260915.tiff",
+          "geotiff_sha256": "54ef4428a44fe47d8ce30ee606ead7629d1a9dfbd80acc2a525c59c8afd584e9",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44F5CZ/BlueTopo_BH44F5CZ_20260915.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        }
+      ],
+      "break_elevation_m": -4.27,
+      "nearest_exposed_cell_m": 80.2,
+      "fits": [
+        {
+          "radius_m": 100.0,
+          "cells": 1890,
+          "survey_cells": 57,
+          "measured_share": 1.0,
+          "azimuth_deg": 249.6,
+          "slope": 0.0319,
+          "r2": 0.695
+        },
+        {
+          "radius_m": 250.0,
+          "cells": 10334,
+          "survey_cells": 4493,
+          "measured_share": 0.16,
+          "azimuth_deg": 227.0,
+          "slope": 0.0337,
+          "r2": 0.86
+        },
+        {
+          "radius_m": 500.0,
+          "cells": 41572,
+          "survey_cells": 32574,
+          "measured_share": 0.032,
+          "azimuth_deg": 223.1,
+          "slope": 0.025,
+          "r2": 0.784
+        },
+        {
+          "radius_m": 1000.0,
+          "cells": 165396,
+          "survey_cells": 150398,
+          "measured_share": 0.012,
+          "azimuth_deg": 233.7,
+          "slope": 0.0154,
+          "r2": 0.846
+        }
+      ],
+      "not_applied": {
+        "shore_normal_deg": {
+          "value": 227.0,
+          "reason": "only 16 % of the fitted cells are measured depths (below 50 %); the rest are interpolated between soundings"
+        }
+      }
+    }
+  },
+  "ocean-beach-sf": {
+    "forecast_point_depth_m": 36.4,
+    "data_quality": {
+      "forecast_point_depth_m": "measured"
+    },
+    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). The contours near the break face 288 deg (the downslope azimuth of a plane fitted to 4544 underwater survey cells within 250 m of the break; R2 0.16, 75 % measured depths, the rest interpolated within the surveys). This is not used as the shore normal: the plane fit explains too little of the depth (R2 0.16 < 0.5). Controlling depth not set: the break coordinate is +2.3 m NAVD88, 1 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 36.4 m below NAVD88.",
+    "provenance": {
+      "source": "NOAA Office of Coast Survey BlueTopo",
+      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median within 25 m",
+      "vertical_datum": "NAVD88",
+      "tiles": [
+        {
+          "tile": "BH44B5D4",
+          "delivered": "2026-09-17 18:23:27",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44B5D4/BlueTopo_BH44B5D4_20260915.tiff",
+          "geotiff_sha256": "9b7f18fa26949ae14a454d46cf5f469a216508e95a81b60f62ac6fef1e7dbb37",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44B5D4/BlueTopo_BH44B5D4_20260915.tiff.aux.xml",
+          "roles": [
+            "forecast_point"
+          ]
+        },
+        {
+          "tile": "BH44C5D4",
+          "delivered": "2026-08-27 21:00:27",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44C5D4/BlueTopo_BH44C5D4_20260820.tiff",
+          "geotiff_sha256": "e481da0578b2426a8f00a3491758806d5ae0a5e8a1960f4dd0bcc3776acd3677",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44C5D4/BlueTopo_BH44C5D4_20260820.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH44C5D5",
+          "delivered": "2026-08-27 20:59:57",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44C5D5/BlueTopo_BH44C5D5_20260820.tiff",
+          "geotiff_sha256": "1f7726fc4fe5ec57e32a1fa58948b6c88f3091c338e3a612dd8604cf80492854",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44C5D5/BlueTopo_BH44C5D5_20260820.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH44D5D5",
+          "delivered": "2026-08-27 20:59:28",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44D5D5/BlueTopo_BH44D5D5_20260820.tiff",
+          "geotiff_sha256": "aeab77846537483140207872c4189c417272d11d5704674e9107d2e0d423d889",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44D5D5/BlueTopo_BH44D5D5_20260820.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH44F5D5",
+          "delivered": "2026-09-17 18:22:05",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44F5D5/BlueTopo_BH44F5D5_20260915.tiff",
+          "geotiff_sha256": "b29b4ef65ea141dc99a8fca70f2a6437b29321c94f832ff354cc7b00a3585b58",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH44F5D5/BlueTopo_BH44F5D5_20260915.tiff.aux.xml",
+          "roles": [
+            "break"
+          ]
+        }
+      ],
+      "break_elevation_m": 2.27,
+      "nearest_exposed_cell_m": 1.2,
+      "fits": [
+        {
+          "radius_m": 100.0,
+          "cells": 581,
+          "survey_cells": 374,
+          "measured_share": 0.278,
+          "azimuth_deg": 5.2,
+          "slope": 0.0014,
+          "r2": 0.008
+        },
+        {
+          "radius_m": 250.0,
+          "cells": 5080,
+          "survey_cells": 4544,
+          "measured_share": 0.749,
+          "azimuth_deg": 288.5,
+          "slope": 0.0042,
+          "r2": 0.161
+        },
+        {
+          "radius_m": 500.0,
+          "cells": 22121,
+          "survey_cells": 21159,
+          "measured_share": 0.681,
+          "azimuth_deg": 270.4,
+          "slope": 0.0118,
+          "r2": 0.743
+        },
+        {
+          "radius_m": 1000.0,
+          "cells": 94213,
+          "survey_cells": 92248,
+          "measured_share": 0.801,
+          "azimuth_deg": 266.9,
+          "slope": 0.0141,
+          "r2": 0.928
+        }
+      ],
+      "not_applied": {
+        "shore_normal_deg": {
+          "value": 288.5,
+          "reason": "the plane fit explains too little of the depth (R2 0.16 < 0.5)"
+        }
+      }
+    }
+  },
+  "trestles": {
+    "shore_normal_deg": 210.9,
+    "forecast_point_depth_m": 758.7,
+    "data_quality": {
+      "shore_normal_deg": "measured",
+      "forecast_point_depth_m": "measured"
+    },
+    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). Shore normal 210.9 deg: the downslope azimuth of a plane fitted to 5923 underwater survey cells within 250 m of the break; R2 0.85, 94 % measured depths, the rest interpolated within the surveys. Controlling depth not set: the break coordinate is +0.5 m NAVD88, 1 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 758.7 m below NAVD88.",
+    "provenance": {
+      "source": "NOAA Office of Coast Survey BlueTopo",
+      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median within 25 m",
+      "vertical_datum": "NAVD88",
+      "tiles": [
+        {
+          "tile": "BH46R59V",
+          "delivered": "2026-10-07 16:18:54",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46R59V/BlueTopo_BH46R59V_20260929.tiff",
+          "geotiff_sha256": "704b493da6191ddfeb42d3f3522190da37e9e478da40d60adeea6a95cb35ee8c",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46R59V/BlueTopo_BH46R59V_20260929.tiff.aux.xml",
+          "roles": [
+            "forecast_point"
+          ]
+        },
+        {
+          "tile": "BH46R59W",
+          "delivered": "2026-10-07 16:18:10",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46R59W/BlueTopo_BH46R59W_20260929.tiff",
+          "geotiff_sha256": "032c9fdac06cb748ffbf83da6aa4f9cfe2062574c28cde80f006c48e3bcb467c",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46R59W/BlueTopo_BH46R59W_20260929.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH46S59W",
+          "delivered": "2026-10-07 16:17:51",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46S59W/BlueTopo_BH46S59W_20260929.tiff",
+          "geotiff_sha256": "d03983525f290934679667f30b1fa787fd45f2744ba7cc2ef78cdafd80cac626",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46S59W/BlueTopo_BH46S59W_20260929.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH46T59W",
+          "delivered": "2026-09-11 21:05:26",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46T59W/BlueTopo_BH46T59W_20260908.tiff",
+          "geotiff_sha256": "8ae6d285cc797f197012dde20ac8ab4ce6b29f560ef3a6bf40c4e8b8885ed481",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46T59W/BlueTopo_BH46T59W_20260908.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH46T59X",
+          "delivered": "2026-09-11 21:05:37",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46T59X/BlueTopo_BH46T59X_20260908.tiff",
+          "geotiff_sha256": "17a8353ec42d8a066b5853bf7375238f144421c81e0d316a9ce306f6b4430292",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH46T59X/BlueTopo_BH46T59X_20260908.tiff.aux.xml",
+          "roles": [
+            "break"
+          ]
+        }
+      ],
+      "break_elevation_m": 0.52,
+      "nearest_exposed_cell_m": 1.4,
+      "fits": [
+        {
+          "radius_m": 100.0,
+          "cells": 659,
+          "survey_cells": 659,
+          "measured_share": 1.0,
+          "azimuth_deg": 224.8,
+          "slope": 0.017,
+          "r2": 0.717
+        },
+        {
+          "radius_m": 250.0,
+          "cells": 5968,
+          "survey_cells": 5923,
+          "measured_share": 0.937,
+          "azimuth_deg": 210.9,
+          "slope": 0.0183,
+          "r2": 0.853
+        },
+        {
+          "radius_m": 500.0,
+          "cells": 25512,
+          "survey_cells": 25417,
+          "measured_share": 0.8,
+          "azimuth_deg": 205.1,
+          "slope": 0.0148,
+          "r2": 0.869
+        },
+        {
+          "radius_m": 1000.0,
+          "cells": 96120,
+          "survey_cells": 95976,
+          "measured_share": 0.853,
+          "azimuth_deg": 205.3,
+          "slope": 0.0088,
+          "r2": 0.729
+        }
+      ],
+      "not_applied": {}
+    }
+  },
+  "rincon": {
+    "forecast_point_depth_m": 96.5,
+    "data_quality": {
+      "forecast_point_depth_m": "measured"
+    },
+    "notes": "Measured from NOAA BlueTopo (scripts/bathymetry_profiles.py; depths relative to NAVD88). The contours near the break face 196 deg (the downslope azimuth of a plane fitted to 2441 underwater survey cells within 250 m of the break; R2 0.66, 72 % measured depths, the rest interpolated within the surveys). This is not used as the shore normal: the documented optimal swell window (270-290 deg) reaches 94 deg from it, and the model's straight-contour refraction would treat those swells as unable to reach the break (the contours turn around the point faster than the model represents). Controlling depth not set: the break coordinate is +5.6 m NAVD88, 2 m from the nearest cell at or above 0 m, so the coordinate marks the shoreline position of the break, not where the waves break. Forecast point depth 96.5 m below NAVD88.",
+    "provenance": {
+      "source": "NOAA Office of Coast Survey BlueTopo",
+      "method": "plane fit within 250 m (underwater survey cells), break depth = median within 25 m when no cell at or above 0 m lies within 100 m, forecast-point depth = median within 25 m",
+      "vertical_datum": "NAVD88",
+      "tiles": [
+        {
+          "tile": "BH45S5BF",
+          "delivered": "2026-09-10 22:33:43",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45S5BF/BlueTopo_BH45S5BF_20260825.tiff",
+          "geotiff_sha256": "882715b749c75f06cad24d3aee9c46fc908d5787937269fc9c788ffa9381b717",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45S5BF/BlueTopo_BH45S5BF_20260825.tiff.aux.xml",
+          "roles": [
+            "forecast_point"
+          ]
+        },
+        {
+          "tile": "BH45T5BF",
+          "delivered": "2026-09-10 22:33:30",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45T5BF/BlueTopo_BH45T5BF_20260825.tiff",
+          "geotiff_sha256": "1160fe19708b11b5449a0f8b260d10865d46b158936e7823377eb06657d25bc4",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45T5BF/BlueTopo_BH45T5BF_20260825.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH45V5BF",
+          "delivered": "2026-09-10 22:33:24",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45V5BF/BlueTopo_BH45V5BF_20260825.tiff",
+          "geotiff_sha256": "bcc538ed2c97dce7a08eea6270b21fa6a64bfaadddbb093c0771f3518c4ab783",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45V5BF/BlueTopo_BH45V5BF_20260825.tiff.aux.xml",
+          "roles": [
+            "transect"
+          ]
+        },
+        {
+          "tile": "BH45V5BG",
+          "delivered": "2026-09-10 22:33:18",
+          "resolution_m": 4.0,
+          "geotiff": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45V5BG/BlueTopo_BH45V5BG_20260825.tiff",
+          "geotiff_sha256": "edda1816ed51e36889aa78705c996c9d949c293c5e9b3de33e3e7ff8d6338642",
+          "rat": "https://noaa-ocs-nationalbathymetry-pds.s3.amazonaws.com/BlueTopo/BH45V5BG/BlueTopo_BH45V5BG_20260825.tiff.aux.xml",
+          "roles": [
+            "break"
+          ]
+        }
+      ],
+      "break_elevation_m": 5.56,
+      "nearest_exposed_cell_m": 1.9,
+      "fits": [
+        {
+          "radius_m": 100.0,
+          "cells": 0,
+          "survey_cells": 0,
+          "measured_share": 0.0,
+          "azimuth_deg": null,
+          "slope": null,
+          "r2": null
+        },
+        {
+          "radius_m": 250.0,
+          "cells": 3986,
+          "survey_cells": 2441,
+          "measured_share": 0.723,
+          "azimuth_deg": 196.2,
+          "slope": 0.0115,
+          "r2": 0.663
+        },
+        {
+          "radius_m": 500.0,
+          "cells": 21637,
+          "survey_cells": 20030,
+          "measured_share": 0.581,
+          "azimuth_deg": 209.5,
+          "slope": 0.0178,
+          "r2": 0.625
+        },
+        {
+          "radius_m": 1000.0,
+          "cells": 85317,
+          "survey_cells": 82455,
+          "measured_share": 0.185,
+          "azimuth_deg": 224.1,
+          "slope": 0.0129,
+          "r2": 0.681
+        }
+      ],
+      "not_applied": {
+        "shore_normal_deg": {
+          "value": 196.2,
+          "reason": "the documented optimal swell window (270-290 deg) reaches 94 deg from it, and the model's straight-contour refraction would treat those swells as unable to reach the break (the contours turn around the point faster than the model represents)"
+        }
+      }
+    }
+  }
+}
