@@ -1,4 +1,4 @@
-"""Forecast confidence and local confidence, methodology forecast-v1 (pure rules).
+"""Forecast confidence and local confidence, methodology forecast-v1.1 (pure rules).
 
 Every input here is a SYNTHETIC test value; nothing is a real forecast or verification.
 """
@@ -276,7 +276,8 @@ def test_inputs_record_every_value_and_rule() -> None:
     out = classify(lead_hours=200.0, run_change_ratio=1.6)
     local = classify_local(out.cls, None)
     stored = fc.confidence_inputs(out, local)
-    assert stored["method"] == "forecast-v1"
+    assert stored["method"] == fc.METHOD == "forecast-v1.1"
+    assert "wind_dispute" not in stored  # only when sources disagree about the wind
     assert stored["lead_h"] == 200.0 and stored["independent_families"] == 2
     assert stored["ensemble"] == {"rel_spread": 0.1, "members": None}
     assert (

@@ -158,7 +158,7 @@ def test_assessment_history(db: Session, tmp_path: Path, monkeypatch: pytest.Mon
     sync_evidence(db, load_evidence(db, _evidence_file(tmp_path)))
     first, created = assess_spot(db, pipeline)
     db.commit()
-    assert created and first.is_current and first.methodology_version == "research-v1.1"
+    assert created and first.is_current and first.methodology_version == "research-v1.2"
     assert first.overall_class == "high"
     season = first.per_variable["seasonality"]
     assert season["class"] == "low" and season["agreement"]["contradicting"] == 1
@@ -264,7 +264,7 @@ def test_api_detail_and_summaries(app_client: ApiClient, db: Session, tmp_path: 
     detail = app_client.get("/api/spots/pipeline").json()
     research = detail["research"]
     assert detail["research_class"] == research["research_class"] == "high"
-    assert research["methodology_version"] == "research-v1.1"
+    assert research["methodology_version"] == "research-v1.2"
     assert {s["retrieval"] for s in research["sources"]} == {"fetched"}  # the default
     assert [v["label"] for v in research["variables"]] == [
         "Swell direction",
@@ -403,7 +403,7 @@ def test_methodology_change_adds_a_history_row_and_keeps_the_old_one(
     pipeline = _spot(db, "pipeline")
     sync_evidence(db, load_evidence(db, _evidence_file(tmp_path)))
     with monkeypatch.context() as m:
-        m.setattr(assess, "METHODOLOGY_VERSION", "research-v1")  # the previous methodology
+        m.setattr(assess, "METHODOLOGY_VERSION", "research-v1.1")  # the previous methodology
         old, _ = assess_spot(db, pipeline)
         db.commit()
     new, created = assess_spot(db, pipeline)
@@ -415,32 +415,37 @@ def test_methodology_change_adds_a_history_row_and_keeps_the_old_one(
         .order_by(SpotResearchAssessment.id)
     ).all()
     assert [(r.methodology_version, r.is_current) for r in rows] == [
-        ("research-v1", False),
-        ("research-v1.1", True),
+        ("research-v1.1", False),
+        ("research-v1.2", True),
     ]
 
 
 def test_committed_evidence_file_loads_and_search_only_support_is_capped(db: Session) -> None:
     """The REAL research_evidence.json (not synthetic): it validates and seeding loads it.
     Sources read directly and sources seen only through search summaries are both present,
-    and a variable whose support is search-only is never High (research-v1.1 cap)."""
+    and a variable whose support is search-only is never High (research-v1.1 cap, kept in
+    research-v1.2). Counts: the second research pass (449 sources, 384 read directly, 1,711
+    claims) plus the 19 NOAA BlueTopo survey_data sources of 2026-10-13, one claim each."""
     _clear_assessments(db)
     path = DEFAULT_DATA_DIR / EVIDENCE_FILENAME
     assert path.exists()
     evidence = load_evidence(db, path)
     assert evidence is not None
     sources = [s for spot in evidence.spots.values() for s in spot.sources]
-    assert len(evidence.spots) == 50 and len(sources) == 449
-    assert sum(len(s.claims) for s in sources) == 1711
+    assert len(evidence.spots) == 50 and len(sources) == 449 + 19
+    assert sum(len(s.claims) for s in sources) == 1711 + 19
     assert {s.retrieval for s in sources} == {"fetched", "web_search"}
-    assert sum(s.retrieval == "fetched" for s in sources) == 384
+    assert sum(s.retrieval == "fetched" for s in sources) == 384 + 19
+    bluetopo = [s for s in sources if s.key.startswith("bluetopo-")]
+    assert len(bluetopo) == 19
+    assert all(s.source_type == "survey_data" and s.retrieval == "fetched" for s in bluetopo)
 
     out = seed_reference_data(db)  # the default data directory, with the file present
     db.commit()
-    assert out["research_evidence_spots"] == 50 and out["research_sources_created"] == 449
+    assert out["research_evidence_spots"] == 50 and out["research_sources_created"] == 468
     current = current_assessments(db)
     assert len(current) == 50
-    assert all(a.methodology_version == "research-v1.1" for a in current.values())
+    assert all(a.methodology_version == "research-v1.2" for a in current.values())
     for a in current.values():
         for entry in a.per_variable.values():
             if entry["sources"] and entry["search_only"]:

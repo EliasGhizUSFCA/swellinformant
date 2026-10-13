@@ -1,4 +1,4 @@
-"""Forecast confidence and local confidence per forecast hour, methodology "forecast-v1".
+"""Forecast confidence and local confidence per forecast hour, methodology "forecast-v1.1".
 
 Two classes (High / Moderate / Low), each with short plain-language reasons
 (docs/forecast-confidence.md has every threshold with the evidence behind it):
@@ -18,6 +18,13 @@ Two classes (High / Moderate / Low), each with short plain-language reasons
   understood: ``min(forecast class, research basis)`` with research basis
   ``min(swell_direction, swell_size, max(bathymetry, local_behavior))`` from the spot's
   current research assessment (app.services.research); no assessment gives Low.
+* **Disputed wind** (forecast-v1.1, a note that changes no class): when the spot's
+  current research assessment fires a conflict rule on wind, or its profile decision
+  record says the offshore wind direction is "disputed"
+  (app.services.research.decisions.wind_dispute), the hour carries the reason
+  WIND_DISPUTE_REASON and a ``wind_dispute`` entry in its stored inputs (the profile and
+  the main contradicting offshore direction and the wind relation under each). Forecast
+  and local classes are computed exactly as in forecast-v1.
 
 Research confidence itself is a separate assessment (docs/research-confidence.md) that is
 stored and shown on its own; only the documented ``min`` above connects the two. None of
@@ -37,7 +44,8 @@ from typing import Any
 
 from app.services.forecasts.families import are_independent
 
-METHOD = "forecast-v1"
+# forecast-v1.1 = forecast-v1 plus the disputed-wind note (no class changes).
+METHOD = "forecast-v1.1"
 
 HIGH, MODERATE, LOW = "high", "moderate", "low"
 _RANK = {LOW: 0, MODERATE: 1, HIGH: 2}
@@ -91,6 +99,7 @@ RESEARCH_REASONS = {
     HIGH: "How this break responds to swell is well documented.",
 }
 STALE_REASON = "Forecast data is out of date; a newer model run is overdue."
+WIND_DISPUTE_REASON = "Sources disagree about which wind is offshore here."
 MAX_REASON_CHARS = 90
 
 
@@ -294,6 +303,9 @@ class ResearchBasisInput:
     assessment_id: int | None
     overall_class: str
     variable_classes: dict[str, str] = field(default_factory=dict)
+    # The assessment's wind entry (rules and evidence), for the disputed-wind note only;
+    # it plays no part in the local class.
+    wind: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -507,7 +519,13 @@ def research_input(assessment: Any | None) -> ResearchBasisInput | None:
         for v in RESEARCH_BASIS_VARIABLES
         if isinstance(per_variable.get(v), dict)
     }
-    return ResearchBasisInput(assessment.id, assessment.overall_class, classes)
+    wind = per_variable.get("wind")
+    return ResearchBasisInput(
+        assessment.id,
+        assessment.overall_class,
+        classes,
+        wind=wind if isinstance(wind, dict) else None,
+    )
 
 
 def research_basis(classes: dict[str, str]) -> str:
@@ -539,9 +557,35 @@ def classify_local(forecast_cls: str, research: ResearchBasisInput | None) -> Lo
 
 
 # --------------------------------------------------------------------------- storage
-def confidence_inputs(fc: ForecastConfidence, local: LocalConfidence) -> dict[str, Any]:
-    """The JSON stored on predictions and archive rows (every input and every rule)."""
+def wind_dispute_inputs(
+    dispute: Any, relation: str, relation_alternative: str | None
+) -> dict[str, Any]:
+    """The ``wind_dispute`` entry of the stored inputs for one hour.
+
+    ``dispute`` is a research.decisions.WindDispute; ``relation`` the hour's wind relation
+    under the profile's offshore direction, ``relation_alternative`` under the main
+    contradicting direction (None when that direction is unknown).
+    """
     return {
+        **dispute.as_dict(),
+        "relation": relation,
+        "relation_alternative": relation_alternative,
+        "differs": relation_alternative is not None and relation_alternative != relation,
+        "reason": WIND_DISPUTE_REASON,
+    }
+
+
+def confidence_inputs(
+    fc: ForecastConfidence,
+    local: LocalConfidence,
+    wind_dispute: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The JSON stored on predictions and archive rows (every input and every rule).
+
+    ``wind_dispute`` (forecast-v1.1, from :func:`wind_dispute_inputs`) is stored only when
+    sources disagree about the offshore wind; it changes neither class.
+    """
+    out = {
         "method": METHOD,
         **fc.inputs_dict(),
         "rules": [r.as_str() for r in fc.rules],
@@ -549,13 +593,20 @@ def confidence_inputs(fc: ForecastConfidence, local: LocalConfidence) -> dict[st
         "reasons": fc.reasons,
         "local": local.as_dict(),
     }
+    if wind_dispute is not None:
+        out["wind_dispute"] = wind_dispute
+    return out
 
 
 def stored_reasons(inputs: dict[str, Any] | None) -> list[str]:
-    """Forecast reasons first, then the local (research) reason, from stored inputs."""
+    """Forecast reasons first, then the disputed-wind note (if any), then the local
+    (research) reason, from stored inputs."""
     if not inputs:
         return []
     out = [str(r) for r in inputs.get("reasons") or []]
+    dispute_reason = (inputs.get("wind_dispute") or {}).get("reason")
+    if dispute_reason and dispute_reason not in out:
+        out.append(str(dispute_reason))
     local_reason = (inputs.get("local") or {}).get("reason")
     if local_reason and local_reason not in out:
         out.append(str(local_reason))

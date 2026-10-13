@@ -1,0 +1,3112 @@
+{
+  "version": 1,
+  "generated_at": "2026-10-13T00:00:00Z",
+  "policy": "ADR-018 (docs/decisions.md): a profile value is changed only when at least two independent publishers read directly agree on the new value within the research methodology's agreement tolerances and every directly read source supporting the old value is of a strictly lower tier than both of them; otherwise the record says kept or disputed and why (app.services.research.decisions.propose). Model wind never decides. Sensitivity numbers: scripts/profile_sensitivity.py decisions --run-id 4 on the real 2026-10-11 runs (database swell_live2, read-only).",
+  "decisions": [
+    {
+      "slug": "anchor-point",
+      "field": "offshore_wind_direction",
+      "old_value": 45.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surf-forecast-anchor-point",
+        "surfatlas-morocco-surf-season",
+        "surfatlas-surfing-morocco"
+      ],
+      "rationale": "Current offshore wind direction: 45 deg. Supporting: Surf-Forecast.com (B); Surf Atlas (thesurfatlas.com) (B). Contradicting: Surf Atlas (thesurfatlas.com) (B). Main contradicting value: 112 deg (stated by Surf Atlas (thesurfatlas.com) (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Surf Atlas (thesurfatlas.com) both supports (E, 90 deg, at the edge of the 45 deg tolerance) and contradicts (E-SE, 112 deg) the profile's 45 deg; a publisher's own support does not outweigh its contradiction, so Surf-Forecast.com is the only other directly read support and the same-tier conflict is unresolved. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 32 (20 in daylight) | mean |delta score| 11.15 | mean delta score -10.31 | max |delta score| 42 | mean breaking height 5.38 -> 5.38 ft | wind relation changed in 68 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 125 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 345 deg (resultant 0.62), 10 % of hours within 45 deg of the profile's 45 deg and 18 % within 45 deg of 112 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 112.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 32,
+        "labels_changed_daylight": 20,
+        "mean_abs_delta_score": 11.15,
+        "max_abs_delta_score": 42,
+        "mean_delta_score": -10.31,
+        "wind_relations_changed": 68,
+        "mean_breaking_mid_ft": [
+          5.38,
+          5.38
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 125,
+        "vector_mean_from_deg": 344.6,
+        "resultant": 0.62,
+        "modal_sector_deg": 337.5,
+        "share_within_45_of_profile": 0.1,
+        "share_within_45_of_alternative": 0.18,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "anchor-point",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surf-forecast-anchor-point",
+        "surfertoday-anchor-point",
+        "wannasurf-anchor-point"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: none. Contradicting: Surf-Forecast.com (B); Surfertoday (B, search summary); WannaSurf (C). Main contradicting value: all (stated by Surfertoday (B, search summary); WannaSurf (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 5.38 -> 5.38 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          5.38,
+          5.38
+        ]
+      }
+    },
+    {
+      "slug": "anchor-point",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 12.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "surfatlas-anchor-point",
+        "surfatlas-taghazout",
+        "surfertoday-anchor-point",
+        "wannasurf-anchor-point"
+      ],
+      "rationale": "Current working size range: 3-12 ft. Supporting: Surfertoday (B, search summary); Surf Atlas (thesurfatlas.com) (B). Contradicting: WannaSurf (C). Main contradicting value: 3-16 ft (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 2 (1 in daylight) | mean |delta score| 0.49 | mean delta score -0.49 | max |delta score| 1 | mean breaking height 5.38 -> 5.38 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 3.0,
+        "max": 16.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 2,
+        "labels_changed_daylight": 1,
+        "mean_abs_delta_score": 0.49,
+        "max_abs_delta_score": 1,
+        "mean_delta_score": -0.49,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          5.38,
+          5.38
+        ]
+      }
+    },
+    {
+      "slug": "bells-beach",
+      "field": "offshore_wind_direction",
+      "old_value": 300.0,
+      "new_value": null,
+      "decision": "kept",
+      "reason": "stated_orientation",
+      "sources": [
+        "surfer-spot-mechanics-bells",
+        "surfforecast-bells",
+        "surfforecast-bells-bowl"
+      ],
+      "rationale": "SURFER (read directly) states the orientation: 'Given the general southeasterly exposure of the beach, straight offshore is from the northwesterly direction.' The profile's 300 deg is straight offshore for that exposure, and Surf-Forecast.com gives NW for both Bells and the Bowl. The S-SW swell window centre (212.5 deg) is the direction the swell comes from, not the shore normal.",
+      "decided_at": "2026-10-13"
+    },
+    {
+      "slug": "bells-beach",
+      "field": "tide_preference",
+      "old_value": "low_to_mid",
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "surfertoday-bells",
+        "surfforecast-bells",
+        "surfforecast-bells-bowl"
+      ],
+      "rationale": "Current tide preference: low_to_mid. Supporting: Surf-Forecast.com (B). Contradicting: Surfer Today (B, search summary). Main contradicting value: all (stated by Surfer Today (B, search summary); no independent directly read publisher agrees with it). Kept: the only contradicting sources were seen as search summaries, not read directly. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 5.03 -> 5.03 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          5.03,
+          5.03
+        ]
+      }
+    },
+    {
+      "slug": "bells-beach",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 15.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "beachsafe-bells",
+        "surfer-spot-mechanics-bells",
+        "wsl-anderson-bells"
+      ],
+      "rationale": "Current working size range: 3-15 ft. Supporting: World Surf League (B); SURFER (republished on Yahoo) (B). Contradicting: Surf Life Saving Australia (Beachsafe) (C). Main contradicting value: 3-23 ft (stated by Surf Life Saving Australia (Beachsafe) (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 2 (1 in daylight) | mean |delta score| 0.43 | mean delta score -0.43 | max |delta score| 3 | mean breaking height 5.03 -> 5.03 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 3.0,
+        "max": 23.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 2,
+        "labels_changed_daylight": 1,
+        "mean_abs_delta_score": 0.43,
+        "max_abs_delta_score": 3,
+        "mean_delta_score": -0.43,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          5.03,
+          5.03
+        ]
+      }
+    },
+    {
+      "slug": "burleigh-heads",
+      "field": "offshore_wind_direction",
+      "old_value": 225.0,
+      "new_value": null,
+      "decision": "kept",
+      "reason": "wave_face",
+      "sources": [
+        "surf-forecast-burleigh",
+        "surfatlas-burleigh",
+        "goldcoast-council-burleigh"
+      ],
+      "rationale": "Burleigh Heads is a right point (City of Gold Coast: the Gold Coast's most northern point break). Surf-Forecast.com (read directly) gives SW as offshore, the profile's 225 deg, and Surf Atlas says the angle of the coast is perfect for the dominant winter southerly offshores.",
+      "decided_at": "2026-10-13"
+    },
+    {
+      "slug": "burleigh-heads",
+      "field": "tide_preference",
+      "old_value": "low_to_mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "experiencegoldcoast-surf-guide",
+        "surf-forecast-burleigh",
+        "surfertoday-burleigh",
+        "wannasurf-burleigh"
+      ],
+      "rationale": "Current tide preference: low_to_mid. Supporting: SurferToday (B, search summary); Experience Gold Coast (tourism) (B). Contradicting: Surf-Forecast.com (B); WannaSurf (C). Main contradicting value: all (stated by Surf-Forecast.com (B); WannaSurf (C); 2 independent directly read publishers agree with it). Directly read support for the current value: Experience Gold Coast (tourism) (B). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 4.89 -> 4.89 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          4.89,
+          4.89
+        ]
+      }
+    },
+    {
+      "slug": "chicama",
+      "field": "offshore_wind_direction",
+      "old_value": 150.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "chicamasurftrips-about",
+        "latamsurfing-chicama",
+        "mywavefinder-chicama",
+        "surfescape-peru",
+        "surfforecast-chicama",
+        "wannasurf-chicama"
+      ],
+      "rationale": "Current offshore wind direction: 150 deg. Supporting: Chicama Surf Trips (C); Surf Escape (C). Contradicting: Surf-Forecast.com (B); WannaSurf (C); LatAm Surfing (C); MyWaveFinder (C). Main contradicting value: 67.5 deg (stated by Surf-Forecast.com (B); WannaSurf (C); 4 independent directly read publishers agree with it). Directly read support for the current value: Chicama Surf Trips (C); Surf Escape (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 81 (41 in daylight) | mean |delta score| 19.35 | mean delta score -19.35 | max |delta score| 35 | mean breaking height 5.08 -> 5.08 ft | wind relation changed in 81 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 146 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 163 deg (resultant 0.98), 99 % of hours within 45 deg of the profile's 150 deg and 0 % within 45 deg of 67.5 deg. Directly read sources say the prevailing wind here is offshore (Wikipedia, Chicama Surf Trips, WannaSurf); the model's prevailing wind matches the profile's direction, so the model sample does not support the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 67.5,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 81,
+        "labels_changed_daylight": 41,
+        "mean_abs_delta_score": 19.35,
+        "max_abs_delta_score": 35,
+        "mean_delta_score": -19.35,
+        "wind_relations_changed": 81,
+        "mean_breaking_mid_ft": [
+          5.08,
+          5.08
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 146,
+        "vector_mean_from_deg": 162.6,
+        "resultant": 0.98,
+        "modal_sector_deg": 157.5,
+        "share_within_45_of_profile": 0.99,
+        "share_within_45_of_alternative": 0.0,
+        "supports_change": false
+      }
+    },
+    {
+      "slug": "chicama",
+      "field": "tide_preference",
+      "old_value": "all",
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "mywavefinder-chicama",
+        "surfertoday-chicama",
+        "surfescape-peru",
+        "topologica-chicama",
+        "wannasurf-chicama"
+      ],
+      "rationale": "Current tide preference: all. Supporting: WannaSurf (C); MyWaveFinder (C); Surf Escape (C). Contradicting: Surfer Today (B, search summary); Topologica (C). Main contradicting value: mid_to_high (stated by Topologica (C); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 5.08 -> 5.08 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "mid_to_high",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          5.08,
+          5.08
+        ]
+      }
+    },
+    {
+      "slug": "chicama",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 12.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "latamsurfing-chicama",
+        "surfertoday-chicama",
+        "topologica-chicama",
+        "wannasurf-chicama",
+        "wikipedia-malabrigo"
+      ],
+      "rationale": "Current working size range: 3-12 ft. Supporting: WannaSurf (C); Surfer Today (B, search summary); LatAm Surfing (C); Topologica (C). Contradicting: Wikipedia (B). Main contradicting value: 3-20 ft (stated by Wikipedia (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 7 (4 in daylight) | mean |delta score| 0.89 | mean delta score -0.89 | max |delta score| 2 | mean breaking height 5.08 -> 5.08 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 3.0,
+        "max": 20.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 7,
+        "labels_changed_daylight": 4,
+        "mean_abs_delta_score": 0.89,
+        "max_abs_delta_score": 2,
+        "mean_delta_score": -0.89,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          5.08,
+          5.08
+        ]
+      }
+    },
+    {
+      "slug": "cloud-9",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 10.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "fatlips-cloud9"
+      ],
+      "rationale": "Current working size range: 3-10 ft. Supporting: none. Contradicting: Fat Lips (surfsiargao.com) (C). Main contradicting value: 2-10 ft (stated by Fat Lips (surfsiargao.com) (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 4 (2 in daylight) | mean |delta score| 0.85 | mean delta score +0.7 | max |delta score| 2 | mean breaking height 4.97 -> 4.97 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 2.0,
+        "max": 10.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 4,
+        "labels_changed_daylight": 2,
+        "mean_abs_delta_score": 0.85,
+        "max_abs_delta_score": 2,
+        "mean_delta_score": 0.7,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          4.97,
+          4.97
+        ]
+      }
+    },
+    {
+      "slug": "cloudbreak",
+      "field": "offshore_wind_direction",
+      "old_value": 135.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "perfectwave-fiji",
+        "surfforecast-cloudbreak",
+        "yeeew-cloudbreak"
+      ],
+      "rationale": "Current offshore wind direction: 135 deg. Supporting: Yeeew! (B); Perfect Wave Travel (C). Contradicting: Surf-Forecast.com (B). Main contradicting value: 225 deg (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 74 (44 in daylight) | mean |delta score| 20.31 | mean delta score -20.31 | max |delta score| 35 | mean breaking height 6.92 -> 6.92 ft | wind relation changed in 81 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 145 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 128 deg (resultant 0.97), 99 % of hours within 45 deg of the profile's 135 deg and 0 % within 45 deg of 225 deg. A directly read source says the prevailing wind here is offshore (Perfect Wave Travel); the model's prevailing wind matches the profile's direction, so the model sample does not support the contradicting value. The only contradicting publisher, Surf-Forecast.com, contradicts itself (best wind southwest in one sentence, east-northeast offshore in another; templated text).",
+      "decided_at": "2026-10-13",
+      "alternative": 225.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 74,
+        "labels_changed_daylight": 44,
+        "mean_abs_delta_score": 20.31,
+        "max_abs_delta_score": 35,
+        "mean_delta_score": -20.31,
+        "wind_relations_changed": 81,
+        "mean_breaking_mid_ft": [
+          6.92,
+          6.92
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 145,
+        "vector_mean_from_deg": 128.3,
+        "resultant": 0.97,
+        "modal_sector_deg": 112.5,
+        "share_within_45_of_profile": 0.99,
+        "share_within_45_of_alternative": 0.0,
+        "supports_change": false
+      }
+    },
+    {
+      "slug": "cloudbreak",
+      "field": "tide_preference",
+      "old_value": "all",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "fijitravel-mamanuca",
+        "surfertoday-cloudbreak",
+        "wsl-breakbreakdown-cloudbreak",
+        "yeeew-cloudbreak"
+      ],
+      "rationale": "Current tide preference: all. Supporting: Surfer Today (B, search summary); Yeeew! (B). Contradicting: World Surf League (B); Surfer Today (B, search summary); Tourism Fiji (fiji.travel) (B). Main contradicting value: low (stated by World Surf League (B); Surfer Today (B, search summary); 2 independent directly read publishers agree with it). Directly read support for the current value: Yeeew! (B). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 6.92 -> 6.92 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "low",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          6.92,
+          6.92
+        ]
+      }
+    },
+    {
+      "slug": "cloudbreak",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 4.0,
+        "max": 20.0
+      },
+      "new_value": {
+        "min": 2.0,
+        "max": 20.0
+      },
+      "decision": "changed",
+      "sources": [
+        "fijitravel-mamanuca",
+        "surfertoday-cloudbreak",
+        "tavarua-surf",
+        "wannasurf-cloudbreak",
+        "wsl-breakbreakdown-cloudbreak"
+      ],
+      "rationale": "Current working size range: 4-20 ft. Supporting: WannaSurf (C). Contradicting: World Surf League (B); Surfer Today (B, search summary); Tourism Fiji (fiji.travel) (B); Tavarua Island Resort (C). Main contradicting value: 2-20 ft (stated by World Surf League (B); Surfer Today (B, search summary); Tourism Fiji (fiji.travel) (B); Tavarua Island Resort (C); 3 independent directly read publishers agree with it). Changed: at least two independent publishers read directly agree on the new value, and no directly read source of the same or a higher tier supports the old one. Before -> after this change, real 2026-10-11 blend run, 81 hours: labels changed 5 (2 in daylight) | mean |delta score| 0.75 | mean delta score +0.75 | max |delta score| 1 | mean breaking height 6.92 -> 6.92 ft. After the change the 20 ft maximum is still contradicted by one publisher (World Surf League quotes a local surfer: it can hold up to 25-30 ft), while three directly read publishers, World Surf League's own conditions table among them, give 20 ft; that single contradiction is kept, not adopted.",
+      "decided_at": "2026-10-13",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "adopted",
+        "hours": 81,
+        "labels_changed": 5,
+        "labels_changed_daylight": 2,
+        "mean_abs_delta_score": 0.75,
+        "max_abs_delta_score": 1,
+        "mean_delta_score": 0.75,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          6.92,
+          6.92
+        ]
+      }
+    },
+    {
+      "slug": "desert-point",
+      "field": "offshore_wind_direction",
+      "old_value": 135.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "isg-desert-point",
+        "lmbk-desert-point",
+        "surfforecast-desert-point",
+        "wannasurf-desert-point"
+      ],
+      "rationale": "Current offshore wind direction: 135 deg. Supporting: WannaSurf (C); Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); LMBK Surf House (C). Contradicting: Surf-Forecast (surf-forecast.com) (B). Main contradicting value: 67.5 deg (stated by Surf-Forecast (surf-forecast.com) (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 71 (34 in daylight) | mean |delta score| 12.25 | mean delta score -12.25 | max |delta score| 28 | mean breaking height 6.66 -> 6.66 ft | wind relation changed in 81 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 146 hours above 5 km/h, 11-21 October, outside the spot's best months; a short sample, not a climatology): vector mean from 150 deg (resultant 0.96), 97 % of hours within 45 deg of the profile's 135 deg and 0 % within 45 deg of 67.5 deg. A directly read source says the prevailing wind here is offshore (LMBK Surf House); the model's prevailing wind matches the profile's direction, so the model sample does not support the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 67.5,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 71,
+        "labels_changed_daylight": 34,
+        "mean_abs_delta_score": 12.25,
+        "max_abs_delta_score": 28,
+        "mean_delta_score": -12.25,
+        "wind_relations_changed": 81,
+        "mean_breaking_mid_ft": [
+          6.66,
+          6.66
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 146,
+        "vector_mean_from_deg": 149.9,
+        "resultant": 0.96,
+        "modal_sector_deg": 135.0,
+        "share_within_45_of_profile": 0.97,
+        "share_within_45_of_alternative": 0.0,
+        "supports_change": false
+      }
+    },
+    {
+      "slug": "dungeons",
+      "field": "offshore_wind_direction",
+      "old_value": 30.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surfertoday-biggest-waves",
+        "surfertoday-dungeons",
+        "surfforecast-dungeons",
+        "surfingworld-dungeons",
+        "wannasurf-dungeons",
+        "yeeew-dungeons"
+      ],
+      "rationale": "Current offshore wind direction: 30 deg. Supporting: WannaSurf (C); Surfer Today (B, search summary); Yeeew! (B). Contradicting: Surf-Forecast.com (B); surfing.world (C). Main contradicting value: 315 deg (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 1 (0 in daylight) | mean |delta score| 4.41 | mean delta score +1 | max |delta score| 12 | mean breaking height 13.09 -> 13.09 ft | wind relation changed in 64 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 142 hours above 5 km/h, 11-21 October, outside the spot's best months; a short sample, not a climatology): vector mean from 302 deg (resultant 0.15), 23 % of hours within 45 deg of the profile's 30 deg and 39 % within 45 deg of 315 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value. The two contradicting publishers do not agree with each other (Surf-Forecast.com NW, surfing.world SE).",
+      "decided_at": "2026-10-13",
+      "alternative": 315.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 1,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 4.41,
+        "max_abs_delta_score": 12,
+        "mean_delta_score": 1,
+        "wind_relations_changed": 64,
+        "mean_breaking_mid_ft": [
+          13.09,
+          13.09
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 142,
+        "vector_mean_from_deg": 301.6,
+        "resultant": 0.15,
+        "modal_sector_deg": 337.5,
+        "share_within_45_of_profile": 0.23,
+        "share_within_45_of_alternative": 0.39,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "dungeons",
+      "field": "tide_preference",
+      "old_value": "low_to_mid",
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "surfertoday-biggest-waves",
+        "surfertoday-dungeons",
+        "surfforecast-dungeons",
+        "wannasurf-dungeons",
+        "yeeew-dungeons"
+      ],
+      "rationale": "Current tide preference: low_to_mid. Supporting: Surf-Forecast.com (B); Surfer Today (B, search summary); Yeeew! (B). Contradicting: WannaSurf (C). Main contradicting value: all (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 13.09 -> 13.09 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          13.09,
+          13.09
+        ]
+      }
+    },
+    {
+      "slug": "g-land",
+      "field": "offshore_wind_direction",
+      "old_value": 120.0,
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "isg-g-land",
+        "surfertoday-g-land",
+        "surfforecast-g-land",
+        "surfindonesia-g-land",
+        "wikipedia-g-land",
+        "worldsurfaris-g-land",
+        "wsl-g-land-2022-preview"
+      ],
+      "rationale": "Current offshore wind direction: 120 deg. Supporting: Wikipedia (B); Surf-Forecast (surf-forecast.com) (B); World Surf League (B); Surfer Today (B, search summary); Surf Indonesia (surfindonesia.com) (C); World Surfaris (C). Contradicting: Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C). Main contradicting value: 67.5 deg (stated by Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 44 (29 in daylight) | mean |delta score| 5.49 | mean delta score -5.32 | max |delta score| 12 | mean breaking height 9.96 -> 9.96 ft | wind relation changed in 56 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 143 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 129 deg (resultant 0.93), 96 % of hours within 45 deg of the profile's 120 deg and 33 % within 45 deg of 67.5 deg. A directly read source says the prevailing wind here is offshore (Wikipedia); the model's prevailing wind matches the profile's direction, so the model sample does not support the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 67.5,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 44,
+        "labels_changed_daylight": 29,
+        "mean_abs_delta_score": 5.49,
+        "max_abs_delta_score": 12,
+        "mean_delta_score": -5.32,
+        "wind_relations_changed": 56,
+        "mean_breaking_mid_ft": [
+          9.96,
+          9.96
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 143,
+        "vector_mean_from_deg": 128.8,
+        "resultant": 0.93,
+        "modal_sector_deg": 135.0,
+        "share_within_45_of_profile": 0.96,
+        "share_within_45_of_alternative": 0.33,
+        "supports_change": false
+      }
+    },
+    {
+      "slug": "g-land",
+      "field": "tide_preference",
+      "old_value": "low_to_mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "isg-g-land",
+        "surfforecast-g-land",
+        "surfindonesia-g-land",
+        "wikipedia-g-land",
+        "worldsurfaris-g-land"
+      ],
+      "rationale": "Current tide preference: low_to_mid. Supporting: Surf-Forecast (surf-forecast.com) (B); World Surfaris (C). Contradicting: Wikipedia (B); Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); Surf Indonesia (surfindonesia.com) (C); World Surfaris (C). Main contradicting value: high (stated by Wikipedia (B); World Surfaris (C); 3 independent directly read publishers agree with it). Directly read support for the current value: Surf-Forecast (surf-forecast.com) (B); World Surfaris (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 9.96 -> 9.96 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "high",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          9.96,
+          9.96
+        ]
+      }
+    },
+    {
+      "slug": "g-land",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 4.0,
+        "max": 15.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "isg-g-land",
+        "wikipedia-g-land"
+      ],
+      "rationale": "Current working size range: 4-15 ft. Supporting: Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C). Contradicting: Wikipedia (B). Main contradicting value: 4-20 ft (stated by Wikipedia (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 5 (1 in daylight) | mean |delta score| 1.12 | mean delta score -0.56 | max |delta score| 3 | mean breaking height 9.96 -> 9.96 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 4.0,
+        "max": 20.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 5,
+        "labels_changed_daylight": 1,
+        "mean_abs_delta_score": 1.12,
+        "max_abs_delta_score": 3,
+        "mean_delta_score": -0.56,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          9.96,
+          9.96
+        ]
+      }
+    },
+    {
+      "slug": "jaws-peahi",
+      "field": "offshore_wind_direction",
+      "old_value": 180.0,
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "surf-forecast-jaws",
+        "surfertoday-jaws",
+        "wannasurf-jaws",
+        "wsl-jaws-bwt-guide",
+        "yeeew-jaws"
+      ],
+      "rationale": "Current offshore wind direction: 180 deg. Supporting: Surf-Forecast.com (B); World Surf League (B); WannaSurf (C); Yeeew! (B). Contradicting: Surfertoday (B, search summary). Main contradicting value: 112.5 deg (stated by Surfertoday (B, search summary); no independent directly read publisher agrees with it). Kept: the only contradicting sources were seen as search summaries, not read directly. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0.43 | mean delta score +0.43 | max |delta score| 3 | mean breaking height 7.24 -> 7.24 ft | wind relation changed in 81 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 146 hours above 5 km/h, 11-21 October, outside the spot's best months; a short sample, not a climatology): vector mean from 93 deg (resultant 0.99), 0 % of hours within 45 deg of the profile's 180 deg and 100 % within 45 deg of 112.5 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 112.5,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0.43,
+        "max_abs_delta_score": 3,
+        "mean_delta_score": 0.43,
+        "wind_relations_changed": 81,
+        "mean_breaking_mid_ft": [
+          7.24,
+          7.24
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 146,
+        "vector_mean_from_deg": 92.9,
+        "resultant": 0.99,
+        "modal_sector_deg": 90.0,
+        "share_within_45_of_profile": 0.0,
+        "share_within_45_of_alternative": 1.0,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "jaws-peahi",
+      "field": "optimal_swell_direction",
+      "old_value": {
+        "min": 315.0,
+        "max": 345.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "hawaiilife-jaws",
+        "surf-forecast-jaws",
+        "surfertoday-jaws",
+        "wannasurf-jaws",
+        "yeeew-jaws"
+      ],
+      "rationale": "Current optimal swell window: 315-345 deg. Supporting: Surfertoday (B, search summary); WannaSurf (C); Yeeew! (B); Hawaii Life Vacations (B). Contradicting: Surf-Forecast.com (B). Main contradicting value: 22.5-22.5 deg (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0.36 | mean delta score -0.36 | max |delta score| 2 | mean breaking height 7.24 -> 7.24 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 22.5,
+        "max": 22.5
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0.36,
+        "max_abs_delta_score": 2,
+        "mean_delta_score": -0.36,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.24,
+          7.24
+        ]
+      }
+    },
+    {
+      "slug": "jaws-peahi",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 20.0,
+        "max": 60.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "surfertoday-jaws",
+        "wikipedia-peahi",
+        "wsl-jaws-bwt-guide",
+        "wsl-jaws-paddling-peahi",
+        "yeeew-jaws"
+      ],
+      "rationale": "Current working size range: 20-60 ft. Supporting: Wikipedia (B); World Surf League (B); Yeeew! (B). Contradicting: Surfertoday (B, search summary). Main contradicting value: 20-80 ft (stated by Surfertoday (B, search summary); no independent directly read publisher agrees with it). Kept: the only contradicting sources were seen as search summaries, not read directly. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 7.24 -> 7.24 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 20.0,
+        "max": 80.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.24,
+          7.24
+        ]
+      }
+    },
+    {
+      "slug": "jeffreys-bay",
+      "field": "offshore_wind_direction",
+      "old_value": 290.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surfatlas-jeffreys-bay",
+        "surfforecast-super-tubes",
+        "wannasurf-supertubes-jbay",
+        "wsl-break-breakdown-jbay",
+        "yeeew-jeffreys-bay"
+      ],
+      "rationale": "Current offshore wind direction: 290 deg. Supporting: Surf-Forecast.com (B); Surf Atlas (B). Contradicting: World Surf League (B); WannaSurf (C); Yeeew! (B). Main contradicting value: 225 deg (stated by WannaSurf (C); 3 independent directly read publishers agree with it). Directly read support for the current value: Surf Atlas (B); Surf-Forecast.com (B). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 20 (11 in daylight) | mean |delta score| 5.44 | mean delta score +2.38 | max |delta score| 29 | mean breaking height 9.32 -> 9.32 ft | wind relation changed in 66 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 137 hours above 5 km/h, 11-21 October, outside the spot's best months; a short sample, not a climatology): vector mean from 237 deg (resultant 0.48), 42 % of hours within 45 deg of the profile's 290 deg and 40 % within 45 deg of 225 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 225.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 20,
+        "labels_changed_daylight": 11,
+        "mean_abs_delta_score": 5.44,
+        "max_abs_delta_score": 29,
+        "mean_delta_score": 2.38,
+        "wind_relations_changed": 66,
+        "mean_breaking_mid_ft": [
+          9.32,
+          9.32
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 137,
+        "vector_mean_from_deg": 237.2,
+        "resultant": 0.48,
+        "modal_sector_deg": 247.5,
+        "share_within_45_of_profile": 0.42,
+        "share_within_45_of_alternative": 0.4,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "jeffreys-bay",
+      "field": "tide_preference",
+      "old_value": "all",
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "wannasurf-supertubes-jbay",
+        "yeeew-jeffreys-bay"
+      ],
+      "rationale": "Current tide preference: all. Supporting: Yeeew! (B). Contradicting: WannaSurf (C). Main contradicting value: mid (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 9.32 -> 9.32 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "mid",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          9.32,
+          9.32
+        ]
+      }
+    },
+    {
+      "slug": "jeffreys-bay",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 4.0,
+        "max": 15.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "wannasurf-supertubes-jbay",
+        "wikipedia-jeffreys-bay",
+        "wsl-break-breakdown-jbay",
+        "yeeew-jeffreys-bay"
+      ],
+      "rationale": "Current working size range: 4-15 ft. Supporting: World Surf League (B); WannaSurf (C); Yeeew! (B). Contradicting: Wikipedia (B). Main contradicting value: 4-20 ft (stated by Wikipedia (B); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 2 (2 in daylight) | mean |delta score| 0.9 | mean delta score -0.85 | max |delta score| 2 | mean breaking height 9.32 -> 9.32 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 4.0,
+        "max": 20.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 2,
+        "labels_changed_daylight": 2,
+        "mean_abs_delta_score": 0.9,
+        "max_abs_delta_score": 2,
+        "mean_delta_score": -0.85,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          9.32,
+          9.32
+        ]
+      }
+    },
+    {
+      "slug": "keramas",
+      "field": "offshore_wind_direction",
+      "old_value": 320.0,
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "bsc-faq-keramas",
+        "bsc-uluwatu-keramas-note",
+        "isg-keramas",
+        "surfforecast-keramas"
+      ],
+      "rationale": "Current offshore wind direction: 320 deg. Supporting: Surf-Forecast.com (B); Indonesian Surf Guide (indonesiansurfguide.com) (C); Padang Padang Surf Camp (balisurfingcamp.com) (C). Contradicting: Padang Padang Surf Camp (balisurfingcamp.com) (C). Main contradicting value: 247.5 deg (stated by Padang Padang Surf Camp (balisurfingcamp.com) (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 48 (27 in daylight) | mean |delta score| 12.14 | mean delta score +11.91 | max |delta score| 42 | mean breaking height 7.97 -> 7.97 ft | wind relation changed in 67 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 134 hours above 5 km/h, 11-21 October, outside the spot's best months; a short sample, not a climatology): vector mean from 130 deg (resultant 0.96), 0 % of hours within 45 deg of the profile's 320 deg and 0 % within 45 deg of 247.5 deg. Padang Padang Surf Camp says a cold wind from the mountain is offshore at Keramas almost every day, but that is a local morning land breeze, which a model point 15-20 km offshore does not resolve, so the model sample has no bearing here.",
+      "decided_at": "2026-10-13",
+      "alternative": 247.5,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 48,
+        "labels_changed_daylight": 27,
+        "mean_abs_delta_score": 12.14,
+        "max_abs_delta_score": 42,
+        "mean_delta_score": 11.91,
+        "wind_relations_changed": 67,
+        "mean_breaking_mid_ft": [
+          7.97,
+          7.97
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 134,
+        "vector_mean_from_deg": 129.7,
+        "resultant": 0.96,
+        "modal_sector_deg": 135.0,
+        "share_within_45_of_profile": 0.0,
+        "share_within_45_of_alternative": 0.0,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "keramas",
+      "field": "tide_preference",
+      "old_value": "mid_to_high",
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "bsc-faq-keramas",
+        "bsc-keramas",
+        "isg-keramas",
+        "surfingwaves-keramas",
+        "wannasurf-keramas",
+        "wsl-keramas"
+      ],
+      "rationale": "Current tide preference: mid_to_high. Supporting: WannaSurf (C); World Surf League (B); Indonesian Surf Guide (indonesiansurfguide.com) (C); Padang Padang Surf Camp (balisurfingcamp.com) (C); Surfing-Waves.com (C). Contradicting: Surfing-Waves.com (C). Main contradicting value: low_to_mid (stated by Surfing-Waves.com (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 7.97 -> 7.97 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "low_to_mid",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.97,
+          7.97
+        ]
+      }
+    },
+    {
+      "slug": "keramas",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 10.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "bsc-keramas",
+        "isg-keramas",
+        "surfatlas-keramas",
+        "surfingwaves-keramas",
+        "wannasurf-keramas",
+        "wsl-keramas"
+      ],
+      "rationale": "Current working size range: 3-10 ft. Supporting: WannaSurf (C); World Surf League (B); Indonesian Surf Guide (indonesiansurfguide.com) (C); Surf Atlas (thesurfatlas.com) (B); Surfing-Waves.com (C). Contradicting: Padang Padang Surf Camp (balisurfingcamp.com) (C). Main contradicting value: 2-10 ft (stated by Padang Padang Surf Camp (balisurfingcamp.com) (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 3 (1 in daylight) | mean |delta score| 0.3 | mean delta score +0.07 | max |delta score| 1 | mean breaking height 7.97 -> 7.97 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 2.0,
+        "max": 10.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 3,
+        "labels_changed_daylight": 1,
+        "mean_abs_delta_score": 0.3,
+        "max_abs_delta_score": 1,
+        "mean_delta_score": 0.07,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.97,
+          7.97
+        ]
+      }
+    },
+    {
+      "slug": "kirra",
+      "field": "best_months",
+      "old_value": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "surf-forecast-kirra",
+        "surfatlas-kirra"
+      ],
+      "rationale": "Current best months: 1,2,3,4,5. Supporting: Surf-Forecast.com (B); Surf Atlas (thesurfatlas.com) (C). Contradicting: Surf Atlas (thesurfatlas.com) (C). Main contradicting value: 8,9 (stated by Surf Atlas (thesurfatlas.com) (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Best months do not enter the score, so predictions do not change.",
+      "decided_at": "2026-10-13",
+      "alternative": [
+        8,
+        9
+      ],
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          4.26,
+          4.26
+        ]
+      }
+    },
+    {
+      "slug": "kirra",
+      "field": "offshore_wind_direction",
+      "old_value": 225.0,
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "surf-forecast-kirra",
+        "surfingreserves-gold-coast",
+        "tsb-1997-surf-impact-assessment",
+        "wannasurf-kirra"
+      ],
+      "rationale": "Current offshore wind direction: 225 deg. Supporting: Surf-Forecast.com (B); National Surfing Reserves (surfingreserves.org) (A); Tweed Sand Bypassing (NSW and Qld Governments) (A). Contradicting: WannaSurf (C). Main contradicting value: 135 deg (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 52 (26 in daylight) | mean |delta score| 16.43 | mean delta score +15.22 | max |delta score| 34 | mean breaking height 4.26 -> 4.26 ft | wind relation changed in 81 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 146 hours above 5 km/h, 11-21 October, outside the spot's best months; a short sample, not a climatology): vector mean from 101 deg (resultant 0.58), 2 % of hours within 45 deg of the profile's 225 deg and 60 % within 45 deg of 135 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 135.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 52,
+        "labels_changed_daylight": 26,
+        "mean_abs_delta_score": 16.43,
+        "max_abs_delta_score": 34,
+        "mean_delta_score": 15.22,
+        "wind_relations_changed": 81,
+        "mean_breaking_mid_ft": [
+          4.26,
+          4.26
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 146,
+        "vector_mean_from_deg": 101.4,
+        "resultant": 0.58,
+        "modal_sector_deg": 112.5,
+        "share_within_45_of_profile": 0.02,
+        "share_within_45_of_alternative": 0.6,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "kirra",
+      "field": "tide_preference",
+      "old_value": "low_to_mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surf-forecast-kirra",
+        "wsl-secrets-of-snapper"
+      ],
+      "rationale": "Current tide preference: low_to_mid. Supporting: World Surf League (B). Contradicting: Surf-Forecast.com (B). Main contradicting value: all (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 4.26 -> 4.26 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          4.26,
+          4.26
+        ]
+      }
+    },
+    {
+      "slug": "la-graviere-hossegor",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "wsl-break-breakdown-france"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: none. Contradicting: World Surf League (B). Main contradicting value: all (stated by World Surf League (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 9.02 -> 9.02 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          9.02,
+          9.02
+        ]
+      }
+    },
+    {
+      "slug": "la-graviere-hossegor",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 15.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "ultimatefrance-hossegor",
+        "wsl-break-breakdown-france"
+      ],
+      "rationale": "Current working size range: 3-15 ft. Supporting: World Surf League (B). Contradicting: Ultimate France (ultimatefrance.com) (B). Main contradicting value: 1.6-15 ft (stated by Ultimate France (ultimatefrance.com) (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 3 (0 in daylight) | mean |delta score| 0.36 | mean delta score +0.23 | max |delta score| 1 | mean breaking height 9.02 -> 9.02 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 1.6,
+        "max": 15.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 3,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0.36,
+        "max_abs_delta_score": 1,
+        "mean_delta_score": 0.23,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          9.02,
+          9.02
+        ]
+      }
+    },
+    {
+      "slug": "lakey-peak",
+      "field": "offshore_wind_direction",
+      "old_value": 60.0,
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "isg-lakey-peak",
+        "lineup-lakey-peak",
+        "surfatlas-lakey-peak",
+        "surfforecast-lakey-peak",
+        "yeeew-lakey-peak"
+      ],
+      "rationale": "Current offshore wind direction: 60 deg. Supporting: Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); Surf Atlas (thesurfatlas.com) (B); Yeeew! (B); Lineup (lineup-experience.com) (C). Contradicting: Surf-Forecast (surf-forecast.com) (B). Main contradicting value: 112.5 deg (stated by Surf-Forecast (surf-forecast.com) (B); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 46 (23 in daylight) | mean |delta score| 6.1 | mean delta score +6.1 | max |delta score| 22 | mean breaking height 7.68 -> 7.68 ft | wind relation changed in 64 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 144 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 134 deg (resultant 0.86), 23 % of hours within 45 deg of the profile's 60 deg and 70 % within 45 deg of 112.5 deg. A directly read source says the prevailing wind here is offshore (Surf Atlas (thesurfatlas.com)); the model's prevailing wind is closer to the contradicting direction, so the model sample supports it. A profile is never changed on model wind alone, and the decision stands.",
+      "decided_at": "2026-10-13",
+      "alternative": 112.5,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 46,
+        "labels_changed_daylight": 23,
+        "mean_abs_delta_score": 6.1,
+        "max_abs_delta_score": 22,
+        "mean_delta_score": 6.1,
+        "wind_relations_changed": 64,
+        "mean_breaking_mid_ft": [
+          7.68,
+          7.68
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 144,
+        "vector_mean_from_deg": 134.5,
+        "resultant": 0.86,
+        "modal_sector_deg": 157.5,
+        "share_within_45_of_profile": 0.23,
+        "share_within_45_of_alternative": 0.7,
+        "supports_change": true
+      }
+    },
+    {
+      "slug": "lakey-peak",
+      "field": "tide_preference",
+      "old_value": "all",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "isg-lakey-peak",
+        "kala-lakey-peak",
+        "lineup-lakey-peak",
+        "surfforecast-lakey-peak",
+        "wannasurf-lakey-peak",
+        "yeeew-lakey-peak"
+      ],
+      "rationale": "Current tide preference: all. Supporting: WannaSurf (C); Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); Yeeew! (B); Lineup (lineup-experience.com) (C). Contradicting: Surf-Forecast (surf-forecast.com) (B); Kala Surf (kala.surf) (C). Main contradicting value: high (stated by Surf-Forecast (surf-forecast.com) (B); 2 independent directly read publishers agree with it). Directly read support for the current value: Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); Lineup (lineup-experience.com) (C); WannaSurf (C); Yeeew! (B). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 7.68 -> 7.68 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "high",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.68,
+          7.68
+        ]
+      }
+    },
+    {
+      "slug": "lobitos",
+      "field": "offshore_wind_direction",
+      "old_value": 150.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "latamsurfing-lobitos",
+        "realsurftravel-lobitos",
+        "surfescape-peru",
+        "surfforecast-lobitos",
+        "surfingwaves-lobitos",
+        "wannasurf-lobitos"
+      ],
+      "rationale": "Current offshore wind direction: 150 deg. Supporting: Surf-Forecast.com (B); WannaSurf (C); Surf Escape (C). Contradicting: Surf-Forecast.com (B); LatAm Surfing (C); Real Surf Travel (C); Surfing-Waves.com (C). Main contradicting value: 90 deg (stated by Surf-Forecast.com (B); LatAm Surfing (C); Real Surf Travel (C); Surfing-Waves.com (C); 4 independent directly read publishers agree with it). Directly read support for the current value: Surf Escape (C); Surf-Forecast.com (B); WannaSurf (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 81 (41 in daylight) | mean |delta score| 19.36 | mean delta score -19.36 | max |delta score| 39 | mean breaking height 7.14 -> 7.14 ft | wind relation changed in 81 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 146 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 187 deg (resultant 0.92), 66 % of hours within 45 deg of the profile's 150 deg and 0 % within 45 deg of 90 deg. Directly read sources say the prevailing wind here is offshore (LatAm Surfing, Viva Mancora); the model's prevailing wind matches the profile's direction, so the model sample does not support the contradicting value. Surf-Forecast.com appears on both sides: its best-conditions line says ESE (supports the profile), its guide text says E.",
+      "decided_at": "2026-10-13",
+      "alternative": 90.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 81,
+        "labels_changed_daylight": 41,
+        "mean_abs_delta_score": 19.36,
+        "max_abs_delta_score": 39,
+        "mean_delta_score": -19.36,
+        "wind_relations_changed": 81,
+        "mean_breaking_mid_ft": [
+          7.14,
+          7.14
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 146,
+        "vector_mean_from_deg": 186.6,
+        "resultant": 0.92,
+        "modal_sector_deg": 180.0,
+        "share_within_45_of_profile": 0.66,
+        "share_within_45_of_alternative": 0.0,
+        "supports_change": false
+      }
+    },
+    {
+      "slug": "lobitos",
+      "field": "optimal_swell_direction",
+      "old_value": {
+        "min": 200.0,
+        "max": 235.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "latamsurfing-lobitos",
+        "realsurftravel-lobitos",
+        "surfatlas-lobitos",
+        "surfforecast-lobitos",
+        "surfinglobitos-blog",
+        "surfingwaves-lobitos",
+        "wannasurf-lobitos"
+      ],
+      "rationale": "Current optimal swell window: 200-235 deg. Supporting: Surf-Forecast.com (B); WannaSurf (C); LatAm Surfing (C); Real Surf Travel (C); Surfing-Waves.com (C); Surfing Lobitos (WordPress blog) (C); Surf Atlas (thesurfatlas.com) (B). Contradicting: Surf-Forecast.com (B). Main contradicting value: 315-315 deg (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Surf-Forecast.com both supports (south-southwest in its best-conditions line) and contradicts (northwest in its guide text) the current window; a publisher's own support does not outweigh its contradiction, so only one other directly read publisher of the same or a higher tier (Surf Atlas) supports the window and the contradiction is recorded as unresolved, although the five community sources read directly all support the window. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 81 (41 in daylight) | mean |delta score| 21.02 | mean delta score -21.02 | max |delta score| 22 | mean breaking height 7.14 -> 7.14 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 315.0,
+        "max": 315.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 81,
+        "labels_changed_daylight": 41,
+        "mean_abs_delta_score": 21.02,
+        "max_abs_delta_score": 22,
+        "mean_delta_score": -21.02,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.14,
+          7.14
+        ]
+      }
+    },
+    {
+      "slug": "lobitos",
+      "field": "tide_preference",
+      "old_value": "mid_to_high",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surfescape-peru",
+        "surfinglobitos-blog",
+        "vivamancora-lobitos",
+        "wannasurf-lobitos"
+      ],
+      "rationale": "Current tide preference: mid_to_high. Supporting: WannaSurf (C); Surfing Lobitos (WordPress blog) (C). Contradicting: Surf Escape (C); Viva Mancora (C). Main contradicting value: all (stated by Surf Escape (C); Viva Mancora (C); 2 independent directly read publishers agree with it). Directly read support for the current value: Surfing Lobitos (WordPress blog) (C); WannaSurf (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 7.14 -> 7.14 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.14,
+          7.14
+        ]
+      }
+    },
+    {
+      "slug": "lobitos",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 10.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surfinglobitos-blog",
+        "wannasurf-lobitos"
+      ],
+      "rationale": "Current working size range: 3-10 ft. Supporting: WannaSurf (C). Contradicting: Surfing Lobitos (WordPress blog) (C). Main contradicting value: 3-18 ft (stated by Surfing Lobitos (WordPress blog) (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 22 (10 in daylight) | mean |delta score| 2.4 | mean delta score -2.4 | max |delta score| 3 | mean breaking height 7.14 -> 7.14 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 3.0,
+        "max": 18.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 22,
+        "labels_changed_daylight": 10,
+        "mean_abs_delta_score": 2.4,
+        "max_abs_delta_score": 3,
+        "mean_delta_score": -2.4,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.14,
+          7.14
+        ]
+      }
+    },
+    {
+      "slug": "macaronis",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "isg-macaronis",
+        "macaronisresort-surf",
+        "macaronisresort-waves",
+        "surfertoday-macaronis",
+        "surfforecast-macaronis",
+        "surfindonesia-macaronis",
+        "surfingwaves-macaronis",
+        "wannasurf-macaronis"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: Surfing-Waves.com (C). Contradicting: Surf-Forecast (surf-forecast.com) (B); WannaSurf (C); Surfer Today (B, search summary); Macaronis Resort (C); Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); Surf Indonesia (surfindonesia.com) (C). Main contradicting value: all (stated by Surf-Forecast (surf-forecast.com) (B); WannaSurf (C); Surfer Today (B, search summary); Macaronis Resort (C); Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); Surf Indonesia (surfindonesia.com) (C); 5 independent directly read publishers agree with it). Directly read support for the current value: Surfing-Waves.com (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 7.28 -> 7.28 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.28,
+          7.28
+        ]
+      }
+    },
+    {
+      "slug": "macaronis",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 10.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "isg-macaronis",
+        "macaronisresort-waves",
+        "surfingwaves-macaronis",
+        "wannasurf-macaronis"
+      ],
+      "rationale": "Current working size range: 3-10 ft. Supporting: WannaSurf (C); Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C). Contradicting: Macaronis Resort (C); Surfing-Waves.com (C). Main contradicting value: 2-10 ft (stated by Macaronis Resort (C); Surfing-Waves.com (C); 2 independent directly read publishers agree with it). Directly read support for the current value: Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); WannaSurf (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 1 (1 in daylight) | mean |delta score| 0.37 | mean delta score +0.1 | max |delta score| 1 | mean breaking height 7.28 -> 7.28 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 2.0,
+        "max": 10.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 1,
+        "labels_changed_daylight": 1,
+        "mean_abs_delta_score": 0.37,
+        "max_abs_delta_score": 1,
+        "mean_delta_score": 0.1,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.28,
+          7.28
+        ]
+      }
+    },
+    {
+      "slug": "margaret-river-main-break",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 4.0,
+        "max": 20.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surfertoday-margaret-river",
+        "wannasurf-margaret-river-left",
+        "wsl-margaret-river-event-guide-main",
+        "wsl-margies-breakdown-main"
+      ],
+      "rationale": "Current working size range: 4-20 ft. Supporting: World Surf League (B); SurferToday (B, search summary); WannaSurf (C). Contradicting: World Surf League (B). Main contradicting value: 2-20 ft (stated by World Surf League (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 1 (0 in daylight) | mean |delta score| 0.22 | mean delta score -0.07 | max |delta score| 1 | mean breaking height 15.24 -> 15.24 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 2.0,
+        "max": 20.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 1,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0.22,
+        "max_abs_delta_score": 1,
+        "mean_delta_score": -0.07,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          15.24,
+          15.24
+        ]
+      }
+    },
+    {
+      "slug": "mavericks",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surfertoday-mavericks",
+        "wannasurf-mavericks"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: none. Contradicting: Surfertoday (B, search summary); WannaSurf (C). Main contradicting value: all (stated by Surfertoday (B, search summary); WannaSurf (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 9.48 -> 9.48 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          9.48,
+          9.48
+        ]
+      }
+    },
+    {
+      "slug": "mullaghmore-head",
+      "field": "offshore_wind_direction",
+      "old_value": 135.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surfholidays-mullaghmore",
+        "wannasurf-mullaghmore"
+      ],
+      "rationale": "Current offshore wind direction: 135 deg. Supporting: WannaSurf (C). Contradicting: Surf Holidays (C). Main contradicting value: 225 deg (stated by Surf Holidays (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 19 (9 in daylight) | mean |delta score| 9.72 | mean delta score +1.67 | max |delta score| 34 | mean breaking height 9.88 -> 9.88 ft | wind relation changed in 80 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 142 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 198 deg (resultant 0.41), 34 % of hours within 45 deg of the profile's 135 deg and 38 % within 45 deg of 225 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 225.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 19,
+        "labels_changed_daylight": 9,
+        "mean_abs_delta_score": 9.72,
+        "max_abs_delta_score": 34,
+        "mean_delta_score": 1.67,
+        "wind_relations_changed": 80,
+        "mean_breaking_mid_ft": [
+          9.88,
+          9.88
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 142,
+        "vector_mean_from_deg": 197.7,
+        "resultant": 0.41,
+        "modal_sector_deg": 90.0,
+        "share_within_45_of_profile": 0.34,
+        "share_within_45_of_alternative": 0.38,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "ocean-beach-sf",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": "all",
+      "decision": "changed",
+      "sources": [
+        "surf-forecast-ocean-beach",
+        "wannasurf-ocean-beach"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: none. Contradicting: Surf-Forecast.com (B); WannaSurf (C). Main contradicting value: all (stated by Surf-Forecast.com (B); WannaSurf (C); 2 independent directly read publishers agree with it). Changed: at least two independent publishers read directly agree on the new value, and no directly read source of the same or a higher tier supports the old one. Before -> after this change, real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 8.14 -> 8.14 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          8.14,
+          8.14
+        ]
+      }
+    },
+    {
+      "slug": "padang-padang",
+      "field": "offshore_wind_direction",
+      "old_value": 135.0,
+      "new_value": null,
+      "decision": "kept",
+      "reason": "wave_face",
+      "sources": [
+        "surfforecast-padang",
+        "isg-padang",
+        "bsc-padang",
+        "bsc-faq-padang",
+        "surfatlas-padang"
+      ],
+      "rationale": "Padang Padang is a left reef 'tucked up tight under the cliffs' (Indonesian Surf Guide); Padang Padang Surf Camp says its swells carry 'maximum power around the headland' and that the SE trade wind 'blows straight off the land there'. Four independent directly read publishers give SE (or E) as the offshore wind (Surf-Forecast.com, Indonesian Surf Guide, Padang Padang Surf Camp, Surf Atlas), so the gap to the window centre reflects the swell wrapping around the headland onto the reef, not a wrong offshore direction.",
+      "decided_at": "2026-10-13"
+    },
+    {
+      "slug": "padang-padang",
+      "field": "optimal_swell_direction",
+      "old_value": {
+        "min": 215.0,
+        "max": 240.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "bsc-faq-padang",
+        "bsc-padang",
+        "isg-padang",
+        "surfatlas-padang",
+        "surfforecast-padang",
+        "wannasurf-padang"
+      ],
+      "rationale": "Current optimal swell window: 215-240 deg. Supporting: Surf-Forecast.com (B); WannaSurf (C); Indonesian Surf Guide (indonesiansurfguide.com) (C); Padang Padang Surf Camp (balisurfingcamp.com) (C); Surf Atlas (thesurfatlas.com) (B). Contradicting: Indonesian Surf Guide (indonesiansurfguide.com) (C). Main contradicting value: 180-180 deg (stated by Indonesian Surf Guide (indonesiansurfguide.com) (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 62 (34 in daylight) | mean |delta score| 11.35 | mean delta score -11.35 | max |delta score| 19 | mean breaking height 7.5 -> 7.5 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 180.0,
+        "max": 180.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 62,
+        "labels_changed_daylight": 34,
+        "mean_abs_delta_score": 11.35,
+        "max_abs_delta_score": 19,
+        "mean_delta_score": -11.35,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.5,
+          7.5
+        ]
+      }
+    },
+    {
+      "slug": "padang-padang",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "bsc-faq-padang",
+        "bsc-padang",
+        "isg-padang",
+        "surfatlas-padang",
+        "surfforecast-padang",
+        "wannasurf-padang"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: Surf-Forecast.com (B); WannaSurf (C); Surf Atlas (thesurfatlas.com) (B). Contradicting: WannaSurf (C); Indonesian Surf Guide (indonesiansurfguide.com) (C); Padang Padang Surf Camp (balisurfingcamp.com) (C). Main contradicting value: all (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 7.5 -> 7.5 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.5,
+          7.5
+        ]
+      }
+    },
+    {
+      "slug": "padang-padang",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 4.0,
+        "max": 12.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "bsc-padang",
+        "isg-padang",
+        "surfertoday-padang",
+        "wannasurf-padang"
+      ],
+      "rationale": "Current working size range: 4-12 ft. Supporting: WannaSurf (C); Surfer Today (B, search summary); Indonesian Surf Guide (indonesiansurfguide.com) (C). Contradicting: Padang Padang Surf Camp (balisurfingcamp.com) (C). Main contradicting value: 4-18 ft (stated by Padang Padang Surf Camp (balisurfingcamp.com) (C); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 4 (2 in daylight) | mean |delta score| 1.1 | mean delta score -1.02 | max |delta score| 3 | mean breaking height 7.5 -> 7.5 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 4.0,
+        "max": 18.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 4,
+        "labels_changed_daylight": 2,
+        "mean_abs_delta_score": 1.1,
+        "max_abs_delta_score": 3,
+        "mean_delta_score": -1.02,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.5,
+          7.5
+        ]
+      }
+    },
+    {
+      "slug": "pavones",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "crsurfco-pavones",
+        "mywavefinder-pavones",
+        "surfertoday-pavones",
+        "surfforecast-pavones",
+        "surfholidays-pavones"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: The Costa Rica Surf Company (C). Contradicting: Surf-Forecast (surf-forecast.com) (B); Surfertoday (B, search summary); MyWaveFinder (C); Surf Holidays (C). Main contradicting value: low (stated by Surf-Forecast (surf-forecast.com) (B); MyWaveFinder (C); 2 independent directly read publishers agree with it). Directly read support for the current value: The Costa Rica Surf Company (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 4.47 -> 4.47 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "low",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          4.47,
+          4.47
+        ]
+      }
+    },
+    {
+      "slug": "pipeline",
+      "field": "optimal_swell_direction",
+      "old_value": {
+        "min": 295.0,
+        "max": 320.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "hawaiisurf-pipeline",
+        "surf-forecast-banzai-backdoor",
+        "surf-forecast-pipeline",
+        "surfer-pipeline",
+        "wannasurf-pipeline",
+        "wikipedia-pipeline",
+        "wsl-pipeline-essentials-2022"
+      ],
+      "rationale": "Current optimal swell window: 295-320 deg. Supporting: Surf-Forecast.com (B); WannaSurf (C); SURFER (B, search summary); World Surf League (B); hawaii.surf (C). Contradicting: Wikipedia (B). Main contradicting value: 0-0 deg (stated by Wikipedia (B); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 55 (26 in daylight) | mean |delta score| 9.38 | mean delta score -2.25 | max |delta score| 22 | mean breaking height 6.33 -> 6.33 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 0.0,
+        "max": 0.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 55,
+        "labels_changed_daylight": 26,
+        "mean_abs_delta_score": 9.38,
+        "max_abs_delta_score": 22,
+        "mean_delta_score": -2.25,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          6.33,
+          6.33
+        ]
+      }
+    },
+    {
+      "slug": "pipeline",
+      "field": "tide_preference",
+      "old_value": "all",
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "hawaiisurf-pipeline",
+        "surf-forecast-banzai-backdoor"
+      ],
+      "rationale": "Current tide preference: all. Supporting: Surf-Forecast.com (B). Contradicting: hawaii.surf (C). Main contradicting value: low_to_mid (stated by hawaii.surf (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 6.33 -> 6.33 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "low_to_mid",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          6.33,
+          6.33
+        ]
+      }
+    },
+    {
+      "slug": "playa-hermosa-cr",
+      "field": "optimal_swell_direction",
+      "old_value": {
+        "min": 190.0,
+        "max": 230.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "backyardhotel-playahermosa",
+        "surfatlas-playahermosa",
+        "surferfactory-playahermosa",
+        "surfertoday-cr-spots-listing",
+        "surfforecast-playahermosa"
+      ],
+      "rationale": "Current optimal swell window: 190-230 deg. Supporting: Surfertoday (B, search summary); Surf Atlas (thesurfatlas.com) (B); Backyard Hotel (C); Surfer Factory (C). Contradicting: Surf-Forecast (surf-forecast.com) (B). Main contradicting value: 270-270 deg (stated by Surf-Forecast (surf-forecast.com) (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 76 (37 in daylight) | mean |delta score| 19.46 | mean delta score -19.46 | max |delta score| 22 | mean breaking height 6.96 -> 6.96 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 270.0,
+        "max": 270.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 76,
+        "labels_changed_daylight": 37,
+        "mean_abs_delta_score": 19.46,
+        "max_abs_delta_score": 22,
+        "mean_delta_score": -19.46,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          6.96,
+          6.96
+        ]
+      }
+    },
+    {
+      "slug": "punta-de-lobos",
+      "field": "offshore_wind_direction",
+      "old_value": 135.0,
+      "new_value": null,
+      "decision": "kept",
+      "reason": "wave_face",
+      "sources": [
+        "surf-forecast-punta-de-lobos",
+        "wannasurf-punta-de-lobos",
+        "wsl-dissecting-punta-de-lobos"
+      ],
+      "rationale": "Punta de Lobos is a left point (World Surf League: 'a big lefthand point'; WannaSurf: three distinct sections make up the point), so the SW swell does not arrive normal to the lineup. Surf-Forecast.com (read directly) gives ESE as the ideal wind, within the methodology's 45 deg of the profile's 135 deg; WannaSurf lists S, SE and E as good winds.",
+      "decided_at": "2026-10-13"
+    },
+    {
+      "slug": "punta-de-lobos",
+      "field": "tide_preference",
+      "old_value": "all",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "wannasurf-punta-de-lobos"
+      ],
+      "rationale": "Current tide preference: all. Supporting: none. Contradicting: WannaSurf (C). Main contradicting value: low_to_mid (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 8.73 -> 8.73 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "low_to_mid",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          8.73,
+          8.73
+        ]
+      }
+    },
+    {
+      "slug": "punta-roca",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": "all",
+      "decision": "changed",
+      "sources": [
+        "elsalvadortravel-puntaroca",
+        "surfsphere-puntaroca",
+        "surftrips-puntaroca",
+        "wikipedia-lalibertad"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: Surfsphere (C). Contradicting: Wikipedia (B); El Salvador Travel (official tourism site) (B); surftrips.co (C). Main contradicting value: all (stated by Wikipedia (B); El Salvador Travel (official tourism site) (B); surftrips.co (C); 3 independent directly read publishers agree with it). Changed: at least two independent publishers read directly agree on the new value, and no directly read source of the same or a higher tier supports the old one. Before -> after this change, real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 7.46 -> 7.46 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.46,
+          7.46
+        ]
+      }
+    },
+    {
+      "slug": "punta-roca",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 12.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "elsalvadortravel-puntaroca",
+        "surftrips-puntaroca",
+        "wikipedia-lalibertad"
+      ],
+      "rationale": "Current working size range: 3-12 ft. Supporting: El Salvador Travel (official tourism site) (B); surftrips.co (C). Contradicting: Wikipedia (B). Main contradicting value: 3-16 ft (stated by Wikipedia (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 11 (7 in daylight) | mean |delta score| 1.21 | mean delta score -1.21 | max |delta score| 2 | mean breaking height 7.46 -> 7.46 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 3.0,
+        "max": 16.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 11,
+        "labels_changed_daylight": 7,
+        "mean_abs_delta_score": 1.21,
+        "max_abs_delta_score": 2,
+        "mean_delta_score": -1.21,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.46,
+          7.46
+        ]
+      }
+    },
+    {
+      "slug": "raglan-manu-bay",
+      "field": "offshore_wind_direction",
+      "old_value": 140.0,
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "mywavefinder-raglan",
+        "strikemission-manu-bay",
+        "surfara-manu-bay",
+        "surfforecast-manu-bay",
+        "surfgirlnz-raglan",
+        "wannasurf-manu-bay"
+      ],
+      "rationale": "Current offshore wind direction: 140 deg. Supporting: Surf-Forecast (B); WannaSurf (C); Surf Girl NZ (C); Surfara (C). Contradicting: MyWaveFinder (C); Strike Mission (C). Main contradicting value: 90 deg (stated by MyWaveFinder (C); Strike Mission (C); 2 independent directly read publishers agree with it). Directly read support for the current value: Surfara (C); Surf-Forecast (B); Surf Girl NZ (C); WannaSurf (C). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 54 (29 in daylight) | mean |delta score| 18.25 | mean delta score -8.99 | max |delta score| 38 | mean breaking height 7.77 -> 7.77 ft | wind relation changed in 70 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 144 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 239 deg (resultant 0.53), 16 % of hours within 45 deg of the profile's 140 deg and 0 % within 45 deg of 90 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 90.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 54,
+        "labels_changed_daylight": 29,
+        "mean_abs_delta_score": 18.25,
+        "max_abs_delta_score": 38,
+        "mean_delta_score": -8.99,
+        "wind_relations_changed": 70,
+        "mean_breaking_mid_ft": [
+          7.77,
+          7.77
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 144,
+        "vector_mean_from_deg": 239.4,
+        "resultant": 0.53,
+        "modal_sector_deg": 225.0,
+        "share_within_45_of_profile": 0.16,
+        "share_within_45_of_alternative": 0.0,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "raglan-manu-bay",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "mywavefinder-raglan",
+        "strikemission-manu-bay",
+        "surfara-manu-bay",
+        "surfforecast-manu-bay",
+        "surfgirlnz-raglan",
+        "wannasurf-manu-bay"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: WannaSurf (C); Strike Mission (C). Contradicting: Surf-Forecast (B); Surf Girl NZ (C); Surfara (C); MyWaveFinder (C). Main contradicting value: all (stated by Surf Girl NZ (C); Surfara (C); MyWaveFinder (C); 3 independent directly read publishers agree with it). Directly read support for the current value: Strike Mission (C); WannaSurf (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 7.77 -> 7.77 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.77,
+          7.77
+        ]
+      }
+    },
+    {
+      "slug": "raglan-manu-bay",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 12.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "wannasurf-manu-bay"
+      ],
+      "rationale": "Current working size range: 3-12 ft. Supporting: none. Contradicting: WannaSurf (C). Main contradicting value: 3-16 ft (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 5 (3 in daylight) | mean |delta score| 1.26 | mean delta score -0.22 | max |delta score| 17 | mean breaking height 7.77 -> 7.77 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 3.0,
+        "max": 16.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 5,
+        "labels_changed_daylight": 3,
+        "mean_abs_delta_score": 1.26,
+        "max_abs_delta_score": 17,
+        "mean_delta_score": -0.22,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.77,
+          7.77
+        ]
+      }
+    },
+    {
+      "slug": "restaurants",
+      "field": "tide_preference",
+      "old_value": "mid_to_high",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "fijitravel-mamanuca",
+        "tavarua-surf",
+        "wannasurf-restaurants",
+        "wsl-breakbreakdown-restaurants",
+        "yeeew-restaurants"
+      ],
+      "rationale": "Current tide preference: mid_to_high. Supporting: Yeeew! (B). Contradicting: World Surf League (B); Tourism Fiji (fiji.travel) (B); WannaSurf (C); Tavarua Island Resort (C). Main contradicting value: low (stated by Tourism Fiji (fiji.travel) (B); 2 independent directly read publishers agree with it). Directly read support for the current value: Yeeew! (B). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 5.21 -> 5.21 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "low",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          5.21,
+          5.21
+        ]
+      }
+    },
+    {
+      "slug": "restaurants",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 10.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "tavarua-surf",
+        "wsl-breakbreakdown-restaurants",
+        "yeeew-restaurants"
+      ],
+      "rationale": "Current working size range: 3-10 ft. Supporting: World Surf League (B); Yeeew! (B). Contradicting: Tavarua Island Resort (C). Main contradicting value: 2-10 ft (stated by Tavarua Island Resort (C); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 3 (1 in daylight) | mean |delta score| 0.58 | mean delta score +0.56 | max |delta score| 1 | mean breaking height 5.21 -> 5.21 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 2.0,
+        "max": 10.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 3,
+        "labels_changed_daylight": 1,
+        "mean_abs_delta_score": 0.58,
+        "max_abs_delta_score": 1,
+        "mean_delta_score": 0.56,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          5.21,
+          5.21
+        ]
+      }
+    },
+    {
+      "slug": "rifles",
+      "field": "offshore_wind_direction",
+      "old_value": 45.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "botik-rifles",
+        "isg-rifles",
+        "playground-rifles",
+        "sumatransurfariis-rifles",
+        "surfertoday-rifles",
+        "surfforecast-rifles",
+        "surfindonesia-rifles",
+        "surftrips-rifles",
+        "wannasurf-rifles",
+        "yeeew-rifles"
+      ],
+      "rationale": "Current offshore wind direction: 45 deg. Supporting: Surf-Forecast (surf-forecast.com) (B); WannaSurf (C). Contradicting: Surfer Today (B, search summary); Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); Playground Surf Resort (C); surftrips.co (C); Sumatran Surfariis (C); Yeeew! (B); Surf Indonesia (surfindonesia.com) (C); Botik Resort (C). Main contradicting value: 315 deg (stated by Yeeew! (B); Surf Indonesia (surfindonesia.com) (C); 5 independent directly read publishers agree with it). Directly read support for the current value: Surf-Forecast (surf-forecast.com) (B); WannaSurf (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 50 (21 in daylight) | mean |delta score| 15.14 | mean delta score -15.14 | max |delta score| 43 | mean breaking height 7.24 -> 7.24 ft | wind relation changed in 80 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 145 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 140 deg (resultant 0.92), 3 % of hours within 45 deg of the profile's 45 deg and 0 % within 45 deg of 315 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 315.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 50,
+        "labels_changed_daylight": 21,
+        "mean_abs_delta_score": 15.14,
+        "max_abs_delta_score": 43,
+        "mean_delta_score": -15.14,
+        "wind_relations_changed": 80,
+        "mean_breaking_mid_ft": [
+          7.24,
+          7.24
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 145,
+        "vector_mean_from_deg": 140.4,
+        "resultant": 0.92,
+        "modal_sector_deg": 135.0,
+        "share_within_45_of_profile": 0.03,
+        "share_within_45_of_alternative": 0.0,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "rifles",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 4.0,
+        "max": 12.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "botik-rifles",
+        "isg-rifles",
+        "surfcampsumatra-rifles",
+        "surftrips-rifles",
+        "wannasurf-rifles",
+        "yeeew-rifles"
+      ],
+      "rationale": "Current working size range: 4-12 ft. Supporting: WannaSurf (C); Surf Camp Sumatra (surfcampsumatra.com) (C); surftrips.co (C); Botik Resort (C). Contradicting: Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); Yeeew! (B). Main contradicting value: 4-18 ft (stated by Ultimate Indonesian Surf Guide (indonesiansurfguide.com) (C); Yeeew! (B); 2 independent directly read publishers agree with it). Directly read support for the current value: Botik Resort (C); Surf Camp Sumatra (surfcampsumatra.com) (C); surftrips.co (C); WannaSurf (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 7 (3 in daylight) | mean |delta score| 1.32 | mean delta score -1.32 | max |delta score| 3 | mean breaking height 7.24 -> 7.24 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 4.0,
+        "max": 18.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 7,
+        "labels_changed_daylight": 3,
+        "mean_abs_delta_score": 1.32,
+        "max_abs_delta_score": 3,
+        "mean_delta_score": -1.32,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.24,
+          7.24
+        ]
+      }
+    },
+    {
+      "slug": "rincon",
+      "field": "offshore_wind_direction",
+      "old_value": 20.0,
+      "new_value": null,
+      "decision": "kept",
+      "reason": "wave_face",
+      "sources": [
+        "surf-forecast-rincon-point",
+        "wannasurf-rincon",
+        "surfatlas-rincon",
+        "bluetopo-bh45v5bg"
+      ],
+      "rationale": "Rincon is a right-hand point (Surf-Forecast.com: 'a fairly exposed point break'; WannaSurf: point-break). Its best swells come from 270-290 deg (the profile's optimal window), and the window centre (280 deg) is not the shore normal of the lineup: the measured BlueTopo contours within 250 m of the break face 196 deg (scripts/bathymetry_profiles.py, recorded under provenance.not_applied), for which the profile's 20 deg is 4 deg from straight offshore. Directly read sources support a N-NE offshore: Surf-Forecast.com (NE) and Surf Atlas (NE for most of the wave, N-NE winds at the Cove).",
+      "decided_at": "2026-10-13"
+    },
+    {
+      "slug": "rincon",
+      "field": "tide_preference",
+      "old_value": "low_to_mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surf-forecast-rincon-point",
+        "surfertoday-rincon",
+        "wikipedia-rincon"
+      ],
+      "rationale": "Current tide preference: low_to_mid. Supporting: Wikipedia (B); SurferToday (B, search summary). Contradicting: Surf-Forecast.com (B). Main contradicting value: all (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 1.08 -> 1.08 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          1.08,
+          1.08
+        ]
+      }
+    },
+    {
+      "slug": "safi",
+      "field": "offshore_wind_direction",
+      "old_value": 45.0,
+      "new_value": null,
+      "decision": "kept",
+      "reason": "wave_face",
+      "sources": [
+        "surfforecast-safi",
+        "worldbeachguide-safi",
+        "wannasurf-safi",
+        "surfsphere-safi",
+        "surfingwaves-safi"
+      ],
+      "rationale": "Safi is a right point (World Beach Guide: 'Fast, hollow right pointbreak'; Surf-Forecast.com: an exposed point break). Directly read sources give N (Surf-Forecast.com, WannaSurf, Surfsphere) and NE (Surfing-Waves.com) as offshore, both within 45 deg of the profile's 45 deg.",
+      "decided_at": "2026-10-13"
+    },
+    {
+      "slug": "salsa-brava",
+      "field": "tide_preference",
+      "old_value": "mid_to_high",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "crystaljungle-salsabrava",
+        "strikemission-salsabrava",
+        "surfforecast-salsabrava",
+        "wannasurf-salsabrava"
+      ],
+      "rationale": "Current tide preference: mid_to_high. Supporting: Strike Mission (C); Crystal Jungle Villa (C). Contradicting: Surf-Forecast (surf-forecast.com) (B); WannaSurf (C). Main contradicting value: all (stated by Surf-Forecast (surf-forecast.com) (B); WannaSurf (C); 2 independent directly read publishers agree with it). Directly read support for the current value: Crystal Jungle Villa (C); Strike Mission (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 3.51 -> 3.51 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          3.51,
+          3.51
+        ]
+      }
+    },
+    {
+      "slug": "salsa-brava",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 12.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "crystaljungle-salsabrava",
+        "wannasurf-salsabrava"
+      ],
+      "rationale": "Current working size range: 3-12 ft. Supporting: none. Contradicting: WannaSurf (C); Crystal Jungle Villa (C). Main contradicting value: 3-16 ft (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0.19 | mean delta score -0.19 | max |delta score| 1 | mean breaking height 3.51 -> 3.51 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 3.0,
+        "max": 16.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0.19,
+        "max_abs_delta_score": 1,
+        "mean_delta_score": -0.19,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          3.51,
+          3.51
+        ]
+      }
+    },
+    {
+      "slug": "skeleton-bay",
+      "field": "offshore_wind_direction",
+      "old_value": 100.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "deserttracks-skeleton-bay",
+        "mywavefinder-namibia",
+        "surfertoday-skeleton-bay",
+        "surfforecast-skeleton-bay",
+        "wavesafari-skeleton-bay"
+      ],
+      "rationale": "Current offshore wind direction: 100 deg. Supporting: Surfer Today (B, search summary); Wave Safari (C). Contradicting: Surf-Forecast.com (B); MyWaveFinder (C); Desert Tracks (C). Main contradicting value: 45 deg (stated by Surf-Forecast.com (B); MyWaveFinder (C); Desert Tracks (C); 3 independent directly read publishers agree with it). Directly read support for the current value: Wave Safari (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 20 (8 in daylight) | mean |delta score| 17.41 | mean delta score -17.31 | max |delta score| 37 | mean breaking height 7.85 -> 7.85 ft | wind relation changed in 80 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 143 hours above 5 km/h, 11-21 October, outside the spot's best months; a short sample, not a climatology): vector mean from 187 deg (resultant 0.97), 2 % of hours within 45 deg of the profile's 100 deg and 1 % within 45 deg of 45 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value. MyWaveFinder gives NE for every Namibian spot it lists, so it is probably templated; Surf Holidays' S-SW is the prevailing wind, not an offshore one.",
+      "decided_at": "2026-10-13",
+      "alternative": 45.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 20,
+        "labels_changed_daylight": 8,
+        "mean_abs_delta_score": 17.41,
+        "max_abs_delta_score": 37,
+        "mean_delta_score": -17.31,
+        "wind_relations_changed": 80,
+        "mean_breaking_mid_ft": [
+          7.85,
+          7.85
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 143,
+        "vector_mean_from_deg": 187.0,
+        "resultant": 0.97,
+        "modal_sector_deg": 180.0,
+        "share_within_45_of_profile": 0.02,
+        "share_within_45_of_alternative": 0.01,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "snapper-rocks-superbank",
+      "field": "offshore_wind_direction",
+      "old_value": 200.0,
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "surf-forecast-snapper-rocks",
+        "surfingreserves-gold-coast",
+        "wannasurf-snapper",
+        "wsl-secrets-of-snapper"
+      ],
+      "rationale": "Current offshore wind direction: 200 deg. Supporting: World Surf League (B); WannaSurf (C); National Surfing Reserves (surfingreserves.org) (A). Contradicting: Surf-Forecast.com (B). Main contradicting value: 135 deg (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 53 (26 in daylight) | mean |delta score| 11.3 | mean delta score +9.74 | max |delta score| 24 | mean breaking height 4.31 -> 4.31 ft | wind relation changed in 72 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 146 hours above 5 km/h, 11-21 October, outside the spot's best months; a short sample, not a climatology): vector mean from 101 deg (resultant 0.58), 7 % of hours within 45 deg of the profile's 200 deg and 60 % within 45 deg of 135 deg. No directly read source says the prevailing wind here is offshore, so the model sample shows which winds blow, not which are offshore; it neither supports nor contradicts the contradicting value.",
+      "decided_at": "2026-10-13",
+      "alternative": 135.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 53,
+        "labels_changed_daylight": 26,
+        "mean_abs_delta_score": 11.3,
+        "max_abs_delta_score": 24,
+        "mean_delta_score": 9.74,
+        "wind_relations_changed": 72,
+        "mean_breaking_mid_ft": [
+          4.31,
+          4.31
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 146,
+        "vector_mean_from_deg": 101.4,
+        "resultant": 0.58,
+        "modal_sector_deg": 112.5,
+        "share_within_45_of_profile": 0.07,
+        "share_within_45_of_alternative": 0.6,
+        "supports_change": null
+      }
+    },
+    {
+      "slug": "snapper-rocks-superbank",
+      "field": "optimal_swell_direction",
+      "old_value": {
+        "min": 95.0,
+        "max": 140.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "goldcoast-council-rainbow-bay",
+        "surf-forecast-snapper-rocks",
+        "surfatlas-snapper",
+        "surfertoday-snapper",
+        "surfingreserves-gold-coast",
+        "tsb-1997-surf-impact-assessment",
+        "wannasurf-snapper",
+        "wannasurf-superbanks",
+        "wsl-secrets-of-snapper"
+      ],
+      "rationale": "Current optimal swell window: 95-140 deg. Supporting: Surf-Forecast.com (B); World Surf League (B); SurferToday (B, search summary); City of Gold Coast (A); WannaSurf (C); National Surfing Reserves (surfingreserves.org) (A); Surf Atlas (thesurfatlas.com) (C); Tweed Sand Bypassing (NSW and Qld Governments) (A). Contradicting: City of Gold Coast (A). Main contradicting value: 180-180 deg (stated by City of Gold Coast (A); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 32 (16 in daylight) | mean |delta score| 7.88 | mean delta score -7.63 | max |delta score| 17 | mean breaking height 4.31 -> 4.31 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 180.0,
+        "max": 180.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 32,
+        "labels_changed_daylight": 16,
+        "mean_abs_delta_score": 7.88,
+        "max_abs_delta_score": 17,
+        "mean_delta_score": -7.63,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          4.31,
+          4.31
+        ]
+      }
+    },
+    {
+      "slug": "snapper-rocks-superbank",
+      "field": "tide_preference",
+      "old_value": "low_to_mid",
+      "new_value": "all",
+      "decision": "changed",
+      "sources": [
+        "surf-forecast-snapper-rocks",
+        "surfertoday-snapper",
+        "wannasurf-snapper"
+      ],
+      "rationale": "Current tide preference: low_to_mid. Supporting: SurferToday (B, search summary). Contradicting: Surf-Forecast.com (B); WannaSurf (C). Main contradicting value: all (stated by Surf-Forecast.com (B); WannaSurf (C); 2 independent directly read publishers agree with it). Changed: at least two independent publishers read directly agree on the new value, and no directly read source of the same or a higher tier supports the old one. Before -> after this change, real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 4.31 -> 4.31 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          4.31,
+          4.31
+        ]
+      }
+    },
+    {
+      "slug": "sunset-beach",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 5.0,
+        "max": 18.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "gohawaii-sunset",
+        "hawaiisurf-sunset",
+        "surfer-sunset",
+        "surfertoday-sunset",
+        "wannasurf-sunset",
+        "wsl-sunset-essentials"
+      ],
+      "rationale": "Current working size range: 5-18 ft. Supporting: World Surf League (B); hawaii.surf (C). Contradicting: Surfertoday (B, search summary); WannaSurf (C); SURFER (B, search summary); GoHawaii.com (Hawaii tourism site) (B, search summary); hawaii.surf (C). Main contradicting value: 5-30 ft (stated by Surfertoday (B, search summary); GoHawaii.com (Hawaii tourism site) (B, search summary); 1 independent directly read publisher agrees with it). Kept: the directly read contradicting sources are of a lower tier than the directly read sources that support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 3 (0 in daylight) | mean |delta score| 0.67 | mean delta score -0.67 | max |delta score| 2 | mean breaking height 7.34 -> 7.34 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 5.0,
+        "max": 30.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 3,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0.67,
+        "max_abs_delta_score": 2,
+        "mean_delta_score": -0.67,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.34,
+          7.34
+        ]
+      }
+    },
+    {
+      "slug": "supertubos",
+      "field": "offshore_wind_direction",
+      "old_value": 40.0,
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "breakfinder-supertubos",
+        "indianface-peniche",
+        "surfforecast-supertubos",
+        "surfingwaves-supertubos",
+        "wannasurf-supertubos",
+        "wsl-break-breakdown-peniche",
+        "wsl-portuguese-perspective",
+        "yeeew-supertubos"
+      ],
+      "rationale": "Current offshore wind direction: 40 deg. Supporting: Surf-Forecast.com (B); World Surf League (B); Surfing-Waves.com (C); Yeeew! (B); BreakFinder (B). Contradicting: WannaSurf (C); The Indian Face (brand blog) (C); BreakFinder (B). Main contradicting value: 337.5 deg (stated by WannaSurf (C); The Indian Face (brand blog) (C); 2 independent directly read publishers agree with it). Directly read support for the current value: BreakFinder (B); Surf-Forecast.com (B); Surfing-Waves.com (C); World Surf League (B); Yeeew! (B). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 20 (10 in daylight) | mean |delta score| 6.47 | mean delta score +0.15 | max |delta score| 34 | mean breaking height 4.93 -> 4.93 ft | wind relation changed in 45 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 144 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 6 deg (resultant 0.65), 59 % of hours within 45 deg of the profile's 40 deg and 76 % within 45 deg of 337.5 deg. A directly read source says the prevailing wind here is offshore (World Surf League); the model's prevailing wind is closer to the contradicting direction, so the model sample supports it. A profile is never changed on model wind alone, and the decision stands. BreakFinder appears on both sides (N/NE in its text, E in an imported summary line).",
+      "decided_at": "2026-10-13",
+      "alternative": 337.5,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 20,
+        "labels_changed_daylight": 10,
+        "mean_abs_delta_score": 6.47,
+        "max_abs_delta_score": 34,
+        "mean_delta_score": 0.15,
+        "wind_relations_changed": 45,
+        "mean_breaking_mid_ft": [
+          4.93,
+          4.93
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 144,
+        "vector_mean_from_deg": 6.4,
+        "resultant": 0.65,
+        "modal_sector_deg": 22.5,
+        "share_within_45_of_profile": 0.59,
+        "share_within_45_of_alternative": 0.76,
+        "supports_change": true
+      }
+    },
+    {
+      "slug": "supertubos",
+      "field": "tide_preference",
+      "old_value": "low_to_mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "breakfinder-supertubos",
+        "centerofportugal-peniche",
+        "wannasurf-supertubos",
+        "wsl-break-breakdown-peniche",
+        "yeeew-supertubos"
+      ],
+      "rationale": "Current tide preference: low_to_mid. Supporting: Yeeew! (B); BreakFinder (B). Contradicting: World Surf League (B); WannaSurf (C); Center of Portugal (regional tourism) (B). Main contradicting value: mid_to_high (stated by World Surf League (B); WannaSurf (C); 2 independent directly read publishers agree with it). Directly read support for the current value: BreakFinder (B); Yeeew! (B). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 4.93 -> 4.93 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "mid_to_high",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          4.93,
+          4.93
+        ]
+      }
+    },
+    {
+      "slug": "supertubos",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 12.0
+      },
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "centerofportugal-peniche",
+        "wannasurf-supertubos",
+        "wsl-break-breakdown-peniche",
+        "yeeew-supertubos"
+      ],
+      "rationale": "Current working size range: 3-12 ft. Supporting: World Surf League (B); WannaSurf (C); Center of Portugal (regional tourism) (B). Contradicting: Yeeew! (B). Main contradicting value: 3-18 ft (stated by Yeeew! (B); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 5 (2 in daylight) | mean |delta score| 0.64 | mean delta score -0.64 | max |delta score| 2 | mean breaking height 4.93 -> 4.93 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 3.0,
+        "max": 18.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 5,
+        "labels_changed_daylight": 2,
+        "mean_abs_delta_score": 0.64,
+        "max_abs_delta_score": 2,
+        "mean_delta_score": -0.64,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          4.93,
+          4.93
+        ]
+      }
+    },
+    {
+      "slug": "teahupoo",
+      "field": "offshore_wind_direction",
+      "old_value": 30.0,
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "surfertoday-teahupoo",
+        "surfforecast-teahupoo",
+        "wsl-breakbreakdown-teahupoo",
+        "yeeew-teahupoo"
+      ],
+      "rationale": "Current offshore wind direction: 30 deg. Supporting: Surf-Forecast.com (B); Surfer Today (B, search summary); Yeeew! (B). Contradicting: World Surf League (B). Main contradicting value: 90 deg (stated by World Surf League (B); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 44 (25 in daylight) | mean |delta score| 10.15 | mean delta score +8.32 | max |delta score| 28 | mean breaking height 8.77 -> 8.77 ft | wind relation changed in 70 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 144 hours above 5 km/h, 11-21 October, outside the spot's best months; a short sample, not a climatology): vector mean from 110 deg (resultant 0.83), 15 % of hours within 45 deg of the profile's 30 deg and 82 % within 45 deg of 90 deg. A directly read source says the prevailing wind here is offshore (The Conversation); the model's prevailing wind is closer to the contradicting direction, so the model sample supports it. A profile is never changed on model wind alone, and the decision stands.",
+      "decided_at": "2026-10-13",
+      "alternative": 90.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 44,
+        "labels_changed_daylight": 25,
+        "mean_abs_delta_score": 10.15,
+        "max_abs_delta_score": 28,
+        "mean_delta_score": 8.32,
+        "wind_relations_changed": 70,
+        "mean_breaking_mid_ft": [
+          8.77,
+          8.77
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 144,
+        "vector_mean_from_deg": 109.8,
+        "resultant": 0.83,
+        "modal_sector_deg": 112.5,
+        "share_within_45_of_profile": 0.15,
+        "share_within_45_of_alternative": 0.82,
+        "supports_change": true
+      }
+    },
+    {
+      "slug": "the-box",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surfertoday-the-box",
+        "wsl-margaret-river-event-guide-box",
+        "wsl-margies-breakdown-box"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: World Surf League (B); SurferToday (B, search summary). Contradicting: World Surf League (B). Main contradicting value: high (stated by World Surf League (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 13.97 -> 13.97 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "high",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          13.97,
+          13.97
+        ]
+      }
+    },
+    {
+      "slug": "thurso-east",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 15.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "matosurf-thurso-east",
+        "northcoastwatersports-thurso-east",
+        "wikipedia-thurso-east"
+      ],
+      "rationale": "Current working size range: 3-15 ft. Supporting: North Coast Watersports (C); Matosurf (B). Contradicting: Wikipedia (B). Main contradicting value: 2-15 ft (stated by Wikipedia (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 1 (1 in daylight) | mean |delta score| 0.85 | mean delta score +0.78 | max |delta score| 17 | mean breaking height 7.22 -> 7.22 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 2.0,
+        "max": 15.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 1,
+        "labels_changed_daylight": 1,
+        "mean_abs_delta_score": 0.85,
+        "max_abs_delta_score": 17,
+        "mean_delta_score": 0.78,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          7.22,
+          7.22
+        ]
+      }
+    },
+    {
+      "slug": "trestles",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "surf-forecast-trestles-lowers",
+        "wannasurf-lower-trestles",
+        "wsl-break-breakdown-trestles"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: WannaSurf (C); World Surf League (B). Contradicting: Surf-Forecast.com (B). Main contradicting value: all (stated by Surf-Forecast.com (B); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 5.77 -> 5.77 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          5.77,
+          5.77
+        ]
+      }
+    },
+    {
+      "slug": "uluwatu",
+      "field": "offshore_wind_direction",
+      "old_value": 120.0,
+      "new_value": null,
+      "decision": "kept",
+      "sources": [
+        "bsc-faq-uluwatu",
+        "bsc-uluwatu",
+        "isg-uluwatu-outside-corner",
+        "isg-uluwatu-peak",
+        "isg-uluwatu-racetracks",
+        "surfatlas-uluwatu",
+        "surfforecast-uluwatu",
+        "wikipedia-uluwatu"
+      ],
+      "rationale": "Current offshore wind direction: 120 deg. Supporting: Wikipedia (B); Surf-Forecast.com (B); Indonesian Surf Guide (indonesiansurfguide.com) (C); Padang Padang Surf Camp (balisurfingcamp.com) (C). Contradicting: Surf Atlas (thesurfatlas.com) (B). Main contradicting value: 45 deg (stated by Surf Atlas (thesurfatlas.com) (B); 1 independent directly read publisher agrees with it). Kept: one publisher contradicts, while two or more directly read publishers of the same or a higher tier support the profile. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 61 (35 in daylight) | mean |delta score| 11.78 | mean delta score -11.56 | max |delta score| 39 | mean breaking height 9.58 -> 9.58 ft | wind relation changed in 79 hours. Model wind at the forecast point (GFS 2026-10-11 18Z and ECMWF 2026-10-11 12Z 10-day forecasts, 142 hours above 5 km/h, 11-21 October, inside the spot's best months; a short sample, not a climatology): vector mean from 128 deg (resultant 0.94), 95 % of hours within 45 deg of the profile's 120 deg and 6 % within 45 deg of 45 deg. Directly read sources say the prevailing wind here is offshore (Indonesian Surf Guide (indonesiansurfguide.com), Padang Padang Surf Camp (balisurfingcamp.com)); the model's prevailing wind matches the profile's direction, so the model sample does not support the contradicting value. Surf Atlas adds that wind matters less under the high cliffs.",
+      "decided_at": "2026-10-13",
+      "alternative": 45.0,
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 61,
+        "labels_changed_daylight": 35,
+        "mean_abs_delta_score": 11.78,
+        "max_abs_delta_score": 39,
+        "mean_delta_score": -11.56,
+        "wind_relations_changed": 79,
+        "mean_breaking_mid_ft": [
+          9.58,
+          9.58
+        ]
+      },
+      "model_wind": {
+        "runs": [
+          2,
+          3
+        ],
+        "hours": 142,
+        "vector_mean_from_deg": 127.8,
+        "resultant": 0.94,
+        "modal_sector_deg": 135.0,
+        "share_within_45_of_profile": 0.95,
+        "share_within_45_of_alternative": 0.06,
+        "supports_change": false
+      }
+    },
+    {
+      "slug": "uluwatu",
+      "field": "tide_preference",
+      "old_value": "mid",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "bsc-faq-uluwatu",
+        "bsc-uluwatu",
+        "surfforecast-uluwatu",
+        "wannasurf-uluwatu"
+      ],
+      "rationale": "Current tide preference: mid. Supporting: Padang Padang Surf Camp (balisurfingcamp.com) (C). Contradicting: Surf-Forecast.com (B); WannaSurf (C). Main contradicting value: all (stated by Surf-Forecast.com (B); WannaSurf (C); 2 independent directly read publishers agree with it). Directly read support for the current value: Padang Padang Surf Camp (balisurfingcamp.com) (C). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 9.58 -> 9.58 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "all",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          9.58,
+          9.58
+        ]
+      }
+    },
+    {
+      "slug": "uluwatu",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 3.0,
+        "max": 15.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "bsc-uluwatu",
+        "isg-uluwatu-peak",
+        "wannasurf-uluwatu",
+        "wikipedia-uluwatu",
+        "wsl-uluwatu"
+      ],
+      "rationale": "Current working size range: 3-15 ft. Supporting: Wikipedia (B); WannaSurf (C); Indonesian Surf Guide (indonesiansurfguide.com) (C). Contradicting: WannaSurf (C); World Surf League (B); Padang Padang Surf Camp (balisurfingcamp.com) (C). Main contradicting value: 1-15 ft (stated by WannaSurf (C); 2 independent directly read publishers agree with it). Directly read support for the current value: Indonesian Surf Guide (indonesiansurfguide.com) (C); WannaSurf (C); Wikipedia (B). Disputed: independent directly read publishers agree on another value, but directly read sources of the same or a higher tier support the current value, so the conflict is unresolved and the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 5 (3 in daylight) | mean |delta score| 0.49 | mean delta score +0.25 | max |delta score| 1 | mean breaking height 9.58 -> 9.58 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 1.0,
+        "max": 15.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 5,
+        "labels_changed_daylight": 3,
+        "mean_abs_delta_score": 0.49,
+        "max_abs_delta_score": 1,
+        "mean_delta_score": 0.25,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          9.58,
+          9.58
+        ]
+      }
+    },
+    {
+      "slug": "waimea-bay",
+      "field": "tide_preference",
+      "old_value": "all",
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "hawaiisurf-waimea"
+      ],
+      "rationale": "Current tide preference: all. Supporting: none. Contradicting: hawaii.surf (C). Main contradicting value: mid_to_high (stated by hawaii.surf (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 0 (0 in daylight) | mean |delta score| 0 | mean delta score 0 | max |delta score| 0 | mean breaking height 6.65 -> 6.65 ft. (The run has no sea-level series, so tide does not enter its scores.)",
+      "decided_at": "2026-10-13",
+      "alternative": "mid_to_high",
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 0,
+        "labels_changed_daylight": 0,
+        "mean_abs_delta_score": 0,
+        "max_abs_delta_score": 0,
+        "mean_delta_score": 0,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          6.65,
+          6.65
+        ]
+      }
+    },
+    {
+      "slug": "waimea-bay",
+      "field": "wave_height_ft",
+      "old_value": {
+        "min": 15.0,
+        "max": 45.0
+      },
+      "new_value": null,
+      "decision": "disputed",
+      "sources": [
+        "gohawaii-waimea",
+        "hawaiisurf-waimea",
+        "surfer-waimea-eddie",
+        "wannasurf-waimea"
+      ],
+      "rationale": "Current working size range: 15-45 ft. Supporting: GoHawaii.com (Hawaii tourism site) (B, search summary); WannaSurf (C); SURFER (B, search summary); hawaii.surf (C). Contradicting: WannaSurf (C). Main contradicting value: 3-45 ft (stated by WannaSurf (C); 1 independent directly read publisher agrees with it). Disputed: the contradiction is not outweighed, but fewer than two independent directly read publishers agree on another value, so the profile is not changed. WannaSurf both supports (its text: 15 ft is a small day) and contradicts (its template field: starts working at 3 ft) the current range; a publisher's own support does not outweigh its contradiction, so only hawaii.surf supports the range among the other directly read publishers and the contradiction is recorded as unresolved. Before -> after if the main contradicting value were adopted (it is not), real 2026-10-11 blend run, 81 hours: labels changed 35 (18 in daylight) | mean |delta score| 36.27 | mean delta score +36.27 | max |delta score| 79 | mean breaking height 6.65 -> 6.65 ft.",
+      "decided_at": "2026-10-13",
+      "alternative": {
+        "min": 3.0,
+        "max": 45.0
+      },
+      "sensitivity": {
+        "run": "blend:6e67a441174f999b (2026-10-11, real)",
+        "applies": "if adopted",
+        "hours": 81,
+        "labels_changed": 35,
+        "labels_changed_daylight": 18,
+        "mean_abs_delta_score": 36.27,
+        "max_abs_delta_score": 79,
+        "mean_delta_score": 36.27,
+        "wind_relations_changed": 0,
+        "mean_breaking_mid_ft": [
+          6.65,
+          6.65
+        ]
+      }
+    }
+  ]
+}

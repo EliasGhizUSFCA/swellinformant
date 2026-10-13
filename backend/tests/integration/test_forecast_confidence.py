@@ -285,7 +285,7 @@ def test_every_prediction_stores_both_classes_lead_and_issue_time(
         assert run is not None
         assert p.forecast_confidence_class in CLASSES and p.local_confidence_class in CLASSES
         assert fc.rank(p.local_confidence_class) <= fc.rank(p.forecast_confidence_class)
-        assert p.confidence_method == fc.METHOD
+        assert p.confidence_method == fc.METHOD == "forecast-v1.1"
         assert p.issued_at == run.issued_at
         assert p.lead_hours == pytest.approx((p.valid_time - run.issued_at).total_seconds() / 3600)
         inputs = p.confidence_inputs or {}
@@ -377,6 +377,63 @@ def test_a_new_research_assessment_rescores_the_authoritative_run(
     _synthetic_research(db, "uluwatu", fc.MODERATE)  # SYNTHETIC
     assert compute_pending_predictions(db, NOW)["rescored_runs"] == 1
     assert compute_pending_predictions(db, NOW)["rescored_runs"] == 0
+
+
+def test_disputed_wind_is_a_reason_and_both_relations_are_named(
+    db: Session, scored: dict[str, Any]
+) -> None:
+    """forecast-v1.1: a wind conflict in the current research assessment (SYNTHETIC here) or a
+    "disputed" decision record (the REAL committed one for Jeffreys Bay) adds the reason and
+    the relation under the main contradicting direction; no class changes."""
+    run = scored["run"]
+    before = _preds(db, run.id, "pipeline")
+    row = _synthetic_research(db, "pipeline", fc.HIGH)
+    per_variable = dict(row.per_variable)
+    per_variable["wind"] = {
+        "class": "moderate",
+        "summary": "SYNTHETIC",
+        "rules": ["base:high", "conflict:same_tier"],
+        "evidence": [
+            {
+                "source_key": key,
+                "publisher": f"SYNTHETIC {key}",
+                "url": f"https://{key}.example.org/",
+                "source_type": "magazine",
+                "retrieval": "fetched",
+                "value": {"offshore_from_deg": deg},
+                "used_agrees": agrees,
+            }
+            for key, deg, agrees in (("a", 45.0, False), ("b", 135.0, True))
+        ],
+    }
+    row.per_variable = per_variable
+    db.commit()
+    compute_predictions_for_run(db, run.id, force=True, now=NOW)
+    db.expire_all()
+    after = _preds(db, run.id, "pipeline")
+    assert [p.score for p in after] == [p.score for p in before]
+    assert [p.wind_relation for p in after] == [p.wind_relation for p in before]
+    assert [p.local_confidence_class for p in after] == [p.local_confidence_class for p in before]
+    for p in after:
+        dispute = (p.confidence_inputs or {})["wind_dispute"]
+        assert dispute["alternative_offshore_deg"] == 45.0
+        assert dispute["basis"] == ["conflict:same_tier"] and dispute["sources"] == ["a"]
+        assert p.components["wind_dispute"]["relation"] == p.wind_relation
+        assert fc.WIND_DISPUTE_REASON in fc.api_fields(p)["confidence_reasons"]
+        # SYNTHETIC wind 8 km/h from 130 deg: offshore for 135, cross-shore for 45.
+        assert p.wind_relation == "offshore"
+        assert dispute["relation_alternative"] == "cross-shore" and dispute["differs"]
+        assert "offshore or cross-shore: sources disagree" in p.explanation
+    # Jeffreys Bay has no assessment here, but its committed decision record says disputed.
+    for p in _preds(db, run.id, "jeffreys-bay"):
+        dispute = (p.confidence_inputs or {})["wind_dispute"]
+        assert dispute["basis"] == ["decision:disputed"]
+        assert dispute["alternative_offshore_deg"] == 225.0
+    # A spot whose assessment has no wind conflict and whose record says kept: no note.
+    for p in _preds(db, run.id, "uluwatu"):
+        assert "wind_dispute" not in (p.confidence_inputs or {})
+        assert fc.WIND_DISPUTE_REASON not in fc.api_fields(p)["confidence_reasons"]
+        assert "sources disagree" not in p.explanation
 
 
 def test_events_get_the_read_time_staleness_cap(db: Session, scored: dict[str, Any]) -> None:

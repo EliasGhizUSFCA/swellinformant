@@ -69,9 +69,16 @@ variables.
 * *Research confidence* per spot and per condition (swell direction, size, period, wind,
   tide, bottom, season, how the wave breaks): High / Moderate / Low from cited sources,
   their independence, type, agreement and age, with the gaps in plain language
-  ([`docs/research-confidence.md`](docs/research-confidence.md)). The committed evidence
-  covers all 50 spots (259 sources); because it was read through web-search results only,
-  no condition is above Moderate yet.
+  ([`docs/research-confidence.md`](docs/research-confidence.md), methodology research-v1.2).
+  The committed evidence covers all 50 spots: 468 sources (403 read directly, 65 seen only
+  as search summaries), 1,730 claims, including NOAA BlueTopo bathymetry for four US spots;
+  35 spots are Moderate and 15 Low, none High.
+* *Evidence-based spot profiles*: every profile value contradicted by the evidence has a
+  decision record (changed / kept / disputed, with sources and the effect on a real run;
+  [`data/surf_spots/profile_decisions.json`](data/surf_spots/profile_decisions.json)), a
+  value changes only when two independent, directly read publishers outrank all direct
+  support for the old one, and `python -m app.cli research lint` flags unexplained
+  geometry. Where sources disagree about which wind is offshore, every forecast hour says so.
 * *Forecast confidence* per forecast hour: lead time, ensemble spread, disagreement between
   independent model families only, run-to-run change, data completeness, staleness and
   source; plus *local confidence* at the break, which can be no better than how well the
@@ -753,11 +760,16 @@ Checklist:
 
 **Known limits of the confidence assessments**
 
-* Research evidence was gathered on 2026-10-11 through domain-restricted web searches,
-  because the research environment could not open the pages; every source and claim was
-  re-checked by an independent verifier, but excerpts are the search tool's text about a
-  page. Such evidence is capped at Moderate. Re-running the research with direct page
-  access (and adding surveyed bathymetry) is what can raise a spot to High.
+* Research evidence comes from two passes: a first one on 2026-10-11 through
+  domain-restricted web searches, and a second on 2026-10-12 that re-read every source it
+  could open (384 of 449 read directly; the 65 behind bot protection remain search
+  summaries, capped at Moderate). No spot is High overall: tide evidence conflicts at the
+  two spots whose swell direction, size and wind are all High, and most spots have no
+  measured bathymetry (only four US spots, from NOAA BlueTopo).
+* Eleven offshore wind directions are disputed by the evidence and were not changed (the rule
+  needs two directly read publishers that outrank every direct source of the old value);
+  forecasts at 15 spots carry "Sources disagree about which wind is offshore here." The
+  score still uses the profile's direction.
 * Forecast and research confidence classes are documented heuristics; they have not been
   calibrated against observed surf (no nearshore observations exist yet).
 
@@ -799,7 +811,9 @@ and Mailpit capture providers only, not through a real email provider.
 * Wave forecasts 5–10 days ahead routinely shift in timing (± a day) and size.
   Confidence is shown separately from quality for this reason.
 * Breaking heights come from a physical model with estimated spot profiles (shore normal,
-  shadowing, focusing; no bathymetry). They are unvalidated against surf observations and
+  shadowing, focusing; survey depths at the forecast points of three US spots and one
+  measured shore normal, at Trestles; no measured depth at any break, because the break coordinates
+  are shoreline positions). They are unvalidated against surf observations and
   can be wrong by a factor of 2 at reef and point breaks with unusual bathymetry. The 80%
   range is a heuristic, not a calibrated probability.
 * Quality-score weights, thresholds and labels are reasoned defaults, not fitted to

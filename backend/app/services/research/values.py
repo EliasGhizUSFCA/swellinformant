@@ -28,13 +28,21 @@ Assumptions (documented in docs/research-confidence.md):
   null or omitted) is open on that side; the same holds for periods.
 * The profile's period range runs from ``min_swell_period_s`` (rarely works below) to
   ``ideal_swell_period_s``; a source range agrees when it overlaps it.
+* Size ranges are working ranges (the sizes at which the break works), never record
+  waves: "the biggest wave ridden here was 80 ft" is not a working maximum and must not be
+  encoded as one (the claim then carries no value).
 
 "Agrees" uses the tolerances of the research-v1 methodology (direction windows overlap
 once the profile window is widened by 30 degrees on each side, offshore wind within 45
-degrees, same or adjacent tide class, overlapping ranges or months). "Exact" is stricter:
-the value is the profile's value at the precision sources state it (direction endpoints
-and wind within 11.25 degrees, i.e. the same 16-point compass name; the same tide class;
-both range bounds within 0.5 ft / 0.5 s; the same set of months).
+degrees, same or adjacent tide class, overlapping ranges or months). research-v1.2 adds a
+bound check for swell size: each bound a source states is compared separately, and a
+stated maximum more than 25 % above the profile's maximum, or a stated minimum more than
+25 % below the profile's minimum, contradicts that bound even when the ranges overlap
+(``SIZE_BOUND_TOLERANCE``). A one-bound value is compared only on the bound it states. A
+narrower range (a maximum below the profile's, a minimum above it) does not contradict.
+"Exact" is stricter: the value is the profile's value at the precision sources state it
+(direction endpoints and wind within 11.25 degrees, i.e. the same 16-point compass name;
+the same tide class; both range bounds within 0.5 ft / 0.5 s; the same set of months).
 """
 
 from __future__ import annotations
@@ -52,6 +60,9 @@ WIND_TOLERANCE_DEG = 45.0
 EXACT_DIRECTION_DEG = 11.25  # half of one 16-point compass sector
 EXACT_RANGE_FT = 0.5
 EXACT_RANGE_S = 0.5
+# research-v1.2: a stated size bound more than this fraction beyond the profile's bound
+# (maximum above, minimum below) contradicts it.
+SIZE_BOUND_TOLERANCE = 0.25
 MAX_PERIOD_S = 30.0
 MAX_FACE_HEIGHT_FT = 150.0
 
@@ -198,6 +209,19 @@ def _ranges_overlap(
     return lo_v <= profile_hi and profile_lo <= hi_v
 
 
+def size_bounds_contradicted(
+    lo: float | None, hi: float | None, profile_lo: float, profile_hi: float
+) -> tuple[bool, bool]:
+    """(minimum contradicted, maximum contradicted) under the research-v1.2 bound check.
+
+    Only stated bounds are compared: a maximum more than SIZE_BOUND_TOLERANCE above the
+    profile's maximum, a minimum more than SIZE_BOUND_TOLERANCE below the profile's minimum.
+    """
+    min_bad = lo is not None and lo < profile_lo * (1.0 - SIZE_BOUND_TOLERANCE)
+    max_bad = hi is not None and hi > profile_hi * (1.0 + SIZE_BOUND_TOLERANCE)
+    return min_bad, max_bad
+
+
 def _range_exact(
     lo: float | None, hi: float | None, profile_lo: float, profile_hi: float, tol: float
 ) -> bool:
@@ -245,7 +269,10 @@ def compare_value(variable: str, value: dict[str, Any], profile: dict[str, Any])
     if variable == "swell_size":
         args = (value.get("min_ft"), value.get("max_ft"))
         bounds = (profile["wave_height_min_ft"], profile["wave_height_max_ft"])
-        agrees = _ranges_overlap(*args, *bounds)
+        # research-v1.2: overlapping AND neither stated bound beyond the 25 % tolerance.
+        agrees = _ranges_overlap(*args, *bounds) and not any(
+            size_bounds_contradicted(*args, *bounds)
+        )
         return Comparison(agrees, agrees and _range_exact(*args, *bounds, EXACT_RANGE_FT))
     if variable == "swell_period":
         args = (value.get("min_s"), value.get("max_s"))

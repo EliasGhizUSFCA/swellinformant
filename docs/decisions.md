@@ -62,7 +62,12 @@ defined path (SURF_SCORING.md §7).
 shadow table with a provenance flag each (`measured`, `literature`, `calibrated`,
 `estimated`, `unknown`). Unknown depths stay NULL and the model then assumes deep water and
 no depth limit, saying so in the prediction's assumptions.
-**Consequences.** All 50 spots currently run on estimated profiles, shown on the spot page.
+**Consequences.** Until 2026-10-13 all 50 spots ran on estimated profiles, shown on the spot
+page. Since ADR-018 four US spots carry measured values from NOAA BlueTopo
+(`data/surf_spots/physical_profiles.json`, provenance per value): survey depths at the
+forecast points of Mavericks, Ocean Beach and Rincon and Trestles' shore normal (Trestles'
+forecast point lies in BlueTopo's NBS Generalization surface, outside any survey, so its
+depth stays unknown); no spot has a measured controlling depth.
 
 ## ADR-006 Uncertainty as labelled ranges, not probabilities
 
@@ -175,9 +180,10 @@ famous, well-documented break can have an untrustworthy 9-day forecast, and an e
 2-day forecast says little about a break nobody has documented.
 **Decision.** Three separate classifications, stored separately and shown separately, none of
 them a calibrated probability: research confidence (`spot_research_assessments`, methodology
-research-v1, research-v1.1 since ADR-016, docs/research-confidence.md); forecast confidence of the offshore forecast and
-local confidence of the breaking-wave estimate (`surf_quality_predictions`, methodology
-forecast-v1, docs/forecast-confidence.md). The only link is documented: local confidence =
+research-v1, research-v1.1 since ADR-016, research-v1.2 since ADR-018,
+docs/research-confidence.md); forecast confidence of the offshore forecast and local
+confidence of the breaking-wave estimate (`surf_quality_predictions`, methodology
+forecast-v1, forecast-v1.1 since ADR-018, docs/forecast-confidence.md). The only link is documented: local confidence =
 min(forecast confidence, research basis) with research basis = min(swell direction, swell
 size, max(bathymetry, local behaviour)); without an assessment it is Low. Forecast confidence
 never reads research, research never reads forecasts. Every prediction records the
@@ -219,7 +225,10 @@ stale after 16 h instead of 18 h, i.e. as soon as one cycle has been missed.
 50 spots) was gathered with domain-restricted web searches while direct page access was
 blocked. Every source was re-checked by an independent verifier, but every excerpt is a
 search tool's text about a page, not the page itself. Under research-v1 that evidence would
-have made three spots (Jaws, Sunset Beach, The Box) High overall.
+have made three spots (Jaws, Sunset Beach, The Box) High overall. A second pass on
+2026-10-12, with direct page access, re-read every source that could be read: 449 sources,
+384 read directly with verbatim excerpts confirmed on the page, 1,711 claims; the 65 sources
+behind bot protection stayed `web_search` (research-v1.1 result: 34 Moderate, 16 Low).
 **Decision.** Record how each source was read (`spot_research_sources.retrieval`: `fetched`
 by default, `web_search`; migration 0005, a check constraint, part of the evidence
 fingerprint). Methodology research-v1.1 caps a variable at Moderate when all of its
@@ -232,10 +241,63 @@ unchanged.
 statements and leave every spot without evidence); treating it like read pages (overstates
 it: a summary can compress or misattribute what the page says); a separate source tier
 (mixes how a source was read with what kind of source it is).
-**Consequences.** No spot is High until some evidence is read directly (live: 18 Moderate,
-32 Low). The methodology change adds one assessment row per spot and keeps the research-v1
-rows. Local confidence, which uses the research basis, is at most Moderate everywhere for
-now.
+**Consequences.** No spot is High until some evidence is read directly (first pass: 18
+Moderate, 32 Low). The methodology change adds one assessment row per spot and keeps the
+research-v1 rows. With the second pass every variable that has support has some directly
+read support, so the cap no longer fires for any variable; no spot is High for other reasons
+(ADR-018).
+
+## ADR-018 Research-v1.2 and the profile-decision policy
+
+**Context.** The second research pass contradicts parts of the spot profiles, which drive
+scoring (wind is 0.30 of the score plus a gate) and the nearshore model. An assessment of
+it found sixteen spots whose wind evidence contradicts the profile's offshore direction
+(the largest prediction impact at Chicama, 150° against ~67.5°), swell-size comparisons
+that ignored the maximum (overlap alone let "holds 30 ft" agree with a 12 ft maximum), no
+measured physical parameter anywhere, 19 spots whose offshore wind is more than 60° from the
+estimated shore normal + 180°, and no warning to users when the offshore direction itself is
+disputed (local confidence does not use the wind).
+**Decision.**
+* **research-v1.2**: each stated size bound is compared separately (a stated maximum more
+  than 25 % above the profile's, or a minimum more than 25 % below, contradicts); record
+  waves are not working ranges; the tier rules are written down (official = government
+  agencies with a coastal or marine mandate, national surfing reserves, government
+  geological or hydrographic surveys; tourism boards and World Surf League editorial pages
+  are magazine). Seven tourism sources were reclassified and five values removed, each
+  noted on its source.
+* **Profile decisions** (`data/surf_spots/profile_decisions.json`,
+  `research.decisions.propose`): a profile value is changed only when at least two
+  independent publishers whose pages were read directly agree on a stated new value, within
+  the methodology's agreement tolerances, and every directly read source supporting the old
+  value is of a strictly lower tier than both of them; otherwise the record says kept or
+  disputed with the reason (a publisher that both supports and contradicts the value
+  does not outweigh its own contradiction). Every contradicted field of the current assessment has a
+  record with its sources, rationale and the before/after effect on the real 2026-10-11 run
+  (`scripts/profile_sensitivity.py`, read-only). For wind the record reports the model wind
+  at the forecast point, which never decides.
+* **forecast-v1.1**: a wind conflict in the assessment or a disputed record adds "Sources
+  disagree about which wind is offshore here." to every hour, stores the wind relation under
+  the main contradicting direction and names both in the explanation; no class or score
+  changes.
+* **Measured bathymetry** (NOAA BlueTopo, public domain) for the four continental US spots
+  where it exists, under documented acceptance rules (`scripts/bathymetry_profiles.py`);
+  measured values that the straight-contour model cannot use, and depths from BlueTopo's
+  NBS Generalization surface (no survey), are kept in the provenance, not applied.
+* **`research lint`** lists unexplained offshore/shore-normal gaps over 60°, contradicted
+  fields without a record and records the rule no longer gives.
+**Alternatives.** Changing a profile when the best contradicting source outranks the best
+supporting one (the methodology's "conflict:stronger"): it would have changed the offshore
+wind at Chicama and Skeleton Bay, each on one forecast-site guide plus community pages
+against community pages of the same tier as those (and five tide or size values the same
+way), and at Chicama the sources that say the wind is "consistently offshore" and the
+model's prevailing SSE wind both point the other way. Deciding by model wind (it shows which
+winds blow 15-20 km offshore, not which are offshore at the lineup). Averaging the sources'
+directions (would invent values nobody states).
+**Consequences.** No wind profile met the rule (11 disputed, 9 kept); four values changed
+(three tides to `all`, Cloudbreak's range to 2-20 ft). Research: 35 Moderate, 15 Low, none
+High; the research basis of local confidence falls (High 8 → 3, Low 12 → 24 spots), almost
+entirely through the size rule. 15 spots carry the disputed-wind note on every hour of the
+real run. Restaurants stays listed by the lint (no source describes its orientation).
 
 ## ADR-017 NDBC: one record per wave report, APD defined per station
 
