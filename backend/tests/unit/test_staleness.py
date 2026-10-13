@@ -51,6 +51,14 @@ def test_cycle_hours_match_the_ingesters() -> None:
     assert queries.SOURCE_CYCLE_HOURS[ECMWF_IFS_CODE] == 24 / len(hours) == hours[1] - hours[0]
 
 
+def test_blend_code_copies_match_the_blend() -> None:
+    """queries and health restate blend.BLEND_CODE instead of importing it."""
+    from app.services import health
+    from app.services.forecasts import blend
+
+    assert queries.BLEND_CODE == health.BLEND_CODE == blend.BLEND_CODE
+
+
 def test_ecmwf_defect_reproduced_and_fixed() -> None:
     """With one FORECAST_STALE_HOURS (18 h) a 22 h old ECMWF run counted as stale, although
     its next 12-hourly cycle is not published until ~8 h after that cycle time."""

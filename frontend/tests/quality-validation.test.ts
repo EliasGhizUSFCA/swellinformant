@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError, readCookie } from "@/lib/api";
-import { colorForScore, labelForScore, NO_FORECAST_COLOR, QUALITY_COLORS } from "@/lib/quality";
+import { colorForScore, labelForScore, NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_LABELS, QUALITY_OPTIONS, QUALITY_THRESHOLDS } from "@/lib/quality";
 import { defaultWizardState, registerSchema, safeNext, toSearchInput, validateStep } from "@/lib/validation";
 
 describe("quality scale (mirrors backend thresholds)", () => {
@@ -16,6 +16,17 @@ describe("quality scale (mirrors backend thresholds)", () => {
     [39, "poor"],
   ])("score %i → %s", (score, label) => {
     expect(labelForScore(score)).toBe(label);
+  });
+
+  it("gives the quality options (search wizard, map filter) the same minimum scores", () => {
+    const thresholds = Object.fromEntries(QUALITY_THRESHOLDS.map(([min, label]) => [label, min]));
+    for (const q of QUALITY_OPTIONS) {
+      expect(q.min, q.value).toBe(thresholds[q.value]);
+      expect(labelForScore(q.min)).toBe(q.value);
+      expect(labelForScore(q.min - 1)).not.toBe(q.value);
+      expect(q.label).toBe(QUALITY_LABELS[q.value]);
+    }
+    expect(QUALITY_OPTIONS.map((q) => q.value)).toEqual(QUALITY_THRESHOLDS.map(([, label]) => label).filter((l) => l !== "poor").reverse());
   });
 
   it("colours by label", () => {

@@ -234,6 +234,16 @@ def test_disagreement_threshold_is_the_blends_flag() -> None:
     assert fc.HS_DISAGREE_LOG_RATIO == blend.HS_LOG_RATIO_FLAG
 
 
+def test_index_class_boundaries_are_the_stored_confidence_labels() -> None:
+    """INDEX_HIGH / INDEX_MODERATE restate confidence.confidence_label's cut-offs (the
+    ``confidence_label`` column); forecast confidence starts from the same class."""
+    from app.services.surf_quality.confidence import confidence_label
+
+    edges = (fc.INDEX_MODERATE, fc.INDEX_HIGH)
+    for index in (0, *(e + d for e in edges for d in (-0.01, 0, 0.01)), 100):
+        assert fc.index_class(index) == confidence_label(index).value, index
+
+
 def test_same_family_mismatch_is_an_integrity_cap() -> None:
     out = classify(disagreement=Disagreement(0.05, flags=("same_family_mismatch:t_copy",)))
     assert out.cls == MODERATE
