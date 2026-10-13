@@ -152,9 +152,11 @@ not be seen live: those directories were empty on 2026-10-12 (presumably emptied
 the previous year's yearly file was published; not checked). A wrong guess would show as a 404 warning, not as
 missing data passed off as complete. Early in a year, before the previous year's yearly
 file is published (HTTP 404), the adapter reads that year's monthly files instead. A file
-missing under every name is a coverage warning; a file that answers 200 but is not gzip
-is an error, not data (a defensive check: every missing file seen live answered 404,
-including the old `view_text_file.php` name). Live, two of the 110 yearly and
+missing under every name is a coverage warning; a file that answers 200 but is not gzip,
+is a truncated gzip, or would decompress to more than 64 MB is an error, not data (a
+defensive check: every missing file seen live answered 404, including the old
+`view_text_file.php` name; the largest yearly file read live, 46026 in 2024, is 350 KB
+compressed and 4.4 MB decompressed; the bound was added in review on 2026-10-13). Live, two of the 110 yearly and
 monthly files requested for the 24-month window were missing: 51201 March and April 2026.
 
 **Values and units** (columns `#YY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES ...`,
@@ -508,8 +510,8 @@ this table NDBC was verified only with synthetic text; see the next section.)
 | Backtest | docs/ml-evaluation.md, section 11. |
 
 Not verified live: the October to December monthly-file codes (`a`, `b`, `c`; those
-directories were empty), a status-200 answer that is not gzip (never seen live; tested
-with a synthetic body), the old yearly layouts with 2-digit years (synthetic fixture
+directories were empty), a status-200 answer that is not gzip, truncated or oversized
+(never seen live; tested with synthetic bodies), the old yearly layouts with 2-digit years (synthetic fixture
 only; the files read live were 2019-2026), and the 5-day files (not used).
 
 ## Known limitations

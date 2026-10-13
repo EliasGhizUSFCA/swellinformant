@@ -30,7 +30,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from app.core.config import Settings
-from app.services.http import TransientProviderError
+from app.services.http import PermanentProviderError, TransientProviderError
 from app.services.observations import aodn, metoffice, ndbc
 from app.services.observations.records import (
     ObservationRecord,
@@ -754,3 +754,34 @@ def test_listing_http_error_is_permanent() -> None:
     client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(403)))
     with pytest.raises(aodn.PermanentProviderError):
         list_objects(client, "https://b.example", "a/", provider="test", backoff_seconds=0)
+
+
+class TestNdbcGzipLimits:
+    """Decompression of NDBC .gz answers is bounded (SYNTHETIC bodies)."""
+
+    def _provider(self, body: bytes) -> ndbc.NdbcProvider:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=body)
+
+        return ndbc.NdbcProvider(
+            Settings(ndbc_base_url="https://ndbc.example"),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+            backoff_seconds=0,
+            now=datetime(2026, 10, 11, tzinfo=UTC),
+        )
+
+    def test_a_gzip_bomb_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ndbc, "MAX_DECOMPRESSED_BYTES", 1000)
+        p = self._provider(gzip.compress(b"9" * 1001))
+        with pytest.raises(PermanentProviderError, match="more than 1000 bytes"):
+            p._get_text("data/historical/stdmet/51201h2024.txt.gz")
+        assert self._provider(gzip.compress(b"9" * 1000))._get_text("x.txt.gz") == "9" * 1000
+
+    def test_multi_member_truncated_and_non_gzip_bodies(self) -> None:
+        two = gzip.compress(b"#YY MM\n") + gzip.compress(b"2026 10\n")
+        assert self._provider(two)._get_text("x.txt.gz") == "#YY MM\n2026 10\n"
+        truncated = gzip.compress(b"#YY MM DD hh mm WVHT\n" * 50)[:-12]
+        with pytest.raises(PermanentProviderError, match="gzip"):
+            self._provider(truncated)._get_text("x.txt.gz")
+        with pytest.raises(PermanentProviderError, match="not a gzip file"):
+            self._provider(b"<html>Unable to access data file</html>")._get_text("x.txt.gz")

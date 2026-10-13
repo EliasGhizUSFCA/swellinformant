@@ -80,7 +80,6 @@ it holds no water depth (the station pages do).
 from __future__ import annotations
 
 import bisect
-import gzip
 import logging
 import re
 import zlib
@@ -135,6 +134,10 @@ COPY_WINDOW = timedelta(minutes=15)
 COPY_HS_TOLERANCE_M = 0.1 + 1e-6
 COPY_PERIOD_TOLERANCE_S = 0.05 + 1e-6
 COPY_DIRECTION_TOLERANCE_DEG = 1.0
+# Bound on a decompressed .gz answer: the largest yearly stdmet file seen live
+# (46026h2024.txt.gz, 350 KB) is a few MB of text, so anything far beyond is refused
+# rather than expanded in memory (a corrupt or hostile answer).
+MAX_DECOMPRESSED_BYTES = 64_000_000
 
 STDMET_SENTINELS: dict[str, float] = {
     "WDIR": 999.0,
@@ -486,6 +489,32 @@ def parse_active_stations(xml_text: str) -> dict[str, dict[str, Any]]:
     return out
 
 
+def gunzip_bounded(body: bytes, path: str) -> bytes:
+    """Decompress a (possibly multi-member) gzip body, at most MAX_DECOMPRESSED_BYTES.
+
+    A 200 answer that is not gzip (an HTML error page, say), a truncated one and one that
+    expands beyond the bound are errors, not data (every missing file seen live answered
+    404, so these are defensive).
+    """
+    limit = MAX_DECOMPRESSED_BYTES
+    out = bytearray()
+    data = body
+    while data:
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        try:
+            out += d.decompress(data, limit + 1 - len(out))
+        except zlib.error as exc:
+            raise PermanentProviderError(f"ndbc: {path} is not a gzip file ({exc})") from exc
+        if len(out) > limit or d.unconsumed_tail:
+            raise PermanentProviderError(
+                f"ndbc: {path} decompresses to more than {limit} bytes; refused"
+            )
+        if not d.eof:
+            raise PermanentProviderError(f"ndbc: {path} is a truncated gzip file")
+        data = d.unused_data.lstrip(b"\x00")  # padding after the last member
+    return bytes(out)
+
+
 def _month_start(year: int, month: int) -> datetime:
     return datetime(year, month, 1, tzinfo=UTC)
 
@@ -551,12 +580,7 @@ class NdbcProvider:
         if body is None:
             return None
         if path.endswith(".gz"):
-            try:
-                body = gzip.decompress(body)
-            except (OSError, EOFError, zlib.error) as exc:
-                # Defensive: a 200 answer that is not gzip (an HTML error page, say) is
-                # an error, not data. Every missing file seen live answered 404.
-                raise PermanentProviderError(f"ndbc: {path} is not a gzip file ({exc})") from exc
+            body = gunzip_bounded(body, path)
         return body.decode("ascii", errors="replace")
 
     def _month_file(self, sid: str, year: int, month: int) -> _File:
