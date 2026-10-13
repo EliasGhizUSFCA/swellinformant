@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -159,7 +160,8 @@ def test_in_place_restore_refuses_another_schema_revision(tools: None, tmp_path:
     backup = run("backup-db.sh", "--dir", str(tmp_path))
     assert backup.returncode == 0, backup.stderr
     archive = backup.stdout.strip()
-    scratch = "swell_ops_revision_check"
+    # One scratch database per run: concurrent runs on one server used to share this name.
+    scratch = f"{db_name()[:40]}_revcheck_{uuid.uuid4().hex[:8]}"
     url = make_url(get_settings().database_url)
     scratch_url = url.set(database=scratch).render_as_string(hide_password=False)
     with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
