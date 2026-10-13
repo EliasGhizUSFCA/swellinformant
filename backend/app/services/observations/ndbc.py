@@ -182,7 +182,6 @@ COMPASS = {
 }
 _STATION_TAG = re.compile(r"<station\s+([^>]*?)/?>", re.S)
 _ATTR = re.compile(r'(\w+)="([^"]*)"')
-_WAVE_FIELDS = ("hs_m", "tp_s", "tm_s", "peak_direction_deg")
 
 
 def _header(lines: list[str]) -> tuple[list[str], int]:
