@@ -294,3 +294,65 @@ window and Waimea Bay's size range kept → disputed; no prediction changes, Anc
 already carried the note), and Trestles' 758.7 m forecast-point depth, an NBS
 Generalization cell outside any survey, is no longer labelled measured (no prediction
 changes: deep water either way).
+
+## 15. Second research pass (2026-10-12)
+
+With direct page access all 50 spots were re-researched: every readable source was re-read,
+its excerpts replaced by verbatim page text (checked mechanically on the page) and every
+claim judged by an independent verifier. 449 sources (384 read directly; 65 behind bot
+protection kept from the first, search-only pass) and 1,711 claims; 41 claims were rejected
+by the verifiers (e.g. record or contest heights encoded as working ranges, a Surfline
+forecast quoted in a WSL post). Research classes moved from 18 Moderate / 32 Low to
+34 / 16 (35 / 15 after research-v1.2 and the BlueTopo sources, §14).
+
+## 16. Validation against buoys ([`ml-evaluation.md`](ml-evaluation.md) §11-12, ADR-017)
+
+* **NDBC verified live** (formats, missing-value codes, WVHT = spectral Hm0, matched against
+  CDIP files) and paired with the 8 US spots (10 buoys). Raw GFS-Wave vs NDBC Hm0, 24
+  months, 409,344 pairs: bias -0.23 m; RMSE 0.38 m at 24 h, 0.51 m at 168 h, 0.64 m at
+  240 h; skill vs the long-term climatology 0.58 at 24 h, 0.23 at 168 h, negative at 240 h.
+* **80 % range**: the app's single-model range covers 53 % at 24 h (too narrow; misses
+  mostly above p90 because the model is low). A lead-dependent scale fitted on the older
+  year covers 75-80 % on the held-out year pooled; it is labelled calibrated only where the
+  spot's own buoy agrees at every lead (Jaws, Trestles) and is not yet wired into the
+  prediction job. The ensemble range and the breaking range stay heuristic.
+* **Confidence classes**: with a GEFS-Wave spread the three classes are ordered by realised
+  error on both years (RMSE 0.34 / 0.49 / 0.75 m); single-model hours without an ensemble
+  show no High-vs-Moderate difference. A cap fixing that ("C2") was rejected in review
+  because its test was written after seeing the results; forecast-v1 classes stay, and the
+  gap is documented. Live hours all have ensemble data.
+* **ML correction**: a random forest trained on NDBC + AODN spectral Hm0 passed the
+  unchanged pre-registered criteria (held-out RMSE 0.43 → 0.32 m) and the transfer check,
+  and is approved for 7 spots, leads 3-240 h. It is **not activated**: activation is an
+  operator step, and the review found its features mean slightly different things at the
+  spots (expected benefit smaller than at the buoys) and a post-correction bias of
+  +0.09 m.
+* Not validated: breaking heights (no nearshore observations), rules needing two
+  independent model families, gridded values at the spots.
+
+## 17. Production operations ([`operations.md`](operations.md))
+
+* **CI**: GitHub Actions (backend lint, types, migrations, unit and integration tests;
+  frontend tsc, eslint, vitest, build; e2e). First run on GitHub, 2026-10-13: success.
+* **Data health**: `/api/health/data` and the status page report each source against its
+  own staleness limit and each scheduled job; a beat job emails admins once per problem
+  (de-duplicated) and sends a recovery notice.
+* **Backups**: `scripts/backup-db.sh`, `restore-db.sh` (refuses a schema-revision mismatch),
+  `restore-drill.sh`, a compose `backup` profile; restore drill: 42 tables and 34,800 rows
+  identical.
+* **Live Docker run**: downloads from inside the Docker network (NOAA 18Z 213 MB in 65 s,
+  GEFS at its own cron time), a 30-minute soak with 63 jobs and 0 failures, peak memory
+  worker 849 MiB / API 471 MiB / PostgreSQL 187 MiB; a backup race after a daemon restart
+  was found live and fixed.
+* Date- and time-of-day-dependent tests found in review were made deterministic.
+
+## 18. Test results (2026-10-13, integrated branch `0c42bc6`)
+
+| Command | Result |
+|---|---|
+| `ruff format --check`, `ruff check`, `mypy app` | pass (159 files) |
+| `alembic upgrade head && alembic check` (to 0005) | pass, no drift |
+| `pytest tests/unit` / `pytest tests/integration` (separate processes) | **635 passed** / **229 passed** |
+| `npx tsc --noEmit && npx eslint . && npx vitest run` | pass, 156 tests |
+| `./scripts/run-e2e.sh` | 50 passed + the timeline test fixed and re-run (26 map tests passed) |
+| GitHub Actions CI run 1 | success |
