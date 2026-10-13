@@ -2,6 +2,7 @@ import { Waves, Wind } from "lucide-react";
 
 import { ForecastConfidence } from "@/components/confidence";
 import { RatingHeadline } from "@/components/rating";
+import { WindDisputeNote } from "@/components/wind-dispute";
 import { compass, formatDateTime, heightRange, kmh, metres, seconds, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingReason } from "@/lib/rating";
@@ -62,6 +63,7 @@ export function ConditionsSummary({
           {kmh(c.wind_speed_kmh)} {compass(c.wind_direction_deg)} · {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
         </div>
       </div>
+      <WindDisputeNote reasons={c.confidence_reasons} className="mt-1.5" />
       <ForecastConfidence
         className="mt-2"
         value={c.forecast_confidence_class}

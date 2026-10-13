@@ -23,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Disclosure } from "@/components/ui/disclosure";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WindDisputeNote } from "@/components/wind-dispute";
 import { useForecast, useMe, useSpot, useSpotEvents, useSpotOpportunities } from "@/hooks/queries";
 import { nearestPointIndex, pointToConditions } from "@/lib/forecast";
 import { compass, formatDateTime, heightRange, kmh, metres, relativeTime, seconds, titleCase, type Units } from "@/lib/format";
@@ -108,6 +109,7 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
                   <InfoPopover term="windRelation" />
                 </span>
               </div>
+              <WindDisputeNote reasons={c.confidence_reasons} className="mt-1.5" />
               <WhyThisRating
                 className="mt-2"
                 score={c.score}

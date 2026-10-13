@@ -6,6 +6,7 @@ import { InfoPopover } from "@/components/info-popover";
 import { DemoBadge } from "@/components/quality";
 import { RatingHeadline, WhyThisRating } from "@/components/rating";
 import { Disclosure } from "@/components/ui/disclosure";
+import { WindDisputeNote } from "@/components/wind-dispute";
 import { compass, formatDateTime, heightRange, kmh, metres, seconds, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors, ratingReason } from "@/lib/rating";
@@ -121,6 +122,7 @@ export function ForecastBreakdown({
             80% range {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)} · {uncertaintyLabel(c.uncertainty_kind)} <InfoPopover term="range80" />
           </div>
         )}
+        <WindDisputeNote reasons={c.confidence_reasons} className="mt-1.5" />
         <div className="mt-2.5 space-y-1.5">
           <ForecastConfidence value={c.forecast_confidence_class} reasons={c.confidence_reasons} leadHours={c.lead_hours} legacyIndex={c.confidence} />
           <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} reason={c.local_confidence_reason} />
