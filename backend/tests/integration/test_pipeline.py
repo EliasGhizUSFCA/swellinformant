@@ -151,17 +151,55 @@ def test_qualifying_swell_produces_flight_opportunity_and_alert(
     assert alert_count(db) == before
 
 
-def test_paused_search_does_not_generate_notifications(db: Session, few_spots: list[str]) -> None:
+def test_paused_search_does_not_generate_notifications(
+    db: Session, few_spots: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A paused search gets no alert for a qualifying swell; once resumed it gets one.
+
+    Natural demo swells are switched off (as in the e2e tests): they follow the calendar,
+    and on some dates one starts 4-5 days ahead at Jeffreys Bay, the simulated swell merges
+    into it, and the merged event then starts inside DETECTION_LEAD_MIN_DAYS, where a search
+    that had no match yet (paused during the first run) correctly gets no new match. With
+    only the simulated swell the event starts 7 days ahead on every date.
+    """
+    monkeypatch.setattr(get_settings(), "demo_natural_swells", False)
+    settings = get_settings()
     user = make_user(db)
     search = make_search(db, user)
     searches.set_paused(db, search, True)
     run_pipeline(db)
-    simulate(db)
+    start, end, _ = simulate(db)
+    # The zero below is about a swell the search would match: an active event inside the
+    # matching window, with no match for the paused search.
+    now = utcnow()
+    event = db.scalar(
+        select(SwellEvent)
+        .join(SurfSpot)
+        .where(
+            SurfSpot.slug == "jeffreys-bay",
+            SwellEvent.status == SwellEventStatus.ACTIVE,
+            SwellEvent.start_time < end,
+            SwellEvent.end_time > start,
+        )
+    )
+    assert event is not None and event.peak_score >= 72
+    assert (
+        now + timedelta(days=settings.detection_lead_min_days)
+        <= event.start_time
+        <= now + timedelta(days=settings.detection_lead_max_days)
+    )
+    assert not db.scalars(
+        select(OpportunityMatch).where(OpportunityMatch.search_id == search.id)
+    ).all()
     assert alert_count(db) == 0
+    assert alert_count(db, include_suppressed=True) == 0
 
     searches.set_paused(db, search, False)
     run_pipeline(db, acquire=False)
-    assert alert_count(db, user_id=user.id) >= 1
+    match = sim_match(db, start, end)
+    assert match.search_id == search.id and match.swell_event_id == event.id
+    sent = db.scalars(select(Notification).where(Notification.user_id == user.id)).all()
+    assert sent and all(n.match_id == match.id for n in sent)
 
 
 def test_pausing_withdraws_queued_alerts(db: Session, few_spots: list[str]) -> None:
