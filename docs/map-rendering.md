@@ -314,24 +314,27 @@ follow the account's ft/m preference. The legend title states the unit of the co
 
 ## 7. Measured (e2e, synthetic fields, headless Chromium, 1440 x 900, shared 4-CPU machine)
 
+Final full e2e run (chromium and Pixel 7 projects, 82 tests passed):
+
 | Check | Result |
 |---|---|
-| Crest orientation, uniform swell from 225° at 12 s (structure tensor) | 45.0°, coherence 0.97 |
-| Crest motion along the travel direction in 0.65 s | 5.0 px (expected about 5.9) |
+| Crest orientation, uniform swell from 225° at 12 s (structure tensor) | 45.0°, coherence 0.97 (0.96 on the Pixel 7 project) |
+| Crest motion along the travel direction | 5.0 px in 0.55 s (expected about 4.9) |
 | Crest spacing 8 s / 16 s | 12 px / 48 px (ratio 4.00) |
-| Ink, Hs 1 m / 4 m | 8,456 / 30,571 |
-| Orientation peaks, swell1 from 270° + swell2 from 180° | 92.5° and 177.5° (one peak, 92.5°, without swell2) |
-| Crest frame draw time, p95 | 6.9 ms, 13,656 vertices |
-| Basemap redraw at zoom 2 | 5.1 ms |
-| Particle canvas after 5 s: alpha 5 / 6 / 7 counts, fade renderer (float16) | 11,859 / 9,483 / 9,000 (no spike at 6) |
-| Same, explicit renderer (8-bit canvas) | 2,405 / 4,080 / 3,171 (no spike at 6) |
+| Ink, Hs 1 m / 4 m | 6,872 / 24,660 |
+| Orientation peaks, swell1 from 270° + swell2 from 180° | 92.5° and 177.5° (one peak, 87.5°, without swell2) |
+| Crest frame draw time, p95 (combined sea, whole world) | 6.0 ms, 6,726 vertices |
+| Basemap redraw at zoom 2 | 7.8 ms |
+| Colour-field redraw at 1440 x 900 (median of 6 pans) | 11.2 ms |
+| Particle canvas after 5 s: alpha 5 / 6 / 7 counts, fade renderer (float16) | 12,107 / 9,493 / 7,872 (no spike at 6) |
+| Same, explicit renderer (8-bit canvas) | 2,402 / 3,706 / 2,655 (no spike at 6; antialiased trail edges, gone once the particles stop) |
+| Field cache after 48 downloads | array buffers 23.5 -> 56.7 MB (cache at most 49.9 MB decoded) |
 
-Main-thread cost per animation frame in headless Chromium (software raster) on a quiet
-machine: crests 11.6 ms task (1.2 ms script) with the per-frame ocean-mask composite, 7.4 ms
-without it (the dark basemap skips it, section 4.6); idle map 0.3 ms. Under the full e2e run on the shared machine the same layer took
-39 ms task (3.8 ms script) and the wind particles 24 ms task (1.7 ms script). These include
-software rasterisation that a GPU-backed canvas does off the main thread; no browser with a
-GPU was available here.
+Main-thread cost per animation frame in that run: crests 2.5 ms script (22.5 ms task), wind
+particles 1.4 ms script (23.3 ms task), idle map 0.07 ms script (0.3 ms task). "Task"
+includes the software rasterisation of headless Chromium, which a GPU-backed canvas does off
+the main thread; no browser with a GPU was available here. On a quieter moment (load about 6,
+dev server) a crest frame took 1.4 to 1.7 ms to draw (p95 2.6 to 5.4 ms).
 
 ## 8. Limitations
 
