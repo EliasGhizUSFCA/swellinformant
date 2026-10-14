@@ -18,9 +18,11 @@ What makes the API data equivalent to sampling the model grids ourselves:
 * Grid cells. Every request sends ``cell_selection`` (OPEN_METEO_CELL_SELECTION, default
   ``sea``): Open-Meteo's default for weather picks a land cell of similar elevation, which
   gave 18.4 instead of 28.0 km/h mean wind at Pipeline (audit DA-5). Waves are requested
-  at the spot's offshore forecast point, wind at the break. The cell Open-Meteo used and
-  its distance are recorded in the first record of each spot (``extra["wave_cell"]``,
-  ``extra["wind_cell"]``).
+  at the spot's offshore forecast point, wind at the break. A wave cell without data in
+  any hour (masked by the wave model although Open-Meteo calls it sea) is replaced by the
+  nearest neighbouring cell with data, as the GRIB ingesters take the nearest valid cell.
+  The cell used and its distance are recorded in the first record of each spot
+  (``extra["wave_cell"]``, ``extra["wind_cell"]``).
 * Native wave grids. ``ncep_gfswave016`` (native 0.16 deg) only covers about 52.5N..15S
   and answers HTTP 400 "No data is available for this location" outside; it is used where
   it exists and ``ncep_gfswave025`` elsewhere (OPEN_METEO_GFS_WAVE_MODELS, in that order).
@@ -56,6 +58,7 @@ for the model's update interval, so a retried run does not download them again.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import logging
 import math
@@ -178,6 +181,14 @@ META_DOMAINS: dict[str, tuple[tuple[HostKind, str], ...]] = {
 # Latitude domains used when a model's metadata has no BBOX (Open-Meteo meta.json,
 # 2026-10-14: ncep_gfswave016 BBOX[-15.0,-180.0,52.5,179.83334]).
 KNOWN_LATITUDE_DOMAINS: dict[str, tuple[float, float]] = {"ncep_gfswave016": (-15.0, 52.5)}
+# Grid spacing of the wave models (degrees). cell_selection=sea can still pick a cell the
+# wave model masks (no value in any hour: ecmwf_wam025 at Keramas and Puerto Escondido on
+# 2026-10-14); the neighbouring cells are then read (``_neighbour_cells``).
+WAVE_GRID_STEP_DEG: dict[str, float] = {
+    "ncep_gfswave016": 1 / 6,
+    "ncep_gfswave025": 0.25,
+    "ecmwf_wam025": 0.25,
+}
 
 LICENCE_URL = "https://open-meteo.com/en/licence"
 ATTRIBUTION_LINK = "https://open-meteo.com/"
@@ -348,6 +359,12 @@ class Series:
                 row[name] = None if value is None else float(value)
             out[int(ts)] = row
         return out
+
+    def has_wave_height(self) -> bool:
+        """Whether any hour has a significant wave height (False: a masked cell)."""
+        names = [api for api, name in self.mapping.items() if name == "sig_wave_height_m"]
+        hourly = self.item.get("hourly") or {}
+        return any(v is not None for api in names for v in hourly.get(api) or [])
 
 
 @dataclass
@@ -699,7 +716,86 @@ class OpenMeteoFamilyProvider(ForecastProvider):
             group = [p for p in points if route.get(p.spot_id) == idx]
             for chunk in _chunks(group, self.settings.forecast_batch_size):
                 self._wave_chunk(state, model, idx, chunk, route, series, errors)
+        self._neighbour_cells(state, points, series)
         return series, errors
+
+    def _neighbour_cells(
+        self, state: _Fetch, points: list[SpotPoint], series: dict[int, Series]
+    ) -> None:
+        """Replace a wave cell without data in any hour by the nearest neighbouring cell
+        that has data.
+
+        The direct GRIB ingesters sample the nearest valid wave cell; Open-Meteo's
+        cell_selection=sea can still answer from a cell the wave model masks. The eight
+        cells one grid step around it (inside the model's domain) are read in one request
+        per model, and the one nearest the forecast point with data, at most
+        GRIB_MAX_CELL_DISTANCE_KM away, is used (recorded in the run's warnings and the
+        spot's extra.wave_cell). Without one, the spot stays without wave data.
+        """
+        groups: dict[tuple[str, tuple[str, ...]], list[SpotPoint]] = {}
+        for p in points:
+            s = series.get(p.spot_id)
+            if s is not None and not s.has_wave_height() and s.model in WAVE_GRID_STEP_DEG:
+                groups.setdefault((s.model, tuple(s.mapping)), []).append(p)
+        limit = self.settings.grib_max_cell_distance_km
+        for (model, _), group in groups.items():
+            step = WAVE_GRID_STEP_DEG[model]
+            mapping = series[group[0].spot_id].mapping
+            metas = [state.metas[d] for m, _, d in self.domains() if m == model]
+            owners: list[tuple[SpotPoint, float, float]] = []
+            for p in group:
+                item = series[p.spot_id].item
+                clat = float(item.get("latitude", p.forecast_latitude))
+                clon = float(item.get("longitude", p.forecast_longitude))
+                for dj, di in itertools.product((-1, 0, 1), repeat=2):
+                    lat, lon = clat + dj * step, (clon + di * step + 180.0) % 360.0 - 180.0
+                    if (dj or di) and -90 <= lat <= 90 and all(m.contains(lat, lon) for m in metas):
+                        owners.append((p, lat, lon))
+            found: dict[int, tuple[float, Series]] = {}
+            size = max(1, self.settings.forecast_batch_size)
+            for start in range(0, len(owners), size):
+                chunk = owners[start : start + size]
+                try:
+                    items = self._request(
+                        state,
+                        "marine",
+                        "/v1/marine",
+                        model,
+                        [o[1] for o in chunk],
+                        [o[2] for o in chunk],
+                        list(mapping),
+                        {},
+                    )
+                except OpenMeteoError as exc:
+                    state.warnings.append(f"{model}: neighbouring cells not read ({exc.reason})")
+                    break
+                for (p, _, _), item in zip(chunk, items, strict=True):
+                    candidate = Series(model, item, mapping)
+                    cell = _cell(item, p.forecast_latitude, p.forecast_longitude)
+                    if cell is None or cell["distance_km"] > limit:
+                        continue
+                    best = found.get(p.spot_id)
+                    if candidate.has_wave_height() and (
+                        best is None or cell["distance_km"] < best[0]
+                    ):
+                        found[p.spot_id] = (cell["distance_km"], candidate)
+            for p in group:
+                old = series[p.spot_id].item
+                where = f"cell ({old.get('latitude')}, {old.get('longitude')})"
+                if p.spot_id not in found:
+                    state.warnings.append(
+                        f"{p.slug}: {model} {where} has no wave data, nor has any neighbouring "
+                        f"cell within {limit:g} km"
+                    )
+                    continue
+                distance, replacement = found[p.spot_id]
+                series[p.spot_id] = replacement
+                new = replacement.item
+                state.warnings.append(
+                    f"{p.slug}: {model} {where} has no wave data; the neighbouring cell "
+                    f"({new.get('latitude')}, {new.get('longitude')}), {distance:g} km from "
+                    "the forecast point, is used"
+                )
 
     def _wave_chunk(
         self,

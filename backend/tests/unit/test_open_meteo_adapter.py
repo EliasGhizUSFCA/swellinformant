@@ -254,6 +254,74 @@ def test_absent_partitions_are_none_never_zero() -> None:
                     assert value > 0, (name, r.valid_time)
 
 
+def masked_cells(masked: set[tuple[float, float]]) -> Callable[[httpx.Request], httpx.Response]:
+    """Marine responses whose cells in ``masked`` (and Pipeline's own cell) have no value in
+    any hour, the way Open-Meteo answers for a cell the wave model masks (SYNTHETIC: the
+    captured series relabelled with the requested coordinates)."""
+
+    def respond(request: httpx.Request) -> httpx.Response | None:
+        if request.url.path != "/v1/marine":
+            return None
+        q = parse_qs(urlparse(str(request.url)).query)
+        variables = q["hourly"][0].split(",")
+        coords = zip(
+            [float(x) for x in q["latitude"][0].split(",")],
+            [float(x) for x in q["longitude"][0].split(",")],
+            strict=True,
+        )
+        items = []
+        for lat, lon in coords:
+            item = single_model(_nearest(MARINE, lat), q["models"][0], variables)
+            if (lat, lon) != (PIPELINE.forecast_latitude, PIPELINE.forecast_longitude):
+                item = {**item, "latitude": lat, "longitude": lon}
+            if (lat, lon) in masked or lat == PIPELINE.forecast_latitude:
+                times = item["hourly"]["time"]
+                item = {
+                    **item,
+                    "hourly": {"time": times} | dict.fromkeys(variables, [None] * len(times)),
+                }
+            items.append(item)
+        return httpx.Response(200, json=items if len(items) > 1 else items[0])
+
+    return respond
+
+
+def test_a_masked_wave_cell_is_replaced_by_the_nearest_neighbouring_cell_with_data() -> None:
+    # Pipeline's cell (21.75, -158.25) has no data; so have the two cells east of it.
+    rec = Recorder(override=masked_cells({(21.75, -158.0833), (21.9167, -158.0833)}))
+    _, result = fetch(rec, [PIPELINE])
+    marine = [(c["models"][0], c["latitude"][0]) for c in rec.data_calls() if "models" in c]
+    assert marine[0] == ("ncep_gfswave016", "21.8000")
+    assert marine[1][0] == "ncep_gfswave016" and len(marine[1][1].split(",")) == 8
+    assert 1 not in result.errors
+    first = result.records[1][0]
+    assert first.values["sig_wave_height_m"] is not None
+    # Nearest cell with data to the forecast point (21.8, -158.18): one step north.
+    cell = first.extra["wave_cell"]
+    assert (cell["lat"], cell["lon"]) == (21.9167, -158.25)  # type: ignore[index]
+    assert cell["distance_km"] == pytest.approx(14.8, abs=0.2)  # type: ignore[index]
+    assert any(
+        "pipeline: ncep_gfswave016 cell (21.75, -158.25) has no wave data; the neighbouring "
+        "cell (21.9167, -158.25)" in w
+        for w in result.warnings
+    )
+    # The neighbour request is charged too: (1 + 8) locations x 15 variables, + the wind.
+    assert result.stats is not None and result.stats.weighted_calls == pytest.approx(14.5)
+
+
+def test_without_a_neighbouring_cell_with_data_the_spot_has_no_wave_data() -> None:
+    step = 1 / 6
+    masked = {
+        (round(21.75 + j * step, 4), round(-158.25 + i * step, 4))
+        for j in (-1, 0, 1)
+        for i in (-1, 0, 1)
+    }
+    _, result = fetch(Recorder(override=masked_cells(masked)), [PIPELINE])
+    assert 1 not in result.records
+    assert "no wave data at the forecast point" in result.errors[1]
+    assert any("nor has any neighbouring cell within 60 km" in w for w in result.warnings)
+
+
 def test_no_sea_level_request_is_made() -> None:
     rec = Recorder()
     fetch(rec, [PIPELINE])
