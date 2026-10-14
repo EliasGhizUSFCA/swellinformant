@@ -71,6 +71,14 @@ const TROUGH_STYLE: FamilyStyle = { ...FAMILY_STYLES.primary, label: "trough", c
 const TROUGH_WIDTH = 1.6;
 const TROUGH_ALPHA = 0.24;
 const TROUGH_LENGTH = 0.8;
+/** Halo under dashed and dotted crests: extra width (px) and opacity relative to the crest. */
+const HALO_PX = 1.6;
+const HALO_ALPHA = 0.55;
+/** The halo of a dashed or dotted system: the same dash and caps, in the dark trough colour. */
+const TROUGH_STYLE_OF: Record<string, FamilyStyle> = {
+  dashed: { ...FAMILY_STYLES.secondary, color: "#000814" },
+  dotted: { ...FAMILY_STYLES.windsea, color: "#000814" },
+};
 /** Opacity along each half crest: [end of the part (share of the half), relative opacity]. */
 const TAPER: ReadonlyArray<readonly [number, number]> = [
   [0.5, 1],
@@ -307,11 +315,12 @@ const smoothstep = (x: number) => {
 };
 
 /** Stroke batches: one per (system, width, opacity, trough) key. */
-type StrokeKind = "crest" | "glow" | "trough";
-const KIND_INDEX: Record<StrokeKind, number> = { crest: 0, glow: 1, trough: 2 };
+type StrokeKind = "crest" | "glow" | "trough" | "halo";
+const KIND_INDEX: Record<StrokeKind, number> = { crest: 0, glow: 1, trough: 2, halo: 3 };
 
 interface Batch {
-  /** Crest line, soft glow under it (solid systems) or the dark trough line behind it. */
+  /** Crest line, soft glow under it (solid systems), the dark trough line behind it (solid
+   * systems), or a dark halo under the dashes and dots (the other systems). */
   kind: StrokeKind;
   style: FamilyStyle;
   /** Index of the system in the lattice (drawing order). */
@@ -587,16 +596,18 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     // Vertices per crest: measured on the previous frame of this lattice (straight crests
     // need few), at first an upper bound (every trace step kept, glow and trough included).
     const steps = (p: Packet) => Math.ceil((style.halfLength * p.spacing) / TRACE_STEP_PX);
-    const bound = (p: Packet) => 2 * (steps(p) + 3) + (style.glow ? 2 * (Math.ceil(steps(p) / 2) + 1) + 2 * (Math.ceil(steps(p) * TROUGH_LENGTH) + 1) : 0);
+    const bound = (p: Packet) => 2 * (steps(p) + 3) * (style.dash.length ? 2 : 1) + (style.glow ? 2 * (Math.ceil(steps(p) / 2) + 1) + 2 * (Math.ceil(steps(p) * TROUGH_LENGTH) + 1) : 0);
     const cost = ({ p, crests }: (typeof plans)[number]) => crests.length * (f.perCrest > 0 ? f.perCrest : bound(p));
-    // Over budget: leave out an even, random share of the packets (never a whole region).
-    const keep = Math.min(1, (cap - stats.vertices) / Math.max(1, plans.reduce((a, pl) => a + cost(pl), 0)));
+    // Packets in a fixed random order (their `keep` hash): when the budget runs out, the ones
+    // left out are an even, random share of the view, never a region, and the same each frame.
+    plans.sort((a, b) => a.p.keep - b.p.keep);
     const before = stats.vertices;
     const crestsBefore = stats.crests;
     for (const plan of plans) {
       const { p, crests } = plan;
-      if (keep < 1 && p.keep >= keep) continue;
       if (stats.vertices + cost(plan) > cap) break;
+      // The frame's total never exceeds the budget: skip a packet that could overrun it.
+      if (stats.vertices + crests.length * bound(p) > o.budget) continue;
       stats.packets++;
       let lead: { x: number; y: number } | null = null;
       let leadU = -Infinity;
@@ -620,6 +631,8 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
             const k = TAPER[half.part[from + 1]!]![1];
             const last = i === n ? n - 1 : i - 1;
             push(batch("crest", style, sys, width, alpha * k), from, last);
+            // Dashes and dots get a dark halo, so they read on bright colours too.
+            if (style.dash.length) push(batch("halo", TROUGH_STYLE_OF[style.look] ?? style, sys, width + HALO_PX, alpha * k * HALO_ALPHA), from, last);
             // The glow follows the bright inner part only.
             if (style.glow && half.part[from + 1] === 0) push(batch("glow", style, sys, width * GLOW_WIDTH, alpha * GLOW_ALPHA), from, last);
             from = last;
@@ -652,7 +665,7 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
 
   ctx.lineJoin = "round";
   // Per system in drawing order (primary last, on top): glow, trough, then the crest lines.
-  const rankOf = (b: Batch) => (b.kind === "glow" ? 0 : b.kind === "trough" ? 1 : 2);
+  const rankOf = (b: Batch) => (b.kind === "glow" ? 0 : b.kind === "trough" ? 1 : b.kind === "halo" ? 2 : 3);
   const ordered = used.sort((a, b) => a.sys - b.sys || rankOf(a) - rankOf(b));
   for (const b of ordered) {
     if (!b.ns) continue;
@@ -663,7 +676,7 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       ctx.moveTo(b.pts[from]!, b.pts[from + 1]!);
       for (let k = from + 2; k < to; k += 2) ctx.lineTo(b.pts[k]!, b.pts[k + 1]!);
     }
-    ctx.setLineDash(b.kind === "crest" ? b.style.dash : []);
+    ctx.setLineDash(b.kind === "crest" || b.kind === "halo" ? b.style.dash : []);
     ctx.lineCap = b.kind === "glow" || b.style.look === "dotted" ? "round" : "butt";
     ctx.lineWidth = b.width;
     ctx.strokeStyle = `rgba(${hexRgb(b.style.color)}, ${b.alpha})`;

@@ -220,17 +220,23 @@ and 120 Hz (unit test).
   and out over the first and last `CYCLE_FADE = 15 %` of the cycle. Crests under weight 0.04
   are not drawn.
 * **Tracing**: each crest is traced from its centre along the local crest-tangent field
-  (perpendicular to the travel vector) in `TRACE_STEP_PX = 6` px midpoint steps, so it curves
+  (perpendicular to the travel vector) in `TRACE_STEP_PX = 8` px midpoint steps, so it curves
   where the field turns and is straight where it is uniform. It stops at an invalid lattice
   cell or where it would turn more than `MAX_TURN_DEG = 25` in one step.
 * **Height**: line width `clamp(0.75 + 0.55 Hs, 0.75, 3)` px and opacity
   `clamp(0.30 + 0.12 Hs, 0.30, 0.90)` (Hs in m), times the envelope weight. Opacity falls off
   toward the crest ends (full over the inner half of each half-crest, 0.6 to 78 %, 0.28 to the
   tip), so crests have no hard tips. Solid systems add a soft glow (3.2 x the width, 0.22 x the
-  opacity) and a faint dark trough line (`#000814`, 1.6 x the width, 0.24 x the opacity, 80 %
-  of the crest length) half a spacing behind each crest, so the bands read as crests and
-  troughs. Strokes are batched by system, kind (crest, glow, trough), 5 width levels and 8
-  opacity levels.
+  opacity, over the inner half of each half-crest) and a faint dark trough line (`#000814`,
+  1.6 x the width, 0.24 x the opacity, 80 % of the crest length) half a spacing behind each
+  crest, so the bands read as crests and troughs. Dashed and dotted systems get a dark halo
+  under their dashes (1.6 px wider, 0.55 x the opacity, same dash pattern), so they stay
+  visible on bright colours. Strokes are batched by system, kind (crest, glow, trough,
+  halo), 5 width levels and 8 opacity levels.
+* **Vertices**: a traced vertex is kept only where the crest has turned more than
+  `SIMPLIFY_DEG = 1.5` since the last kept one, at the taper boundaries and at the ends (less
+  than 0.35 px from the traced curve over a 100 px chord); where the field is straight the
+  trace step doubles up to 32 px.
 
 ### 4.6 Ocean mask (both basemaps)
 
@@ -260,8 +266,9 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
 * Budget: at most `VERTEX_BUDGET = 20,000` vertices per frame for a 1440 x 900 view (scaled
   with the view area between 0.5 and 1.6 times), `PHONE_VERTEX_BUDGET = 6,000` below 640 px
   wide. The top system (primary, else combined) is planned first and may use 60 % of what is
-  left, the next 60 % of the rest, the last one all of it. A frame over budget leaves out an
-  even, random share of a system's sets (fixed per set, so the same ones), never a region.
+  left, the next 60 % of the rest, the last one all of it. Sets are visited in a fixed random
+  order (a hash per set), so a frame over budget leaves out an even, random share of the sets
+  (the same ones each frame), never a region; a set that could overrun the total is skipped.
 
 ### 4.8 Data attributes (tests and diagnostics)
 
