@@ -65,6 +65,8 @@ from typing import Any, ClassVar, Protocol
 
 import numpy as np
 
+from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES
+
 logger = logging.getLogger(__name__)
 
 NODATA = 255
@@ -98,7 +100,8 @@ class Quantisation:
         return out
 
 
-# Keys and units match models.forecast_engine.MAP_FIELD_VARIABLES.
+# Keys and units match models.forecast_engine.CORE_MAP_FIELD_VARIABLES (the partition
+# variables of PARTITION_MAP_FIELD_VARIABLES are not encoded here yet).
 QUANTISATION: dict[str, Quantisation] = {
     "hs": Quantisation("m", 0.0, 0.1),
     "tp": Quantisation("s", 0.0, 0.1),
@@ -327,11 +330,12 @@ def encode_field(
 
 
 def complete_times(fields: Iterable[EncodedField]) -> list[datetime]:
-    """Valid times at which every variable of FIELD_VARIABLES is present, in order."""
+    """Valid times at which every core variable (CORE_MAP_FIELD_VARIABLES) is present."""
     seen: dict[datetime, set[str]] = {}
     for f in fields:
         seen.setdefault(f.valid_time, set()).add(f.variable)
-    return sorted(t for t, names in seen.items() if names >= set(FIELD_VARIABLES))
+    core = set(CORE_MAP_FIELD_VARIABLES)
+    return sorted(t for t, names in seen.items() if names >= core)
 
 
 # --------------------------------------------------------------------------- collecting

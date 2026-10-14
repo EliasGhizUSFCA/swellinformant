@@ -14,7 +14,9 @@ Fields are produced in one of three modes (:func:`map_fields_mode`):
 * ``off``: neither (the default with the demo provider), or MAP_FIELDS_ENABLED=false.
 
 The read side serves whatever is stored, from the newest run (by model cycle) with at
-least one complete valid time, so it does not depend on the mode.
+least one complete valid time, so it does not depend on the mode. A valid time is complete
+when all six core variables (``CORE_MAP_FIELD_VARIABLES``) exist; the optional partition
+variables never make it incomplete.
 """
 
 from __future__ import annotations
@@ -30,7 +32,12 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.models import ForecastRun
-from app.models.forecast_engine import MAP_FIELD_VARIABLES, MapField
+from app.models.forecast_engine import (
+    CORE_MAP_FIELD_VARIABLES,
+    MAP_FIELD_VARIABLES,
+    PARTITION_MAP_FIELD_VARIABLES,
+    MapField,
+)
 from app.schemas.map_fields import FieldIndexOut, FieldMeta, FieldSourceOut, FieldVariableOut
 
 logger = logging.getLogger(__name__)
@@ -65,7 +72,8 @@ VARIABLES: dict[str, VariableInfo] = {
     "wind_v": VariableInfo("10 m wind, northward component", -30.0, 30.0),
     "pressure": VariableInfo("Mean sea-level pressure", 960.0, 1045.0),
 }
-assert set(VARIABLES) == set(MAP_FIELD_VARIABLES)
+assert set(VARIABLES) == set(CORE_MAP_FIELD_VARIABLES)
+CORE_NAMES = tuple(CORE_MAP_FIELD_VARIABLES)
 
 
 def _unavailable_message(settings: Settings) -> str:
@@ -92,7 +100,7 @@ def _unavailable_message(settings: Settings) -> str:
 class _CurrentRun:
     run: ForecastRun
     cycle_time: datetime
-    valid_times: list[datetime]  # times at which all six variables exist
+    valid_times: list[datetime]  # times at which all six core variables exist
 
 
 @dataclass(frozen=True)
@@ -101,7 +109,7 @@ class ServableRun:
 
     run_id: int
     cycle_time: datetime
-    complete_times: int  # valid times at which all six variables exist
+    complete_times: int  # valid times at which all six core variables exist
 
 
 def servable_runs_query(limit: int | None = None) -> Select[Any]:
@@ -116,12 +124,14 @@ def servable_runs_query(limit: int | None = None) -> Select[Any]:
         select(
             MapField.run_id,
             func.max(MapField.cycle_time).label("cycle"),
-            func.count(func.distinct(MapField.variable)).label("n"),
+            func.count(func.distinct(MapField.variable))
+            .filter(MapField.variable.in_(CORE_NAMES))
+            .label("n"),
         )
         .group_by(MapField.run_id, MapField.valid_time)
         .subquery()
     )
-    complete = func.count().filter(per_time.c.n == len(MAP_FIELD_VARIABLES))
+    complete = func.count().filter(per_time.c.n == len(CORE_NAMES))
     stmt = (
         select(per_time.c.run_id, func.max(per_time.c.cycle), complete)
         .group_by(per_time.c.run_id)
@@ -146,16 +156,20 @@ def _current_run(db: Session) -> _CurrentRun | None:
     if not best:
         return None
     counts = db.execute(
-        select(MapField.valid_time, func.count(func.distinct(MapField.variable)))
+        select(
+            MapField.valid_time,
+            func.count(func.distinct(MapField.variable)).filter(MapField.variable.in_(CORE_NAMES)),
+        )
         .where(MapField.run_id == best[0].run_id)
         .group_by(MapField.valid_time)
         .order_by(MapField.valid_time)
     ).all()
-    complete = [t for t, n in counts if n == len(MAP_FIELD_VARIABLES)]
-    incomplete = [t for t, n in counts if n != len(MAP_FIELD_VARIABLES)]
+    complete = [t for t, n in counts if n == len(CORE_NAMES)]
+    incomplete = [t for t, n in counts if n != len(CORE_NAMES)]
     if incomplete:
         logger.info(
-            "map fields run %s: %d valid time(s) lack a variable and are not served (first %s)",
+            "map fields run %s: %d valid time(s) lack a core variable and are not served "
+            "(first %s)",
             best[0].run_id,
             len(incomplete),
             incomplete[0].isoformat(),
@@ -189,7 +203,7 @@ def field_index(db: Session) -> FieldIndexOut:
                 display_min=VARIABLES[name].display_min,
                 display_max=VARIABLES[name].display_max,
             )
-            for name, unit in MAP_FIELD_VARIABLES.items()
+            for name, unit in CORE_MAP_FIELD_VARIABLES.items()
         ],
     )
 
@@ -244,6 +258,7 @@ def field_bytes(db: Session, variable: str, at: datetime | None) -> tuple[FieldM
         return None
     meta = FieldMeta(
         variable=variable,
+        group="partition" if variable in PARTITION_MAP_FIELD_VARIABLES else "core",
         unit=MAP_FIELD_VARIABLES[variable],
         valid_time=row.valid_time,
         run_key=row.run_key,

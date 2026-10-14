@@ -34,6 +34,10 @@ class PermanentProviderError(ProviderError):
     """Will not succeed on retry (bad credentials, invalid request, unsupported route)."""
 
 
+class QuotaExhaustedError(PermanentProviderError):
+    """A call budget (app.core.redis quota) is used up: do not call again in this window."""
+
+
 def _sleep_backoff(attempt: int, base: float, retry_after: str | None) -> None:
     if base <= 0:
         return

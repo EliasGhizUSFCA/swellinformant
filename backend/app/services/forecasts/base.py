@@ -1,4 +1,10 @@
-"""Forecast provider interface and normalised record types."""
+"""Forecast provider interface and normalised record types.
+
+Conventions of :class:`ForecastRecord` values: UTC valid times; directions in degrees FROM;
+wind in km/h, heights in m, periods in s. A partition (secondary swell, wind sea, ...) that
+the model does not have at a time is None, never 0. Optional per-record metadata goes in
+``extra`` under the EXTRA_* keys below.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +14,16 @@ from datetime import UTC, datetime, timedelta
 
 from app.services.forecasts.fields import EncodedField
 from app.services.surf_quality.models import SpotParams
+
+# ForecastRecord.extra keys shared by providers, the blend and the timeline.
+EXTRA_INTERPOLATED = "interpolated"  # bool: the source interpolated this time step
+EXTRA_NATIVE_STEP_S = "native_step_seconds"  # int: the model's own output spacing here
+EXTRA_WIND_CELL = "wind_cell"  # {"lat", "lon", "distance_km"}: grid cell used for wind
+EXTRA_WAVE_CELL = "wave_cell"  # {"lat", "lon", "distance_km"}: grid cell used for waves
+EXTRA_WAVE_MODEL = "wave_model"  # str: the wave model that produced the values
+# str: how the gust is defined, one of schemas.spots.GustKind ("gfs_instantaneous",
+# "ecmwf_max_3h", "ecmwf_max_since_pp", "unknown").
+EXTRA_GUST_KIND = "gust_kind"
 
 FORECAST_FIELDS = (
     "sig_wave_height_m",
@@ -54,12 +70,36 @@ class ForecastRecord:
 
 
 @dataclass(frozen=True)
+class ModelRunRef:
+    """One model run a provider's data came from (e.g. HRRR and GFS for gfs_seamless)."""
+
+    model: str
+    init_time: datetime
+    # When the provider published the run, if it says (e.g. Open-Meteo meta.json).
+    available_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class RunInfo:
     run_key: str
     issued_at: datetime
     wave_model_run_at: datetime | None = None
     atmosphere_model_run_at: datetime | None = None
     metadata_source: str = "provider"
+    # Every model run behind the data, stored as run.details["model_runs"].
+    model_runs: tuple[ModelRunRef, ...] = ()
+
+
+@dataclass
+class FetchStats:
+    """What one fetch cost upstream, stored as run.details["stats"] (dataclasses.asdict)."""
+
+    bytes_downloaded: int = 0
+    requests: int = 0
+    # Response count per HTTP status ("200", "400", ...).
+    http_status_counts: dict[str, int] = field(default_factory=dict)
+    # Provider-weighted call count where the provider bills that way (Open-Meteo).
+    weighted_calls: float | None = None
 
 
 @dataclass
@@ -72,6 +112,7 @@ class FetchResult:
     # map_fields rows of the run. Their problems are warnings, never spot errors.
     fields: list[EncodedField] = field(default_factory=list)
     field_warnings: list[str] = field(default_factory=list)
+    stats: FetchStats | None = None
 
 
 @dataclass(frozen=True)

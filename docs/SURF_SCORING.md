@@ -179,6 +179,48 @@ Where sources disagree about which wind is offshore (forecast-confidence.md §3a
 directions give different relations, the wind part reads *"wind 12 km/h from NE, offshore or
 cross-shore: sources disagree"*; the score and `wind_relation` keep the profile's direction.
 
+## 3a. Stored components contract (algorithm 2.1.0)
+
+`surf_quality_predictions.components` (JSONB) is read by the spot timeline API ("Why this
+forecast?") and by the confidence and text layer. Algorithm 2.0.0 stores the factor fits
+(`swell_direction`, `swell_period`, `wave_size`, `wind`, `tide`, `consistency`, each 0–1
+and present only when its inputs exist), the gates (`size_gate`, `period_gate`,
+`wind_gate`), `run_agreement`, `tide_stage`, `uncertainty`, `breaking` and, when they
+apply, `ml_correction` and `wind_dispute`. Algorithm 2.1.0 keeps all of these and adds the
+keys below. The scoring change that writes them also raises `ALGORITHM_VERSION` from 2.0.0
+to 2.1.0, so live runs are rescored; until then no stored row has these keys.
+
+| Key | Shape | Meaning |
+|---|---|---|
+| `wind_detail` | object, below | The wind fit and its physical components |
+| `weights_used` | `{factor: weight}` | The renormalised weights actually applied (only factors with inputs; they sum to 1) |
+| `contributions` | `{factor_or_gate: points_lost}` | Points each factor or gate cost the score; the sum of `points_lost` plus `score` equals 100 within rounding |
+| `direction_partitions` | `[{kind, weight, direction_fit, period_fit}]` | Swell direction and period scored per wave partition, with weight `Hb_i^2.5 / sum(Hb_j^2.5)` |
+| `tide_detail` | `{stage, rising, range_m, source}` | Present only when the tide is scored |
+| `tide_excluded_reason` | string | Present only when the tide is not scored, saying why (e.g. no tide prediction, or the tide preference is not well established) |
+
+`wind_detail`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `q` | float 0–1 | The wind fit used in the score |
+| `v_offshore_kmh` | float | `V . n`, with `V` the wind velocity (where the air goes) and `n` the seaward unit normal (bearing `offshore_wind_direction + 180`): positive = offshore component, negative = onshore |
+| `v_cross_kmh` | float | Size of the cross-shore component, `abs(V x n)` |
+| `strength` | `glassy` \| `light` \| `moderate` \| `strong` | Speed class (Beaufort-based, km/h): glassy at most 5.0; light below 12.0; moderate below 29.0; strong from 29.0 |
+| `favourability` | `favourable` \| `workable` \| `unfavourable` | From `q`: favourable at 0.75 or more, workable at 0.4 or more, otherwise unfavourable |
+| `gust_used` | bool | Whether gusts entered `q` (only with `WIND_GUST_SCORING=scored` and a documented gust definition) |
+| `params` | `{name: {value, provenance}}` | Every wind-model parameter used, with `provenance` `research`, `beaufort` or `heuristic` |
+
+Rules for readers and writers:
+
+* The six `wind_relation` strings (glassy, offshore, cross-offshore, cross-shore,
+  cross-onshore, onshore; "unknown" without wind data) and its `String(16)` column do not
+  change. `strength` and `favourability` are separate fields, not new relations.
+* Readers treat every key above as optional and a missing key as None: rows scored by
+  2.0.0 do not have them.
+* Classes such as `strength`, `favourability` and the confidence classes are documented
+  heuristic classes, not probabilities.
+
 ## 4. Daylight
 
 Sunrise and sunset come from the NOAA solar position approximation (±2 min), extended by

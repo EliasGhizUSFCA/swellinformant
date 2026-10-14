@@ -26,7 +26,7 @@ from app.core.config import get_settings
 from app.core.database import utcnow
 from app.models import ForecastRun, ForecastSource, SurfSpot, WaveForecast
 from app.models.enums import ForecastRunStatus
-from app.models.forecast_engine import MAP_FIELD_VARIABLES, MapField
+from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES, MapField
 from app.services.forecasts.base import FORECAST_FIELDS, ForecastProvider, RunInfo, SpotPoint
 from app.services.forecasts.demo import DemoForecastProvider, SwellOverride
 from app.services.forecasts.fields import EncodedField, summarise
@@ -399,7 +399,9 @@ def acquire_map_fields(
             return {**out, "status": "skipped", "run_id": run.id, "message": "in progress"}
     if not force:
         expected = {
-            (cycle_time + timedelta(hours=h), name) for h in hours for name in MAP_FIELD_VARIABLES
+            (cycle_time + timedelta(hours=h), name)
+            for h in hours
+            for name in CORE_MAP_FIELD_VARIABLES
         }
         stored = db.execute(
             select(MapField.valid_time, MapField.variable)

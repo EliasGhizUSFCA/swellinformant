@@ -8,8 +8,9 @@
 * ``forecast_comparisons`` record, for each blended hour, what every source said, the
   weights used and any disagreement flags.
 * ``map_fields`` hold downsampled global grids (wave height, period, direction, 10 m wind,
-  pressure) per model run and valid time for the map's ocean layers: quantised to one byte
-  per cell and deflate-compressed.
+  pressure, and optionally the primary swell, secondary swell and wind-sea partitions) per
+  model run and valid time for the map's ocean layers: quantised to one byte per cell and
+  deflate-compressed.
 * ``prediction_archive`` is the verification record: what we predicted, from which model
   run and at which lead time. It is exempt from the forecast-run retention policy (it has
   its own, much longer one) because forecast-time values cannot be reconstructed later.
@@ -93,6 +94,10 @@ class SpotPhysicalProfile(TimestampMixin, Base):
     # Provenance per parameter, e.g. {"shore_normal_deg": "estimated", ...}
     data_quality: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False, default=dict)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Optional spot-specific wind behaviour from research (offshore tolerance, sheltered
+    # sectors, extra offshore bearings); NULL = the general wind model applies. Validated by
+    # app.services.seed; every value carries its provenance.
+    wind_profile: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class ForecastEnsembleStat(Base):
@@ -218,8 +223,10 @@ class PredictionArchive(Base):
     )
 
 
-# Map field variables (map_fields.variable) and their unit.
-MAP_FIELD_VARIABLES = {
+# Map field variables (map_fields.variable) and their unit. The six core variables define a
+# complete (servable) valid time; the nine partition variables are optional layers that a run
+# may or may not store, and their absence never makes a valid time incomplete.
+CORE_MAP_FIELD_VARIABLES = {
     "hs": "m",  # significant wave height (offshore)
     "tp": "s",  # peak wave period
     "wave_dir": "deg",  # peak wave direction, degrees FROM
@@ -227,6 +234,21 @@ MAP_FIELD_VARIABLES = {
     "wind_v": "m/s",  # 10 m wind, northward component
     "pressure": "hPa",  # mean sea-level pressure
 }
+# Wave-model partitions: swell1 = primary swell, swell2 = secondary swell, windsea = wind
+# sea. Heights are partition significant heights, periods partition mean periods, directions
+# degrees FROM (as wave_dir; no +180).
+PARTITION_MAP_FIELD_VARIABLES = {
+    "swell1_hs": "m",
+    "swell1_tp": "s",
+    "swell1_dir": "deg",
+    "swell2_hs": "m",
+    "swell2_tp": "s",
+    "swell2_dir": "deg",
+    "windsea_hs": "m",
+    "windsea_tp": "s",
+    "windsea_dir": "deg",
+}
+MAP_FIELD_VARIABLES = CORE_MAP_FIELD_VARIABLES | PARTITION_MAP_FIELD_VARIABLES
 
 
 class MapField(Base):

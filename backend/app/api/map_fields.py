@@ -37,6 +37,11 @@ def fields_index(response: Response, db: Session = Depends(get_db)) -> FieldInde
 def field_data(
     variable: str = Path(..., pattern=VARIABLE_PATTERN),
     at: datetime | None = Query(None, description="Valid time (ISO 8601); default now"),
+    run: str | None = Query(
+        None,
+        max_length=120,
+        description="Model run (the index's run_key). Not used yet: the current run is served.",
+    ),
     db: Session = Depends(get_db),
 ) -> Response:
     """One field as zlib-compressed uint8 bytes; decoding parameters in X-Field-Meta."""

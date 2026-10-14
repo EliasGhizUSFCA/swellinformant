@@ -30,7 +30,7 @@ from app.models import (
     WaveForecast,
 )
 from app.models.enums import ForecastRunStatus
-from app.models.forecast_engine import MAP_FIELD_VARIABLES, MapField
+from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES, MapField
 from app.services import map_fields as map_fields_service
 from app.services.forecasts.base import FetchResult, RunInfo, SpotPoint
 from app.services.forecasts.fields import QUANTISATION, TargetGrid, decode_bytes
@@ -361,7 +361,7 @@ def test_index_lists_the_complete_valid_times(
     assert body["run_key"] == fields_run.run_key and _iso(body["cycle_time"]) == CYCLE
     assert [_iso(t) for t in body["valid_times"]] == TIMES
     variables = {v["name"]: v for v in body["variables"]}
-    assert list(variables) == list(MAP_FIELD_VARIABLES)
+    assert list(variables) == list(CORE_MAP_FIELD_VARIABLES)
     assert variables["hs"]["unit"] == "m" and "not surf height" in variables["hs"]["label"]
     ranges = {k: (v["display_min"], v["display_max"]) for k, v in variables.items()}
     assert ranges == {
@@ -404,6 +404,7 @@ def test_field_bytes_and_their_metadata(
     assert _iso(meta.pop("valid_time")) == row.valid_time
     assert meta == {
         "variable": "hs",
+        "group": "core",
         "unit": "m",
         "run_key": row.run_key,
         "nx": row.nx,

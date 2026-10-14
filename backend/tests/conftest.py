@@ -4,6 +4,10 @@ Integration tests use a real PostgreSQL database (TEST_DATABASE_URL, default
 postgresql+psycopg://swell:swell@localhost:5432/swell_test) migrated with Alembic, and
 Redis database 15. Reference data (airports + spots) is seeded once per session;
 everything else is truncated after each test.
+
+The session starts by dropping the database's public schema, so it refuses a database whose
+name does not contain "test" (e.g. a TEST_DATABASE_URL pointing at a live database by
+mistake). Set ALLOW_ANY_TEST_DB_NAME=1 to override.
 """
 
 from __future__ import annotations
@@ -48,6 +52,9 @@ from app.core.database import SessionLocal, get_engine  # noqa: E402
 from app.core.redis import get_redis  # noqa: E402
 
 MUTABLE_TABLES = [
+    "tide_predictions",
+    "spot_tide_stations",
+    "tide_stations",
     "map_fields",
     "spot_research_claims",
     "spot_research_sources",
@@ -97,10 +104,22 @@ def _db_available() -> bool:
         return False
 
 
+def _refuse_non_test_database() -> None:
+    name = get_engine().url.database or ""
+    if "test" not in name and os.environ.get("ALLOW_ANY_TEST_DB_NAME") != "1":
+        pytest.exit(
+            f"Refusing to drop the schema of database {name!r}: its name does not contain "
+            "'test'. Point TEST_DATABASE_URL at a scratch database (e.g. swell_test_<x>), or "
+            "set ALLOW_ANY_TEST_DB_NAME=1.",
+            returncode=4,
+        )
+
+
 @pytest.fixture(scope="session")
 def migrated_db() -> Iterator[None]:
     if not _db_available():
         pytest.skip("PostgreSQL test database not available")
+    _refuse_non_test_database()
     from alembic import command
     from alembic.config import Config
 

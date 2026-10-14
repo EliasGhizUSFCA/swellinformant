@@ -26,7 +26,7 @@ from app.models import (
     User,
 )
 from app.models.enums import ForecastRunStatus, JobStatus
-from app.models.forecast_engine import MAP_FIELD_VARIABLES, MapField
+from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES, MapField
 from app.services.health import data_health, expected_jobs
 from app.services.notifications.ops_alerts import run_data_health_check
 from app.workers import tasks
@@ -126,7 +126,7 @@ def heartbeat(db: Session, now: datetime | None = None) -> None:
 def map_fields(db: Session, run_row: ForecastRun, cycle: datetime, steps: int = 2) -> None:
     blob = zlib.compress(bytes([10]))
     for i in range(steps):
-        for variable in MAP_FIELD_VARIABLES:
+        for variable in CORE_MAP_FIELD_VARIABLES:
             db.add(
                 MapField(
                     run_id=run_row.id,

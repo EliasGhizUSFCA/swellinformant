@@ -7,6 +7,7 @@ from app.services.forecasts.base import ForecastProvider
 from app.services.forecasts.demo import DemoForecastProvider, SwellOverride
 from app.services.forecasts.open_meteo import OpenMeteoProvider
 from app.services.forecasts.windy import WindyProvider
+from app.services.http import PermanentProviderError
 
 # Source codes of the direct open-data ingesters (their modules are imported lazily
 # because they pull in ecCodes).
@@ -50,4 +51,10 @@ def build_provider(
         from app.services.forecasts.ecmwf import EcmwfIfsProvider
 
         return EcmwfIfsProvider(settings)
+    if name == "open_meteo_ecmwf":
+        # Accepted by the settings validator; the adapter is not part of this version yet.
+        raise PermanentProviderError(
+            "The Open-Meteo ECMWF provider (open_meteo_ecmwf) is not implemented yet: "
+            "remove it from FORECAST_PROVIDERS for now."
+        )
     raise ValueError(f"Unknown forecast provider {name!r}")

@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from app.schemas.common import ORMModel
+
+# Wind regime (Beaufort-based km/h thresholds) and favourability at the spot, from the
+# stored wind_detail of a prediction (docs/SURF_SCORING.md, "Stored components contract").
+WindStrength = Literal["glassy", "light", "moderate", "strong"]
+WindFavourability = Literal["favourable", "workable", "unfavourable"]
+# Gust definitions: GFS instantaneous gust, ECMWF maximum over the last 3 h or since the
+# previous post-processing step, or not documented by the source.
+GustKind = Literal["gfs_instantaneous", "ecmwf_max_3h", "ecmwf_max_since_pp", "unknown"]
 
 
 class AirportOut(ORMModel):
@@ -76,11 +84,24 @@ class Conditions(BaseModel):
     # These are documented classifications, not calibrated probabilities.
     forecast_confidence_class: str | None = None
     local_confidence_class: str | None = None
+    # Deprecated: forecast, research and wind-dispute reasons mixed in one list. Use
+    # forecast_confidence_reasons, local_confidence_reason and wind_dispute_note.
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
     # The one reason local confidence is lower than forecast confidence (how well the
     # break is understood); None when the two classes are equal.
     local_confidence_reason: str | None = None
+    # Forecast-confidence reasons only (lead time, model agreement, freshness ...), with the
+    # stale reason first when staleness capped the class.
+    forecast_confidence_reasons: list[str] = []
+    # Set when researched sources disagree about this spot's offshore wind direction.
+    wind_dispute_note: str | None = None
+    # Wind regime from our wind model (km/h thresholds in docs/SURF_SCORING.md) and how
+    # favourable the wind is at this break; None for predictions made before 2.1.0.
+    wind_strength: WindStrength | None = None
+    wind_favourability: WindFavourability | None = None
+    # How the source defines the gust value (instantaneous, maximum over 3 h, ...).
+    gust_kind: GustKind | None = None
 
 
 class MapSpotOut(BaseModel):
@@ -99,6 +120,11 @@ class MapSnapshotOut(BaseModel):
     range_end: datetime | None
     step_hours: int
     spots: list[MapSpotOut]
+    # Freshness of the predictions behind the snapshot: the newest authoritative run's issue
+    # time, when it was last updated, and whether it is older than its stale limit.
+    stale: bool = False
+    newest_run_issued_at: datetime | None = None
+    last_updated_at: datetime | None = None
 
 
 class SpotMini(BaseModel):
@@ -147,8 +173,16 @@ class EventOut(BaseModel):
     # Conditions). None for events last updated before these classes existed.
     forecast_confidence_class: str | None = None
     local_confidence_class: str | None = None
+    # Deprecated: mixed reasons (see Conditions.confidence_reasons).
     confidence_reasons: list[str] = []
     local_confidence_reason: str | None = None
+    forecast_confidence_reasons: list[str] = []
+    wind_dispute_note: str | None = None
+    wind_strength: WindStrength | None = None
+    wind_favourability: WindFavourability | None = None
+    gust_kind: GustKind | None = None
+    # The forecast run behind the event is older than its source's stale limit.
+    stale: bool = False
 
 
 class SpotSummary(SpotMini):
@@ -282,11 +316,24 @@ class ForecastPoint(BaseModel):
     # These are documented classifications, not calibrated probabilities.
     forecast_confidence_class: str | None = None
     local_confidence_class: str | None = None
+    # Deprecated: forecast, research and wind-dispute reasons mixed in one list. Use
+    # forecast_confidence_reasons, local_confidence_reason and wind_dispute_note.
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
     # The one reason local confidence is lower than forecast confidence (how well the
     # break is understood); None when the two classes are equal.
     local_confidence_reason: str | None = None
+    # Forecast-confidence reasons only (lead time, model agreement, freshness ...), with the
+    # stale reason first when staleness capped the class.
+    forecast_confidence_reasons: list[str] = []
+    # Set when researched sources disagree about this spot's offshore wind direction.
+    wind_dispute_note: str | None = None
+    # Wind regime from our wind model (km/h thresholds in docs/SURF_SCORING.md) and how
+    # favourable the wind is at this break; None for predictions made before 2.1.0.
+    wind_strength: WindStrength | None = None
+    wind_favourability: WindFavourability | None = None
+    # How the source defines the gust value (instantaneous, maximum over 3 h, ...).
+    gust_kind: GustKind | None = None
 
 
 class DailySummary(BaseModel):
@@ -297,11 +344,19 @@ class DailySummary(BaseModel):
     height_min_ft: float
     height_max_ft: float
     avg_wind_kmh: float | None
-    good_hours: int
+    # Hours of Good or better daylight surf, weighted by each forecast step's duration.
+    good_hours: float
     confidence: int
     # Forecast and local confidence at the day's best hour (``best_time``).
     forecast_confidence_class: str | None = None
     local_confidence_class: str | None = None
+
+
+class AttributionLinkOut(BaseModel):
+    """A credit or licence link the data source asks for (shown next to the data)."""
+
+    label: str
+    href: str
 
 
 class ForecastSourceOut(BaseModel):
@@ -309,6 +364,20 @@ class ForecastSourceOut(BaseModel):
     name: str
     is_demo: bool
     attribution: str
+    wave_model: str | None
+    atmosphere_model: str | None
+    attribution_links: list[AttributionLinkOut] = []
+
+
+class RunMemberOut(BaseModel):
+    """One model run behind a forecast (a blend member, or the single source itself)."""
+
+    code: str
+    name: str
+    family: str
+    run_key: str
+    # Initialisation (cycle) time of the model run; None when the source does not say.
+    init_time: datetime | None
     wave_model: str | None
     atmosphere_model: str | None
 
@@ -320,6 +389,7 @@ class ForecastRunOut(BaseModel):
     wave_model_run_at: datetime | None
     atmosphere_model_run_at: datetime | None
     status: str
+    members: list[RunMemberOut] = []
 
 
 class ModelPoint(BaseModel):
@@ -379,6 +449,10 @@ class SpotForecastOut(BaseModel):
     models: list[ModelSeries] = []
     ensemble: list[EnsemblePoint] = []
     blend: BlendInfo | None = None
+    # Alerts for this spot are held back because the forecast is too old to act on.
+    alerts_paused: bool = False
+    # Server time when this response was built (UTC).
+    generated_at: datetime | None = None
 
 
 class RegionOut(BaseModel):
