@@ -38,6 +38,7 @@ from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES, MapField
 from app.services.forecasts.base import (
     FORECAST_FIELDS,
     FetchResult,
+    FetchStats,
     ForecastProvider,
     RunInfo,
     SpotPoint,
@@ -45,7 +46,7 @@ from app.services.forecasts.base import (
 from app.services.forecasts.demo import DemoForecastProvider, SwellOverride
 from app.services.forecasts.fields import EncodedField, summarise
 from app.services.forecasts.registry import build_provider
-from app.services.http import ProviderError, RunNotServedError
+from app.services.http import HttpTally, ProviderError, RunNotServedError
 from app.services.maintenance import prune_map_fields
 from app.services.surf_quality.models import SpotParams
 
@@ -149,6 +150,39 @@ def fetch_stats_detail(result: FetchResult, provider: object) -> dict[str, Any] 
         "http_status_counts": {},
         "weighted_calls": None,
     }
+
+
+def _counters(provider: object) -> tuple[int, int, dict[str, int], float | None] | None:
+    """(responses, bytes, statuses, weighted calls) a provider has counted so far, or None
+    when it keeps no HttpTally."""
+    tally = getattr(provider, "tally", None)
+    if not isinstance(tally, HttpTally):
+        return None
+    responses, wire_bytes, statuses = tally.snapshot()
+    weighted = getattr(provider, "weighted_calls_total", None)
+    return responses, wire_bytes, statuses, weighted if isinstance(weighted, float) else None
+
+
+def failed_fetch_stats(
+    provider: object, before: tuple[int, int, dict[str, int], float | None] | None
+) -> dict[str, Any] | None:
+    """What a fetch that raised had downloaded and been charged (``details["stats"]`` of a
+    FAILED run), from the provider's counters before and after it."""
+    after = _counters(provider)
+    if before is None or after is None:
+        return None
+    statuses = {k: v - before[2].get(k, 0) for k, v in after[2].items() if v - before[2].get(k, 0)}
+    weighted = None
+    if after[3] is not None and before[3] is not None:
+        weighted = round(after[3] - before[3], 3)
+    return asdict(
+        FetchStats(
+            bytes_downloaded=after[1] - before[1],
+            requests=after[0] - before[0],
+            http_status_counts=statuses,
+            weighted_calls=weighted,
+        )
+    )
 
 
 def ensure_source(db: Session, provider: ForecastProvider, priority: int = 100) -> ForecastSource:
@@ -363,6 +397,7 @@ def acquire_from_provider(
     run_id = run.id
 
     points = spot_points(db)
+    counters = _counters(provider)
     try:
         result = provider.fetch(points, info)
         count = store_records(db, run, result.records)
@@ -376,6 +411,7 @@ def acquire_from_provider(
             failed.details = {
                 **(failed.details or {}),
                 "retryable": isinstance(exc, ProviderError) and exc.transient,
+                "stats": failed_fetch_stats(provider, counters),
             }
             db.commit()
         if isinstance(exc, ProviderError):

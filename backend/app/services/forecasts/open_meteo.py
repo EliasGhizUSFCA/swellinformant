@@ -398,6 +398,9 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         self.wait = timedelta(minutes=self.settings.open_meteo_availability_wait_minutes)
         self.days = min(self.settings.forecast_days, self.max_forecast_days)
         self.request_count = 0
+        # Weighted calls charged by this instance, failed fetches included (ingestion
+        # records the share of a fetch that raised).
+        self.weighted_calls_total = 0.0
 
     # ---------------------------------------------------------------- subclass hooks
     def wave_models(self) -> list[str]:
@@ -574,6 +577,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         def charge() -> None:
             consume_open_meteo_budget(weight, settings=self.settings)
             state.weighted_calls += weight
+            self.weighted_calls_total += weight
 
         return charge
 

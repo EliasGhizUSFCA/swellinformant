@@ -210,3 +210,35 @@ def test_a_stuck_run_is_judged_by_the_real_clock(
     # it is in progress, not stuck.
     (outcome,) = ingestion.acquire_all(db, now=cycle_clock)
     assert outcome.status == "skipped" and outcome.message == "run in progress"
+
+
+def test_a_quota_hit_mid_fetch_still_records_what_the_run_cost(
+    db: Session, few_spots: list[str]
+) -> None:
+    """The real Open-Meteo adapter on recorded responses: the waves arrive, then the
+    forecast API answers with its daily-limit body (as it did live on 2026-10-14 for this
+    machine's shared egress address). The run ends FAILED, not retried, and its details
+    still say what it downloaded and was charged."""
+    import httpx
+
+    from tests.unit.test_open_meteo_adapter import NOW as OM_NOW
+    from tests.unit.test_open_meteo_adapter import Recorder
+    from tests.unit.test_open_meteo_adapter import provider as open_meteo_provider
+
+    reason = "Daily API request limit exceeded. Please try again tomorrow."
+
+    def daily_limit(request: httpx.Request) -> httpx.Response | None:
+        if request.url.path == "/v1/gfs":
+            return httpx.Response(429, json={"error": True, "reason": reason})
+        return None
+
+    out = ingestion.acquire_from_provider(
+        db, open_meteo_provider(Recorder(override=daily_limit)), now=OM_NOW
+    )
+    assert out.status == "failed" and not out.retryable and reason in out.message
+    run = db.get(ForecastRun, out.run_id)
+    assert run is not None and run.status == ForecastRunStatus.FAILED
+    stats = run.details["stats"]
+    assert stats["http_status_counts"]["429"] == 1 and stats["http_status_counts"]["200"] >= 2
+    assert stats["bytes_downloaded"] > 0 and stats["weighted_calls"] > 0
+    assert stats["requests"] == sum(stats["http_status_counts"].values())
