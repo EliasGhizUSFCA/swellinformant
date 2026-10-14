@@ -410,11 +410,65 @@ def test_database_size_limit(db: Session, env: pytest.MonkeyPatch) -> None:
     heartbeat(db)
     report = data_health(db)
     assert report.status == "ok" and report.out.storage.database_bytes > 0
-    assert report.out.storage.database_max_gb is None
+    # Default cap (lead decision): 5 GB, an alert only.
+    assert report.out.storage.database_max_gb == 5.0
     set_env(env, DATA_HEALTH_DATABASE_MAX_GB="0.000001")  # about 1 kB: always exceeded
     report = data_health(db)
     assert [p.key for p in report.problems] == ["database_size"]
     assert "DATA_HEALTH_DATABASE_MAX_GB" in report.out.reasons[0]
+
+
+def test_redis_memory_is_reported_against_its_cap(db: Session) -> None:
+    """The test Redis runs without maxmemory: the fraction uses REDIS_MAXMEMORY (256mb)."""
+    run(db, "demo", 1)
+    heartbeat(db)
+    report = data_health(db)
+    r = report.out.storage.redis
+    assert report.status == "ok" and r is not None and r.available
+    assert r.used_memory_bytes and r.used_memory_bytes > 0
+    if r.maxmemory_bytes is None:
+        assert r.cap_source == "setting" and r.cap_bytes == 256 * 1024**2
+    assert r.used_fraction is not None and r.used_fraction < r.alert_fraction == 0.8
+
+
+def test_redis_memory_above_the_threshold_is_degraded(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run(db, "demo", 1)
+    heartbeat(db)
+    fake = {"used_memory": 230 * 1024**2, "maxmemory": 256 * 1024**2}  # SYNTHETIC INFO
+    monkeypatch.setattr(
+        "app.services.health.redis_memory", lambda: {**fake, "maxmemory_policy": "noeviction"}
+    )
+    report = data_health(db)
+    assert report.status == "degraded" and [p.key for p in report.problems] == ["redis_memory"]
+    assert report.out.reasons[0].startswith("Redis memory: 230 MB used, 90% of the 256 MB cap")
+    r = report.out.storage.redis
+    assert r is not None and r.cap_source == "redis" and r.used_fraction == pytest.approx(0.8984)
+
+    monkeypatch.setattr(
+        "app.services.health.redis_memory",
+        lambda: {
+            "used_memory": 1024**2,
+            "maxmemory": 256 * 1024**2,
+            "maxmemory_policy": "allkeys-lru",
+        },
+    )
+    assert keys(db) == {"redis_eviction_policy"}
+
+
+def test_redis_down_is_degraded(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    import redis
+
+    def down() -> dict[str, object]:
+        raise redis.ConnectionError("synthetic outage")
+
+    run(db, "demo", 1)
+    heartbeat(db)
+    monkeypatch.setattr("app.services.health.redis_memory", down)
+    report = data_health(db)
+    assert {p.key for p in report.problems} == {"redis_unavailable"}
+    assert report.out.storage.redis is not None and report.out.storage.redis.available is False
 
 
 # --------------------------------------------------------------------------- API

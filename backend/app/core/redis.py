@@ -168,6 +168,23 @@ def budget_usage(keys: Sequence[str]) -> list[float]:
     return [float(v) if v else 0.0 for v in values]
 
 
+_MEMORY_UNITS = {"": 1, "b": 1, "k": 1000, "kb": 1024, "m": 1000**2, "mb": 1024**2}
+_MEMORY_UNITS |= {"g": 1000**3, "gb": 1024**3}
+
+
+def parse_memory_size(text: str | None) -> int | None:
+    """Bytes of a redis.conf memory size ("256mb", "1gb", "100k"); None if unreadable.
+
+    Redis's units: k/m/g are powers of 1000, kb/mb/gb powers of 1024 (redis.conf).
+    """
+    value = (text or "").strip().lower()
+    number = value.rstrip("kmgb")
+    unit = value[len(number) :]
+    if not number.isdigit() or unit not in _MEMORY_UNITS:
+        return None
+    return int(number) * _MEMORY_UNITS[unit]
+
+
 def redis_memory() -> dict[str, Any]:
     """INFO memory figures the health check uses: used_memory, maxmemory (0 = no cap)
     and maxmemory_policy."""

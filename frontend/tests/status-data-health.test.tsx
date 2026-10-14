@@ -11,6 +11,7 @@ import {
   JobTable,
   LayersAndObservations,
   overallTone,
+  redisLine,
   SourceFreshness,
   type SourceHealth,
 } from "@/app/status/data-health";
@@ -185,5 +186,29 @@ describe("data health components", () => {
     expect(card).toHaveTextContent("NDBC · 0 active stations · none stored");
     expect(card).toHaveTextContent("alarm after 30 min");
     expect(card).toHaveTextContent("Database 184 MB (no size alarm configured)");
+    expect(screen.queryByTestId("data-health-redis")).toBeNull(); // older reports have no Redis block
+  });
+
+  it("renders the Redis memory check against its cap", () => {
+    const redis = {
+      available: true,
+      used_memory_bytes: 230 * 1024 ** 2,
+      maxmemory_bytes: 256 * 1024 ** 2,
+      maxmemory_policy: "noeviction",
+      cap_bytes: 256 * 1024 ** 2,
+      cap_source: "redis" as const,
+      used_fraction: 0.8984,
+      alert_fraction: 0.8,
+    };
+    render(<LayersAndObservations data={report({ storage: { database_bytes: 193_035_287, database_max_gb: 5, redis } })} />);
+    expect(screen.getByTestId("data-health-other")).toHaveTextContent("Database 184 MB (alarm above 5 GB)");
+    expect(screen.getByTestId("data-health-redis")).toHaveTextContent("Redis 230 MB of 256 MB (90 %, alarm above 80 %)");
+  });
+
+  it("labels a cap that is only the configured REDIS_MAXMEMORY, and an unreachable Redis", () => {
+    const uncapped = { available: true, used_memory_bytes: 1024 ** 2, cap_bytes: 256 * 1024 ** 2, cap_source: "setting" as const, used_fraction: 0.0039, alert_fraction: 0.8 };
+    expect(redisLine(uncapped)).toBe("Redis 1 MB of 256 MB (REDIS_MAXMEMORY; Redis itself runs uncapped) (0.4 %, alarm above 80 %)");
+    expect(redisLine({ available: false, alert_fraction: 0.8 })).toBe("Redis is not answering");
+    expect(redisLine({ available: true, used_memory_bytes: 1024 ** 2, alert_fraction: 0.8 })).toBe("Redis 1 MB (no memory cap known, alarm above 80 %)");
   });
 });
