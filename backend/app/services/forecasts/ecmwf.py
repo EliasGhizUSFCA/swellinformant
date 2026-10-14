@@ -15,9 +15,13 @@ Only the 00Z and 12Z cycles are used: they run to 360 h, 3-hourly to 144 h and 6
 after (85 steps; the 06Z/18Z cycles stop at 144 h). A wave file is ~10.9 MB and an
 atmosphere file ~145 MB, so only the needed messages are fetched by HTTP ``Range``:
 
-* wave: ``swh``, ``pp1d``, ``mwd``, ``mwp``, ``mp2``, the period-band heights
-  ``h1012`` … ``h2530`` and ``wmb`` (model depth). In the live layout they are one
-  contiguous block, so this is a single ~9.9 MB request per step.
+* wave: ECMWF_WAVE_PARAMS, by default ``swh``, ``mwd``, ``pp1d`` and ``mwp``: one
+  contiguous 3.69 MB range per step in the live layout (indexes of 2026-10-13), instead of
+  the 10.06 MB of all 12 wave parameters. ``wmb`` (model depth, a static field) is read on
+  the first wave step of a run only. The period-band heights ``h1012`` … ``h2530`` and
+  ``mp2`` are read only when listed in ECMWF_WAVE_PARAMS (nothing in the app uses them; they
+  go to ``extra``). This provider is an optional, key-free fallback: the recommended setup
+  reads ECMWF through Open-Meteo (``open_meteo_ecmwf``).
 * atmosphere: ``10u``, ``10v``, ``10fg``, ``msl`` (four ~0.5–1.4 MB requests per step) and
   ``lsm`` once per run (0.19 MB).
 
@@ -74,8 +78,10 @@ import numpy as np
 
 from app.core.config import Settings, get_settings
 from app.services.forecasts.base import (
+    EXTRA_GUST_KIND,
     FORECAST_FIELDS,
     FetchResult,
+    FetchStats,
     ForecastProvider,
     ForecastRecord,
     RunInfo,
@@ -98,6 +104,7 @@ from app.services.forecasts.grib import (
 from app.services.forecasts.registry import ECMWF_IFS_CODE
 from app.services.geo import wind_from_uv
 from app.services.http import (
+    HttpTally,
     PermanentProviderError,
     TransientProviderError,
     request_with_retries,
@@ -125,8 +132,12 @@ BAND_PARAMS = {
     "h2530": "25-30s",
 }
 LONG_PERIOD_BANDS = ("h1214", "h1417", "h1721", "h2125", "h2530")  # periods >= 12 s
+# Every wave parameter this module can read (ECMWF_WAVE_PARAMS picks from these).
 WAVE_PARAMS = ("swh", "pp1d", "mwd", "mwp", "mp2", *BAND_PARAMS, "wmb")
-STATIC_WAVE_PARAMS = ("wmb",)  # decoded once per run (it is fetched anyway: same block)
+STATIC_WAVE_PARAMS = ("wmb",)  # fetched and decoded on the first wave step of a run only
+REQUIRED_WAVE_PARAMS = ("swh",)
+# ECMWF's 10fg is the "Maximum 10 metre wind gust since previous post-processing".
+GUST_KIND = "ecmwf_max_since_pp"
 ATMOS_PARAMS = ("10u", "10v", "10fg", "msl")
 LSM_PARAM = "lsm"
 SEA_MAX_LAND_FRACTION = 0.5  # lsm < 0.5 = sea
@@ -355,11 +366,21 @@ class EcmwfIfsProvider(ForecastProvider):
         )
         self.pacer = _RequestPacer(request_interval_seconds)
         self.counter = _ResponseCounter()
+        self.tally = HttpTally()
         hooks = self.client.event_hooks
         self.client.event_hooks = {
             "request": [*hooks.get("request", []), self.pacer],
-            "response": [*hooks.get("response", []), self.counter],
+            "response": [*hooks.get("response", []), self.counter, self.tally],
         }
+        wanted = self.settings.ecmwf_wave_param_list
+        unknown = sorted(set(wanted) - set(WAVE_PARAMS))
+        if unknown or not set(REQUIRED_WAVE_PARAMS) <= set(wanted):
+            raise PermanentProviderError(
+                f"ECMWF_WAVE_PARAMS={','.join(wanted)!r}: must include "
+                f"{', '.join(REQUIRED_WAVE_PARAMS)} and only name {', '.join(WAVE_PARAMS)}"
+                + (f" (unknown: {', '.join(unknown)})" if unknown else "")
+            )
+        self.wave_params = tuple(p for p in wanted if p not in STATIC_WAVE_PARAMS)
         self.attempts = attempts
         self.backoff_seconds = backoff_seconds
         self.workers = max(1, min(self.settings.grib_download_workers, MAX_WORKERS))
@@ -583,7 +604,10 @@ class EcmwfIfsProvider(ForecastProvider):
         for part in parts:
             try:
                 if part == WAVE_STREAM:
-                    blobs, missing = self._download(fetcher, cycle, step, part, WAVE_PARAMS)
+                    wave_params = list(self.wave_params)
+                    if not state.model_depth:  # the static depth field, once per run
+                        wave_params += STATIC_WAVE_PARAMS
+                    blobs, missing = self._download(fetcher, cycle, step, part, wave_params)
                     sample.wave = self._sample_wave(blobs, spots, state)
                 else:
                     params = list(ATMOS_PARAMS)
@@ -616,6 +640,7 @@ class EcmwfIfsProvider(ForecastProvider):
             return FetchResult()
         started = time.monotonic()
         before = (self.counter.responses, self.counter.http_503, self.counter.slowdown)
+        tally_before = self.tally.snapshot()
         cycle = self._cycle_of(run)
         steps = self._steps_for(cycle)
         state = _RunState(PointSampler(self.settings.grib_max_cell_distance_km))
@@ -650,6 +675,23 @@ class EcmwfIfsProvider(ForecastProvider):
             "seconds": round(time.monotonic() - started, 1),
         }
         self.last_fetch_stats = stats
+        responses, wire_bytes, statuses = self.tally.snapshot()
+        result.stats = FetchStats(
+            bytes_downloaded=wire_bytes - tally_before[1],
+            requests=responses - tally_before[0],
+            http_status_counts={
+                k: v - tally_before[2].get(k, 0)
+                for k, v in statuses.items()
+                if v - tally_before[2].get(k, 0)
+            },
+        )
+        mb = result.stats.bytes_downloaded / 1e6
+        result.warnings.insert(
+            0,
+            f"downloaded {mb:.1f} MB in {result.request_count} requests for {len(steps)} steps "
+            f"({mb / max(len(steps), 1):.2f} MB per step; wave parameters "
+            f"{','.join(self.wave_params)})",
+        )
         if stats["http_503"]:
             result.warnings.insert(
                 0,
@@ -751,16 +793,21 @@ class EcmwfIfsProvider(ForecastProvider):
         msl = atmos.get("msl")
         values["pressure_msl_hpa"] = None if msl is None else round(msl / 100.0, 2)
 
-        bands = {label: _round(wave.get(name), 3) for name, label in BAND_PARAMS.items()}
-        extra: dict[str, object] = {
-            # ECMWF mwp: mean period Tm-1,0 (s); mp2: mean zero-crossing period Tm02 (s).
-            "mean_period_tm10_s": _round(wave.get("mwp"), 2),
-            "mean_period_tm02_s": _round(wave.get("mp2"), 2),
+        # Only the parameters that were read (ECMWF_WAVE_PARAMS) appear in extra.
+        extra: dict[str, object] = {}
+        if "mwp" in wave:  # ECMWF mwp: mean period Tm-1,0 (s)
+            extra["mean_period_tm10_s"] = _round(wave.get("mwp"), 2)
+        if "mp2" in wave:  # ECMWF mp2: mean zero-crossing period Tm02 (s)
+            extra["mean_period_tm02_s"] = _round(wave.get("mp2"), 2)
+        if any(name in wave for name in BAND_PARAMS):
             # ECMWF h1012...h2530: significant height (m) of the waves in each period band.
-            "hs_band_m": bands,
+            extra["hs_band_m"] = {
+                label: _round(wave.get(name), 3) for name, label in BAND_PARAMS.items()
+            }
             # Derived here (not an ECMWF field): sqrt of the sum of squares, bands >= 12 s.
-            "hs_ge_12s_m": _round(combined_band_height(wave.get(n) for n in LONG_PERIOD_BANDS), 3),
-        }
+            extra["hs_ge_12s_m"] = _round(
+                combined_band_height(wave.get(n) for n in LONG_PERIOD_BANDS), 3
+            )
         cell = state.wave_cells.get(spot.spot_id)
         if cell is not None:
             extra["wave_cell"] = {
@@ -776,6 +823,7 @@ class EcmwfIfsProvider(ForecastProvider):
             }
         if values["wind_gust_kmh"] is not None:
             extra["wind_gust_window_h"] = gust_window_h
+            extra[EXTRA_GUST_KIND] = GUST_KIND
         return ForecastRecord(
             valid_time=cycle + timedelta(hours=step),
             values=values,

@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.database import utcnow
 from app.models import (
     ForecastEnsembleStat,
     ForecastRun,
@@ -87,7 +88,9 @@ def test_acquire_writes_ensemble_stats_only(
     assert out["status"] == "success", out
     assert out["run_key"] == "gefs-wave:2026101012"
     assert out["records"] == len(few_spots) * 3 and out["spots"] == len(few_spots)
-    assert out["checks"]["partition_order"]["verified"] is True
+    # GEFS_STAT_FIELDS default (HTSGW,PERPW): swell partitions are not read, so there is no
+    # partition-order check (tests/unit/test_ensemble.py covers it with SWELL enabled).
+    assert "partition_order" not in out["checks"]
 
     run = _gefs_run(db)
     db.refresh(run)
@@ -108,8 +111,12 @@ def test_acquire_writes_ensemble_stats_only(
     ).first()
     assert row is not None and row.valid_time == CYCLE + timedelta(hours=12)
     assert row.hs_mean_m == pytest.approx(2.5, abs=1e-3)
-    assert row.wind_speed_mean_kmh == pytest.approx(36.0, abs=0.01)
+    assert row.tp_mean_s == pytest.approx(12.0, abs=1e-3) and row.tp_spread_s is not None
+    assert row.wind_speed_mean_kmh is None and row.swell1_height_mean_m is None  # not read
     assert row.members == 31 and row.extra["period_kind"] == "tp"
+    assert run.details["stat_fields"] == ["HTSGW", "PERPW"]
+    assert run.details["stats"]["bytes_downloaded"] == run.details["bytes_downloaded"]
+    assert run.details["model_runs"][0]["init_time"] == CYCLE.isoformat()
 
 
 def test_rerun_is_idempotent_and_force_refetches(
@@ -134,12 +141,14 @@ def test_stuck_and_failed_runs_are_retried(
     acquire_ensemble(db, now=NOW, provider=provider)
     run = _gefs_run(db)
 
-    run.status, run.started_at = ForecastRunStatus.RUNNING, NOW - timedelta(minutes=10)
+    # started_at is the real start time of the provider's run, so "stuck" is judged on the
+    # real clock, not on the cycle-selecting ``now``.
+    run.status, run.started_at = ForecastRunStatus.RUNNING, utcnow() - timedelta(minutes=10)
     db.commit()
     busy = acquire_ensemble(db, now=NOW, provider=provider)
     assert busy["status"] == "skipped" and busy["message"] == "run in progress"
 
-    run.started_at = NOW - timedelta(hours=2)  # older than STUCK_RUN_AFTER: a dead worker
+    run.started_at = utcnow() - timedelta(hours=2)  # older than STUCK_RUN_AFTER: dead worker
     db.commit()
     assert acquire_ensemble(db, now=NOW, provider=provider)["status"] == "success"
 

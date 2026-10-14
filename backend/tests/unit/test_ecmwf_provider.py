@@ -371,6 +371,35 @@ def test_fetch_maps_fields_units_and_period_kind() -> None:
             assert v[name] is None, name
     extra = rec.extra
     assert extra["mean_period_tm10_s"] == pytest.approx(9.5, abs=0.01)
+    # The default ECMWF_WAVE_PARAMS (swh, mwd, pp1d, mwp) skip mp2 and the period bands,
+    # which nothing in the app reads (audit DA-3): they are neither fetched nor stored.
+    assert "mean_period_tm02_s" not in extra and "hs_band_m" not in extra
+    assert extra["wave_cell"]["model_depth_m"] == pytest.approx(999.0, abs=0.1)  # type: ignore[index]
+    assert extra["wind_gust_window_h"] == 1.0 and extra["gust_kind"] == "ecmwf_max_since_pp"
+    assert extra["wind_cell"]["land_fraction"] == pytest.approx(0.0)  # type: ignore[index]
+    # Step 0: the gust has no window yet (constant 0 field) and is dropped, not stored as 0.
+    first = recs[0]
+    assert first.values["wind_gust_kmh"] is None and "wind_gust_window_h" not in first.extra
+    assert "gust_kind" not in first.extra
+    assert first.values["wind_speed_kmh"] == pytest.approx(18.0, abs=0.05)
+    # Wave: the contiguous swh..mwp block per step, plus wmb (model depth) on the first step
+    # only. Atmosphere: four requests per step, lsm once.
+    assert len(bucket.gets("wave-fc.grib2")) == 2 + 1
+    assert len(bucket.gets("oper-fc.grib2")) == 5 + 4
+    assert result.request_count == len(bucket.gets())
+    assert p.last_fetch_stats["slowdown"] == 0 and p.last_fetch_stats["bytes"] > 0
+    assert result.stats is not None and result.stats.bytes_downloaded > 0
+    assert result.stats.requests == len(bucket.calls)
+    assert result.warnings[0].startswith("downloaded ")
+
+
+def test_configured_band_heights_are_still_read() -> None:
+    bucket = standard_bucket([3])
+    params = "swh,mwd,pp1d,mwp,mp2," + ",".join(
+        ("h1012", "h1214", "h1417", "h1721", "h2125", "h2530")
+    )
+    p = provider(bucket, steps=[3], ecmwf_wave_params=params)
+    extra = p.fetch([NAZARE], RUN).records[NAZARE.spot_id][0].extra
     assert extra["mean_period_tm02_s"] == pytest.approx(7.5, abs=0.01)
     assert extra["hs_band_m"] == pytest.approx(
         {"10-12s": 0.3, "12-14s": 0.4, "14-17s": 0.5, "17-21s": 0.6, "21-25s": 0.1, "25-30s": 0.05},
@@ -379,18 +408,46 @@ def test_fetch_maps_fields_units_and_period_kind() -> None:
     assert extra["hs_ge_12s_m"] == pytest.approx(
         math.sqrt(0.16 + 0.25 + 0.36 + 0.01 + 0.0025), 1e-3
     )
-    assert extra["wave_cell"]["model_depth_m"] == pytest.approx(999.0, abs=0.1)  # type: ignore[index]
-    assert extra["wind_gust_window_h"] == 1.0
-    assert extra["wind_cell"]["land_fraction"] == pytest.approx(0.0)  # type: ignore[index]
-    # Step 0: the gust has no window yet (constant 0 field) and is dropped, not stored as 0.
-    first = recs[0]
-    assert first.values["wind_gust_kmh"] is None and "wind_gust_window_h" not in first.extra
-    assert first.values["wind_speed_kmh"] == pytest.approx(18.0, abs=0.05)
-    # One contiguous wave request + four atmosphere requests (lsm only once) per step.
-    assert len(bucket.gets("wave-fc.grib2")) == 2
-    assert len(bucket.gets("oper-fc.grib2")) == 5 + 4
-    assert result.request_count == len(bucket.gets())
-    assert p.last_fetch_stats["slowdown"] == 0 and p.last_fetch_stats["bytes"] > 0
+
+
+def test_wave_params_are_validated() -> None:
+    with pytest.raises(PermanentProviderError, match="must include swh"):
+        provider(FakeBucket(), ecmwf_wave_params="mwd,pp1d")
+    with pytest.raises(PermanentProviderError, match="unknown: cdww"):
+        provider(FakeBucket(), ecmwf_wave_params="swh,cdww")
+
+
+def test_trimmed_range_from_the_live_index() -> None:
+    """The real index of 2026-10-13 00Z +24 h (tests/fixtures/idx): one Range covering
+    swh..mwp (3.69 MB instead of the 10.06 MB of all wave parameters), and wmb apart."""
+    from pathlib import Path
+
+    from app.services.forecasts.grib import GribFetcher
+
+    index = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "idx"
+        / "20261013000000-24h-wave-fc.index"
+    ).read_text()
+    ranges: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".index"):
+            return httpx.Response(200, text=index)
+        rng = request.headers["Range"]
+        ranges.append(rng)
+        start, end = (int(x) for x in rng.removeprefix("bytes=").split("-"))
+        return httpx.Response(206, content=bytes(end - start + 1))  # SYNTHETIC zero bytes
+
+    p = provider(FakeBucket())
+    fetcher = GribFetcher(httpx.Client(transport=httpx.MockTransport(handler)), "test")
+    cycle = datetime(2026, 10, 13, tzinfo=UTC)
+    blobs, missing = p._download(fetcher, cycle, 24, "wave", [*p.wave_params, "wmb"])
+    assert missing == [] and set(blobs) == {"swh", "mwd", "pp1d", "mwp", "wmb"}
+    assert sorted(ranges) == ["bytes=4933466-5443527", "bytes=6375196-10062548"]
+    assert 10062548 - 6375196 + 1 == 3_687_353  # swh..mwp
+    assert fetcher.bytes_downloaded == 3_687_353 + 510_062 + len(index.encode())  # + the index
 
 
 def test_waves_use_nearest_valid_wave_cell_and_wind_the_nearest_sea_cell() -> None:

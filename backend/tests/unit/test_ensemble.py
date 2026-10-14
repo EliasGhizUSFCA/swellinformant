@@ -26,7 +26,7 @@ from app.services.forecasts.ensemble import (
     select_stat_records,
     swell1_complete_certain,
 )
-from app.services.http import TransientProviderError
+from app.services.http import PermanentProviderError, TransientProviderError
 from tests.unit.gefs_synthetic import (
     BASE_URL,
     CYCLE,
@@ -82,6 +82,9 @@ def make_provider(
 
 
 RUN = RunInfo("gefs-wave:2026101012", CYCLE, wave_model_run_at=CYCLE)
+# GEFS_STAT_FIELDS reading every statistic this module knows (the default reads HTSGW and
+# PERPW only, the two the uncertainty model uses).
+ALL_STAT_FIELDS = "HTSGW,PERPW,WIND,SWELL,SWPER"
 
 
 # --------------------------------------------------------------------------- layout
@@ -165,7 +168,7 @@ def test_fetch_reads_partition_one_by_order_and_converts_units() -> None:
         return stat_records(kind, SMALL, overrides=over)
 
     publish_cycle(bucket, SMALL, [0, 12, 24], stats=stats)
-    res = make_provider(bucket).fetch_stats([SPOT], RUN)
+    res = make_provider(bucket, gefs_stat_fields=ALL_STAT_FIELDS).fetch_stats([SPOT], RUN)
     assert res.errors == {} and res.steps_failed == {}
     rows = res.rows[1]
     assert [r["lead_hours"] for r in rows] == [0.0, 12.0, 24.0]
@@ -192,6 +195,40 @@ def test_fetch_reads_partition_one_by_order_and_converts_units() -> None:
     assert res.bytes_downloaded > 0
 
 
+def test_default_reads_only_hs_and_tp_mean_and_spread() -> None:
+    """GEFS_STAT_FIELDS=HTSGW,PERPW (default): 4 records per step, Hs/Tp columns filled."""
+    bucket = FakeBucket()
+    publish_cycle(bucket, SMALL, [0, 12, 24])
+    provider = make_provider(bucket)
+    assert [spec.variable for spec in provider.stat_fields] == ["HTSGW", "PERPW"]
+    res = provider.fetch_stats([SPOT], RUN)
+    assert res.errors == {} and res.steps_failed == {}
+    r = res.rows[1][1]
+    assert r["hs_mean_m"] == pytest.approx(2.5, abs=1e-3)
+    assert r["hs_spread_m"] == pytest.approx(0.4, abs=1e-3)
+    assert r["tp_mean_s"] == pytest.approx(12.0, abs=1e-3)
+    assert r["tp_spread_s"] is not None
+    for column in ("wind_speed_mean_kmh", "swell1_height_mean_m", "swell1_period_mean_s"):
+        assert r.get(column) is None, column  # not read, so not stored
+    assert "swell1_complete_certain" not in r["extra"]
+    # Per step: 2 .idx files + one range per file. HTSGW and PERPW are records 1 and 2 in
+    # both files, so each range ends where record 3 starts: 4 records per step, no more.
+    ranges = [(k, r) for m, k, r in bucket.log if m == "GET" and r]
+    assert len(ranges) == 2 * 3 and res.request_count == len(bucket.gets()) == 4 * 3
+    for key, rng in ranges:
+        idx = bucket.objects[key + ".idx"].decode().splitlines()
+        third = int(idx[2].split(":")[1])
+        assert rng == f"bytes=0-{third - 1}", (key, rng)
+    assert not any("partition order" in w for w in res.warnings)
+
+
+def test_unknown_or_incomplete_stat_fields_are_refused() -> None:
+    with pytest.raises(PermanentProviderError, match="must include HTSGW"):
+        make_provider(FakeBucket(), gefs_stat_fields="PERPW")
+    with pytest.raises(PermanentProviderError, match="unknown: DIRPW"):
+        make_provider(FakeBucket(), gefs_stat_fields="HTSGW,DIRPW")
+
+
 def test_swapped_partition_order_aborts_the_run() -> None:
     bucket = FakeBucket()
     publish_cycle(
@@ -203,7 +240,7 @@ def test_swapped_partition_order_aborts_the_run() -> None:
         ),
     )
     with pytest.raises(GefsLayoutError, match="partition order"):
-        make_provider(bucket).fetch_stats([SPOT], RUN)
+        make_provider(bucket, gefs_stat_fields=ALL_STAT_FIELDS).fetch_stats([SPOT], RUN)
 
 
 def test_records_must_decode_to_the_expected_parameter_and_statistic() -> None:
@@ -333,7 +370,9 @@ def test_member_mode_stores_quantiles_and_member_count() -> None:
     bucket = FakeBucket()
     hs = {m: 1.0 + 0.1 * k for k, m in enumerate(MEMBERS)}  # 1.0 .. 4.0 m, mean 2.5 m
     publish_cycle(bucket, SMALL, [0, 12, 24], member_hs=lambda m, f: hs[m])
-    res = make_provider(bucket, members=True).fetch_stats([SPOT], RUN)
+    res = make_provider(bucket, members=True, gefs_stat_fields=ALL_STAT_FIELDS).fetch_stats(
+        [SPOT], RUN
+    )
     extra = res.rows[1][1]["extra"]
     expected = np.quantile(np.array(list(hs.values())), [0.1, 0.5, 0.9])
     assert extra["hs_members"] == 31
