@@ -56,7 +56,9 @@ sends another request (asserted in `e2e/timeline.spec.ts`).
   favourability, V·n components); older rows carry the fit and relation only, and the rest is
   `null`. `gust_below_mean` flags a source whose gust is lower than its mean wind.
 * `tide` and `observations` blocks come from `services/tides/api.py`; a step's `tide` is read
-  from the block's curve (never from model sea level). Today both blocks are stubs that say
+  from the block's curve (never from model sea level), linearly between the curve's two
+  neighbouring points (30-60 minutes apart; none when they are more than 3 hours apart), with
+  rising or falling from the next high or low water. Today both blocks are stubs that say
   "unavailable"; the tides package fills them.
 * Caching: `Cache-Control: public, max-age=300` and a weak `ETag` over the run key, algorithm
   version, tide fetch time, first and last step, staleness, window and newest observation;
