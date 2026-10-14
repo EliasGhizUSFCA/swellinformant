@@ -35,7 +35,10 @@ FAMILIES: dict[str, Family] = {
             "WAVEWATCH III (NOAA GFS-Wave)",
             "NOAA GFS atmosphere",
             related_to=("ncep_gefs",),
-            notes="NOAA direct, Open-Meteo ncep_gfswave025/016 and Windy gfsWave.",
+            notes=(
+                "NOAA direct (noaa_gfs_direct), Open-Meteo ncep_gfswave016/025 + GFS "
+                "(open_meteo_noaa) and Windy gfsWave."
+            ),
         ),
         Family(
             "ncep_gefs",
@@ -49,7 +52,10 @@ FAMILIES: dict[str, Family] = {
             "ECMWF ecWAM (IFS HRES wave)",
             "ECMWF IFS atmosphere with altimeter assimilation",
             related_to=("ecmwf_aifs", "mfwam"),
-            notes="Independent of the NOAA chain.",
+            notes=(
+                "ECMWF open data direct (ecmwf_ifs_open) and via Open-Meteo ecmwf_wam025 + "
+                "ecmwf_ifs025 (open_meteo_ecmwf). Independent of the NOAA chain."
+            ),
         ),
         Family(
             "ecmwf_aifs",
@@ -93,7 +99,11 @@ def family_for_open_meteo_model(model: str | None) -> str:
 
 
 def period_kind_for_open_meteo(model: str | None) -> str | None:
-    """Open-Meteo's ``wave_period`` is GFS PERPW (peak) but ECMWF ``mwp`` (Tm-1,0)."""
+    """Open-Meteo's ``wave_period`` is GFS PERPW (peak) but ECMWF ``mwp`` (Tm-1,0).
+
+    The ECMWF-family adapter therefore reads ``wave_peak_period`` as its period
+    (open_meteo_ecmwf.py) and keeps ``wave_period`` only as the mean period.
+    """
     m = (model or "").lower()
     if m.startswith("ncep_"):
         return "tp"
