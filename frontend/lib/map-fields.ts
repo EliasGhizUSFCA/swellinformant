@@ -9,15 +9,33 @@
  *
  * Variables: hs (m, offshore significant wave height of the combined sea state; not surf
  * height), tp (s, peak period), wave_dir (deg, nautical FROM), wind_u / wind_v (m/s, the
- * eastward / northward components of the velocity the air moves with), pressure (hPa).
+ * eastward / northward components of the velocity the air moves with), pressure (hPa). When
+ * the model run stores them (the index lists them with group "partition"), also the wave
+ * model's partitions: swell1_* (primary swell), swell2_* (secondary swell) and windsea_*
+ * (wind sea), each with _hs (m), _tp (s, period) and _dir (deg FROM). An absent partition is
+ * no data, never 0.
  */
 import type { components } from "@/types/openapi";
 
 export type FieldIndex = components["schemas"]["FieldIndexOut"];
 export type FieldVariable = components["schemas"]["FieldVariableOut"];
 
-export const FIELD_VARIABLES = ["hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure"] as const;
+export const CORE_FIELD_VARIABLES = ["hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure"] as const;
+export const PARTITION_FIELD_VARIABLES = [
+  "swell1_hs",
+  "swell1_tp",
+  "swell1_dir",
+  "swell2_hs",
+  "swell2_tp",
+  "swell2_dir",
+  "windsea_hs",
+  "windsea_tp",
+  "windsea_dir",
+] as const;
+export const FIELD_VARIABLES = [...CORE_FIELD_VARIABLES, ...PARTITION_FIELD_VARIABLES] as const;
 export type FieldVariableName = (typeof FIELD_VARIABLES)[number];
+
+export const isFieldVariable = (v: unknown): v is FieldVariableName => typeof v === "string" && (FIELD_VARIABLES as readonly string[]).includes(v);
 
 /** Mirrors backend FieldMeta (sent as JSON in the X-Field-Meta response header). */
 export interface FieldMeta {
@@ -36,8 +54,8 @@ export interface FieldMeta {
   nodata: number;
 }
 
-/** A decoded regular lat/lon grid; NaN marks cells without data. */
-export interface FieldGrid {
+/** A regular lat/lon grid of values; NaN marks cells without data. */
+export interface Grid {
   nx: number;
   ny: number;
   lat0: number;
@@ -45,6 +63,15 @@ export interface FieldGrid {
   dlat: number;
   dlon: number;
   values: Float32Array;
+}
+
+/** A decoded model field: its grid plus what the server says it is (from X-Field-Meta). */
+export interface FieldGrid extends Grid {
+  /** Valid time the server served (ISO 8601). */
+  validTime: string;
+  /** Model run the bytes come from. */
+  runKey: string;
+  variable: FieldVariableName;
 }
 
 const NUMERIC_KEYS = ["nx", "ny", "lat0", "lon0", "dlat", "dlon", "scale", "offset"] as const;
@@ -70,6 +97,7 @@ export function parseFieldMeta(header: string | null): FieldMeta {
 
 /** uint8 cells → physical values (NaN for the nodata byte). */
 export function decodeField(bytes: Uint8Array, meta: FieldMeta): FieldGrid {
+  if (!isFieldVariable(meta.variable)) throw new Error(`Unknown field variable: ${String(meta.variable)}`);
   const n = meta.nx * meta.ny;
   if (bytes.length !== n) throw new Error(`Field has ${bytes.length} cells, expected ${n}`);
   const values = new Float32Array(n);
@@ -79,7 +107,18 @@ export function decodeField(bytes: Uint8Array, meta: FieldMeta): FieldGrid {
     const b = bytes[k]!;
     values[k] = b === nodata ? NaN : offset + scale * b;
   }
-  return { nx: meta.nx, ny: meta.ny, lat0: meta.lat0, lon0: meta.lon0, dlat: meta.dlat, dlon: meta.dlon, values };
+  return {
+    nx: meta.nx,
+    ny: meta.ny,
+    lat0: meta.lat0,
+    lon0: meta.lon0,
+    dlat: meta.dlat,
+    dlon: meta.dlon,
+    values,
+    validTime: String(meta.valid_time),
+    runKey: String(meta.run_key),
+    variable: meta.variable,
+  };
 }
 
 /** zlib-inflates a response body with the browser's DecompressionStream. */
@@ -90,7 +129,7 @@ export async function inflate(data: ArrayBuffer | Uint8Array): Promise<Uint8Arra
 }
 
 /** True when the grid's columns cover the full circle, so column nx-1 neighbours column 0. */
-export function wrapsLongitude(g: Pick<FieldGrid, "nx" | "dlon">): boolean {
+export function wrapsLongitude(g: Pick<Grid, "nx" | "dlon">): boolean {
   return Math.abs(g.nx * g.dlon - 360) < g.dlon * 0.5;
 }
 
@@ -101,7 +140,7 @@ interface Corners {
 }
 const scratch: Corners = { k: [0, 0, 0, 0], w: [0, 0, 0, 0] };
 
-function corners(g: FieldGrid, lat: number, lon: number): Corners | null {
+function corners(g: Grid, lat: number, lon: number): Corners | null {
   const fy = (g.lat0 - lat) / g.dlat;
   if (!(fy >= 0 && fy <= g.ny - 1)) return null;
   let fx = (lon - g.lon0) / g.dlon;
@@ -132,7 +171,7 @@ function corners(g: FieldGrid, lat: number, lon: number): Corners | null {
  * weight is real data; a small value lets the colour field reach under the land mask at
  * coastlines instead of leaving a gap.
  */
-export function sampleGrid(g: FieldGrid, lat: number, lon: number, minWeight = 0.5): number {
+export function sampleGrid(g: Grid, lat: number, lon: number, minWeight = 0.5): number {
   const c = corners(g, lat, lon);
   if (!c) return NaN;
   let sum = 0;
@@ -148,11 +187,20 @@ export function sampleGrid(g: FieldGrid, lat: number, lon: number, minWeight = 0
   return w > 0 && w >= minWeight ? sum / w : NaN;
 }
 
+/** Smallest angle between two directions, degrees (0..180). */
+export function angleGap(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
 /**
  * Direction (nautical degrees FROM) at (lat, lon), interpolated as unit vectors so that 350°
- * and 10° average to 0°, never 180°. NaN without data or when the corners cancel out.
+ * and 10° average to 0°, never 180°. NaN without data or when the corners cancel out, and,
+ * with `maxSpreadDeg`, when two of the valid corners (with non-zero weight) differ by more
+ * than that: wave partitions are numbered per cell, so neighbouring cells can hold different
+ * swells, and averaging across such a swap would give a direction no wave has.
  */
-export function sampleDirection(g: FieldGrid, lat: number, lon: number, minWeight = 0.5): number {
+export function sampleDirection(g: Grid, lat: number, lon: number, minWeight = 0.5, maxSpreadDeg = 360): number {
   const c = corners(g, lat, lon);
   if (!c) return NaN;
   const rad = Math.PI / 180;
@@ -168,12 +216,22 @@ export function sampleDirection(g: FieldGrid, lat: number, lon: number, minWeigh
       w += wn;
     }
   }
+  if (maxSpreadDeg < 180) {
+    for (let a = 0; a < 4; a++) {
+      const da = g.values[c.k[a]!]!;
+      if (!(da === da) || c.w[a]! <= 0) continue;
+      for (let b = a + 1; b < 4; b++) {
+        const db = g.values[c.k[b]!]!;
+        if (db === db && c.w[b]! > 0 && angleGap(da, db) > maxSpreadDeg) return NaN;
+      }
+    }
+  }
   if (!(w > 0 && w >= minWeight) || !(Math.hypot(s, co) > 1e-6 * w)) return NaN;
   return (((Math.atan2(s, co) / rad) % 360) + 360) % 360;
 }
 
-/** A grid with the same geometry and values mapped cell by cell (NaN stays NaN). */
-export function withValues(g: FieldGrid, f: (v: number, k: number) => number): FieldGrid {
+/** A grid with the same geometry (and metadata) and values mapped cell by cell (NaN stays NaN). */
+export function withValues<T extends Grid>(g: T, f: (v: number, k: number) => number): T {
   const out = new Float32Array(g.values.length);
   for (let k = 0; k < out.length; k++) {
     const v = g.values[k]!;
@@ -182,14 +240,14 @@ export function withValues(g: FieldGrid, f: (v: number, k: number) => number): F
   return { ...g, values: out };
 }
 
-function sameShape(a: FieldGrid, b: FieldGrid): void {
+function sameShape(a: Grid, b: Grid): void {
   if (a.nx !== b.nx || a.ny !== b.ny || a.lat0 !== b.lat0 || a.lon0 !== b.lon0 || a.dlat !== b.dlat || a.dlon !== b.dlon) {
     throw new Error("Fields are on different grids");
   }
 }
 
 /** Wind speed |(u, v)| in m/s, cell by cell. */
-export function windSpeedGrid(u: FieldGrid, v: FieldGrid): FieldGrid {
+export function windSpeedGrid<T extends Grid>(u: T, v: Grid): T {
   sameShape(u, v);
   return withValues(u, (uu, k) => Math.hypot(uu, v.values[k]!));
 }
@@ -203,7 +261,7 @@ export function waveEnergyKwPerM(hs: number, tp: number): number {
   return 0.49 * hs * hs * 0.9 * tp;
 }
 
-export function waveEnergyGrid(hs: FieldGrid, tp: FieldGrid): FieldGrid {
+export function waveEnergyGrid<T extends Grid>(hs: T, tp: Grid): T {
   sameShape(hs, tp);
   return withValues(hs, (h, k) => waveEnergyKwPerM(h, tp.values[k]!));
 }
@@ -212,16 +270,6 @@ export function waveEnergyGrid(hs: FieldGrid, tp: FieldGrid): FieldGrid {
 export function directionFromUV(u: number, v: number): number {
   if (!(Math.hypot(u, v) > 1e-9)) return NaN;
   return (((270 - (Math.atan2(v, u) * 180) / Math.PI) % 360) + 360) % 360;
-}
-
-/** Particle flow for the wave layers: unit vectors pointing where the waves travel TOWARDS
- * (direction FROM + 180°), scaled by period / 10 s so long-period swell moves faster. */
-export function waveFlowGrids(dir: FieldGrid, tp: FieldGrid): { u: FieldGrid; v: FieldGrid } {
-  sameShape(dir, tp);
-  const rad = Math.PI / 180;
-  const u = withValues(dir, (d, k) => -Math.sin(d * rad) * (tp.values[k]! / 10));
-  const v = withValues(dir, (d, k) => -Math.cos(d * rad) * (tp.values[k]! / 10));
-  return { u, v };
 }
 
 /** Small least-recently-used cache (Map keeps insertion order; re-set on read). */
@@ -276,28 +324,62 @@ export class LruCache<K, V> {
 }
 
 /**
- * The field URL. `run` (the index's run_key) is only a cache key: the server ignores it and
- * serves its current run, but each model run gets its own URLs, so no HTTP cache can hand
- * back the previous run's bytes for the same valid time.
+ * The field URL. `run` is the index's run_key: the server serves that run while it still
+ * retains it (404 otherwise), and every model run gets its own URLs, so no HTTP cache can
+ * hand back the previous run's bytes for the same valid time.
  */
 export const fieldUrl = (variable: string, at: string, run?: string | null) =>
   `/api/map/fields/${variable}?at=${encodeURIComponent(at)}${run ? `&run=${encodeURIComponent(run)}` : ""}`;
 
-/** Fetches, inflates and decodes one field. */
+/**
+ * The server answered with a different field than the one requested (another valid time or
+ * model run), or no longer has it (404): the field index the request came from is out of
+ * date. The field is never shown under the requested time; the caller re-reads the index.
+ */
+export class FieldMismatchError extends Error {
+  constructor(
+    message: string,
+    readonly servedValidTime: string | null = null,
+    readonly servedRunKey: string | null = null,
+  ) {
+    super(message);
+    this.name = "FieldMismatchError";
+  }
+}
+
+/** Checks the served X-Field-Meta against the request; throws FieldMismatchError on a mismatch. */
+export function checkServedMeta(meta: Pick<FieldMeta, "variable" | "valid_time" | "run_key">, variable: string, at: string, run?: string | null): void {
+  if (meta.variable !== variable) throw new FieldMismatchError(`Asked for ${variable}, the server sent ${String(meta.variable)}`);
+  const served = Date.parse(String(meta.valid_time));
+  if (!(served === Date.parse(at))) {
+    throw new FieldMismatchError(`${variable}: asked for ${at}, the server sent ${String(meta.valid_time)}`, String(meta.valid_time), String(meta.run_key));
+  }
+  if (run && meta.run_key !== run) {
+    throw new FieldMismatchError(`${variable}: asked for run ${run}, the server sent ${String(meta.run_key)}`, String(meta.valid_time), String(meta.run_key));
+  }
+}
+
+/** Fetches, checks, inflates and decodes one field. */
 export async function fetchField(variable: string, at: string, run?: string | null, signal?: AbortSignal): Promise<FieldGrid> {
   const res = await fetch(fieldUrl(variable, at, run), { credentials: "same-origin", signal });
+  if (res.status === 404) throw new FieldMismatchError(`Field ${variable} at ${at}: HTTP 404`);
   if (!res.ok) throw new Error(`Field ${variable} at ${at}: HTTP ${res.status}`);
   const meta = parseFieldMeta(res.headers.get("X-Field-Meta"));
+  checkServedMeta(meta, variable, at, run);
   return decodeField(await inflate(await res.arrayBuffer()), meta);
 }
 
+/** Field cache size: 12 wave fields per step (3 combined + 9 partitions) for the step on
+ * screen and both neighbours (36), plus the pressure and wind-overlay fields. */
+export const FIELD_STORE_CAPACITY = 48;
+
 /**
  * Decoded fields keyed by (model run, variable, valid time): each is downloaded and decoded
- * once and kept in an LRU of at most `capacity` fields (24, about 1 MB each at 0.5°) and at
+ * once and kept in an LRU of at most `capacity` fields (48, about 1 MB each at 0.5°) and at
  * most `maxBytes` of decoded values (64 MB: a finer backend grid, 0.25° at 4.2 MB a field,
- * keeps 15 instead of 24). In-flight requests are shared. The run is part of the key because
- * the index is re-read every few minutes: after a new model run, a valid time both runs
- * share must not show the previous run's field.
+ * keeps 15 instead of 48). In-flight requests are shared. The run is part of the key because
+ * the index is re-read every 5 minutes: after a new model run, a valid time both runs share
+ * must not show the previous run's field.
  */
 export class FieldStore {
   private readonly cache: LruCache<string, Promise<FieldGrid>>;
@@ -306,7 +388,7 @@ export class FieldStore {
   private total = 0;
 
   constructor(
-    capacity = 24,
+    capacity = FIELD_STORE_CAPACITY,
     private readonly loader: (variable: string, at: string, run?: string | null) => Promise<FieldGrid> = fetchField,
     readonly maxBytes = 64e6,
   ) {

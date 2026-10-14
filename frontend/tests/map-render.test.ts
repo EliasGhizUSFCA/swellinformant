@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { buildLut, LAYER_SCALES, RAMP } from "@/lib/map-colors";
-import type { FieldGrid } from "@/lib/map-fields";
+import type { Grid } from "@/lib/map-fields";
 import { mercLat, mercLon } from "@/lib/map-geo";
 import { renderField } from "@/lib/map-render";
-import { parseSettings, DEFAULT_SETTINGS, readSettings, writeSettings, SETTINGS_KEY } from "@/lib/map-settings";
+import { DEFAULT_SETTINGS, parseSettings, parseWaveSystems, readSettings, SETTINGS_KEY, WIND_UNIT_EVENT, WIND_UNIT_KEY, writeSettings } from "@/lib/map-settings";
 
 /** SYNTHETIC global 1° field: value = |lat| / 9 m, no data over a box (a fake "continent"). */
-function synthetic(): FieldGrid {
+function synthetic(): Grid {
   const nx = 360;
   const ny = 181;
   const values = new Float32Array(nx * ny);
@@ -71,17 +71,61 @@ describe("map settings", () => {
     expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings("not json")).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings("[1,2]").layer).toBe(DEFAULT_SETTINGS.layer);
+    // A settings object saved before the wind overlay and wave systems existed (v1) still loads.
     const s = parseSettings(JSON.stringify({ layer: "wind", pressure: true, heightUnits: "m", windUnits: "kn", particles: false, basemap: "streets" }));
-    expect(s).toEqual({ layer: "wind", pressure: true, heightUnits: "m", windUnits: "kn", particles: false, basemap: "streets" });
-    const bad = parseSettings(JSON.stringify({ layer: "rain", pressure: "yes", heightUnits: "yards", windUnits: "mph", particles: 1, basemap: "satellite" }));
+    expect(s).toEqual({
+      layer: "wind",
+      pressure: true,
+      heightUnits: "m",
+      windUnits: "kn",
+      particles: false,
+      basemap: "streets",
+      windOverlay: false,
+      waveSystems: ["primary", "secondary"],
+    });
+    // mph is a wind unit now (shared with the spot charts); "furlongs/h" is not.
+    const bad = parseSettings(JSON.stringify({ layer: "rain", pressure: "yes", heightUnits: "yards", windUnits: "furlongs/h", particles: 1, basemap: "satellite", windOverlay: "on", waveSystems: "all" }));
     expect(bad).toEqual(DEFAULT_SETTINGS);
+    expect(parseSettings(JSON.stringify({ windUnits: "mph" })).windUnits).toBe("mph");
+  });
+
+  it("parses the wave systems tolerantly", () => {
+    expect(parseWaveSystems(["windsea", "bogus", "windsea", "primary"])).toEqual(["windsea", "primary"]);
+    expect(parseWaveSystems(["combined"])).toEqual(["combined"]);
+    expect(parseWaveSystems(["combined", "secondary"])).toEqual(["secondary"]); // combined is an alternative, not an addition
+    expect(parseWaveSystems([])).toEqual(["primary", "secondary"]);
+    expect(parseWaveSystems(null)).toEqual(["primary", "secondary"]);
+    expect(parseSettings(JSON.stringify({ windOverlay: true, waveSystems: ["windsea"] }))).toMatchObject({ windOverlay: true, waveSystems: ["windsea"] });
+  });
+
+  it("shares the wind unit with the spot charts through swell.windUnit", () => {
+    window.localStorage.clear();
+    // The shared key wins over the map's own copy.
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({ windUnits: "kn" }));
+    window.localStorage.setItem(WIND_UNIT_KEY, "mph");
+    expect(readSettings().windUnits).toBe("mph");
+    window.localStorage.setItem(WIND_UNIT_KEY, "parsecs");
+    expect(readSettings().windUnits).toBe("kn");
+    // Writing the map settings writes the shared key and tells the page.
+    const events: string[] = [];
+    const listen = () => events.push("changed");
+    window.addEventListener(WIND_UNIT_EVENT, listen);
+    try {
+      writeSettings({ ...DEFAULT_SETTINGS, windUnits: "m/s" });
+      expect(window.localStorage.getItem(WIND_UNIT_KEY)).toBe("m/s");
+      expect(events).toEqual(["changed"]);
+      writeSettings({ ...DEFAULT_SETTINGS, windUnits: "m/s", basemap: "streets" });
+      expect(events).toEqual(["changed"]); // unchanged unit: no event
+    } finally {
+      window.removeEventListener(WIND_UNIT_EVENT, listen);
+    }
   });
 
   it("round-trips through localStorage and survives storage errors", () => {
     window.localStorage.clear();
-    writeSettings({ ...DEFAULT_SETTINGS, basemap: "streets" });
+    writeSettings({ ...DEFAULT_SETTINGS, basemap: "streets", windOverlay: true, waveSystems: ["windsea"] });
     expect(JSON.parse(window.localStorage.getItem(SETTINGS_KEY)!).basemap).toBe("streets");
-    expect(readSettings().basemap).toBe("streets");
+    expect(readSettings()).toMatchObject({ basemap: "streets", windOverlay: true, waveSystems: ["windsea"] });
     const getItem = Storage.prototype.getItem;
     const setItem = Storage.prototype.setItem;
     Storage.prototype.getItem = () => {

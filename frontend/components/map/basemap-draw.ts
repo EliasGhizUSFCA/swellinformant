@@ -1,9 +1,14 @@
 /**
  * Draws the dark vector basemap layers on one canvas, bottom to top: land (opaque, so it
- * also masks the colour field and particles at coastlines), country borders, isobars with
- * value labels, then country and city labels with greedy collision avoidance. Geometry is
- * pre-projected to Mercator units, so a redraw is a scale-and-offset per vertex per visible
- * world copy (the Pacific view needs the copies either side of the antimeridian).
+ * also masks the colour field and the wave crests at coastlines; translucent on the Wind
+ * layer, where the wind over land matters), country borders, isobars with value labels, then
+ * country and city labels with greedy collision avoidance. Geometry is pre-projected to
+ * Mercator units, so a redraw is a scale-and-offset per vertex per visible world copy (the
+ * Pacific view needs the copies either side of the antimeridian).
+ *
+ * Rings are not closed with closePath(): fill() closes every subpath itself, and the Natural
+ * Earth rings repeat their first point, so the coastline stroke is unchanged. closePath()
+ * after each of the ~2,500 rings cost 214 ms of a 234 ms redraw at zoom 2 (measured).
  */
 import { mercX, mercY, pathCopies, placeBoxes, worldCopies, type Box, type MercPath, type PixelView, type PlaceLabel } from "@/lib/map-geo";
 
@@ -30,9 +35,14 @@ export interface BasemapDrawOptions {
   isobars: IsobarPath[] | null;
   cities: CityLabel[] | null;
   zoom: number;
+  /** Land at LAND_ALPHA over the colour field (the Wind layer) instead of opaque. */
+  translucentLand?: boolean;
 }
 
 export const LAND_COLOR = "#2b2b2b";
+/** Land opacity with `translucentLand`: the wind colour and particles show through, dimmed. */
+export const LAND_ALPHA = 0.55;
+const TRANSLUCENT_LAND = `rgba(43, 43, 43, ${LAND_ALPHA})`;
 const LABEL_FONT = '500 12px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
 const CITY_FONT = '400 11px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
 const ISOBAR_FONT = '600 10px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
@@ -48,7 +58,7 @@ function visible(p: MercPath, v: PixelView, dx: number, margin = 2): boolean {
 }
 
 /** Adds the paths to the current canvas path, skipping vertices closer than ~0.7 px. */
-function tracePaths(ctx: CanvasRenderingContext2D, paths: MercPath[], v: PixelView, close: boolean): number {
+export function tracePaths(ctx: Pick<CanvasRenderingContext2D, "moveTo" | "lineTo">, paths: MercPath[], v: PixelView): number {
   let segments = 0;
   const w = v.worldPx;
   for (const k of pathCopies(v)) {
@@ -68,7 +78,6 @@ function tracePaths(ctx: CanvasRenderingContext2D, paths: MercPath[], v: PixelVi
         ly = y;
         segments++;
       }
-      if (close) ctx.closePath();
     }
   }
   return segments;
@@ -97,14 +106,14 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
   const g = o.geometry;
   if (o.vector && g) {
     ctx.beginPath();
-    tracePaths(ctx, g.land, v, true);
-    ctx.fillStyle = LAND_COLOR;
+    tracePaths(ctx, g.land, v);
+    ctx.fillStyle = o.translucentLand ? TRANSLUCENT_LAND : LAND_COLOR;
     ctx.fill("evenodd");
     ctx.strokeStyle = "rgba(255, 255, 255, 0.07)";
     ctx.lineWidth = 0.8;
     ctx.stroke();
     ctx.beginPath();
-    tracePaths(ctx, g.borders, v, false);
+    tracePaths(ctx, g.borders, v);
     ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
     ctx.lineWidth = 0.7;
     ctx.stroke();
@@ -116,7 +125,7 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
     const copies = pathCopies(v);
     isobarCount = o.isobars.filter((p) => copies.some((k) => visible(p, v, k * v.worldPx))).length;
     ctx.beginPath();
-    tracePaths(ctx, o.isobars, v, false);
+    tracePaths(ctx, o.isobars, v);
     ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
     ctx.lineWidth = 1;
     ctx.stroke();

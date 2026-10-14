@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { buildLut, LAYER_SCALES } from "@/lib/map-colors";
-import { FieldStore, fieldUrl, parseFieldMeta, type FieldGrid } from "@/lib/map-fields";
+import { FieldStore, fieldUrl, parseFieldMeta, type FieldGrid, type Grid } from "@/lib/map-fields";
 import { mercX, mercY, type PixelView } from "@/lib/map-geo";
 import { LAYERS } from "@/lib/map-layers";
 import { renderField } from "@/lib/map-render";
@@ -16,11 +16,11 @@ function hotNode(lat: number, lon: number): FieldGrid {
   const ny = 361;
   const values = new Float32Array(nx * ny).fill(0.5);
   values[Math.round((90 - lat) / 0.5) * nx + Math.round((lon + 180) / 0.5)] = 9;
-  return { nx, ny, lat0: 90, lon0: -180, dlat: 0.5, dlon: 0.5, values };
+  return { nx, ny, lat0: 90, lon0: -180, dlat: 0.5, dlon: 0.5, values, validTime: "2026-10-12T00:00:00Z", runKey: "synthetic", variable: "hs" };
 }
 
 /** Renders `g` at `zoom` centred on (lat, lon) and returns the brightest pixel's offset from the centre, in CSS px. */
-function peakOffset(g: FieldGrid, lat: number, lon: number, zoom: number, k = 2) {
+function peakOffset(g: Grid, lat: number, lon: number, zoom: number, k = 2) {
   const worldPx = 256 * 2 ** zoom;
   const width = 400;
   const height = 400;

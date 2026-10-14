@@ -392,7 +392,7 @@ test.describe("ocean layers (synthetic fields)", () => {
     await mockFieldsUnavailable(page, "Ocean layers need live NOAA data");
     const fieldRequests: string[] = [];
     page.on("request", (r) => {
-      if (/\/api\/map\/fields\/[a-z_]+\?/.test(r.url())) fieldRequests.push(r.url());
+      if (/\/api\/map\/fields\/[a-z0-9_]+\?/.test(r.url())) fieldRequests.push(r.url());
     });
     const { errors } = await openMap(page);
     // A short line on the map; the backend's own message is in the legend (checked below).

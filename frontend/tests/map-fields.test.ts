@@ -14,11 +14,11 @@ import {
   sampleGrid,
   waveEnergyGrid,
   waveEnergyKwPerM,
-  waveFlowGrids,
   windSpeedGrid,
   wrapsLongitude,
   type FieldGrid,
   type FieldMeta,
+  type Grid,
 } from "@/lib/map-fields";
 
 // All grids below are SYNTHETIC test data, not model output.
@@ -38,8 +38,13 @@ const META: FieldMeta = {
   nodata: 255,
 };
 
-function grid(values: number[], over: Partial<FieldGrid> = {}): FieldGrid {
+function grid(values: number[], over: Partial<Grid> = {}): Grid {
   return { nx: 4, ny: 3, lat0: 10, lon0: -180, dlat: 10, dlon: 90, values: Float32Array.from(values), ...over };
+}
+
+/** A grid as the store holds it: with the served metadata. */
+function field(values: number[], over: Partial<FieldGrid> = {}): FieldGrid {
+  return { ...grid(values), validTime: "2026-10-11T12:00:00Z", runKey: "synthetic", variable: "hs", ...over };
 }
 
 describe("field decoding", () => {
@@ -146,15 +151,6 @@ describe("derived quantities", () => {
     expect(() => waveEnergyGrid(grid(new Array(12).fill(1)), grid(new Array(12).fill(1), { dlat: 5 }))).toThrow(/different grids/);
   });
 
-  it("wave flow points TOWARDS direction + 180°, scaled by period", () => {
-    // waves from the west (270°) travel east: u > 0, v ≈ 0; from the north travel south
-    const f = waveFlowGrids(grid([270, 0, NaN, 0, 0, 0, 0, 0, 0, 0, 0, 0]), grid([10, 20, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
-    expect(f.u.values[0]).toBeCloseTo(1);
-    expect(f.v.values[0]).toBeCloseTo(0);
-    expect(f.u.values[1]).toBeCloseTo(0);
-    expect(f.v.values[1]).toBeCloseTo(-2);
-    expect(f.u.values[2]).toBeNaN();
-  });
 });
 
 describe("caching", () => {
@@ -170,7 +166,7 @@ describe("caching", () => {
   });
 
   it("FieldStore shares in-flight loads and forgets failures", async () => {
-    const g = grid(new Array(12).fill(1));
+    const g = field(new Array(12).fill(1));
     const loader = vi.fn(async (variable: string) => {
       if (variable === "bad") throw new Error("HTTP 404");
       return g;
@@ -186,7 +182,7 @@ describe("caching", () => {
   });
 
   it("FieldStore keeps at most `capacity` fields", async () => {
-    const s = new FieldStore(3, async () => grid(new Array(12).fill(0)));
+    const s = new FieldStore(3, async () => field(new Array(12).fill(0)));
     for (const t of ["t1", "t2", "t3", "t4"]) await s.load("hs", t);
     expect(s.has("hs", "t1")).toBe(false);
     expect(s.has("hs", "t4")).toBe(true);

@@ -9,7 +9,7 @@
 import { contours } from "d3-contour";
 import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 
-import type { FieldGrid } from "@/lib/map-fields";
+import type { Grid } from "@/lib/map-fields";
 import { wrapsLongitude } from "@/lib/map-fields";
 
 export const MAX_LAT = 85.0511287798;
@@ -298,10 +298,10 @@ export interface IsoLine {
   pts: Float64Array;
 }
 
-const isobarCache = new WeakMap<FieldGrid, IsoLine[]>();
+const isobarCache = new WeakMap<Grid, IsoLine[]>();
 
 /** `isobars(g)`, computed once per decoded grid (contouring a global grid takes a while). */
-export function isobarsFor(g: FieldGrid): IsoLine[] {
+export function isobarsFor(g: Grid): IsoLine[] {
   let lines = isobarCache.get(g);
   if (!lines) {
     lines = isobars(g);
@@ -315,7 +315,7 @@ export function isobarsFor(g: FieldGrid): IsoLine[] {
  * smooth at the scale of isobars, so contouring a 0.5° grid at 1° loses nothing visible and
  * takes about a third of the time (measured in Node: 175–300 ms → 55–70 ms for 720 × 361).
  */
-export function decimate(g: FieldGrid, stride: number): FieldGrid {
+export function decimate(g: Grid, stride: number): Grid {
   if (stride <= 1 || g.nx % stride !== 0) return g;
   const nx = g.nx / stride;
   const ny = Math.floor((g.ny - 1) / stride) + 1;
@@ -331,7 +331,7 @@ export function decimate(g: FieldGrid, stride: number): FieldGrid {
  * along the grid border to close its polygons are dropped, leaving the open isolines. Cells
  * without data are filled with the grid mean first (pressure normally has none).
  */
-export function isobars(full: FieldGrid, interval = 4, maxCells = 140_000): IsoLine[] {
+export function isobars(full: Grid, interval = 4, maxCells = 140_000): IsoLine[] {
   const g = decimate(full, Math.max(1, Math.ceil(Math.sqrt((full.nx * full.ny) / maxCells))));
   const wraps = wrapsLongitude(g);
   const W = wraps ? g.nx + 1 : g.nx;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ParticleAnimator, particleCount } from "@/components/map/particles";
-import type { FieldGrid } from "@/lib/map-fields";
+import type { Grid } from "@/lib/map-fields";
 import { viewToLatLng, type PixelView } from "@/lib/map-geo";
 
 /** A canvas context stand-in that records the line segments drawn. */
@@ -25,7 +25,7 @@ function recorder() {
 }
 
 // SYNTHETIC flow: 5 m/s eastward wind on a global 10° grid, no data west of 0°.
-function halfGrid(value: number): FieldGrid {
+function halfGrid(value: number): Grid {
   const nx = 36;
   const ny = 19;
   const values = new Float32Array(nx * ny);

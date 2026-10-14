@@ -2,7 +2,7 @@ import type { FeatureCollection, Geometry } from "geojson";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import { describe, expect, it } from "vitest";
 
-import type { FieldGrid } from "@/lib/map-fields";
+import type { Grid } from "@/lib/map-fields";
 import {
   countryLabels,
   decimate,
@@ -186,7 +186,7 @@ describe("antimeridian", () => {
 });
 
 /** SYNTHETIC pressure field (hPa): a 985 hPa low centred at (latC, lonC) on a global 2° grid. */
-function syntheticLow(latC: number, lonC: number): FieldGrid {
+function syntheticLow(latC: number, lonC: number): Grid {
   const nx = 180;
   const ny = 91;
   const values = new Float32Array(nx * ny);
@@ -239,7 +239,7 @@ describe("isobars", () => {
   });
 
   it("contours large grids on a decimated copy (every 2nd row and column)", () => {
-    const g: FieldGrid = { nx: 8, ny: 5, lat0: 90, lon0: -180, dlat: 45, dlon: 45, values: Float32Array.from({ length: 40 }, (_, k) => k) };
+    const g: Grid = { nx: 8, ny: 5, lat0: 90, lon0: -180, dlat: 45, dlon: 45, values: Float32Array.from({ length: 40 }, (_, k) => k) };
     const d = decimate(g, 2);
     expect([d.nx, d.ny, d.dlat, d.dlon]).toEqual([4, 3, 90, 90]);
     expect(Array.from(d.values)).toEqual([0, 2, 4, 6, 16, 18, 20, 22, 32, 34, 36, 38]);
@@ -250,7 +250,7 @@ describe("isobars", () => {
   });
 
   it("returns nothing for a flat or empty field and caches per grid", () => {
-    const flat: FieldGrid = { nx: 4, ny: 3, lat0: 10, lon0: -180, dlat: 10, dlon: 90, values: new Float32Array(12).fill(1013) };
+    const flat: Grid = { nx: 4, ny: 3, lat0: 10, lon0: -180, dlat: 10, dlon: 90, values: new Float32Array(12).fill(1013) };
     expect(isobars(flat)).toEqual([]);
     expect(isobars({ ...flat, values: new Float32Array(12).fill(NaN) })).toEqual([]);
     const g = syntheticLow(10, 10);
