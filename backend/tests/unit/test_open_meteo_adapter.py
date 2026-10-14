@@ -399,6 +399,24 @@ def test_availability_wait_keeps_the_previous_run_until_ten_minutes_pass() -> No
     assert rec.data_calls() == []
 
 
+def test_a_newer_readable_run_ready_before_the_fetch_is_read_on_a_quick_retry() -> None:
+    """The run was identified from the 00Z metadata; by the fetch the 06Z run is ready:
+    nothing is requested, and the task retries within a minute to read the newer run."""
+    old_init = datetime(2026, 10, 14, 0, tzinfo=UTC)
+    new_init = old_init + timedelta(hours=6)
+    available = datetime(2026, 10, 14, 11, 16, tzinfo=UTC)
+    rec = Recorder(meta=meta_at(old_init, available - timedelta(hours=6)))
+    p = provider(rec)
+    run = p.current_run(available + timedelta(minutes=30))
+    assert run.wave_model_run_at == old_init
+    rec.meta = meta_at(new_init, available)
+    p.clock = lambda: available + timedelta(minutes=30)
+    with pytest.raises(RunNotServedError, match="read on the retry") as newer:
+        p.fetch([PIPELINE], run)
+    assert newer.value.retry_after_s == 60.0
+    assert rec.data_calls() == []
+
+
 def test_a_run_published_during_the_fetch_is_never_stored_under_the_old_key() -> None:
     state = {"meta_reads": 0}
     new = meta_at(INIT + timedelta(hours=6), INIT + timedelta(hours=11))

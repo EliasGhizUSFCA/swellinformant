@@ -556,6 +556,12 @@ class OpenMeteoFamilyProvider(ForecastProvider):
                     f"{self.wait.total_seconds() / 60:g} min after that",
                     retry_after_s=max(30.0, wait_s + 30.0),
                 )
+            if meta.init_time > init and self._allowed(meta.init_time):
+                raise RunNotServedError(
+                    f"Open-Meteo published {domain} run {meta.init_time:%Y-%m-%d %H}Z while run "
+                    f"{init:%Y-%m-%d %H}Z was being acquired; the newer run is read on the retry",
+                    retry_after_s=60.0,
+                )
             if meta.init_time > init:
                 raise RunNotServedError(
                     f"Open-Meteo now serves {domain} run {meta.init_time:%Y-%m-%d %H}Z, which "
