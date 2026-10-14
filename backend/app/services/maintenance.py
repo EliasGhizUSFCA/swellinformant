@@ -13,7 +13,8 @@
 * notifications older than RETENTION_NOTIFICATION_DAYS are deleted;
 * the prediction archive, forecasts at observation stations, buoy observations and
   verification pairs are kept for RETENTION_ARCHIVE_DAYS (they are the only record of
-  past forecast skill, so they outlive forecast runs by far).
+  past forecast skill, so they outlive forecast runs by far);
+* past tide predictions are pruned by app.services.tides.maintenance.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ from app.models import (
 from app.models.enums import ForecastRunStatus, MatchStatus
 from app.models.forecast_engine import MapField
 from app.services.map_fields import servable_runs_query
+from app.services.tides.maintenance import prune_tide_predictions
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +175,7 @@ def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
         ("prediction_validation", PredictionValidation, PredictionValidation.valid_time),
     ):
         out[key] = db.execute(delete(model).where(column < archive_cutoff)).rowcount or 0  # type: ignore[attr-defined]
+    out["tide_predictions"] = prune_tide_predictions(db, now)
     db.commit()
     logger.info("Cleanup: %s", out)
     return out

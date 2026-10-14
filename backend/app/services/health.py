@@ -20,6 +20,7 @@ It checks, with plain reasons:
   against DATA_HEALTH_OBSERVATION_STALE_HOURS (default: the ingestion look-back window).
 * **Heartbeat**: the newest finished job of any kind (this check's own job excluded).
 * **Storage**: the database size, against DATA_HEALTH_DATABASE_MAX_GB when that is set.
+* **Tides**: the problems app.services.tides.health.tide_freshness reports.
 
 Overall status: ``failing`` when the product cannot serve fresh forecasts (no forecast
 source is fresh) or no background job has finished for DATA_HEALTH_HEARTBEAT_MINUTES
@@ -67,6 +68,7 @@ from app.services.forecasts.registry import (
     configured_source_codes,
 )
 from app.services.map_fields import map_fields_mode, servable_runs
+from app.services.tides.health import tide_freshness
 from app.workers.schedule import (
     DATA_HEALTH_TASK,
     NEXT_STAGE,
@@ -661,7 +663,18 @@ def data_health(
     map_fields, map_problems = _check_map_fields(db, settings, now)
     observations, obs_problems = _check_observations(db, settings, now)
     storage, storage_problems = _check_storage(db, settings)
-    problems = [*source_problems, *job_problems, *map_problems, *obs_problems, *storage_problems]
+    tide_problems = [
+        Problem(str(p["key"]), p["severity"], str(p["message"]), p.get("detail"))
+        for p in tide_freshness(db, now)
+    ]
+    problems = [
+        *source_problems,
+        *job_problems,
+        *map_problems,
+        *obs_problems,
+        *storage_problems,
+        *tide_problems,
+    ]
     problems.sort(key=lambda p: (p.severity != "failing", p.key))
     out = DataHealthOut(
         status=overall_status(problems),

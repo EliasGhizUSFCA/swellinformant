@@ -18,6 +18,8 @@ from app.api import (
     searches,
     spots,
     system,
+    tides,
+    timeline,
     users,
     webhooks,
 )
@@ -82,6 +84,8 @@ def create_app() -> FastAPI:
         webhooks,
         accuracy,
         map_fields,
+        tides,
+        timeline,
     ):
         app.include_router(module.router)
     if settings.enable_dev_endpoints:

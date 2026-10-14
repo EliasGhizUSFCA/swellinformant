@@ -238,6 +238,14 @@ def ingest_observations(self: Task) -> dict[str, Any]:
     return run_job("observations.ingest", ingest_all, task_id=self.request.id, lock_ttl=1800)
 
 
+@celery_app.task(name="tides.acquire", bind=True)
+def acquire_tides_task(self: Task) -> dict[str, Any]:
+    """Daily tide predictions for every spot's tide station (TIDE_PROVIDERS)."""
+    from app.services.tides.ingest import acquire_tides
+
+    return run_job("tides.acquire", acquire_tides, task_id=self.request.id, lock_ttl=1800)
+
+
 @celery_app.task(name="verification.collect_point_forecasts", bind=True)
 def collect_point_forecasts(self: Task) -> dict[str, Any]:
     """Archive model forecasts at observation stations (VERIFICATION_ENABLED)."""

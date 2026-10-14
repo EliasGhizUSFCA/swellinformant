@@ -56,6 +56,12 @@ def optional_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
             "task": "forecasts.acquire_ensemble",
             "schedule": crontab(hour="1,7,13,19", minute=40),
         }
+    if settings.tide_provider_list:
+        # Tide predictions change slowly: one daily request (or local computation) per station.
+        jobs["tide-acquisition"] = {
+            "task": "tides.acquire",
+            "schedule": crontab(hour=2, minute=20),
+        }
     if settings.observations_enabled:
         jobs["observation-ingest"] = {
             "task": "observations.ingest",
