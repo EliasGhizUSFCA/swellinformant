@@ -15,10 +15,21 @@ from typing import Any
 from app.models.enums import DestinationMode, QualityLabel, WindRequirement
 from app.services.geo import in_window
 from app.services.surf_quality.scoring import label_for_score, min_score_for_label
+from app.services.surf_quality.wind import wind_strength
 from app.services.swell_detection.clustering import Step, best_cluster, cluster_steps
 
+# Wind requirements work on the stored direction classes (wind_relation): "offshore" accepts
+# GOOD_WIND, "not onshore" rejects BAD_WIND. The wind's strength is judged by the score
+# (strong offshore and chop lower the wind fit), not by redefining the classes.
 GOOD_WIND = {"glassy", "offshore", "cross-offshore"}
 BAD_WIND = {"onshore", "cross-onshore"}
+# Optional rules, off by default (owner decisions; docs/SURF_SCORING.md section 3c):
+# * EXCLUDE_STRONG_OFFSHORE: an offshore or cross-offshore hour whose wind is "strong"
+#   (Beaufort 5 and up, 29 km/h or more) fails the "offshore" requirement;
+# * LIGHT_ONSHORE_IS_NOT_ONSHORE: a "light" or calmer onshore or cross-onshore hour (below
+#   12 km/h) passes the "not onshore" requirement.
+EXCLUDE_STRONG_OFFSHORE = False
+LIGHT_ONSHORE_IS_NOT_ONSHORE = False
 
 
 @dataclass(frozen=True)
@@ -81,10 +92,7 @@ def step_meets(pred: Any, fc: Any, c: SearchCriteria) -> bool:
         fc.wind_speed_kmh is None or fc.wind_speed_kmh > c.max_wind_kmh
     ):
         return False
-    relation = pred.wind_relation
-    if c.wind_requirement == WindRequirement.OFFSHORE and relation not in GOOD_WIND:
-        return False
-    if c.wind_requirement == WindRequirement.NOT_ONSHORE and relation in BAD_WIND:
+    if not wind_meets(pred.wind_relation, fc.wind_speed_kmh, c.wind_requirement):
         return False
     if c.swell_direction_min is not None and c.swell_direction_max is not None:
         direction = fc.primary_swell_direction_deg
@@ -96,6 +104,18 @@ def step_meets(pred: Any, fc: Any, c: SearchCriteria) -> bool:
         consistency = (pred.components or {}).get("consistency")
         if consistency is None or consistency * 100 < c.min_consistency:
             return False
+    return True
+
+
+def wind_meets(relation: str, speed_kmh: float | None, requirement: WindRequirement) -> bool:
+    """Whether an hour's wind satisfies a search's wind requirement (see GOOD_WIND)."""
+    strength = wind_strength(speed_kmh) if speed_kmh is not None else None
+    if requirement == WindRequirement.OFFSHORE:
+        if relation not in GOOD_WIND:
+            return False
+        return not (EXCLUDE_STRONG_OFFSHORE and relation != "glassy" and strength == "strong")
+    if requirement == WindRequirement.NOT_ONSHORE and relation in BAD_WIND:
+        return LIGHT_ONSHORE_IS_NOT_ONSHORE and strength in ("glassy", "light")
     return True
 
 
