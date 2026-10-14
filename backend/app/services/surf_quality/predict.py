@@ -13,12 +13,22 @@ its explanation names both relations when they differ, and its confidence reason
 "Sources disagree about which wind is offshore here." The score keeps the profile's
 direction. Decision records are read from the data directory once per run; a change to
 that file alone takes effect at the next rescoring.
+
+The tide stage of each hour comes from the stored tide predictions
+(``tides.stage.tide_stages_for``: 0 at the preceding low water, 1 at the next high water),
+never from model sea level; demo runs without tide predictions use their synthetic sea level
+(labelled source "demo"). The tide is scored only when the spot's tide research class is
+moderate or high, its tide decision is not disputed and it has a preference; otherwise the
+stored components say why (``tide_excluded_reason``). Gusts enter the wind fit only with
+WIND_GUST_SCORING=scored and a documented gust definition.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -27,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.database import utcnow
 from app.models import (
     ForecastEnsembleStat,
@@ -39,6 +50,7 @@ from app.models import (
 )
 from app.models.enums import ForecastRunStatus
 from app.services.ml.hook import RunCorrector
+from app.services.research import current_assessments
 from app.services.research.decisions import (
     DecisionValidationError,
     WindDispute,
@@ -73,6 +85,7 @@ from app.services.surf_quality.uncertainty import (
     breaking_uncertainty,
     confidence_index,
 )
+from app.services.tides.stage import TideStage, tide_stages_for
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +111,70 @@ def tide_stages(times: list[datetime], levels: list[float | None]) -> list[float
     return [
         None if pd.isna(v) else round(float(v), 3) for v in stage.reindex(pd.DatetimeIndex(times))
     ]
+
+
+DEMO_TIDE_SOURCE = "demo"
+
+
+def demo_tide_stages(
+    times: Sequence[datetime], levels: Sequence[float | None]
+) -> dict[datetime, TideStage]:
+    """Tide stages of a DEMO run from its synthetic sea level (``tide_stages`` above, with
+    rising from the neighbouring levels). Never used for real forecasts: their sea level has
+    no datum and model sea level is not a tide prediction."""
+    stages = tide_stages(list(times), list(levels))
+    out: dict[datetime, TideStage] = {}
+    for i, (t, stage) in enumerate(zip(times, stages, strict=True)):
+        level = levels[i]
+        if stage is None or level is None:
+            continue
+        nxt = levels[i + 1] if i + 1 < len(levels) else None
+        prev = levels[i - 1] if i > 0 else None
+        rising = nxt > level if nxt is not None else (prev is not None and level > prev)
+        window = [v for v in levels[max(0, i - 6) : i + 7] if v is not None]
+        out[t] = TideStage(
+            stage=stage,
+            rising=bool(rising),
+            range_m=round(max(window) - min(window), 3),
+            source=DEMO_TIDE_SOURCE,
+        )
+    return out
+
+
+def tide_research_classes(db: Session) -> dict[int, str | None]:
+    """spot_id -> the tide class ("high" | "moderate" | "low") of its current research
+    assessment; spots without an assessment are absent."""
+    out: dict[int, str | None] = {}
+    for spot_id, row in current_assessments(db).items():
+        tide = (row.per_variable or {}).get("tide")
+        out[spot_id] = str(tide["class"]) if isinstance(tide, dict) and tide.get("class") else None
+    return out
+
+
+def scoring_params(
+    spot: SurfSpot,
+    tide_classes: dict[int, str | None],
+    decisions: dict[str, list[dict[str, Any]]],
+) -> SpotParams:
+    """The spot's scoring parameters, with the tide research class and tide decision that
+    decide whether its tide preference is scored."""
+    record = record_for(decisions, spot.slug, "tide_preference")
+    return replace(
+        SpotParams.from_orm(spot),
+        tide_research_class=tide_classes.get(spot.id),
+        tide_decision=str(record["decision"]) if record is not None else None,
+    )
+
+
+def _tide_detail(stage: TideStage | None) -> dict[str, Any] | None:
+    if stage is None:
+        return None
+    return {
+        "stage": round(stage.stage, 3),
+        "rising": stage.rising,
+        "range_m": round(stage.range_m, 3),
+        "source": stage.source,
+    }
 
 
 def _ensemble_index(
@@ -202,6 +279,8 @@ def compute_predictions_for_run(
     corrector = None if run.source.kind == "blend" else RunCorrector.for_run(db, run)
     spots = {s.id: s for s in db.scalars(select(SurfSpot)).all()}
     decisions = _profile_decisions()
+    tide_classes = tide_research_classes(db)
+    gust_scoring = get_settings().wind_gust_scoring == "scored"
     by_spot: dict[int, list[WaveForecast]] = defaultdict(list)
     for row in db.scalars(
         select(WaveForecast)
@@ -215,13 +294,18 @@ def compute_predictions_for_run(
         spot = spots.get(spot_id)
         if spot is None:
             continue
-        params = SpotParams.from_orm(spot)
+        params = scoring_params(spot, tide_classes, decisions)
         stations = station_codes(spot)
         research = ctx.research.get(spot_id)
         dispute = spot_wind_dispute(spot, research, decisions)
         alternative = dispute.alternative_offshore_deg if dispute is not None else None
-        stages = tide_stages([f.valid_time for f in forecasts], [f.sea_level_m for f in forecasts])
-        for f, stage in zip(forecasts, stages, strict=True):
+        times = [f.valid_time for f in forecasts]
+        stages = tide_stages_for(db, spot_id, times)
+        if not stages and run.source.is_demo:
+            stages = demo_tide_stages(times, [f.sea_level_m for f in forecasts])
+        for f in forecasts:
+            tide = stages.get(f.valid_time)
+            stage = None if tide is None else round(tide.stage, 3)
             sea = SeaState.from_orm(f, tide_stage=stage)
             ml_label, ml_info = _ml_correction(f), (f.extra or {}).get("ml_corrections")
             if corrector is not None:
@@ -229,7 +313,13 @@ def compute_predictions_for_run(
                 if hit is not None:
                     sea = sea.scaled(hit[0])
                     ml_label, ml_info = corrector.label, hit[1]
-            result = evaluate(sea, params, alternative_offshore_deg=alternative)
+            result = evaluate(
+                sea,
+                params,
+                alternative_offshore_deg=alternative,
+                gust_scoring=gust_scoring,
+                tide_detail=_tide_detail(tide),
+            )
             dispute_entry = (
                 None
                 if dispute is None
@@ -310,7 +400,7 @@ def compute_predictions_for_run(
                     "score": result.score,
                     "label": result.label,
                     "components": {
-                        **result.components,
+                        **result.stored_components(),
                         "run_agreement": agreement,
                         "tide_stage": stage,
                         "uncertainty": unc.as_dict(),
