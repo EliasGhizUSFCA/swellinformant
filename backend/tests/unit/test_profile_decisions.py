@@ -22,6 +22,7 @@ from app.services.research.decisions import (
     propose_all,
     validate_decisions,
     wind_dispute,
+    wind_profile_issues,
 )
 from app.services.research.evidence import parse_evidence
 from app.services.research.values import profile_values
@@ -331,6 +332,40 @@ def test_lint_lists_unexplained_geometry_missing_and_outdated_records() -> None:
     assert lint({"x": spot}, {"x": 330.0}, {}, {}) == []  # 15 deg from straight offshore
 
 
+def test_lint_flags_research_wind_profiles_without_a_directly_read_source() -> None:
+    spot = {
+        "offshore_wind_direction": 215,
+        "optimal_swell_direction_min": 200,
+        "optimal_swell_direction_max": 230,
+        "tide_preference": "mid",
+        "wave_height_min_ft": 4,
+        "wave_height_max_ft": 12,
+        "min_swell_period_s": 10,
+        "ideal_swell_period_s": 14,
+        "best_months": [6, 7],
+    }
+    sector = {"from_min": 157.5, "from_max": 202.5, "factor": 0.5, "sources": ["a"]}
+    profile = {"shelter": [sector], "data_quality": "research", "sources": ["b", "c"]}
+    evidence = {"x": {"a": "fetched", "b": "web_search"}}
+    issues = lint({"x": spot}, {"x": 35.0}, {}, {}, wind_profiles={"x": profile}, evidence=evidence)
+    assert [(i.kind, i.message) for i in issues] == [
+        ("wind_profile", "cites 'b', which was not read directly (web_search)"),
+        ("wind_profile", "cites unknown evidence key 'c'"),
+    ]
+    clean = {**profile, "sources": ["a"]}
+    assert (
+        lint({"x": spot}, {"x": 35.0}, {}, {}, wind_profiles={"x": clean}, evidence=evidence) == []
+    )
+    # Heuristic defaults cite nothing; without the inputs the check does not run.
+    heuristic = {"shelter": [], "data_quality": "heuristic default"}
+    assert wind_profile_issues("x", heuristic, {}) == []
+    assert lint({"x": spot}, {"x": 35.0}, {}, {}) == []
+    empty = {"shelter": [], "data_quality": "research"}
+    assert [i.message for i in wind_profile_issues("x", empty, {})] == [
+        "research wind profile without sources"
+    ]
+
+
 def _tide_ev(key: str, tide: str, agrees: bool) -> dict[str, Any]:
     return {
         "source_key": key,
@@ -376,7 +411,15 @@ def test_committed_decisions_are_valid_and_are_the_rules_decisions() -> None:
     # Every contradicted field of the current assessment has a record, and every kept or
     # disputed record is what the rule gives today.
     normals = {}  # geometry is checked by the CLI against the database's shore normals
-    issues = lint(by_slug, normals, assessments, decisions)
+    profiles = json.loads((DEFAULT_DATA_DIR / "physical_profiles.json").read_text("utf-8"))
+    winds = {slug: e["wind_profile"] for slug, e in profiles.items() if "wind_profile" in e}
+    retrievals = {
+        slug: {src["key"]: src["retrieval"] for src in e["sources"]}
+        for slug, e in extra["evidence"]["spots"].items()
+    }
+    issues = lint(
+        by_slug, normals, assessments, decisions, wind_profiles=winds, evidence=retrievals
+    )
     assert issues == [], issues
     # A changed record is what the rule gave at the old value.
     changed = [rec for rec in records if rec["decision"] == "changed"]

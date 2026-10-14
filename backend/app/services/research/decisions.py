@@ -45,6 +45,7 @@ from app.services.geo import angular_diff
 from app.services.research.assess import SOURCE_TIERS, TIER_C, publisher_groups
 from app.services.research.values import TIDE_ORDER, compare_value
 from app.services.seed import SeedValidationError, resolve_data_dir
+from app.services.surf_quality.wind import cited_keys
 
 DECISIONS_FILENAME = "profile_decisions.json"
 FORMAT_VERSION = 1
@@ -578,7 +579,7 @@ def record_for(
 @dataclass(frozen=True)
 class LintIssue:
     slug: str
-    kind: str  # "geometry" | "missing_record" | "rule_differs" | "file"
+    kind: str  # "geometry" | "missing_record" | "rule_differs" | "wind_profile" | "file"
     message: str
 
 
@@ -593,6 +594,9 @@ def lint(
     assessments: dict[str, dict[str, Any]],
     decisions: dict[str, list[dict[str, Any]]],
     max_gap_deg: float = GEOMETRY_LINT_DEG,
+    *,
+    wind_profiles: dict[str, dict[str, Any]] | None = None,
+    evidence: dict[str, dict[str, str]] | None = None,
 ) -> list[LintIssue]:
     """``research lint`` (pure): every issue, sorted by spot.
 
@@ -601,14 +605,21 @@ def lint(
     * missing_record: the current assessment has contradicting evidence for a decision
       field without a rule-outcome record;
     * rule_differs: a kept or disputed record whose decision the rule no longer gives
-      (the evidence or the profile changed since it was decided).
+      (the evidence or the profile changed since it was decided);
+    * wind_profile: a "research" wind profile (tolerance, shelter) that cites an evidence
+      key the spot does not have, or one that was not read directly (only with
+      ``wind_profiles`` and ``evidence``).
 
     ``spots``: slug -> spots.json-like mapping; ``shore_normals``: slug -> the shore normal
-    the model uses; ``assessments``: slug -> current assessment ``per_variable``.
+    the model uses; ``assessments``: slug -> current assessment ``per_variable``;
+    ``wind_profiles``: slug -> stored wind profile; ``evidence``: slug -> {evidence key:
+    retrieval}.
     """
     issues: list[LintIssue] = []
     for slug in sorted(spots):
         spot = spots[slug]
+        if wind_profiles is not None and evidence is not None:
+            issues += wind_profile_issues(slug, wind_profiles.get(slug), evidence.get(slug, {}))
         records = decisions.get(slug, [])
         normal = shore_normals.get(slug)
         offshore = float(spot["offshore_wind_direction"])
@@ -651,6 +662,31 @@ def lint(
                     )
                 )
     return issues
+
+
+def wind_profile_issues(
+    slug: str, wind_profile: dict[str, Any] | None, evidence: dict[str, str]
+) -> list[LintIssue]:
+    """Lint issues of one stored wind profile: research values whose cited evidence key is
+    missing or was not read directly ("fetched")."""
+    if not wind_profile or wind_profile.get("data_quality") != "research":
+        return []
+    out: list[LintIssue] = []
+    for key in cited_keys(wind_profile):
+        retrieval = evidence.get(key)
+        if retrieval is None:
+            out.append(LintIssue(slug, "wind_profile", f"cites unknown evidence key {key!r}"))
+        elif retrieval != FETCHED:
+            out.append(
+                LintIssue(
+                    slug,
+                    "wind_profile",
+                    f"cites {key!r}, which was not read directly ({retrieval})",
+                )
+            )
+    if not cited_keys(wind_profile):
+        out.append(LintIssue(slug, "wind_profile", "research wind profile without sources"))
+    return out
 
 
 def profile_from_spot(spot: dict[str, Any]) -> dict[str, Any]:
