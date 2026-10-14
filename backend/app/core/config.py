@@ -13,9 +13,13 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ForecastProviderName = Literal["open_meteo", "windy", "demo"]
 FlightProviderName = Literal["duffel", "amadeus", "demo"]
 EmailProviderName = Literal["console", "mailpit", "smtp", "resend", "sendgrid"]
+# FORECAST_PROVIDERS tokens. "open_meteo" is the Open-Meteo GFS family, "open_meteo_ecmwf"
+# the Open-Meteo ECMWF family; "windy" also needs WINDY_TERMS_ACKNOWLEDGED.
+FORECAST_PROVIDER_TOKENS = frozenset(
+    {"demo", "noaa_gfs", "ecmwf_ifs", "open_meteo", "open_meteo_ecmwf", "windy"}
+)
 # Providers that capture mail locally for development: nothing reaches a real mailbox.
 CAPTURE_EMAIL_PROVIDERS = frozenset({"console", "mailpit"})
 SmsProviderName = Literal["console", "twilio", "disabled"]
@@ -70,7 +74,10 @@ class Settings(BaseSettings):
     trusted_proxy_count: int = 1
 
     # ------------------------------------------------------------------ forecasts
-    # Comma separated, in priority order. The first provider is the primary source.
+    # Comma separated, in priority order. The first provider is the primary source. Tokens
+    # (FORECAST_PROVIDER_TOKENS): demo, noaa_gfs, ecmwf_ifs, open_meteo (Open-Meteo, GFS
+    # family), open_meteo_ecmwf (Open-Meteo, ECMWF family) and windy (only with
+    # WINDY_TERMS_ACKNOWLEDGED, see the validator).
     forecast_providers: str = "demo"
     forecast_days: int = Field(default=16, ge=3, le=16)
     forecast_refresh_minutes: int = 180
@@ -79,8 +86,41 @@ class Settings(BaseSettings):
     forecast_http_timeout_seconds: float = 30.0
     forecast_daily_request_quota: int = 5000
     open_meteo_api_key: str | None = None
+    # Deprecated aliases, read only by the single-model Open-Meteo adapter: when set
+    # explicitly they override OPEN_METEO_GFS_WAVE_MODELS / OPEN_METEO_GFS_ATMOS_MODEL (see
+    # open_meteo_gfs_wave_model_list and open_meteo_gfs_atmos_model_name).
     open_meteo_wave_model: str = "ncep_gfswave025"
     open_meteo_atmos_model: str = "gfs_seamless"
+    # Open-Meteo, GFS family (FORECAST_PROVIDERS token "open_meteo"). Wave models in routing
+    # order: ncep_gfswave016 covers only about 52.5N..15S (HTTP 400 "No data is available for
+    # this location" outside), ncep_gfswave025 is global; one model per request.
+    open_meteo_gfs_wave_models: str = "ncep_gfswave016,ncep_gfswave025"
+    # One model run per family. "gfs_seamless" (HRRR near the US, GFS elsewhere) is also
+    # accepted; the run then records both init times (RunInfo.model_runs).
+    open_meteo_gfs_atmos_model: str = "gfs_global"
+    # Open-Meteo, ECMWF family (token "open_meteo_ecmwf").
+    open_meteo_ecmwf_wave_model: str = "ecmwf_wam025"
+    open_meteo_ecmwf_atmos_model: str = "ecmwf_ifs025"
+    # Grid cell Open-Meteo samples for a coordinate: "sea" picks the nearest sea cell (wind
+    # over water, as at a break), "land" its default land preference, "nearest" either.
+    open_meteo_cell_selection: Literal["sea", "nearest", "land"] = "sea"
+    # A new model run is used only this long after Open-Meteo reports it available (meta.json).
+    open_meteo_availability_wait_minutes: int = Field(default=10, ge=0, le=180)
+    # Keep only the model's native output steps (no Open-Meteo-interpolated hours).
+    open_meteo_native_steps_only: bool = True
+    # Call budgets (free tier, Open-Meteo pricing page): weighted calls, not HTTP requests.
+    open_meteo_calls_per_minute: int = Field(default=600, ge=1)
+    open_meteo_calls_per_hour: int = Field(default=5000, ge=1)
+    open_meteo_calls_per_day: int = Field(default=10000, ge=1)
+    open_meteo_calls_per_month: int = Field(default=300000, ge=1)
+    # Windy's terms forbid storing its data and derived databases: the provider token is refused
+    # unless the operator confirms a licence that allows this use (docs/API_SETUP_REQUIRED.md).
+    windy_terms_acknowledged: bool = False
+    # Provider HTTP response cache in Redis (TTL = the model update interval). Bodies larger
+    # than the byte limit are not cached; at most MAX_KEYS entries.
+    provider_response_cache_enabled: bool = True
+    provider_response_cache_max_bytes: int = Field(default=2_000_000, ge=0)
+    provider_response_cache_max_keys: int = Field(default=200, ge=0)
 
     # NOAA open data on AWS (direct GRIB2 by byte range; no key needed).
     # Bandwidth (measured): ~24 MB per forecast step for all 50 spots (15 MB without the
@@ -102,10 +142,15 @@ class Settings(BaseSettings):
     gefs_step_hours: int = Field(default=6, ge=3, le=12)
     gefs_max_lead_hours: int = Field(default=240, ge=24, le=384)
     gefs_availability_lag_hours: float = 7.5
+    # GEFS-Wave mean/spread records read per step, and the cycles read (UTC hours).
+    gefs_stat_fields: str = "HTSGW,PERPW"
+    gefs_cycles: str = "00,06,12,18"
     # ECMWF open data (CC BY 4.0, attribution required).
     ecmwf_base_url: str = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
     ecmwf_max_lead_hours: int = Field(default=240, ge=24, le=360)
     ecmwf_availability_lag_hours: float = 8.0
+    # Wave parameters read from ECMWF open data (comma separated GRIB short names).
+    ecmwf_wave_params: str = "swh,mwd,pp1d,mwp"
     # Shared by the GRIB ingesters.
     grib_download_workers: int = Field(default=6, ge=1, le=16)
     grib_max_cell_distance_km: float = 60.0
@@ -125,6 +170,25 @@ class Settings(BaseSettings):
         "https://met-office-marine-observations-data.s3.eu-west-2.amazonaws.com"
     )
     ndbc_base_url: str = "https://www.ndbc.noaa.gov"
+    # Read NDBC's 5-day files (5day2) when the look-back window fits in them.
+    ndbc_use_5day: bool = True
+    # Quality-controlled buoy observations are kept this long (independent of the archive).
+    observation_retention_days: int = Field(default=3650, ge=1)
+
+    # ------------------------------------------------------------------ tides
+    # Comma separated, in priority order: noaa_coops (NOAA CO-OPS predictions, US stations),
+    # harmonic_model (committed harmonic constants evaluated locally). Empty = no tides, and
+    # the daily tides.acquire job is not scheduled.
+    tide_providers: str = "noaa_coops,harmonic_model"
+    noaa_coops_base_url: str = "https://api.tidesandcurrents.noaa.gov"
+    # The "application" parameter CO-OPS asks callers to send; empty = APP_NAME.
+    noaa_coops_application: str = ""
+    tide_model: Literal["eot20", "fes2022"] = "eot20"
+    # Harmonic constants per spot (relative to the backend working directory or absolute).
+    tide_constants_path: str = "data/tides/constants_eot20.json"
+    tide_horizon_days: int = Field(default=16, ge=1, le=31)
+    # Past tide predictions kept (the future ones always are).
+    tide_retention_past_days: int = Field(default=2, ge=0)
 
     # ------------------------------------------------------------------ verification & ML
     verification_enabled: bool = False
@@ -133,17 +197,37 @@ class Settings(BaseSettings):
     ml_artifact_dir: str = "/tmp/swell-ml"  # noqa: S108  (use a persistent volume in production)
     # Apply ACTIVE ML corrections (only models that passed the deployment criteria).
     ml_corrections_enabled: bool = True
-    # Map ocean layers (downsampled GFS-Wave + GFS global grids). None = automatic: on
-    # when "noaa_gfs" is a forecast provider (the grids are extracted from files that
-    # provider downloads anyway); True also fetches them in other modes; False = off.
+    # Map ocean layers (downsampled GFS-Wave + GFS global grids). None = automatic, decided by
+    # app.services.map_fields.map_fields_mode (docs/map-layers.md); True = always fetch them;
+    # False = off.
     map_fields_enabled: bool | None = None
     map_field_resolution_deg: float = Field(default=0.5, ge=0.25, le=2.0)
     map_field_max_lead_hours: int = Field(default=240, ge=24, le=384)
     map_field_step_hours: int = Field(default=3, ge=1, le=12)
+    # GFS atmosphere grid read for the map's wind and pressure in standalone mode, and its
+    # file layout ({grid} is MAP_FIELD_ATMOS_GRID; other placeholders as in
+    # NOAA_GFS_ATMOS_PATH_TEMPLATE). Use map_field_atmos_path() to fill it in.
+    map_field_atmos_grid: Literal["0p25", "0p50", "1p00"] = "0p50"
+    map_field_atmos_path_template: str = "gfs.{ymd}/{hh}/atmos/gfs.t{hh}z.pgrb2.{grid}.f{fhour:03d}"
+    # Map hours per cycle as "start-end:step" ranges in forecast hours (0..120 3-hourly, then
+    # 6-hourly to 240), and the GFS cycles read (UTC hours).
+    map_field_steps: str = "0-120:3,120-240:6"
+    map_field_cycles: str = "00,12"
+    # Primary swell, secondary swell and wind-sea partition layers (9 extra variables).
+    map_field_partitions: Literal["on", "off"] = "on"
+    # A map-field run that would download more than this is stopped (bytes).
+    map_field_max_bytes_per_run: int = Field(default=600_000_000, ge=1)
+    # The map's ocean layers are flagged stale once their model cycle is older than this.
+    map_field_stale_after_hours: float = Field(default=12.0, gt=0)
     windy_api_key: str | None = None
     # Demo provider only: false = calm background seas, so only simulated swells create
     # events (used by the end-to-end tests for deterministic results).
     demo_natural_swells: bool = True
+
+    # ------------------------------------------------------------------ scoring
+    # Wind gusts: "off" = shown only; "scored" = used by the wind score where the source's gust
+    # definition is documented (ForecastRecord.extra["gust_kind"]).
+    wind_gust_scoring: Literal["off", "scored"] = "off"
 
     # ------------------------------------------------------------------ detection
     detection_lead_min_days: float = 5.0
@@ -219,6 +303,8 @@ class Settings(BaseSettings):
     # The prediction archive and verification pairs are kept much longer than forecast
     # runs: they are the only record of what was forecast at each lead time.
     retention_archive_days: int = 730
+    # Archive a short digest of the confidence inputs instead of the full inputs.
+    archive_confidence_digest: bool = True
 
     # ------------------------------------------------------------------ data health
     # The ``ops.data_health`` beat job (app.services.health) checks forecast, map-field,
@@ -238,11 +324,33 @@ class Settings(BaseSettings):
     # Degraded once the database is larger than this (GB). None = no limit. Size it from
     # the disk and the growth per day in docs/operations.md ("Capacity").
     data_health_database_max_gb: float | None = Field(default=None, gt=0)
+    # Degraded once Redis uses more than this fraction of its maxmemory.
+    data_health_redis_max_fraction: float = Field(default=0.8, gt=0, le=1)
+
+    # ------------------------------------------------------------------ worker and compose
+    # Queues the Celery worker consumes (docker-entrypoint.sh) and the Redis memory cap
+    # (docker-compose.yml); declared here so the health checks can report them.
+    worker_queues: str = "celery,bulk"
+    redis_maxmemory: str = "256mb"
 
     @field_validator("app_base_url", "api_base_url")
     @classmethod
     def _strip_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @field_validator("map_field_steps")
+    @classmethod
+    def _check_steps(cls, v: str) -> str:
+        _step_ranges(v)  # raises ValueError on a malformed entry
+        return v
+
+    @field_validator("map_field_cycles", "gefs_cycles")
+    @classmethod
+    def _check_cycles(cls, v: str) -> str:
+        hours = _split(v)
+        if not hours or any(not h.isdigit() or int(h) not in (0, 6, 12, 18) for h in hours):
+            raise ValueError(f"cycles must be a comma-separated subset of 00,06,12,18, got {v!r}")
+        return v
 
     @model_validator(mode="after")
     def _validate_production(self) -> Settings:
@@ -264,9 +372,17 @@ class Settings(BaseSettings):
                 "FORECAST_PROVIDERS cannot mix 'demo' with live providers: synthetic data "
                 "must never be blended into real forecasts"
             )
-        unknown = set(providers) - {"open_meteo", "windy", "demo", "noaa_gfs", "ecmwf_ifs"}
+        unknown = set(providers) - FORECAST_PROVIDER_TOKENS
         if unknown:
             raise ValueError(f"Unknown FORECAST_PROVIDERS entries: {sorted(unknown)}")
+        if "windy" in providers and not self.windy_terms_acknowledged:
+            raise ValueError(
+                "FORECAST_PROVIDERS contains 'windy', but Windy's API terms forbid storing its "
+                "data, building databases derived from it and redistributing it, which this app "
+                "does (forecast runs, blends, archived predictions). Remove 'windy', or set "
+                "WINDY_TERMS_ACKNOWLEDGED=true once a licence that allows this use is in place "
+                "(docs/API_SETUP_REQUIRED.md)."
+            )
         if self.detection_lead_min_days > self.detection_lead_max_days:
             raise ValueError("DETECTION_LEAD_MIN_DAYS must be <= DETECTION_LEAD_MAX_DAYS")
         return self
@@ -293,6 +409,59 @@ class Settings(BaseSettings):
     def forecast_provider_list(self) -> list[str]:
         names = [p.strip() for p in self.forecast_providers.split(",") if p.strip()]
         return names or ["demo"]
+
+    @property
+    def open_meteo_gfs_wave_model_list(self) -> list[str]:
+        """GFS-family wave models in routing order (the deprecated alias wins when set)."""
+        if "open_meteo_wave_model" in self.model_fields_set:
+            return [self.open_meteo_wave_model]
+        return _split(self.open_meteo_gfs_wave_models)
+
+    @property
+    def open_meteo_gfs_atmos_model_name(self) -> str:
+        """GFS-family atmosphere model (the deprecated alias wins when set)."""
+        if "open_meteo_atmos_model" in self.model_fields_set:
+            return self.open_meteo_atmos_model
+        return self.open_meteo_gfs_atmos_model
+
+    @property
+    def ecmwf_wave_param_list(self) -> list[str]:
+        return _split(self.ecmwf_wave_params)
+
+    @property
+    def gefs_stat_field_list(self) -> list[str]:
+        return _split(self.gefs_stat_fields)
+
+    @property
+    def gefs_cycle_hours(self) -> list[int]:
+        return sorted({int(h) for h in _split(self.gefs_cycles)})
+
+    @property
+    def map_field_step_ranges(self) -> list[tuple[int, int, int]]:
+        """MAP_FIELD_STEPS as (first hour, last hour, step) ranges, in the order given."""
+        return _step_ranges(self.map_field_steps)
+
+    @property
+    def map_field_cycle_hours(self) -> list[int]:
+        return sorted({int(h) for h in _split(self.map_field_cycles)})
+
+    def map_field_atmos_path(self, ymd: str, hh: str, fhour: int) -> str:
+        """MAP_FIELD_ATMOS_PATH_TEMPLATE filled in (below NOAA_GFS_BASE_URL)."""
+        return self.map_field_atmos_path_template.format(
+            ymd=ymd, hh=hh, fhour=fhour, grid=self.map_field_atmos_grid
+        )
+
+    @property
+    def tide_provider_list(self) -> list[str]:
+        return _split(self.tide_providers)
+
+    @property
+    def noaa_coops_application_name(self) -> str:
+        return self.noaa_coops_application or self.app_name
+
+    @property
+    def worker_queue_list(self) -> list[str]:
+        return _split(self.worker_queues)
 
     @property
     def observation_provider_list(self) -> list[str]:
@@ -346,6 +515,29 @@ class Settings(BaseSettings):
         if "windy" in self.forecast_provider_list and not self.windy_api_key:
             missing.append("WINDY_API_KEY")
         return missing
+
+
+def _split(value: str) -> list[str]:
+    """Entries of a comma-separated setting, stripped, blanks dropped."""
+    return [p.strip() for p in value.split(",") if p.strip()]
+
+
+def _step_ranges(value: str) -> list[tuple[int, int, int]]:
+    """Parse "0-120:3,120-240:6" into [(0, 120, 3), (120, 240, 6)]."""
+    out: list[tuple[int, int, int]] = []
+    for entry in _split(value):
+        try:
+            span, step = entry.split(":")
+            first, last = span.split("-")
+            item = (int(first), int(last), int(step))
+        except ValueError as exc:
+            raise ValueError(f"MAP_FIELD_STEPS entry {entry!r} is not 'start-end:step'") from exc
+        if item[0] < 0 or item[1] <= item[0] or item[2] < 1:
+            raise ValueError(f"MAP_FIELD_STEPS entry {entry!r} needs 0 <= start < end, step >= 1")
+        out.append(item)
+    if not out:
+        raise ValueError("MAP_FIELD_STEPS is empty")
+    return out
 
 
 @lru_cache
