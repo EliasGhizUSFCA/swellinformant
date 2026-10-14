@@ -164,7 +164,7 @@ export class ParticleAnimator {
 
   /** One frame at timestamp `now` (ms, as requestAnimationFrame passes it). */
   advance(now: number): void {
-    const dt = this.last == null ? FRAME_MS : Math.min(MAX_DT_MS, Math.max(0, now - this.last));
+    const dt = this.last == null ? 0 : Math.min(MAX_DT_MS, Math.max(0, now - this.last));
     this.last = now;
     this.step(dt);
   }

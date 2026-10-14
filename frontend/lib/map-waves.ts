@@ -104,7 +104,7 @@ export function metresPerPixel(zoom: number, latDeg: number): number {
  * 73.4x at zoom 8. At least 1: zoomed in beyond 1/S metres per pixel the map draws true scale.
  */
 export function exaggeration(zoom: number, latDeg: number): number {
-  return SPACING_PX_PER_M * metresPerPixel(zoom, latDeg);
+  return Math.max(1, SPACING_PX_PER_M * metresPerPixel(zoom, latDeg));
 }
 
 /**
@@ -156,12 +156,12 @@ export interface FamilyStyle {
   dash: number[];
   /** Crest half-length along the crest line, in crest spacings. */
   halfLength: number;
-  /** Crests in one packet (the envelope width is crests x spacing). */
+  /** Crests in one packet (a "set"): the envelope is crests x spacing long. */
   crests: number;
-  /** Packet cell size in px: one packet per cell of a jittered grid in world pixels. */
-  cellPx: number;
-  /** Faint trough lines between crests (solid families only). */
-  troughs: boolean;
+  /** Packet cell size in crest spacings (one packet per cell of a jittered world-pixel grid). */
+  cellSpacings: number;
+  /** A soft glow along each crest and a faint dark trough line between crests (solid systems). */
+  glow: boolean;
   /** Short "how it looks" text for the legend key. */
   look: string;
 }
@@ -173,10 +173,10 @@ export interface FamilyStyle {
  * no partitions) is solid white and is never called "primary swell".
  */
 export const FAMILY_STYLES: Record<WaveSystem, FamilyStyle> = {
-  primary: { label: "Primary swell", short: "Primary", color: "#f4f7fb", dash: [], halfLength: 1.6, crests: 4, cellPx: 118, troughs: true, look: "solid" },
-  secondary: { label: "Secondary swell", short: "Secondary", color: "#ffc46b", dash: [7, 5], halfLength: 1.2, crests: 3, cellPx: 104, troughs: false, look: "dashed" },
-  windsea: { label: "Wind sea", short: "Wind sea", color: "#7fe3ff", dash: [2, 4], halfLength: 0.6, crests: 2, cellPx: 70, troughs: false, look: "dotted" },
-  combined: { label: "Combined sea (peak)", short: "Combined", color: "#ffffff", dash: [], halfLength: 1.6, crests: 4, cellPx: 118, troughs: true, look: "solid" },
+  primary: { label: "Primary swell", short: "Primary", color: "#f4f7fb", dash: [], halfLength: 1.8, crests: 6, cellSpacings: 6, glow: true, look: "solid" },
+  secondary: { label: "Secondary swell", short: "Secondary", color: "#ffc46b", dash: [7, 5], halfLength: 1.5, crests: 5, cellSpacings: 5.5, glow: false, look: "dashed" },
+  windsea: { label: "Wind sea", short: "Wind sea", color: "#7fe3ff", dash: [1.5, 3.5], halfLength: 1.4, crests: 4, cellSpacings: 4.5, glow: false, look: "dotted" },
+  combined: { label: "Combined sea (peak)", short: "Combined", color: "#ffffff", dash: [], halfLength: 1.8, crests: 6, cellSpacings: 6, glow: true, look: "solid" },
 };
 
 /** Model variables of each system: significant height (m), period (s), direction FROM (deg). */
@@ -202,8 +202,8 @@ export function effectiveSystems(chosen: readonly WaveSystem[], available: Reado
 /** Legend sentence for the stated scales at a zoom and latitude. */
 export function scaleStatement(zoom: number, latDeg: number): string {
   const e = exaggeration(zoom, latDeg);
-  const spacing = e >= 1 ? `Crest spacing ×${formatFactor(e)} at this zoom` : "Crest spacing to true scale at this zoom";
-  return `${spacing}, motion ×${TIME_SCALE} real time.`;
+  const spacing = e > 1 ? `Crest spacing ×${formatFactor(e)} at this zoom` : "Crest spacing to true scale at this zoom";
+  return `${spacing}; time runs ${TIME_SCALE}× faster than real.`;
 }
 
 /** 4696 -> "4,700", 73.4 -> "73", 1.6 -> "1.6". */

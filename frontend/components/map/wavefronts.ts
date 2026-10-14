@@ -49,24 +49,40 @@ export const LATTICE_PX = 8;
 /** Largest disagreement of the four grid corners of a direction before the node is invalid. */
 export const MAX_CORNER_SPREAD_DEG = 60;
 /** Crest tracing step, px. */
-export const TRACE_STEP_PX = 4;
+export const TRACE_STEP_PX = 6;
 /** A crest stops where it would turn more than this in one step. */
 export const MAX_TURN_DEG = 25;
 /** Animation frame interval (30 fps cap: crests move a few px per second). */
 export const FRAME_INTERVAL_MS = 1000 / 30;
+/** Share of the remaining vertex budget each system may use, top system first. */
+const BUDGET_SHARE = 0.6;
 /** Vertices per frame (a 1440 x 900 desktop view / a phone). */
 export const VERTEX_BUDGET = 20_000;
 export const PHONE_VERTEX_BUDGET = 6_000;
-/** Opacity of a trough line relative to its crests (solid systems only). */
-const TROUGH_ALPHA = 0.22;
+/** Soft glow along the middle of each crest of the solid systems: width x line width, opacity. */
+const GLOW_WIDTH = 3.2;
+const GLOW_ALPHA = 0.22;
+const GLOW_LEVELS = [2.5, 4, 6, 8.5, 11];
+/** Trough lines: dark, a little wider than the crest, faint. */
+const TROUGH_STYLE: FamilyStyle = { ...FAMILY_STYLES.primary, label: "trough", color: "#000814", dash: [], glow: false };
+const TROUGH_WIDTH = 1.6;
+const TROUGH_ALPHA = 0.24;
+const TROUGH_LENGTH = 0.8;
+/** Opacity along each half crest: [end of the part (share of the half), relative opacity]. */
+const TAPER: ReadonlyArray<readonly [number, number]> = [
+  [0.5, 1],
+  [0.78, 0.6],
+  [1, 0.28],
+];
 /** Envelope weight below which a crest is not drawn. */
 const MIN_WEIGHT = 0.04;
+/** Share of the envelope's half-width at full weight (the rest tapers to 0). */
+export const ENVELOPE_FLAT = 0.5;
+/** A packet fades in over the first and out over the last CYCLE_FADE of its travel cycle. */
+export const CYCLE_FADE = 0.15;
 /** Opacity levels and line widths the strokes are batched into. */
-const ALPHA_LEVELS = [0.12, 0.3, 0.52, 0.78];
+const ALPHA_LEVELS = [0.05, 0.12, 0.2, 0.3, 0.42, 0.56, 0.72, 0.88];
 const WIDTH_LEVELS = [0.75, 1.25, 1.75, 2.25, 2.75];
-/** Solid crests are drawn brighter in the middle: the outer part of each half at this opacity. */
-const END_FADE = 0.45;
-const END_FROM = 0.55;
 
 const RAD = Math.PI / 180;
 const COS_MAX_TURN = Math.cos(MAX_TURN_DEG * RAD);
@@ -234,6 +250,8 @@ export interface Packet {
   /** Envelope travel per cycle, px, and the cycle phase offset (0..1). */
   travel: number;
   phase: number;
+  /** Uniform in [0, 1): which packets are left out first when a frame is over budget. */
+  keep: number;
 }
 
 /**
@@ -246,34 +264,48 @@ export interface Packet {
  */
 export function packetCrests(p: Packet, crests: number, t: number, still = false): Array<{ u: number; w: number }> {
   const s = p.spacing;
-  const width = crests * s;
+  const half = (crests * s) / 2;
+  const flat = half * ENVELOPE_FLAT;
   let centre = 0;
   let fade = 1;
   if (!still) {
-    const e = (((p.speed / 2) * t + p.phase * p.travel) % p.travel + p.travel) % p.travel;
+    const e = ((((p.speed / 2) * t + p.phase * p.travel) % p.travel) + p.travel) % p.travel;
     centre = e - p.travel / 2;
-    const sf = Math.sin((Math.PI * e) / p.travel);
-    fade = sf * sf;
+    const x = e / p.travel;
+    fade = smoothstep(x / CYCLE_FADE) * smoothstep((1 - x) / CYCLE_FADE);
   }
   const ref = p.px * p.wx + p.py * p.wy;
   const shift = still ? 0 : p.speed * t;
   // First lattice crest at or after the envelope's back edge.
-  const back = centre - width / 2;
-  const n0 = Math.ceil((back + ref - shift) / s);
+  const n0 = Math.ceil((centre - half + ref - shift) / s);
   const out: Array<{ u: number; w: number }> = [];
   for (let n = n0; ; n++) {
     const u = n * s + shift - ref;
-    if (u > centre + width / 2) break;
-    const c = Math.cos((Math.PI * (u - centre)) / width);
-    const w = c * c * fade;
+    const d = Math.abs(u - centre);
+    if (u > centre + half) break;
+    // Flat-top envelope: full weight in the middle, a cosine taper over the outer part.
+    const taper = d <= flat ? 1 : Math.cos((Math.PI / 2) * ((d - flat) / (half - flat))) ** 2;
+    const w = taper * fade;
     if (w >= MIN_WEIGHT) out.push({ u, w });
   }
   return out;
 }
 
+/** 0 -> 0, 1 -> 1, smooth in between (clamped). */
+const smoothstep = (x: number) => {
+  const c = Math.min(1, Math.max(0, x));
+  return c * c * (3 - 2 * c);
+};
+
 /** Stroke batches: one per (system, width, opacity, trough) key. */
+type StrokeKind = "crest" | "glow" | "trough";
+
 interface Batch {
+  /** Crest line, soft glow under it (solid systems) or the dark trough line behind it. */
+  kind: StrokeKind;
   style: FamilyStyle;
+  /** Index of the system in the lattice (drawing order). */
+  sys: number;
   width: number;
   alpha: number;
   /** Polylines: start offsets into `pts` (pairs), each ended by the next start. */
@@ -304,14 +336,17 @@ const nearestLevel = (levels: number[], x: number) => {
 /** Packet cell size for a system and view (world px; divides the world width exactly). */
 function cellSize(f: FamilyLattice, view: PixelView, scale: number): number {
   const s = Number.isFinite(f.medianSpacing) ? f.medianSpacing : 20;
-  // About 4 crest spacings per cell (2.5 for the short wind-sea packets), in 0.25 log2 steps
-  // so that a small change of period between forecast steps keeps the same packets.
-  const k = f.system === "windsea" ? 2.6 : f.system === "secondary" ? 3.6 : 4.2;
-  const raw = Math.min(260, Math.max(f.style.cellPx * 0.55, k * s)) * scale;
+  // A few crest spacings more than one packet, in 0.25 log2 steps so that a small change of
+  // period between forecast steps keeps the same packets.
+  const raw = Math.min(MAX_CELL_PX, Math.max(MIN_CELL_PX, f.style.cellSpacings * s)) * scale;
   const q = 2 ** (Math.round(Math.log2(raw) * 4) / 4);
   const nWorld = Math.max(1, Math.round(view.worldPx / q));
   return view.worldPx / nWorld;
 }
+
+/** Packet cell size limits, px. */
+const MIN_CELL_PX = 40;
+const MAX_CELL_PX = 320;
 
 const packetCache = new WeakMap<FamilyLattice, { scale: number; packets: Packet[] }>();
 
@@ -354,6 +389,7 @@ function computePackets(l: Lattice, f: FamilyLattice, view: PixelView, scale: nu
         speed: sample.speed,
         travel: cell,
         phase: hash01(wrapped * 7 + 3, cj * 13 + 5, sys),
+        keep: hash01(wrapped * 11 + 1, cj * 5 + 9, sys + 17),
       });
     }
   }
@@ -431,32 +467,48 @@ export interface DrawOptions {
 export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: Lattice, o: DrawOptions): FrameStats {
   const batches = new Map<string, Batch>();
   const stats: FrameStats = { crests: 0, vertices: 0, strokes: 0, packets: 0, arrows: 0, families: [] };
-  const batch = (style: FamilyStyle, sys: number, width: number, alpha: number, trough: boolean): Batch => {
-    const wl = nearestLevel(WIDTH_LEVELS, width);
+  const batch = (kind: StrokeKind, style: FamilyStyle, sys: number, width: number, alpha: number): Batch => {
+    const levels = kind === "glow" ? GLOW_LEVELS : WIDTH_LEVELS;
+    const wl = nearestLevel(levels, width);
     const al = nearestLevel(ALPHA_LEVELS, alpha);
-    const key = `${sys}|${wl}|${al}|${trough ? 1 : 0}`;
+    const key = `${kind}|${sys}|${wl}|${al}`;
     let b = batches.get(key);
     if (!b) {
-      b = { style: trough ? { ...style, dash: [] } : style, width: WIDTH_LEVELS[wl]!, alpha: ALPHA_LEVELS[al]!, starts: [], pts: [] };
+      b = { kind, style, sys, width: levels[wl]!, alpha: ALPHA_LEVELS[al]!, starts: [], pts: [] };
       batches.set(key, b);
     }
     return b;
   };
+  const push = (b: Batch, pts: number[]) => {
+    b.starts.push(b.pts.length);
+    for (const v of pts) b.pts.push(v);
+    stats.vertices += pts.length / 2;
+  };
   const arrows: number[] = [];
-  let over = false;
-  l.families.forEach((f, sys) => {
-    if (!f.validCount) return;
-    stats.families.push(f.system);
-    if (over) return;
+  // The budget goes to the top system first (the primary swell is drawn last, on top, but is
+  // never the one left out): each system may use BUDGET_SHARE of what is left, the last one
+  // all. A packet is only started when its estimated vertices still fit.
+  const order = l.families.map((f, sys) => ({ f, sys })).filter(({ f }) => f.validCount > 0);
+  stats.families = order.map(({ f }) => f.system);
+  order.reverse().forEach(({ f, sys }, rank) => {
     const style = f.style;
-    const solid = style.dash.length === 0;
-    for (const p of packetsFor(l, f, view, o.cellScale ?? 1)) {
-      if (stats.vertices >= o.budget) {
-        over = true;
-        break;
-      }
+    const left = o.budget - stats.vertices;
+    const cap = stats.vertices + (rank === order.length - 1 ? left : left * BUDGET_SHARE);
+    const plans = packetsFor(l, f, view, o.cellScale ?? 1).map((p) => ({ p, crests: packetCrests(p, style.crests, o.t, o.still) }));
+    // Upper bound of the vertices of a packet: per crest two traced halves, split in three
+    // (two shared points each), the glow over the same points and the shorter trough.
+    const cost = ({ p, crests }: (typeof plans)[number]) => {
+      const steps = Math.ceil((style.halfLength * p.spacing) / TRACE_STEP_PX);
+      const perCrest = 2 * (steps + 3) * (style.glow ? 2 : 1) + (style.glow ? 2 * (Math.ceil(steps * TROUGH_LENGTH) + 1) : 0);
+      return crests.length * perCrest;
+    };
+    // Over budget: leave out an even, random share of the packets (never a whole region).
+    const keep = Math.min(1, (cap - stats.vertices) / Math.max(1, plans.reduce((a, pl) => a + cost(pl), 0)));
+    for (const plan of plans) {
+      const { p, crests } = plan;
+      if (keep < 1 && p.keep >= keep) continue;
+      if (stats.vertices + cost(plan) > cap) break;
       stats.packets++;
-      const crests = packetCrests(p, style.crests, o.t, o.still);
       let lead: { x: number; y: number } | null = null;
       let leadU = -Infinity;
       for (const { u, w } of crests) {
@@ -466,38 +518,29 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
         const hs = sample.hs;
         const alpha = crestAlpha(hs) * w;
         const width = lineWidth(hs);
-        const half = style.halfLength * p.spacing;
-        const main = batch(style, sys, width, alpha, false);
-        const dim = solid ? batch(style, sys, width, alpha * END_FADE, false) : main;
-        const v = traceCrest(l, f, cx, cy, half, (pts) => {
-          if (!solid) {
-            main.starts.push(main.pts.length);
-            main.pts.push(...pts);
-            return;
-          }
-          // Brighter middle, dimmer ends: split each half at END_FROM of its length.
-          const split = Math.max(2, Math.round((pts.length / 2) * END_FROM)) * 2;
-          main.starts.push(main.pts.length);
-          main.pts.push(...pts.slice(0, Math.min(pts.length, split)));
-          if (split < pts.length) {
-            dim.starts.push(dim.pts.length);
-            dim.pts.push(...pts.slice(split - 2));
+        const v = traceCrest(l, f, cx, cy, style.halfLength * p.spacing, (pts) => {
+          // Full opacity near the packet's ray, fading toward the crest ends (no hard tips).
+          const n = pts.length / 2;
+          let from = 0;
+          for (const [end, k] of TAPER) {
+            const to = Math.min(n - 1, Math.round((n - 1) * end));
+            if (to <= from) continue;
+            const part = pts.slice(from * 2, to * 2 + 2);
+            push(batch("crest", style, sys, width, alpha * k), part);
+            if (style.glow) push(batch("glow", style, sys, width * GLOW_WIDTH, alpha * k * GLOW_ALPHA), part);
+            from = to;
           }
         });
         if (!v) continue;
         stats.crests++;
-        stats.vertices += v;
+        if (style.glow) {
+          // The trough behind the crest: a faint dark line half a spacing back.
+          const tb = batch("trough", TROUGH_STYLE, sys, width * TROUGH_WIDTH, alpha * TROUGH_ALPHA);
+          traceCrest(l, f, cx - (p.px * p.spacing) / 2, cy - (p.py * p.spacing) / 2, style.halfLength * p.spacing * TROUGH_LENGTH, (pts) => push(tb, pts));
+        }
         if (u > leadU) {
           leadU = u;
           lead = { x: cx, y: cy };
-        }
-        if (style.troughs && alpha * TROUGH_ALPHA >= 0.04) {
-          const tb = batch(style, sys, width * 0.6, alpha * TROUGH_ALPHA, true);
-          const trough = { x: cx + (p.px * p.spacing) / 2, y: cy + (p.py * p.spacing) / 2 };
-          stats.vertices += traceCrest(l, f, trough.x, trough.y, half * 0.7, (pts) => {
-            tb.starts.push(tb.pts.length);
-            tb.pts.push(...pts);
-          });
         }
       }
       // Reduced motion: an arrowhead on the leading crest shows which way the packet travels.
@@ -509,7 +552,10 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   });
 
   ctx.lineJoin = "round";
-  for (const b of batches.values()) {
+  // Per system in drawing order (primary last, on top): glow, trough, then the crest lines.
+  const rankOf = (b: Batch) => (b.kind === "glow" ? 0 : b.kind === "trough" ? 1 : 2);
+  const ordered = [...batches.values()].sort((a, b) => a.sys - b.sys || rankOf(a) - rankOf(b));
+  for (const b of ordered) {
     if (!b.starts.length) continue;
     ctx.beginPath();
     for (let s = 0; s < b.starts.length; s++) {
@@ -518,8 +564,8 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       ctx.moveTo(b.pts[from]!, b.pts[from + 1]!);
       for (let k = from + 2; k < to; k += 2) ctx.lineTo(b.pts[k]!, b.pts[k + 1]!);
     }
-    ctx.setLineDash(b.style.dash);
-    ctx.lineCap = b.style.look === "dotted" ? "round" : "butt";
+    ctx.setLineDash(b.kind === "crest" ? b.style.dash : []);
+    ctx.lineCap = b.kind === "glow" || b.style.look === "dotted" ? "round" : "butt";
     ctx.lineWidth = b.width;
     ctx.strokeStyle = `rgba(${hexRgb(b.style.color)}, ${b.alpha})`;
     ctx.stroke();

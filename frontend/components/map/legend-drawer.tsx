@@ -11,7 +11,7 @@ import { cssGradient, type LayerScale } from "@/lib/map-colors";
 import type { FieldIndex } from "@/lib/map-fields";
 import { layerDef, layerUnit, legendTicks, type DisplayUnits } from "@/lib/map-layers";
 import type { MapSettings } from "@/lib/map-settings";
-import { FAMILY_STYLES, scaleStatement, type WaveSystem } from "@/lib/map-waves";
+import { FAMILY_STYLES, scaleStatement, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
 import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_LABELS } from "@/lib/quality";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
@@ -91,7 +91,7 @@ export function LegendDrawer({
   const status = useMapFlowStatus();
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
   const windShown = layer === "wind" || settings.windOverlay;
-  const crests = layer !== "wind" ? status.systems : [];
+  const crests = layer !== "wind" ? WAVE_SYSTEMS.filter((s) => status.systems.includes(s)) : [];
   const validTime = status.validTime;
   const lead = leadText(validTime, index?.cycle_time);
   const flowOn = particles !== "off" && available;
