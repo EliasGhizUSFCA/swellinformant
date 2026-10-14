@@ -69,6 +69,11 @@ gigabytes, without losing accuracy. What the adapters do (`forecasts/open_meteo.
   18.4 instead of 28.0 km/h mean wind at Pipeline in the audit. Waves are requested at the
   spot's offshore forecast point, wind at the break; the cells Open-Meteo used and their
   distances are stored in each spot's first record (`extra.wave_cell`, `extra.wind_cell`).
+  A wave cell with no value in any hour (masked by the wave model although Open-Meteo
+  calls it sea: `ecmwf_wam025` at Keramas and Puerto Escondido on 2026-10-14) is replaced
+  by the nearest of its eight neighbouring cells that has data, at most
+  `GRIB_MAX_CELL_DISTANCE_KM` (60) from the forecast point, as the GRIB ingesters take the
+  nearest valid cell; the replacement is listed in the run's warnings.
 * **Native wave grids.** `ncep_gfswave016` where its domain (read from the model's
   metadata) contains the point, `ncep_gfswave025` elsewhere; one request never mixes
   models, and a spot refused with HTTP 400 "No data is available for this location" is
@@ -174,8 +179,10 @@ about 1.9 GB (NOAA) and 0.48 GB (ECMWF, trimmed; computed) per run.
 * ECMWF open data has no swell partitions, so an ECMWF-only run uses the bulk sea state
   for the breaking estimate; in the blend the partitions come from GFS-Wave.
 * Open-Meteo picks its own grid cell; it was our nearest valid sea cell at 47 of 50 spots
-  for GFS-Wave on 2026-10-14 (the other 3 a neighbouring valid cell). The cells used are
-  stored with each run.
+  for GFS-Wave on 2026-10-14 (the other 3 a neighbouring valid cell). For `ecmwf_wam025`
+  it chose a masked cell at 2 spots, replaced by a neighbouring cell 14.3 km (Puerto
+  Escondido) and 26 km (Keramas) from the forecast point. The cells used are stored with
+  each run.
 * One vendor for spot forecasts: the free tier is non-commercial, counts calls per IP
   address and its terms can change; the direct GRIB providers stay as tested fallbacks.
 * GFS 0.25° and Open-Meteo `gfs_global` winds under-resolve sea breezes and terrain effects
@@ -189,34 +196,63 @@ about 1.9 GB (NOAA) and 0.48 GB (ECMWF, trimmed; computed) per run.
 
 ### API-first acquisition (measured live, 2026-10-14, this sandbox's proxy)
 
-Live checks on scratch databases with the 50 seeded spots, 16 days (15 for ECMWF). The
-values are what `forecast_runs.details.stats` and the parity script measured; nothing
-here is extrapolated unless it says so.
+One acquisition with `FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf` on a fresh scratch
+database (`init-db`, the 50 seeded spots), every response fetched live (empty cache), then
+the blend and the predictions (`build_blend`, `compute_pending_predictions`: jobs A2 and
+B). The numbers are what `forecast_runs.details.stats` and the parity scripts recorded;
+nothing here is extrapolated unless it says so.
 
-| Check | Result |
+| Run (GFS and ECMWF 12Z runs of 2026-10-14) | Result |
 |---|---|
-| Open-Meteo Marine, GFS family, all 50 spots, 16 days (06Z and 12Z cycles) | 2 data requests (`ncep_gfswave016` for 32 spots, `ncep_gfswave025` for 18), **85.7 weighted calls**, 236-237 kB on the wire including the metadata reads, 0 errors |
-| Same-cycle parity with a direct NOAA NODD sample (12Z, f006; `gfswave` `global.0p16`/`global.0p25` HTSGW and PERPW read by byte range, decoded in memory, sampled at the cell Open-Meteo reports) | **Hs: 50 of 50 spots within 0.05 m**; mean absolute difference 0.004 m, maximum 0.01 m (Open-Meteo rounds to 0.01 m). Tp: mean 0.009 s, maximum 0.02 s. The 06Z cycle gave the same (Hs mean 0.005 m, maximum 0.01 m). The NOAA sample of that single step cost 1.73 MB |
-| Grid cell | Open-Meteo's cell was our nearest valid sea cell at 47 of 50 spots; at Desert Point, G-Land and Mundaka it chose a neighbouring valid cell |
-| GFS family with wind (`FORECAST_PROVIDERS=open_meteo`) | Not completed: the Forecast API (`api.open-meteo.com`) answered "Daily API request limit exceeded. Please try again tomorrow." for this sandbox's shared egress address (the app had used 143 weighted calls), then stopped completing TLS handshakes. The run ended FAILED, not retried, with its cost recorded: 11 HTTP responses (10 x 200, 1 x 429), 237,152 B, 142.9 weighted calls |
-| Files written by the acquisition (`strace -f -e openat,creat,rename,unlink,mkdir`) | None (the only file opened for writing was the test driver's own report) |
+| `open_meteo_noaa` (GFS family, 16 days) | SUCCESS, 50 of 50 spots, 10,200 rows (120 hourly steps to f119, then 84 3-hourly), 3 data requests (`ncep_gfswave016` for 32 spots, `ncep_gfswave025` for 18, `gfs_global`), 11 HTTP responses with the metadata, **345.6 kB**, **142.9 weighted calls**, 6.3 s. Model runs recorded: `ncep_gfswave016`, `ncep_gfswave025`, `ncep_gfs013`, `ncep_gfs025`, all 12Z |
+| `open_meteo_ecmwf` (ECMWF family, 15 days) | SUCCESS, 50 of 50 spots, 4,100 rows (48 3-hourly steps, then 34 6-hourly), 3 data requests, 7 HTTP responses, **175.1 kB**, **124.3 weighted calls** (17.1 of them for the neighbouring cells of Keramas and Puerto Escondido), 4.7 s; `extra.gust_kind` `ecmwf_max_3h` on every row |
+| Blend | SUCCESS, 2 independent families (`ncep_gfs`, `ecmwf_ifs`), 10,200 rows and 10,200 comparison rows, 9.9 s; 5,650 rows marked `interpolated` (an ECMWF value aligned in time); gust kind of the highest-weight member: `gfs_instantaneous` 9,650, `ecmwf_max_3h` 550 |
+| Predictions | 24,500 for the 3 runs, 4,050 archived (the blend's), 19.7 s |
+| Storage | database 12.2 MB after `init-db`, 101.3 MB after this cycle: `surf_quality_predictions` 63.6 MB (2.29 kB per row), `wave_forecasts` 14.6 MB (GFS family 407 B, ECMWF family 597 B, blend 535 B per row), `forecast_comparisons` 7.7 MB, `prediction_archive` 3.0 MB (555 B per row). Redis 1.98 MB before, 2.53 MB after |
+| Files written (`strace -f -e openat,creat,rename,unlink,mkdir`) | None by the acquisition: the only files opened for writing were the test driver's own report and a joblib semaphore in `/dev/shm` (shared memory) |
+| Open-Meteo refusals | Earlier the same day the Forecast API answered "Daily API request limit exceeded. Please try again tomorrow." for this sandbox's shared egress address (other users of the address; the app had used 143 weighted calls). Those runs ended FAILED, not retried, with their cost recorded, and the next acquisition read the wave responses it had already received from the cache and paid only for the wind request |
 
-Examples (12Z, f006; Hs m / Tp s, Open-Meteo vs NOAA direct at the same cell):
+**Same-cycle parity** (valid time 2026-10-14 18:00 UTC = lead 6 h of both 12Z runs; the
+direct samples were read by byte range and decoded in memory, at the cell Open-Meteo
+reported for each spot):
 
-| Spot | Wave model | Open-Meteo | NOAA direct |
-|---|---|---|---|
-| Pipeline | `ncep_gfswave016` | 1.62 / 12.65 | 1.61 / 12.64 |
-| Mavericks | `ncep_gfswave016` | 1.26 / 13.70 | 1.25 / 13.70 |
-| Nazaré | `ncep_gfswave016` | 1.72 / 14.10 | 1.72 / 14.09 |
-| Jeffreys Bay | `ncep_gfswave025` | 2.20 / 10.20 | 2.20 / 10.20 |
-| Thurso East | `ncep_gfswave025` | 2.84 / 12.75 | 2.84 / 12.74 |
-| Cloudbreak | `ncep_gfswave025` | 1.12 / 15.85 | 1.12 / 15.85 |
+| Comparison, 50 spots | Hs | Peak period | Wind speed | Wind direction |
+|---|---|---|---|---|
+| GFS family vs NOAA NODD `gfswave` `global.0p16`/`global.0p25` (HTSGW, PERPW) | **50 of 50 within 0.05 m**; mean 0.004 m, max 0.01 m | mean 0.009 s, max 0.02 s | | |
+| GFS family vs NOAA NODD `gfs.t12z.sfluxgrbf006` (UGRD/VGRD 10 m on the same ~13 km Gaussian grid Open-Meteo's `gfs_global` wind comes from, `ncep_gfs013`) | | | mean 0.08 km/h, max 0.21 km/h | mean 0.4°, max 2.4° |
+| GFS family vs NOAA NODD `pgrb2.0p25` (the 0.25° grid our direct ingester reads), nearest 0.25° cell | | | mean 2.7 km/h, max 9.7 km/h | mean 7.4°, max 32° |
+| ECMWF family vs ECMWF open data `wave`/`oper` step 6 (swh, pp1d, mwd, 10u/10v) | **50 of 50 within 0.05 m**; mean 0.005 m, max 0.01 m | mean 0.013 s, max 0.025 s | mean 0.09 km/h, max 0.24 km/h | mean 0.4°, max 3.1° |
+
+The remaining differences are of the size of Open-Meteo's output rounding (0.01 m,
+0.05 s, 0.1 km/h, 1°) and the GRIB packing precision; the largest direction differences
+are at light wind (3.1° at 0.8 km/h at Ocean Beach SF, 2.4° at 4.5 km/h at Punta Roca).
+The wind difference against `pgrb2.0p25` is the grid, not the transport: the same GFS run
+on a coarser grid. The direct samples cost 4.3 MB (waves and the `pgrb2.0p25` wind), 7.3 MB
+(sflux wind) and 4.6 MB (ECMWF) for this single step. Open-Meteo's GFS-Wave cell was our
+nearest valid sea cell at 47 of 50 spots; at Desert Point, G-Land and Mundaka it chose a
+neighbouring valid cell. The 12Z and 06Z waves-only checks earlier the same day gave the
+same Hs agreement (mean 0.004-0.005 m, max 0.01 m).
+
+Examples (Hs m / Tp s / wind km/h, from degrees; Open-Meteo as served, the direct
+samples to 2 decimals and 0.1°):
+
+| Spot | GFS family | NOAA direct | ECMWF family | ECMWF direct |
+|---|---|---|---|---|
+| Pipeline (`ncep_gfswave016`) | 1.62 / 12.65 / 20.0 from 76° | 1.61 / 12.64 / 20.00 from 76.5° | 2.04 / 13.10 / 17.1 from 75° | 2.03 / 13.08 / 17.18 from 74.9° |
+| Mavericks (`ncep_gfswave016`) | 1.26 / 13.70 / 8.4 from 263° | 1.25 / 13.70 / 8.29 from 263.8° | 1.80 / 15.10 / 4.0 from 265° | 1.81 / 15.10 / 3.97 from 263.3° |
+| Nazaré (`ncep_gfswave016`) | 1.72 / 14.10 / 13.7 from 14° | 1.72 / 14.09 / 13.80 from 13.3° | 1.62 / 13.15 / 14.5 from 19° | 1.62 / 13.16 / 14.50 from 19.0° |
+| Jeffreys Bay (`ncep_gfswave025`) | 2.20 / 10.20 / 15.3 from 246° | 2.20 / 10.20 / 15.45 from 246.7° | 2.04 / 10.65 / 14.6 from 250° | 2.04 / 10.65 / 14.41 from 249.6° |
+| Thurso East (`ncep_gfswave025`) | 2.84 / 12.75 / 34.7 from 236° | 2.84 / 12.74 / 34.77 from 235.9° | 2.20 / 11.40 / 41.8 from 188° | 2.21 / 11.42 / 41.68 from 188.3° |
+
+The NOAA direct wind is the sflux sample (same grid). The two families differ from each
+other by far more than either differs from its source (Pipeline Hs 1.62 vs 2.04 m,
+Thurso East wind from 236° vs 188°): that disagreement is what the blend and the forecast
+confidence use.
 
 **Bytes per cycle, before and after.** Direct GRIB (measured 2026-10-11): NOAA 1.91 GB
-per GFS cycle, ECMWF 847 MB per run, GEFS-Wave 201.6 MB. API-first: the GFS family's waves
-for 50 spots cost 0.24 MB (measured above); with the wind request and the ECMWF family the
-audit's estimate is about 0.5 MB (GFS) and 0.24 MB (ECMWF) per cycle. GEFS-Wave trimmed
-to HTSGW/PERPW: about 65 MB per run (computed from record sizes). Map layers, standalone:
+per GFS cycle, ECMWF 847 MB per run, GEFS-Wave 201.6 MB. API-first (measured above): the
+GFS family 345.6 kB, the ECMWF family 175.1 kB for 50 spots. GEFS-Wave trimmed to
+HTSGW/PERPW: about 65 MB per run (computed from record sizes). Map layers, standalone:
 about 0.16 GB per cycle, 0.48 GB with the partition layers (computed in the audit).
 
 ## Flights

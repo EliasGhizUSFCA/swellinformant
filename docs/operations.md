@@ -329,7 +329,8 @@ use until it goes stale. The two Open-Meteo families share one budget.
 
 **What to do.** The free tier counts calls per IP address: on shared hosting other users
 of the address use the same allowance (this happened in the sandbox on 2026-10-14, after
-the app itself had used 143 weighted calls). Use a paid plan (`OPEN_METEO_API_KEY`, then
+the app itself had used 143 weighted calls; the next acquisition re-read the waves it had
+already received from the cache and paid only for the refused wind request). Use a paid plan (`OPEN_METEO_API_KEY`, then
 raise `OPEN_METEO_CALLS_PER_DAY` / `OPEN_METEO_CALLS_PER_MONTH`), or wait for the reset.
 Never lower `OPEN_METEO_AVAILABILITY_WAIT_MINUTES` to read runs sooner.
 
@@ -376,18 +377,35 @@ accounts, searches, alerts and the prediction archive come only from the backup.
 
 ### API-first setup (`FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf`, 2026-10-14)
 
+Measured live on a fresh scratch database (50 spots, GFS and ECMWF 12Z runs of
+2026-10-14, every response fetched, nothing from the cache; `forecast_runs.details.stats`):
+
 | Item | Per run | Per day (default schedule) | Basis |
 |---|---|---|---|
-| Open-Meteo GFS family, 50 spots, 16 days | 142.9 weighted calls (waves 85.7: 50 locations x 15 variables / 10 x 16 / 14 days; wind 57.1); waves 237 kB on the wire | 4 runs: 571 weighted calls | waves and the weighted calls measured live; the wind response was refused by Open-Meteo for this sandbox's shared address, so its size is not measured here |
-| Open-Meteo ECMWF family, 50 spots, 15 days | 107.1 weighted calls (waves 53.6, wind 53.6) | 2 runs (00Z, 12Z): 214 weighted calls | computed with the same rule |
-| Both families | 250 weighted calls | about 786 weighted calls a day, about 23,900 a month: 8 % of the free tier's 10,000 a day and 300,000 a month | computed |
+| Open-Meteo GFS family, 50 spots, 16 days | 142.9 weighted calls (waves 85.7: 50 locations x 15 variables / 10 x 16 / 14 days; wind 57.1), 3 data requests, 11 HTTP responses with the metadata, 345.6 kB, 6.3 s; 10,200 rows | 4 runs: 571 weighted calls, 1.4 MB | measured |
+| Open-Meteo ECMWF family, 50 spots, 15 days | 124.3 weighted calls (waves 53.6, wind 53.6, 17.1 for the neighbouring cells of the 2 spots whose `ecmwf_wam025` cell has no data), 7 HTTP responses, 175.1 kB, 4.7 s; 4,100 rows | 2 runs (00Z, 12Z): 249 weighted calls, 0.35 MB | measured |
+| Blend and predictions | blend 9.9 s (10,200 rows + 10,200 comparisons); `quality.predict` 19.7 s for the 3 runs (24,500 predictions, 4,050 archive rows) | | measured |
+| Both families | 267 weighted calls | about 820 weighted calls a day, about 24,600 a month: 8 % of the free tier's 10,000 a day and 300,000 a month | per run measured; per day computed |
 | GEFS-Wave, HTSGW and PERPW only (41 steps) | about 65 MB | 4 cycles: about 0.26 GB | computed from record sizes |
 | Map fields, standalone (61 map hours) | about 0.16 GB; 0.48 GB with the partition layers | 2 cycles: 0.33-0.96 GB | computed in the audit |
 
+The whole acquisition took 47.6 s of wall time; the two providers' own runs took 6.3 s and
+4.7 s, the rest went to the metadata reads before each run (`current_run`,
+`ensure_servable`). One cycle of both families added 89 MB to the database (12.2 MB after
+`init-db`, 101.3 MB after): `surf_quality_predictions` 63.6 MB (24,500 rows, 2.29 kB
+each), `wave_forecasts` 14.6 MB (24,500 rows: GFS family 407 B, ECMWF family 597 B, blend
+535 B per row on average), `forecast_comparisons` 7.7 MB (10,200 rows), `prediction_archive`
+3.0 MB (4,050 rows, 555 B each with the confidence digest). The nightly cleanup removes the
+predictions of superseded member runs, so only the newest runs keep theirs. Redis grew from
+1.98 MB to 2.53 MB (6 cached responses and the budget counters).
+
 Acquisitions run every `FORECAST_REFRESH_MINUTES` (180), but a run already stored costs
 only the free metadata requests, and a retry reads the responses it already received from
-the cache. Nothing is written to disk: a traced acquisition opened no file for writing.
-Before the change, the direct GRIB setup downloaded about 10 GB a day (next section).
+the cache (seen live: a run whose ECMWF wind request was refused re-read its waves from the
+cache and paid only for the wind). Nothing is written to disk: a traced acquisition
+(`strace -f -e openat,creat,rename,unlink,mkdir`) opened no file for writing other than
+the test driver's own report and a joblib semaphore in `/dev/shm` (shared memory). Before
+the change, the direct GRIB setup downloaded about 10 GB a day (next section).
 
 ### Measured run, direct GRIB setup (Docker, 2026-10-12, NOAA 00Z / ECMWF 00Z / GEFS 00Z, 50 spots)
 
@@ -458,8 +476,9 @@ run.
 
 **Bandwidth:** the direct GRIB setup downloaded about **10 GB per day** (NOAA 4 × 1.91 GB,
 ECMWF 2 × 0.85-0.9 GB, GEFS 4 × 0.20 GB), about 300 GB a month. The API-first setup
-needs a few MB a day for the spot forecasts plus about 0.26 GB for GEFS-Wave and
-0.33-0.96 GB for the map layers (computed, see "API-first setup" above). Uploads are
+needs about 1.7 MB a day for the spot forecasts (4 GFS-family runs of 345.6 kB and 2
+ECMWF-family runs of 175.1 kB, measured) plus about 0.26 GB for GEFS-Wave and 0.33-0.96 GB
+for the map layers (computed, see "API-first setup" above). Uploads are
 negligible (requests only).
 
 **Backups:** the measured dump was 52 % of the database size, dominated by the

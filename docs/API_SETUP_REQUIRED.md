@@ -99,7 +99,10 @@ models (`OPEN_METEO_GFS_WAVE_MODELS`) and `OPEN_METEO_GFS_ATMOS_MODEL=gfs_global
 Behaviour worth knowing:
 
 * Grid cells: "sea prefers grid-cells on sea" ([docs](https://open-meteo.com/en/docs)); the
-  app sends `cell_selection=sea` and records the cell Open-Meteo used.
+  app sends `cell_selection=sea` and records the cell Open-Meteo used. The chosen cell can
+  still be masked by the wave model (no value in any hour: `ecmwf_wam025` at Keramas and
+  Puerto Escondido on 2026-10-14); the app then reads the eight neighbouring cells and uses
+  the nearest one with data (a few extra weighted calls, recorded in the run's warnings).
 * Run identity: the run comes from each model's `meta.json`; a new run is read only after
   Open-Meteo's advice: "please wait 10 minutes after the availability time".
 * Open-Meteo fills hours a model did not output: "values are interpolated from 3-hourly to
@@ -110,9 +113,12 @@ Behaviour worth knowing:
   The sea-level variable is "not suitable for coastal navigation" and is not used as a tide.
 * The free tier counts calls per IP address. On 2026-10-14 the Forecast API answered this
   sandbox's shared egress address with "Daily API request limit exceeded. Please try again
-  tomorrow." while the app itself had used 143 weighted calls: on shared hosting, a paid key
-  avoids depending on other users of the address. The run then ends FAILED with that
-  message, is not retried until the next schedule, and the previous run stays in use.
+  tomorrow." while the app itself had used 143 weighted calls, and again at 21:47 UTC
+  between successful requests; a full acquisition of both families went through at
+  22:04 UTC. On shared hosting a paid key avoids depending on other users of the address.
+  The run then ends FAILED with that message, is not retried until the next schedule
+  (which re-reads the responses already received from the cache), and the previous run
+  stays in use.
 
 ### 2.2 NOAA NODD: GFS, GFS-Wave (map layers; optional spot-forecast fallback)
 
