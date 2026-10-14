@@ -4,9 +4,14 @@ import { deflateSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  checkServedMeta,
   decodeField,
   directionFromUV,
+  fetchField,
+  FieldMismatchError,
   FieldStore,
+  FIELD_STORE_CAPACITY,
+  PARTITION_FIELD_VARIABLES,
   inflate,
   LruCache,
   parseFieldMeta,
@@ -186,5 +191,99 @@ describe("caching", () => {
     for (const t of ["t1", "t2", "t3", "t4"]) await s.load("hs", t);
     expect(s.has("hs", "t1")).toBe(false);
     expect(s.has("hs", "t4")).toBe(true);
+  });
+});
+
+describe("served field checks (X-Field-Meta)", () => {
+  const meta = { variable: "hs", valid_time: "2026-10-14T12:00:00Z", run_key: "gfs-2026101406" };
+
+  it("accepts the field asked for (any equivalent time spelling)", () => {
+    expect(() => checkServedMeta(meta, "hs", "2026-10-14T12:00:00Z", "gfs-2026101406")).not.toThrow();
+    expect(() => checkServedMeta({ ...meta, valid_time: "2026-10-14T12:00:00+00:00" }, "hs", "2026-10-14T12:00:00.000Z", null)).not.toThrow();
+  });
+
+  it("rejects another valid time, model run or variable", () => {
+    expect(() => checkServedMeta({ ...meta, valid_time: "2026-10-14T15:00:00Z" }, "hs", "2026-10-14T12:00:00Z")).toThrow(FieldMismatchError);
+    expect(() => checkServedMeta({ ...meta, run_key: "gfs-2026101412" }, "hs", "2026-10-14T12:00:00Z", "gfs-2026101406")).toThrow(/run/);
+    expect(() => checkServedMeta(meta, "tp", "2026-10-14T12:00:00Z")).toThrow(FieldMismatchError);
+    try {
+      checkServedMeta({ ...meta, valid_time: "2026-10-14T15:00:00Z" }, "hs", "2026-10-14T12:00:00Z");
+    } catch (e) {
+      expect((e as FieldMismatchError).servedValidTime).toBe("2026-10-14T15:00:00Z");
+    }
+  });
+
+  it("never decodes a mismatched field, and reads a 404 as an out-of-date index", async () => {
+    const header = (valid_time: string) => JSON.stringify({ ...META, variable: "hs", valid_time, run_key: "r1" });
+    const respond = (status: number, h: string | null) =>
+      vi.fn(async () => new Response(status === 200 ? deflateSync(new Uint8Array(12)) : "{}", { status, headers: h ? { "X-Field-Meta": h } : {} }));
+    const real = globalThis.fetch;
+    try {
+      globalThis.fetch = respond(200, header("2026-10-14T15:00:00Z")) as unknown as typeof fetch;
+      await expect(fetchField("hs", "2026-10-14T12:00:00Z", "r1")).rejects.toBeInstanceOf(FieldMismatchError);
+      globalThis.fetch = respond(404, null) as unknown as typeof fetch;
+      await expect(fetchField("swell2_hs", "2026-10-14T12:00:00Z", "r1")).rejects.toBeInstanceOf(FieldMismatchError);
+      globalThis.fetch = respond(500, null) as unknown as typeof fetch;
+      await expect(fetchField("hs", "2026-10-14T12:00:00Z", "r1")).rejects.not.toBeInstanceOf(FieldMismatchError);
+      globalThis.fetch = respond(200, header("2026-10-14T12:00:00Z")) as unknown as typeof fetch;
+      const g = await fetchField("hs", "2026-10-14T12:00:00Z", "r1");
+      expect([g.validTime, g.runKey, g.variable]).toEqual(["2026-10-14T12:00:00Z", "r1", "hs"]);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it("decodes partition variables and refuses unknown ones", () => {
+    const bytes = new Uint8Array(12).fill(40);
+    for (const v of PARTITION_FIELD_VARIABLES) expect(decodeField(bytes, { ...META, variable: v }).variable).toBe(v);
+    expect(() => decodeField(bytes, { ...META, variable: "swell3_hs" })).toThrow(/Unknown field variable/);
+  });
+});
+
+describe("field cache size", () => {
+  it("keeps the step on screen while stepping with partitions, wind overlay and pressure", async () => {
+    // 12 wave fields (3 combined + 9 partitions) + wind u/v + pressure per step, for the step on
+    // screen and both neighbours (the prefetch): 45 fields.
+    const vars = ["hs", "tp", "wave_dir", ...PARTITION_FIELD_VARIABLES, "wind_u", "wind_v", "pressure"];
+    const times = Array.from({ length: 12 }, (_, i) => `t${i}`);
+    const run = async (capacity: number) => {
+      const s = new FieldStore(capacity, async (variable) => field(new Array(12).fill(0), { variable: variable as FieldGrid["variable"] }));
+      let kept = true;
+      for (let i = 1; i < times.length - 1; i++) {
+        for (const v of vars) await s.load(v, times[i]!, "r");
+        for (const t of [times[i + 1]!, times[i - 1]!]) for (const v of vars) await s.load(v, t, "r");
+        kept &&= vars.every((v) => s.has(v, times[i]!, "r"));
+      }
+      return kept;
+    };
+    expect(FIELD_STORE_CAPACITY).toBe(48);
+    expect(await run(FIELD_STORE_CAPACITY)).toBe(true);
+    expect(await run(24)).toBe(false); // the old size evicted the step on screen
+  });
+});
+
+
+describe("wind units on the map (shared with the spot charts)", () => {
+  it("formats m/s wind in every unit, mph included", async () => {
+    const { formatLayerValue, fromDisplay, readout, WIND_UNITS } = await import("@/lib/map-layers");
+    expect(WIND_UNITS).toEqual(["km/h", "mph", "kn", "m/s"]);
+    expect(formatLayerValue("wind", 10, { height: "ft", wind: "mph" })).toBe("22 mph");
+    expect(formatLayerValue("wind", 10, { height: "ft", wind: "km/h" })).toBe("36 km/h");
+    expect(formatLayerValue("wind", 10, { height: "ft", wind: "kn" })).toBe("19 kn");
+    expect(formatLayerValue("wind", 10, { height: "ft", wind: "m/s" })).toBe("10.0 m/s");
+    expect(formatLayerValue("wind", NaN, { height: "ft", wind: "mph" })).toBe("—");
+    expect(fromDisplay("wind", 22.369, { height: "ft", wind: "mph" })).toBeCloseTo(10, 3);
+    // The readout says where the wind comes FROM.
+    expect(readout("wind", { windSpeed: 10, windDir: 270 }, { height: "ft", wind: "mph" })?.text).toBe("22 mph · from W");
+  });
+
+  it("lists the wave partitions under the cursor, height, period and FROM direction", async () => {
+    const { readout } = await import("@/lib/map-layers");
+    const r = readout(
+      "hs",
+      { hs: 2.4, tp: 13, waveDir: 200, partitions: [{ system: "primary", hs: 1.9, tp: 14, dir: 195 }, { system: "windsea", hs: 2.0, tp: 7, dir: 110 }] },
+      { height: "m", wind: "km/h" },
+    );
+    expect(r?.text).toBe("2.4 m · 13 s · from SSW · Primary 1.9 m 14 s from SSW (195°) · Wind sea 2.0 m 7 s from ESE (110°)");
   });
 });

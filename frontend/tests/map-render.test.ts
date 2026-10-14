@@ -66,6 +66,38 @@ describe("field rendering", () => {
   });
 });
 
+describe("wind colour = readout value (WINDVIZ-10)", () => {
+  it("paints the length of the interpolated (u, v), as the readout shows, not interpolated node speeds", async () => {
+    const { sampleGrid } = await import("@/lib/map-fields");
+    // SYNTHETIC: u alternates +10 / -10 m/s between 1° columns, v = 4 m/s everywhere.
+    const nx = 360;
+    const ny = 181;
+    const u = new Float32Array(nx * ny);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) u[j * nx + i] = i % 2 ? -10 : 10;
+    const ug: Grid = { nx, ny, lat0: 90, lon0: -180, dlat: 1, dlon: 1, values: u };
+    const vg: Grid = { ...ug, values: new Float32Array(nx * ny).fill(4) };
+    const scale = LAYER_SCALES.wind;
+    const windLut = buildLut(scale.stops);
+    const view = { originX: 0, originY: 1536, width: 64, height: 64, worldPx: 4096 }; // zoom 4, near the equator
+    const out = buffer(64, 64);
+    renderField(out, view, 1, { grid: ug, v: vg, scale, lut: windLut, minWeight: 0.5, alpha: 255 });
+    for (const [x, y] of [
+      [5, 5],
+      [20, 40],
+      [33, 12],
+    ] as const) {
+      const lat = mercLat((view.originY + y + 0.5) / view.worldPx);
+      const lon = mercLon((view.originX + x + 0.5) / view.worldPx);
+      const speed = Math.hypot(sampleGrid(ug, lat, lon), sampleGrid(vg, lat, lon)); // the readout's value
+      const t = (speed - scale.min) / (scale.max - scale.min);
+      const pos = scale.transform === "sqrt" ? Math.sqrt(Math.max(0, t)) : t;
+      const li = Math.round(Math.min(1, Math.max(0, pos)) * 255) * 4;
+      const k = (y * 64 + x) * 4;
+      for (let c = 0; c < 3; c++) expect(Math.abs(out.data[k + c]! - windLut[li + c]!)).toBeLessThanOrEqual(4);
+    }
+  });
+});
+
 describe("map settings", () => {
   it("keeps only valid stored values", () => {
     expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
