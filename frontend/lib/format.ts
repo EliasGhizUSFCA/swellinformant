@@ -61,6 +61,47 @@ export function formatDateTime(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
+const part = (parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+
+/**
+ * A forecast time in the spot's own zone: "Thu, Oct 15, 7:00 AM"; with `zone` the short zone
+ * name the browser knows is added ("… 7:00 AM GMT+2", "… 1:30 AM EDT"). `hour12: false` gives
+ * "07:00".
+ */
+export function formatSpotDateTime(
+  iso: string,
+  tz: string,
+  opts: { zone?: boolean; hour12?: boolean; weekday?: "short" | "long" } = {},
+): string {
+  const hour12 = opts.hour12 ?? true;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: opts.weekday ?? "short",
+    month: "short",
+    day: "numeric",
+    hour: hour12 ? "numeric" : "2-digit",
+    minute: "2-digit",
+    hourCycle: hour12 ? "h12" : "h23",
+    ...(opts.zone ? { timeZoneName: "short" as const } : {}),
+  }).formatToParts(new Date(iso));
+  const time = `${part(parts, "hour")}:${part(parts, "minute")}${hour12 ? ` ${part(parts, "dayPeriod")}` : ""}`;
+  const text = `${part(parts, "weekday")}, ${part(parts, "month")} ${part(parts, "day")}, ${time}`;
+  return opts.zone ? `${text} ${part(parts, "timeZoneName")}` : text;
+}
+
+/** Hour-axis label at epoch milliseconds `t` in `tz`: "12 AM", "6 AM", "12 PM", "6 PM" ("6:30 AM"
+ * where the zone's offset is not a whole hour from the tick). */
+export function formatHourTick(t: number, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hourCycle: "h12" }).formatToParts(new Date(t));
+  const minute = part(parts, "minute");
+  return `${part(parts, "hour")}${minute === "00" ? "" : `:${minute}`} ${part(parts, "dayPeriod")}`;
+}
+
+/** Short name of the zone's offset at that instant: "PDT", "EST", "GMT+2", "GMT+5:45". */
+export function zoneAbbrev(iso: string, tz: string): string {
+  return part(new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" }).formatToParts(new Date(iso)), "timeZoneName");
+}
+
 /** Plain calendar dates ("2026-07-10") rendered without any timezone shifting. */
 export function formatCalendarDate(value: string | null | undefined, opts: Intl.DateTimeFormatOptions = {}): string {
   if (!value) return "—";

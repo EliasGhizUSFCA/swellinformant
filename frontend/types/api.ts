@@ -47,6 +47,14 @@ export type Research = S["ResearchOut"];
 export type ResearchVariable = S["ResearchVariableOut"];
 export type ResearchSource = S["ResearchSourceOut"];
 
+// The unified spot timeline (GET /api/spots/{slug}/timeline) and its tide / observation blocks.
+export type SpotTimeline = S["SpotTimelineOut"];
+export type TimelineStep = S["TimelineStepOut"];
+export type TimelineDay = S["TimelineDayOut"];
+export type PartitionOut = S["PartitionOut"];
+export type TideBlock = S["TideBlockOut"];
+export type ObservationsBlock = S["ObservationsBlockOut"];
+
 export type SearchInput = S["SearchIn"];
 export type Search = S["SearchOut"];
 export type TravelInput = S["TravelIn"];

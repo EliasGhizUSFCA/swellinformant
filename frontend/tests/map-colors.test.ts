@@ -45,7 +45,13 @@ describe("colour scales", () => {
   });
 
   it("takes the hs / tp display range from the field index when given", () => {
-    const index = { available: true, valid_times: [], variables: [{ name: "hs", label: "Hs", unit: "m", display_min: 0, display_max: 12 }] } as FieldIndex;
+    const index = {
+      available: true,
+      valid_times: [],
+      variables: [{ name: "hs", label: "Hs", unit: "m", display_min: 0, display_max: 12, group: "core" }],
+      stale_after_hours: 12,
+      stale: false,
+    } as FieldIndex;
     expect(layerScale("hs", index).max).toBe(12);
     expect(layerScale("tp", index).max).toBe(20);
     expect(layerScale("wind", index).max).toBe(30);

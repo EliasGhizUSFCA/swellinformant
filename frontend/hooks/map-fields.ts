@@ -12,6 +12,9 @@ const UNAVAILABLE: FieldIndex = {
   message: "Ocean layers could not be loaded right now.",
   valid_times: [],
   variables: [],
+  // What the API itself sends with an unavailable index (no run, so nothing to call stale).
+  stale_after_hours: 12,
+  stale: false,
 };
 
 /** Which ocean-layer fields exist for the current model run. Never throws: a failing

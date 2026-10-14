@@ -17,6 +17,7 @@ import type {
   SpotDetail,
   SpotForecast,
   SpotSummary,
+  SpotTimeline,
   SwellEvent,
   SystemStatus,
   User,
@@ -28,6 +29,7 @@ export const qk = {
   spots: ["spots"] as const,
   spot: (slug: string) => ["spot", slug] as const,
   forecast: (slug: string, days: number) => ["forecast", slug, days] as const,
+  timeline: (slug: string, days: number) => ["timeline", slug, days] as const,
   spotEvents: (slug: string) => ["spot-events", slug] as const,
   spotOpportunities: (slug: string) => ["spot-opportunities", slug] as const,
   events: (limit: number, minScore: number) => ["events", limit, minScore] as const,
@@ -72,6 +74,14 @@ export const useForecast = (slug: string, days = 10) =>
   useQuery({
     queryKey: qk.forecast(slug, days),
     queryFn: ({ signal }) => get<SpotForecast>(`/api/spots/${slug}/forecast?days=${days}`, signal),
+    staleTime: 120_000,
+  });
+
+/** Every chart row of the spot page on one time axis (fetched once; selection is client-side). */
+export const useSpotTimeline = (slug: string, days = 10) =>
+  useQuery({
+    queryKey: qk.timeline(slug, days),
+    queryFn: ({ signal }) => get<SpotTimeline>(`/api/spots/${slug}/timeline?days=${days}`, signal),
     staleTime: 120_000,
   });
 
@@ -181,7 +191,9 @@ export const useVerificationStatus = (enabled: boolean) =>
   });
 
 /** All spots at one forecast hour (cached predictions). Keeps the previous hour on screen
- * while the next loads so scrubbing the time control never blanks the map. */
+ * while the next loads so scrubbing the time control never blanks the map. The "now" snapshot
+ * (`at` null) is refreshed every 5 minutes and when the window regains focus, so a page left
+ * open picks up new model runs. */
 export const useMapConditions = (at: string | null) =>
   useQuery({
     queryKey: qk.mapConditions(at),
@@ -189,4 +201,6 @@ export const useMapConditions = (at: string | null) =>
       get<MapSnapshot>(at ? `/api/map/conditions?at=${encodeURIComponent(at)}` : "/api/map/conditions", signal),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
+    refetchInterval: at === null ? 300_000 : false,
+    refetchOnWindowFocus: at === null,
   });

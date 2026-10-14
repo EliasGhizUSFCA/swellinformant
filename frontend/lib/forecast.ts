@@ -35,6 +35,11 @@ export function pointToConditions(p: ForecastPoint, fc: SpotForecast): Condition
     confidence_reasons: p.confidence_reasons ?? [],
     lead_hours: p.lead_hours ?? null,
     local_confidence_reason: p.local_confidence_reason ?? null,
+    forecast_confidence_reasons: p.forecast_confidence_reasons ?? [],
+    wind_dispute_note: p.wind_dispute_note ?? null,
+    wind_strength: p.wind_strength ?? null,
+    wind_favourability: p.wind_favourability ?? null,
+    gust_kind: p.gust_kind ?? null,
   };
 }
 

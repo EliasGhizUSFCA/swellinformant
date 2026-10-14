@@ -2394,7 +2394,7 @@
       "required": true,
       "schema": {
        "type": "string",
-       "pattern": "^(hs|tp|wave_dir|wind_u|wind_v|pressure)$",
+       "pattern": "^(hs|tp|wave_dir|wind_u|wind_v|pressure|swell1_hs|swell1_tp|swell1_dir|swell2_hs|swell2_tp|swell2_dir|windsea_hs|windsea_tp|windsea_dir)$",
        "title": "Variable"
       }
      },
@@ -2416,6 +2416,25 @@
        "title": "At"
       },
       "description": "Valid time (ISO 8601); default now"
+     },
+     {
+      "name": "run",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 120
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Model run (the index's run_key). Not used yet: the current run is served.",
+       "title": "Run"
+      },
+      "description": "Model run (the index's run_key). Not used yet: the current run is served."
      }
     ],
     "responses": {
@@ -2423,6 +2442,185 @@
       "description": "Successful Response",
       "content": {
        "application/octet-stream": {}
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}/tides": {
+   "get": {
+    "tags": [
+     "tides"
+    ],
+    "summary": "Spot Tides",
+    "description": "Predicted tide heights and high/low waters at the spot's tide station.",
+    "operationId": "spot_tides_api_spots__slug__tides_get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     },
+     {
+      "name": "start",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date-time"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Window start (ISO 8601); default now",
+       "title": "Start"
+      },
+      "description": "Window start (ISO 8601); default now"
+     },
+     {
+      "name": "end",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date-time"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Window end (ISO 8601); default start + TIDE_HORIZON_DAYS",
+       "title": "End"
+      },
+      "description": "Window end (ISO 8601); default start + TIDE_HORIZON_DAYS"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TideBlockOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}/observations": {
+   "get": {
+    "tags": [
+     "tides"
+    ],
+    "summary": "Spot Observations",
+    "description": "Recent measurements at the spot's reference stations (never forecasts).",
+    "operationId": "spot_observations_api_spots__slug__observations_get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ObservationsBlockOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}/timeline": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Spot Timeline",
+    "description": "Every chart row of the spot page on one time axis, for the next ``days`` days.",
+    "operationId": "spot_timeline_api_spots__slug__timeline_get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     },
+     {
+      "name": "days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 16,
+       "minimum": 1,
+       "default": 10,
+       "title": "Days"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SpotTimelineOut"
+        }
+       }
       }
      },
      "422": {
@@ -2791,6 +2989,25 @@
      "timezone"
     ],
     "title": "AirportOut"
+   },
+   "AttributionLinkOut": {
+    "properties": {
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "href": {
+      "type": "string",
+      "title": "Href"
+     }
+    },
+    "type": "object",
+    "required": [
+     "label",
+     "href"
+    ],
+    "title": "AttributionLinkOut",
+    "description": "A credit or licence link the data source asks for (shown next to the data)."
    },
    "AuthOut": {
     "properties": {
@@ -3190,6 +3407,75 @@
        }
       ],
       "title": "Local Confidence Reason"
+     },
+     "forecast_confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Forecast Confidence Reasons",
+      "default": []
+     },
+     "wind_dispute_note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Dispute Note"
+     },
+     "wind_strength": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "glassy",
+         "light",
+         "moderate",
+         "strong"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Strength"
+     },
+     "wind_favourability": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "favourable",
+         "workable",
+         "unfavourable"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Favourability"
+     },
+     "gust_kind": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "gfs_instantaneous",
+         "ecmwf_max_3h",
+         "ecmwf_max_since_pp",
+         "unknown"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kind"
      }
     },
     "type": "object",
@@ -3293,7 +3579,7 @@
       "title": "Avg Wind Kmh"
      },
      "good_hours": {
-      "type": "integer",
+      "type": "number",
       "title": "Good Hours"
      },
      "confidence": {
@@ -3793,6 +4079,80 @@
        }
       ],
       "title": "Local Confidence Reason"
+     },
+     "forecast_confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Forecast Confidence Reasons",
+      "default": []
+     },
+     "wind_dispute_note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Dispute Note"
+     },
+     "wind_strength": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "glassy",
+         "light",
+         "moderate",
+         "strong"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Strength"
+     },
+     "wind_favourability": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "favourable",
+         "workable",
+         "unfavourable"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Favourability"
+     },
+     "gust_kind": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "gfs_instantaneous",
+         "ecmwf_max_3h",
+         "ecmwf_max_since_pp",
+         "unknown"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kind"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
      }
     },
     "type": "object",
@@ -3944,6 +4304,39 @@
       "type": "array",
       "title": "Variables",
       "default": []
+     },
+     "updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Updated At"
+     },
+     "age_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Hours"
+     },
+     "stale_after_hours": {
+      "type": "number",
+      "title": "Stale After Hours",
+      "default": 12.0
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
      }
     },
     "type": "object",
@@ -4001,6 +4394,31 @@
      "display_max": {
       "type": "number",
       "title": "Display Max"
+     },
+     "group": {
+      "type": "string",
+      "enum": [
+       "core",
+       "partition"
+      ],
+      "title": "Group",
+      "default": "core"
+     },
+     "system": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "primary",
+         "secondary",
+         "windsea"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "System"
      }
     },
     "type": "object",
@@ -4431,6 +4849,75 @@
        }
       ],
       "title": "Local Confidence Reason"
+     },
+     "forecast_confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Forecast Confidence Reasons",
+      "default": []
+     },
+     "wind_dispute_note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Dispute Note"
+     },
+     "wind_strength": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "glassy",
+         "light",
+         "moderate",
+         "strong"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Strength"
+     },
+     "wind_favourability": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "favourable",
+         "workable",
+         "unfavourable"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Favourability"
+     },
+     "gust_kind": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "gfs_instantaneous",
+         "ecmwf_max_3h",
+         "ecmwf_max_since_pp",
+         "unknown"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kind"
      }
     },
     "type": "object",
@@ -4514,6 +5001,14 @@
      "status": {
       "type": "string",
       "title": "Status"
+     },
+     "members": {
+      "items": {
+       "$ref": "#/components/schemas/RunMemberOut"
+      },
+      "type": "array",
+      "title": "Members",
+      "default": []
      }
     },
     "type": "object",
@@ -4566,6 +5061,14 @@
        }
       ],
       "title": "Atmosphere Model"
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",
@@ -4989,6 +5492,35 @@
       },
       "type": "array",
       "title": "Spots"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
+     },
+     "newest_run_issued_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Newest Run Issued At"
+     },
+     "last_updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Updated At"
      }
     },
     "type": "object",
@@ -5282,6 +5814,54 @@
       "type": "string",
       "format": "date-time",
       "title": "Updated At"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
      },
      "event": {
       "$ref": "#/components/schemas/EventOut"
@@ -5621,6 +6201,54 @@
       "type": "string",
       "format": "date-time",
       "title": "Updated At"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
      }
     },
     "type": "object",
@@ -6296,6 +6924,49 @@
      "is_demo": {
       "type": "boolean",
       "title": "Is Demo"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -6456,6 +7127,156 @@
     ],
     "title": "NotificationPrefsOut"
    },
+   "ObservationOut": {
+    "properties": {
+     "t": {
+      "type": "string",
+      "format": "date-time",
+      "title": "T"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "instrument",
+       "human_report",
+       "model_analysis"
+      ],
+      "title": "Kind"
+     },
+     "station_code": {
+      "type": "string",
+      "title": "Station Code"
+     },
+     "station_name": {
+      "type": "string",
+      "title": "Station Name"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "relation": {
+      "type": "string",
+      "title": "Relation"
+     },
+     "distance_km": {
+      "type": "number",
+      "title": "Distance Km"
+     },
+     "hs_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs M"
+     },
+     "hs_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs Kind"
+     },
+     "tp_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tp S"
+     },
+     "dir_from_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dir From Deg"
+     },
+     "wind_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Kmh"
+     },
+     "qc_flag": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Qc Flag"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale"
+     },
+     "licence": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Licence"
+     },
+     "attribution": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Attribution"
+     }
+    },
+    "type": "object",
+    "required": [
+     "t",
+     "kind",
+     "station_code",
+     "station_name",
+     "provider",
+     "relation",
+     "distance_km",
+     "hs_m",
+     "hs_kind",
+     "tp_s",
+     "dir_from_deg",
+     "wind_kmh",
+     "qc_flag",
+     "stale",
+     "licence",
+     "attribution"
+    ],
+    "title": "ObservationOut"
+   },
    "ObservationProviderHealthOut": {
     "properties": {
      "provider": {
@@ -6511,6 +7332,43 @@
      "stale_after_hours"
     ],
     "title": "ObservationProviderHealthOut"
+   },
+   "ObservationsBlockOut": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "available",
+       "unavailable",
+       "stale"
+      ],
+      "title": "Status"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/ObservationOut"
+      },
+      "type": "array",
+      "title": "Items",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "status"
+    ],
+    "title": "ObservationsBlockOut"
    },
    "ObservationsHealthOut": {
     "properties": {
@@ -6815,6 +7673,72 @@
     ],
     "title": "PairsOut"
    },
+   "PartitionOut": {
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "primary_swell",
+       "secondary_swell",
+       "tertiary_swell",
+       "wind_sea"
+      ],
+      "title": "Kind"
+     },
+     "height_m": {
+      "type": "number",
+      "title": "Height M"
+     },
+     "period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Period S"
+     },
+     "dir_from_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dir From Deg"
+     },
+     "breaking_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Ft"
+     },
+     "drives_surf": {
+      "type": "boolean",
+      "title": "Drives Surf"
+     }
+    },
+    "type": "object",
+    "required": [
+     "kind",
+     "height_m",
+     "period_s",
+     "dir_from_deg",
+     "breaking_ft",
+     "drives_surf"
+    ],
+    "title": "PartitionOut",
+    "description": "One wave system of the model; only systems the model provides are listed."
+   },
    "PhoneConfirmIn": {
     "properties": {
      "code": {
@@ -7112,6 +8036,59 @@
     ],
     "title": "ProfileOut"
    },
+   "ProvenanceOut": {
+    "properties": {
+     "source": {
+      "$ref": "#/components/schemas/ForecastSourceOut"
+     },
+     "run": {
+      "$ref": "#/components/schemas/TimelineRunOut"
+     },
+     "members": {
+      "items": {
+       "$ref": "#/components/schemas/RunMemberOut"
+      },
+      "type": "array",
+      "title": "Members",
+      "default": []
+     },
+     "breaking_method": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Method"
+     },
+     "algorithm_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Algorithm Version"
+     },
+     "calibrated": {
+      "type": "boolean",
+      "title": "Calibrated"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source",
+     "run",
+     "breaking_method",
+     "algorithm_version",
+     "calibrated"
+    ],
+    "title": "ProvenanceOut"
+   },
    "QualityLabel": {
     "type": "string",
     "enum": [
@@ -7405,6 +8382,72 @@
      "token"
     ],
     "title": "ResetPasswordIn"
+   },
+   "RunMemberOut": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "family": {
+      "type": "string",
+      "title": "Family"
+     },
+     "run_key": {
+      "type": "string",
+      "title": "Run Key"
+     },
+     "init_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Init Time"
+     },
+     "wave_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model"
+     },
+     "atmosphere_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Atmosphere Model"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "family",
+     "run_key",
+     "init_time",
+     "wave_model",
+     "atmosphere_model"
+    ],
+    "title": "RunMemberOut",
+    "description": "One model run behind a forecast (a blend member, or the single source itself)."
    },
    "ScatterPoint": {
     "properties": {
@@ -8671,6 +9714,23 @@
         "type": "null"
        }
       ]
+     },
+     "alerts_paused": {
+      "type": "boolean",
+      "title": "Alerts Paused",
+      "default": false
+     },
+     "generated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Generated At"
      }
     },
     "type": "object",
@@ -8898,6 +9958,93 @@
     ],
     "title": "SpotSummary"
    },
+   "SpotTimelineOut": {
+    "properties": {
+     "spot_slug": {
+      "type": "string",
+      "title": "Spot Slug"
+     },
+     "timezone": {
+      "type": "string",
+      "title": "Timezone"
+     },
+     "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Generated At"
+     },
+     "available": {
+      "type": "boolean",
+      "title": "Available"
+     },
+     "message": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Message"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale"
+     },
+     "units": {
+      "$ref": "#/components/schemas/TimelineUnitsOut"
+     },
+     "steps_meta": {
+      "$ref": "#/components/schemas/StepsMetaOut"
+     },
+     "provenance": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ProvenanceOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "days": {
+      "items": {
+       "$ref": "#/components/schemas/TimelineDayOut"
+      },
+      "type": "array",
+      "title": "Days"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/TimelineStepOut"
+      },
+      "type": "array",
+      "title": "Steps"
+     },
+     "tide": {
+      "$ref": "#/components/schemas/TideBlockOut"
+     },
+     "observations": {
+      "$ref": "#/components/schemas/ObservationsBlockOut"
+     }
+    },
+    "type": "object",
+    "required": [
+     "spot_slug",
+     "timezone",
+     "generated_at",
+     "available",
+     "stale",
+     "units",
+     "steps_meta",
+     "days",
+     "steps",
+     "tide",
+     "observations"
+    ],
+    "title": "SpotTimelineOut"
+   },
    "StationSummary": {
     "properties": {
      "code": {
@@ -8974,6 +10121,452 @@
     ],
     "title": "StationSummary"
    },
+   "StepBreakingOut": {
+    "properties": {
+     "central_ft": {
+      "type": "number",
+      "title": "Central Ft"
+     },
+     "typical_ft": {
+      "type": "number",
+      "title": "Typical Ft"
+     },
+     "sets_ft": {
+      "type": "number",
+      "title": "Sets Ft"
+     },
+     "p10_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P10 Ft"
+     },
+     "p90_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P90 Ft"
+     },
+     "uncertainty_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Uncertainty Kind"
+     }
+    },
+    "type": "object",
+    "required": [
+     "central_ft",
+     "typical_ft",
+     "sets_ft",
+     "p10_ft",
+     "p90_ft",
+     "uncertainty_kind"
+    ],
+    "title": "StepBreakingOut",
+    "description": "Our predicted breaking (face) height at the break, in feet."
+   },
+   "StepOffshoreOut": {
+    "properties": {
+     "hs_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs M"
+     },
+     "tp_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tp S"
+     },
+     "period_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Period Kind"
+     },
+     "dir_from_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dir From Deg"
+     }
+    },
+    "type": "object",
+    "required": [
+     "hs_m",
+     "tp_s",
+     "period_kind",
+     "dir_from_deg"
+    ],
+    "title": "StepOffshoreOut",
+    "description": "Raw offshore model sea state (significant height, not surf height)."
+   },
+   "StepQualityOut": {
+    "properties": {
+     "score": {
+      "type": "integer",
+      "title": "Score"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "forecast_confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Forecast Confidence Reasons"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
+     }
+    },
+    "type": "object",
+    "required": [
+     "score",
+     "label",
+     "forecast_confidence_class",
+     "local_confidence_class",
+     "forecast_confidence_reasons",
+     "local_confidence_reason"
+    ],
+    "title": "StepQualityOut"
+   },
+   "StepSegmentOut": {
+    "properties": {
+     "start": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Start"
+     },
+     "end": {
+      "type": "string",
+      "format": "date-time",
+      "title": "End"
+     },
+     "step_hours": {
+      "type": "number",
+      "title": "Step Hours"
+     }
+    },
+    "type": "object",
+    "required": [
+     "start",
+     "end",
+     "step_hours"
+    ],
+    "title": "StepSegmentOut",
+    "description": "A stretch of steps with the same spacing: ``start`` is the first step of the stretch,\n``end`` its last step plus one step."
+   },
+   "StepTideOut": {
+    "properties": {
+     "height_m": {
+      "type": "number",
+      "title": "Height M"
+     },
+     "rising": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rising"
+     },
+     "stage": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stage"
+     }
+    },
+    "type": "object",
+    "required": [
+     "height_m",
+     "rising",
+     "stage"
+    ],
+    "title": "StepTideOut"
+   },
+   "StepWhyOut": {
+    "properties": {
+     "fits": {
+      "additionalProperties": {
+       "type": "number"
+      },
+      "type": "object",
+      "title": "Fits"
+     },
+     "gates": {
+      "additionalProperties": {
+       "type": "number"
+      },
+      "type": "object",
+      "title": "Gates"
+     },
+     "contributions": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "number"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Contributions"
+     },
+     "tide_included": {
+      "type": "boolean",
+      "title": "Tide Included"
+     },
+     "explanation": {
+      "type": "string",
+      "title": "Explanation"
+     }
+    },
+    "type": "object",
+    "required": [
+     "fits",
+     "gates",
+     "contributions",
+     "tide_included",
+     "explanation"
+    ],
+    "title": "StepWhyOut",
+    "description": "What drove the score: factor fits and gates (0..1), points lost per factor."
+   },
+   "StepWindOut": {
+    "properties": {
+     "speed_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Speed Kmh"
+     },
+     "gust_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kmh"
+     },
+     "gust_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kind"
+     },
+     "gust_below_mean": {
+      "type": "boolean",
+      "title": "Gust Below Mean"
+     },
+     "dir_from_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dir From Deg"
+     },
+     "relation": {
+      "type": "string",
+      "title": "Relation"
+     },
+     "strength": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Strength"
+     },
+     "favourability": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Favourability"
+     },
+     "fit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fit"
+     },
+     "offshore_component_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Offshore Component Kmh"
+     },
+     "cross_component_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cross Component Kmh"
+     }
+    },
+    "type": "object",
+    "required": [
+     "speed_kmh",
+     "gust_kmh",
+     "gust_kind",
+     "gust_below_mean",
+     "dir_from_deg",
+     "relation",
+     "strength",
+     "favourability",
+     "fit",
+     "offshore_component_kmh",
+     "cross_component_kmh"
+    ],
+    "title": "StepWindOut"
+   },
+   "StepsMetaOut": {
+    "properties": {
+     "segments": {
+      "items": {
+       "$ref": "#/components/schemas/StepSegmentOut"
+      },
+      "type": "array",
+      "title": "Segments"
+     },
+     "interpolation": {
+      "type": "string",
+      "const": "none",
+      "title": "Interpolation",
+      "default": "none"
+     },
+     "policy": {
+      "type": "string",
+      "const": "nearest-valid-step",
+      "title": "Policy",
+      "default": "nearest-valid-step"
+     }
+    },
+    "type": "object",
+    "required": [
+     "segments"
+    ],
+    "title": "StepsMetaOut"
+   },
    "StorageOut": {
     "properties": {
      "database_bytes": {
@@ -8997,6 +10590,589 @@
      "database_bytes"
     ],
     "title": "StorageOut"
+   },
+   "TideBlockOut": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "available",
+       "unavailable",
+       "demo"
+      ],
+      "title": "Status"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "station": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/TideStationOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "source": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source"
+     },
+     "datum": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "MLLW",
+         "MSL",
+         "LAT",
+         "model_msl"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Datum"
+     },
+     "units": {
+      "type": "string",
+      "const": "m",
+      "title": "Units",
+      "default": "m"
+     },
+     "curve": {
+      "items": {
+       "$ref": "#/components/schemas/TidePointOut"
+      },
+      "type": "array",
+      "title": "Curve",
+      "default": []
+     },
+     "events": {
+      "items": {
+       "$ref": "#/components/schemas/TideEventOut"
+      },
+      "type": "array",
+      "title": "Events",
+      "default": []
+     },
+     "preference": {
+      "$ref": "#/components/schemas/TidePreferenceOut"
+     },
+     "attribution": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Attribution"
+     },
+     "fetched_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fetched At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "status",
+     "preference"
+    ],
+    "title": "TideBlockOut"
+   },
+   "TideEventOut": {
+    "properties": {
+     "t": {
+      "type": "string",
+      "format": "date-time",
+      "title": "T"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "high",
+       "low"
+      ],
+      "title": "Kind"
+     },
+     "height_m": {
+      "type": "number",
+      "title": "Height M"
+     }
+    },
+    "type": "object",
+    "required": [
+     "t",
+     "kind",
+     "height_m"
+    ],
+    "title": "TideEventOut"
+   },
+   "TidePointOut": {
+    "properties": {
+     "t": {
+      "type": "string",
+      "format": "date-time",
+      "title": "T"
+     },
+     "height_m": {
+      "type": "number",
+      "title": "Height M"
+     },
+     "interpolated": {
+      "type": "boolean",
+      "title": "Interpolated"
+     }
+    },
+    "type": "object",
+    "required": [
+     "t",
+     "height_m",
+     "interpolated"
+    ],
+    "title": "TidePointOut"
+   },
+   "TidePreferenceOut": {
+    "properties": {
+     "value": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Value"
+     },
+     "research_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Class"
+     },
+     "decision": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Decision"
+     },
+     "text": {
+      "type": "string",
+      "title": "Text"
+     }
+    },
+    "type": "object",
+    "required": [
+     "value",
+     "research_class",
+     "decision",
+     "text"
+    ],
+    "title": "TidePreferenceOut",
+    "description": "The spot's researched tide preference, and how far it can be trusted."
+   },
+   "TideStationOut": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "harmonic",
+       "subordinate",
+       "model"
+      ],
+      "title": "Kind"
+     },
+     "distance_km": {
+      "type": "number",
+      "title": "Distance Km"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "provider",
+     "kind",
+     "distance_km"
+    ],
+    "title": "TideStationOut"
+   },
+   "TimelineDayOut": {
+    "properties": {
+     "date": {
+      "type": "string",
+      "format": "date",
+      "title": "Date"
+     },
+     "start_utc": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Start Utc"
+     },
+     "end_utc": {
+      "type": "string",
+      "format": "date-time",
+      "title": "End Utc"
+     },
+     "sunrise": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sunrise"
+     },
+     "sunset": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sunset"
+     },
+     "first_light": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "First Light"
+     },
+     "last_light": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Light"
+     },
+     "polar_state": {
+      "type": "string",
+      "enum": [
+       "normal",
+       "polar_day",
+       "polar_night"
+      ],
+      "title": "Polar State"
+     },
+     "best_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Time"
+     },
+     "best_score": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Score"
+     },
+     "best_label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Label"
+     },
+     "good_hours": {
+      "type": "number",
+      "title": "Good Hours"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     }
+    },
+    "type": "object",
+    "required": [
+     "date",
+     "start_utc",
+     "end_utc",
+     "sunrise",
+     "sunset",
+     "first_light",
+     "last_light",
+     "polar_state",
+     "best_time",
+     "best_score",
+     "best_label",
+     "good_hours",
+     "forecast_confidence_class"
+    ],
+    "title": "TimelineDayOut"
+   },
+   "TimelineRunOut": {
+    "properties": {
+     "run_key": {
+      "type": "string",
+      "title": "Run Key"
+     },
+     "init_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Init Time"
+     },
+     "completed_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Completed At"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "age_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Hours"
+     },
+     "stale_after_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stale After Hours"
+     }
+    },
+    "type": "object",
+    "required": [
+     "run_key",
+     "init_time",
+     "completed_at",
+     "status",
+     "age_hours",
+     "stale_after_hours"
+    ],
+    "title": "TimelineRunOut"
+   },
+   "TimelineStepOut": {
+    "properties": {
+     "t": {
+      "type": "string",
+      "format": "date-time",
+      "title": "T"
+     },
+     "step_hours": {
+      "type": "number",
+      "title": "Step Hours"
+     },
+     "lead_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lead Hours"
+     },
+     "is_daylight": {
+      "type": "boolean",
+      "title": "Is Daylight"
+     },
+     "interpolated": {
+      "type": "boolean",
+      "title": "Interpolated"
+     },
+     "quality": {
+      "$ref": "#/components/schemas/StepQualityOut"
+     },
+     "breaking": {
+      "$ref": "#/components/schemas/StepBreakingOut"
+     },
+     "offshore": {
+      "$ref": "#/components/schemas/StepOffshoreOut"
+     },
+     "partitions": {
+      "items": {
+       "$ref": "#/components/schemas/PartitionOut"
+      },
+      "type": "array",
+      "title": "Partitions"
+     },
+     "wind": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/StepWindOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "tide": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/StepTideOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "why": {
+      "$ref": "#/components/schemas/StepWhyOut"
+     }
+    },
+    "type": "object",
+    "required": [
+     "t",
+     "step_hours",
+     "lead_hours",
+     "is_daylight",
+     "interpolated",
+     "quality",
+     "breaking",
+     "offshore",
+     "partitions",
+     "wind",
+     "tide",
+     "why"
+    ],
+    "title": "TimelineStepOut"
+   },
+   "TimelineUnitsOut": {
+    "properties": {
+     "breaking": {
+      "type": "string",
+      "const": "ft",
+      "title": "Breaking",
+      "default": "ft"
+     },
+     "offshore": {
+      "type": "string",
+      "const": "m",
+      "title": "Offshore",
+      "default": "m"
+     },
+     "wind": {
+      "type": "string",
+      "const": "km/h",
+      "title": "Wind",
+      "default": "km/h"
+     },
+     "tide": {
+      "type": "string",
+      "const": "m",
+      "title": "Tide",
+      "default": "m"
+     }
+    },
+    "type": "object",
+    "title": "TimelineUnitsOut"
    },
    "TokenIn": {
     "properties": {

@@ -38,6 +38,7 @@ function point(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
     forecast_confidence_class: "high",
     local_confidence_class: "low",
     confidence_reasons: ["Synthetic: models agree.", "Synthetic: this break's research is thin."],
+    forecast_confidence_reasons: ["Synthetic: models agree."],
     lead_hours: 18,
     local_confidence_reason: "Synthetic: the API's own reason for this hour.",
     ...overrides,
@@ -54,6 +55,7 @@ const FORECAST = {
   daily: [],
   models: [],
   ensemble: [],
+  alerts_paused: false,
 } as SpotForecast;
 
 describe("pointToConditions", () => {
