@@ -1,0 +1,2235 @@
+{
+ "spot_slug": "jeffreys-bay",
+ "timezone": "Africa/Johannesburg",
+ "generated_at": "2026-10-12T04:00:00Z",
+ "available": true,
+ "message": null,
+ "stale": false,
+ "units": {
+  "breaking": "ft",
+  "offshore": "m",
+  "wind": "km/h",
+  "tide": "m"
+ },
+ "steps_meta": {
+  "segments": [
+   {
+    "start": "2026-10-12T03:00:00Z",
+    "end": "2026-10-15T00:00:00Z",
+    "step_hours": 3.0
+   }
+  ],
+  "interpolation": "none",
+  "policy": "nearest-valid-step"
+ },
+ "provenance": {
+  "source": {
+   "code": "blend",
+   "name": "Swell Travel Agent multi-model blend",
+   "is_demo": false,
+   "attribution": "Combination of the member sources listed on each run; their attributions and licences apply. NOAA/NCEP Global Forecast System (GFS) and GFS-Wave (WAVEWATCH III), via the NOAA Open Data Dissemination (NODD) program. Contains modified ECMWF open data: Copyright European Centre for Medium-Range Weather Forecasts (ECMWF), IFS HRES and ecWAM real-time forecasts, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Modified by Swell Travel Agent: sampled to the nearest grid cell of each spot and converted to other units (wind m/s to km/h, pressure Pa to hPa); derived values such as hs_ge_12s_m are ours, not ECMWF's.",
+   "wave_model": "blend of independent wave models",
+   "atmosphere_model": "blend of independent atmospheric models",
+   "attribution_links": []
+  },
+  "run": {
+   "run_key": "blend:6e67a441174f999b",
+   "init_time": "2026-10-11T12:00:00Z",
+   "completed_at": "2026-10-12T03:49:32.119781Z",
+   "status": "success",
+   "age_hours": 16.0,
+   "stale_after_hours": null
+  },
+  "members": [
+   {
+    "code": "noaa_gfs_direct",
+    "name": "NOAA GFS-Wave + GFS (direct from NOAA open data)",
+    "family": "ncep_gfs",
+    "run_key": "noaa-gfs:2026101118",
+    "init_time": "2026-10-11T18:00:00Z",
+    "wave_model": "GFS-Wave WW3 global.0p16+gsouth.0p25 (global.0p25 fallback)",
+    "atmosphere_model": "GFS 0.25 deg"
+   },
+   {
+    "code": "ecmwf_ifs_open",
+    "name": "ECMWF IFS HRES + ecWAM (open data, 0.25\u00b0)",
+    "family": "ecmwf_ifs",
+    "run_key": "ecmwf-ifs:2026101112",
+    "init_time": "2026-10-11T12:00:00Z",
+    "wave_model": "ecmwf_ifs_ecwam_0p25",
+    "atmosphere_model": "ecmwf_ifs_hres_0p25"
+   }
+  ],
+  "breaking_method": "linear_wave_v2",
+  "algorithm_version": "2.0.0",
+  "calibrated": false
+ },
+ "days": [
+  {
+   "date": "2026-10-12",
+   "start_utc": "2026-10-11T22:00:00Z",
+   "end_utc": "2026-10-12T22:00:00Z",
+   "sunrise": "2026-10-12T03:43:12.966584Z",
+   "sunset": "2026-10-12T16:29:54.688248Z",
+   "first_light": "2026-10-12T03:23:12.966584Z",
+   "last_light": "2026-10-12T16:49:54.688248Z",
+   "polar_state": "normal",
+   "best_time": "2026-10-12T06:00:00Z",
+   "best_score": 73,
+   "best_label": "very_good",
+   "good_hours": 9.0,
+   "forecast_confidence_class": "high"
+  },
+  {
+   "date": "2026-10-13",
+   "start_utc": "2026-10-12T22:00:00Z",
+   "end_utc": "2026-10-13T22:00:00Z",
+   "sunrise": "2026-10-13T03:41:55.765143Z",
+   "sunset": "2026-10-13T16:30:42.763071Z",
+   "first_light": "2026-10-13T03:21:55.765143Z",
+   "last_light": "2026-10-13T16:50:42.763071Z",
+   "polar_state": "normal",
+   "best_time": "2026-10-13T06:00:00Z",
+   "best_score": 59,
+   "best_label": "good",
+   "good_hours": 3.0,
+   "forecast_confidence_class": "high"
+  },
+  {
+   "date": "2026-10-14",
+   "start_utc": "2026-10-13T22:00:00Z",
+   "end_utc": "2026-10-14T22:00:00Z",
+   "sunrise": "2026-10-14T03:40:39.292989Z",
+   "sunset": "2026-10-14T16:31:31.312049Z",
+   "first_light": "2026-10-14T03:20:39.292989Z",
+   "last_light": "2026-10-14T16:51:31.312049Z",
+   "polar_state": "normal",
+   "best_time": "2026-10-14T06:00:00Z",
+   "best_score": 49,
+   "best_label": "fair",
+   "good_hours": 0.0,
+   "forecast_confidence_class": "high"
+  }
+ ],
+ "steps": [
+  {
+   "t": "2026-10-12T03:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 15.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 75,
+    "label": "very_good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A forecast less than a day ahead.",
+     "Not yet checked against buoys near this spot.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.46,
+    "typical_ft": 7.5,
+    "sets_ft": 9.5,
+    "p10_ft": 4.9,
+    "p90_ft": 11.4,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.957,
+    "tp_s": 11.9,
+    "period_kind": "tp",
+    "dir_from_deg": 220.0
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.723,
+     "period_s": 12.05,
+     "dir_from_deg": 224.8,
+     "breaking_ft": 7.42,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.834,
+     "period_s": 8.98,
+     "dir_from_deg": 95.7,
+     "breaking_ft": 0.47,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.389,
+     "period_s": 11.59,
+     "dir_from_deg": 158.9,
+     "breaking_ft": 1.15,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 13.07,
+    "gust_kmh": 16.39,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 338.1,
+    "relation": "cross-offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.911,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.41,
+     "wave_size": 0.871,
+     "wind": 0.911,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.91,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.7 m @ 12 s SW swell, well aligned with the break; cross-offshore wind 13 km/h from NNW; approx. 7.5\u20139.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-12T06:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 18.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 73,
+    "label": "very_good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 1-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.31,
+    "typical_ft": 7.5,
+    "sets_ft": 9.5,
+    "p10_ft": 4.8,
+    "p90_ft": 11.2,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.961,
+    "tp_s": 11.63,
+    "period_kind": "tp",
+    "dir_from_deg": 220.1
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.689,
+     "period_s": 11.86,
+     "dir_from_deg": 223.4,
+     "breaking_ft": 7.28,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.861,
+     "period_s": 8.95,
+     "dir_from_deg": 93.5,
+     "breaking_ft": 0.44,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.218,
+     "period_s": 11.73,
+     "dir_from_deg": 160.9,
+     "breaking_ft": 0.78,
+     "drives_surf": false
+    },
+    {
+     "kind": "wind_sea",
+     "height_m": 0.458,
+     "period_s": 2.63,
+     "dir_from_deg": 257.8,
+     "breaking_ft": 1.05,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 20.12,
+    "gust_kmh": 32.68,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 267.7,
+    "relation": "offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.963,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.381,
+     "wave_size": 0.866,
+     "wind": 0.963,
+     "consistency": 0.945
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.881,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.7 m @ 12 s SW swell, well aligned with the break; offshore wind 20 km/h from W; approx. 7.5\u20139.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-12T09:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 21.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 19,
+    "label": "poor",
+    "forecast_confidence_class": "moderate",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "GFS and ECMWF disagree on the wind.",
+     "A 1-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": null
+   },
+   "breaking": {
+    "central_ft": 7.19,
+    "typical_ft": 7.0,
+    "sets_ft": 9.0,
+    "p10_ft": 4.7,
+    "p90_ft": 10.9,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.107,
+    "tp_s": 11.43,
+    "period_kind": "tp",
+    "dir_from_deg": 221.2
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 0.812,
+     "period_s": 8.86,
+     "dir_from_deg": 91.6,
+     "breaking_ft": 0.39,
+     "drives_surf": false
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.329,
+     "period_s": 11.72,
+     "dir_from_deg": 159.5,
+     "breaking_ft": 1.03,
+     "drives_surf": false
+    },
+    {
+     "kind": "wind_sea",
+     "height_m": 1.922,
+     "period_s": 11.7,
+     "dir_from_deg": 234.4,
+     "breaking_ft": 7.16,
+     "drives_surf": true
+    }
+   ],
+   "wind": {
+    "speed_kmh": 23.09,
+    "gust_kmh": 36.4,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 212.0,
+    "relation": "cross-offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.604,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 0.0,
+     "swell_period": 0.0,
+     "wave_size": 0.862,
+     "wind": 0.604,
+     "consistency": 0.172
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.5,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "0.8 m @ 9 s E swell, poorly aligned / partly blocked; cross-offshore wind 23 km/h from SSW; approx. 7\u20139 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-12T12:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 24.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 63,
+    "label": "good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 1-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.28,
+    "typical_ft": 7.5,
+    "sets_ft": 9.0,
+    "p10_ft": 4.8,
+    "p90_ft": 11.0,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.169,
+    "tp_s": 11.42,
+    "period_kind": "tp",
+    "dir_from_deg": 222.3
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.576,
+     "period_s": 11.63,
+     "dir_from_deg": 225.1,
+     "breaking_ft": 6.81,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.726,
+     "period_s": 8.87,
+     "dir_from_deg": 92.4,
+     "breaking_ft": 0.37,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.246,
+     "period_s": 11.27,
+     "dir_from_deg": 159.6,
+     "breaking_ft": 0.8,
+     "drives_surf": false
+    },
+    {
+     "kind": "wind_sea",
+     "height_m": 1.269,
+     "period_s": 5.07,
+     "dir_from_deg": 247.7,
+     "breaking_ft": 3.4,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 22.19,
+    "gust_kmh": 38.5,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 231.5,
+    "relation": "cross-offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.761,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.351,
+     "wave_size": 0.865,
+     "wind": 0.761,
+     "consistency": 0.652
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.851,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.6 m @ 12 s SW swell, well aligned with the break; cross-offshore wind 22 km/h from SW; approx. 7.5\u20139 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-12T15:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 27.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 62,
+    "label": "good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 1-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.28,
+    "typical_ft": 7.5,
+    "sets_ft": 9.0,
+    "p10_ft": 4.8,
+    "p90_ft": 11.0,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.071,
+    "tp_s": 11.48,
+    "period_kind": "tp",
+    "dir_from_deg": 222.5
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.61,
+     "period_s": 11.62,
+     "dir_from_deg": 225.7,
+     "breaking_ft": 6.92,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.666,
+     "period_s": 9.07,
+     "dir_from_deg": 92.1,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.236,
+     "period_s": 11.43,
+     "dir_from_deg": 160.4,
+     "breaking_ft": 0.81,
+     "drives_surf": false
+    },
+    {
+     "kind": "wind_sea",
+     "height_m": 1.087,
+     "period_s": 4.93,
+     "dir_from_deg": 243.8,
+     "breaking_ft": 3.04,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 16.19,
+    "gust_kmh": 27.1,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 211.5,
+    "relation": "cross-offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.701,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.349,
+     "wave_size": 0.865,
+     "wind": 0.701,
+     "consistency": 0.72
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.849,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.6 m @ 12 s SW swell, well aligned with the break; cross-offshore wind 16 km/h from SSW; approx. 7.5\u20139 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-12T18:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 30.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 67,
+    "label": "good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 1-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.12,
+    "typical_ft": 7.0,
+    "sets_ft": 9.0,
+    "p10_ft": 4.7,
+    "p90_ft": 10.8,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.034,
+    "tp_s": 11.43,
+    "period_kind": "tp",
+    "dir_from_deg": 222.5
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.566,
+     "period_s": 11.56,
+     "dir_from_deg": 226.5,
+     "breaking_ft": 6.74,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 1.088,
+     "period_s": 5.11,
+     "dir_from_deg": 242.6,
+     "breaking_ft": 3.12,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.651,
+     "period_s": 9.47,
+     "dir_from_deg": 91.2,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 11.86,
+    "gust_kmh": 12.92,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 352.0,
+    "relation": "cross-offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.879,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.341,
+     "wave_size": 0.859,
+     "wind": 0.879,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.841,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.6 m @ 12 s SW swell, well aligned with the break; cross-offshore wind 12 km/h from N; approx. 7\u20139 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-12T21:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 33.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 64,
+    "label": "good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 1-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 6.99,
+    "typical_ft": 7.0,
+    "sets_ft": 9.0,
+    "p10_ft": 4.6,
+    "p90_ft": 10.6,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.929,
+    "tp_s": 11.17,
+    "period_kind": "tp",
+    "dir_from_deg": 223.7
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.564,
+     "period_s": 11.36,
+     "dir_from_deg": 227.4,
+     "breaking_ft": 6.67,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.886,
+     "period_s": 5.95,
+     "dir_from_deg": 238.1,
+     "breaking_ft": 2.89,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.657,
+     "period_s": 9.47,
+     "dir_from_deg": 90.7,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 10.32,
+    "gust_kmh": 19.39,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 359.0,
+    "relation": "cross-offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.886,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.315,
+     "wave_size": 0.855,
+     "wind": 0.886,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.815,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.6 m @ 11 s SW swell, well aligned with the break; cross-offshore wind 10 km/h from N; approx. 7\u20139 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-13T00:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 36.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 63,
+    "label": "good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 2-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.61,
+    "typical_ft": 7.5,
+    "sets_ft": 9.5,
+    "p10_ft": 5.0,
+    "p90_ft": 11.6,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.996,
+    "tp_s": 10.81,
+    "period_kind": "tp",
+    "dir_from_deg": 223.3
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.87,
+     "period_s": 11.01,
+     "dir_from_deg": 227.5,
+     "breaking_ft": 7.6,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.662,
+     "period_s": 9.57,
+     "dir_from_deg": 90.2,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.21,
+     "period_s": 10.23,
+     "dir_from_deg": 158.6,
+     "breaking_ft": 0.66,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 6.82,
+    "gust_kmh": 8.67,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 294.8,
+    "relation": "offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 1.0,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.268,
+     "wave_size": 0.876,
+     "wind": 1.0,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.768,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.9 m @ 11 s SW swell, well aligned with the break; offshore wind 7 km/h from WNW; approx. 7.5\u20139.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-13T03:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 39.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 61,
+    "label": "good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 2-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 8.15,
+    "typical_ft": 8.0,
+    "sets_ft": 10.5,
+    "p10_ft": 5.3,
+    "p90_ft": 12.5,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.163,
+    "tp_s": 10.62,
+    "period_kind": "tp",
+    "dir_from_deg": 222.5
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 2.058,
+     "period_s": 10.85,
+     "dir_from_deg": 227.9,
+     "breaking_ft": 8.15,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.644,
+     "period_s": 9.7,
+     "dir_from_deg": 90.1,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.179,
+     "period_s": 10.76,
+     "dir_from_deg": 158.1,
+     "breaking_ft": 0.58,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 11.3,
+    "gust_kmh": 18.7,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 282.0,
+    "relation": "offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.998,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.247,
+     "wave_size": 0.895,
+     "wind": 0.998,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.747,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "2.1 m @ 11 s SW swell, well aligned with the break; offshore wind 11 km/h from WNW; approx. 8\u201310.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-13T06:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 42.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 59,
+    "label": "good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 2-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 8.36,
+    "typical_ft": 8.5,
+    "sets_ft": 10.5,
+    "p10_ft": 5.5,
+    "p90_ft": 12.7,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.234,
+    "tp_s": 10.55,
+    "period_kind": "tp",
+    "dir_from_deg": 222.9
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 2.14,
+     "period_s": 10.77,
+     "dir_from_deg": 229.1,
+     "breaking_ft": 8.36,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.616,
+     "period_s": 9.63,
+     "dir_from_deg": 90.3,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 14.48,
+    "gust_kmh": 20.39,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 255.2,
+    "relation": "offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.944,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.236,
+     "wave_size": 0.902,
+     "wind": 0.944,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.736,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "2.1 m @ 11 s SW swell, well aligned with the break; offshore wind 14 km/h from WSW; approx. 8.5\u201310.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-13T09:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 45.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 49,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 2-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 8.21,
+    "typical_ft": 8.0,
+    "sets_ft": 10.5,
+    "p10_ft": 5.4,
+    "p90_ft": 12.5,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.21,
+    "tp_s": 10.36,
+    "period_kind": "tp",
+    "dir_from_deg": 225.4
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 2.127,
+     "period_s": 10.44,
+     "dir_from_deg": 229.7,
+     "breaking_ft": 8.21,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.581,
+     "period_s": 9.55,
+     "dir_from_deg": 90.7,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 16.42,
+    "gust_kmh": 20.31,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 211.3,
+    "relation": "cross-offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.694,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.192,
+     "wave_size": 0.897,
+     "wind": 0.694,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.692,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "2.1 m @ 10 s SW swell, well aligned with the break; cross-offshore wind 16 km/h from SSW; approx. 8\u201310.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-13T12:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 48.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 44,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 2-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.97,
+    "typical_ft": 8.0,
+    "sets_ft": 10.0,
+    "p10_ft": 5.3,
+    "p90_ft": 12.1,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.144,
+    "tp_s": 10.29,
+    "period_kind": "tp",
+    "dir_from_deg": 225.5
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 2.073,
+     "period_s": 10.26,
+     "dir_from_deg": 229.8,
+     "breaking_ft": 7.97,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.554,
+     "period_s": 9.47,
+     "dir_from_deg": 91.3,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.174,
+     "period_s": 11.33,
+     "dir_from_deg": 158.1,
+     "breaking_ft": 0.58,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 16.83,
+    "gust_kmh": 22.71,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 191.5,
+    "relation": "cross-shore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.548,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.168,
+     "wave_size": 0.889,
+     "wind": 0.548,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.668,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "2.1 m @ 10 s SW swell, well aligned with the break; cross-shore wind 17 km/h from SSW; approx. 8\u201310 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-13T15:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 51.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 48,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 2-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.83,
+    "typical_ft": 8.0,
+    "sets_ft": 10.0,
+    "p10_ft": 5.2,
+    "p90_ft": 11.9,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.094,
+    "tp_s": 10.28,
+    "period_kind": "tp",
+    "dir_from_deg": 225.7
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 2.023,
+     "period_s": 10.16,
+     "dir_from_deg": 228.2,
+     "breaking_ft": 7.83,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.531,
+     "period_s": 9.34,
+     "dir_from_deg": 91.4,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 9.65,
+    "gust_kmh": 15.72,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 188.9,
+    "relation": "cross-shore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.815,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.155,
+     "wave_size": 0.884,
+     "wind": 0.815,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.655,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "2.0 m @ 10 s SW swell, well aligned with the break; cross-shore wind 10 km/h from S; approx. 8\u201310 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-13T18:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 54.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 52,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 2-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.7,
+    "typical_ft": 7.5,
+    "sets_ft": 10.0,
+    "p10_ft": 5.1,
+    "p90_ft": 11.7,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.051,
+    "tp_s": 10.26,
+    "period_kind": "tp",
+    "dir_from_deg": 225.7
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.979,
+     "period_s": 10.13,
+     "dir_from_deg": 227.7,
+     "breaking_ft": 7.7,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.513,
+     "period_s": 9.2,
+     "dir_from_deg": 92.0,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.195,
+     "period_s": 10.66,
+     "dir_from_deg": 158.0,
+     "breaking_ft": 0.62,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 5.3,
+    "gust_kmh": 6.09,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 44.7,
+    "relation": "cross-onshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.986,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.151,
+     "wave_size": 0.879,
+     "wind": 0.986,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.651,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "2.0 m @ 10 s SW swell, well aligned with the break; cross-onshore wind 5 km/h from NE; approx. 7.5\u201310 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-13T21:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 57.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 53,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 2-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.57,
+    "typical_ft": 7.5,
+    "sets_ft": 9.5,
+    "p10_ft": 5.0,
+    "p90_ft": 11.5,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.01,
+    "tp_s": 10.25,
+    "period_kind": "tp",
+    "dir_from_deg": 225.7
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.928,
+     "period_s": 10.21,
+     "dir_from_deg": 227.5,
+     "breaking_ft": 7.56,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.505,
+     "period_s": 9.07,
+     "dir_from_deg": 92.4,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.227,
+     "period_s": 10.75,
+     "dir_from_deg": 157.5,
+     "breaking_ft": 0.69,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 4.42,
+    "gust_kmh": 5.83,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 29.6,
+    "relation": "glassy",
+    "strength": null,
+    "favourability": null,
+    "fit": 1.0,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.161,
+     "wave_size": 0.875,
+     "wind": 1.0,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.661,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.9 m @ 10 s SW swell, well aligned with the break; glassy, near-calm wind; approx. 7.5\u20139.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-14T00:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 60.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 53,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 3-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.35,
+    "typical_ft": 7.5,
+    "sets_ft": 9.5,
+    "p10_ft": 4.8,
+    "p90_ft": 11.1,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.952,
+    "tp_s": 10.19,
+    "period_kind": "tp",
+    "dir_from_deg": 226.1
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.858,
+     "period_s": 10.24,
+     "dir_from_deg": 227.9,
+     "breaking_ft": 7.34,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.498,
+     "period_s": 8.95,
+     "dir_from_deg": 92.7,
+     "breaking_ft": 0.27,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.28,
+     "period_s": 10.39,
+     "dir_from_deg": 158.1,
+     "breaking_ft": 0.82,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 5.21,
+    "gust_kmh": 8.22,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 35.0,
+    "relation": "cross-shore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.991,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.165,
+     "wave_size": 0.867,
+     "wind": 0.991,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.665,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.9 m @ 10 s SW swell, well aligned with the break; cross-shore wind 5 km/h from NE; approx. 7.5\u20139.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-14T03:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 63.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 51,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 3-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.09,
+    "typical_ft": 7.0,
+    "sets_ft": 9.0,
+    "p10_ft": 4.7,
+    "p90_ft": 10.8,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.879,
+    "tp_s": 10.09,
+    "period_kind": "tp",
+    "dir_from_deg": 227.0
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.785,
+     "period_s": 10.14,
+     "dir_from_deg": 228.6,
+     "breaking_ft": 7.07,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.491,
+     "period_s": 8.98,
+     "dir_from_deg": 93.0,
+     "breaking_ft": 0.28,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.324,
+     "period_s": 10.15,
+     "dir_from_deg": 156.4,
+     "breaking_ft": 0.86,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 6.07,
+    "gust_kmh": 10.23,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 32.2,
+    "relation": "cross-shore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.957,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.152,
+     "wave_size": 0.858,
+     "wind": 0.957,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.652,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.8 m @ 10 s SW swell, well aligned with the break; cross-shore wind 6 km/h from NNE; approx. 7\u20139 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-14T06:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 66.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 49,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 3-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 6.75,
+    "typical_ft": 7.0,
+    "sets_ft": 8.5,
+    "p10_ft": 4.4,
+    "p90_ft": 10.3,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.805,
+    "tp_s": 10.02,
+    "period_kind": "tp",
+    "dir_from_deg": 228.4
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.7,
+     "period_s": 9.96,
+     "dir_from_deg": 229.4,
+     "breaking_ft": 6.73,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.493,
+     "period_s": 9.36,
+     "dir_from_deg": 93.2,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.357,
+     "period_s": 10.13,
+     "dir_from_deg": 157.2,
+     "breaking_ft": 0.95,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 5.71,
+    "gust_kmh": 9.83,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 352.3,
+    "relation": "cross-offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.987,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.128,
+     "wave_size": 0.846,
+     "wind": 0.987,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.628,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.7 m @ 10 s SW swell, well aligned with the break; cross-offshore wind 6 km/h from N; approx. 7\u20138.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-14T09:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 69.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 43,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 3-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 6.58,
+    "typical_ft": 6.5,
+    "sets_ft": 8.5,
+    "p10_ft": 4.3,
+    "p90_ft": 10.0,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.764,
+    "tp_s": 10.03,
+    "period_kind": "tp",
+    "dir_from_deg": 228.7
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.659,
+     "period_s": 9.8,
+     "dir_from_deg": 229.7,
+     "breaking_ft": 6.56,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.507,
+     "period_s": 9.28,
+     "dir_from_deg": 93.2,
+     "breaking_ft": 0.0,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.37,
+     "period_s": 9.87,
+     "dir_from_deg": 157.2,
+     "breaking_ft": 0.96,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 8.68,
+    "gust_kmh": 11.51,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 141.7,
+    "relation": "onshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.773,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.107,
+     "wave_size": 0.84,
+     "wind": 0.773,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.607,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.7 m @ 10 s SW swell, well aligned with the break; onshore wind 9 km/h from SE; approx. 6.5\u20138.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-14T12:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 72.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 29,
+    "label": "poor",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 3-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "GFS and ECMWF agree on swell size.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 6.67,
+    "typical_ft": 6.5,
+    "sets_ft": 8.5,
+    "p10_ft": 4.4,
+    "p90_ft": 10.2,
+    "uncertainty_kind": "ensemble_heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.817,
+    "tp_s": 10.22,
+    "period_kind": "tp",
+    "dir_from_deg": 228.3
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.689,
+     "period_s": 9.8,
+     "dir_from_deg": 229.6,
+     "breaking_ft": 6.65,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.563,
+     "period_s": 9.12,
+     "dir_from_deg": 96.4,
+     "breaking_ft": 0.01,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.372,
+     "period_s": 9.71,
+     "dir_from_deg": 156.3,
+     "breaking_ft": 0.94,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 15.45,
+    "gust_kmh": 20.41,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 134.3,
+    "relation": "onshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.334,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.107,
+     "wave_size": 0.843,
+     "wind": 0.334,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.607,
+     "wind": 0.834
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.7 m @ 10 s SW swell, well aligned with the break; onshore wind 15 km/h from SE; approx. 6.5\u20138.5 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-14T15:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 75.0,
+   "is_daylight": true,
+   "interpolated": false,
+   "quality": {
+    "score": 47,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 3-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 7.2,
+    "typical_ft": 7.0,
+    "sets_ft": 9.0,
+    "p10_ft": 4.7,
+    "p90_ft": 11.0,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 1.959,
+    "tp_s": 10.59,
+    "period_kind": "tp",
+    "dir_from_deg": 227.9
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.83,
+     "period_s": 10.06,
+     "dir_from_deg": 228.9,
+     "breaking_ft": 7.18,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.589,
+     "period_s": 9.0,
+     "dir_from_deg": 97.4,
+     "breaking_ft": 0.01,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.364,
+     "period_s": 9.58,
+     "dir_from_deg": 156.4,
+     "breaking_ft": 0.92,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 10.61,
+    "gust_kmh": 17.95,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 200.9,
+    "relation": "cross-shore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.816,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.141,
+     "wave_size": 0.862,
+     "wind": 0.816,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.641,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.8 m @ 10 s SW swell, well aligned with the break; cross-shore wind 11 km/h from SSW; approx. 7\u20139 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-14T18:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 78.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 52,
+    "label": "fair",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 3-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 8.03,
+    "typical_ft": 8.0,
+    "sets_ft": 10.0,
+    "p10_ft": 5.2,
+    "p90_ft": 12.3,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.153,
+    "tp_s": 11.06,
+    "period_kind": "tp",
+    "dir_from_deg": 228.5
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 1.814,
+     "period_s": 10.28,
+     "dir_from_deg": 231.5,
+     "breaking_ft": 7.13,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.907,
+     "period_s": 13.0,
+     "dir_from_deg": 219.0,
+     "breaking_ft": 4.66,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.459,
+     "period_s": 8.85,
+     "dir_from_deg": 91.9,
+     "breaking_ft": 0.25,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 12.83,
+    "gust_kmh": 21.42,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 250.0,
+    "relation": "offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.939,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 0.967,
+     "swell_period": 0.171,
+     "wave_size": 0.891,
+     "wind": 0.939,
+     "consistency": 1.0
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.671,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "1.8 m @ 10 s SW swell, well aligned with the break; offshore wind 13 km/h from WSW; approx. 8\u201310 ft faces vs. a working range of 4\u201315 ft."
+   }
+  },
+  {
+   "t": "2026-10-14T21:00:00Z",
+   "step_hours": 3.0,
+   "lead_hours": 81.0,
+   "is_daylight": false,
+   "interpolated": false,
+   "quality": {
+    "score": 83,
+    "label": "very_good",
+    "forecast_confidence_class": "high",
+    "local_confidence_class": "moderate",
+    "forecast_confidence_reasons": [
+     "A 3-day forecast.",
+     "Not yet checked against buoys near this spot.",
+     "Ensemble members agree closely."
+    ],
+    "local_confidence_reason": "How this break responds to swell is only partly documented."
+   },
+   "breaking": {
+    "central_ft": 8.79,
+    "typical_ft": 9.0,
+    "sets_ft": 11.0,
+    "p10_ft": 5.7,
+    "p90_ft": 13.4,
+    "uncertainty_kind": "heuristic"
+   },
+   "offshore": {
+    "hs_m": 2.293,
+    "tp_s": 12.39,
+    "period_kind": "tp",
+    "dir_from_deg": 225.0
+   },
+   "partitions": [
+    {
+     "kind": "primary_swell",
+     "height_m": 2.099,
+     "period_s": 12.33,
+     "dir_from_deg": 227.6,
+     "breaking_ft": 8.73,
+     "drives_surf": true
+    },
+    {
+     "kind": "secondary_swell",
+     "height_m": 0.56,
+     "period_s": 8.9,
+     "dir_from_deg": 94.8,
+     "breaking_ft": 0.33,
+     "drives_surf": false
+    },
+    {
+     "kind": "tertiary_swell",
+     "height_m": 0.258,
+     "period_s": 9.52,
+     "dir_from_deg": 156.0,
+     "breaking_ft": 0.69,
+     "drives_surf": false
+    },
+    {
+     "kind": "wind_sea",
+     "height_m": 0.7,
+     "period_s": 3.51,
+     "dir_from_deg": 257.9,
+     "breaking_ft": 1.65,
+     "drives_surf": false
+    }
+   ],
+   "wind": {
+    "speed_kmh": 11.66,
+    "gust_kmh": 17.46,
+    "gust_kind": null,
+    "gust_below_mean": false,
+    "dir_from_deg": 272.8,
+    "relation": "offshore",
+    "strength": null,
+    "favourability": null,
+    "fit": 0.99,
+    "offshore_component_kmh": null,
+    "cross_component_kmh": null
+   },
+   "tide": null,
+   "why": {
+    "fits": {
+     "swell_direction": 1.0,
+     "swell_period": 0.466,
+     "wave_size": 0.917,
+     "wind": 0.99,
+     "consistency": 0.906
+    },
+    "gates": {
+     "size": 1.0,
+     "period": 0.966,
+     "wind": 1.0
+    },
+    "contributions": null,
+    "tide_included": false,
+    "explanation": "2.1 m @ 12 s SW swell, well aligned with the break; offshore wind 12 km/h from W; approx. 9\u201311 ft faces vs. a working range of 4\u201315 ft."
+   }
+  }
+ ],
+ "tide": {
+  "status": "unavailable",
+  "reason": "No tide source configured for this spot.",
+  "station": null,
+  "source": null,
+  "datum": null,
+  "units": "m",
+  "curve": [],
+  "events": [],
+  "preference": {
+   "value": "all",
+   "research_class": null,
+   "decision": null,
+   "text": "Tide preference not well established."
+  },
+  "attribution": null,
+  "fetched_at": null
+ },
+ "observations": {
+  "status": "unavailable",
+  "reason": "Observations are not available for this spot yet.",
+  "items": []
+ }
+}
