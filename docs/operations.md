@@ -374,7 +374,22 @@ accounts, searches, alerts and the prediction archive come only from the backup.
 
 ## 6. Capacity
 
-### Measured run (Docker, 2026-10-12, NOAA 00Z / ECMWF 00Z / GEFS 00Z, 50 spots)
+### API-first setup (`FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf`, 2026-10-14)
+
+| Item | Per run | Per day (default schedule) | Basis |
+|---|---|---|---|
+| Open-Meteo GFS family, 50 spots, 16 days | 142.9 weighted calls (waves 85.7: 50 locations x 15 variables / 10 x 16 / 14 days; wind 57.1); waves 237 kB on the wire | 4 runs: 571 weighted calls | waves and the weighted calls measured live; the wind response was refused by Open-Meteo for this sandbox's shared address, so its size is not measured here |
+| Open-Meteo ECMWF family, 50 spots, 15 days | 107.1 weighted calls (waves 53.6, wind 53.6) | 2 runs (00Z, 12Z): 214 weighted calls | computed with the same rule |
+| Both families | 250 weighted calls | about 786 weighted calls a day, about 23,900 a month: 8 % of the free tier's 10,000 a day and 300,000 a month | computed |
+| GEFS-Wave, HTSGW and PERPW only (41 steps) | about 65 MB | 4 cycles: about 0.26 GB | computed from record sizes |
+| Map fields, standalone (61 map hours) | about 0.16 GB; 0.48 GB with the partition layers | 2 cycles: 0.33-0.96 GB | computed in the audit |
+
+Acquisitions run every `FORECAST_REFRESH_MINUTES` (180), but a run already stored costs
+only the free metadata requests, and a retry reads the responses it already received from
+the cache. Nothing is written to disk: a traced acquisition opened no file for writing.
+Before the change, the direct GRIB setup downloaded about 10 GB a day (next section).
+
+### Measured run, direct GRIB setup (Docker, 2026-10-12, NOAA 00Z / ECMWF 00Z / GEFS 00Z, 50 spots)
 
 | Step | Duration | Downloaded | Rows written |
 |---|---|---|---|
@@ -417,12 +432,12 @@ full run. Rows per day assume the default schedule: 4 NOAA cycles, 2 ECMWF cycle
 
 | Table | Bytes per row | Rows per day | Per day | Kept | Steady state |
 |---|---|---|---|---|---|
-| `surf_quality_predictions` | 2,529 | 47,000 | 119 MB | with its forecast run, `RETENTION_FORECAST_DAYS` (10) | ~1.2 GB |
+| `surf_quality_predictions` | 2,529 | 47,000 | 119 MB | blend runs: `RETENTION_FORECAST_DAYS` (10); member runs: until superseded (pruned nightly, the newest run per source kept) | ~1.2 GB before the pruning; the member share (about half the rows) now stays at one run per source |
 | `wave_forecasts` | 631 | 47,000 | 30 MB | 10 days | ~0.3 GB |
 | `forecast_comparisons` | 771 | 24,300 | 19 MB | 10 days | ~0.19 GB |
 | `forecast_ensemble_stats` | 156-352 | 8,200 | 1.3-2.9 MB | 10 days | ≤ 29 MB |
 | `map_fields` | 84,800 (41 MB per run) | 4 runs | 165 MB written | the 2 best runs | ~82 MB |
-| `prediction_archive` | 1,706 | 24,300 | 41.5 MB | `RETENTION_ARCHIVE_DAYS` (730) | 15 GB after 1 year, 30 GB after 2 |
+| `prediction_archive` | 1,706 before; 562 with the confidence digest (`ARCHIVE_CONFIDENCE_DIGEST`, measured on the 3,950 rows of the 2026-10-11 blend) | 24,300 | 41.5 MB before; about 13.7 MB with the digest (computed) | `RETENTION_ARCHIVE_DAYS` (730) | 30 GB after 2 years before; about 10 GB with the digest (computed) |
 | `background_job_logs` | ~330 (+ index) | ~1,150 | ~0.5 MB | `RETENTION_JOB_LOG_DAYS` (30) | ~15 MB |
 
 The second session's 24-hour run (1,350 forecast rows and predictions, 450 comparison and
@@ -430,17 +445,22 @@ archive rows) grew the same tables by 2,555 (predictions), 655 (`wave_forecasts`
 (`forecast_comparisons`) and 1,839 (`prediction_archive`) bytes per row: within 8 % of the
 figures above (small deltas are rounded to whole 8 kB pages).
 
-So with the defaults the database settles at about **1.8 GB plus the archive**, which
-grows by about **42 MB a day** (15 GB a year) until it reaches its 730-day retention
-(about 30 GB). Forecast runs and their rows are deleted by `maintenance.cleanup` (daily
+So with the direct GRIB setup and the full archive rows the database settled at about
+**1.8 GB plus the archive**, which grew by about **42 MB a day** (15 GB a year) until it
+reached its 730-day retention (about 30 GB). With the confidence digest (default) the
+archive grows by about 14 MB a day (about 10 GB at 730 days, computed), and pruning the
+superseded member runs' predictions removes about half of the 1.2 GB of predictions (computed from the run mix above);
+`DATA_HEALTH_DATABASE_MAX_GB` (5) alerts before either outgrows a small disk. Forecast runs and their rows are deleted by `maintenance.cleanup` (daily
 03:30 UTC), always keeping the two newest usable runs per source; map fields are pruned
 to two runs after every acquisition. Buoy observations, point forecasts and verification
 pairs (when enabled) also follow `RETENTION_ARCHIVE_DAYS`; they were not enabled in this
 run.
 
-**Bandwidth:** about **10 GB downloaded per day** (NOAA 4 × 1.91 GB, ECMWF 2 × 0.85-0.9
-GB, GEFS 4 × 0.20 GB), about 300 GB a month, all from NOAA's and ECMWF's open-data
-buckets. Uploads are negligible (requests only).
+**Bandwidth:** the direct GRIB setup downloaded about **10 GB per day** (NOAA 4 × 1.91 GB,
+ECMWF 2 × 0.85-0.9 GB, GEFS 4 × 0.20 GB), about 300 GB a month. The API-first setup
+needs a few MB a day for the spot forecasts plus about 0.26 GB for GEFS-Wave and
+0.33-0.96 GB for the map layers (computed, see "API-first setup" above). Uploads are
+negligible (requests only).
 
 **Backups:** the measured dump was 52 % of the database size, dominated by the
 incompressible map fields (about 74 MB); the other tables compressed about 5:1. From
