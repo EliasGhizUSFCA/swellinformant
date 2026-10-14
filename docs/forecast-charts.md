@@ -235,6 +235,7 @@ Measured on this machine (4 CPUs) on 2026-10-14; see the package report for comm
 | `/timeline` response time, demo J-Bay | 94–169 ms (5 requests, while other tests ran) | `curl -w %{time_total}` |
 | DOM size of the timeline (demo, hourly, 10 days) | about 3,750 elements desktop, 3,390 on a phone | `document.querySelectorAll` in Chromium |
 | Row renders on hover / select / keys / day buttons | 0 | React Profiler counter, `tests/forecast-timeline.test.tsx` |
+| Hover, click and ArrowRight to the next frame (production build, demo J-Bay, hourly, 10 days) | median 25 / 29 / 32 ms on a 1440 px desktop, 20 / 25 / 24 ms in Pixel 7 emulation | 25 synthetic events each in headless Chromium, handler + render + one animation frame, `requestAnimationFrame` + `setTimeout` after each event |
 | Requests caused by selecting steps | 0 | request log in `e2e/timeline.spec.ts` |
 
 ## 11. Tests (spec 27, chart items 1-15)
