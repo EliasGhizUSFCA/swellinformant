@@ -479,7 +479,7 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
           <Swatch className="bg-[var(--chart-wave)]" /> breaking height, central estimate
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="h-3 w-px bg-[var(--chart-wave-range)]" aria-hidden="true" /> likely range (p10–p90 of an assumed error model, not yet verified)
+          <Swatch className="bg-[var(--chart-wave-band)]" /> likely range (p10–p90 of an assumed error model, not yet verified)
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="h-0.5 w-3 rounded bg-ink" aria-hidden="true" /> sets
@@ -541,7 +541,9 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
         </span>
       </div>
       <ObservationsNote timeline={timeline} />
-      <div className="lg:col-span-2">Shaded: night (last light to first light). Each bar spans the time its forecast step stands for.</div>
+      <div className="lg:col-span-2">
+        Shaded: night (last light to first light). Marks are centred on each forecast step&apos;s valid time and as wide as the time the step stands for (1, 3 or 6 hours).
+      </div>
     </div>
   );
 });
