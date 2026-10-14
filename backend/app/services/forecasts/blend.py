@@ -27,13 +27,21 @@ What is blended
   * swell/wind-sea partitions: taken from the highest-priority member that has them
     and scaled by Hs_blend / Hs_member (energy-consistent; directions and periods kept).
     Partition indices are height ranks, so partitions of different models are never
-    matched index by index;
+    matched index by index. A partition the member does not have stays None (never 0);
   * wave direction: from the structure member (GFS-Wave publishes the peak direction,
     ECMWF the mean direction — different quantities, compared but not averaged);
-  * wind: speed and gust as weighted means, direction as the weighted vector mean of unit
+  * wind: speed as a weighted mean, direction as the weighted vector mean of unit
     vectors; pressure as a weighted mean; sea level from the first member that has it.
+  * gust: members define gusts differently (GFS: an instantaneous diagnostic; ECMWF:
+    a maximum over the preceding 3 h or since the previous post-processing step), so
+    gusts are only averaged over members with the same definition as the highest-weight
+    member that has one; ``extra["gust_kind"]`` names it and ``extra["gust_kinds"]``
+    records every member's definition.
   Members are aligned in time by linear interpolation between their own steps (circular
-  for directions) across gaps of at most MAX_INTERP_GAP; never extrapolated.
+  for directions) across gaps of at most MAX_INTERP_GAP; never extrapolated. A blended
+  step that uses such an interpolated member value (or a member value its source marked
+  interpolated) is marked ``extra["interpolated"] = True`` with the members in
+  ``extra["interpolated_members"]``, so it is never presented as all-native model output.
 
 Disagreement
   For every pair of independent families: |ln(Hs_a/Hs_b)|, |ΔTp| (peak periods only),
@@ -68,10 +76,16 @@ from app.models import (
     WaveForecast,
 )
 from app.models.enums import ForecastRunStatus
-from app.services.forecasts.base import FORECAST_FIELDS, ForecastRecord, SourceInfo
+from app.services.forecasts.base import (
+    EXTRA_GUST_KIND,
+    EXTRA_INTERPOLATED,
+    FORECAST_FIELDS,
+    ForecastRecord,
+    SourceInfo,
+)
 from app.services.forecasts.families import are_independent, prior_error_correlation
 from app.services.forecasts.ingestion import AcquisitionOutcome, store_records
-from app.services.forecasts.queries import USABLE, is_stale
+from app.services.forecasts.queries import USABLE, gust_kind_for, is_stale
 from app.services.forecasts.registry import configured_source_codes
 from app.services.ml.hook import RunCorrector, scale_heights, spot_slugs
 from app.services.surf_quality.uncertainty import lead_sigma
@@ -200,6 +214,16 @@ def _interp_angle(a: float, b: float, frac: float) -> float:
     return math.degrees(math.atan2(y, x)) % 360.0
 
 
+def row_at(
+    rows: list[WaveForecast], times: list[datetime], t: datetime
+) -> tuple[WaveForecast | None, bool]:
+    """(the member's own row at t, or the row before t; True when t is not a member step)."""
+    i = bisect.bisect_left(times, t)
+    if i < len(times) and times[i] == t:
+        return rows[i], False
+    return (rows[i - 1] if i > 0 else None), True
+
+
 def value_at(
     rows: list[WaveForecast], times: list[datetime], t: datetime, name: str
 ) -> float | None:
@@ -294,12 +318,16 @@ class HourValues:
     lead_hours: float
     values: dict[str, float | None]
     period_kind: str | None
+    gust_kind: str | None = None
+    # The member's values at this time are interpolated (time alignment or its source).
+    interpolated: bool = False
 
 
 def blend_hour(
     hours: list[HourValues], skill: SkillTable
-) -> tuple[dict[str, float | None], dict[str, float], str | None]:
-    """(blended values, weight per source code, period kind) for one spot and hour."""
+) -> tuple[dict[str, float | None], dict[str, float], str | None, str | None]:
+    """(blended values, weight per source code, period kind, gust kind) for one spot and
+    hour."""
     with_hs = [h for h in hours if (h.values.get("sig_wave_height_m") or 0) > 0]
     weights: dict[str, float] = {}
     if with_hs:
@@ -346,7 +374,13 @@ def blend_hour(
         out[name] = v * ratio if v is not None and name in PARTITION_HEIGHTS else v
 
     out["wind_speed_kmh"] = wmean("wind_speed_kmh", hours)
-    out["wind_gust_kmh"] = wmean("wind_gust_kmh", hours)
+    gusty = [h for h in hours if h.values.get("wind_gust_kmh") is not None and weights.get(h.code)]
+    gust_kind: str | None = None
+    if gusty:
+        lead = max(gusty, key=lambda h: weights[h.code])
+        gust_kind = lead.gust_kind or "unknown"
+        same = [h for h in gusty if (h.gust_kind or "unknown") == gust_kind]
+        out["wind_gust_kmh"] = wmean("wind_gust_kmh", same)
     out["pressure_msl_hpa"] = wmean("pressure_msl_hpa", hours)
     vx = vy = 0.0
     for h in hours:
@@ -360,7 +394,7 @@ def blend_hour(
     out["sea_level_m"] = next(
         (h.values["sea_level_m"] for h in hours if h.values.get("sea_level_m") is not None), None
     )
-    return out, weights, period_kind
+    return out, weights, period_kind, gust_kind
 
 
 def angular_diff(a: float, b: float) -> float:
@@ -508,6 +542,8 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
                 values = {name: value_at(rows, times, t, name) for name in FORECAST_FIELDS}
                 if all(v is None for v in values.values()):
                     continue
+                own, between_steps = row_at(rows, times, t)
+                own_extra = own.extra if own is not None else None
                 corrector = correctors.get(m.code) if m in members else None
                 if corrector is not None:
                     row = {**values, "wave_period_kind": rows[0].wave_period_kind}
@@ -522,14 +558,29 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
                     (t - m.run.issued_at).total_seconds() / 3600.0,
                     values,
                     rows[0].wave_period_kind,
+                    gust_kind=gust_kind_for(m.code, own_extra),
+                    interpolated=between_steps
+                    or bool((own_extra or {}).get(EXTRA_INTERPOLATED, False)),
                 )
                 (hours if m in members else dup_hours).append(hv)
             if not hours:
                 continue
-            values, weights, kind = blend_hour(hours, skill)
+            values, weights, kind, gust_kind = blend_hour(hours, skill)
             if values["sig_wave_height_m"] is None and values["primary_swell_height_m"] is None:
                 continue
             extra: dict[str, Any] = {"families": len({h.family for h in hours})}
+            used = [h for h in hours if weights.get(h.code)] or hours
+            interpolated = sorted(h.code for h in used if h.interpolated)
+            if interpolated:
+                extra[EXTRA_INTERPOLATED] = True
+                extra["interpolated_members"] = interpolated
+            if values["wind_gust_kmh"] is not None and gust_kind is not None:
+                extra[EXTRA_GUST_KIND] = gust_kind
+                extra["gust_kinds"] = {
+                    h.code: h.gust_kind or "unknown"
+                    for h in hours
+                    if h.values.get("wind_gust_kmh") is not None
+                }
             if corrected:
                 extra["ml_corrections"] = corrected
             out.append(ForecastRecord(t, values, period_kind=kind, extra=extra))

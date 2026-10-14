@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Iterator
 
 import httpx
 import numpy as np
@@ -14,6 +15,7 @@ from app.services.forecasts.grib import (
     GridField,
     NotPublishedError,
     PointSampler,
+    RangeNotHonouredError,
     decode_message,
     haversine_km,
     load_eccodes,
@@ -89,6 +91,59 @@ def test_fetcher_reports_unpublished_files() -> None:
     )
     with pytest.raises(NotPublishedError):
         fetcher.text("https://x/missing.grib2")
+
+
+class _WholeFile(httpx.SyncByteStream):
+    """A SYNTHETIC whole-file body that records whether anyone read it."""
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self.read = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        self.read = True
+        yield bytes(self.size)
+
+
+def _range_ignoring_client(
+    body: _WholeFile, *hooks: Callable[[httpx.Response], None]
+) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"Content-Length": str(body.size)}, stream=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    if hooks:
+        client.event_hooks = {"response": list(hooks)}
+    return client
+
+
+def test_a_200_to_a_range_request_is_refused_unread() -> None:
+    """Audit DA-12: a server ignoring Range sends the whole file; it is never downloaded."""
+    from app.services.http import HttpTally
+
+    body = _WholeFile(5_000_000)
+    tally = HttpTally()  # installed before the fetcher, as the ECMWF provider does
+    fetcher = GribFetcher(_range_ignoring_client(body, tally), "test", backoff_seconds=0)
+    entries = parse_ncep_idx(NCEP_IDX)
+    with pytest.raises(RangeNotHonouredError, match="HTTP 200"):
+        fetcher.ranges("https://x/file.grib2", [entries[2]])  # bytes=250-399
+    assert isinstance(RangeNotHonouredError("x"), GribError)
+    assert body.read is False and tally.snapshot()[1] == 0 and fetcher.bytes_downloaded == 0
+
+
+def test_a_200_to_a_bounded_range_at_offset_zero_is_refused_too() -> None:
+    body = _WholeFile(5_000_000)
+    fetcher = GribFetcher(_range_ignoring_client(body), "test", backoff_seconds=0)
+    with pytest.raises(RangeNotHonouredError):
+        fetcher.ranges("https://x/file.grib2", [parse_ncep_idx(NCEP_IDX)[0]])  # bytes=0-99
+    assert body.read is False
+
+
+def test_a_200_is_accepted_when_the_range_is_the_whole_file() -> None:
+    body = _WholeFile(100)
+    fetcher = GribFetcher(_range_ignoring_client(body), "test", backoff_seconds=0)
+    parts = fetcher.ranges("https://x/file.grib2", [parse_ncep_idx(NCEP_IDX)[0]])  # bytes=0-99
+    assert parts == [bytes(100)] and body.read is True
 
 
 def _grib_message(values: np.ndarray, lat0: float, lon0: float, step: float) -> bytes:

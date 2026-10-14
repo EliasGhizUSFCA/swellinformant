@@ -9,9 +9,15 @@ next acquisition, with a margin. With the default settings that is 6 + 5 + 3 + 2
 for NOAA GFS, 6 + 7.5 + 3 + 2 = 18.5 h for GEFS-Wave and 12 + 8 + 3 + 2 = 25 h for ECMWF
 (two long cycles a day). A single FORECAST_STALE_HOURS of 18 h made every ECMWF run stale
 for several hours each day (the newest 12-hourly cycle is routinely 20-23 h old before the
-next one is fetched), which silently dropped ECMWF from the blend. Sources without a known
-cycle (demo, Open-Meteo, Windy) keep FORECAST_STALE_HOURS. A blend is stale when any of its
-members is stale by its own source's rule.
+next one is fetched), which silently dropped ECMWF from the blend.
+
+The Open-Meteo families follow the same rule with Open-Meteo's own publication lag (the
+time between a run's initialisation and its ``last_run_availability_time`` in meta.json,
+read on 2026-10-14: GFS 5.3-6.0 h, ECMWF 7.0-7.2 h) plus OPEN_METEO_AVAILABILITY_WAIT_MINUTES:
+6 + 6 + 0.17 + 3 + 2 = 17.2 h for ``open_meteo_noaa`` and 12 + 7.5 + 0.17 + 3 + 2 = 24.7 h for
+``open_meteo_ecmwf`` (it reads the 00Z and 12Z runs only). Sources without a known cycle
+(demo, Windy) keep FORECAST_STALE_HOURS. A blend is stale when any of its members is stale
+by its own source's rule.
 """
 
 from __future__ import annotations
@@ -27,10 +33,13 @@ from app.core.database import utcnow
 from app.models import ForecastRun, ForecastSource
 from app.models.enums import ForecastRunStatus
 from app.schemas.spots import AttributionLinkOut
+from app.services.forecasts.base import EXTRA_GUST_KIND
 from app.services.forecasts.registry import (
     ECMWF_IFS_CODE,
     GEFS_WAVE_CODE,
     NOAA_GFS_CODE,
+    OPEN_METEO_ECMWF_CODE,
+    OPEN_METEO_NOAA_CODE,
     configured_source_codes,
 )
 
@@ -44,9 +53,19 @@ SOURCE_CYCLE_HOURS: dict[str, float] = {
     NOAA_GFS_CODE: 6.0,
     GEFS_WAVE_CODE: 6.0,
     ECMWF_IFS_CODE: 12.0,
+    OPEN_METEO_NOAA_CODE: 6.0,
+    OPEN_METEO_ECMWF_CODE: 12.0,  # open_meteo_ecmwf.OpenMeteoEcmwfProvider.cycle_hours
 }
+# Open-Meteo's publication lag (hours from initialisation to availability; meta.json of
+# 2026-10-14, rounded up to the slowest domain of each family).
+OPEN_METEO_LAG_HOURS: dict[str, float] = {OPEN_METEO_NOAA_CODE: 6.0, OPEN_METEO_ECMWF_CODE: 7.5}
 # Slack for a slow download or a late upstream publication (heuristic).
 STALENESS_MARGIN_HOURS = 2.0
+
+# What a source's 10 m gust is when its records do not say (extra["gust_kind"]): NOAA's
+# GUST:surface is an instantaneous diagnostic (it is often below the 10 m mean wind).
+DEFAULT_GUST_KINDS: dict[str, str] = {NOAA_GFS_CODE: "gfs_instantaneous"}
+GUST_KINDS = frozenset({"gfs_instantaneous", "ecmwf_max_3h", "ecmwf_max_since_pp", "unknown"})
 
 
 def authoritative_source_codes() -> list[str]:
@@ -58,6 +77,9 @@ def authoritative_source_codes() -> list[str]:
 
 
 def _availability_lag_hours(source_code: str, settings: Settings) -> float:
+    if source_code in OPEN_METEO_LAG_HOURS:
+        wait = settings.open_meteo_availability_wait_minutes / 60.0
+        return OPEN_METEO_LAG_HOURS[source_code] + wait
     return {
         NOAA_GFS_CODE: settings.noaa_availability_lag_hours,
         GEFS_WAVE_CODE: settings.gefs_availability_lag_hours,
@@ -65,16 +87,27 @@ def _availability_lag_hours(source_code: str, settings: Settings) -> float:
     }[source_code]
 
 
+def _cycle_hours(source_code: str, settings: Settings) -> float | None:
+    """Longest gap between two cycles the source reads (GEFS follows GEFS_CYCLES)."""
+    if source_code == GEFS_WAVE_CODE:
+        hours = sorted(settings.gefs_cycle_hours)
+        if hours:
+            gaps = [b - a for a, b in zip(hours, hours[1:], strict=False)]
+            return float(max([*gaps, hours[0] + 24 - hours[-1]]))
+    return SOURCE_CYCLE_HOURS.get(source_code)
+
+
 def stale_after_hours(source_code: str, settings: Settings | None = None) -> float:
     """Age (hours since the run's issue time) after which a run of this source is stale.
 
-    Cycle interval + publication lag (the ``*_AVAILABILITY_LAG_HOURS`` settings) + the
-    acquisition interval (``FORECAST_REFRESH_MINUTES``) + STALENESS_MARGIN_HOURS for the
-    direct NOAA / GEFS / ECMWF ingesters; ``FORECAST_STALE_HOURS`` for every other source.
-    A blend has no rule of its own (see :func:`is_stale`).
+    Cycle interval + publication lag (the ``*_AVAILABILITY_LAG_HOURS`` settings, or
+    Open-Meteo's measured lag plus OPEN_METEO_AVAILABILITY_WAIT_MINUTES) + the acquisition
+    interval (``FORECAST_REFRESH_MINUTES``) + STALENESS_MARGIN_HOURS for the direct NOAA /
+    GEFS / ECMWF ingesters and the two Open-Meteo families; ``FORECAST_STALE_HOURS`` for
+    every other source. A blend has no rule of its own (see :func:`is_stale`).
     """
     settings = settings or get_settings()
-    cycle = SOURCE_CYCLE_HOURS.get(source_code)
+    cycle = _cycle_hours(source_code, settings)
     if cycle is None:
         return float(settings.forecast_stale_hours)
     return (
@@ -122,14 +155,93 @@ def run_id_is_stale(db: Session, run_id: int | None, now: datetime | None = None
     return run is not None and is_stale(run, now)
 
 
+def gust_kind_for(source_code: str, extra: dict[str, Any] | None) -> str | None:
+    """What a record's ``wind_gust_kmh`` is (values as in the ``GustKind`` schema).
+
+    The record's own ``extra["gust_kind"]`` (Open-Meteo, ECMWF direct, Windy, blend) or the
+    source's documented definition (NOAA direct); None when neither says.
+    """
+    kind = (extra or {}).get(EXTRA_GUST_KIND)
+    if isinstance(kind, str) and kind in GUST_KINDS:
+        return kind
+    return DEFAULT_GUST_KINDS.get(source_code)
+
+
+# Credit and licence links per source. Open-Meteo: "You must include a link next to any
+# location Open-Meteo data are displayed" (open-meteo.com/en/licence); ECMWF open data:
+# CC BY 4.0 with the notice "Copyright ECMWF"; NOAA NODD asks for attribution and that
+# modified data are not presented as original NOAA data.
+_OPEN_METEO_LINKS = (
+    AttributionLinkOut(label="Weather data by Open-Meteo.com", href="https://open-meteo.com/"),
+    AttributionLinkOut(
+        label="Open-Meteo licence (CC BY 4.0)", href="https://open-meteo.com/en/licence"
+    ),
+)
+_NOAA_GFS_LINK = AttributionLinkOut(
+    label="NOAA NCEP GFS and GFS-Wave (modified)",
+    href="https://www.nco.ncep.noaa.gov/pmb/products/gfs/",
+)
+_ECMWF_LINKS = (
+    AttributionLinkOut(
+        label="Copyright ECMWF: IFS and ecWAM open data (modified)",
+        href="https://www.ecmwf.int/en/forecasts/datasets/open-data",
+    ),
+    AttributionLinkOut(label="CC BY 4.0", href="https://creativecommons.org/licenses/by/4.0/"),
+)
+_COPERNICUS_LINK = AttributionLinkOut(
+    label="Generated using E.U. Copernicus Marine Service Information",
+    href="https://marine.copernicus.eu/",
+)
+SOURCE_ATTRIBUTION_LINKS: dict[str, tuple[AttributionLinkOut, ...]] = {
+    OPEN_METEO_NOAA_CODE: (*_OPEN_METEO_LINKS, _NOAA_GFS_LINK),
+    OPEN_METEO_ECMWF_CODE: (*_OPEN_METEO_LINKS, *_ECMWF_LINKS),
+    NOAA_GFS_CODE: (
+        _NOAA_GFS_LINK,
+        AttributionLinkOut(
+            label="NOAA Open Data Dissemination (AWS)",
+            href="https://registry.opendata.aws/noaa-gfs-bdp-pds/",
+        ),
+    ),
+    ECMWF_IFS_CODE: _ECMWF_LINKS,
+    GEFS_WAVE_CODE: (
+        AttributionLinkOut(
+            label="NOAA NCEP GEFS-Wave ensemble (modified)",
+            href="https://registry.opendata.aws/noaa-gefs/",
+        ),
+    ),
+    "windy_gfswave": (AttributionLinkOut(label="Windy.com", href="https://www.windy.com/"),),
+}
+
+
+def attribution_links_for(source: ForecastSource) -> list[AttributionLinkOut]:
+    """The links one source asks for; Copernicus Marine is credited whenever its MFWAM
+    wave model (Open-Meteo ``meteofrance_wave``) is among the source's models."""
+    links = list(SOURCE_ATTRIBUTION_LINKS.get(source.code, ()))
+    models = f"{source.wave_model or ''},{source.atmosphere_model or ''}".lower()
+    if "meteofrance_wave" in models or "mfwam" in models:
+        links.append(_COPERNICUS_LINK)
+    return links
+
+
 def source_attribution_links(db: Session, run: ForecastRun) -> list[AttributionLinkOut]:
     """Credit and licence links the run's data sources ask for (for a blend, every
     member's), shown next to the data as ``ForecastSourceOut.attribution_links``.
 
-    No source records its links yet, so there are none; the plain-text attribution
-    (``spot_views.source_attribution``) is unchanged.
+    The plain-text attribution (``spot_views.source_attribution``) is unchanged.
     """
-    return []
+    sources: list[ForecastSource] = [run.source]
+    if run.source.code == BLEND_CODE:
+        codes = [str(m["code"]) for m in (run.details or {}).get("members", []) if m.get("code")]
+        found = {
+            s.code: s
+            for s in db.scalars(select(ForecastSource).where(ForecastSource.code.in_(codes)))
+        }
+        sources = [found[c] for c in codes if c in found]
+    links: dict[tuple[str, str], AttributionLinkOut] = {}
+    for source in sources:
+        for link in attribution_links_for(source):
+            links.setdefault((link.label, link.href), link)
+    return list(links.values())
 
 
 def candidate_runs(db: Session, require_predictions: bool = True) -> list[ForecastRun]:
