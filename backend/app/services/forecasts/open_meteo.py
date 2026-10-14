@@ -55,6 +55,7 @@ for the model's update interval, so a retried run does not download them again.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -93,6 +94,7 @@ from app.services.http import (
     RETRYABLE_STATUS,
     HttpTally,
     PermanentProviderError,
+    ProviderError,
     QuotaExhaustedError,
     RunNotServedError,
     TransientProviderError,
@@ -779,15 +781,19 @@ class OpenMeteoFamilyProvider(ForecastProvider):
             )
         metas = self.ensure_servable(run)
         state = _Fetch(labelled={r.model: r.init_time for r in run.model_runs}, metas=metas)
-        waves, wave_errors = self._fetch_waves(state, spots)
-        atmos, atmos_errors = self._fetch_atmos(state, spots) if waves else ({}, {})
+        try:
+            waves, wave_errors = self._fetch_waves(state, spots)
+            atmos, atmos_errors = self._fetch_atmos(state, spots) if waves else ({}, {})
+        except ProviderError:
+            # A later request failed (a call budget, a timeout): keep the responses that
+            # arrived for this run, so the task's retry does not download and pay for them
+            # again (only if the run is still the one Open-Meteo serves).
+            with contextlib.suppress(ProviderError):
+                if not self._changed_runs(state):
+                    self._save_responses(state)
+            raise
         if waves:
-            after = self.read_metas()
-            changed = [
-                f"{d} {after[d].init_time:%Y-%m-%d %H}Z"
-                for d, init in state.labelled.items()
-                if d in after and after[d].init_time != init
-            ]
+            changed = self._changed_runs(state)
             if changed:
                 raise TransientProviderError(
                     "Open-Meteo published a new run during the fetch ("
@@ -795,8 +801,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
                     + "): the responses may mix runs, so nothing is stored",
                     retry_after_s=self.wait.total_seconds() + 60.0,
                 )
-        for key, body, ttl in state.cache_writes:
-            provider_cache.put(key, body, ttl, self.settings)
+        self._save_responses(state)
 
         for p in spots:
             if p.spot_id not in waves:
@@ -832,6 +837,20 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         )
         result.warnings.extend(state.warnings)
         return result
+
+    def _changed_runs(self, state: _Fetch) -> list[str]:
+        """Domains whose current run differs from the one being fetched (meta.json, free)."""
+        after = self.read_metas()
+        return [
+            f"{d} {after[d].init_time:%Y-%m-%d %H}Z"
+            for d, init in state.labelled.items()
+            if d in after and after[d].init_time != init
+        ]
+
+    def _save_responses(self, state: _Fetch) -> None:
+        for key, body, ttl in state.cache_writes:
+            provider_cache.put(key, body, ttl, self.settings)
+        state.cache_writes.clear()
 
     def _model_meta(self, state: _Fetch, model: str) -> tuple[datetime, datetime | None, int]:
         """(run init, data end, temporal resolution in s) of one requested model.

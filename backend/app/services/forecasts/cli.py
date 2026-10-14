@@ -3,6 +3,7 @@
 python -m app.cli engine ensemble [--force] [--members]   # GEFS-Wave mean/spread, prints JSON
 python -m app.cli engine map-fields [--cycle YYYYMMDDHH] [--max-lead-hours N] [--force]
     # global map fields (ocean layers) of the newest complete GFS cycle, prints JSON
+python -m app.cli engine budget   # Open-Meteo weighted calls used per window, cache entries
 
 To add a subcommand, write ``_add_<name>(subparsers)`` that adds its parser and sets
 ``handler`` with ``set_defaults``, then append the function to SUBCOMMANDS.
@@ -116,7 +117,37 @@ def _add_map_fields(sub: SubParsers) -> None:
     p.set_defaults(handler=_run_map_fields)
 
 
-SUBCOMMANDS: list[Callable[[SubParsers], None]] = [_add_ensemble, _add_map_fields]
+def _run_budget(args: argparse.Namespace) -> int:
+    from app.services.forecasts import provider_cache
+    from app.services.forecasts.quota import open_meteo_budget_usage
+
+    usage = open_meteo_budget_usage()
+    print(
+        json.dumps(
+            {
+                "open_meteo_weighted_calls": usage or "unavailable (Redis not reachable)",
+                "provider_cache_entries": provider_cache.cache_size(),
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _add_budget(sub: SubParsers) -> None:
+    p = sub.add_parser(
+        "budget",
+        help="Open-Meteo weighted calls used in the current minute, hour, day and month",
+        description=(
+            "Reads the call-budget counters in Redis (OPEN_METEO_CALLS_PER_MINUTE/HOUR/DAY/"
+            "MONTH; both Open-Meteo families share them) and the number of cached provider "
+            "responses. Read-only; metadata requests are free and not counted."
+        ),
+    )
+    p.set_defaults(handler=_run_budget)
+
+
+SUBCOMMANDS: list[Callable[[SubParsers], None]] = [_add_ensemble, _add_map_fields, _add_budget]
 
 
 def register(subparsers: SubParsers) -> None:

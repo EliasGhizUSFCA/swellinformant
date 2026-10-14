@@ -27,11 +27,13 @@ from app.core.config import Settings
 from app.core.redis import get_redis
 from app.services.forecasts.base import SpotPoint
 from app.services.forecasts.open_meteo import (
+    ATMOS,
     ModelMeta,
     OpenMeteoProvider,
     is_native_step,
     native_step_hours,
 )
+from app.services.forecasts.quota import call_weight
 from app.services.forecasts.registry import SOURCE_CODES, build_provider
 from app.services.http import QuotaExhaustedError, RunNotServedError, TransientProviderError
 
@@ -537,3 +539,32 @@ def test_a_retried_fetch_of_the_same_run_reads_the_cache() -> None:
     assert len(rec.data_calls()) == n  # no data request the second time
     assert second.stats is not None and second.stats.weighted_calls == 0
     assert [r.values for r in second.records[1]] == [r.values for r in first.records[1]]
+
+
+def test_a_retry_after_a_failed_wind_request_reads_the_waves_from_the_cache() -> None:
+    """The waves arrived, then the forecast API refused (a transient minute limit): the
+    task's retry reads the waves from the cache and pays only for the wind request."""
+    try:
+        get_redis().ping()
+    except redis.RedisError:
+        pytest.skip("Redis not available")
+    refuse = {"on": True}
+
+    def minute_limit(request: httpx.Request) -> httpx.Response | None:
+        if refuse["on"] and request.url.path == "/v1/gfs":
+            reason = "Minutely API request limit exceeded. Please try again in one minute."
+            return httpx.Response(429, json={"error": True, "reason": reason})
+        return None
+
+    rec = Recorder(override=minute_limit)
+    p = provider(rec)
+    with pytest.raises(TransientProviderError):
+        p.fetch([PIPELINE, THURSO], p.current_run(NOW))
+    marine = [c for c in rec.data_calls() if c["path"] == ["/v1/marine"]]
+    assert len(marine) == 2  # one per wave model
+    refuse["on"] = False
+    result = p.fetch([PIPELINE, THURSO], p.current_run(NOW))
+    assert [c for c in rec.data_calls() if c["path"] == ["/v1/marine"]] == marine
+    assert result.records[PIPELINE.spot_id] and result.errors == {}
+    wind_only = call_weight(2, len(ATMOS), 3)
+    assert result.stats is not None and result.stats.weighted_calls == pytest.approx(wind_only)
