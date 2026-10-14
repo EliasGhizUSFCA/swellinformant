@@ -409,6 +409,24 @@ describe("15. no time is invented", () => {
   });
 });
 
+describe("opening position", () => {
+  it("scrolls to the selected step once both the frame size and the selection are known", () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
+    const tl = jbay();
+    const store = new SelectionStore(); // nothing selected yet: the page seeds it when data arrives
+    render(
+      <TimelineSelectionProvider initialT={null} store={store}>
+        <SpotForecastTimeline timeline={tl} units="ft" />
+      </TimelineSelectionProvider>,
+    );
+    expect(scroller().scrollLeft).toBe(0);
+    act(() => store.initialise(Date.parse(tl.steps[18]!.t)));
+    const x = scaleFor(tl)(Date.parse(tl.steps[18]!.t));
+    expect(scroller().scrollLeft).toBeCloseTo(Math.max(0, x - (1000 - GUTTER) * 0.2), 6);
+    expect(scroller().scrollLeft).toBeGreaterThan(0);
+  });
+});
+
 describe("performance: hovering and selecting re-render no row", () => {
   it("renders the rows once; hover, click, keys and day buttons only move the cursor and the summary", () => {
     const tl = jbay();

@@ -115,15 +115,19 @@ export function SpotForecastTimeline({
     else el.scrollLeft = left;
   }, []);
 
-  // First layout: open with the selected step in view (a little in from the left edge).
+  // Open with the selected step in view (a little in from the left edge), as soon as the
+  // frame is measured and a step is selected, whichever comes last.
   const opened = useRef(false);
-  useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    const t = store.getState().selectedT;
-    if (opened.current || !el || viewWidth === 0 || t == null) return;
-    opened.current = true;
-    el.scrollLeft = Math.max(0, scale(t) - (viewWidth - gutter) * 0.2);
-  }, [viewWidth, scale, gutter, store]);
+  const openAt = useCallback(
+    (t: number | null) => {
+      const el = scrollerRef.current;
+      if (opened.current || !el || viewWidth === 0 || t == null) return;
+      opened.current = true;
+      el.scrollLeft = Math.max(0, scale(t) - (viewWidth - gutter) * 0.2);
+    },
+    [viewWidth, scale, gutter],
+  );
+  useLayoutEffect(() => openAt(store.getState().selectedT), [openAt, store]);
 
   // Follow the selection without re-rendering anything: mark the selected step's marks in
   // every row (data-selected) and scroll as little as needed to keep it in view, however it
@@ -141,8 +145,9 @@ export function SpotForecastTimeline({
         if (t != null) for (const el of root.querySelectorAll(`[data-step="${nearestStepIndex(model.times, t)}"]`)) el.setAttribute("data-selected", "");
       }
       const el = scrollerRef.current;
-      if (skipScroll.current) skipScroll.current = false;
-      else if (el && t != null && opened.current) {
+      if (!opened.current) openAt(t);
+      else if (skipScroll.current) skipScroll.current = false;
+      else if (el && t != null) {
         const x = scale(t);
         const view = el.clientWidth - gutter;
         const margin = Math.min(48, view / 4);
@@ -152,7 +157,7 @@ export function SpotForecastTimeline({
     };
     follow();
     return store.subscribe(follow);
-  }, [store, model, scale, gutter, scrollPlotTo, width]);
+  }, [store, model, scale, gutter, scrollPlotTo, width, openAt]);
 
   // --- pointer -------------------------------------------------------------------------
   const pointerT = (clientX: number): { t: number; x: number } | null => {
