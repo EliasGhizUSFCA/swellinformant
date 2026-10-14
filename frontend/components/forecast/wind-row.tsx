@@ -22,9 +22,9 @@ export const FAVOURABILITY_FILL: Record<string, string> = {
 };
 
 export const FAVOURABILITY_LABEL: Record<string, string> = {
-  favourable: "Favourable",
+  favourable: "Favorable",
   workable: "Workable",
-  unfavourable: "Unfavourable",
+  unfavourable: "Unfavorable",
 };
 
 const textWidth = (s: string) => s.length * 5.6 + 6;

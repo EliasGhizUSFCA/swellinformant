@@ -512,6 +512,9 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
           <span className="h-0.5 w-3 rounded bg-ink" aria-hidden="true" /> gust
         </span>
         <span>Labels: relation to this break ({WIND_RELATION_LABEL.offshore}, {WIND_RELATION_LABEL["cross-shore"]}, …)</span>
+        <span className="inline-flex items-center gap-1" data-testid="compass-legend">
+          <CompassGlyph /> e.g. an arrow pointing east is a wind from the west
+        </span>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 lg:col-span-2" data-testid="tide-caption">
         <span className="font-semibold text-ink">Tide</span>
@@ -558,6 +561,20 @@ function ObservationsNote({ timeline }: { timeline: SpotTimeline }) {
         {latest.stale || obs.status === "stale" ? " (stale)" : ""} · an instrument measurement offshore, shown with “Offshore Hs (model)”
       </span>
     </div>
+  );
+}
+
+/** A small compass with an example arrow pointing east (a westerly wind, travelling east). */
+function CompassGlyph() {
+  return (
+    <svg viewBox="-12 -12 24 24" className="size-6" aria-hidden="true">
+      <circle r={9} fill="none" stroke="var(--border)" />
+      <text y={-5.5} textAnchor="middle" className="fill-muted-foreground text-[5.5px] font-semibold">
+        N
+      </text>
+      <path d="M-5,0H3" stroke="var(--chart-swell)" strokeWidth={1.4} />
+      <path d="M6,0L2,-2.6L2,2.6Z" fill="var(--chart-swell)" />
+    </svg>
   );
 }
 

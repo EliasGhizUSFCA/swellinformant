@@ -228,7 +228,10 @@ Measured on this machine (4 CPUs) on 2026-10-14; see the package report for comm
 | What | Value | How |
 |---|---|---|
 | Real J-Bay blend run, `/timeline` vs `/forecast` | 132,905 B vs 262,304 B (JSON) | `services/timeline.spot_timeline` on a clone of the `swell_live2` capture (78 3-hourly steps) |
-| Demo J-Bay (hourly, 243 steps), `/timeline` vs `/forecast` | see the package report | `curl` against the demo backend |
+| Demo J-Bay (hourly, 243 steps), `/timeline` vs `/forecast` | 375,075 B vs 702,528 B (JSON); 15,046 B gzip through the Next.js proxy vs 26,260 B gzip | `curl` against the demo backend and the proxy (`Accept-Encoding: gzip`) |
+| Conditional request with the ETag | 304, 0 B | `curl -H "If-None-Match: …"` |
+| `/timeline` response time, demo J-Bay | 94–169 ms (5 requests, while other tests ran) | `curl -w %{time_total}` |
+| DOM size of the timeline (demo, hourly, 10 days) | about 3,750 elements desktop, 3,390 on a phone | `document.querySelectorAll` in Chromium |
 | Row renders on hover / select / keys / day buttons | 0 | React Profiler counter, `tests/forecast-timeline.test.tsx` |
 | Requests caused by selecting steps | 0 | request log in `e2e/timeline.spec.ts` |
 
