@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { devices, expect, test, type Page } from "@playwright/test";
 
 import { mixedCadence, realTimeline, routeTimeline, withSyntheticTide, type MockTimeline } from "./timeline.mock";
 
@@ -207,9 +207,15 @@ test.describe("spot forecast timeline", () => {
   });
 });
 
+// Pixel 7 emulation in every project (the "mobile" project runs it as @mobile; the
+// browser type cannot be set per describe, so it is left out).
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const { defaultBrowserType: _browser, ...PIXEL_7 } = devices["Pixel 7"];
+
 test.describe("spot forecast timeline on a phone", () => {
-  test("about one day in view, swipe to scroll, tap to select, no page-wide horizontal scroll", { tag: "@mobile" }, async ({ page, isMobile }) => {
-    test.skip(!isMobile, "runs in the Pixel 7 project");
+  test.use(PIXEL_7);
+
+  test("about one day in view, swipe to scroll, tap to select, no page-wide horizontal scroll", { tag: "@mobile" }, async ({ page }) => {
     const api = await realTimeline(page);
     await openSpot(page);
     const sc = scroller(page);
