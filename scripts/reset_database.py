@@ -18,7 +18,8 @@ url = make_url(os.environ["DATABASE_URL"])
 name = url.database or ""
 if not re.search(r"_(e2e|test)(_[A-Za-z0-9]+)?$", name):
     sys.exit(
-        f"refusing to reset database {name!r} (must end in _e2e or _test, or _e2e_<x>)"
+        f"refusing to reset database {name!r} (must end in _e2e or _test, optionally "
+        "followed by one _<suffix>)"
     )
 admin = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
 with admin.connect() as conn:

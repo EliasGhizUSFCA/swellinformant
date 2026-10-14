@@ -12,6 +12,7 @@ Command groups provided by feature packages (``python -m app.cli GROUP --help``)
   verify  forecast verification and backtests     (app.services.verification.cli)
   ml      ML experiments and the model registry   (app.services.ml.cli)
   engine  ensemble, blending and spot profiles     (app.services.forecasts.cli)
+  tides   tide stations and predictions           (app.services.tides.cli, once it exists)
 """
 
 from __future__ import annotations
@@ -48,6 +49,8 @@ PLUGIN_GROUPS = {
     "ml": "app.services.ml.cli",
     "engine": "app.services.forecasts.cli",
     "research": "app.services.research.cli",
+    # Tide stations and predictions (the module is added with the tide providers).
+    "tides": "app.services.tides.cli",
 }
 
 

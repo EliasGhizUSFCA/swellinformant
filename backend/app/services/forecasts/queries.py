@@ -26,6 +26,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.models import ForecastRun, ForecastSource
 from app.models.enums import ForecastRunStatus
+from app.schemas.spots import AttributionLinkOut
 from app.services.forecasts.registry import (
     ECMWF_IFS_CODE,
     GEFS_WAVE_CODE,
@@ -119,6 +120,16 @@ def run_id_is_stale(db: Session, run_id: int | None, now: datetime | None = None
         return False
     run = db.get(ForecastRun, run_id)
     return run is not None and is_stale(run, now)
+
+
+def source_attribution_links(db: Session, run: ForecastRun) -> list[AttributionLinkOut]:
+    """Credit and licence links the run's data sources ask for (for a blend, every
+    member's), shown next to the data as ``ForecastSourceOut.attribution_links``.
+
+    No source records its links yet, so there are none; the plain-text attribution
+    (``spot_views.source_attribution``) is unchanged.
+    """
+    return []
 
 
 def candidate_runs(db: Session, require_predictions: bool = True) -> list[ForecastRun]:

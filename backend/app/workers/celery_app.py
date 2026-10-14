@@ -85,12 +85,16 @@ def _redact_task_logs(logger: logging.Logger, **_: object) -> None:
 def _kick_off_pipeline(**_: object) -> None:
     """Interval schedules first fire one interval after beat starts; on a fresh stack that
     would mean hours without forecasts. Queue one acquisition (which chains through every
-    stage) as soon as the scheduler starts, and the map-field job in standalone mode. The
-    job lock makes a duplicate run harmless."""
+    stage) as soon as the scheduler starts, the map-field job in standalone mode and the
+    daily tide job (otherwise a deployment that gains it would wait until 02:20 UTC, and
+    the data-health check would meanwhile report it as never run). The job lock makes a
+    duplicate run harmless."""
     if get_settings().beat_run_on_start:
         celery_app.send_task("forecasts.acquire")
         if map_fields_standalone(get_settings()):
             celery_app.send_task("forecasts.map_fields")
+        if get_settings().tide_provider_list:
+            celery_app.send_task("tides.acquire")
 
 
 @worker_process_init.connect

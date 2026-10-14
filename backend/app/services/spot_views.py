@@ -42,7 +42,13 @@ from app.schemas.spots import (
     SpotMini,
     SpotSummary,
 )
-from app.services.forecasts.queries import USABLE, is_stale, latest_runs_by_spot, run_id_is_stale
+from app.services.forecasts.queries import (
+    USABLE,
+    is_stale,
+    latest_runs_by_spot,
+    run_id_is_stale,
+    source_attribution_links,
+)
 from app.services.forecasts.registry import configured_source_codes
 from app.services.research.views import research_classes, research_out
 from app.services.surf_quality.breaking import dominant_component
@@ -552,6 +558,7 @@ def spot_forecast(
             attribution=source_attribution(db, run),
             wave_model=source.wave_model,
             atmosphere_model=source.atmosphere_model,
+            attribution_links=source_attribution_links(db, run),
         ),
         run=ForecastRunOut(
             run_key=run.run_key,

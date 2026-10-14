@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap, useMapEvents, ZoomControl } from "react-leaflet";
 
 import type { LayerScale } from "@/lib/map-colors";
-import { directionFromUV, sampleDirection, sampleGrid, type FieldGrid } from "@/lib/map-fields";
+import type { FieldGrid } from "@/lib/map-fields";
 import { mercX, mercY, type IsoLine } from "@/lib/map-geo";
 import { readout, type DisplayUnits, type LayerId, type PointSample } from "@/lib/map-layers";
 import type { MapSettings } from "@/lib/map-settings";
@@ -17,7 +17,7 @@ import type { FieldSet } from "@/hooks/map-fields";
 import type { SpotSummary } from "@/types/api";
 
 import type { CityLabel, IsobarPath } from "./basemap-draw";
-import { layerGrid, MapDataLayers, type ParticleMode } from "./map-canvas-layers";
+import { fieldSampler, MapDataLayers, type ParticleMode } from "./map-canvas-layers";
 import type { MarkerState } from "./surf-map";
 
 const TILES = tileConfig(process.env.NEXT_PUBLIC_MAP_TILE_URL, process.env.NEXT_PUBLIC_MAP_ATTRIBUTION, process.env.NEXT_PUBLIC_CARTO_API_KEY);
@@ -224,7 +224,6 @@ export default function ForecastMap(props: ForecastMapProps) {
   const { layer, basemap } = settings;
   const [tilesFailed, setTilesFailed] = useState(false);
   const selectedSpot = spots.find((s) => s.slug === selected);
-  const grid = useMemo(() => layerGrid(layer, fields), [layer, fields]);
   const isobarPaths = useMemo<IsobarPath[] | null>(() => {
     if (!isobars) return null;
     return isobars.map((l) => {
@@ -248,24 +247,8 @@ export default function ForecastMap(props: ForecastMapProps) {
     });
   }, [isobars]);
 
-  const sample = useMemo(() => {
-    if (!fields && !pressure) return null;
-    return (lat: number, lon: number): PointSample => {
-      const s: PointSample = {};
-      if (fields?.hs) s.hs = sampleGrid(fields.hs, lat, lon);
-      if (fields?.tp) s.tp = sampleGrid(fields.tp, lat, lon);
-      if (fields?.wave_dir) s.waveDir = sampleDirection(fields.wave_dir, lat, lon);
-      if (grid && layer === "energy") s.energy = sampleGrid(grid, lat, lon);
-      if (fields?.wind_u && fields?.wind_v) {
-        const u = sampleGrid(fields.wind_u, lat, lon);
-        const v = sampleGrid(fields.wind_v, lat, lon);
-        s.windSpeed = Math.hypot(u, v);
-        s.windDir = directionFromUV(u, v);
-      }
-      if (pressure) s.pressure = sampleGrid(pressure, lat, lon);
-      return s;
-    };
-  }, [fields, pressure, grid, layer]);
+  // The hover readout's sampler is defined with the data layers (map-canvas-layers).
+  const sample = useMemo(() => fieldSampler(layer, fields, pressure), [layer, fields, pressure]);
 
   return (
     // `isolation: isolate` keeps Leaflet's internal z-indexes (400–1000) from painting over

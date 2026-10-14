@@ -41,7 +41,7 @@ def map_fields_standalone(settings: Settings) -> bool:
 
 
 def optional_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
-    """Jobs that only run when their feature flag is on (they download extra data)."""
+    """Jobs that only run when their feature setting is on (most download extra data)."""
     jobs: dict[str, dict[str, Any]] = {}
     if map_fields_standalone(settings):
         # Same interval as forecast-acquisition (every 3 h by default), so both look for a

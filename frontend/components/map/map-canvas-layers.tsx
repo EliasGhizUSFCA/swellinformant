@@ -4,14 +4,15 @@
  * The map's data layers inside Leaflet: the ocean colour field, the flow particles, the
  * basemap (Natural Earth land, isobars, city labels) and the field credit in the attribution
  * strip. Each canvas lives in its own pane (order in `Z`). The map shell (forecast-map.tsx)
- * renders <MapDataLayers/> inside its MapContainer.
+ * renders <MapDataLayers/> inside its MapContainer and samples its hover readout with
+ * `fieldSampler`.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMap } from "react-leaflet";
 
 import { buildLut, type LayerScale } from "@/lib/map-colors";
-import { waveEnergyGrid, waveFlowGrids, windSpeedGrid, type FieldGrid } from "@/lib/map-fields";
-import type { LayerId } from "@/lib/map-layers";
+import { directionFromUV, sampleDirection, sampleGrid, waveEnergyGrid, waveFlowGrids, windSpeedGrid, type FieldGrid } from "@/lib/map-fields";
+import type { LayerId, PointSample } from "@/lib/map-layers";
 import { renderField, type FieldPaint } from "@/lib/map-render";
 import type { Basemap, MapSettings } from "@/lib/map-settings";
 import type { FieldSet } from "@/hooks/map-fields";
@@ -45,6 +46,30 @@ export function layerGrid(layer: LayerId, f: FieldSet | null): FieldGrid | null 
     else cache.set(layer, f.wind_u && f.wind_v ? windSpeedGrid(f.wind_u, f.wind_v) : null);
   }
   return cache.get(layer) ?? null;
+}
+
+/**
+ * The values under one map point for the hover readout (lib/map-layers `readout`), sampled
+ * from the downloaded fields and the pressure field; null without any ocean data.
+ */
+export function fieldSampler(layer: LayerId, fields: FieldSet | null, pressure: FieldGrid | null): ((lat: number, lon: number) => PointSample) | null {
+  if (!fields && !pressure) return null;
+  const grid = layerGrid(layer, fields);
+  return (lat: number, lon: number): PointSample => {
+    const s: PointSample = {};
+    if (fields?.hs) s.hs = sampleGrid(fields.hs, lat, lon);
+    if (fields?.tp) s.tp = sampleGrid(fields.tp, lat, lon);
+    if (fields?.wave_dir) s.waveDir = sampleDirection(fields.wave_dir, lat, lon);
+    if (grid && layer === "energy") s.energy = sampleGrid(grid, lat, lon);
+    if (fields?.wind_u && fields?.wind_v) {
+      const u = sampleGrid(fields.wind_u, lat, lon);
+      const v = sampleGrid(fields.wind_v, lat, lon);
+      s.windSpeed = Math.hypot(u, v);
+      s.windDir = directionFromUV(u, v);
+    }
+    if (pressure) s.pressure = sampleGrid(pressure, lat, lon);
+    return s;
+  };
 }
 
 function layerFlow(layer: LayerId, f: FieldSet | null): Flow | null {

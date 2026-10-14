@@ -15,7 +15,7 @@ astronomical tide predictions, not observed water levels.
 | `h_9414131.json` | 9414131 Pillar Point Harbor, Half Moon Bay (harmonic) | `interval=h`, datum MLLW, 7 hourly values |
 | `msl_9414131.json` | 9414131 | `interval=h`, datum MSL, 4 hourly values; MLLW - MSL = 0.911 m at 02:00Z (0.004 vs -0.907) |
 | `h72_9414131.json`, `h72_9411270.json`, `h72_1615680.json`, `h72_9410580.json`, `h72_9414290.json` | Pillar Point, Rincon Island, Kahului, Newport Bay Entrance, San Francisco (Golden Gate), all harmonic | 72 hourly values from 2026-10-14 00:00Z. For 9414131 the values equal `msl_9414131.json` where they overlap (datum MSL); the audit's comparison with Open-Meteo used all five as MSL |
-| `stations_tidepredictions.trimmed.json` | 62 stations | `https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=tidepredictions` (captured 2026-10-14 01:52:21 UTC, 3,502 stations, 2,042,754 bytes), trimmed to the stations nearest the US and Central/South Pacific spots (and their reference stations) listed by the audit; `count` is the trimmed count, every other field as served |
+| `stations_tidepredictions.trimmed.json` | 62 stations | `https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=tidepredictions` (captured 2026-10-14 01:52:21 UTC, 3,502 stations, 2,042,754 bytes), trimmed to the stations nearest the US and Central/South Pacific spots (and their reference stations) listed by the audit; `count` is the trimmed count and the top-level `self` field (null in the capture) is dropped; every station object is as served |
 
 Licence: NOAA CO-OPS data are U.S. Government works in the public domain; NOS asks that
 attribution be given when the material is reproduced
