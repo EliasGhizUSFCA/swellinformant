@@ -260,7 +260,7 @@ describe("systems, reduced motion and budget", () => {
     for (const l of crestLines) byColour.set(l.style.slice(0, l.style.lastIndexOf(",")), l.dash.join(","));
     expect(byColour.get("rgba(244, 247, 251")).toBe(""); // primary: solid white
     expect(byColour.get("rgba(255, 196, 107")).toBe("7,5"); // secondary: dashed amber
-    expect(byColour.get("rgba(127, 227, 255")).toBe("1.5,3.5"); // wind sea: dotted cyan
+    expect(byColour.get("rgba(127, 227, 255")).toBe("2,4"); // wind sea: dotted cyan
   });
 
   it("draws more ink for a higher swell", () => {

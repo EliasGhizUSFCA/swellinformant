@@ -175,7 +175,7 @@ export interface FamilyStyle {
 export const FAMILY_STYLES: Record<WaveSystem, FamilyStyle> = {
   primary: { label: "Primary swell", short: "Primary", color: "#f4f7fb", dash: [], halfLength: 1.8, crests: 6, cellSpacings: 6, glow: true, look: "solid" },
   secondary: { label: "Secondary swell", short: "Secondary", color: "#ffc46b", dash: [7, 5], halfLength: 1.5, crests: 5, cellSpacings: 5.5, glow: false, look: "dashed" },
-  windsea: { label: "Wind sea", short: "Wind sea", color: "#7fe3ff", dash: [1.5, 3.5], halfLength: 1.4, crests: 4, cellSpacings: 4.5, glow: false, look: "dotted" },
+  windsea: { label: "Wind sea", short: "Wind sea", color: "#7fe3ff", dash: [2, 4], halfLength: 1.4, crests: 4, cellSpacings: 4.5, glow: false, look: "dotted" },
   combined: { label: "Combined sea (peak)", short: "Combined", color: "#ffffff", dash: [], halfLength: 1.8, crests: 6, cellSpacings: 6, glow: true, look: "solid" },
 };
 

@@ -181,6 +181,11 @@ export function LegendDrawer({
             </div>
             <div className="mt-0.5">{index.source.attribution}</div>
             {index.cycle_time && <div className="mt-0.5">Model cycle {formatDateTime(index.cycle_time, "UTC")} UTC</div>}
+            {index.stale && (
+              <div className="mt-0.5 font-medium text-amber-200" data-testid="legend-stale">
+                Out of date: this model run is {index.age_hours != null ? `${Math.round(index.age_hours)} h` : "more than " + Math.round(index.stale_after_hours) + " h"} old.
+              </div>
+            )}
             {validTime && (
               <div className="mt-0.5" data-testid="legend-valid">
                 Valid {formatSpotDateTime(validTime, tz, { zone: true })}
