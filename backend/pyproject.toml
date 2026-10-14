@@ -41,6 +41,12 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
 ]
+# One-off extraction of harmonic tide constants for the committed constants file
+# (scripts/extract_tide_constants.py); never imported by the app at runtime.
+# pyTMD 3.0.9 (MIT) was released on PyPI on 2026-07-02.
+tides-extract = [
+    "pyTMD==3.0.9",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
