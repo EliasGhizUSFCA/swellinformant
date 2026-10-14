@@ -135,7 +135,7 @@ export const WaveBars = memo(function WaveBars({
                 data-sets-tick=""
               />
               {peaks.has(s.i) && (
-                <text x={cx} y={Math.max(11, Math.min(hi ?? top, y(conv(b.sets_ft))) - 4)} textAnchor="middle" className="fill-ink text-[10px] font-semibold tabular-nums">
+                <text x={Math.max(10, Math.min(width - 10, cx))} y={Math.max(11, Math.min(hi ?? top, y(conv(b.sets_ft))) - 4)} textAnchor="middle" className="fill-ink text-[10px] font-semibold tabular-nums">
                   {valueText(conv(b.central_ft))}
                 </text>
               )}

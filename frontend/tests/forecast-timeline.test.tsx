@@ -350,6 +350,48 @@ describe("14. missing data does not break the timeline", () => {
   });
 });
 
+describe("observations stay apart from the forecast", () => {
+  it("shows a measured buoy height as measured, with station, distance and time, only with offshore Hs", () => {
+    const tl = structuredClone(jbay());
+    // SYNTHETIC measurement at the time of step 2.
+    tl.observations = {
+      status: "available",
+      reason: null,
+      items: [
+        {
+          t: tl.steps[2]!.t,
+          kind: "instrument",
+          station_code: "TEST1",
+          station_name: "Synthetic test buoy",
+          provider: "test",
+          relation: "offshore_reference",
+          distance_km: 41.6,
+          hs_m: 2.3,
+          hs_kind: "spectral_hm0",
+          tp_s: 12,
+          dir_from_deg: 230,
+          wind_kmh: null,
+          qc_flag: null,
+          stale: false,
+          licence: null,
+          attribution: null,
+        },
+      ],
+    };
+    renderTimeline(tl);
+    expect(screen.getByTestId("observations-note")).toHaveTextContent("Synthetic test buoy (42 km away, test): Hs 2.3 m at Mon 11:00 AM");
+    expect(document.querySelector("[data-observation]")).toBeNull();
+    fireEvent.click(screen.getByTestId("toggle-offshore"));
+    expect(document.querySelector("[data-observation='TEST1']")).not.toBeNull();
+    expect(document.querySelectorAll("[data-offshore-hs]")).toHaveLength(tl.steps.length);
+  });
+
+  it("shows nothing while the observations block is unavailable", () => {
+    renderTimeline(jbay());
+    expect(screen.queryByTestId("observations-note")).toBeNull();
+  });
+});
+
 describe("15. no time is invented", () => {
   it("draws one mark per API step, only at API times; 6-hour steps are twice as wide as 3-hour ones", () => {
     const tl = mixed3h6h(jbay());

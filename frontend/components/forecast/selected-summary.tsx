@@ -166,25 +166,26 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
       <div className="mt-3 grid gap-x-8 gap-y-4 lg:grid-cols-[minmax(14rem,0.8fr)_2.2fr]">
         <div className="grid min-w-0 grid-cols-2 gap-x-5 gap-y-3 lg:grid-cols-1">
           <div className="min-w-0" data-testid="summary-quality" data-label={q} data-score={step.quality.score}>
-            <div className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Surf quality</div>
+            <div className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              Surf quality <span className="font-normal normal-case">· our rating</span>
+            </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
               <QualityMarker label={q} />
               <span className="text-lg font-semibold text-ink sm:text-xl">{QUALITY_LABELS[q]}</span>
               <span className="text-lg font-semibold text-ink tabular-nums sm:text-xl">{score10(step.quality.score)}/10</span>
             </div>
-            <div className="text-[11px] text-muted-foreground">our rating for this break</div>
           </div>
           <div className="min-w-0">
             <div className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-              Breaking waves <InfoPopover term="breakingHeight" />
+              Breaking waves <span className="font-normal normal-case">· our estimate</span> <InfoPopover term="breakingHeight" />
             </div>
             <div className="flex flex-wrap items-baseline gap-x-2" data-testid="summary-breaking" data-typical={b.typical_ft} data-sets={b.sets_ft} data-central={b.central_ft}>
               <span className="font-display text-2xl font-semibold text-ink tabular-nums sm:text-3xl">{formatHeightRange(b.typical_ft, b.sets_ft, units)}</span>
               <span className="text-xs text-muted-foreground">typical–sets</span>
             </div>
             <div className="text-[11px] text-muted-foreground tabular-nums">
-              our estimate · central {convertHeightFt(b.central_ft, units).toFixed(1)} {units}
-              {b.p10_ft != null && b.p90_ft != null && <> · likely {formatHeightRange(b.p10_ft, b.p90_ft, units)} (unverified)</>}
+              central {convertHeightFt(b.central_ft, units).toFixed(1)} {units}
+              {b.p10_ft != null && b.p90_ft != null && <> · likely {formatHeightRange(b.p10_ft, b.p90_ft, units)}, unverified</>}
             </div>
           </div>
         </div>
@@ -196,9 +197,11 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
           <Item label="Wind" testId="summary-wind">
             {w && w.speed_kmh != null ? (
               <>
-                <span className="inline-flex flex-wrap items-center gap-x-1.5 font-semibold" data-speed={w.speed_kmh}>
-                  {w.dir_from_deg != null && <ToArrow fromDeg={w.dir_from_deg} />}
-                  {formatWind(w.speed_kmh, windUnit)} from {directionText(w.dir_from_deg)}
+                <span className="flex items-start gap-1.5 font-semibold" data-speed={w.speed_kmh}>
+                  {w.dir_from_deg != null && <ToArrow fromDeg={w.dir_from_deg} className="mt-[3px]" />}
+                  <span>
+                    {formatWind(w.speed_kmh, windUnit)} from {directionText(w.dir_from_deg)}
+                  </span>
                 </span>
                 <span className="block text-xs text-muted-foreground" data-testid="summary-wind-relation">
                   {WIND_RELATION_LABEL[w.relation] ?? w.relation}

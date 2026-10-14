@@ -381,9 +381,18 @@ const DayNav = memo(function DayNav({ model, onDay }: { model: TimelineModel; on
   const days = model.days.filter((d) => model.steps.some((s) => s.t >= d.start && s.t < d.end));
   const at = days.findIndex((d) => d.date === selectedDay);
   const listRef = useRef<HTMLDivElement>(null);
+  // Keep the pressed day visible in the (horizontally scrolling) list. Only the list scrolls:
+  // scrollIntoView would also scroll the page to it.
   useEffect(() => {
-    const btn = listRef.current?.querySelector<HTMLElement>('[aria-pressed="true"]');
-    btn?.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
+    const list = listRef.current;
+    const btn = list?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (!list || !btn) return;
+    const l = list.getBoundingClientRect();
+    const b = btn.getBoundingClientRect();
+    const delta = b.left < l.left ? b.left - l.left - 8 : b.right > l.right ? b.right - l.right + 8 : 0;
+    if (!delta) return;
+    if (typeof list.scrollBy === "function") list.scrollBy({ left: delta, behavior: reducedMotion() ? "auto" : "smooth" });
+    else list.scrollLeft += delta;
   }, [selectedDay]);
   const nav = "shrink-0 rounded-lg border bg-card p-2 text-ink transition-colors hover:bg-muted disabled:opacity-40";
   return (
@@ -523,10 +532,34 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
           Preferred tide here: {tide.preference.text}
         </span>
       </div>
+      <ObservationsNote timeline={timeline} />
       <div className="lg:col-span-2">Shaded: night (last light to first light). Each bar spans the time its forecast step stands for.</div>
     </div>
   );
 });
+
+/** The latest instrument measurement near the spot, kept apart from the forecast: station,
+ * distance, local time and value, marked stale when the provider's data is old. Nothing is
+ * shown while the observations block is unavailable. */
+function ObservationsNote({ timeline }: { timeline: SpotTimeline }) {
+  const obs = timeline.observations;
+  const latest = obs.items
+    .filter((o) => o.kind === "instrument" && o.hs_m != null)
+    .reduce<SpotTimeline["observations"]["items"][number] | null>((a, o) => (!a || Date.parse(o.t) > Date.parse(a.t) ? o : a), null);
+  if (obs.status === "unavailable" || !latest) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 lg:col-span-2" data-testid="observations-note">
+      <span className="font-semibold text-ink">Measured</span>
+      <span className="inline-flex items-center gap-1">
+        <svg viewBox="-6 -6 12 12" className="size-3" aria-hidden="true">
+          <path d="M0,-5L5,0L0,5L-5,0Z" fill="var(--card)" stroke="var(--chart-offshore)" strokeWidth={1.5} />
+        </svg>
+        {latest.station_name} ({Math.round(latest.distance_km)} km away, {latest.provider}): Hs {latest.hs_m!.toFixed(1)} m at {shortTime(Date.parse(latest.t), timeline.timezone)}
+        {latest.stale || obs.status === "stale" ? " (stale)" : ""} · an instrument measurement offshore, shown with “Offshore Hs (model)”
+      </span>
+    </div>
+  );
+}
 
 function ArrowGlyph({ solid = false }: { solid?: boolean }) {
   return (

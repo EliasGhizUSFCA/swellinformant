@@ -406,7 +406,8 @@ export default function SpotPage() {
         </Alert>
       )}
 
-      <TimelineSelectionProvider initialT={null}>
+      {/* One selection per spot: a new spot starts from its own default (or ?t=). */}
+      <TimelineSelectionProvider key={slug} initialT={null}>
         <InitialSelection timeline={timeline.data} />
         <SurfOutlook s={s} units={units} points={points} />
 
