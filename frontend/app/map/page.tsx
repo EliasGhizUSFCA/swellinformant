@@ -8,9 +8,9 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/layout/app-shell";
-import type { ParticleMode } from "@/components/map/forecast-map";
 import { LayerTabs } from "@/components/map/layer-tabs";
 import { LegendDrawer, LegendTab } from "@/components/map/legend-drawer";
+import type { ParticleMode } from "@/components/map/map-canvas-layers";
 import { FOCUS, GLASS } from "@/components/map/map-ui";
 import { SettingsPopover } from "@/components/map/settings-popover";
 import { NO_FILTERS, passes, type Filters } from "@/components/map/spot-filters";
@@ -18,12 +18,11 @@ import { SpotList } from "@/components/map/spot-list";
 import { SpotPanel } from "@/components/map/spot-panel";
 import type { MarkerState } from "@/components/map/surf-map";
 import { Timeline } from "@/components/map/timeline";
-import { useCityAirports, useFieldGrids, useFieldIndex } from "@/hooks/map-fields";
+import { useCityAirports, useFieldIndex, useMapLayerFields } from "@/hooks/map-fields";
 import { useMediaQuery, usePageVisible, usePrefersReducedMotion } from "@/hooks/map-media";
 import { useMapSettings } from "@/hooks/map-settings";
 import { useMapConditions, useMe, useSpots } from "@/hooks/queries";
 import { formatDateTime, heightRange, type Units } from "@/lib/format";
-import type { FieldVariableName } from "@/lib/map-fields";
 import { isobarsFor } from "@/lib/map-geo";
 import { layerDef, layerScale, type DisplayUnits } from "@/lib/map-layers";
 import { bubbleLabel, longTimeLabel, nearestStepIndex, timelineSteps } from "@/lib/map-time";
@@ -110,18 +109,9 @@ export default function MapPage() {
   // --- ocean layers ---------------------------------------------------------------------
   const layer = settings.layer;
   const def = layerDef(layer);
-  const offered = useMemo(() => new Set((index?.variables ?? []).map((v) => v.name)), [index]);
-  const layerVars = useMemo(() => def.needs.filter((v) => offered.size === 0 || offered.has(v)), [def, offered]);
-  const pressureVars = useMemo<FieldVariableName[]>(() => (settings.pressure && offered.has("pressure") ? ["pressure"] : []), [settings.pressure, offered]);
-  // Prefetch around the settled (debounced) time only, never around steps passed while scrubbing.
-  const neighbours = useMemo(() => {
-    const i = debounced.field ? steps.indexOf(debounced.field) : -1;
-    return i < 0 ? [] : [steps[i + 1], steps[i - 1]].filter((s): s is string => !!s);
-  }, [steps, debounced.field]);
-  const runKey = fieldsAvailable ? (index.run_key ?? null) : null;
-  const layerFields = useFieldGrids(layerVars, debounced.field, neighbours, runKey);
-  const pressureField = useFieldGrids(pressureVars, debounced.field, neighbours, runKey);
-  const pressureGrid = settings.pressure ? (pressureField.grids?.pressure ?? null) : null;
+  // The settled (debounced) time: fields and their prefetch follow it, not every step scrubbed.
+  const layerFields = useMapLayerFields({ settings, at: debounced.field, index: index ?? null });
+  const pressureGrid = layerFields.pressure;
   const isobars = useMemo(() => (pressureGrid ? isobarsFor(pressureGrid) : null), [pressureGrid]);
   const scale = useMemo(() => layerScale(layer, index), [layer, index]);
   const particleMode: ParticleMode = !settings.particles || !pageVisible ? "off" : reducedMotion ? "static" : "animated";
@@ -199,7 +189,7 @@ export default function MapPage() {
   const listIsOpen = listOpen ?? isDesktop;
   const timeText = at ? bubbleLabel(at, tz) : "";
   // The canvas keeps the previous step's field until the next one arrives: describe what it shows.
-  const fieldTime = layerFields.at ?? at;
+  const fieldTime = layerFields.servedValidTime ?? at;
   const fieldTimeText = fieldTime ? longTimeLabel(fieldTime, tz) : "";
   // One short line for everyone; the backend's setup message (for whoever runs the site) is in
   // the legend. Its full text covered a block of the map on phones and ran under the spot list.
@@ -257,7 +247,7 @@ export default function MapPage() {
           <div className="pointer-events-auto shrink-0 p-1">
             <SettingsPopover
               settings={settings}
-              onSettings={updateSettings}
+              onChange={updateSettings}
               heightUnits={heightUnits}
               reducedMotion={reducedMotion}
               spots={spots}
@@ -278,10 +268,9 @@ export default function MapPage() {
         {legendOpen && (
           <div className="absolute top-16 left-9 z-[1150]" style={{ bottom: bottomInset + 12 }}>
             <LegendDrawer
-              layer={layer}
+              settings={settings}
               scale={scale}
               units={units}
-              pressure={settings.pressure}
               index={index}
               particles={particleMode}
               onClose={() => setLegendOpen(false)}
@@ -364,10 +353,9 @@ export default function MapPage() {
             markers={markers}
             selected={selected}
             onSelect={setSelected}
-            basemap={settings.basemap}
-            layer={layer}
-            fields={fieldsAvailable ? layerFields.grids : null}
-            fieldsAt={layerFields.at}
+            settings={settings}
+            fields={layerFields.fields}
+            fieldsAt={layerFields.servedValidTime}
             pressure={pressureGrid}
             isobars={isobars}
             scale={scale}

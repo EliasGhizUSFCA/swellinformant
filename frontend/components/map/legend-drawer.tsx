@@ -6,13 +6,14 @@ import { DemoBadge } from "@/components/quality";
 import { formatDateTime } from "@/lib/format";
 import { cssGradient, type LayerScale } from "@/lib/map-colors";
 import type { FieldIndex } from "@/lib/map-fields";
-import { layerDef, layerUnit, legendTicks, type DisplayUnits, type LayerId } from "@/lib/map-layers";
+import { layerDef, layerUnit, legendTicks, type DisplayUnits } from "@/lib/map-layers";
+import type { MapSettings } from "@/lib/map-settings";
 import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_LABELS } from "@/lib/quality";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
 
 import { FOCUS, GLASS } from "./map-ui";
-import type { ParticleMode } from "./forecast-map";
+import type { ParticleMode } from "./map-canvas-layers";
 
 const MARKER_LEGEND: Array<{ label: string; color: string }> = [
   { label: "No usable forecast", color: NO_FORECAST_COLOR },
@@ -36,22 +37,22 @@ export function LegendTab({ open, onToggle }: { open: boolean; onToggle: () => v
 }
 
 export function LegendDrawer({
-  layer,
+  settings,
   scale,
   units,
-  pressure,
   index,
   particles,
   onClose,
 }: {
-  layer: LayerId;
+  /** Display settings: the active layer, the pressure overlay, ... */
+  settings: MapSettings;
   scale: LayerScale;
   units: DisplayUnits;
-  pressure: boolean;
   index: FieldIndex | null | undefined;
   particles: ParticleMode;
   onClose: () => void;
 }) {
+  const { layer, pressure } = settings;
   const def = layerDef(layer);
   const ticks = legendTicks(layer, scale, units);
   const available = !!index?.available;

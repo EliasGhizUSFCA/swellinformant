@@ -48,7 +48,7 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
  */
 export function SettingsPopover({
   settings,
-  onSettings,
+  onChange,
   heightUnits,
   reducedMotion,
   spots,
@@ -57,7 +57,7 @@ export function SettingsPopover({
   matching,
 }: {
   settings: MapSettings;
-  onSettings: (patch: Partial<MapSettings>) => void;
+  onChange: (patch: Partial<MapSettings>) => void;
   heightUnits: Units;
   reducedMotion: boolean;
   spots: SpotSummary[];
@@ -93,9 +93,9 @@ export function SettingsPopover({
               { value: "ft", label: "ft" },
               { value: "m", label: "m" },
             ]}
-            onChange={(v) => onSettings({ heightUnits: v })}
+            onChange={(v) => onChange({ heightUnits: v })}
           />
-          <Segmented<WindUnit> label="Wind" value={settings.windUnits} options={WIND_UNITS.map((u) => ({ value: u, label: u }))} onChange={(v) => onSettings({ windUnits: v })} />
+          <Segmented<WindUnit> label="Wind" value={settings.windUnits} options={WIND_UNITS.map((u) => ({ value: u, label: u }))} onChange={(v) => onChange({ windUnits: v })} />
           <Segmented<Basemap>
             label="Basemap"
             value={settings.basemap}
@@ -103,7 +103,7 @@ export function SettingsPopover({
               { value: "dark", label: "Dark" },
               { value: "streets", label: "Streets" },
             ]}
-            onChange={(v) => onSettings({ basemap: v })}
+            onChange={(v) => onChange({ basemap: v })}
           />
           <div className="flex items-start justify-between gap-3">
             <label htmlFor="map-particles" className="text-sm text-white/85">
@@ -112,7 +112,7 @@ export function SettingsPopover({
                 <span className="block text-xs text-white/60">Your device asks for reduced motion, so the flow is drawn as still arrows.</span>
               )}
             </label>
-            <Switch id="map-particles" checked={settings.particles} onCheckedChange={(on) => onSettings({ particles: on })} />
+            <Switch id="map-particles" checked={settings.particles} onCheckedChange={(on) => onChange({ particles: on })} />
           </div>
         </div>
         <div className="mt-4 border-t border-white/10 pt-3">
