@@ -81,8 +81,17 @@ def compass_label(deg: float | None) -> str:
     return points[int((norm_deg(deg) + 11.25) // 22.5) % 16]
 
 
-def wind_from_uv(u: float, v: float) -> tuple[float, float]:
-    """Convert eastward/northward wind components (m/s) to (speed m/s, direction FROM deg)."""
+def wind_from_uv(u: float, v: float) -> tuple[float, float | None]:
+    """Speed and nautical direction FROM (degrees, [0, 360)) of a wind vector.
+
+    ``u`` points east and ``v`` north: the direction the air moves TO (GRIB and model
+    convention), so a wind of speed V from bearing theta has u = -V sin(theta) and
+    v = -V cos(theta); a wind blowing towards the east (u > 0, v = 0) comes FROM 270. The
+    speed has the unit of u and v (callers convert, e.g. m/s x 3.6 = km/h). A calm wind
+    has no direction: (0.0, None).
+    """
     speed = math.hypot(u, v)
-    direction = norm_deg(270.0 - math.degrees(math.atan2(v, u))) if speed > 0 else 0.0
-    return speed, direction
+    if speed == 0.0:
+        return 0.0, None
+    direction = math.degrees(math.atan2(-u, -v)) % 360.0
+    return speed, 0.0 if direction >= 360.0 else direction  # -1e-15 % 360 rounds to 360.0

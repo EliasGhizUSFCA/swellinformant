@@ -23,12 +23,12 @@ from app.services.forecasts.base import FORECAST_FIELDS, RunInfo, SpotPoint
 from app.services.forecasts.ecmwf import (
     LICENSE_URL,
     EcmwfIfsProvider,
+    _RunState,
     candidate_cycles,
     choose_cell,
     combined_band_height,
     cycle_steps,
     file_url,
-    wind_from_uv,
 )
 from app.services.forecasts.grib import (
     PointSampler,
@@ -287,12 +287,20 @@ def test_file_urls_follow_the_bucket_layout() -> None:
     )
 
 
-def test_wind_from_uv_gives_km_h_and_direction_from() -> None:
-    speed, direction = wind_from_uv(3.0, 4.0)  # air moving towards the NE
-    assert speed == pytest.approx(18.0) and direction == pytest.approx(216.87, abs=0.01)
-    assert wind_from_uv(0.0, -5.0)[1] == pytest.approx(0.0)  # moving south = from north
-    assert wind_from_uv(-5.0, 0.0)[1] == pytest.approx(90.0)  # moving west = from east
-    assert wind_from_uv(0.0, 0.0) == (0.0, None)  # calm: no direction
+def test_wind_record_gives_km_h_and_direction_from() -> None:
+    state = _RunState(sampler=PointSampler())
+    spot = SpotPoint(1, "x", 0.0, 0.0, 0.0, 0.0)
+    cycle = datetime(2026, 10, 10, tzinfo=UTC)
+
+    def wind(u: float, v: float) -> tuple[float | None, float | None]:
+        r = EcmwfIfsProvider._record(cycle, 6, {}, {"10u": u, "10v": v}, None, spot, state)
+        return r.values["wind_speed_kmh"], r.values["wind_direction_deg"]
+
+    speed, direction = wind(3.0, 4.0)  # air moving towards the NE: 5 m/s = 18 km/h
+    assert speed == pytest.approx(18.0) and direction == pytest.approx(216.9, abs=0.01)
+    assert wind(0.0, -5.0)[1] == pytest.approx(0.0)  # moving south = from north
+    assert wind(-5.0, 0.0)[1] == pytest.approx(90.0)  # moving west = from east
+    assert wind(0.0, 0.0) == (0.0, None)  # calm: no direction
 
 
 def test_combined_band_height_adds_energy() -> None:

@@ -96,6 +96,7 @@ from app.services.forecasts.grib import (
     select_entries,
 )
 from app.services.forecasts.registry import ECMWF_IFS_CODE
+from app.services.geo import wind_from_uv
 from app.services.http import (
     PermanentProviderError,
     TransientProviderError,
@@ -185,15 +186,6 @@ def candidate_cycles(
 def file_url(base_url: str, cycle: datetime, step: int, stream: str, ext: str = "grib2") -> str:
     day, hour = f"{cycle:%Y%m%d}", f"{cycle:%H}"
     return f"{base_url}/{day}/{hour}z/ifs/0p25/{stream}/{day}{hour}0000-{step}h-{stream}-fc.{ext}"
-
-
-def wind_from_uv(u: float, v: float) -> tuple[float, float | None]:
-    """(speed km/h, nautical direction FROM in degrees; None when calm) from 10 m u/v (m/s)."""
-    speed_ms = math.hypot(u, v)
-    if speed_ms < 1e-6:
-        return 0.0, None
-    # (u, v) points where the air goes; FROM is the opposite bearing.
-    return speed_ms * 3.6, math.degrees(math.atan2(-u, -v)) % 360.0
 
 
 def combined_band_height(heights: Iterable[float | None]) -> float | None:
@@ -751,8 +743,8 @@ class EcmwfIfsProvider(ForecastProvider):
         values["wave_direction_deg"] = _bearing(wave.get("mwd"))  # already FROM
         u, v = atmos.get("10u"), atmos.get("10v")
         if u is not None and v is not None:
-            speed, direction = wind_from_uv(u, v)
-            values["wind_speed_kmh"] = round(speed, 2)
+            speed_ms, direction = wind_from_uv(u, v)  # m/s; direction None when calm
+            values["wind_speed_kmh"] = round(speed_ms * 3.6, 2)
             values["wind_direction_deg"] = _bearing(direction)
         gust = atmos.get("10fg")
         values["wind_gust_kmh"] = None if gust is None else round(gust * 3.6, 2)

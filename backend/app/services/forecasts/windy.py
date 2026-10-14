@@ -141,7 +141,7 @@ class WindyProvider(ForecastProvider):
                 gust, pres = _at(atmos, "gust-surface", i), _at(atmos, "pressure-surface", i)
                 row: dict[str, float | None] = {}
                 if u is not None and v is not None:
-                    speed, direction = wind_from_uv(u, v)
+                    speed, direction = wind_from_uv(u, v)  # m/s; direction None when calm
                     row["wind_speed_kmh"] = ms_to_kmh(speed)
                     row["wind_direction_deg"] = direction
                 if gust is not None:

@@ -43,9 +43,9 @@ Conventions (research notes, from WW3 ``ww3_grib.F90`` and the WW3 manual):
 * HTSGW is the offshore significant wave height of the combined sea state. It is NOT the
   breaking (surf) height.
 * Wind speed is ``|(u, v)|`` m/s x 3.6 = km/h and its direction FROM is
-  ``(270 - atan2(v, u)) mod 360``. GUST (a boundary-layer mixing diagnostic, not an
-  observed gust) is m/s x 3.6. PRMSL is Pa / 100 = hPa. GFS has no tide, so
-  ``sea_level_m`` is always None.
+  ``atan2(-u, -v) mod 360`` (``geo.wind_from_uv``; None when calm). GUST (a boundary-layer
+  mixing diagnostic, not an observed gust) is m/s x 3.6. PRMSL is Pa / 100 = hPa. GFS has
+  no tide, so ``sea_level_m`` is always None.
 
 Point sampling never crosses land. Waves come from the nearest cell with a valid HTSGW
 value (land is masked in the GRIB bitmap) to the spot's forecast point, falling back to
@@ -73,7 +73,6 @@ else.
 from __future__ import annotations
 
 import logging
-import math
 import threading
 import time
 from collections.abc import Callable, Hashable, Iterable, Sequence
@@ -107,6 +106,7 @@ from app.services.forecasts.grib import (
     select_entries,
 )
 from app.services.forecasts.registry import NOAA_GFS_CODE
+from app.services.geo import wind_from_uv
 from app.services.http import (
     PermanentProviderError,
     ProviderError,
@@ -224,19 +224,6 @@ def map_field_hours(max_lead_hours: int, step_hours: int) -> list[int]:
     """
     step = max(1, step_hours)
     return [h for h in forecast_hours(max_lead_hours, 1) if h % step == 0]
-
-
-def wind_from_uv(u: float, v: float) -> tuple[float, float | None]:
-    """Speed (same unit as u, v) and nautical direction FROM (deg) of a wind vector.
-
-    ``u`` points east and ``v`` north (GRIB convention: the direction the air moves to),
-    so a wind blowing towards the east (u > 0, v = 0) comes FROM 270 deg. A calm wind has
-    no direction.
-    """
-    speed = math.hypot(u, v)
-    if speed == 0.0:
-        return 0.0, None
-    return speed, (270.0 - math.degrees(math.atan2(v, u))) % 360.0
 
 
 def _rounded(value: float | None, digits: int) -> float | None:

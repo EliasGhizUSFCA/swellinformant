@@ -26,9 +26,9 @@ from app.services.forecasts.noaa import (
     forecast_hours,
     sample_gfs_points,
     wave_grid_for,
-    wind_from_uv,
 )
 from app.services.forecasts.registry import NOAA_GFS_CODE, build_provider
+from app.services.geo import wind_from_uv
 from app.services.http import PermanentProviderError, TransientProviderError
 from tests.synthetic_gfs import (
     ATMOS_GRID,
