@@ -2,7 +2,7 @@
  * Wavefronts for the map's wave layers: stylised crest lines drawn from the wave model's
  * height, period and direction of each wave system (primary swell, secondary swell, wind
  * sea, or the combined sea when the run has no partitions). Nothing here is shared with the
- * wind particles: crests are lines across the direction of travel, grouped in packets, and
+ * wind particles: crests are lines across the direction of travel, grouped in sets, and
  * move slowly; the physics and scales are in lib/map-waves.ts and docs/map-rendering.md.
  *
  * Per view (after a pan or zoom, or new fields) a screen LATTICE is built every LATTICE_PX
@@ -10,14 +10,15 @@
  * spacing, crest speed, height and a validity flag. A node is invalid without data, below
  * MIN_DRAW_HS_M, where the four grid corners of the direction disagree by more than
  * MAX_CORNER_SPREAD_DEG (a partition swap between cells: no averaged direction is invented),
- * or over land. Packets sit on a jittered grid in WORLD pixels, so they stay put while the
- * map pans and the timeline steps. Each frame, every packet places its crests along its ray
- * at the crest lattice u = n s + v t (phase speed), under a raised-cosine envelope that moves
- * at v / 2 (group speed) and fades in and out over its travel, and traces each crest along
- * the local crest-tangent field (curved where the field turns, straight where it is uniform,
- * stopped where the lattice is invalid or the crest turns more than MAX_TURN_DEG per step).
- * Strokes are batched per system, width and opacity; the canvas is cleared every frame (no
- * trails), then masked to the ocean: data validity AND NOT Natural Earth land, on both
+ * or over land. Sets (packets) sit on a jittered grid in WORLD pixels, so they stay put
+ * while the map pans and the timeline steps. Each frame, every set places its crests along
+ * its ray on the crest lattice u = n s + v t (phase speed), under a flat-topped envelope that
+ * moves at v / 2 (group speed) and fades in and out over its travel, and traces each crest
+ * along the local crest-tangent field (curved where the field turns, straight where it is
+ * uniform, stopped where the lattice is invalid or the crest turns more than MAX_TURN_DEG
+ * per step). Solid systems get a soft glow and a faint dark trough line behind each crest.
+ * Strokes are batched per system, kind, width and opacity; the canvas is cleared every frame
+ * (no trails), then masked to the ocean: data validity AND NOT Natural Earth land, on both
  * basemaps. Reduced motion draws the same crests once, still, with arrowheads.
  */
 import { sampleDirection, sampleGrid, type Grid } from "@/lib/map-fields";

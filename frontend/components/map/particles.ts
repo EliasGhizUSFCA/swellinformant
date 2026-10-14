@@ -77,6 +77,8 @@ export class ParticleAnimator {
   private readonly trails = new TrailRenderer();
   private readonly random: () => number;
   private readonly count: (width: number, height: number) => number;
+  /** Share of the particle count drawn (the wind overlay on a wave layer uses fewer). */
+  private density = 1;
   private readonly fixedAge: number | null;
 
   constructor(opts: ParticleOptions = {}) {
@@ -88,6 +90,11 @@ export class ParticleAnimator {
   /** Sets the flow. Running particles keep their positions and trails (no reseed). */
   setFlow(flow: Flow | null): void {
     this.flow = flow;
+  }
+
+  /** Share of the usual particle count, from the next start (0..1). */
+  setDensity(density: number): void {
+    this.density = Math.min(1, Math.max(0, density));
   }
 
   get trailMode(): TrailMode {
@@ -134,7 +141,7 @@ export class ParticleAnimator {
     this.view = view;
     this.mode = mode;
     if (!this.flow) return;
-    const n = this.count(view.width, view.height);
+    const n = Math.max(1, Math.round(this.count(view.width, view.height) * this.density));
     this.particles = Array.from({ length: n }, () => ({ x: 0, y: 0, age: 0, maxAge: 1 }));
     this.trails.reset(mode === "explicit" ? n : 0);
     this.particles.forEach((p, i) => {

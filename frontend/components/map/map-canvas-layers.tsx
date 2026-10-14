@@ -220,7 +220,11 @@ function colorTypeOf(ctx: CanvasRenderingContext2D): string {
   return (ctx.getContextAttributes?.() as { colorType?: string } | undefined)?.colorType ?? "unorm8";
 }
 
-function ParticleCanvas({ flow, mode }: { flow: Flow | null; mode: ParticleMode }) {
+/** Particles of the wind overlay on a wave layer, relative to the Wind layer: fewer, so the
+ * crests stay readable underneath. */
+const OVERLAY_DENSITY = 0.45;
+
+function ParticleCanvas({ flow, mode, overlay }: { flow: Flow | null; mode: ParticleMode; overlay: boolean }) {
   const map = useMap();
   const layerRef = useRef<CanvasLayer | null>(null);
   const modeRef = useRef(mode);
@@ -268,6 +272,11 @@ function ParticleCanvas({ flow, mode }: { flow: Flow | null; mode: ParticleMode 
       publishMapFlowStatus({ windMode: "off", trailMode: null });
     };
   }, [map, animator]);
+
+  useEffect(() => {
+    animator.setDensity(overlay ? OVERLAY_DENSITY : 1);
+    layerRef.current?.redraw();
+  }, [overlay, animator]);
 
   // A new flow (the next forecast step) while animating keeps the particles and their trails;
   // anything else (first flow, mode change, flow gone) redraws.
@@ -489,7 +498,7 @@ export function MapDataLayers(props: MapDataLayersProps) {
         clipLand={basemap === "streets" && layer !== "wind" ? land : null}
       />
       {layer !== "wind" && <WaveCanvas families={families} mode={waveMode} land={land} />}
-      {windParticles && <ParticleCanvas flow={flow} mode={particles} />}
+      {windParticles && <ParticleCanvas flow={flow} mode={particles} overlay={layer !== "wind"} />}
       <BasemapCanvas
         vector={basemap === "dark"}
         isobars={props.isobarPaths ?? null}
