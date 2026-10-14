@@ -67,6 +67,13 @@ def test_every_scheduled_task_is_consumed_by_the_default_worker() -> None:
         assert routed(name) in consumed, name
 
 
+def test_a_worker_without_queue_options_consumes_both_queues() -> None:
+    """README starts a development worker without -Q: it must still take bulk tasks."""
+    declared = {q.name for q in celery_app.conf.task_queues}
+    assert declared == {DEFAULT_QUEUE, BULK_QUEUE}
+    assert set(celery_app.amqp.queues) >= declared
+
+
 def test_every_beat_entry_expires_after_its_interval() -> None:
     schedule = celery_beat_schedule(every_job_settings())
     assert set(schedule) == set(build_beat_schedule(every_job_settings()))

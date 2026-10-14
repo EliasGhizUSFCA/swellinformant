@@ -39,6 +39,8 @@ DATA_HEALTH_TASK = "ops.data_health"
 # "bulk" alone (docker-compose.yml, profile "bulk-worker").
 DEFAULT_QUEUE = "celery"
 BULK_QUEUE = "bulk"
+# Every queue a task can be routed to: a worker started without -Q consumes all of them.
+QUEUES = (DEFAULT_QUEUE, BULK_QUEUE)
 BULK_TASK_PATTERNS = ("forecasts.*", "observations.*", "verification.*", "tides.*")
 # GEFS-Wave mean/spread files of a cycle are complete about 7 h after it (ensemble.py).
 GEFS_JOB_DELAY = timedelta(hours=7, minutes=40)

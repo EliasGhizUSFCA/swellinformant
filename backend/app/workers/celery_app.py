@@ -6,7 +6,8 @@ Start the scheduler: celery -A app.workers.celery_app beat --loglevel=INFO
 Queues: data acquisition (forecasts.*, observations.*, verification.*, tides.*) runs on the
 "bulk" queue, everything else (account emails, alert delivery, matching, ...) on the default
 "celery" queue (app.workers.schedule.task_routes). A worker must consume both: the default
-WORKER_QUEUES=celery,bulk does (docker-entrypoint.sh). Beat messages expire after their own
+WORKER_QUEUES=celery,bulk does (docker-entrypoint.sh), and so does a worker started without
+-Q (both queues are declared in task_queues). Beat messages expire after their own
 interval (schedule.celery_beat_schedule).
 
 Reliability settings: tasks are acknowledged only after they finish (acks_late) and are
@@ -25,11 +26,13 @@ from celery.signals import (
     beat_init,
     worker_process_init,
 )
+from kombu import Queue
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging, install_redaction
 from app.workers.schedule import (
     DEFAULT_QUEUE,
+    QUEUES,
     TASK_SOFT_TIME_LIMIT_SECONDS,
     TASK_TIME_LIMIT_SECONDS,
     celery_beat_schedule,
@@ -76,6 +79,9 @@ celery_app.conf.update(
     task_always_eager=settings.celery_task_always_eager,
     task_eager_propagates=True,
     task_default_queue=DEFAULT_QUEUE,
+    # Declared so a worker started without -Q (README, local development) consumes every
+    # queue; WORKER_QUEUES / -Q narrows it (docker-entrypoint.sh).
+    task_queues=tuple(Queue(name) for name in QUEUES),
     task_routes=task_routes(),
     beat_schedule=celery_beat_schedule(settings),
 )

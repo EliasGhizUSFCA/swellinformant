@@ -103,3 +103,17 @@ def test_real_worker_consumes_from_redis(db: Session, few_spots: list[str]) -> N
     finally:
         celery_app.conf.task_always_eager = True
     assert "quality.predict" in logs(db) and "forecasts.check_staleness" in logs(db)
+
+
+def test_a_worker_without_queue_options_takes_bulk_tasks(db: Session) -> None:
+    """A development worker started without -Q (README) still consumes the bulk queue."""
+    from celery.contrib.testing.worker import start_worker
+
+    celery_app.conf.task_always_eager = False
+    try:
+        with start_worker(celery_app, pool="solo", perform_ping_check=False, shutdown_timeout=30):
+            bulk = tasks.check_staleness.apply_async()  # forecasts.* -> "bulk"
+            assert bulk.get(timeout=60)["status"] == "success"
+    finally:
+        celery_app.conf.task_always_eager = True
+    assert "forecasts.check_staleness" in logs(db)
