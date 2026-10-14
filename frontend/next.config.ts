@@ -8,6 +8,9 @@ import { cartoKeyMissing, tileConfig, tileCspSources } from "./lib/map-tiles";
  * ever shipped to the client. BACKEND_URL is read when the server is built/started.
  */
 const backendUrl = (process.env.BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
+// How long the /api proxy waits for the backend (ms); unset = Next.js's 30 s. The e2e runner
+// raises it: its developer endpoints run the whole forecast pipeline inside one request.
+const proxyTimeout = Number(process.env.API_PROXY_TIMEOUT_MS) || undefined;
 const isDev = process.env.NODE_ENV !== "production";
 // The map tile host is derived from NEXT_PUBLIC_MAP_TILE_URL so a custom provider is never
 // CSP-blocked; MAP_TILE_HOSTS adds more sources. Both are read at build time.
@@ -45,6 +48,7 @@ const nextConfig: NextConfig = {
   // `next dev` blocks dev resources for origins other than localhost; allow the loopback IP too.
   allowedDevOrigins: ["127.0.0.1"],
   reactStrictMode: true,
+  ...(proxyTimeout ? { experimental: { proxyTimeout } } : {}),
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${backendUrl}/api/:path*` }];
   },

@@ -172,6 +172,7 @@ function point(h: number, sc: Scenario): ForecastPoint {
     forecast_confidence_class: sc.forecastClass,
     local_confidence_class: sc.localClass,
     confidence_reasons: sc.reasons,
+    forecast_confidence_reasons: [],
     lead_hours: h,
   };
 }
@@ -207,6 +208,7 @@ function toConditions(p: ForecastPoint): Conditions {
     forecast_confidence_class: p.forecast_confidence_class ?? null,
     local_confidence_class: p.local_confidence_class ?? null,
     confidence_reasons: p.confidence_reasons ?? [],
+    forecast_confidence_reasons: p.forecast_confidence_reasons ?? [],
     lead_hours: p.lead_hours ?? null,
   };
 }
@@ -291,8 +293,8 @@ export function spotForecast(sc: Scenario): SpotForecast {
     timezone: TZ,
     available: true,
     message: null,
-    source: { code: "demo", name: "Synthetic test forecast (not real data)", is_demo: true, attribution: "Synthetic test fixture.", wave_model: "synthetic", atmosphere_model: "synthetic" },
-    run: { run_key: "synthetic-test", issued_at: iso(-6), completed_at: iso(-5), wave_model_run_at: iso(-6), atmosphere_model_run_at: iso(-6), status: "success" },
+    source: { code: "demo", name: "Synthetic test forecast (not real data)", is_demo: true, attribution: "Synthetic test fixture.", wave_model: "synthetic", atmosphere_model: "synthetic", attribution_links: [] },
+    run: { run_key: "synthetic-test", issued_at: iso(-6), completed_at: iso(-5), wave_model_run_at: iso(-6), atmosphere_model_run_at: iso(-6), status: "success", members: [] },
     stale: false,
     breaking_height_method: "linear_wave_v2",
     algorithm_version: "2.0.0",
@@ -302,6 +304,7 @@ export function spotForecast(sc: Scenario): SpotForecast {
     models: [],
     ensemble: [],
     blend: null,
+    alerts_paused: false,
   };
 }
 
@@ -338,6 +341,8 @@ export function swellEvent(sc: Scenario, opts: { id: string; name: string; start
     forecast_confidence_class: sc.forecastClass,
     local_confidence_class: sc.localClass,
     confidence_reasons: sc.reasons,
+    forecast_confidence_reasons: [],
+    stale: false,
   };
 }
 
@@ -412,6 +417,7 @@ export function matchSummary(sc: Scenario): MatchSummary {
     created_at: iso(-24),
     updated_at: iso(-2),
     forecast_confidence_class: sc.forecastClass,
+    stale: false,
   };
 }
 

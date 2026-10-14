@@ -55,7 +55,9 @@ PIDS+=($!)
 echo "▶ building frontend against the e2e backend"
 cd "$ROOT/frontend"
 export NEXT_DIST_DIR=".next-e2e" NEXT_TELEMETRY_DISABLED=1
-BACKEND_URL="http://127.0.0.1:${BACKEND_PORT}" npx next build >/dev/null
+# /api/dev/simulate-swell and run-pipeline run the whole pipeline inside the request (about
+# 30 s on a 4-CPU machine): give the /api proxy more than Next.js's default 30 s.
+BACKEND_URL="http://127.0.0.1:${BACKEND_PORT}" API_PROXY_TIMEOUT_MS="${E2E_API_PROXY_TIMEOUT_MS:-120000}" npx next build >/dev/null
 rm -rf .next-e2e/standalone/.next-e2e/static .next-e2e/standalone/public
 mkdir -p .next-e2e/standalone/.next-e2e && cp -r .next-e2e/static .next-e2e/standalone/.next-e2e/static && cp -r public .next-e2e/standalone/public
 (cd .next-e2e/standalone && PORT="$FRONTEND_PORT" HOSTNAME=127.0.0.1 exec node server.js) &

@@ -1,10 +1,14 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-/** Calls the backend through the Next.js proxy with the page's cookies and CSRF token. */
+/**
+ * Calls the backend through the Next.js proxy with the page's cookies and CSRF token. The
+ * developer endpoints run the whole pipeline inside the request, so the timeout is longer
+ * than Playwright's default 30 s (the e2e runner raises the proxy's timeout to match).
+ */
 export async function apiPost(page: Page, path: string, body: unknown = {}) {
   const cookies = await page.context().cookies();
   const csrf = cookies.find((c) => c.name === "sta_csrf")?.value ?? "";
-  const res = await page.request.post(path, { data: body, headers: { "X-CSRF-Token": csrf } });
+  const res = await page.request.post(path, { data: body, headers: { "X-CSRF-Token": csrf }, timeout: 120_000 });
   expect(res.ok(), `${path} → ${res.status()} ${await res.text()}`).toBeTruthy();
   return res.json();
 }
