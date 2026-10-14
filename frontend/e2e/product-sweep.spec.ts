@@ -84,13 +84,16 @@ for (const [device, viewport] of [
       await blockTiles(page);
       await page.goto("/map");
       await expect(page.locator("path.spot-marker")).toHaveCount(50);
-      if (device === "mobile") {
-        // On a phone the spot is opened from the list (Cloudbreak is in the demo's top 15).
-        await page.getByRole("button", { name: /Best spots now/ }).tap();
-        await page.getByTestId("top-spots").getByRole("button", { name: /^Cloudbreak/ }).tap();
-      } else {
-        await page.getByTestId("top-spots").getByRole("button", { name: /^Cloudbreak/ }).click();
-      }
+      // The spot is opened from the best-spots list, as a surfer would. The list ranks spots in
+      // daylight first, so Cloudbreak is in its 15 rows only while it is day in Fiji (about
+      // 18:00-06:30 UTC); at other times of day the test opens it from its marker instead (a
+      // click event on the marker: on a phone it lies outside the initial view).
+      if (device === "mobile") await page.getByRole("button", { name: /Best spots now/ }).tap();
+      await expect(page.getByTestId("top-spots").locator("li")).toHaveCount(15);
+      const row = page.getByTestId("top-spots").getByRole("button", { name: /^Cloudbreak/ });
+      if (!(await row.count())) await page.locator("path.spot-cloudbreak").dispatchEvent("click");
+      else if (device === "mobile") await row.tap();
+      else await row.click();
       const panel = page.getByTestId("map-spot-panel");
       await expect(panel.getByTestId("panel-spot-name")).toHaveText("Cloudbreak");
       await expect(panel.getByTestId("forecast-breakdown").getByTestId("wind-dispute-note")).toHaveText(WIND_NOTE);
