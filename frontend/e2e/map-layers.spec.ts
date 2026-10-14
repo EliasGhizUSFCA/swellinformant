@@ -696,7 +696,7 @@ test.describe("ocean layers: geography, motion and bandwidth (synthetic fields)"
     });
   }
 
-  test("prefers-reduced-motion: still crests on wave layers, still arrows for wind, nothing animates", { tag: "@mobile" }, async ({ page }) => {
+  test("prefers-reduced-motion: still crests on wave layers, still arrows for wind, nothing animates", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await openMapWithFields(page, { fields: UNIFORM_FLOW });
     // Waves from the west: still, vertical crests with arrowheads pointing east.
@@ -880,6 +880,7 @@ async function pagePoint(page: Page, lat: number, lon: number) {
 async function openWithSwells(page: Page, spec: Parameters<typeof swells>[0], families: string) {
   const s = swells(spec);
   const opened = await openMapWithFields(page, { fields: s.fields, variables: s.variables });
+  await expect(page.locator("canvas.map-basemap-canvas")).toHaveAttribute("data-land", "1"); // the coastline mask is ready
   await expect(wave(page)).toHaveAttribute("data-families", families);
   await expect.poll(async () => Number(await wave(page).getAttribute("data-crests"))).toBeGreaterThan(10);
   return opened;
@@ -887,27 +888,6 @@ async function openWithSwells(page: Page, spec: Parameters<typeof swells>[0], fa
 
 test.describe("wave crests (synthetic partitions)", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
-
-  test("crests of a swell from the SW run NW-SE and travel up-right (to the NE)", { tag: "@mobile" }, async ({ page }) => {
-    await openWithSwells(page, { primary: [2.5, 12, 225] }, "primary");
-    const img = await waveImage(page);
-    console.log(`orientation for a swell from 225°: ${img.orientation.toFixed(1)}° (coherence ${img.coherence.toFixed(2)})`);
-    test.info().annotations.push({ type: "crest orientation, swell from 225°", description: `${img.orientation.toFixed(1)}°, coherence ${img.coherence.toFixed(2)}` });
-    expect(Math.abs(img.orientation - 45), JSON.stringify({ o: img.orientation, c: img.coherence })).toBeLessThan(8);
-    expect(img.coherence).toBeGreaterThan(0.5);
-    // Motion: the ink profile along the travel direction (x east, y down: (0.707, -0.707))
-    // shifts forward between two frames; a crest of a 12 s swell moves 27 px x 4 / 12 s = 9 px/s.
-    const a = await inkProfile(page, Math.SQRT1_2, -Math.SQRT1_2);
-    const t0 = Date.now();
-    await page.waitForTimeout(500);
-    const b = await inkProfile(page, Math.SQRT1_2, -Math.SQRT1_2);
-    const dt = (Date.now() - t0) / 1000;
-    const shift = shiftOf(a.prof, b.prof, Math.round(10 * a.scale)) / a.scale;
-    console.log(`crest motion along the travel direction: ${shift.toFixed(1)} CSS px in ${dt.toFixed(2)} s (expected about ${(9 * dt).toFixed(1)})`);
-    expect(shift).toBeGreaterThan(1.5);
-    expect(shift).toBeLessThan(9 * dt * 2.5);
-    await shot(page, "desktop-1440x900-crests-from-sw");
-  });
 
   test("crest spacing follows the period: 16 s crests are 4 times as far apart as 8 s crests", async ({ browser, baseURL }) => {
     const spacing = async (tp: number) => {
@@ -1006,29 +986,6 @@ test.describe("wave crests (synthetic partitions)", () => {
     await expect(page.getByTestId("legend-crests")).toContainText("One combined sea");
   });
 
-  test("crests stay off land on the dark and the street basemap (land probes)", { tag: "@mobile" }, async ({ page }) => {
-    // Uniform SYNTHETIC swell everywhere, land included: only the coastline clip keeps it off land.
-    await openWithSwells(page, { primary: [3, 12, 250] }, "primary");
-    const probe = async (label: string) => {
-      await page.waitForTimeout(2000);
-      let ocean = 0;
-      for (let i = 0; i < 8; i++) {
-        expect(await waveAlphaNear(page, -25, 135), `${label}: central Australia`).toBe(0);
-        expect(await waveAlphaNear(page, 40, -100), `${label}: central United States`).toBe(0);
-        expect(await waveAlphaNear(page, 23, 10), `${label}: Sahara`).toBe(0);
-        ocean = Math.max(ocean, await waveAlphaNear(page, -45, -120, 40), await waveAlphaNear(page, -40, 60, 40));
-        await page.waitForTimeout(250);
-      }
-      expect(ocean, `${label}: open ocean`).toBeGreaterThan(0);
-    };
-    await probe("dark");
-    await page.getByRole("button", { name: "Settings" }).click();
-    await page.getByTestId("map-settings").getByRole("radio", { name: "Streets" }).click();
-    await page.keyboard.press("Escape");
-    await expect(page.locator("canvas.map-basemap-canvas")).toHaveAttribute("data-land", "0");
-    await probe("streets");
-  });
-
   test("crests stop at the coast: nothing 30 km inland of Perth at zoom 7, on both basemaps", async ({ browser, baseURL }) => {
     // 31.99°S 116.07°E is 30 km east of the coast at Cottesloe (115.75°E).
     const ctx = await browser.newContext({ baseURL, viewport: { width: 1440, height: 900 }, geolocation: { latitude: -31.99, longitude: 116.07 }, permissions: ["geolocation"] });
@@ -1112,6 +1069,11 @@ test.describe("wave crests (synthetic partitions)", () => {
 
   test("the readout lists the wave systems under the cursor", async ({ page }) => {
     await openWithSwells(page, { primary: [2.5, 13, 250], windsea: [1.2, 6, 300] }, "primary");
+    // The readout lists the systems on screen: add the wind sea.
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByTestId("wave-systems").getByRole("button", { name: /^Wind sea/ }).click();
+    await page.keyboard.press("Escape");
+    await expect(wave(page)).toHaveAttribute("data-families", "windsea,primary");
     const p = await pagePoint(page, -50, -120);
     await page.mouse.move(p.x, p.y);
     const readout = page.getByTestId("map-readout");
@@ -1140,6 +1102,85 @@ test.describe("wave crests (synthetic partitions)", () => {
     await expect.poll(() => requested(mock, "hs", last)).toBe(true);
     await expect.poll(() => mock.indexReads, { message: "index re-read after the mismatch" }).toBeGreaterThan(reads);
     await expect(field(page)).not.toHaveAttribute("data-at", last);
+  });
+});
+
+/** Wave crest checks that also run on the Pixel 7 project (no fixed viewport). */
+test.describe("wave crests on any screen (synthetic partitions)", () => {
+  test("crests of a swell from the SW run NW-SE and travel up-right (to the NE)", { tag: "@mobile" }, async ({ page }) => {
+    await openWithSwells(page, { primary: [2.5, 12, 225] }, "primary");
+    const img = await waveImage(page);
+    console.log(`orientation for a swell from 225°: ${img.orientation.toFixed(1)}° (coherence ${img.coherence.toFixed(2)})`);
+    test.info().annotations.push({ type: "crest orientation, swell from 225°", description: `${img.orientation.toFixed(1)}°, coherence ${img.coherence.toFixed(2)}` });
+    expect(Math.abs(img.orientation - 45), JSON.stringify({ o: img.orientation, c: img.coherence })).toBeLessThan(8);
+    expect(img.coherence).toBeGreaterThan(0.5);
+    // Motion: the ink profile along the travel direction (x east, y down: (0.707, -0.707))
+    // shifts forward between two frames; a crest of a 12 s swell moves 27 px x 4 / 12 s = 9 px/s.
+    const a = await inkProfile(page, Math.SQRT1_2, -Math.SQRT1_2);
+    const t0 = Date.now();
+    await page.waitForTimeout(500);
+    const b = await inkProfile(page, Math.SQRT1_2, -Math.SQRT1_2);
+    const dt = (Date.now() - t0) / 1000;
+    const shift = shiftOf(a.prof, b.prof, Math.round(10 * a.scale)) / a.scale;
+    console.log(`crest motion along the travel direction: ${shift.toFixed(1)} CSS px in ${dt.toFixed(2)} s (expected about ${(9 * dt).toFixed(1)})`);
+    expect(shift).toBeGreaterThan(1.5);
+    expect(shift).toBeLessThan(9 * dt * 2.5);
+    await shot(page, "desktop-1440x900-crests-from-sw");
+  });
+
+  test("crests stay off land on the dark and the street basemap (land probes)", { tag: "@mobile" }, async ({ page }) => {
+    // Uniform SYNTHETIC swell everywhere, land included: only the coastline clip keeps it off land.
+    await openWithSwells(page, { primary: [3, 12, 250] }, "primary");
+    const LAND = [
+      [-25, 135, "central Australia"],
+      [40, -100, "central United States"],
+      [23, 10, "Sahara"],
+      [5, 22, "central Africa"],
+      [50, 60, "Kazakhstan"],
+    ] as const;
+    const OCEAN = [
+      [-45, -120],
+      [-40, 60],
+      [-40, -5],
+    ] as const;
+    const probe = async (label: string) => {
+      await page.waitForTimeout(2000);
+      let ocean = 0;
+      let landInView = 0;
+      for (let i = 0; i < 8; i++) {
+        for (const [lat, lon, name] of LAND) {
+          const a = await waveAlphaNear(page, lat, lon);
+          if (a < 0) continue; // not in this view (a phone shows less of the world)
+          landInView++;
+          expect(a, `${label}: ${name}`).toBe(0);
+        }
+        for (const [lat, lon] of OCEAN) ocean = Math.max(ocean, await waveAlphaNear(page, lat, lon, 30));
+        await page.waitForTimeout(250);
+      }
+      expect(landInView, `${label}: land probes in view`).toBeGreaterThanOrEqual(8 * 2);
+      expect(ocean, `${label}: open ocean`).toBeGreaterThan(0);
+    };
+    // Dark: the opaque land above the crests clips them; the crest canvas skips the composite.
+    await expect(wave(page)).toHaveAttribute("data-ocean-mask", "0");
+    await probe("dark");
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByTestId("map-settings").getByRole("radio", { name: "Streets" }).click();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("canvas.map-basemap-canvas")).toHaveAttribute("data-land", "0");
+    await expect(wave(page)).toHaveAttribute("data-ocean-mask", "1");
+    await probe("streets");
+  });
+
+  test("reduced motion: still crests with arrowheads, unchanged over a second", { tag: "@mobile" }, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await openWithSwells(page, { primary: [2.5, 12, 225] }, "primary");
+    await expect(wave(page)).toHaveAttribute("data-mode", "static");
+    expect(Number(await wave(page).getAttribute("data-arrows"))).toBeGreaterThan(0);
+    const a = await waveImage(page);
+    expect(a.ink).toBeGreaterThan(0);
+    expect(Math.abs(a.orientation - 45), JSON.stringify({ o: a.orientation })).toBeLessThan(8);
+    await page.waitForTimeout(1000);
+    expect((await waveImage(page)).hash).toBe(a.hash);
   });
 });
 

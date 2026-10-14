@@ -126,7 +126,7 @@ grid, 7 to 18 px long (8 px per px-per-frame of flow), pointing downwind, drawn 
 |---|---|---|---|---|---|
 | Primary swell | `swell1_hs/_tp/_dir` | solid, `#f4f7fb`, glow + trough | 6 | 1.8 spacings | 6 spacings |
 | Secondary swell | `swell2_*` | dashed `[7, 5]`, `#ffc46b` | 5 | 1.5 | 5.5 |
-| Wind sea | `windsea_*` | dotted `[1.5, 3.5]` round caps, `#7fe3ff` | 4 | 1.4 | 4.5 |
+| Wind sea | `windsea_*` | dotted `[2, 4]` round caps, `#7fe3ff` | 4 | 1.4 | 4.5 |
 | Combined sea (peak) | `hs`, `tp`, `wave_dir` | solid, white, glow + trough | 6 | 1.8 | 6 |
 
 Systems are told apart by dash pattern **and** colour (never colour alone), and the legend
@@ -234,14 +234,23 @@ and 120 Hz (unit test).
 
 ### 4.6 Ocean mask (both basemaps)
 
-Crests are kept to the ocean twice: (1) lattice nodes over land are invalid (Natural Earth
-land rasterised at lattice resolution, a node is land when more than 200/255 of its 8 px cell
-is land), so crests stop near the coast; (2) every frame is composited (`destination-in`) with
-an ocean mask built once per view: where any system has data (the lattice validity, soft
-edged) and not inside the Natural Earth land rings (crisp). This applies on the dark and the
-Streets basemap. E2E land probes read the crest canvas itself: alpha 0 in central Australia
-(25°S 135°E), the central United States (40°N 100°W), the Sahara (23°N 10°E) and 30 km inland
-of Perth at zoom 7, on both basemaps, with crests over the open ocean.
+Crests are kept to the ocean in three ways:
+
+1. Lattice nodes without data are invalid (land and sea ice are no data in the wave model),
+   and so are lattice nodes over Natural Earth land (rasterised at lattice resolution: a node is
+   land when more than 200/255 of its 8 px cell is land). No crest crosses an invalid cell, so
+   crests stop within one lattice cell (8 px) of the coast in the crest canvas itself.
+2. **Dark basemap**: the opaque land is drawn above the crest pane (section 2), so it clips
+   the crests exactly at the Natural Earth coastline.
+3. **Streets basemap** (no land drawn over the tiles): every frame is composited
+   (`destination-in`) with an ocean mask built once per view: where any system has data (the
+   lattice validity, soft edged) and not inside the Natural Earth land rings (crisp). This
+   full-canvas composite costs about 4 ms a frame with software rendering, so it is skipped on
+   the dark basemap where step 2 already clips (`data-ocean-mask` = 1 or 0).
+
+E2E land probes read the crest canvas itself: alpha 0 in central Australia (25°S 135°E), the
+central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa and Kazakhstan, and
+30 km inland of Perth at zoom 7, on both basemaps, with crests over the open ocean.
 
 ### 4.7 Reduced motion and draw budget
 
@@ -259,7 +268,8 @@ of Perth at zoom 7, on both basemaps, with crests over the open ocean.
 `canvas.map-wave-canvas`: `data-mode` (animated, static, off), `data-families` (systems
 drawn, in drawing order), `data-crests`, `data-vertices`, `data-strokes`, `data-drawn`,
 `data-arrows` (still mode), `data-exaggeration` (E rounded), `data-view` (origin, size, world
-px), `data-draw-ms`, `data-draw-ms-p95` (last 120 frames) and `data-lattice-ms`.
+px), `data-ocean-mask`, `data-draw-ms`, `data-draw-ms-p95` (last 120 frames) and
+`data-lattice-ms`.
 `canvas.map-particle-canvas`: `data-mode`, `data-color-type`, `data-trails`, `data-arrows`.
 
 ## 5. Field client and freshness
@@ -302,8 +312,8 @@ follow the account's ft/m preference. The legend title states the unit of the co
 | Same, explicit renderer (8-bit canvas) | 2,405 / 4,080 / 3,171 (no spike at 6) |
 
 Main-thread cost per animation frame in headless Chromium (software raster) on a quiet
-machine: crests 11.6 ms task (1.2 ms script), of which about 4 ms is the per-frame ocean-mask
-composite; idle map 0.3 ms. Under the full e2e run on the shared machine the same layer took
+machine: crests 11.6 ms task (1.2 ms script) with the per-frame ocean-mask composite, 7.4 ms
+without it (the dark basemap skips it, section 4.6); idle map 0.3 ms. Under the full e2e run on the shared machine the same layer took
 39 ms task (3.8 ms script) and the wind particles 24 ms task (1.7 ms script). These include
 software rasterisation that a GPU-backed canvas does off the main thread; no browser with a
 GPU was available here.
