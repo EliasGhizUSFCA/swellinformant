@@ -178,7 +178,7 @@ def test_committed_wind_profiles_cite_directly_read_claims() -> None:
         profile = wind_profile_from_dict(raw)
         assert profile is not None and profile.data_quality == "research"
         for sector in profile.shelter:
-            assert sector.factor == 0.5  # the one heuristic strength for "some shelter"
+            assert sector.factor == 0.3  # the one heuristic strength for "some shelter"
             assert (sector.from_max - sector.from_min) % 360 == 45.0
     assert winds["padang-padang"]["offshore_tolerance_kmh"] == 39.0
 

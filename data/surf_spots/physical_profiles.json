@@ -257,7 +257,7 @@
         {
           "from_min": 292.5,
           "from_max": 337.5,
-          "factor": 0.5,
+          "factor": 0.3,
           "sources": [
             "surf-forecast-ocean-beach"
           ]
@@ -265,7 +265,7 @@
       ],
       "extra_offshore_deg": [],
       "data_quality": "research",
-      "notes": "surf-forecast-ocean-beach (read directly): \"Offshore winds are from the east with some shelter here from northwest winds.\" Shelter factor 0.5 is the heuristic strength used for every qualitative shelter claim; the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
+      "notes": "surf-forecast-ocean-beach (read directly): \"Offshore winds are from the east with some shelter here from northwest winds.\" Shelter factor 0.3 is the heuristic strength used for every qualitative shelter claim (deliberately conservative: the claim gives no strength); the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
     }
   },
   "trestles": {
@@ -517,7 +517,7 @@
         {
           "from_min": 157.5,
           "from_max": 202.5,
-          "factor": 0.5,
+          "factor": 0.3,
           "sources": [
             "surf-forecast-burleigh"
           ]
@@ -525,7 +525,7 @@
       ],
       "extra_offshore_deg": [],
       "data_quality": "research",
-      "notes": "surf-forecast-burleigh (read directly): \"Offshore winds are from the southwest with some shelter here from south winds.\" Shelter factor 0.5 is the heuristic strength used for every qualitative shelter claim; the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
+      "notes": "surf-forecast-burleigh (read directly): \"Offshore winds are from the southwest with some shelter here from south winds.\" Shelter factor 0.3 is the heuristic strength used for every qualitative shelter claim (deliberately conservative: the claim gives no strength); the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
     }
   },
   "g-land": {
@@ -536,7 +536,7 @@
         {
           "from_min": 112.5,
           "from_max": 157.5,
-          "factor": 0.5,
+          "factor": 0.3,
           "sources": [
             "surfforecast-g-land"
           ]
@@ -544,7 +544,7 @@
       ],
       "extra_offshore_deg": [],
       "data_quality": "research",
-      "notes": "surfforecast-g-land (read directly): \"Offshore winds are from the east with some shelter here from southeast winds.\" Shelter factor 0.5 is the heuristic strength used for every qualitative shelter claim; the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
+      "notes": "surfforecast-g-land (read directly): \"Offshore winds are from the east with some shelter here from southeast winds.\" Shelter factor 0.3 is the heuristic strength used for every qualitative shelter claim (deliberately conservative: the claim gives no strength); the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
     }
   },
   "mundaka": {
@@ -555,7 +555,7 @@
         {
           "from_min": 247.5,
           "from_max": 292.5,
-          "factor": 0.5,
+          "factor": 0.3,
           "sources": [
             "surf-forecast-mundaka"
           ]
@@ -563,7 +563,7 @@
       ],
       "extra_offshore_deg": [],
       "data_quality": "research",
-      "notes": "surf-forecast-mundaka (read directly): \"The best wind direction is from the south with some shelter here from west winds.\" Shelter factor 0.5 is the heuristic strength used for every qualitative shelter claim; the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
+      "notes": "surf-forecast-mundaka (read directly): \"The best wind direction is from the south with some shelter here from west winds.\" Shelter factor 0.3 is the heuristic strength used for every qualitative shelter claim (deliberately conservative: the claim gives no strength); the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
     }
   },
   "padang-padang": {
@@ -586,7 +586,7 @@
         {
           "from_min": 202.5,
           "from_max": 247.5,
-          "factor": 0.5,
+          "factor": 0.3,
           "sources": [
             "wavelength-wsr-punta-de-lobos"
           ]
@@ -594,7 +594,7 @@
       ],
       "extra_offshore_deg": [],
       "data_quality": "research",
-      "notes": "wavelength-wsr-punta-de-lobos (read directly): \"is sheltered from the dreaded, and almost daily, SW wind by the cliffs\". Shelter factor 0.5 is the heuristic strength used for every qualitative shelter claim; the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
+      "notes": "wavelength-wsr-punta-de-lobos (read directly): \"is sheltered from the dreaded, and almost daily, SW wind by the cliffs\". Shelter factor 0.3 is the heuristic strength used for every qualitative shelter claim (deliberately conservative: the claim gives no strength); the sector is the stated compass point +/- 22.5 deg (an 8-point compass sector), fading out over 15 deg outside it."
     }
   }
 }

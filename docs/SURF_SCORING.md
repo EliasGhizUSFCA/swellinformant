@@ -347,7 +347,7 @@ evidence; `beaufort` = the Beaufort wind scale; `heuristic` = a reasoned default
 | favourability bounds | 0.75 / 0.4 | heuristic | favourable / workable / unfavourable |
 | relation sector bounds | 45 / 75 / 105 / 135° | heuristic | below |
 | wind gate start | 0.75 | heuristic | section 3 |
-| shelter factor | 0.5 | heuristic | strength of a qualitative shelter claim (below) |
+| shelter factor | 0.3 | heuristic | strength of a qualitative shelter claim (below) |
 | shelter taper | 15° | heuristic | fade-out outside a sheltered sector |
 
 The practitioner guidance behind the heuristic defaults (low-tier sources, read during the
@@ -384,21 +384,24 @@ not exist or was not read directly, and `research lint` reports them
 are scaled by `1 − factor` before the components are taken; outside it the shelter fades as
 `factor·exp(−2·(d/15°)²)`), `extra_offshore_deg` (further straight-offshore bearings of
 breaks with several wave faces), `data_quality` (`research` or `heuristic default`) and
-`notes`. A 0.5 factor halves the wind from the sector, so the same fit needs twice the
-speed. The committed profiles:
+`notes`. A factor f scales the wind from the sector by 1 − f (0.5 would halve it, so the
+same fit would need twice the speed). The committed profiles:
 
 | Spot | Claim read (evidence key) | Encoded |
 |---|---|---|
-| Burleigh Heads | "some shelter here from south winds" (surf-forecast-burleigh) | shelter S (157.5–202.5°), 0.5 |
-| G-Land | "some shelter here from southeast winds" (surfforecast-g-land) | shelter SE (112.5–157.5°), 0.5 |
-| Mundaka | "some shelter here from west winds" (surf-forecast-mundaka) | shelter W (247.5–292.5°), 0.5 |
-| Ocean Beach SF | "some shelter here from northwest winds" (surf-forecast-ocean-beach) | shelter NW (292.5–337.5°), 0.5 |
-| Punta de Lobos | "sheltered from the dreaded, and almost daily, SW wind by the cliffs" (wavelength-wsr-punta-de-lobos) | shelter SW (202.5–247.5°), 0.5 |
+| Burleigh Heads | "some shelter here from south winds" (surf-forecast-burleigh) | shelter S (157.5–202.5°), 0.3 |
+| G-Land | "some shelter here from southeast winds" (surfforecast-g-land) | shelter SE (112.5–157.5°), 0.3 |
+| Mundaka | "some shelter here from west winds" (surf-forecast-mundaka) | shelter W (247.5–292.5°), 0.3 |
+| Ocean Beach SF | "some shelter here from northwest winds" (surf-forecast-ocean-beach) | shelter NW (292.5–337.5°), 0.3 |
+| Punta de Lobos | "sheltered from the dreaded, and almost daily, SW wind by the cliffs" (wavelength-wsr-punta-de-lobos) | shelter SW (202.5–247.5°), 0.3 |
 | Padang Padang | "it can cope with a strong offshore very well" (isg-padang) | offshore tolerance 39 km/h (lower bound of force 6, "strong breeze", in the km/h form) |
 
 The sector of a compass word is that point ±22.5° (an 8-point compass sector) and every
-qualitative shelter gets the same heuristic factor 0.5: the direction is research, the
-strength is not. Not encoded: Macaronis ("performs well at any size, any tide, and any
+qualitative shelter gets the same heuristic factor 0.3: the direction is research, the
+strength is not. The factor is deliberately conservative: none of the claims says how much
+shelter there is. With 0.5, one Ocean Beach hour of the 2026-10-11 run with a 19 km/h
+northwest wind (ψ = 135°, the onshore edge of cross-onshore) went from Fair (41) to Very
+Good (80) when only the wind part changed; with 0.3 it stays Fair (44 under all of 2.1.0). Not encoded: Macaronis ("performs well at any size, any tide, and any
 wind", one community page that also names a best wind; no direction or strength to encode,
 left for owner review), and Rifles and Skeleton Bay ("no shelter here from cross shore
 breezes"), which is the default. The other 44 spots use the defaults. No spot has extra
@@ -466,20 +469,25 @@ database whose spot profiles were re-seeded from `data/surf_spots` (2026-10-14):
 
 | | 2.0.0 | 2.1.0 |
 |---|---:|---:|
-| Labels: poor / fair / good / very good / excellent / exceptional | 1,342 / 485 / 570 / 681 / 801 / 171 | 1,236 / 620 / 530 / 670 / 885 / 109 |
+| Labels: poor / fair / good / very good / excellent / exceptional | 1,342 / 485 / 570 / 681 / 801 / 171 | 1,238 / 618 / 531 / 674 / 880 / 109 |
 | Offshore hours at 45 km/h or more, Very Good or better | 0 of 3 | 0 of 3 |
 | Offshore hours at 30 km/h or more, Very Good or better | 37 | 19 |
 | Cross-shore hours at 30 km/h or more, Good or better | 37 of 127 | 0 of 151 |
 
-1,320 labels change (32.6 %; 701 of them in daylight; 630 up, 690 down); the mean absolute
-score change is 7.8 points (mean +0.3, 25 % of hours by 10 points or more). 205 hours change
+1,313 labels change (32.4 %; 696 of them in daylight; 623 up, 690 down); the mean absolute
+score change is 7.7 points (mean +0.25, 25 % of hours by 10 points or more). 205 hours change
 relation, only through the new sector bounds (124 cross-offshore to cross-shore, 81
 cross-shore to cross-onshore). Switching one part on at a time (the others at 2.0.0;
 the parts overlap, so the counts do not add up): partition weighting 966 labels (mean
-|Δ| 5.6), wind fit with its gate and sectors 694 (3.4), consistency 130 (0.5), window taper
-26 (0.1), continuous spreading 7 (0.03). The six spot wind profiles change 98 hours at five
-spots (mean +6.2, at most +27) and 36 labels (Ocean Beach 14, Punta de Lobos 13, Mundaka 5,
-G-Land 4); Padang Padang's tolerance changes nothing on this run. The largest changes are partition effects: hours
+|Δ| 5.6), wind fit with its gate, sectors and spot profiles 687 (3.4), consistency 130
+(0.5), window taper 26 (0.1), continuous spreading 7 (0.03). The six spot wind profiles
+alone change 96 hours at five spots (mean +4.2, at most +19) and 29 labels (Ocean Beach 11,
+Punta de Lobos 10, Mundaka 4, G-Land 4); Padang Padang's tolerance changes nothing on this
+run. The wind part's largest changes are strong cross-shore hours that 2.0.0 rated Very Good,
+now Fair: Sunset Beach 2026-10-19 06Z (38 km/h from 75°, offshore 135°: 80 → 47), Bells Beach
+2026-10-13 00Z (35 km/h from 231°, offshore 300°: 82 → 49), Raglan 2026-10-16 03Z (41 km/h
+from 197°, offshore 140°: 77 → 44), Teahupoo 2026-10-12 12Z (36 km/h from 118°, offshore 30°:
+80 → 48). The largest changes are partition effects: hours
 whose primary swell is a short local sea or a blocked remnant while a well-aligned secondary
 or tertiary groundswell makes the surf rise by up to 64 points (La Graviere 2026-10-20 09Z:
 primary 0.9 m 6 s from 357°, secondary 0.9 m 15 s WNW with 85 % of the breaking flux, 28 →
