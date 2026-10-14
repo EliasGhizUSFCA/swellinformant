@@ -11,17 +11,36 @@ keep backups that restore, and size the machine. Every number below was measured
 | Process | Role | Instances | Health check |
 |---|---|---|---|
 | `backend` | FastAPI API; applies migrations and seeds on start (`RUN_MIGRATIONS=true`) | 1+ (`API_WORKERS` uvicorn workers each) | `GET /api/health/ready` (database and Redis) |
-| `worker` | Celery worker: every job in docs/ARCHITECTURE.md §2 | 1+ (`WORKER_CONCURRENCY` slots each) | `celery inspect ping` |
+| `worker` | Celery worker: every job in docs/ARCHITECTURE.md §2, from the queues in `WORKER_QUEUES` (default `celery,bulk`) | 1+ (`WORKER_CONCURRENCY` slots each) | `celery inspect ping` |
+| `worker-bulk` | optional (`--profile bulk-worker`): a second worker for the `bulk` queue only (data downloads); then set `WORKER_QUEUES=celery` for the main worker | 0-1 | `celery inspect ping` |
 | `beat` | Celery beat: the schedule (`app/workers/schedule.py`) | **exactly 1** | its schedule file was written in the last 10 min |
 | `frontend` | Next.js server; proxies `/api/*` to the backend | 1+ | `GET /` |
 | `postgres` | PostgreSQL 16 (all persistent state) | 1 | `pg_isready` |
-| `redis` | Celery broker and results, locks, rate limits (transient only) | 1 | `redis-cli ping` |
+| `redis` | Celery broker and results, locks, rate limits, Open-Meteo call budgets and the small provider response cache (transient only); `--maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy noeviction` | 1 | `redis-cli ping` |
 | `mailpit` | development inbox (not needed with real email) | 0-1 | built in |
 | `backup` | optional (`--profile backup`): `scripts/backup-db.sh` every `BACKUP_INTERVAL_HOURS` | 0-1 | newest backup younger than the interval + 1 h |
 
 Redis holds nothing that must survive: on a Redis restart beat re-sends the schedule, a
 lost lock only allows one duplicate run (every job is idempotent), and queued alert
-deliveries are rows in PostgreSQL, not Redis messages.
+deliveries are rows in PostgreSQL, not Redis messages. The Open-Meteo call-budget counters
+restart from zero (Open-Meteo still enforces its own limits), and cached provider responses
+are fetched again.
+
+**Queues.** Data acquisition (`forecasts.*`, `observations.*`, `verification.*`,
+`tides.*`) is routed to the `bulk` queue, everything else (account emails, alert
+delivery, matching, the data-health check) to the default `celery` queue
+(`app/workers/schedule.py`, `task_routes`), so a verification email never waits behind a
+download. The default worker consumes both. A queue that no worker consumes stalls
+silently: if you run a bulk-only worker, the main worker must still list `celery`.
+Every beat message expires after its own interval, so a worker that was down does not
+replay a backlog of missed runs.
+
+**Retries.** A transient acquisition failure (timeout, HTTP 5xx, an Open-Meteo minute or
+hour limit, a model run still being published) makes the task retry itself after 2, 4
+and 8 min (or the provider's own wait, at most 1 h), up to 3 times. A permanent one (an
+exhausted daily or monthly quota, a refused request) ends that provider's run FAILED and
+waits for the next schedule. When every provider failed, the job is logged FAILED and
+does not chain to the blend.
 
 ## 2. Deploy on one server (Docker Compose)
 
@@ -40,7 +59,7 @@ deliveries are rows in PostgreSQL, not Redis messages.
    API_BASE_URL=https://your-domain
    CORS_ORIGINS=https://your-domain
    POSTGRES_PASSWORD=<random>
-   FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs
+   FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf   # docs/API_SETUP_REQUIRED.md
    GEFS_ENABLED=true
    # Publish only on the loopback interface; a reverse proxy (Caddy, nginx) terminates TLS.
    POSTGRES_PORT=127.0.0.1:5432
@@ -84,7 +103,7 @@ rebuild after a code-only change took 1.6 s (the dependency layer is cached).
 
 | Check | Problem when | Severity |
 |---|---|---|
-| Each `FORECAST_PROVIDERS` source | newest successful run older than the source's own stale limit (`queries.stale_after_hours`: NOAA 16 h, ECMWF 25 h, others `FORECAST_STALE_HOURS`), or no successful run | degraded |
+| Each `FORECAST_PROVIDERS` source | newest successful run older than the source's own stale limit (`queries.stale_after_hours`: Open-Meteo GFS family 17.2 h, Open-Meteo ECMWF family 24.7 h, NOAA direct 16 h, ECMWF direct 25 h, others `FORECAST_STALE_HOURS`), or no successful run | degraded |
 | All forecast sources at once | none of them is fresh: forecasts, events and alerts run on stale data | **failing** |
 | Blend (two or more independent families) | stale or missing although every member is fresh and no `forecasts.acquire` / `forecasts.blend` run is in progress (`forecasts.blend` broken; during an acquisition the blend trails its first refreshed member until the chained blend stage runs) | degraded |
 | GEFS-Wave (`GEFS_ENABLED`) | older than 18.5 h or missing (uncertainty only) | degraded |
@@ -92,7 +111,8 @@ rebuild after a code-only change took 1.6 s (the dependency layer is cached).
 | Heartbeat | no job of any kind finished for `DATA_HEALTH_HEARTBEAT_MINUTES` (30; `notifications.deliver` alone runs every 2 min): worker or beat down | **failing** |
 | Map ocean layers (unless off) | served GFS cycle older than the NOAA limit (16 h), or no complete field set | degraded |
 | Buoy observations (`OBSERVATIONS_ENABLED`) | newest observation of a provider older than `DATA_HEALTH_OBSERVATION_STALE_HOURS` (default: the 48 h ingestion look-back, beyond which the hourly job cannot fill the gap) | degraded |
-| Storage | database larger than `DATA_HEALTH_DATABASE_MAX_GB` (unset: reported, no limit) | degraded |
+| Storage | database larger than `DATA_HEALTH_DATABASE_MAX_GB` (default 5 GB; an alert only, nothing is deleted) | degraded |
+| Redis | used memory above `DATA_HEALTH_REDIS_MAX_FRACTION` (0.8) of its cap (Redis's `maxmemory`, or `REDIS_MAXMEMORY` when Redis runs without one); an evicting `maxmemory-policy`; Redis not answering | degraded |
 
 The overall status is `failing` if any problem is failing, `degraded` if any is degraded,
 else `ok`, and `reasons` lists one plain sentence per problem, the most severe first. The
@@ -293,6 +313,36 @@ every source is stale the report says `failing` (`forecasts_unavailable`).
    and tells you every 12 h). Removing it from `FORECAST_PROVIDERS` silences the alert
    but also turns the blend off.
 
+### Open-Meteo refuses requests (quota or rate limit)
+
+**What you see.** A FAILED `open_meteo_noaa` or `open_meteo_ecmwf` run whose error is
+Open-Meteo's own reason ("Daily API request limit exceeded. Please try again tomorrow.",
+"Minutely API request limit exceeded ...") or the app's budget ("Open-Meteo day budget of
+10000 weighted calls (OPEN_METEO_CALLS_PER_DAY) would be exceeded ..."), and later
+`forecast_stale:<source>`. `python -m app.cli engine budget` prints the weighted calls the
+app has used per window.
+
+**What the system already does.** A minute or hour limit is transient: the task retries
+after the window resets, and the responses already received are read from the cache.
+A daily or monthly limit ends the run FAILED without retrying; the previous run stays in
+use until it goes stale. The two Open-Meteo families share one budget.
+
+**What to do.** The free tier counts calls per IP address: on shared hosting other users
+of the address use the same allowance (this happened in the sandbox on 2026-10-14, after
+the app itself had used 143 weighted calls). Use a paid plan (`OPEN_METEO_API_KEY`, then
+raise `OPEN_METEO_CALLS_PER_DAY` / `OPEN_METEO_CALLS_PER_MONTH`), or wait for the reset.
+Never lower `OPEN_METEO_AVAILABILITY_WAIT_MINUTES` to read runs sooner.
+
+### Redis memory high
+
+`redis_memory` (degraded) means Redis uses more than 80 % of its cap. With `noeviction` a
+full Redis refuses writes, so new jobs fail to queue. Look at the queue lengths
+(`docker compose exec redis redis-cli llen celery`, `... llen bulk`: a stopped worker lets
+them grow until the beat messages expire), then at the provider cache
+(`python -m app.cli engine budget` shows its entry count; it is bounded by
+`PROVIDER_RESPONSE_CACHE_MAX_KEYS` and `PROVIDER_RESPONSE_CACHE_MAX_BYTES`). Raise
+`REDIS_MAXMEMORY` (and keep the setting and the compose value equal) only after that.
+
 ### Worker or beat down, jobs overdue or stuck
 
 * `jobs_not_running` (failing) or many `job_overdue:*`: `docker compose ps`; restart the
@@ -305,7 +355,7 @@ every source is stale the report says `failing` (`forecasts_unavailable`).
 
 ### Database or disk full
 
-`database_size` (when `DATA_HEALTH_DATABASE_MAX_GB` is set), failed jobs with "No space
+`database_size` (above `DATA_HEALTH_DATABASE_MAX_GB`, default 5 GB), failed jobs with "No space
 left on device", or PostgreSQL refusing writes. Free space first (old local backups,
 Docker build cache: `docker builder prune`), then lower the retention settings (§6) and
 run `maintenance.cleanup`. PostgreSQL reuses the space of deleted rows; it only returns
@@ -431,9 +481,16 @@ fewer ECMWF steps (53 of 65), and shorten the forecast to 7 days.
 | `DATA_HEALTH_ALERT_REPEAT_HOURS` | 12 | at most one email per problem in this interval |
 | `DATA_HEALTH_HEARTBEAT_MINUTES` | 30 | no finished job for this long = worker or beat down (failing) |
 | `DATA_HEALTH_OBSERVATION_STALE_HOURS` | `OBSERVATION_LOOKBACK_HOURS` (48) | buoy provider stale after this |
-| `DATA_HEALTH_DATABASE_MAX_GB` | unset | degraded above this database size |
+| `DATA_HEALTH_DATABASE_MAX_GB` | 5 | degraded above this database size (alert only) |
+| `DATA_HEALTH_REDIS_MAX_FRACTION` | 0.8 | degraded above this fraction of the Redis memory cap |
+| `REDIS_MAXMEMORY` | 256mb | Redis `--maxmemory` in docker-compose; also what the health check measures against when Redis runs without a cap |
+| `WORKER_QUEUES` | celery,bulk | queues the worker consumes |
+| `OPEN_METEO_CALLS_PER_MINUTE` / `_HOUR` / `_DAY` / `_MONTH` | 600 / 5,000 / 10,000 / 300,000 | the app's Open-Meteo weighted-call budget (free tier); raise for a paid plan |
+| `PROVIDER_RESPONSE_CACHE_ENABLED`, `_MAX_BYTES`, `_MAX_KEYS` | true, 2,000,000, 200 | bounded Redis cache of provider responses (one model run) |
+| `ARCHIVE_CONFIDENCE_DIGEST` | true | archive rows keep a digest of the confidence inputs |
+| `OBSERVATION_RETENTION_DAYS` | 3650 | quality-controlled buoy observations (others follow `RETENTION_ARCHIVE_DAYS`) |
 | `RETENTION_FORECAST_DAYS` | 10 | forecast runs and their rows (two newest per source always kept) |
-| `RETENTION_ARCHIVE_DAYS` | 730 | prediction archive, buoy observations, point forecasts, verification pairs |
+| `RETENTION_ARCHIVE_DAYS` | 730 | prediction archive, unchecked buoy observations, point forecasts, verification pairs |
 | `RETENTION_JOB_LOG_DAYS` | 30 | job logs (also the alert de-duplication state) |
 | `RETENTION_FLIGHT_DAYS` / `RETENTION_NOTIFICATION_DAYS` | 30 / 365 | flight searches / notifications |
 | `BACKUP_DIR`, `BACKUP_KEEP`, `BACKUP_MAX_AGE_DAYS`, `BACKUP_PREFIX` | ./backups, 7, 30, swell | `scripts/backup-db.sh` |
