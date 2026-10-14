@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, Moon } from "lucide-react";
-import { memo } from "react";
+import { memo, useId, useState } from "react";
 
 import { ConfidenceBadge } from "@/components/confidence";
 import { InfoPopover } from "@/components/info-popover";
@@ -66,7 +66,11 @@ function Item({ label, children, className, testId }: { label: React.ReactNode; 
   );
 }
 
+/** Every wave system of the step, the surf-driving one first. On phones the others fold
+ * behind "+N more" to keep the summary short. */
 function SwellLines({ step, units }: { step: TimelineStep; units: HeightUnit }) {
+  const [all, setAll] = useState(false);
+  const listId = useId();
   const drive = drivingPartition(step);
   const rest = step.partitions.filter((p) => p !== drive);
   if (!step.partitions.length) {
@@ -76,17 +80,36 @@ function SwellLines({ step, units }: { step: TimelineStep; units: HeightUnit }) 
       </span>
     );
   }
+  const ordered = [...(drive ? [drive] : []), ...rest];
   return (
-    <ul className="space-y-0.5" data-testid="summary-partitions">
-      {[...(drive ? [drive] : []), ...rest].map((p) => (
-        <li key={p.kind} className={cn("flex flex-wrap items-center gap-x-1.5", p.drives_surf ? "font-semibold" : "text-muted-foreground")} data-partition={p.kind} data-drives={p.drives_surf ? "true" : undefined}>
-          {p.dir_from_deg != null ? <ToArrow fromDeg={p.dir_from_deg} className={p.drives_surf ? "text-ink" : "text-muted-foreground"} /> : <span className="size-3.5" />}
-          <span className="min-w-[7rem]">{PARTITION_LABEL[p.kind]}</span>
-          <span className="tabular-nums">{partitionText(p, units)}</span>
-          {p.drives_surf && <span className="rounded-full bg-[var(--chart-swell)] px-1.5 py-px text-[10px] font-semibold text-white">drives the surf</span>}
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="space-y-0.5" data-testid="summary-partitions" id={listId}>
+        {ordered.map((p, k) => (
+          <li
+            key={p.kind}
+            className={cn("flex flex-wrap items-center gap-x-1.5", p.drives_surf ? "font-semibold" : "text-muted-foreground", k > 0 && !all && "max-sm:hidden")}
+            data-partition={p.kind}
+            data-drives={p.drives_surf ? "true" : undefined}
+          >
+            {p.dir_from_deg != null ? <ToArrow fromDeg={p.dir_from_deg} className={p.drives_surf ? "text-ink" : "text-muted-foreground"} /> : <span className="size-3.5" />}
+            <span className="min-w-[7rem]">{PARTITION_LABEL[p.kind]}</span>
+            <span className="tabular-nums">{partitionText(p, units)}</span>
+            {p.drives_surf && <span className="rounded-full bg-[var(--chart-swell)] px-1.5 py-px text-[10px] font-semibold text-white">drives the surf</span>}
+          </li>
+        ))}
+      </ul>
+      {ordered.length > 1 && (
+        <button
+          type="button"
+          className="mt-0.5 text-xs font-medium text-ocean hover:underline sm:hidden"
+          aria-expanded={all}
+          aria-controls={listId}
+          onClick={() => setAll((v) => !v)}
+        >
+          {all ? "Show less" : `+${ordered.length - 1} more wave system${ordered.length > 2 ? "s" : ""}`}
+        </button>
+      )}
+    </>
   );
 }
 

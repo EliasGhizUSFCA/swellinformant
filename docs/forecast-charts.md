@@ -34,8 +34,8 @@ from `/forecast`, and "Compare forecast models" keeps the model comparison chart
 ## 2. Data: `GET /api/spots/{slug}/timeline?days=10`
 
 Contract: `backend/app/schemas/timeline.py` (`SpotTimelineOut`). The page fetches it once
-(`useSpotTimeline`, stale time 2 minutes); selecting, hovering, changing units or days never
-sends another request (asserted in `e2e/timeline.spec.ts`).
+(`useSpotTimeline`, stale time 2 minutes); selecting, hovering or changing units never sends
+another request (for selection, asserted in `e2e/timeline.spec.ts`).
 
 * Same authoritative run and window as `/forecast` (`latest_runs_by_spot`, from 3 h ago to
   `days` ahead), so a step's score and label equal the forecast point's
