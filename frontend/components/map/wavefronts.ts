@@ -114,8 +114,8 @@ export interface FamilyLattice {
   valid: Uint8Array;
   validCount: number;
   medianSpacing: number;
-  /** Vertices per drawn crest on the last frame (0 = not measured yet), for the budget. */
-  perCrest: number;
+  /** Packets drawn at most (in their fixed random order), for a steady budget cut. */
+  limit: number;
 }
 
 export interface Lattice {
@@ -166,7 +166,7 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
       valid: new Uint8Array(n),
       validCount: 0,
       medianSpacing: NaN,
-      perCrest: 0,
+      limit: Infinity,
     };
     const spacings: number[] = [];
     for (let j = 0; j < ny; j++) {
@@ -272,14 +272,15 @@ export interface Packet {
 }
 
 /**
- * Crest offsets u (px along the packet ray from its anchor) and envelope weights at time t
+ * Crest offsets u (px along the packet ray from its anchor), envelope weights and lattice
+ * crest numbers n (a crest keeps its n while it crosses the set) at time t
  * (seconds of animation). Crests lie on the lattice u = n s + v t - p . W (W the anchor in
  * world px), the same lattice for every packet with the same direction, period and zoom, so
  * crests of neighbouring packets line up in a uniform sea. The envelope (width crests x s)
  * moves at v / 2 over `travel` px and fades in and out over that cycle. `still` = centred,
  * full envelope (reduced motion).
  */
-export function packetCrests(p: Packet, crests: number, t: number, still = false): Array<{ u: number; w: number }> {
+export function packetCrests(p: Packet, crests: number, t: number, still = false): Array<{ u: number; w: number; n: number }> {
   const s = p.spacing;
   const half = (crests * s) / 2;
   const flat = half * ENVELOPE_FLAT;
@@ -295,7 +296,7 @@ export function packetCrests(p: Packet, crests: number, t: number, still = false
   const shift = still ? 0 : p.speed * t;
   // First lattice crest at or after the envelope's back edge.
   const n0 = Math.ceil((centre - half + ref - shift) / s);
-  const out: Array<{ u: number; w: number }> = [];
+  const out: Array<{ u: number; w: number; n: number }> = [];
   for (let n = n0; ; n++) {
     const u = n * s + shift - ref;
     const d = Math.abs(u - centre);
@@ -303,7 +304,7 @@ export function packetCrests(p: Packet, crests: number, t: number, still = false
     // Flat-top envelope: full weight in the middle, a cosine taper over the outer part.
     const taper = d <= flat ? 1 : Math.cos((Math.PI / 2) * ((d - flat) / (half - flat))) ** 2;
     const w = taper * fade;
-    if (w >= MIN_WEIGHT) out.push({ u, w });
+    if (w >= MIN_WEIGHT) out.push({ u, w, n });
   }
   return out;
 }
@@ -336,6 +337,9 @@ interface Batch {
   /** Frame in which the batch was last used. */
   frame: number;
 }
+
+/** Vertices per drawn crest of each system, averaged over frames (for the budget estimate). */
+const perCrestBySystem = new Map<WaveSystem, number>();
 
 /** Stroke batches reused across frames (fewer allocations per frame, less garbage collection). */
 const batchPool = new Map<number, Batch>();
@@ -528,6 +532,39 @@ function traceHalf(l: Lattice, f: FamilyLattice, cx: number, cy: number, sign: n
   return half.n >= 2 ? half.n : 0;
 }
 
+/** A traced polyline kept between frames: vertices and, per vertex, its taper part. */
+interface TracedLine {
+  x: Float32Array;
+  y: Float32Array;
+  part: Uint8Array;
+  n: number;
+}
+
+/** One crest as traced at offset `u` of its set, with the height there. */
+interface TracedCrest {
+  u: number;
+  hs: number;
+  lines: TracedLine[];
+  troughs: TracedLine[];
+  frame: number;
+}
+
+/**
+ * Crests move by a fraction of a pixel per frame, so each crest's traced shape is kept (per
+ * set and lattice crest number) and drawn shifted along the travel vector; it is traced again
+ * once it has moved RETRACE_PX from where it was traced. A new lattice (pan, zoom, new fields)
+ * has new sets and so traces afresh.
+ */
+const crestCache = new WeakMap<Packet, Map<number, TracedCrest>>();
+export const RETRACE_PX = 2;
+
+const copyHalf = (n: number): TracedLine => ({
+  x: Float32Array.from(half.x.slice(0, n)),
+  y: Float32Array.from(half.y.slice(0, n)),
+  part: Uint8Array.from(half.part.slice(0, n)),
+  n,
+});
+
 /** Taper part (index into TAPER) at a share of the half crest's length. */
 function taperPart(share: number): number {
   for (let i = 0; i < TAPER.length - 1; i++) if (share < TAPER[i]![0] - 1e-9) return i;
@@ -573,12 +610,12 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     }
     return b;
   };
-  /** Appends vertices first..last of `half` to a batch as one polyline. */
-  const push = (b: Batch, first: number, last: number) => {
+  /** Appends vertices first..last of a traced line, shifted by (dx, dy), to a batch as one polyline. */
+  const push = (b: Batch, line: TracedLine, first: number, last: number, dx: number, dy: number) => {
     b.starts[b.ns++] = b.np;
     for (let i = first; i <= last; i++) {
-      b.pts[b.np++] = half.x[i]!;
-      b.pts[b.np++] = half.y[i]!;
+      b.pts[b.np++] = line.x[i]! + dx;
+      b.pts[b.np++] = line.y[i]! + dy;
     }
     stats.vertices += last - first + 1;
   };
@@ -593,66 +630,95 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     const left = o.budget - stats.vertices;
     const cap = stats.vertices + (rank === order.length - 1 ? left : left * BUDGET_SHARE);
     const plans = packetsFor(l, f, view, o.cellScale ?? 1).map((p) => ({ p, crests: packetCrests(p, style.crests, o.t, o.still) }));
-    // Vertices per crest: measured on the previous frame of this lattice (straight crests
-    // need few), at first an upper bound (every trace step kept, glow and trough included).
+    // Vertices per crest: measured on earlier frames of this system (straight crests need
+    // few), at first an upper bound (every trace step kept, glow, halo and trough included).
     const steps = (p: Packet) => Math.ceil((style.halfLength * p.spacing) / TRACE_STEP_PX);
     const bound = (p: Packet) => 2 * (steps(p) + 3) * (style.dash.length ? 2 : 1) + (style.glow ? 2 * (Math.ceil(steps(p) / 2) + 1) + 2 * (Math.ceil(steps(p) * TROUGH_LENGTH) + 1) : 0);
-    const cost = ({ p, crests }: (typeof plans)[number]) => crests.length * (f.perCrest > 0 ? f.perCrest : bound(p));
+    const perCrest = perCrestBySystem.get(f.system) ?? 0;
+    const cost = ({ p, crests }: (typeof plans)[number]) => crests.length * (perCrest > 0 ? perCrest : bound(p));
     // Packets in a fixed random order (their `keep` hash): when the budget runs out, the ones
     // left out are an even, random share of the view, never a region, and the same each frame.
+    // `f.limit` (packets in that order) only shrinks when the budget is hit and grows back one
+    // packet a frame while well under it, so a packet at the margin does not flicker.
     plans.sort((a, b) => a.p.keep - b.p.keep);
     const before = stats.vertices;
     const crestsBefore = stats.crests;
+    let visited = 0;
+    let hit = false;
     for (const plan of plans) {
       const { p, crests } = plan;
-      if (stats.vertices + cost(plan) > cap) break;
+      if (visited >= f.limit) break;
+      if (stats.vertices + cost(plan) > cap) {
+        hit = true;
+        break;
+      }
+      visited++;
       // The frame's total never exceeds the budget: skip a packet that could overrun it.
       if (stats.vertices + crests.length * bound(p) > o.budget) continue;
       stats.packets++;
       let lead: { x: number; y: number } | null = null;
       let leadU = -Infinity;
-      for (const { u, w } of crests) {
-        const cx = p.ax + p.px * u;
-        const cy = p.ay + p.py * u;
-        if (!sampleLattice(l, f, cx, cy)) continue;
-        const hs = sample.hs;
-        const alpha = crestAlpha(hs) * w;
-        const width = lineWidth(hs);
-        let drawn = false;
-        for (const sign of [1, -1]) {
-          // Each half starts at the crest centre, so dash patterns stay anchored on the crest.
-          const n = traceHalf(l, f, cx, cy, sign, style.halfLength * p.spacing, true);
-          if (!n) continue;
-          drawn = true;
+      let cache = crestCache.get(p);
+      if (!cache) crestCache.set(p, (cache = new Map()));
+      for (const { u, w, n: crestNo } of crests) {
+        let c = cache.get(crestNo);
+        if (!c || Math.abs(u - c.u) > RETRACE_PX) {
+          const cx = p.ax + p.px * u;
+          const cy = p.ay + p.py * u;
+          if (!sampleLattice(l, f, cx, cy)) {
+            cache.delete(crestNo);
+            continue;
+          }
+          c = { u, hs: sample.hs, lines: [], troughs: [], frame };
+          for (const sign of [1, -1]) {
+            // Each half starts at the crest centre, so dash patterns stay anchored on the crest.
+            const n = traceHalf(l, f, cx, cy, sign, style.halfLength * p.spacing, true);
+            if (n) c.lines.push(copyHalf(n));
+          }
+          if (style.glow) {
+            // The trough behind the crest: a faint dark line half a spacing back.
+            for (const sign of [1, -1]) {
+              const n = traceHalf(l, f, cx - (p.px * p.spacing) / 2, cy - (p.py * p.spacing) / 2, sign, style.halfLength * p.spacing * TROUGH_LENGTH, false);
+              if (n) c.troughs.push(copyHalf(n));
+            }
+          }
+          cache.set(crestNo, c);
+        }
+        c.frame = frame;
+        if (!c.lines.length) continue;
+        const dx = p.px * (u - c.u);
+        const dy = p.py * (u - c.u);
+        const alpha = crestAlpha(c.hs) * w;
+        const width = lineWidth(c.hs);
+        for (const line of c.lines) {
           // Full opacity near the packet's ray, fading toward the crest ends (no hard tips).
           let from = 0;
-          for (let i = 1; i <= n; i++) {
-            if (i < n && half.part[i] === half.part[from + 1]) continue;
-            const k = TAPER[half.part[from + 1]!]![1];
-            const last = i === n ? n - 1 : i - 1;
-            push(batch("crest", style, sys, width, alpha * k), from, last);
+          for (let i = 1; i <= line.n; i++) {
+            if (i < line.n && line.part[i] === line.part[from + 1]) continue;
+            const k = TAPER[line.part[from + 1]!]![1];
+            const last = i === line.n ? line.n - 1 : i - 1;
+            push(batch("crest", style, sys, width, alpha * k), line, from, last, dx, dy);
             // Dashes and dots get a dark halo, so they read on bright colours too.
-            if (style.dash.length) push(batch("halo", TROUGH_STYLE_OF[style.look] ?? style, sys, width + HALO_PX, alpha * k * HALO_ALPHA), from, last);
+            if (style.dash.length) push(batch("halo", TROUGH_STYLE_OF[style.look] ?? style, sys, width + HALO_PX, alpha * k * HALO_ALPHA), line, from, last, dx, dy);
             // The glow follows the bright inner part only.
-            if (style.glow && half.part[from + 1] === 0) push(batch("glow", style, sys, width * GLOW_WIDTH, alpha * GLOW_ALPHA), from, last);
+            if (style.glow && line.part[from + 1] === 0) push(batch("glow", style, sys, width * GLOW_WIDTH, alpha * GLOW_ALPHA), line, from, last, dx, dy);
             from = last;
           }
         }
-        if (!drawn) continue;
         stats.crests++;
-        if (style.glow) {
-          // The trough behind the crest: a faint dark line half a spacing back.
+        if (c.troughs.length) {
           const tb = batch("trough", TROUGH_STYLE, sys, width * TROUGH_WIDTH, alpha * TROUGH_ALPHA);
-          for (const sign of [1, -1]) {
-            const n = traceHalf(l, f, cx - (p.px * p.spacing) / 2, cy - (p.py * p.spacing) / 2, sign, style.halfLength * p.spacing * TROUGH_LENGTH, false);
-            if (n) push(tb, 0, n - 1);
-          }
+          for (const line of c.troughs) push(tb, line, 0, line.n - 1, dx, dy);
         }
+        const cx = p.ax + p.px * u;
+        const cy = p.ay + p.py * u;
         if (u > leadU) {
           leadU = u;
           lead = { x: cx, y: cy };
         }
       }
+      // Crests that left the set are forgotten.
+      for (const [k, c] of cache) if (c.frame !== frame) cache.delete(k);
       // Reduced motion: an arrowhead on the leading crest shows which way the packet travels.
       if (o.still && lead && (f.system === "primary" || f.system === "combined")) {
         arrows.push(lead.x, lead.y, p.px, p.py);
@@ -660,7 +726,9 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       }
     }
     const n = stats.crests - crestsBefore;
-    if (n >= 20) f.perCrest = (stats.vertices - before) / n;
+    if (n >= 20) perCrestBySystem.set(f.system, perCrest > 0 ? 0.8 * perCrest + (0.2 * (stats.vertices - before)) / n : (stats.vertices - before) / n);
+    if (hit) f.limit = visited;
+    else if (f.limit < plans.length && stats.vertices - before < 0.75 * (cap - before)) f.limit++;
   });
 
   ctx.lineJoin = "round";

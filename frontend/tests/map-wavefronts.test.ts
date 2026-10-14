@@ -209,6 +209,32 @@ describe("crest motion", () => {
     expect([...pa].filter((k) => !pb.has(k))).toEqual([]);
   });
 
+  it("reuses traced crests between frames without moving them off the crest lattice", () => {
+    // Uniform SYNTHETIC sea: a crest traced earlier and shifted along the travel vector must
+    // coincide with the same crest traced afresh at that time.
+    const fam = [family("primary", 3, 12, 240), family("secondary", 1.5, 9, 200)];
+    const view = viewAt(3, -40, -30);
+    const { ctx: warm } = recorder();
+    const reused = buildLattice(view, fam);
+    const budget = 1e6; // no budget effects
+    for (let k = 0; k <= 30; k++) drawCrests(warm, view, reused, { t: k / 30, still: false, budget });
+    const a = recorder();
+    drawCrests(a.ctx, view, reused, { t: 1.05, still: false, budget });
+    const b = recorder();
+    drawCrests(b.ctx, view, buildLattice(view, fam), { t: 1.05, still: false, budget });
+    const key = (x: number, y: number) => `${Math.round(x * 20)},${Math.round(y * 20)}`;
+    const near = (lines: Polyline[]) => {
+      const set = new Set<string>();
+      for (const l of lines) for (const [x, y] of l.pts) for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) set.add(key(x + dx / 20, y + dy / 20));
+      return set;
+    };
+    const inB = near(b.lines);
+    // (a crest cut at the edge of the view may end a little differently)
+    const pts = a.lines.flatMap((l) => l.pts).filter(([x, y]) => x > 40 && y > 40 && x < view.width - 40 && y < view.height - 40);
+    expect(pts.length).toBeGreaterThan(500);
+    expect(pts.filter(([x, y]) => !inB.has(key(x, y)))).toEqual([]);
+  });
+
   it("advances by time, not frames: 60 Hz and 120 Hz give the same clock", () => {
     const rafs: Array<() => void> = [];
     vi.stubGlobal("requestAnimationFrame", (cb: () => void) => rafs.push(cb));
@@ -287,6 +313,20 @@ describe("systems, reduced motion and budget", () => {
     const b = draw(viewAt(3, -40, -30), fam, 37, true);
     expect(a.stats.arrows).toBeGreaterThan(3);
     expect(JSON.stringify(b.lines)).toBe(JSON.stringify(a.lines));
+  });
+
+  it("cuts an over-budget view steadily: the same sets from frame to frame", () => {
+    const fam = [family("secondary", 2, 9, 200), family("primary", 4, 12, 250)];
+    const view = viewAt(4, -30, -30);
+    const l = buildLattice(view, fam);
+    const counts: number[] = [];
+    for (let k = 0; k < 90; k++) {
+      const st = drawCrests(recorder().ctx, view, l, { t: k / 30, still: false, budget: 5000 });
+      expect(st.vertices).toBeLessThanOrEqual(5000);
+      if (k >= 45) counts.push(st.packets);
+    }
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+    expect(Math.min(...counts)).toBeGreaterThan(10);
   });
 
   it("stays within the vertex budget on a busy 1440 x 900 view", () => {

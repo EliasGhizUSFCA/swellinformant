@@ -181,7 +181,8 @@ scale by
 E is at least 1: zoomed in so far that `S x metres per pixel < 1`, the true wavelength
 `L / (metres per pixel)` is drawn (8 to 256 px). The legend states E for the zoom and the
 latitude of the view centre, for example "Crest spacing ×4,700 at this zoom; time runs 4×
-faster than real." (`scaleStatement`, rounded to 2 significant figures above 1,000).
+faster than real." (`scaleStatement`; E is rounded to the nearest 100 from 1,000, to a whole
+number from 10, else to one decimal).
 
 ### 4.4 Motion and its time scale
 
@@ -233,6 +234,10 @@ and 120 Hz (unit test).
   under their dashes (1.6 px wider, 0.55 x the opacity, same dash pattern), so they stay
   visible on bright colours. Strokes are batched by system, kind (crest, glow, trough,
   halo), 5 width levels and 8 opacity levels.
+* **Reuse**: crests move a fraction of a pixel per frame, so each crest's traced shape is kept
+  per set and lattice crest number and drawn shifted along the travel vector; it is traced
+  again once it has moved `RETRACE_PX = 2` px. A new lattice (pan, zoom, new fields) traces
+  afresh.
 * **Vertices**: a traced vertex is kept only where the crest has turned more than
   `SIMPLIFY_DEG = 1.5` since the last kept one, at the taper boundaries and at the ends (less
   than 0.35 px from the traced curve over a 100 px chord); where the field is straight the
@@ -267,8 +272,11 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
   with the view area between 0.5 and 1.6 times), `PHONE_VERTEX_BUDGET = 6,000` below 640 px
   wide. The top system (primary, else combined) is planned first and may use 60 % of what is
   left, the next 60 % of the rest, the last one all of it. Sets are visited in a fixed random
-  order (a hash per set), so a frame over budget leaves out an even, random share of the sets
-  (the same ones each frame), never a region; a set that could overrun the total is skipped.
+  order (a hash per set), so a frame over budget leaves out an even, random share of the sets,
+  never a region. The number of sets drawn only shrinks when the budget is hit and grows back
+  by one set a frame while under 75 % of it, so the cut is steady (no set flickers at the
+  margin); the vertices per crest come from earlier frames of the same system. A set that
+  could overrun the frame's total is skipped.
 
 ### 4.8 Data attributes (tests and diagnostics)
 
