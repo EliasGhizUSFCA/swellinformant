@@ -173,6 +173,8 @@ export function syntheticValidTimes(now = Date.now(), steps = 41): string[] {
 
 export interface FieldMock {
   validTimes: string[];
+  /** How often the field index was read. */
+  indexReads: number;
   /** Every field request, as "variable@at". */
   requests: string[];
   /** Every field request URL. */
@@ -188,11 +190,21 @@ export async function mockFields(
     variables = VARIABLES,
     fields = DEFAULT_FIELDS,
     origin = SYNTHETIC_SOURCE,
-  }: { grid?: GridSpec; validTimes?: string[]; variables?: string[]; fields?: SyntheticFields; origin?: typeof SYNTHETIC_SOURCE } = {},
+    servedMeta,
+  }: {
+    grid?: GridSpec;
+    validTimes?: string[];
+    variables?: string[];
+    fields?: SyntheticFields;
+    origin?: typeof SYNTHETIC_SOURCE;
+    /** Changes what X-Field-Meta claims for a request (e.g. another valid time, as a server that moved on would). */
+    servedMeta?: (variable: string, at: string) => { valid_time?: string; run_key?: string } | null;
+  } = {},
 ): Promise<FieldMock> {
-  const mock: FieldMock = { validTimes, requests: [], urls: [] };
-  await page.route(/\/api\/map\/fields(\?.*)?$/, (route) =>
-    route.fulfill({
+  const mock: FieldMock = { validTimes, indexReads: 0, requests: [], urls: [] };
+  await page.route(/\/api\/map\/fields(\?.*)?$/, (route) => {
+    mock.indexReads++;
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
@@ -216,8 +228,8 @@ export async function mockFields(
         stale_after_hours: 12,
         stale: false,
       }),
-    }),
-  );
+    });
+  });
   await page.route(/\/api\/map\/fields\/[a-z0-9_]+\?/, (route) => {
     const url = new URL(route.request().url());
     const variable = url.pathname.split("/").pop()!;
@@ -244,6 +256,7 @@ export async function mockFields(
       scale: e.scale,
       offset: e.offset,
       nodata: 255,
+      ...(servedMeta?.(variable, at) ?? {}),
     };
     return route.fulfill({
       status: 200,

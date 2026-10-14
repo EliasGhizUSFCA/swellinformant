@@ -1,15 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { apiGet } from "./helpers";
-import { mockFieldsUnavailable, syntheticValue, type SyntheticFields } from "./map-fields.mock";
-import { field, openMap, openMapWithFields, requested, screenPoint, shot, type Spot } from "./map-helpers";
+import { mockFields, mockFieldsUnavailable, PARTITION_VARIABLES, syntheticValue, VARIABLES, type SyntheticFields } from "./map-fields.mock";
+import { field, openMap, openMapWithFields, painted, requested, screenPoint, shot, type Spot } from "./map-helpers";
 
 /**
- * The map's ocean layers against the production build: the colour field, flow particles,
- * isobars, the hover readout, the legend and the display settings. They are tested with
- * route-mocked SYNTHETIC fields from ./map-fields.mock.ts (made-up patterns, not a forecast);
- * the backend in this suite has no live NOAA data, so its own index reports "unavailable".
- * Navigation, markers, the spot panel and the timeline are in map.spec.ts.
+ * The map's ocean layers against the production build: the colour field, the wave crests
+ * (wave layers), the wind particles (Wind layer and the wind overlay), isobars, the hover
+ * readout, the legend and the display settings. They are tested with route-mocked SYNTHETIC
+ * fields from ./map-fields.mock.ts (made-up patterns, not a forecast); the backend in this
+ * suite has no live NOAA data, so its own index reports "unavailable". Navigation, markers,
+ * the spot panel and the timeline are in map.spec.ts.
  */
 
 /** RGB of every page pixel in a (2r+1)² square around a screen point. */
@@ -161,6 +162,153 @@ async function arrowLean(page: Page) {
   });
 }
 
+const wave = (page: Page) => page.locator("canvas.map-wave-canvas");
+
+/**
+ * What the wave canvas shows: "ink" = alpha x brightness (the crest lines; the dark trough
+ * lines count almost nothing), the dominant line orientation from the structure tensor of
+ * the ink (degrees in screen coordinates, x east, y down: 0 = horizontal crests, 90 =
+ * vertical, 45 = running from top left to bottom right), its coherence (0..1), an
+ * orientation histogram (36 bins of 5 degrees, gradient energy), and a hash of the pixels.
+ */
+async function waveImage(page: Page) {
+  return wave(page).evaluate((c: HTMLCanvasElement) => {
+    const { width: w, height: h } = c;
+    const d = c.getContext("2d")!.getImageData(0, 0, w, h).data;
+    const b = new Float32Array(w * h);
+    let ink = 0;
+    let hash = 0;
+    for (let k = 0; k < w * h; k++) {
+      const a = d[k * 4 + 3]!;
+      if (!a) continue;
+      b[k] = ((a / 255) * (d[k * 4]! + d[k * 4 + 1]! + d[k * 4 + 2]!)) / 765;
+      ink += b[k]!;
+      hash = (hash * 31 + a * ((k % w) + 1) + Math.floor(k / w)) % 1_000_000_007;
+    }
+    let jxx = 0;
+    let jyy = 0;
+    let jxy = 0;
+    const hist = new Array<number>(36).fill(0);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const k = y * w + x;
+        const gx = (b[k + 1]! - b[k - 1]!) / 2;
+        const gy = (b[k + w]! - b[k - w]!) / 2;
+        const e = gx * gx + gy * gy;
+        if (!e) continue;
+        jxx += gx * gx;
+        jyy += gy * gy;
+        jxy += gx * gy;
+        // line orientation = gradient orientation + 90 degrees, folded to 0..180
+        const line = ((((Math.atan2(gy, gx) * 180) / Math.PI + 90) % 180) + 180) % 180;
+        hist[Math.floor(line / 5) % 36]! += e;
+      }
+    }
+    const grad = (0.5 * Math.atan2(2 * jxy, jxx - jyy) * 180) / Math.PI;
+    const orientation = (((grad + 90) % 180) + 180) % 180;
+    const coherence = Math.hypot(jxx - jyy, 2 * jxy) / Math.max(1e-9, jxx + jyy);
+    return { ink, orientation, coherence, hist, hash, width: w, height: h };
+  });
+}
+
+/** Orientation peaks of a waveImage histogram: bins (5 degrees) holding > `share` of the energy after smoothing. */
+function orientationPeaks(hist: number[], share = 0.15): number[] {
+  const total = hist.reduce((a, v) => a + v, 0);
+  const smooth = hist.map((_, i) => hist[(i + 35) % 36]! + hist[i]! + hist[(i + 1) % 36]!);
+  const peaks: number[] = [];
+  smooth.forEach((v, i) => {
+    if (v > share * total && v >= smooth[(i + 35) % 36]! && v >= smooth[(i + 1) % 36]!) peaks.push(i * 5 + 2.5);
+  });
+  return peaks;
+}
+
+/**
+ * Bright ink of the wave canvas projected on a direction (dx, dy): a 1 px binned profile.
+ * Crest lines across that direction show as peaks spaced by the crest spacing.
+ */
+async function inkProfile(page: Page, dx: number, dy: number) {
+  return wave(page).evaluate(
+    (c: HTMLCanvasElement, [ux, uy]) => {
+      const { width: w, height: h } = c;
+      const d = c.getContext("2d")!.getImageData(0, 0, w, h).data;
+      const n = Math.ceil(Math.abs(ux) * w + Math.abs(uy) * h) + 2;
+      const off = Math.min(0, ux * w) + Math.min(0, uy * h);
+      const prof = new Array<number>(n).fill(0);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const k = (y * w + x) * 4;
+          const a = d[k + 3]!;
+          if (!a) continue;
+          prof[Math.floor(x * ux + y * uy - off)]! += ((a / 255) * (d[k]! + d[k + 1]! + d[k + 2]!)) / 765;
+        }
+      }
+      return { prof, scale: w / c.getBoundingClientRect().width };
+    },
+    [dx, dy] as const,
+  );
+}
+
+/** First autocorrelation peak of a profile (lag in profile bins) between `min` and `max`. */
+function period(prof: number[], min: number, max: number): number {
+  const mean = prof.reduce((a, v) => a + v, 0) / prof.length;
+  const x = prof.map((v) => v - mean);
+  const ac = (lag: number) => x.slice(lag).reduce((a, v, i) => a + v * x[i]!, 0);
+  const vals = Array.from({ length: max + 2 }, (_, lag) => (lag >= min - 1 ? ac(lag) : -Infinity));
+  for (let lag = min; lag <= max; lag++) if (vals[lag]! > 0 && vals[lag]! >= vals[lag - 1]! && vals[lag]! >= vals[lag + 1]!) return lag;
+  return NaN;
+}
+
+/** Shift (bins) of profile `b` relative to `a` with the highest correlation, within ±maxShift. */
+function shiftOf(a: number[], b: number[], maxShift: number): number {
+  let best = 0;
+  let bestV = -Infinity;
+  for (let s = -maxShift; s <= maxShift; s++) {
+    let v = 0;
+    for (let i = maxShift; i < a.length - maxShift; i++) v += a[i]! * b[i + s]!;
+    if (v > bestV) {
+      bestV = v;
+      best = s;
+    }
+  }
+  return best;
+}
+
+/** Largest wave-canvas alpha within `r` canvas px of (lat, lon), from the view the canvas was drawn for. */
+async function waveAlphaNear(page: Page, lat: number, lon: number, r = 3) {
+  return wave(page).evaluate(
+    (c: HTMLCanvasElement, [la, lo, rr]) => {
+      const [ox, oy, vw, vh, world] = c.dataset.view!.split(",").map(Number) as [number, number, number, number, number];
+      const mx = ((lo + 180) / 360) * world;
+      const my = (0.5 - Math.log(Math.tan(Math.PI / 4 + (la * Math.PI) / 360)) / (2 * Math.PI)) * world;
+      let x = mx - ox;
+      x += Math.round((vw / 2 - x) / world) * world; // the world copy nearest the view centre
+      const cx = Math.round((x * c.width) / vw);
+      const cy = Math.round(((my - oy) * c.height) / vh);
+      if (cx < rr || cy < rr || cx >= c.width - rr || cy >= c.height - rr) return -1;
+      const d = c.getContext("2d")!.getImageData(cx - rr, cy - rr, 2 * rr + 1, 2 * rr + 1).data;
+      let max = 0;
+      for (let i = 3; i < d.length; i += 4) max = Math.max(max, d[i]!);
+      return max;
+    },
+    [lat, lon, r] as const,
+  );
+}
+
+/** SYNTHETIC uniform wave systems (height m, period s, direction FROM deg); a missing one has no data. */
+function swells(spec: Partial<Record<"primary" | "secondary" | "windsea", [number, number, number]>>, combined: [number, number, number] = [3, 12, 250]): { fields: SyntheticFields; variables: string[] } {
+  const prefix = { primary: "swell1", secondary: "swell2", windsea: "windsea" } as const;
+  const values: Record<string, number> = { hs: combined[0], tp: combined[1], wave_dir: combined[2], wind_u: 0, wind_v: 8, pressure: 1013 };
+  for (const [system, v] of Object.entries(spec) as Array<[keyof typeof prefix, [number, number, number]]>) {
+    values[`${prefix[system]}_hs`] = v[0];
+    values[`${prefix[system]}_tp`] = v[1];
+    values[`${prefix[system]}_dir`] = v[2];
+  }
+  return {
+    fields: { name: `swells-${JSON.stringify(values)}`, value: (variable) => values[variable] ?? null },
+    variables: [...VARIABLES, ...PARTITION_VARIABLES.filter((v) => values[v] != null)],
+  };
+}
+
 // SYNTHETIC uniform flow: waves FROM the west (270°, so they travel east) at 10 s, and wind
 // blowing TOWARDS the north (u 0, v 8 m/s, i.e. a southerly).
 const UNIFORM_FLOW: SyntheticFields = {
@@ -211,8 +359,9 @@ test.describe("ocean layers (synthetic fields)", () => {
     for (const ch of [0, 1, 2] as const) expect(Math.abs(median(land.map((p) => p[ch])) - 0x2b)).toBeLessThan(10);
     const sp = await screenPoint(page, -50, -120);
     expect(median((await pixels(page, sp.x, sp.y)).map(saturation))).toBeGreaterThan(40); // a saturated colour, not grey
-    // Particles run over the ocean.
-    await expect(page.locator("canvas.map-particle-canvas")).toHaveAttribute("data-mode", "animated");
+    // Wave crests run over the ocean; wave layers never use the wind particle canvas.
+    await expect(wave(page)).toHaveAttribute("data-mode", "animated");
+    await expect(page.locator("canvas.map-particle-canvas")).toHaveCount(0);
     await shot(page, "desktop-1440x900-synthetic-wave-height");
 
     // Redraw time of the colour field at 1440 × 900 (half-resolution canvas), over 6 pans.
@@ -300,13 +449,13 @@ test.describe("ocean layers (synthetic fields)", () => {
     await openMapWithFields(page);
     await page.getByRole("button", { name: "Settings" }).click();
     const settings = page.getByTestId("map-settings");
-    // particles off / on
-    const particles = settings.getByRole("switch", { name: /Animated particles/ });
-    await expect(particles).toHaveAttribute("aria-checked", "true");
-    await particles.click();
-    await expect(page.locator("canvas.map-particle-canvas")).toHaveAttribute("data-mode", "off");
-    await particles.click();
-    await expect(page.locator("canvas.map-particle-canvas")).toHaveAttribute("data-mode", "animated");
+    // animation off / on (the wave crests on this wave layer)
+    const flow = settings.getByRole("switch", { name: /Animated flow/ });
+    await expect(flow).toHaveAttribute("aria-checked", "true");
+    await flow.click();
+    await expect(wave(page)).toHaveAttribute("data-mode", "off");
+    await flow.click();
+    await expect(wave(page)).toHaveAttribute("data-mode", "animated");
     // basemap
     await settings.getByRole("radio", { name: "Streets" }).click();
     await expect(page.locator("canvas.map-basemap-canvas")).toHaveAttribute("data-land", "0");
@@ -481,63 +630,101 @@ test.describe("ocean layers: geography, motion and bandwidth (synthetic fields)"
     }
   });
 
-  test("particles travel towards wave_dir + 180° on wave tabs and with (u, v) on the wind tab", async ({ page }) => {
+  test("wind particles travel with (u, v) on the Wind layer; wave layers draw crests instead", async ({ page }) => {
     const { mock, now } = await openMapWithFields(page, { fields: UNIFORM_FLOW });
-    const particles = page.locator("canvas.map-particle-canvas");
-    await expect(particles).toHaveAttribute("data-mode", "animated");
-    // Waves from 270° (west): trails head east.
-    await page.waitForTimeout(1500); // let trails build up
-    const wave = await trailGradient(page);
-    expect(wave.gx, JSON.stringify(wave)).toBeGreaterThan(0);
-    expect(Math.abs(wave.gx)).toBeGreaterThan(3 * Math.abs(wave.gy));
+    await expect(wave(page)).toHaveAttribute("data-mode", "animated");
+    await expect(page.locator("canvas.map-particle-canvas")).toHaveCount(0);
     // Wind towards the north (v > 0): trails head up the screen (y decreases).
     await page.getByRole("radio", { name: "Wind Speed" }).click();
     await expect(field(page)).toHaveAttribute("data-layer", "wind");
     await expect.poll(() => requested(mock, "wind_u", now) && requested(mock, "wind_v", now)).toBe(true);
     await expect.poll(async () => Number(await field(page).getAttribute("data-painted"))).toBeGreaterThan(10_000);
+    const particles = page.locator("canvas.map-particle-canvas");
+    await expect(particles).toHaveAttribute("data-mode", "animated");
+    await expect(wave(page)).toHaveCount(0);
     await page.waitForTimeout(1500);
     const wind = await trailGradient(page);
     expect(wind.gy, JSON.stringify(wind)).toBeLessThan(0);
     expect(Math.abs(wind.gy)).toBeGreaterThan(3 * Math.abs(wind.gx));
-    console.log(`trail gradients: waves ${JSON.stringify(wave)}, wind ${JSON.stringify(wind)}`);
-    // Trails fade out completely. On an 8-bit canvas, dimming each frame by 0.92 stops at
-    // alpha 6/255, a veil that piles up wherever particles have been (a spike at 6 in the
-    // alpha histogram); the half-float particle canvas has none.
-    await expect(particles).toHaveAttribute("data-color-type", "float16");
-    await page.waitForTimeout(5000);
-    const alpha = await particles.evaluate((c: HTMLCanvasElement) => {
-      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
-      const h = new Array<number>(256).fill(0);
-      for (let i = 3; i < d.length; i += 4) h[d[i]!]!++;
-      return { at5: h[5]!, at6: h[6]!, at7: h[7]!, inked: (d.length / 4 - h[0]!) / (d.length / 4) };
-    });
-    test.info().annotations.push({ type: "particle canvas alpha", description: JSON.stringify(alpha) });
-    expect(alpha.at6, JSON.stringify(alpha)).toBeLessThan(3 * Math.max(1, (alpha.at5 + alpha.at7) / 2));
+    console.log(`wind trail gradient: ${JSON.stringify(wind)}`);
   });
 
-  test("prefers-reduced-motion: still arrows pointing downstream, nothing animates", async ({ page }) => {
+  for (const renderer of ["native", "8-bit"] as const) {
+    test(`wind trails fade out completely, without an alpha-6 veil (${renderer} canvas)`, { tag: "@cross-browser" }, async ({ page, browserName }) => {
+      if (renderer === "8-bit") {
+        // Chromium has half-float canvases; take that away to exercise the explicit trail
+        // renderer that Firefox, Safari and iOS use.
+        await page.addInitScript(() => {
+          const get = HTMLCanvasElement.prototype.getContext;
+          HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, opts?: Record<string, unknown>) {
+            if (opts && "colorType" in opts) {
+              const { colorType: _drop, ...rest } = opts;
+              void _drop;
+              return get.call(this, type, rest);
+            }
+            return get.call(this, type, opts);
+          } as typeof HTMLCanvasElement.prototype.getContext;
+        });
+      }
+      const { mock, now } = await openMapWithFields(page, { fields: UNIFORM_FLOW });
+      await page.getByRole("radio", { name: "Wind Speed" }).click();
+      await expect.poll(() => requested(mock, "wind_u", now) && requested(mock, "wind_v", now)).toBe(true);
+      const particles = page.locator("canvas.map-particle-canvas");
+      await expect(particles).toHaveAttribute("data-mode", "animated");
+      const colorType = await particles.getAttribute("data-color-type");
+      const trails = await particles.getAttribute("data-trails");
+      if (renderer === "8-bit" || browserName !== "chromium") {
+        expect(trails).toBe("explicit");
+      } else {
+        expect(colorType).toBe("float16");
+        expect(trails).toBe("fade");
+      }
+      // On an 8-bit canvas, dimming each frame by 0.92 stops at alpha 6/255, a veil that piles
+      // up wherever particles have been (a spike at 6 in the alpha histogram).
+      await page.waitForTimeout(5000);
+      const alpha = await particles.evaluate((c: HTMLCanvasElement) => {
+        const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+        const h = new Array<number>(256).fill(0);
+        for (let i = 3; i < d.length; i += 4) h[d[i]!]!++;
+        return { at5: h[5]!, at6: h[6]!, at7: h[7]!, inked: (d.length / 4 - h[0]!) / (d.length / 4) };
+      });
+      test.info().annotations.push({ type: `particle canvas alpha (${renderer}, ${colorType}, ${trails})`, description: JSON.stringify(alpha) });
+      console.log(`particle canvas alpha (${renderer}, ${colorType}, ${trails}): ${JSON.stringify(alpha)}`);
+      expect(alpha.inked).toBeGreaterThan(0.002); // the particles do draw
+      expect(alpha.at6, JSON.stringify(alpha)).toBeLessThan(3 * Math.max(1, (alpha.at5 + alpha.at7) / 2));
+      expect(alpha.inked, "no veil over the ocean").toBeLessThan(0.35);
+    });
+  }
+
+  test("prefers-reduced-motion: still crests on wave layers, still arrows for wind, nothing animates", { tag: "@mobile" }, async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await openMapWithFields(page, { fields: UNIFORM_FLOW });
+    // Waves from the west: still, vertical crests with arrowheads pointing east.
+    await expect(wave(page)).toHaveAttribute("data-mode", "static");
+    await expect.poll(async () => Number(await wave(page).getAttribute("data-crests"))).toBeGreaterThan(20);
+    expect(Number(await wave(page).getAttribute("data-arrows"))).toBeGreaterThan(3);
+    const still = await waveImage(page);
+    expect(still.ink).toBeGreaterThan(0);
+    expect(Math.abs(still.orientation - 90), JSON.stringify(still)).toBeLessThan(8);
+    await page.waitForTimeout(1000);
+    expect((await waveImage(page)).hash, "no animation").toBe(still.hash);
+    await page.getByRole("radio", { name: "Wind Speed" }).click();
+    await expect(field(page)).toHaveAttribute("data-layer", "wind");
     const particles = page.locator("canvas.map-particle-canvas");
     await expect(particles).toHaveAttribute("data-mode", "static");
     expect(Number(await particles.getAttribute("data-arrows"))).toBeGreaterThan(100);
-    const a = await arrowLean(page);
-    expect(a.dx, JSON.stringify(a)).toBeGreaterThan(0.5); // waves from the west: arrows point east
-    expect(Math.abs(a.dx)).toBeGreaterThan(3 * Math.abs(a.dy));
-    await page.waitForTimeout(800);
-    expect((await arrowLean(page)).hash, "no animation").toBe(a.hash);
-    await page.getByRole("radio", { name: "Wind Speed" }).click();
-    await expect(field(page)).toHaveAttribute("data-layer", "wind");
     await expect.poll(async () => (await arrowLean(page)).dy).toBeLessThan(-0.5); // wind towards the north: arrows point up
     const w = await arrowLean(page);
     expect(Math.abs(w.dy)).toBeGreaterThan(3 * Math.abs(w.dx));
+    await page.waitForTimeout(800);
+    expect((await arrowLean(page)).hash, "no animation").toBe(w.hash);
     await page.getByRole("button", { name: "Legend", exact: true }).click();
     await expect(page.getByTestId("legend-drawer")).toContainText("still arrows");
   });
 
-  test("a hidden tab stops the particles and holds playback until it is shown again", async ({ page }) => {
+  test("a hidden tab stops the animation and holds playback until it is shown again", async ({ page }) => {
     const { mock } = await openMapWithFields(page);
-    const particles = page.locator("canvas.map-particle-canvas");
+    const particles = wave(page); // the wave crests of the default Wave Height layer
     await expect(particles).toHaveAttribute("data-mode", "animated");
     const slider = page.getByRole("slider", { name: "Forecast time" });
     await slider.focus();
@@ -619,21 +806,37 @@ test.describe("ocean layers: geography, motion and bandwidth (synthetic fields)"
       const m1 = await metrics();
       return { frames, scriptMs: ((m1.ScriptDuration! - m0.ScriptDuration!) * 1000) / frames, taskMs: ((m1.TaskDuration! - m0.TaskDuration!) * 1000) / frames };
     };
+    // Wave crests (the default Wave Height layer), then the wind particles, then nothing.
+    await expect(wave(page)).toHaveAttribute("data-mode", "animated");
+    const size = await wave(page).evaluate((c: HTMLCanvasElement) => `${c.width}x${c.height}`);
+    const crests = await perFrame(3000);
+    const drawP95 = Number(await wave(page).getAttribute("data-draw-ms-p95"));
+    const vertices = Number(await wave(page).getAttribute("data-vertices"));
+    await page.getByRole("radio", { name: "Wind Speed" }).click();
     const particles = page.locator("canvas.map-particle-canvas");
     await expect(particles).toHaveAttribute("data-mode", "animated");
-    const count = await particles.evaluate((c: HTMLCanvasElement) => `${c.width}x${c.height}`);
     const animated = await perFrame(3000);
     await page.getByRole("button", { name: "Settings" }).click();
-    await page.getByTestId("map-settings").getByRole("switch", { name: /Animated particles/ }).click();
+    await page.getByTestId("map-settings").getByRole("switch", { name: /Animated flow/ }).click();
     await page.keyboard.press("Escape");
     await expect(particles).toHaveAttribute("data-mode", "off");
     const still = await perFrame(3000);
-    const note = `particles on: ${animated.scriptMs.toFixed(2)} ms script / ${animated.taskMs.toFixed(2)} ms task per frame (${animated.frames} frames, canvas ${count}); off: ${still.scriptMs.toFixed(2)} / ${still.taskMs.toFixed(2)} ms`;
+    const note =
+      `wave crests: ${crests.scriptMs.toFixed(2)} ms script / ${crests.taskMs.toFixed(2)} ms task per frame, draw p95 ${drawP95} ms, ${vertices} vertices (canvas ${size}); ` +
+      `wind particles: ${animated.scriptMs.toFixed(2)} / ${animated.taskMs.toFixed(2)} ms (${animated.frames} frames); off: ${still.scriptMs.toFixed(2)} / ${still.taskMs.toFixed(2)} ms`;
     console.log(note);
-    test.info().annotations.push({ type: "particle frame cost (1440x900)", description: note });
+    test.info().annotations.push({ type: "flow frame cost (1440x900)", description: note });
     expect(animated.scriptMs).toBeLessThan(12); // regression guard; one frame at 60 Hz is 16.7 ms
+    expect(crests.scriptMs).toBeLessThan(12);
+    expect(drawP95, "crest frame draw time p95 (ms)").toBeLessThanOrEqual(8);
+    expect(vertices).toBeLessThanOrEqual(20_000);
+    // The dark basemap redraw at zoom 2 (no closePath per ring).
+    const basemapMs = Number(await page.locator("canvas.map-basemap-canvas").getAttribute("data-draw-ms"));
+    console.log(`basemap redraw at zoom 2: ${basemapMs} ms`);
+    expect(basemapMs).toBeLessThan(30);
+    await page.getByRole("radio", { name: "Wave Height" }).click();
 
-    // Field cache: step through 12 times (36 fields with the prefetch); the LRU keeps 24.
+    // Field cache: step through 12 times (36 fields with the prefetch); the LRU keeps 48.
     const heap = async () => (await cdp.send("Runtime.getHeapUsage")) as { usedSize: number; totalSize: number; backingStorageSize?: number };
     await cdp.send("HeapProfiler.collectGarbage");
     const h0 = await heap();
@@ -650,10 +853,293 @@ test.describe("ocean layers: geography, motion and bandwidth (synthetic fields)"
     const h1 = await heap();
     const mb = (b: number) => (b / 1e6).toFixed(1);
     const grew = h1.usedSize + (h1.backingStorageSize ?? 0) - h0.usedSize - (h0.backingStorageSize ?? 0);
-    const memNote = `JS heap ${mb(h0.usedSize)} → ${mb(h1.usedSize)} MB, array buffers ${mb(h0.backingStorageSize ?? 0)} → ${mb(h1.backingStorageSize ?? 0)} MB after ${new Set(mock.requests).size} field downloads (expected decoded cache: 24 × 720 × 361 × 4 B = 25.0 MB)`;
+    const memNote = `JS heap ${mb(h0.usedSize)} → ${mb(h1.usedSize)} MB, array buffers ${mb(h0.backingStorageSize ?? 0)} → ${mb(h1.backingStorageSize ?? 0)} MB after ${new Set(mock.requests).size} field downloads (decoded cache: at most 48 × 720 × 361 × 4 B = 49.9 MB)`;
     console.log(memNote);
     test.info().annotations.push({ type: "field cache memory", description: memNote });
     expect(grew / 1e6).toBeLessThan(80);
+  });
+});
+
+/** Page position of (lat, lon) from the view the colour-field canvas was drawn for (any zoom; nearest world copy). */
+async function pagePoint(page: Page, lat: number, lon: number) {
+  return field(page).evaluate(
+    (c: HTMLCanvasElement, [la, lo]) => {
+      const [ox, oy, vw, vh, world] = c.dataset.view!.split(",").map(Number) as [number, number, number, number, number];
+      const r = c.getBoundingClientRect();
+      const mx = ((lo + 180) / 360) * world;
+      const my = (0.5 - Math.log(Math.tan(Math.PI / 4 + (la * Math.PI) / 360)) / (2 * Math.PI)) * world;
+      let x = mx - ox;
+      x += Math.round((vw / 2 - x) / world) * world;
+      return { x: r.left + (x * r.width) / vw, y: r.top + ((my - oy) * r.height) / vh };
+    },
+    [lat, lon] as const,
+  );
+}
+
+/** Opens the map with SYNTHETIC uniform wave systems and waits for drawn crests of `families`. */
+async function openWithSwells(page: Page, spec: Parameters<typeof swells>[0], families: string) {
+  const s = swells(spec);
+  const opened = await openMapWithFields(page, { fields: s.fields, variables: s.variables });
+  await expect(wave(page)).toHaveAttribute("data-families", families);
+  await expect.poll(async () => Number(await wave(page).getAttribute("data-crests"))).toBeGreaterThan(10);
+  return opened;
+}
+
+test.describe("wave crests (synthetic partitions)", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("crests of a swell from the SW run NW-SE and travel up-right (to the NE)", { tag: "@mobile" }, async ({ page }) => {
+    await openWithSwells(page, { primary: [2.5, 12, 225] }, "primary");
+    const img = await waveImage(page);
+    console.log(`orientation for a swell from 225°: ${img.orientation.toFixed(1)}° (coherence ${img.coherence.toFixed(2)})`);
+    test.info().annotations.push({ type: "crest orientation, swell from 225°", description: `${img.orientation.toFixed(1)}°, coherence ${img.coherence.toFixed(2)}` });
+    expect(Math.abs(img.orientation - 45), JSON.stringify({ o: img.orientation, c: img.coherence })).toBeLessThan(8);
+    expect(img.coherence).toBeGreaterThan(0.5);
+    // Motion: the ink profile along the travel direction (x east, y down: (0.707, -0.707))
+    // shifts forward between two frames; a crest of a 12 s swell moves 27 px x 4 / 12 s = 9 px/s.
+    const a = await inkProfile(page, Math.SQRT1_2, -Math.SQRT1_2);
+    const t0 = Date.now();
+    await page.waitForTimeout(500);
+    const b = await inkProfile(page, Math.SQRT1_2, -Math.SQRT1_2);
+    const dt = (Date.now() - t0) / 1000;
+    const shift = shiftOf(a.prof, b.prof, Math.round(10 * a.scale)) / a.scale;
+    console.log(`crest motion along the travel direction: ${shift.toFixed(1)} CSS px in ${dt.toFixed(2)} s (expected about ${(9 * dt).toFixed(1)})`);
+    expect(shift).toBeGreaterThan(1.5);
+    expect(shift).toBeLessThan(9 * dt * 2.5);
+    await shot(page, "desktop-1440x900-crests-from-sw");
+  });
+
+  test("crest spacing follows the period: 16 s crests are 4 times as far apart as 8 s crests", async ({ browser, baseURL }) => {
+    const spacing = async (tp: number) => {
+      const ctx = await browser.newContext({ baseURL, viewport: { width: 1440, height: 900 } });
+      try {
+        const page = await ctx.newPage();
+        await openWithSwells(page, { primary: [2.5, tp, 270] }, "primary");
+        const { prof, scale } = await inkProfile(page, 1, 0); // waves from the west: vertical crests
+        return period(prof, Math.round(6 * scale), Math.round(90 * scale)) / scale;
+      } finally {
+        await ctx.close();
+      }
+    };
+    const s8 = await spacing(8);
+    const s16 = await spacing(16);
+    console.log(`crest spacing: 8 s ${s8} px, 16 s ${s16} px (ratio ${(s16 / s8).toFixed(2)})`);
+    test.info().annotations.push({ type: "crest spacing 8 s / 16 s", description: `${s8} / ${s16} px` });
+    expect(Math.abs(s8 - 12)).toBeLessThanOrEqual(1); // 0.12 px/m x 99.9 m
+    expect(Math.abs(s16 / s8 - 4)).toBeLessThanOrEqual(0.4);
+  });
+
+  test("higher waves draw more ink", async ({ browser, baseURL }) => {
+    const ink = async (hs: number) => {
+      const ctx = await browser.newContext({ baseURL, viewport: { width: 1440, height: 900 } });
+      try {
+        const page = await ctx.newPage();
+        await openWithSwells(page, { primary: [hs, 12, 250] }, "primary");
+        let sum = 0;
+        for (let i = 0; i < 4; i++) {
+          sum += (await waveImage(page)).ink;
+          await page.waitForTimeout(250);
+        }
+        return sum / 4;
+      } finally {
+        await ctx.close();
+      }
+    };
+    const [low, high] = [await ink(1), await ink(4)];
+    console.log(`crest ink: 1 m ${low.toFixed(0)}, 4 m ${high.toFixed(0)}`);
+    expect(high).toBeGreaterThan(1.5 * low);
+  });
+
+  test("a primary swell from the W and a secondary from the S give two crest orientations; without the secondary, one", async ({ page, browser, baseURL }) => {
+    const { mock } = await openWithSwells(page, { primary: [2.5, 13, 270], secondary: [1.8, 10, 180] }, "secondary,primary");
+    const both = orientationPeaks((await waveImage(page)).hist);
+    console.log(`orientation peaks (W + S): ${both.join(", ")}`);
+    expect(both.some((o) => Math.abs(o - 90) <= 10), both.join(",")).toBe(true); // vertical: from the west
+    expect(both.some((o) => o <= 10 || o >= 170), both.join(",")).toBe(true); // horizontal: from the south
+    expect(mock.requests.some((r) => r.startsWith("swell2_dir@"))).toBe(true);
+    const ctx = await browser.newContext({ baseURL, viewport: { width: 1440, height: 900 } });
+    try {
+      const p2 = await ctx.newPage();
+      const { mock: m2 } = await openWithSwells(p2, { primary: [2.5, 13, 270] }, "primary");
+      const one = orientationPeaks((await waveImage(p2)).hist);
+      console.log(`orientation peaks (W only): ${one.join(", ")}`);
+      expect(one.every((o) => Math.abs(o - 90) <= 10), one.join(",")).toBe(true);
+      expect(one.length).toBeGreaterThan(0);
+      // The secondary swell is not in the index, so it is never requested (never made up).
+      expect(m2.requests.some((r) => r.startsWith("swell2"))).toBe(false);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("the wave-system chooser: wind sea alone, systems the run lacks disabled, combined sea", async ({ page }) => {
+    const { mock } = await openWithSwells(page, { primary: [2.5, 13, 250], windsea: [1.4, 6, 300] }, "primary");
+    await page.getByRole("button", { name: "Settings" }).click();
+    const chooser = page.getByTestId("wave-systems");
+    await expect(chooser).toBeVisible();
+    const secondary = chooser.getByRole("button", { name: /Secondary swell/ });
+    await expect(secondary).toBeDisabled();
+    await expect(secondary).toHaveAttribute("title", "Not available for this model run");
+    await expect(chooser).toContainText("Not available for this model run: Secondary swell.");
+    await chooser.getByRole("button", { name: /^Wind sea/ }).click();
+    await expect(wave(page)).toHaveAttribute("data-families", "windsea,primary");
+    await chooser.getByRole("button", { name: /^Primary swell/ }).click();
+    await expect(wave(page)).toHaveAttribute("data-families", "windsea");
+    await expect.poll(() => mock.requests.some((r) => r.startsWith("windsea_dir@"))).toBe(true);
+    await expect(chooser.getByRole("button", { name: /^Wind sea/ })).toHaveAttribute("aria-pressed", "true");
+    await shot(page, "desktop-1440x900-chooser-windsea");
+    await chooser.getByRole("button", { name: /^Combined sea/ }).click();
+    await expect(wave(page)).toHaveAttribute("data-families", "combined");
+    await page.keyboard.press("Escape");
+    expect(mock.requests.some((r) => r.startsWith("swell2"))).toBe(false);
+  });
+
+  test("without partitions the combined sea is drawn and the chooser is hidden", async ({ page }) => {
+    await openMapWithFields(page, { fields: UNIFORM_FLOW });
+    await expect(wave(page)).toHaveAttribute("data-families", "combined");
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByTestId("map-settings")).toBeVisible();
+    await expect(page.getByTestId("wave-systems")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Legend", exact: true }).click();
+    await expect(page.getByTestId("legend-crests")).toContainText("Combined sea (peak)");
+    await expect(page.getByTestId("legend-crests")).toContainText("One combined sea");
+  });
+
+  test("crests stay off land on the dark and the street basemap (land probes)", { tag: "@mobile" }, async ({ page }) => {
+    // Uniform SYNTHETIC swell everywhere, land included: only the coastline clip keeps it off land.
+    await openWithSwells(page, { primary: [3, 12, 250] }, "primary");
+    const probe = async (label: string) => {
+      await page.waitForTimeout(2000);
+      let ocean = 0;
+      for (let i = 0; i < 8; i++) {
+        expect(await waveAlphaNear(page, -25, 135), `${label}: central Australia`).toBe(0);
+        expect(await waveAlphaNear(page, 40, -100), `${label}: central United States`).toBe(0);
+        expect(await waveAlphaNear(page, 23, 10), `${label}: Sahara`).toBe(0);
+        ocean = Math.max(ocean, await waveAlphaNear(page, -45, -120, 40), await waveAlphaNear(page, -40, 60, 40));
+        await page.waitForTimeout(250);
+      }
+      expect(ocean, `${label}: open ocean`).toBeGreaterThan(0);
+    };
+    await probe("dark");
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByTestId("map-settings").getByRole("radio", { name: "Streets" }).click();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("canvas.map-basemap-canvas")).toHaveAttribute("data-land", "0");
+    await probe("streets");
+  });
+
+  test("crests stop at the coast: nothing 30 km inland of Perth at zoom 7, on both basemaps", async ({ browser, baseURL }) => {
+    // 31.99°S 116.07°E is 30 km east of the coast at Cottesloe (115.75°E).
+    const ctx = await browser.newContext({ baseURL, viewport: { width: 1440, height: 900 }, geolocation: { latitude: -31.99, longitude: 116.07 }, permissions: ["geolocation"] });
+    try {
+      const page = await ctx.newPage();
+      await openWithSwells(page, { primary: [3, 12, 250] }, "primary");
+      await page.getByRole("button", { name: "Show my location" }).click();
+      await expect(field(page)).toHaveAttribute("data-zoom", "7");
+      await expect(wave(page)).toHaveAttribute("data-view", /,32768$/);
+      for (const basemap of ["Dark", "Streets"]) {
+        if (basemap === "Streets") {
+          await page.getByRole("button", { name: "Settings" }).click();
+          await page.getByTestId("map-settings").getByRole("radio", { name: "Streets" }).click();
+          await page.keyboard.press("Escape");
+        }
+        await page.waitForTimeout(1500);
+        let offshore = 0;
+        for (let i = 0; i < 10; i++) {
+          expect(await waveAlphaNear(page, -31.99, 116.07, 4), `${basemap}: 30 km inland`).toBe(0);
+          offshore = Math.max(offshore, await waveAlphaNear(page, -31.99, 115.2, 40));
+          await page.waitForTimeout(250);
+        }
+        expect(offshore, `${basemap}: 50 km offshore`).toBeGreaterThan(0);
+        await shot(page, `perth-zoom7-${basemap.toLowerCase()}`);
+      }
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  test("the wind shows over land on the Wind layer; wave layers keep opaque land", async ({ page }) => {
+    await openMapWithFields(page, { fields: UNIFORM_FLOW });
+    const p = await pagePoint(page, 23, 10); // the Sahara
+    const grey = (px: Array<[number, number, number]>) => Math.max(...[0, 1, 2].map((ch) => Math.abs(median(px.map((q) => q[ch as 0 | 1 | 2])) - 0x2b)));
+    expect(grey(await pixels(page, p.x, p.y)), "opaque land on Wave Height").toBeLessThan(10);
+    await page.getByRole("radio", { name: "Wind Speed" }).click();
+    await expect(page.locator("canvas.map-basemap-canvas")).toHaveAttribute("data-land-alpha", "translucent");
+    await expect.poll(async () => grey(await pixels(page, p.x, p.y)), { message: "wind colour through the land" }).toBeGreaterThan(12);
+    await shot(page, "desktop-1440x900-wind-over-land");
+  });
+
+  test("the wind overlay on a wave layer downloads the wind and draws particles over the crests", async ({ page }) => {
+    const { mock, now } = await openWithSwells(page, { primary: [2.5, 13, 250], secondary: [1.5, 10, 190] }, "secondary,primary");
+    expect(requested(mock, "wind_u", now)).toBe(false);
+    await expect(page.locator("canvas.map-particle-canvas")).toHaveCount(0);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByTestId("map-settings").getByRole("switch", { name: /Wind on wave layers/ }).click();
+    await page.keyboard.press("Escape");
+    await expect.poll(() => requested(mock, "wind_u", now) && requested(mock, "wind_v", now)).toBe(true);
+    await expect(page.locator("canvas.map-particle-canvas")).toHaveAttribute("data-mode", "animated");
+    await expect(wave(page)).toHaveAttribute("data-mode", "animated");
+    await expect(field(page)).toHaveAttribute("data-layer", "hs");
+    await page.getByRole("button", { name: "Legend", exact: true }).click();
+    await expect(page.getByTestId("legend-wind")).toContainText("White streaks drift with the wind");
+    await expect(page.getByTestId("legend-crests")).toContainText("Primary swell");
+    await shot(page, "desktop-1440x900-wind-overlay");
+  });
+
+  test("the legend states units, source, model cycle, valid time, scales and the arrow convention", async ({ page }) => {
+    await openWithSwells(page, { primary: [2.5, 13, 250], secondary: [1.5, 10, 190] }, "secondary,primary");
+    await page.getByRole("button", { name: "Legend", exact: true }).click();
+    const legend = page.getByTestId("legend-drawer");
+    await expect(legend.getByTestId("legend-title")).toHaveText("Offshore wave height, Hs (ft)");
+    await expect(legend.getByTestId("legend-crests")).toContainText("Primary swell (solid)");
+    await expect(legend.getByTestId("legend-crests")).toContainText("Secondary swell (dashed)");
+    await expect(legend.getByTestId("legend-scales")).toHaveText(/^Crest spacing ×[\d,]+ at this zoom; time runs 4× faster than real\.$/);
+    await expect(legend.getByTestId("legend-crests")).toContainText("Stylised crests from the forecast model, not individual waves.");
+    await expect(legend.getByTestId("legend-convention")).toContainText("Arrows point where the wind or waves are going.");
+    await expect(legend.getByTestId("legend-source")).toContainText("Model cycle");
+    await expect(legend.getByTestId("legend-valid")).toContainText(/Valid .+ · [+-]?\d+ h \(forecast, not observed\)|analysis/);
+    // Units: mph is offered and shared with the spot charts through swell.windUnit.
+    await page.getByRole("radio", { name: "Wind Speed" }).click();
+    await expect(legend.getByTestId("legend-title")).toHaveText("Wind speed (km/h)");
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByTestId("map-settings").getByRole("radio", { name: "mph", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(legend.getByTestId("legend-title")).toHaveText("Wind speed (mph)");
+    expect(await page.evaluate(() => window.localStorage.getItem("swell.windUnit"))).toBe("mph");
+    await shot(page, "desktop-1440x900-legend-wind-mph");
+  });
+
+  test("the readout lists the wave systems under the cursor", async ({ page }) => {
+    await openWithSwells(page, { primary: [2.5, 13, 250], windsea: [1.2, 6, 300] }, "primary");
+    const p = await pagePoint(page, -50, -120);
+    await page.mouse.move(p.x, p.y);
+    const readout = page.getByTestId("map-readout");
+    // (directions are sent in 1.5° steps, so 250° arrives as 250.5°)
+    await expect(readout).toContainText(/Primary 8\.2 ft 13 s from WSW \(25[01]°\)/);
+    await expect(readout).toContainText(/Wind sea 3\.9 ft 6 s from WNW \(300°\)/);
+  });
+
+  test("a field served for another valid time is never shown: the map re-reads the index", async ({ page }) => {
+    // The SYNTHETIC server answers every request for hs with the next step's field.
+    let shifted = false;
+    const s = swells({ primary: [2.5, 13, 250] });
+    const mock = await mockFields(page, {
+      fields: s.fields,
+      variables: s.variables,
+      servedMeta: (variable, at) => (shifted && variable === "hs" ? { valid_time: new Date(Date.parse(at) + 3 * 3_600_000).toISOString() } : null),
+    });
+    await openMap(page);
+    await expect.poll(() => painted(page)).toBeGreaterThan(10_000);
+    const reads = mock.indexReads;
+    shifted = true;
+    const slider = page.getByRole("slider", { name: "Forecast time" });
+    await slider.focus();
+    await page.keyboard.press("End"); // a step not downloaded yet
+    const last = mock.validTimes[mock.validTimes.length - 1]!;
+    await expect.poll(() => requested(mock, "hs", last)).toBe(true);
+    await expect.poll(() => mock.indexReads, { message: "index re-read after the mismatch" }).toBeGreaterThan(reads);
+    await expect(field(page)).not.toHaveAttribute("data-at", last);
   });
 });
 
