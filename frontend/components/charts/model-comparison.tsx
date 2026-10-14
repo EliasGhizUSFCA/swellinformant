@@ -5,6 +5,8 @@ import { Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, 
 
 import { InfoPopover } from "@/components/info-popover";
 import { Disclosure } from "@/components/ui/disclosure";
+import { formatSpotDateTime } from "@/lib/format";
+import { localMidnights } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 import type { EnsemblePoint, ModelSeries } from "@/types/api";
 
@@ -65,9 +67,10 @@ export function ModelComparisonChart({ series, ensemble, tz }: { series: ModelSe
     }
   }
   const rows = [...byTime.values()].sort((a, b) => (a.t as number) - (b.t as number));
-  const dayTicks = rows
-    .map((r) => r.t as number)
-    .filter((t) => Number(new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false }).format(new Date(t))) % 24 === 0);
+  // Local midnights from the axis and the zone, not from the sample times: on a 3-hourly
+  // UTC grid most zones have no sample at local midnight (that left 42 of 50 spots without
+  // any axis label).
+  const dayTicks = rows.length ? localMidnights(rows[0]!.t as number, rows[rows.length - 1]!.t as number, tz) : [];
 
   return (
     <div data-testid="model-comparison">
@@ -95,7 +98,7 @@ export function ModelComparisonChart({ series, ensemble, tz }: { series: ModelSe
             <XAxis dataKey="t" type="number" scale="time" domain={["dataMin", "dataMax"]} ticks={dayTicks} tickFormatter={tickLabel(tz)} tick={axisStyle} />
             <YAxis tick={axisStyle} width={48} unit={` ${m.unit}`} />
             <Tooltip
-              labelFormatter={(t) => new Intl.DateTimeFormat("en-US", { timeZone: tz, dateStyle: "medium", timeStyle: "short" }).format(new Date(Number(t)))}
+              labelFormatter={(t) => formatSpotDateTime(new Date(Number(t)).toISOString(), tz, { zone: true })}
               formatter={(v, name) => [Array.isArray(v) ? v.map((x) => Number(x).toFixed(m.digits)).join("–") : Number(v).toFixed(m.digits) + " " + m.unit, name]}
             />
             <Legend wrapperStyle={{ fontSize: 11 }} />

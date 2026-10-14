@@ -22,6 +22,7 @@ test("spots catalogue, spot page and map are public", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Banzai Pipeline" })).toBeVisible();
   await expect(page.getByText("Spot characteristics")).toBeVisible();
   await expect(page.getByTestId("quality-chart")).toBeVisible();
+  await expect(page.getByTestId("timeline-scroller")).toHaveAttribute("role", "slider");
   await page.goto("/map");
   await expect(page.getByLabel("Map of monitored surf spots")).toBeVisible();
 });
