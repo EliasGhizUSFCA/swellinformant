@@ -50,9 +50,11 @@ export const LATTICE_PX = 8;
 /** Largest disagreement of the four grid corners of a direction before the node is invalid. */
 export const MAX_CORNER_SPREAD_DEG = 60;
 /** Crest tracing step, px. */
-export const TRACE_STEP_PX = 6;
+export const TRACE_STEP_PX = 8;
 /** A crest stops where it would turn more than this in one step. */
 export const MAX_TURN_DEG = 25;
+/** A traced vertex is kept once the line has turned this much since the last kept one. */
+export const SIMPLIFY_DEG = 1.5;
 /** Animation frame interval (30 fps cap: crests move a few px per second). */
 export const FRAME_INTERVAL_MS = 1000 / 30;
 /** Share of the remaining vertex budget each system may use, top system first. */
@@ -87,6 +89,9 @@ const WIDTH_LEVELS = [0.75, 1.25, 1.75, 2.25, 2.75];
 
 const RAD = Math.PI / 180;
 const COS_MAX_TURN = Math.cos(MAX_TURN_DEG * RAD);
+const COS_SIMPLIFY = Math.cos(SIMPLIFY_DEG * RAD);
+/** A trace step that turned less than this lets the next step double (straight field). */
+const COS_STRAIGHT = Math.cos(0.25 * RAD);
 
 /** Per-system lattice: values at nodes (x = (gx0 + i) * LATTICE_PX - originX, likewise y). */
 export interface FamilyLattice {
@@ -101,6 +106,8 @@ export interface FamilyLattice {
   valid: Uint8Array;
   validCount: number;
   medianSpacing: number;
+  /** Vertices per drawn crest on the last frame (0 = not measured yet), for the budget. */
+  perCrest: number;
 }
 
 export interface Lattice {
@@ -151,6 +158,7 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
       valid: new Uint8Array(n),
       validCount: 0,
       medianSpacing: NaN,
+      perCrest: 0,
     };
     const spacings: number[] = [];
     for (let j = 0; j < ny; j++) {
@@ -300,6 +308,7 @@ const smoothstep = (x: number) => {
 
 /** Stroke batches: one per (system, width, opacity, trough) key. */
 type StrokeKind = "crest" | "glow" | "trough";
+const KIND_INDEX: Record<StrokeKind, number> = { crest: 0, glow: 1, trough: 2 };
 
 interface Batch {
   /** Crest line, soft glow under it (solid systems) or the dark trough line behind it. */
@@ -309,10 +318,19 @@ interface Batch {
   sys: number;
   width: number;
   alpha: number;
-  /** Polylines: start offsets into `pts` (pairs), each ended by the next start. */
+  /** Polylines: start offsets into `pts` (pairs), each ended by the next start; `ns` and `np`
+   * are the used lengths (the arrays are reused from frame to frame and only grow). */
   starts: number[];
+  ns: number;
   pts: number[];
+  np: number;
+  /** Frame in which the batch was last used. */
+  frame: number;
 }
+
+/** Stroke batches reused across frames (fewer allocations per frame, less garbage collection). */
+const batchPool = new Map<number, Batch>();
+let poolFrame = 0;
 
 export interface FrameStats {
   crests: number;
@@ -397,56 +415,114 @@ function computePackets(l: Lattice, f: FamilyLattice, view: PixelView, scale: nu
   return out;
 }
 
+/** Direction-only lattice sample (the tracer needs nothing else): the unit travel vector. */
+function sampleDir(l: Lattice, f: FamilyLattice, x: number, y: number): boolean {
+  const fx = (x - l.x0) / LATTICE_PX;
+  const fy = (y - l.y0) / LATTICE_PX;
+  if (!(fx >= 0 && fy >= 0 && fx < l.nx - 1 && fy < l.ny - 1)) return false;
+  const i = fx | 0;
+  const j = fy | 0;
+  const a = j * l.nx + i;
+  const b = a + 1;
+  const c = a + l.nx;
+  const d = c + 1;
+  const v = f.valid;
+  if (!(v[a] && v[b] && v[c] && v[d])) return false;
+  const tx = fx - i;
+  const ty = fy - j;
+  const wa = (1 - tx) * (1 - ty);
+  const wb = tx * (1 - ty);
+  const wc = (1 - tx) * ty;
+  const wd = tx * ty;
+  const px = f.px[a]! * wa + f.px[b]! * wb + f.px[c]! * wc + f.px[d]! * wd;
+  const py = f.py[a]! * wa + f.py[b]! * wb + f.py[c]! * wc + f.py[d]! * wd;
+  const m = Math.hypot(px, py);
+  if (!(m > 0.5)) return false;
+  sample.px = px / m;
+  sample.py = py / m;
+  return true;
+}
+
+/** One traced half crest: vertex coordinates and, per vertex after the first, the taper part
+ * (index into TAPER) of the segment that ends there. Reused between calls. */
+const half = { x: [] as number[], y: [] as number[], part: [] as number[], n: 0 };
+
 /**
- * Traces a crest from (cx, cy) along the local crest tangent for `half` px each way, appending
- * the two halves (each starting at the centre, so dash patterns stay anchored on the crest)
- * to `emit`. Returns the number of vertices.
+ * Traces half a crest from (cx, cy) along the local crest tangent (sign = which way) for `len`
+ * px into `half`, in TRACE_STEP_PX midpoint steps. A vertex is kept only where the line has
+ * turned by more than SIMPLIFY_DEG since the last kept one, where the taper part changes
+ * (`tapered`) and at the end, so straight crests cost two vertices. Returns the vertex count
+ * (0 or at least 2).
  */
-function traceCrest(l: Lattice, f: FamilyLattice, cx: number, cy: number, half: number, emit: (pts: number[], fromIndex: number) => void): number {
-  if (!sampleLattice(l, f, cx, cy)) return 0;
-  const tx0 = -sample.py;
-  const ty0 = sample.px;
-  let vertices = 0;
-  for (const sign of [1, -1]) {
-    const pts = [cx, cy];
-    let x = cx;
-    let y = cy;
-    let tx = tx0 * sign;
-    let ty = ty0 * sign;
-    let travelled = 0;
-    while (travelled < half) {
-      const h = Math.min(TRACE_STEP_PX, half - travelled);
-      // Midpoint (RK2) step along the tangent field, keeping the orientation continuous.
-      if (!sampleLattice(l, f, x + (tx * h) / 2, y + (ty * h) / 2)) break;
-      let mx = -sample.py;
-      let my = sample.px;
-      if (mx * tx + my * ty < 0) {
-        mx = -mx;
-        my = -my;
-      }
-      const nx = x + mx * h;
-      const ny = y + my * h;
-      if (!sampleLattice(l, f, nx, ny)) break;
-      let ex = -sample.py;
-      let ey = sample.px;
-      if (ex * tx + ey * ty < 0) {
-        ex = -ex;
-        ey = -ey;
-      }
-      if (ex * tx + ey * ty < COS_MAX_TURN) break;
-      x = nx;
-      y = ny;
-      tx = ex;
-      ty = ey;
-      travelled += h;
-      pts.push(x, y);
+function traceHalf(l: Lattice, f: FamilyLattice, cx: number, cy: number, sign: number, len: number, tapered: boolean): number {
+  half.n = 0;
+  if (!sampleDir(l, f, cx, cy)) return 0;
+  let tx = -sample.py * sign;
+  let ty = sample.px * sign;
+  const keep = (x: number, y: number, part: number) => {
+    half.x[half.n] = x;
+    half.y[half.n] = y;
+    half.part[half.n] = part;
+    half.n++;
+  };
+  keep(cx, cy, 0);
+  let x = cx;
+  let y = cy;
+  let kx = tx;
+  let ky = ty;
+  let travelled = 0;
+  let part = 0;
+  let pending = false;
+  let step = TRACE_STEP_PX;
+  while (travelled < len - 1e-6) {
+    // Never step over the end of a taper part, so its vertex lands on the boundary.
+    const boundary = tapered && part < TAPER.length - 1 ? TAPER[part]![0] * len : len;
+    const h = Math.min(step, boundary - travelled, len - travelled);
+    // Midpoint (RK2) step along the tangent field, keeping the orientation continuous.
+    if (!sampleDir(l, f, x + (tx * h) / 2, y + (ty * h) / 2)) break;
+    let mx = -sample.py;
+    let my = sample.px;
+    if (mx * tx + my * ty < 0) {
+      mx = -mx;
+      my = -my;
     }
-    if (pts.length >= 4) {
-      emit(pts, 0);
-      vertices += pts.length / 2;
+    const nx = x + mx * h;
+    const ny = y + my * h;
+    if (!sampleDir(l, f, nx, ny)) break;
+    let ex = -sample.py;
+    let ey = sample.px;
+    if (ex * tx + ey * ty < 0) {
+      ex = -ex;
+      ey = -ey;
+    }
+    const turn = ex * tx + ey * ty;
+    if (turn < COS_MAX_TURN) break;
+    // Where the field is straight, longer steps (up to 4 x) trace the same line for less.
+    step = turn > COS_STRAIGHT ? Math.min(step * 2, 4 * TRACE_STEP_PX) : TRACE_STEP_PX;
+    x = nx;
+    y = ny;
+    tx = ex;
+    ty = ey;
+    travelled += h;
+    const next = tapered ? taperPart(travelled / len) : 0;
+    if (next !== part || tx * kx + ty * ky < COS_SIMPLIFY || travelled >= len - 1e-6) {
+      keep(x, y, part);
+      kx = tx;
+      ky = ty;
+      part = next;
+      pending = false;
+    } else {
+      pending = true;
     }
   }
-  return vertices;
+  if (pending) keep(x, y, part); // stopped early: end where the trace ended
+  return half.n >= 2 ? half.n : 0;
+}
+
+/** Taper part (index into TAPER) at a share of the half crest's length. */
+function taperPart(share: number): number {
+  for (let i = 0; i < TAPER.length - 1; i++) if (share < TAPER[i]![0] - 1e-9) return i;
+  return TAPER.length - 1;
 }
 
 export type WaveMode = "animated" | "static" | "off";
@@ -466,24 +542,36 @@ export interface DrawOptions {
  * drew. Pure apart from the canvas calls, so tests can record them.
  */
 export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: Lattice, o: DrawOptions): FrameStats {
-  const batches = new Map<string, Batch>();
+  const frame = ++poolFrame;
+  const used: Batch[] = [];
   const stats: FrameStats = { crests: 0, vertices: 0, strokes: 0, packets: 0, arrows: 0, families: [] };
   const batch = (kind: StrokeKind, style: FamilyStyle, sys: number, width: number, alpha: number): Batch => {
     const levels = kind === "glow" ? GLOW_LEVELS : WIDTH_LEVELS;
     const wl = nearestLevel(levels, width);
     const al = nearestLevel(ALPHA_LEVELS, alpha);
-    const key = `${kind}|${sys}|${wl}|${al}`;
-    let b = batches.get(key);
+    const key = ((KIND_INDEX[kind] * 16 + sys) * 16 + wl) * 16 + al;
+    let b = batchPool.get(key);
     if (!b) {
-      b = { kind, style, sys, width: levels[wl]!, alpha: ALPHA_LEVELS[al]!, starts: [], pts: [] };
-      batches.set(key, b);
+      b = { kind, style, sys, width: levels[wl]!, alpha: ALPHA_LEVELS[al]!, starts: [], ns: 0, pts: [], np: 0, frame: 0 };
+      batchPool.set(key, b);
+    }
+    if (b.frame !== frame) {
+      b.frame = frame;
+      b.style = style; // the system at this index can differ from the last frame's
+      b.ns = 0;
+      b.np = 0;
+      used.push(b);
     }
     return b;
   };
-  const push = (b: Batch, pts: number[]) => {
-    b.starts.push(b.pts.length);
-    for (const v of pts) b.pts.push(v);
-    stats.vertices += pts.length / 2;
+  /** Appends vertices first..last of `half` to a batch as one polyline. */
+  const push = (b: Batch, first: number, last: number) => {
+    b.starts[b.ns++] = b.np;
+    for (let i = first; i <= last; i++) {
+      b.pts[b.np++] = half.x[i]!;
+      b.pts[b.np++] = half.y[i]!;
+    }
+    stats.vertices += last - first + 1;
   };
   const arrows: number[] = [];
   // The budget goes to the top system first (the primary swell is drawn last, on top, but is
@@ -496,15 +584,15 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     const left = o.budget - stats.vertices;
     const cap = stats.vertices + (rank === order.length - 1 ? left : left * BUDGET_SHARE);
     const plans = packetsFor(l, f, view, o.cellScale ?? 1).map((p) => ({ p, crests: packetCrests(p, style.crests, o.t, o.still) }));
-    // Upper bound of the vertices of a packet: per crest two traced halves, split in three
-    // (two shared points each), the glow over the same points and the shorter trough.
-    const cost = ({ p, crests }: (typeof plans)[number]) => {
-      const steps = Math.ceil((style.halfLength * p.spacing) / TRACE_STEP_PX);
-      const perCrest = 2 * (steps + 3) * (style.glow ? 2 : 1) + (style.glow ? 2 * (Math.ceil(steps * TROUGH_LENGTH) + 1) : 0);
-      return crests.length * perCrest;
-    };
+    // Vertices per crest: measured on the previous frame of this lattice (straight crests
+    // need few), at first an upper bound (every trace step kept, glow and trough included).
+    const steps = (p: Packet) => Math.ceil((style.halfLength * p.spacing) / TRACE_STEP_PX);
+    const bound = (p: Packet) => 2 * (steps(p) + 3) + (style.glow ? 2 * (Math.ceil(steps(p) / 2) + 1) + 2 * (Math.ceil(steps(p) * TROUGH_LENGTH) + 1) : 0);
+    const cost = ({ p, crests }: (typeof plans)[number]) => crests.length * (f.perCrest > 0 ? f.perCrest : bound(p));
     // Over budget: leave out an even, random share of the packets (never a whole region).
     const keep = Math.min(1, (cap - stats.vertices) / Math.max(1, plans.reduce((a, pl) => a + cost(pl), 0)));
+    const before = stats.vertices;
+    const crestsBefore = stats.crests;
     for (const plan of plans) {
       const { p, crests } = plan;
       if (keep < 1 && p.keep >= keep) continue;
@@ -519,25 +607,33 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
         const hs = sample.hs;
         const alpha = crestAlpha(hs) * w;
         const width = lineWidth(hs);
-        const v = traceCrest(l, f, cx, cy, style.halfLength * p.spacing, (pts) => {
+        let drawn = false;
+        for (const sign of [1, -1]) {
+          // Each half starts at the crest centre, so dash patterns stay anchored on the crest.
+          const n = traceHalf(l, f, cx, cy, sign, style.halfLength * p.spacing, true);
+          if (!n) continue;
+          drawn = true;
           // Full opacity near the packet's ray, fading toward the crest ends (no hard tips).
-          const n = pts.length / 2;
           let from = 0;
-          for (const [end, k] of TAPER) {
-            const to = Math.min(n - 1, Math.round((n - 1) * end));
-            if (to <= from) continue;
-            const part = pts.slice(from * 2, to * 2 + 2);
-            push(batch("crest", style, sys, width, alpha * k), part);
-            if (style.glow) push(batch("glow", style, sys, width * GLOW_WIDTH, alpha * k * GLOW_ALPHA), part);
-            from = to;
+          for (let i = 1; i <= n; i++) {
+            if (i < n && half.part[i] === half.part[from + 1]) continue;
+            const k = TAPER[half.part[from + 1]!]![1];
+            const last = i === n ? n - 1 : i - 1;
+            push(batch("crest", style, sys, width, alpha * k), from, last);
+            // The glow follows the bright inner part only.
+            if (style.glow && half.part[from + 1] === 0) push(batch("glow", style, sys, width * GLOW_WIDTH, alpha * GLOW_ALPHA), from, last);
+            from = last;
           }
-        });
-        if (!v) continue;
+        }
+        if (!drawn) continue;
         stats.crests++;
         if (style.glow) {
           // The trough behind the crest: a faint dark line half a spacing back.
           const tb = batch("trough", TROUGH_STYLE, sys, width * TROUGH_WIDTH, alpha * TROUGH_ALPHA);
-          traceCrest(l, f, cx - (p.px * p.spacing) / 2, cy - (p.py * p.spacing) / 2, style.halfLength * p.spacing * TROUGH_LENGTH, (pts) => push(tb, pts));
+          for (const sign of [1, -1]) {
+            const n = traceHalf(l, f, cx - (p.px * p.spacing) / 2, cy - (p.py * p.spacing) / 2, sign, style.halfLength * p.spacing * TROUGH_LENGTH, false);
+            if (n) push(tb, 0, n - 1);
+          }
         }
         if (u > leadU) {
           leadU = u;
@@ -550,18 +646,20 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
         stats.arrows++;
       }
     }
+    const n = stats.crests - crestsBefore;
+    if (n >= 20) f.perCrest = (stats.vertices - before) / n;
   });
 
   ctx.lineJoin = "round";
   // Per system in drawing order (primary last, on top): glow, trough, then the crest lines.
   const rankOf = (b: Batch) => (b.kind === "glow" ? 0 : b.kind === "trough" ? 1 : 2);
-  const ordered = [...batches.values()].sort((a, b) => a.sys - b.sys || rankOf(a) - rankOf(b));
+  const ordered = used.sort((a, b) => a.sys - b.sys || rankOf(a) - rankOf(b));
   for (const b of ordered) {
-    if (!b.starts.length) continue;
+    if (!b.ns) continue;
     ctx.beginPath();
-    for (let s = 0; s < b.starts.length; s++) {
+    for (let s = 0; s < b.ns; s++) {
       const from = b.starts[s]!;
-      const to = s + 1 < b.starts.length ? b.starts[s + 1]! : b.pts.length;
+      const to = s + 1 < b.ns ? b.starts[s + 1]! : b.np;
       ctx.moveTo(b.pts[from]!, b.pts[from + 1]!);
       for (let k = from + 2; k < to; k += 2) ctx.lineTo(b.pts[k]!, b.pts[k + 1]!);
     }
@@ -572,6 +670,8 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     ctx.stroke();
     stats.strokes++;
   }
+  // Batches unused for a while give their memory back.
+  for (const [key, b] of batchPool) if (frame - b.frame > 300) batchPool.delete(key);
   if (arrows.length) {
     ctx.setLineDash([]);
     ctx.lineCap = "round";
@@ -670,6 +770,7 @@ export class WaveAnimator {
   private land: MercPath[] | null = null;
   private lattice: Lattice | null = null;
   private mask: HTMLCanvasElement | null = null;
+  private maskOn = true;
   private view: PixelView | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
   private mode: WaveMode = "off";
@@ -700,6 +801,18 @@ export class WaveAnimator {
     this.rebuild();
   }
 
+  /**
+   * Whether every frame is composited with the ocean mask. Needed over street tiles; on the
+   * dark basemap the opaque land drawn above the crests already clips them at the coast (and
+   * land lattice nodes keep them off land in the canvas), so the full-canvas composite, about
+   * 4 ms a frame with software rendering, is skipped there.
+   */
+  setOceanMask(on: boolean): void {
+    if (on === this.maskOn) return;
+    this.maskOn = on;
+    this.rebuild();
+  }
+
   private rebuild(): void {
     if (!this.view || !this.ctx || this.mode === "off") return;
     this.build(this.view);
@@ -710,7 +823,7 @@ export class WaveAnimator {
     const grid = buildLattice(view, [], null);
     const land = this.land ? landAtNodes(view, grid, this.land) : null;
     this.lattice = buildLattice(view, this.families, land);
-    this.mask = oceanMask(view, this.lattice, this.land);
+    this.mask = this.maskOn ? oceanMask(view, this.lattice, this.land) : null;
   }
 
   /** Starts on a freshly reset canvas: animated, one still frame, or nothing. */

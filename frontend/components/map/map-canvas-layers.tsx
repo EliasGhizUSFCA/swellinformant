@@ -292,7 +292,7 @@ function ParticleCanvas({ flow, mode, overlay }: { flow: Flow | null; mode: Part
   return null;
 }
 
-function WaveCanvas({ families, mode, land }: { families: WaveFamilyGrids[]; mode: WaveMode; land: BasemapGeometry["land"] | null }) {
+function WaveCanvas({ families, mode, land, oceanMask }: { families: WaveFamilyGrids[]; mode: WaveMode; land: BasemapGeometry["land"] | null; oceanMask: boolean }) {
   const map = useMap();
   const layerRef = useRef<CanvasLayer | null>(null);
   const [animator] = useState(() => new WaveAnimator());
@@ -354,6 +354,11 @@ function WaveCanvas({ families, mode, land }: { families: WaveFamilyGrids[]; mod
   useEffect(() => {
     animator.setLand(land);
   }, [animator, land]);
+
+  useEffect(() => {
+    animator.setOceanMask(oceanMask);
+    layerRef.current?.canvas?.setAttribute("data-ocean-mask", oceanMask ? "1" : "0");
+  }, [animator, oceanMask]);
 
   // New fields keep the packets and the clock: the lattice is rebuilt for the same view.
   useEffect(() => {
@@ -497,7 +502,7 @@ export function MapDataLayers(props: MapDataLayersProps) {
         layer={layer}
         clipLand={basemap === "streets" && layer !== "wind" ? land : null}
       />
-      {layer !== "wind" && <WaveCanvas families={families} mode={waveMode} land={land} />}
+      {layer !== "wind" && <WaveCanvas families={families} mode={waveMode} land={land} oceanMask={basemap !== "dark"} />}
       {windParticles && <ParticleCanvas flow={flow} mode={particles} overlay={layer !== "wind"} />}
       <BasemapCanvas
         vector={basemap === "dark"}
