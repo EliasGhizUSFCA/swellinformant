@@ -136,10 +136,12 @@ def test_archive_rows_store_the_confidence_digest(db: Session, codes: list[str])
         )
     ).one()
     assert float(digest) < 0.3 * float(full)  # the reason sentences are not archived
-    # Measured 446 B on this fixture (166 B digest + about 280 B of fixed columns) and 499 B
-    # on the real 2026-10-11 blend (1,506 B before). The audit's estimate of < 400 B would
-    # need dropping the disagreement values the digest keeps for re-calibration.
-    assert float(row_bytes) < 500
+    # The row with the full inputs would be row_bytes - digest + full. Measured on the real
+    # 2026-10-11 blend: 562 B instead of 1,506 B (0.37); about 508 B on this fixture. The
+    # audit's estimate of < 400 B would need dropping the disagreement values and classes
+    # the digest keeps (about 280 B of every row are fixed columns).
+    full_row = float(row_bytes) - float(digest) + float(full)
+    assert float(row_bytes) < 0.5 * full_row, (row_bytes, full_row)
 
 
 def test_digest_keeps_the_rules_and_inputs_a_recalibration_needs() -> None:
@@ -158,13 +160,14 @@ def test_digest_keeps_the_rules_and_inputs_a_recalibration_needs() -> None:
     }
     assert confidence_digest(inputs) == {
         "digest": 1,
+        "class": "low",
+        "local": {"assessment_id": 37},
         "caps": ["low:hs_strong_disagree", "downgrade:spread_large"],
         "hs_lr": 1.1,
         "dir_d": 58.0,
         "tp_d": 1.0,
         "spread": 0.02,
         "fam": 2,
-        "assess": 37,
     }
     assert confidence_digest(None) is None
 

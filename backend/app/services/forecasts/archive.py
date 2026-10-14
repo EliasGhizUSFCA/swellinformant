@@ -20,7 +20,7 @@ re-calibrating the rules against observations needs. Dropped are the explanatory
 and the reason sentences (they follow from the rules and the method version), and the
 per-variable research classes (they follow from the research assessment id). Measured on
 the 3,950 archive rows of the real 2026-10-11 blend (``swell_live2``): the inputs take
-1,222 B of a 1,506 B row, the digest 214 B, so a row is 499 B (docs/operations.md).
+1,222 B of a 1,506 B row, the digest 278 B, so a row is 562 B (docs/operations.md).
 """
 
 from __future__ import annotations
@@ -60,13 +60,14 @@ DIGEST_VERSION = 1
 def confidence_digest(inputs: dict[str, Any] | None) -> dict[str, Any] | None:
     """The archived digest of a prediction's ``confidence_inputs`` (see the module docstring).
 
+    Kept under the full inputs' own names: ``class`` and ``local`` (its ``class`` and
+    ``assessment_id``), so a reader of the full inputs reads these from a digest too.
     ``caps``: every rule except ``note:`` ones (``cap:`` dropped from the name, e.g.
     ``low:hs_strong_disagree``; ``downgrade:...`` kept whole). Numbers: the between-model
     disagreement (``hs_lr`` log ratio of Hs, ``dir_d`` deg, ``tp_d`` s, ``wind_d`` km/h),
-    the ensemble's relative Hs spread (``spread``), the independent family count (``fam``),
-    the run-to-run change (``run_change``) and the research assessment id (``assess``).
-    ``stale``, ``missing`` and ``wind_dispute`` appear only when set. Absent values are left
-    out, never stored as 0. None stays None.
+    the ensemble's relative Hs spread (``spread``), the independent family count (``fam``)
+    and the run-to-run change (``run_change``). ``stale``, ``missing`` and ``wind_dispute``
+    appear only when set. Absent values are left out, never stored as 0. None stays None.
     """
     if not inputs:
         return inputs
@@ -74,8 +75,11 @@ def confidence_digest(inputs: dict[str, Any] | None) -> dict[str, Any] | None:
     ensemble = inputs.get("ensemble") or {}
     local = inputs.get("local") or {}
     rules = [str(r) for r in inputs.get("rules") or []]
+    local_digest = {k: v for k in ("class", "assessment_id") if (v := local.get(k)) is not None}
     digest: dict[str, Any] = {
         "digest": DIGEST_VERSION,
+        "class": inputs.get("class"),
+        "local": local_digest or None,
         "caps": [r.removeprefix("cap:") for r in rules if not r.startswith("note:")],
         "hs_lr": disagreement.get("hs_log_ratio"),
         "dir_d": disagreement.get("dir_diff_deg"),
@@ -84,7 +88,6 @@ def confidence_digest(inputs: dict[str, Any] | None) -> dict[str, Any] | None:
         "spread": ensemble.get("rel_spread"),
         "fam": inputs.get("independent_families"),
         "run_change": inputs.get("run_change_ratio"),
-        "assess": local.get("assessment_id"),
         "stale": inputs.get("stale") or None,
         "missing": inputs.get("missing") or None,
         "wind_dispute": True if inputs.get("wind_dispute") else None,
