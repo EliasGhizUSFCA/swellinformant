@@ -33,7 +33,9 @@ case "$1" in
     ;;
   worker)
     wait_for
-    exec celery -A app.workers.celery_app worker --loglevel="${LOG_LEVEL:-INFO}" --concurrency="${WORKER_CONCURRENCY:-2}"
+    # WORKER_QUEUES: "celery" (emails, alerts, matching) and "bulk" (data downloads); a
+    # worker that consumes only one of them needs a second worker for the other.
+    exec celery -A app.workers.celery_app worker --loglevel="${LOG_LEVEL:-INFO}" --concurrency="${WORKER_CONCURRENCY:-2}" --queues="${WORKER_QUEUES:-celery,bulk}"
     ;;
   beat)
     wait_for

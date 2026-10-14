@@ -2,7 +2,14 @@
 
 One acquisition per (source, upstream model run): the run is identified by ``run_key``
 and stored once; re-running the job for an already ingested run is a no-op. Failed or
-interrupted runs (worker crash) are retried on the next schedule.
+interrupted runs (worker crash) are retried on the next schedule, and transient failures
+(timeouts, 5xx, a full minute or hour call budget, a run still being published) are marked
+``retryable`` so the Celery task retries within minutes (app.workers.tasks).
+
+Providers run one after another. Each run records its own start time, what the fetch cost
+(``details["stats"]``: bytes, HTTP responses, statuses, weighted calls) and every model
+run behind its data (``details["model_runs"]``). Any exception of one provider ends that
+provider's run FAILED with a message, and the next provider still runs.
 
 The map's global ocean-layer fields (``map_fields``, docs/map-layers.md) are stored with
 the run they were read with (``FetchResult.fields``), or by :func:`acquire_map_fields`
@@ -13,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -24,14 +31,21 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
+from app.core.logging import redact
 from app.models import ForecastRun, ForecastSource, SurfSpot, WaveForecast
 from app.models.enums import ForecastRunStatus
 from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES, MapField
-from app.services.forecasts.base import FORECAST_FIELDS, ForecastProvider, RunInfo, SpotPoint
+from app.services.forecasts.base import (
+    FORECAST_FIELDS,
+    FetchResult,
+    ForecastProvider,
+    RunInfo,
+    SpotPoint,
+)
 from app.services.forecasts.demo import DemoForecastProvider, SwellOverride
 from app.services.forecasts.fields import EncodedField, summarise
 from app.services.forecasts.registry import build_provider
-from app.services.http import ProviderError
+from app.services.http import ProviderError, RunNotServedError
 from app.services.maintenance import prune_map_fields
 from app.services.surf_quality.models import SpotParams
 
@@ -57,6 +71,10 @@ class AcquisitionOutcome:
     spot_errors: int = 0
     message: str = ""
     errors: dict[str, str] = field(default_factory=dict)
+    # A transient failure (or a run not served yet): the job should retry, after
+    # ``retry_after_s`` when the provider said how long to wait.
+    retryable: bool = False
+    retry_after_s: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -67,7 +85,70 @@ class AcquisitionOutcome:
             "records": self.records,
             "spot_errors": self.spot_errors,
             "message": self.message,
+            "retryable": self.retryable,
+            "retry_after_s": self.retry_after_s,
         }
+
+
+def _error_text(exc: BaseException) -> str:
+    """A stored, logged error message: redacted and bounded."""
+    text = str(exc) if isinstance(exc, ProviderError) else f"{type(exc).__name__}: {exc}"
+    return redact(text)[:2000]
+
+
+def _failure(
+    source_code: str, run_key: str | None, exc: BaseException, run_id: int | None = None
+) -> AcquisitionOutcome:
+    transient = isinstance(exc, ProviderError) and exc.transient
+    return AcquisitionOutcome(
+        source_code,
+        run_key,
+        "failed",
+        run_id,
+        message=_error_text(exc),
+        retryable=transient,
+        retry_after_s=getattr(exc, "retry_after_s", None) if transient else None,
+    )
+
+
+def model_runs_detail(info: RunInfo, provider: ForecastProvider) -> list[dict[str, Any]]:
+    """``run.details["model_runs"]``: every model run behind the data.
+
+    Providers that do not list them (the direct GRIB ingesters, demo) have one wave and
+    one atmosphere run, named after the source's models.
+    """
+    if info.model_runs:
+        return [
+            {
+                "model": r.model,
+                "init_time": r.init_time.isoformat(),
+                "available_at": r.available_at.isoformat() if r.available_at else None,
+            }
+            for r in info.model_runs
+        ]
+    source = provider.source_info()
+    out = []
+    for model, when in (
+        (source.wave_model, info.wave_model_run_at),
+        (source.atmosphere_model, info.atmosphere_model_run_at),
+    ):
+        if model and when is not None:
+            out.append({"model": model, "init_time": when.isoformat(), "available_at": None})
+    return out
+
+
+def fetch_stats_detail(result: FetchResult, provider: object) -> dict[str, Any] | None:
+    """``run.details["stats"]``: the provider's FetchStats, or what it exposes otherwise
+    (bytes from ``last_bytes_downloaded``; None when the provider does not say)."""
+    if result.stats is not None:
+        return asdict(result.stats)
+    downloaded = getattr(provider, "last_bytes_downloaded", None)
+    return {
+        "bytes_downloaded": int(downloaded) if isinstance(downloaded, int) else None,
+        "requests": result.request_count,
+        "http_status_counts": {},
+        "weighted_calls": None,
+    }
 
 
 def ensure_source(db: Session, provider: ForecastProvider, priority: int = 100) -> ForecastSource:
@@ -213,14 +294,21 @@ def acquire_from_provider(
     extra_details: dict[str, Any] | None = None,
     priority: int = 100,
 ) -> AcquisitionOutcome:
+    """Fetch and store one provider's current run (``now`` selects the model cycle).
+
+    Never raises for a provider problem: every exception ends the attempt with a
+    "failed" outcome (and a FAILED run once one was recorded), marked ``retryable`` when
+    the failure was transient. A run the provider does not serve unmixed yet (Open-Meteo
+    while a new run is published) is "skipped" without recording a run.
+    """
     now = now or utcnow()
     source = ensure_source(db, provider, priority)
     db.commit()
     try:
         info = run_info or provider.current_run(now)
-    except ProviderError as exc:
-        logger.error("Could not determine current run for %s: %s", source.code, exc)
-        return AcquisitionOutcome(source.code, None, "failed", message=str(exc))
+    except Exception as exc:  # provider errors and bugs alike end only this provider
+        logger.error("Could not determine current run for %s: %s", source.code, _error_text(exc))
+        return _failure(source.code, None, exc)
 
     run = db.scalar(
         select(ForecastRun).where(
@@ -232,36 +320,70 @@ def acquire_from_provider(
             return AcquisitionOutcome(
                 source.code, info.run_key, "skipped", run.id, message="run already ingested"
             )
-        if run.status == ForecastRunStatus.RUNNING and now - run.started_at < STUCK_RUN_AFTER:
+        # The real clock: the shared ``now`` of acquire_all can be minutes old by now.
+        if run.status == ForecastRunStatus.RUNNING and utcnow() - run.started_at < STUCK_RUN_AFTER:
             return AcquisitionOutcome(
                 source.code, info.run_key, "skipped", run.id, message="run in progress"
             )
+    servable = getattr(provider, "ensure_servable", None)
+    if run_info is None and callable(servable):
+        try:
+            servable(info)
+        except RunNotServedError as exc:
+            logger.info("%s run %s not served yet: %s", source.code, info.run_key, exc)
+            return AcquisitionOutcome(
+                source.code,
+                info.run_key,
+                "skipped",
+                run.id if run else None,
+                message=_error_text(exc),
+                retryable=exc.retry_after_s is not None,
+                retry_after_s=exc.retry_after_s,
+            )
+        except Exception as exc:
+            logger.error("%s run %s cannot be read: %s", source.code, info.run_key, exc)
+            return _failure(source.code, info.run_key, exc, run.id if run else None)
     if run is None:
         run = ForecastRun(source_id=source.id, run_key=info.run_key, details={})
         db.add(run)
     run.issued_at = info.issued_at
     run.wave_model_run_at = info.wave_model_run_at
     run.atmosphere_model_run_at = info.atmosphere_model_run_at
-    run.started_at = now
+    run.started_at = utcnow()  # this provider's own start (providers run one by one)
     run.completed_at = None
     run.status = ForecastRunStatus.RUNNING
     run.error_message = None
     run.predictions_computed_at = None
-    run.details = {"metadata_source": info.metadata_source, **(extra_details or {})}
+    run.details = {
+        "metadata_source": info.metadata_source,
+        "model_runs": model_runs_detail(info, provider),
+        **(extra_details or {}),
+    }
     db.commit()
+    run_id = run.id
 
     points = spot_points(db)
     try:
         result = provider.fetch(points, info)
-    except ProviderError as exc:
-        run.status = ForecastRunStatus.FAILED
-        run.error_message = str(exc)[:2000]
-        run.completed_at = utcnow()
-        db.commit()
-        logger.error("Forecast fetch failed for %s: %s", source.code, exc)
-        return AcquisitionOutcome(source.code, info.run_key, "failed", run.id, message=str(exc))
+        count = store_records(db, run, result.records)
+    except Exception as exc:
+        db.rollback()
+        failed = db.get(ForecastRun, run_id)
+        if failed is not None:
+            failed.status = ForecastRunStatus.FAILED
+            failed.error_message = _error_text(exc)
+            failed.completed_at = utcnow()
+            failed.details = {
+                **(failed.details or {}),
+                "retryable": isinstance(exc, ProviderError) and exc.transient,
+            }
+            db.commit()
+        if isinstance(exc, ProviderError):
+            logger.error("Forecast fetch failed for %s: %s", source.code, _error_text(exc))
+        else:
+            logger.exception("Forecast acquisition of %s failed unexpectedly", source.code)
+        return _failure(source.code, info.run_key, exc, run_id)
 
-    count = store_records(db, run, result.records)
     slugs = {p.spot_id: p.slug for p in points}
     run.record_count = count
     run.spot_count = len(result.records)
@@ -271,6 +393,7 @@ def acquire_from_provider(
         "spot_ids": sorted(result.records),
         "spot_errors": {slugs.get(k, str(k)): v for k, v in result.errors.items()},
         "warnings": result.warnings[:50],
+        "stats": fetch_stats_detail(result, provider),
     }
     if result.fields or result.field_warnings:
         fields, field_warnings = result.fields, list(result.field_warnings)
@@ -297,13 +420,16 @@ def acquire_from_provider(
         run.status = ForecastRunStatus.SUCCESS
     run.completed_at = utcnow()
     db.commit()
+    stats = run.details.get("stats") or {}
     logger.info(
-        "Ingested %s run %s: %d records for %d spots (%d errors)",
+        "Ingested %s run %s: %d records for %d spots (%d errors), %s bytes, %s weighted calls",
         source.code,
         info.run_key,
         count,
         run.spot_count,
         len(result.errors),
+        stats.get("bytes_downloaded"),
+        stats.get("weighted_calls"),
     )
     return AcquisitionOutcome(
         source.code,
@@ -326,15 +452,20 @@ def acquire_all(
         try:
             overrides = active_demo_overrides(db, now) if name == "demo" else None
             provider = build_provider(name, settings, overrides=overrides)
-        except ProviderError as exc:
-            outcomes.append(AcquisitionOutcome(name, None, "failed", message=str(exc)))
+        except Exception as exc:  # a provider that cannot be built does not stop the others
+            logger.error("Forecast provider %s unavailable: %s", name, _error_text(exc))
+            outcomes.append(_failure(name, None, exc))
             continue
         extra = {"overrides": [o.to_json() for o in overrides]} if overrides else None
-        outcomes.append(
-            acquire_from_provider(
+        try:
+            outcome = acquire_from_provider(
                 db, provider, now=now, force=force, extra_details=extra, priority=priority
             )
-        )
+        except Exception as exc:  # e.g. the database refused the source row
+            db.rollback()
+            logger.exception("Forecast acquisition of %s failed", name)
+            outcome = _failure(name, None, exc)
+        outcomes.append(outcome)
     return outcomes
 
 
@@ -378,7 +509,14 @@ def acquire_map_fields(
         info = provider.run_for_cycle(cycle) if cycle is not None else provider.current_run(now)
     except ProviderError as exc:
         logger.error("Could not determine the map-field cycle: %s", exc)
-        return {**out, "status": "failed", "message": str(exc)}
+        failed = _failure(source.code, None, exc)
+        return {
+            **out,
+            "status": "failed",
+            "message": failed.message,
+            "retryable": failed.retryable,
+            "retry_after_s": failed.retry_after_s,
+        }
     hours = provider.map_hours()
     cycle_time = info.wave_model_run_at or info.issued_at
     out.update(run_key=info.run_key, cycle=cycle_time.isoformat(), map_hours=len(hours))
@@ -395,7 +533,7 @@ def acquire_map_fields(
         done = run.status in (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
         if done and attempted >= set(hours):
             return {**out, "status": "skipped", "run_id": run.id, "message": "already stored"}
-        if run.status == ForecastRunStatus.RUNNING and now - run.started_at < STUCK_RUN_AFTER:
+        if run.status == ForecastRunStatus.RUNNING and utcnow() - run.started_at < STUCK_RUN_AFTER:
             return {**out, "status": "skipped", "run_id": run.id, "message": "in progress"}
     if not force:
         expected = {
@@ -417,13 +555,14 @@ def acquire_map_fields(
     run.issued_at = info.issued_at
     run.wave_model_run_at = info.wave_model_run_at
     run.atmosphere_model_run_at = info.atmosphere_model_run_at
-    run.started_at = now
+    run.started_at = utcnow()
     run.completed_at = None
     run.status = ForecastRunStatus.RUNNING
     run.error_message = None
     run.predictions_computed_at = None
     run.details = {
         "metadata_source": info.metadata_source,
+        "model_runs": model_runs_detail(info, provider),
         "fields_only": True,
         "spot_ids": [],
         "map_hours": hours,
@@ -433,14 +572,28 @@ def acquire_map_fields(
 
     try:
         result = provider.fetch([], info)
-    except ProviderError as exc:
-        run.status = ForecastRunStatus.FAILED
-        run.error_message = str(exc)[:2000]
-        run.completed_at = utcnow()
-        run.predictions_computed_at = run.completed_at
-        db.commit()
-        logger.error("Map-field fetch failed for %s: %s", info.run_key, exc)
-        return {**out, "status": "failed", "message": str(exc)}
+    except Exception as exc:
+        db.rollback()
+        failed = _failure(source.code, info.run_key, exc, out["run_id"])
+        failed_run = db.get(ForecastRun, out["run_id"])
+        if failed_run is not None:
+            failed_run.status = ForecastRunStatus.FAILED
+            failed_run.error_message = failed.message
+            failed_run.completed_at = utcnow()
+            failed_run.predictions_computed_at = failed_run.completed_at
+            failed_run.details = {**(failed_run.details or {}), "retryable": failed.retryable}
+            db.commit()
+        if isinstance(exc, ProviderError):
+            logger.error("Map-field fetch failed for %s: %s", info.run_key, failed.message)
+        else:
+            logger.exception("Map-field fetch of %s failed unexpectedly", info.run_key)
+        return {
+            **out,
+            "status": "failed",
+            "message": failed.message,
+            "retryable": failed.retryable,
+            "retry_after_s": failed.retry_after_s,
+        }
 
     count = store_map_fields(db, run, result.fields)
     summary = summarise(result.fields, result.field_warnings)
@@ -448,7 +601,12 @@ def acquire_map_fields(
     run.record_count = 0
     run.spot_count = 0
     run.request_count = result.request_count
-    run.details = {**run.details, "warnings": result.warnings[:50], "map_fields": summary}
+    run.details = {
+        **run.details,
+        "warnings": result.warnings[:50],
+        "map_fields": summary,
+        "stats": fetch_stats_detail(result, provider),
+    }
     if complete == len(hours):
         run.status = ForecastRunStatus.SUCCESS
     elif complete:

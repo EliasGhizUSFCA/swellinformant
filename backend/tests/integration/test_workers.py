@@ -83,14 +83,23 @@ def test_lock_expires_after_a_crashed_worker(db: Session) -> None:
 
 
 def test_real_worker_consumes_from_redis(db: Session, few_spots: list[str]) -> None:
-    """Runs a genuine Celery worker thread against the Redis broker (not eager mode)."""
+    """Runs a genuine Celery worker thread against the Redis broker (not eager mode), with
+    the queues of the default WORKER_QUEUES (celery,bulk): one task from each queue."""
     from celery.contrib.testing.worker import start_worker
 
+    from app.core.config import get_settings
+
+    queues = get_settings().worker_queue_list
+    assert queues == ["celery", "bulk"]
     celery_app.conf.task_always_eager = False
     try:
-        with start_worker(celery_app, pool="solo", perform_ping_check=False, shutdown_timeout=30):
-            result = tasks.predict_quality.apply_async()
+        with start_worker(
+            celery_app, pool="solo", perform_ping_check=False, shutdown_timeout=30, queues=queues
+        ):
+            result = tasks.predict_quality.apply_async()  # default queue "celery"
             assert result.get(timeout=60)["status"] == "success"
+            bulk = tasks.check_staleness.apply_async()  # forecasts.* -> "bulk"
+            assert bulk.get(timeout=60)["status"] == "success"
     finally:
         celery_app.conf.task_always_eager = True
-    assert "quality.predict" in logs(db)
+    assert "quality.predict" in logs(db) and "forecasts.check_staleness" in logs(db)

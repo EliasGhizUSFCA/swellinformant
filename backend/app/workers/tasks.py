@@ -6,6 +6,13 @@ Each job:
 * triggers the next stage of the pipeline when it succeeds, so new forecast data flows
   through to alerts within minutes, while the beat schedule re-runs every stage
   periodically as a safety net.
+
+Data acquisition jobs (forecasts, ensemble, map fields) record provider failures instead of
+raising them, so one provider's outage never stops another's. Their task then decides:
+the job is FAILED (and does not chain) when nothing was acquired, and a transient failure
+(timeout, 5xx, a full call-budget window, a model run still being published) makes the
+task retry itself after a countdown (:func:`retry_transient`), up to ACQUIRE_MAX_RETRIES
+times, instead of waiting hours for the next scheduled run.
 """
 
 from __future__ import annotations
@@ -31,6 +38,15 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["NEXT_STAGE", "run_job"]
 
+# Retries of acquisition tasks after a transient failure: 2, 4, 8 min (capped at 15 min),
+# or the provider's own retry time when it gives one (capped at 1 h).
+ACQUIRE_MAX_RETRIES = 3
+RETRY_BASE_SECONDS = 120
+RETRY_MAX_SECONDS = 900
+RETRY_HINT_MAX_SECONDS = 3600
+
+Judge = Callable[[dict[str, Any]], tuple[JobStatus, str | None]]
+
 
 def run_job(
     job_name: str,
@@ -39,7 +55,13 @@ def run_job(
     task_id: str | None = None,
     lock_ttl: int = 1800,
     chain: bool = True,
+    judge: Judge | None = None,
 ) -> dict[str, Any]:
+    """Run ``fn`` under the job lock and log it.
+
+    ``judge`` turns a result into the job status (and an error message), e.g. FAILED when
+    every provider failed; a FAILED job never chains to the next stage.
+    """
     started = time.monotonic()
     with SessionLocal() as log_db:
         log = BackgroundJobLog(
@@ -59,6 +81,9 @@ def run_job(
             with SessionLocal() as db:
                 result = fn(db)
             details = result if isinstance(result, dict) else {"result": result}
+            if judge is not None:
+                status, error = judge(details)
+                error = redact(error)[:2000] if error else None
     except LockNotAcquired:
         status, details = JobStatus.SKIPPED, {"reason": "another worker is running this job"}
     except Exception as exc:
@@ -81,6 +106,52 @@ def run_job(
     return {"status": status.value, **details}
 
 
+def judge_acquisition(result: dict[str, Any]) -> tuple[JobStatus, str | None]:
+    """forecasts.acquire: FAILED when every configured provider failed."""
+    outcomes = result.get("outcomes") or []
+    failed = [o for o in outcomes if o.get("status") == "failed"]
+    if outcomes and len(failed) == len(outcomes):
+        reasons = "; ".join(f"{o.get('source')}: {o.get('message')}" for o in failed)
+        return JobStatus.FAILED, f"every forecast provider failed ({reasons})"
+    return JobStatus.SUCCESS, None
+
+
+def judge_single(result: dict[str, Any]) -> tuple[JobStatus, str | None]:
+    """One-source jobs (ensemble, map fields): FAILED when the acquisition failed."""
+    if result.get("status") == "failed":
+        return JobStatus.FAILED, str(result.get("message") or "acquisition failed")
+    return JobStatus.SUCCESS, None
+
+
+def retry_countdown(retries: int, hints: list[float | None]) -> int:
+    """Seconds before retry number ``retries + 1``: the provider's hint, else backoff."""
+    hinted = [h for h in hints if h]
+    if hinted:
+        return int(min(RETRY_HINT_MAX_SECONDS, max(60.0, max(hinted))))
+    return int(min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * 2**retries))
+
+
+def retry_transient(task: Task, result: dict[str, Any]) -> None:
+    """Retry ``task`` (raises celery's Retry) when a provider failed transiently.
+
+    Eager mode (tests, single-process development) does not retry: the failure is
+    already recorded, and the next scheduled run picks it up.
+    """
+    outcomes = result.get("outcomes") or [result]
+    retryable = [o for o in outcomes if isinstance(o, dict) and o.get("retryable")]
+    if not retryable:
+        return
+    if task.request.is_eager:
+        logger.info("%s: transient failure not retried in eager mode", task.name)
+        return
+    if task.request.retries >= ACQUIRE_MAX_RETRIES:
+        logger.warning("%s: transient failure, retries exhausted", task.name)
+        return
+    countdown = retry_countdown(task.request.retries, [o.get("retry_after_s") for o in retryable])
+    logger.info("%s: transient failure, retrying in %d s", task.name, countdown)
+    raise task.retry(countdown=countdown, max_retries=ACQUIRE_MAX_RETRIES)
+
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(k): _jsonable(v) for k, v in value.items()}
@@ -92,23 +163,19 @@ def _jsonable(value: Any) -> Any:
 
 
 # ---------------------------------------------------------------- jobs A–H
-@celery_app.task(
-    name="forecasts.acquire",
-    bind=True,
-    autoretry_for=(TransientProviderError,),
-    retry_backoff=60,
-    retry_backoff_max=900,
-    max_retries=3,
-)
+@celery_app.task(name="forecasts.acquire", bind=True, max_retries=ACQUIRE_MAX_RETRIES)
 def acquire_forecasts(self: Task) -> dict[str, Any]:
     from app.services.forecasts.ingestion import acquire_all
 
-    return run_job(
+    result = run_job(
         "forecasts.acquire",
         lambda db: {"outcomes": [o.as_dict() for o in acquire_all(db)]},
         task_id=self.request.id,
         lock_ttl=3600,
+        judge=judge_acquisition,
     )
+    retry_transient(self, result)
+    return result
 
 
 @celery_app.task(name="forecasts.blend", bind=True)
@@ -188,29 +255,23 @@ def cleanup_task(self: Task) -> dict[str, Any]:
     return run_job("maintenance.cleanup", cleanup, task_id=self.request.id, chain=False)
 
 
-@celery_app.task(
-    name="forecasts.acquire_ensemble",
-    bind=True,
-    autoretry_for=(TransientProviderError,),
-    retry_backoff=120,
-    max_retries=2,
-)
+@celery_app.task(name="forecasts.acquire_ensemble", bind=True, max_retries=ACQUIRE_MAX_RETRIES)
 def acquire_ensemble_task(self: Task) -> dict[str, Any]:
     """GEFS-Wave ensemble mean/spread for forecast uncertainty (GEFS_ENABLED)."""
     from app.services.forecasts.ensemble import acquire_ensemble
 
-    return run_job(
-        "forecasts.acquire_ensemble", acquire_ensemble, task_id=self.request.id, lock_ttl=3600
+    result = run_job(
+        "forecasts.acquire_ensemble",
+        acquire_ensemble,
+        task_id=self.request.id,
+        lock_ttl=3600,
+        judge=judge_single,
     )
+    retry_transient(self, result)
+    return result
 
 
-@celery_app.task(
-    name="forecasts.map_fields",
-    bind=True,
-    autoretry_for=(TransientProviderError,),
-    retry_backoff=120,
-    max_retries=2,
-)
+@celery_app.task(name="forecasts.map_fields", bind=True, max_retries=ACQUIRE_MAX_RETRIES)
 def acquire_map_fields_task(self: Task) -> dict[str, Any]:
     """Global map fields on their own (standalone mode only; otherwise a no-op).
 
@@ -227,7 +288,16 @@ def acquire_map_fields_task(self: Task) -> dict[str, Any]:
             return {"skipped": f"map fields mode is {mode!r}, not 'standalone'"}
         return acquire_map_fields(db)
 
-    return run_job("forecasts.map_fields", job, task_id=self.request.id, lock_ttl=3600, chain=False)
+    result = run_job(
+        "forecasts.map_fields",
+        job,
+        task_id=self.request.id,
+        lock_ttl=3600,
+        chain=False,
+        judge=judge_single,
+    )
+    retry_transient(self, result)
+    return result
 
 
 @celery_app.task(name="observations.ingest", bind=True)
