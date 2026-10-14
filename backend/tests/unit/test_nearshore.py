@@ -90,6 +90,37 @@ class TestDirectionalFactor:
         assert r == sorted(r, reverse=True) and r[-1] > 0.0
         assert r[2] < 0.5 * r[0] and r[3] < 0.1 * r[0]
 
+    def test_spreading_is_continuous_in_period(self) -> None:
+        """2.1.0: linear ramps 30 -> 15 deg over 8-10 s and 15 -> 10 deg over 12-14 s (2.0.0
+        stepped at 9 s and 13 s, so breaking heights jumped by 4-8 %)."""
+        sigma = ns.spreading_sigma_deg
+        assert sigma(6.0, False) == sigma(8.0, False) == 30.0
+        assert sigma(9.0, False) == pytest.approx(22.5)
+        assert sigma(10.0, False) == sigma(12.0, False) == 15.0
+        assert sigma(13.0, False) == pytest.approx(12.5)
+        assert sigma(14.0, False) == sigma(20.0, False) == 10.0
+        assert sigma(16.0, True) == 30.0  # wind sea
+        assert sigma(16.0, False, override=7.0) == 7.0
+        periods = [8.0 + i * 0.01 for i in range(601)]
+        values = [sigma(t, False) for t in periods]
+        assert max(abs(b - a) for a, b in zip(values, values[1:], strict=False)) <= 0.076
+
+    @pytest.mark.parametrize(
+        "profile",
+        [
+            PROFILE,
+            ns.Profile(shore_normal_deg=215.0, swell_window_min=180.0, swell_window_max=250.0),
+            ns.Profile(shore_normal_deg=290.0, swell_window_min=250.0, swell_window_max=300.0),
+        ],
+    )
+    def test_breaking_height_is_continuous_in_period(self, profile: ns.Profile) -> None:
+        direction = (profile.swell_window_min + profile.swell_window_max) / 2 + 10.0
+        for i in range(0, 1401):
+            t = 6.0 + i * 0.01
+            a = ns.estimate([ns.Partition("s", 1.5, t, direction)], profile).breaking_m
+            b = ns.estimate([ns.Partition("s", 1.5, t + 0.01, direction)], profile).breaking_m
+            assert abs(b - a) / a < 0.01, t
+
     def test_shadow_table_is_used_and_interpolated(self) -> None:
         table = tuple(1.0 if 250 <= 10 * i <= 290 else 0.0 for i in range(36))
         p = ns.Profile(270.0, 0.0, 359.0, shadow_table=table)
