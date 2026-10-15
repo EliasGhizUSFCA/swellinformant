@@ -1,0 +1,804 @@
+{
+ "description": "Tide prediction points per surf spot: a NOAA CO-OPS station for the US spots (primary) and the EOT20 global tide model cell nearest the break (primary elsewhere, fallback for US spots). distance_km is the great-circle distance from the spot's break position (spots.json latitude/longitude). Model cells and their constants come from data/tides/constants_eot20.json (scripts/extract_tide_constants.py). Loaded by `python -m app.cli tides seed` and by the daily tides.acquire job. See docs/tides.md.",
+ "version": 1,
+ "model": {
+  "source": "eot20",
+  "constants": "data/tides/constants_eot20.json",
+  "licence": "CC BY 4.0",
+  "attribution": "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE"
+ },
+ "stations": [
+  {
+   "provider": "noaa_coops",
+   "code": "1612668",
+   "name": "Haleiwa, Waialua Bay",
+   "kind": "subordinate",
+   "reference_code": "1612340",
+   "latitude": 21.5983,
+   "longitude": -158.108,
+   "state": "HI",
+   "datum": "MLLW",
+   "position_source": "CO-OPS mdapi stations.json?type=tidepredictions, captured 2026-10-14 01:52 UTC (backend/tests/fixtures/coops/stations_tidepredictions.trimmed.json)"
+  },
+  {
+   "provider": "noaa_coops",
+   "code": "1615680",
+   "name": "Kahului, Kahului Harbor",
+   "kind": "harmonic",
+   "reference_code": null,
+   "latitude": 20.89494,
+   "longitude": -156.469,
+   "state": "HI",
+   "datum": "MLLW",
+   "position_source": "CO-OPS mdapi stations.json?type=tidepredictions, captured 2026-10-14 01:52 UTC (backend/tests/fixtures/coops/stations_tidepredictions.trimmed.json)"
+  },
+  {
+   "provider": "noaa_coops",
+   "code": "9414131",
+   "name": "Pillar Point Harbor, Half Moon Bay",
+   "kind": "harmonic",
+   "reference_code": null,
+   "latitude": 37.5025,
+   "longitude": -122.48217,
+   "state": "CA",
+   "datum": "MLLW",
+   "position_source": "CO-OPS mdapi stations.json?type=tidepredictions, captured 2026-10-14 01:52 UTC (backend/tests/fixtures/coops/stations_tidepredictions.trimmed.json)"
+  },
+  {
+   "provider": "noaa_coops",
+   "code": "9414275",
+   "name": "Ocean Beach, outer coast",
+   "kind": "subordinate",
+   "reference_code": "9414290",
+   "latitude": 37.775,
+   "longitude": -122.513,
+   "state": "CA",
+   "datum": "MLLW",
+   "position_source": "CO-OPS mdapi stations.json?type=tidepredictions, captured 2026-10-14 01:52 UTC (backend/tests/fixtures/coops/stations_tidepredictions.trimmed.json)"
+  },
+  {
+   "provider": "noaa_coops",
+   "code": "TWC0419",
+   "name": "San Clemente",
+   "kind": "subordinate",
+   "reference_code": "9410170",
+   "latitude": 33.41667,
+   "longitude": -117.61667,
+   "state": "CA",
+   "datum": "MLLW",
+   "position_source": "CO-OPS mdapi stations.json?type=tidepredictions, captured 2026-10-14 01:52 UTC (backend/tests/fixtures/coops/stations_tidepredictions.trimmed.json)"
+  },
+  {
+   "provider": "noaa_coops",
+   "code": "9411270",
+   "name": "Rincon Island, Mussel Shoals",
+   "kind": "harmonic",
+   "reference_code": null,
+   "latitude": 34.3483,
+   "longitude": -119.443,
+   "state": "CA",
+   "datum": "MLLW",
+   "position_source": "CO-OPS mdapi stations.json?type=tidepredictions, captured 2026-10-14 01:52 UTC (backend/tests/fixtures/coops/stations_tidepredictions.trimmed.json)"
+  }
+ ],
+ "spots": {
+  "pipeline": {
+   "stations": [
+    {
+     "provider": "noaa_coops",
+     "code": "1612668",
+     "relation": "primary",
+     "distance_km": 9.4,
+     "justification": "Nearest CO-OPS prediction station, on the same North Shore coast (Waialua Bay, Haleiwa), 9.4 km SW of the break. Subordinate station (time and height offsets applied to Honolulu 1612340): CO-OPS publishes only its high and low waters, so the curve between them is interpolated here."
+    },
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:pipeline",
+     "relation": "fallback",
+     "distance_km": 8.7,
+     "latitude": 21.625,
+     "longitude": -158.125,
+     "justification": "EOT20 global tide model cell 8.7 km from the break; used only when no CO-OPS predictions are stored for the window (never mixed into a station curve)."
+    }
+   ]
+  },
+  "sunset-beach": {
+   "stations": [
+    {
+     "provider": "noaa_coops",
+     "code": "1612668",
+     "relation": "primary",
+     "distance_km": 11.3,
+     "justification": "Nearest CO-OPS prediction station, on the same North Shore coast (Waialua Bay, Haleiwa), 11.3 km SW of the break. Subordinate station (time and height offsets applied to Honolulu 1612340): CO-OPS publishes only its high and low waters, so the curve between them is interpolated here."
+    },
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:sunset-beach",
+     "relation": "fallback",
+     "distance_km": 9.0,
+     "latitude": 21.75,
+     "longitude": -158.0,
+     "justification": "EOT20 global tide model cell 9.0 km from the break; used only when no CO-OPS predictions are stored for the window (never mixed into a station curve)."
+    }
+   ]
+  },
+  "waimea-bay": {
+   "stations": [
+    {
+     "provider": "noaa_coops",
+     "code": "1612668",
+     "relation": "primary",
+     "distance_km": 6.5,
+     "justification": "Nearest CO-OPS prediction station, on the same North Shore coast (Waialua Bay, Haleiwa), 6.5 km SW of the bay. Subordinate station (time and height offsets applied to Honolulu 1612340): CO-OPS publishes only its high and low waters, so the curve between them is interpolated here."
+    },
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:waimea-bay",
+     "relation": "fallback",
+     "distance_km": 6.3,
+     "latitude": 21.625,
+     "longitude": -158.125,
+     "justification": "EOT20 global tide model cell 6.3 km from the break; used only when no CO-OPS predictions are stored for the window (never mixed into a station curve)."
+    }
+   ]
+  },
+  "jaws-peahi": {
+   "stations": [
+    {
+     "provider": "noaa_coops",
+     "code": "1615680",
+     "relation": "primary",
+     "distance_km": 18.6,
+     "justification": "Nearest CO-OPS prediction station: Kahului Harbor on the same north shore of Maui, 18.6 km W of Peahi. Harmonic station (its own predictions at any interval)."
+    },
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:jaws-peahi",
+     "relation": "fallback",
+     "distance_km": 8.1,
+     "latitude": 21.0,
+     "longitude": -156.25,
+     "justification": "EOT20 global tide model cell 8.1 km from the break; used only when no CO-OPS predictions are stored for the window (never mixed into a station curve)."
+    }
+   ]
+  },
+  "mavericks": {
+   "stations": [
+    {
+     "provider": "noaa_coops",
+     "code": "9414131",
+     "relation": "primary",
+     "distance_km": 2.0,
+     "justification": "Pillar Point Harbor, inside the point 2.0 km from the reef. Harmonic station (its own predictions at any interval)."
+    },
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:mavericks",
+     "relation": "fallback",
+     "distance_km": 11.0,
+     "latitude": 37.5,
+     "longitude": -122.625,
+     "justification": "EOT20 global tide model cell 11.0 km from the break; used only when no CO-OPS predictions are stored for the window (never mixed into a station curve)."
+    }
+   ]
+  },
+  "ocean-beach-sf": {
+   "stations": [
+    {
+     "provider": "noaa_coops",
+     "code": "9414275",
+     "relation": "primary",
+     "distance_km": 1.7,
+     "justification": "Ocean Beach (outer coast), 1.7 km from the break on the same beach. Subordinate station (offsets applied to San Francisco, Golden Gate 9414290): high and low waters only, the curve between them is interpolated here. The harmonic Golden Gate station (6.6 km) is not used: it lies inside the strait, where the tide lags the open coast."
+    },
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:ocean-beach-sf",
+     "relation": "fallback",
+     "distance_km": 10.0,
+     "latitude": 37.75,
+     "longitude": -122.625,
+     "justification": "EOT20 global tide model cell 10.0 km from the break; used only when no CO-OPS predictions are stored for the window (never mixed into a station curve)."
+    }
+   ]
+  },
+  "trestles": {
+   "stations": [
+    {
+     "provider": "noaa_coops",
+     "code": "TWC0419",
+     "relation": "primary",
+     "distance_km": 4.6,
+     "justification": "San Clemente, 4.6 km NW of Trestles on the same open coast. Subordinate station (offsets applied to San Diego 9410170): high and low waters only, the curve between them is interpolated here. The nearest harmonic station (Newport Bay Entrance 9410580) is 36.7 km away."
+    },
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:trestles",
+     "relation": "fallback",
+     "distance_km": 3.5,
+     "latitude": 33.375,
+     "longitude": -117.625,
+     "justification": "EOT20 global tide model cell 3.5 km from the break; used only when no CO-OPS predictions are stored for the window (never mixed into a station curve)."
+    }
+   ]
+  },
+  "rincon": {
+   "stations": [
+    {
+     "provider": "noaa_coops",
+     "code": "9411270",
+     "relation": "primary",
+     "distance_km": 4.3,
+     "justification": "Rincon Island (an artificial island off Mussel Shoals), 4.3 km SE of the point on the same open coast. Harmonic station (its own predictions at any interval)."
+    },
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:rincon",
+     "relation": "fallback",
+     "distance_km": 2.1,
+     "latitude": 34.375,
+     "longitude": -119.5,
+     "justification": "EOT20 global tide model cell 2.1 km from the break; used only when no CO-OPS predictions are stored for the window (never mixed into a station curve)."
+    }
+   ]
+  },
+  "puerto-escondido": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:puerto-escondido",
+     "relation": "primary",
+     "distance_km": 7.8,
+     "latitude": 15.875,
+     "longitude": -97.125,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 7.8 km from the break. The nearest CO-OPS prediction station (Puerto Angel TWC0373, a subordinate of Salina Cruz) is 63.6 km away; CO-OPS stations are used for US spots only."
+    }
+   ]
+  },
+  "punta-de-lobos": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:punta-de-lobos",
+     "relation": "primary",
+     "distance_km": 7.0,
+     "latitude": -34.375,
+     "longitude": -72.0,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 7.0 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "chicama": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:chicama",
+     "relation": "primary",
+     "distance_km": 7.7,
+     "latitude": -7.75,
+     "longitude": -79.5,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 7.7 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "lobitos": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:lobitos",
+     "relation": "primary",
+     "distance_km": 11.2,
+     "latitude": -4.5,
+     "longitude": -81.375,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 11.2 km from the break. The nearest CO-OPS prediction station (Puerto Bolivar TWC0261) is 193 km away."
+    }
+   ]
+  },
+  "uluwatu": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:uluwatu",
+     "relation": "primary",
+     "distance_km": 7.8,
+     "latitude": -8.875,
+     "longitude": 115.125,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 7.8 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "padang-padang": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:padang-padang",
+     "relation": "primary",
+     "distance_km": 7.1,
+     "latitude": -8.75,
+     "longitude": 115.125,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 7.1 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "keramas": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:keramas",
+     "relation": "primary",
+     "distance_km": 4.7,
+     "latitude": -8.625,
+     "longitude": 115.375,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 4.7 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "desert-point": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:desert-point",
+     "relation": "primary",
+     "distance_km": 5.3,
+     "latitude": -8.75,
+     "longitude": 115.875,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 5.3 km from the break. No station prediction source is integrated for this coast (docs/tides.md).",
+     "caveat": "In the Lombok Strait, where tides and tidal streams are complex; the 1/8 degree model is less reliable here than on an open coast."
+    }
+   ]
+  },
+  "g-land": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:g-land",
+     "relation": "primary",
+     "distance_km": 10.0,
+     "latitude": -8.75,
+     "longitude": 114.25,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 10.0 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "lakey-peak": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:lakey-peak",
+     "relation": "primary",
+     "distance_km": 5.4,
+     "latitude": -8.875,
+     "longitude": 118.375,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 5.4 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "macaronis": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:macaronis",
+     "relation": "primary",
+     "distance_km": 10.6,
+     "latitude": -2.875,
+     "longitude": 100.0,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 10.6 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "rifles": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:rifles",
+     "relation": "primary",
+     "distance_km": 8.0,
+     "latitude": -1.875,
+     "longitude": 99.375,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 8.0 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "cloudbreak": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:cloudbreak",
+     "relation": "primary",
+     "distance_km": 6.5,
+     "latitude": -17.875,
+     "longitude": 177.125,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 6.5 km from the break. The nearest CO-OPS prediction station (Suva Harbor 1910000) is 134 km away on the other side of Viti Levu.",
+     "caveat": "Reef break by a pass in the Mamanuca barrier reef; a 1/8 degree global model does not resolve reefs and passes, so times and heights are approximate."
+    }
+   ]
+  },
+  "restaurants": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:restaurants",
+     "relation": "primary",
+     "distance_km": 5.8,
+     "latitude": -17.875,
+     "longitude": 177.25,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 5.8 km from the break. The nearest CO-OPS prediction station (Suva Harbor 1910000) is 133 km away on the other side of Viti Levu.",
+     "caveat": "Reef break on the Tavarua reef inside the Mamanuca barrier reef; a 1/8 degree global model does not resolve reefs and lagoons, so times and heights are approximate."
+    }
+   ]
+  },
+  "teahupoo": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:teahupoo",
+     "relation": "primary",
+     "distance_km": 1.1,
+     "latitude": -17.875,
+     "longitude": -149.25,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 1.1 km from the break. The nearest CO-OPS prediction station (Papeete Harbor 1732417) is 49.9 km away on the other side of Tahiti.",
+     "caveat": "Reef pass off Tahiti Iti with a very small tide (a few tens of centimetres); a 1/8 degree global model does not resolve the reef, and weather-driven sea-level changes can match the tide."
+    }
+   ]
+  },
+  "shipstern-bluff": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:shipstern-bluff",
+     "relation": "primary",
+     "distance_km": 4.4,
+     "latitude": -43.25,
+     "longitude": 147.75,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 4.4 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "bells-beach": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:bells-beach",
+     "relation": "primary",
+     "distance_km": 8.1,
+     "latitude": -38.375,
+     "longitude": 144.375,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 8.1 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "snapper-rocks-superbank": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:snapper-rocks-superbank",
+     "relation": "primary",
+     "distance_km": 6.4,
+     "latitude": -28.125,
+     "longitude": 153.5,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 6.4 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "kirra": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:kirra",
+     "relation": "primary",
+     "distance_km": 5.1,
+     "latitude": -28.125,
+     "longitude": 153.5,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 5.1 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "burleigh-heads": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:burleigh-heads",
+     "relation": "primary",
+     "distance_km": 6.0,
+     "latitude": -28.125,
+     "longitude": 153.5,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 6.0 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "the-box": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:the-box",
+     "relation": "primary",
+     "distance_km": 10.5,
+     "latitude": -34.0,
+     "longitude": 114.875,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 10.5 km from the break. No station prediction source is integrated for this coast (docs/tides.md).",
+     "caveat": "Small, mostly diurnal tide; weather-driven sea-level changes are often as large as the tide here."
+    }
+   ]
+  },
+  "margaret-river-main-break": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:margaret-river-main-break",
+     "relation": "primary",
+     "distance_km": 10.2,
+     "latitude": -34.0,
+     "longitude": 114.875,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 10.2 km from the break. No station prediction source is integrated for this coast (docs/tides.md).",
+     "caveat": "Small, mostly diurnal tide; weather-driven sea-level changes are often as large as the tide here."
+    }
+   ]
+  },
+  "north-point-gracetown": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:north-point-gracetown",
+     "relation": "primary",
+     "distance_km": 10.2,
+     "latitude": -33.875,
+     "longitude": 114.875,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 10.2 km from the break. No station prediction source is integrated for this coast (docs/tides.md).",
+     "caveat": "Small, mostly diurnal tide; weather-driven sea-level changes are often as large as the tide here."
+    }
+   ]
+  },
+  "jeffreys-bay": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:jeffreys-bay",
+     "relation": "primary",
+     "distance_km": 7.2,
+     "latitude": -34.0,
+     "longitude": 25.0,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 7.2 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "dungeons": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:dungeons",
+     "relation": "primary",
+     "distance_km": 9.9,
+     "latitude": -34.0,
+     "longitude": 18.25,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 9.9 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "skeleton-bay": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:skeleton-bay",
+     "relation": "primary",
+     "distance_km": 8.2,
+     "latitude": -22.875,
+     "longitude": 14.375,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 8.2 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "supertubos": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:supertubos",
+     "relation": "primary",
+     "distance_km": 10.5,
+     "latitude": 39.25,
+     "longitude": -9.375,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 10.5 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "nazare": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:nazare",
+     "relation": "primary",
+     "distance_km": 3.8,
+     "latitude": 39.625,
+     "longitude": -9.125,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 3.8 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "coxos": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:coxos",
+     "relation": "primary",
+     "distance_km": 6.3,
+     "latitude": 39.0,
+     "longitude": -9.5,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 6.3 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "mundaka": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:mundaka",
+     "relation": "primary",
+     "distance_km": 11.0,
+     "latitude": 43.5,
+     "longitude": -2.75,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 11.0 km from the break. No station prediction source is integrated for this coast (docs/tides.md).",
+     "caveat": "River-mouth break at the Urdaibai estuary; the model cell is in the open Bay of Biscay, so times and heights at the river mouth may differ."
+    }
+   ]
+  },
+  "la-graviere-hossegor": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:la-graviere-hossegor",
+     "relation": "primary",
+     "distance_km": 7.0,
+     "latitude": 43.625,
+     "longitude": -1.5,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 7.0 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "anchor-point": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:anchor-point",
+     "relation": "primary",
+     "distance_km": 5.3,
+     "latitude": 30.5,
+     "longitude": -9.75,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 5.3 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "safi": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:safi",
+     "relation": "primary",
+     "distance_km": 12.6,
+     "latitude": 32.375,
+     "longitude": -9.375,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 12.6 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "punta-roca": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:punta-roca",
+     "relation": "primary",
+     "distance_km": 13.3,
+     "latitude": 13.375,
+     "longitude": -89.375,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 13.3 km from the break. The nearest CO-OPS prediction station (Acajutla TWC0367) is 57.5 km away; CO-OPS stations are used for US spots only."
+    }
+   ]
+  },
+  "pavones": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:pavones",
+     "relation": "primary",
+     "distance_km": 12.0,
+     "latitude": 8.5,
+     "longitude": -83.125,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 12.0 km from the break. The nearest CO-OPS prediction station (Golfito TWC0339, a subordinate of Puntarenas) is 29 km away inside the Golfo Dulce; CO-OPS stations are used for US spots only.",
+     "caveat": "At the mouth of the Golfo Dulce; the 1/8 degree model may not represent the gulf's tide exactly."
+    }
+   ]
+  },
+  "salsa-brava": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:salsa-brava",
+     "relation": "primary",
+     "distance_km": 10.4,
+     "latitude": 9.75,
+     "longitude": -82.75,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 10.4 km from the break. The nearest CO-OPS prediction station (Puerto Limon 9688541, a subordinate of Cristobal) is 47.7 km away; CO-OPS stations are used for US spots only.",
+     "caveat": "Small-tide Caribbean reef (a few tens of centimetres); weather-driven sea-level changes can match the tide, so the curve is a rough guide only."
+    }
+   ]
+  },
+  "playa-hermosa-cr": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:playa-hermosa-cr",
+     "relation": "primary",
+     "distance_km": 8.6,
+     "latitude": 9.5,
+     "longitude": -84.625,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 8.6 km from the break. The nearest CO-OPS prediction station (Puerto Herradura TWC0345, a subordinate of Puntarenas) is 10.6 km away; CO-OPS stations are used for US spots only."
+    }
+   ]
+  },
+  "bocas-del-toro": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:bocas-del-toro",
+     "relation": "primary",
+     "distance_km": 8.9,
+     "latitude": 9.375,
+     "longitude": -82.125,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 8.9 km from the break. The nearest CO-OPS prediction station (Boca del Toro TEC5677, a subordinate of Cristobal) is 5.1 km away; CO-OPS stations are used for US spots only.",
+     "caveat": "Inside the Bocas del Toro archipelago, a small-tide Caribbean coast; the model does not resolve the islands, and weather-driven sea-level changes can match the tide."
+    }
+   ]
+  },
+  "cloud-9": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:cloud-9",
+     "relation": "primary",
+     "distance_km": 8.2,
+     "latitude": 9.875,
+     "longitude": 126.125,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 8.2 km from the break. No station prediction source is integrated for this coast (docs/tides.md)."
+    }
+   ]
+  },
+  "thurso-east": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:thurso-east",
+     "relation": "primary",
+     "distance_km": 2.6,
+     "latitude": 58.625,
+     "longitude": -3.5,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 2.6 km from the break. UK station predictions (UKHO) need a licence whose terms were not reviewed (docs/tides.md).",
+     "caveat": "Close to the Pentland Firth, where the tide changes quickly over short distances; the 1/8 degree model is less reliable here than on an open coast."
+    }
+   ]
+  },
+  "raglan-manu-bay": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:raglan-manu-bay",
+     "relation": "primary",
+     "distance_km": 8.2,
+     "latitude": -37.875,
+     "longitude": 174.75,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 8.2 km from the break. LINZ publishes CC BY 4.0 predictions for Raglan, but they are not integrated (docs/tides.md)."
+    }
+   ]
+  },
+  "mullaghmore-head": {
+   "stations": [
+    {
+     "provider": "harmonic_model",
+     "code": "eot20:mullaghmore-head",
+     "relation": "primary",
+     "distance_km": 4.2,
+     "latitude": 54.5,
+     "longitude": -8.5,
+     "justification": "Nearest EOT20 global tide model cell (1/8 degree) with every constituent defined, 4.2 km from the break. Station predictions under CC BY 4.0 exist for Sligo and Killybegs (Marine Institute Ireland, 19-20 km, LAT datum) but are not integrated (docs/tides.md)."
+    }
+   ]
+  }
+ }
+}
