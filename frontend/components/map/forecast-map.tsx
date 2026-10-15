@@ -2,10 +2,11 @@
 
 import "leaflet/dist/leaflet.css";
 
-import type { Map as LeafletMap } from "leaflet";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { svg, type Map as LeafletMap } from "leaflet";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap, useMapEvents, ZoomControl } from "react-leaflet";
 
+import { minZoomFor, nearestCopy } from "@/lib/map-bounds";
 import type { LayerScale } from "@/lib/map-colors";
 import type { FieldGrid } from "@/lib/map-fields";
 import { mercX, mercY, type IsoLine } from "@/lib/map-geo";
@@ -18,7 +19,7 @@ import type { SpotSummary } from "@/types/api";
 
 import type { CityLabel, IsobarPath } from "./basemap-draw";
 import { fieldSampler, MapDataLayers, type ParticleMode } from "./map-canvas-layers";
-import type { MarkerState } from "./surf-map";
+import { BOUNDED_MAP_OPTIONS, CentreWatcher, FlyToSpot, MapBounds, useWrapCentre, type MarkerState } from "./surf-map";
 
 const TILES = tileConfig(process.env.NEXT_PUBLIC_MAP_TILE_URL, process.env.NEXT_PUBLIC_MAP_ATTRIBUTION, process.env.NEXT_PUBLIC_CARTO_API_KEY);
 const FAILED_TILES_BEFORE_NOTICE = 4;
@@ -27,18 +28,20 @@ const OCEAN_BACKGROUND = "#151a21";
 /** Natural Earth 1:50m outlines turn visibly angular beyond this zoom; Streets go further. */
 const DARK_MAX_ZOOM = 8;
 
-function FlyTo({ spot }: { spot?: SpotSummary }) {
-  const map = useMap();
-  useEffect(() => {
-    if (spot) map.flyTo([spot.latitude, spot.longitude], Math.max(map.getZoom(), 5), { duration: 0.8 });
-  }, [spot, map]);
-  return null;
-}
+/**
+ * The first view: Atlantic-centred, at one world width (or zoom 2 where that is closer). At
+ * 8°N the spots (43°S to 59°N) sit midway between the layer tabs and the timeline on desktop
+ * screens; at the old 15°N the southern ones crowded the timeline and the zoom buttons.
+ */
+const INITIAL_CENTRE: [number, number] = [8, 10];
+const INITIAL_ZOOM = 2;
+/** Spots open at this zoom or closer. */
+const SPOT_ZOOM = 5;
 
 function FlyToUser({ at }: { at: { lat: number; lon: number; key: number } | null }) {
   const map = useMap();
   useEffect(() => {
-    if (at) map.flyTo([at.lat, at.lon], Math.max(map.getZoom(), 7), { duration: 1 });
+    if (at) map.flyTo([at.lat, nearestCopy(at.lon, map.getCenter().lng)], Math.max(map.getZoom(), 7), { duration: 1 });
   }, [at, map]);
   return null;
 }
@@ -48,17 +51,6 @@ function MaxZoom({ zoom }: { zoom: number }) {
   useEffect(() => {
     map.setMaxZoom(zoom);
   }, [map, zoom]);
-  return null;
-}
-
-/** Leaflet only re-measures on window resize; also follow the container's own size. */
-function InvalidateOnResize() {
-  const map = useMap();
-  useEffect(() => {
-    const observer = new ResizeObserver(() => map.invalidateSize());
-    observer.observe(map.getContainer());
-    return () => observer.disconnect();
-  }, [map]);
   return null;
 }
 
@@ -207,6 +199,12 @@ export interface ForecastMapProps {
   fieldLabel: string;
   /** Short credit for the ocean layers in Leaflet's attribution strip (plain text, escaped here). */
   fieldAttribution?: string;
+  /**
+   * What covers the map while a spot is open: `bottom` the fraction of its height under a
+   * bottom sheet (phones), `top` the CSS pixels under the top controls. A selected spot then
+   * lands in the strip between them instead of at the map centre.
+   */
+  cover?: { top: number; bottom: number };
 }
 
 function ZoomWatcher({ onZoom }: { onZoom?: (z: number) => void }) {
@@ -215,15 +213,94 @@ function ZoomWatcher({ onZoom }: { onZoom?: (z: number) => void }) {
 }
 
 /**
+ * One spot marker, an SVG path `path.spot-<slug>` coloured by our surf-quality prediction.
+ * Memoised with stable props, so a new forecast hour restyles only the markers whose colour
+ * changed and a zoom or pan touches none; `lng` is the spot's world copy nearest the view.
+ */
+export const SpotMarker = memo(function SpotMarker({
+  spot,
+  lng,
+  score,
+  tooltip,
+  selected,
+  highlight,
+  onSelect,
+}: {
+  spot: SpotSummary;
+  lng: number;
+  score: number | null;
+  tooltip: string;
+  selected: boolean;
+  highlight: boolean;
+  onSelect: (slug: string) => void;
+}) {
+  const center = useMemo<[number, number]>(() => [spot.latitude, lng], [spot.latitude, lng]);
+  const fill = colorForScore(score);
+  const pathOptions = useMemo(() => ({ color: "#ffffff", weight: selected ? 3 : 1.5, fillColor: fill, fillOpacity: 0.95 }), [selected, fill]);
+  const slug = spot.slug;
+  const eventHandlers = useMemo(
+    () => ({
+      click: () => onSelect(slug),
+      // Leaflet makes markers focusable (their tooltip opens on focus): Enter or Space opens
+      // the spot, as a click does.
+      keydown: (e: { originalEvent: KeyboardEvent }) => {
+        if (e.originalEvent.key === "Enter" || e.originalEvent.key === " ") {
+          e.originalEvent.preventDefault();
+          onSelect(slug);
+        }
+      },
+    }),
+    [onSelect, slug],
+  );
+  return (
+    <CircleMarker
+      center={center}
+      radius={selected ? 11 : highlight ? 8 : 6}
+      pathOptions={pathOptions}
+      // Set at creation (Leaflet ignores className changes in later setStyle calls).
+      className={`spot-marker spot-${slug}`}
+      eventHandlers={eventHandlers}
+    >
+      <Tooltip direction="top" offset={[0, -6]}>
+        <strong>{spot.name}</strong>
+        <br />
+        {tooltip}
+      </Tooltip>
+    </CircleMarker>
+  );
+});
+
+/** The first view for a map of this size: one world wide, or zoom 2 where that is closer. */
+function initialView(el: HTMLElement): { zoom: number; minZoom: number } {
+  const r = el.getBoundingClientRect();
+  const minZoom = minZoomFor(r.width, r.height);
+  return { minZoom, zoom: Math.max(INITIAL_ZOOM, minZoom) };
+}
+
+/**
  * Full-screen forecast map: ocean colour field, flow particles, dark Natural Earth basemap
  * (or OpenStreetMap tiles), isobars, labels and the spot markers on top. Markers stay SVG
  * paths (`path.spot-<slug>`) coloured by our surf-quality prediction and always clickable.
+ *
+ * Navigation (lib/map-bounds.ts): the latitude band 84°N to 78.5°S with a hard edge, a minimum
+ * zoom of one world width for the container's size, endless east-west panning with markers,
+ * flights and the user's position in the world copy nearest the view.
  */
-export default function ForecastMap(props: ForecastMapProps) {
-  const { spots, markers, selected, onSelect, settings, fields, pressure, isobars, scale, particles, units } = props;
+function ForecastMap(props: ForecastMapProps) {
+  const { spots, markers, selected, onSelect, settings, fields, pressure, isobars, scale, particles, units, cover } = props;
   const { layer, basemap } = settings;
   const [tilesFailed, setTilesFailed] = useState(false);
   const selectedSpot = spots.find((s) => s.slug === selected);
+  const lons = useMemo(() => spots.map((s) => s.longitude), [spots]);
+  const { centreLng, onMove, onRecentre } = useWrapCentre(lons, INITIAL_CENTRE[1]);
+  // The container is measured before the map exists, so it opens at its final zoom.
+  const [start, setStart] = useState<{ zoom: number; minZoom: number } | null>(null);
+  const measure = useCallback((el: HTMLDivElement | null) => {
+    if (el) setStart((s) => s ?? initialView(el));
+  }, []);
+  // Leaflet's SVG renderer re-clips its paths only when a move ends; a wider margin keeps
+  // markers from popping in late during long inertial pans.
+  const renderer = useMemo(() => svg({ padding: 0.5 }), []);
   const isobarPaths = useMemo<IsobarPath[] | null>(() => {
     if (!isobars) return null;
     return isobars.map((l) => {
@@ -253,80 +330,71 @@ export default function ForecastMap(props: ForecastMapProps) {
   return (
     // `isolation: isolate` keeps Leaflet's internal z-indexes (400–1000) from painting over
     // the sticky site header and the floating map controls.
-    <div role="region" aria-label="Map of monitored surf spots" className="forecast-map absolute inset-0" style={{ isolation: "isolate" }}>
-      <MapContainer
-        center={[15, 10]}
-        zoom={2}
-        minZoom={2}
-        worldCopyJump
-        scrollWheelZoom
-        zoomControl={false}
-        style={{ height: "100%", width: "100%", background: OCEAN_BACKGROUND }}
-      >
-        {basemap === "streets" && <TileErrors onFailed={setTilesFailed} />}
-        <MapDataLayers
-          layer={layer}
-          fields={fields}
-          pressure={pressure}
-          settings={settings}
-          particles={particles}
-          basemap={basemap}
-          scale={scale}
-          fieldLabel={props.fieldLabel}
-          fieldsAt={props.fieldsAt}
-          cities={props.cities}
-          isobarPaths={isobarPaths}
-          fieldAttribution={props.fieldAttribution}
-        />
-        <ZoomControl position="bottomright" />
-        {spots.map((s) => {
-          const m = markers[s.slug];
-          const score = m?.score ?? null;
-          const isSel = s.slug === selected;
-          return (
-            <CircleMarker
-              key={s.slug}
-              center={[s.latitude, s.longitude]}
-              radius={isSel ? 11 : m?.highlight ? 8 : 6}
-              pathOptions={{ color: "#ffffff", weight: isSel ? 3 : 1.5, fillColor: colorForScore(score), fillOpacity: 0.95 }}
-              // Set at creation (Leaflet ignores className changes in later setStyle calls).
-              className={`spot-marker spot-${s.slug}`}
-              eventHandlers={{
-                click: () => onSelect(s.slug),
-                // Leaflet makes markers focusable (their tooltip opens on focus): Enter or Space
-                // opens the spot, as a click does.
-                keydown: (e) => {
-                  if (e.originalEvent.key === "Enter" || e.originalEvent.key === " ") {
-                    e.originalEvent.preventDefault();
-                    onSelect(s.slug);
-                  }
-                },
-              }}
-            >
-              <Tooltip direction="top" offset={[0, -6]}>
-                <strong>{s.name}</strong>
-                <br />
-                {m?.tooltip ?? "No usable forecast"}
-              </Tooltip>
-            </CircleMarker>
-          );
-        })}
-        {props.userLocation && (
-          <CircleMarker
-            center={[props.userLocation.lat, props.userLocation.lon]}
-            radius={7}
-            pathOptions={{ color: "#ffffff", weight: 2.5, fillColor: "#3b82f6", fillOpacity: 1 }}
-            className="user-location-marker"
-            interactive={false}
+    <div ref={measure} role="region" aria-label="Map of monitored surf spots" className="forecast-map absolute inset-0" style={{ isolation: "isolate" }}>
+      {start && (
+        <MapContainer
+          center={INITIAL_CENTRE}
+          zoom={start.zoom}
+          minZoom={start.minZoom}
+          {...BOUNDED_MAP_OPTIONS}
+          // No whole-level snapping: the one-world minimum is usually fractional (2.49 at
+          // 1440x807, 2.91 at 1920x987), and snapping rounded 2.91 up to 3, so zooming out
+          // never got back to it. A wheel notch is still about one level; +/- step by one.
+          zoomSnap={0}
+          renderer={renderer}
+          scrollWheelZoom
+          zoomControl={false}
+          style={{ height: "100%", width: "100%", background: OCEAN_BACKGROUND }}
+        >
+          {basemap === "streets" && <TileErrors onFailed={setTilesFailed} />}
+          <MapDataLayers
+            layer={layer}
+            fields={fields}
+            pressure={pressure}
+            settings={settings}
+            particles={particles}
+            basemap={basemap}
+            scale={scale}
+            fieldLabel={props.fieldLabel}
+            fieldsAt={props.fieldsAt}
+            cities={props.cities}
+            isobarPaths={isobarPaths}
+            fieldAttribution={props.fieldAttribution}
           />
-        )}
-        <Readout sample={sample} layer={layer} units={units} />
-        <FlyTo spot={selectedSpot} />
-        <FlyToUser at={props.userLocation} />
-        <ZoomWatcher onZoom={props.onZoom} />
-        <MaxZoom zoom={basemap === "dark" ? DARK_MAX_ZOOM : TILES.maxZoom} />
-        <InvalidateOnResize />
-      </MapContainer>
+          <ZoomControl position="bottomright" />
+          {spots.map((s) => {
+            const m = markers[s.slug];
+            return (
+              <SpotMarker
+                key={s.slug}
+                spot={s}
+                lng={nearestCopy(s.longitude, centreLng)}
+                score={m?.score ?? null}
+                tooltip={m?.tooltip ?? "No usable forecast"}
+                selected={s.slug === selected}
+                highlight={!!m?.highlight}
+                onSelect={onSelect}
+              />
+            );
+          })}
+          {props.userLocation && (
+            <CircleMarker
+              center={[props.userLocation.lat, nearestCopy(props.userLocation.lon, centreLng)]}
+              radius={7}
+              pathOptions={{ color: "#ffffff", weight: 2.5, fillColor: "#3b82f6", fillOpacity: 1 }}
+              className="user-location-marker"
+              interactive={false}
+            />
+          )}
+          <Readout sample={sample} layer={layer} units={units} />
+          <FlyToSpot slug={selected} lat={selectedSpot?.latitude} lon={selectedSpot?.longitude} minZoom={SPOT_ZOOM} cover={cover} />
+          <FlyToUser at={props.userLocation} />
+          <ZoomWatcher onZoom={props.onZoom} />
+          <MaxZoom zoom={basemap === "dark" ? DARK_MAX_ZOOM : TILES.maxZoom} />
+          <MapBounds onRecentre={onRecentre} />
+          <CentreWatcher onCentre={onMove} />
+        </MapContainer>
+      )}
       {tilesFailed && basemap === "streets" && (
         <div
           role="status"
@@ -339,3 +407,5 @@ export default function ForecastMap(props: ForecastMapProps) {
     </div>
   );
 }
+
+export default memo(ForecastMap);
