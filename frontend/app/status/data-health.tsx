@@ -75,7 +75,33 @@ export interface DataHealth {
     }>;
   };
   heartbeat: { last_job_finished_at: string | null; age_minutes: number | null; limit_minutes: number };
-  storage: { database_bytes: number; database_max_gb: number | null };
+  storage: { database_bytes: number; database_max_gb: number | null; redis?: RedisHealth | null };
+}
+
+/** Redis (job queue, locks, call budgets, provider cache) memory against its cap. */
+export interface RedisHealth {
+  available: boolean;
+  used_memory_bytes?: number | null;
+  maxmemory_bytes?: number | null;
+  maxmemory_policy?: string | null;
+  cap_bytes?: number | null;
+  cap_source?: "redis" | "setting" | null;
+  used_fraction?: number | null;
+  alert_fraction: number;
+}
+
+/** "Redis 1 MB of 256 MB (0.4 %, alarm above 80 %)"; the cap is labelled when it is only the
+ * configured REDIS_MAXMEMORY because this Redis runs without one. */
+export function redisLine(r: RedisHealth): string {
+  if (!r.available) return "Redis is not answering";
+  const used = r.used_memory_bytes ?? null;
+  if (used === null) return "Redis memory unknown";
+  const alarm = `alarm above ${Math.round(r.alert_fraction * 100)} %`;
+  if (!r.cap_bytes || r.used_fraction == null) return `Redis ${formatBytes(used)} (no memory cap known, ${alarm})`;
+  const pct = r.used_fraction * 100;
+  const share = `${pct < 10 ? pct.toFixed(1) : Math.round(pct)} %`;
+  const cap = r.cap_source === "setting" ? `${formatBytes(r.cap_bytes)} (REDIS_MAXMEMORY; Redis itself runs uncapped)` : formatBytes(r.cap_bytes);
+  return `Redis ${formatBytes(used)} of ${cap} (${share}, ${alarm})`;
 }
 
 /** "184 MB", "12.3 GB" (binary units, as PostgreSQL's pg_size_pretty). */
@@ -272,6 +298,7 @@ export function LayersAndObservations({ data }: { data: DataHealth }) {
           <div className="text-xs text-muted-foreground">
             Database {formatBytes(data.storage.database_bytes)}
             {data.storage.database_max_gb !== null ? ` (alarm above ${data.storage.database_max_gb} GB)` : " (no size alarm configured)"}
+            {data.storage.redis && <div data-testid="data-health-redis">{redisLine(data.storage.redis)}</div>}
           </div>
         </div>
       </CardContent>

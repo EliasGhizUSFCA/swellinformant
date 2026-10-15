@@ -1,44 +1,121 @@
-"""NOAA GFS (atmosphere) + NOAA GFS-Wave / WAVEWATCH III (waves) via the Open-Meteo API.
+"""Spot point forecasts from the Open-Meteo API, one provider per model family.
 
-Why Open-Meteo: it republishes the NOAA model output as JSON (no GRIB/eccodes tooling),
-supports many coordinates per request (one centralised fetch serves every user), and
-publishes model-run metadata. The free tier is for non-commercial use; set
-OPEN_METEO_API_KEY to use the commercial ``customer-*`` hosts.
+Open-Meteo republishes NOAA and ECMWF model output as JSON for many coordinates per
+request, so 50 spot forecasts cost kilobytes instead of the gigabytes of whole-globe GRIB
+records the direct ingesters read (docs/FORECAST_SOURCES.md has the measured numbers).
+The free tier is for non-commercial use; OPEN_METEO_API_KEY switches to the commercial
+``customer-*`` hosts (docs/API_SETUP_REQUIRED.md).
 
-Requests per batch of spots (FORECAST_BATCH_SIZE, default 10):
-  1. marine /v1/marine  models=OPEN_METEO_WAVE_MODEL (ncep_gfswave025)  waves + swell partitions
-  2. gfs    /v1/gfs     models=OPEN_METEO_ATMOS_MODEL (gfs_seamless)  10 m wind, gusts, pressure
-  3. marine /v1/marine  (default model)  sea_level_height_msl (tide proxy)
+Families (``families.py``; the blend keeps one member per family):
 
-Variables marked optional are dropped automatically if the API rejects them, and the
-sea-level request is best effort — tides are a minor scoring component.
+* :class:`OpenMeteoProvider` (source ``open_meteo_noaa``, family ``ncep_gfs``, token
+  ``open_meteo``): NOAA GFS-Wave (WAVEWATCH III) waves, NOAA GFS 10 m wind, gust and MSLP.
+* ``open_meteo_ecmwf.OpenMeteoEcmwfProvider`` (source ``open_meteo_ecmwf``, family
+  ``ecmwf_ifs``): ECMWF ecWAM waves and IFS atmosphere (open data, 0.25 deg).
+
+What makes the API data equivalent to sampling the model grids ourselves:
+
+* Grid cells. Every request sends ``cell_selection`` (OPEN_METEO_CELL_SELECTION, default
+  ``sea``): Open-Meteo's default for weather picks a land cell of similar elevation, which
+  gave 18.4 instead of 28.0 km/h mean wind at Pipeline (audit DA-5). Waves are requested
+  at the spot's offshore forecast point, wind at the break. A wave cell without data in
+  any hour (masked by the wave model although Open-Meteo calls it sea) is replaced by the
+  nearest neighbouring cell with data, as the GRIB ingesters take the nearest valid cell.
+  The cell used and its distance are recorded in the first record of each spot
+  (``extra["wave_cell"]``, ``extra["wind_cell"]``).
+* Native wave grids. ``ncep_gfswave016`` (native 0.16 deg) only covers about 52.5N..15S
+  and answers HTTP 400 "No data is available for this location" outside; it is used where
+  it exists and ``ncep_gfswave025`` elsewhere (OPEN_METEO_GFS_WAVE_MODELS, in that order).
+  The domain comes from each model's metadata (``BBOX``). One request never mixes models;
+  a spot refused by one model is retried alone with the next.
+* All partitions. Primary, secondary and tertiary swell and wind sea. Open-Meteo returns
+  0 m / 0 s / 0 deg for a partition the model does not have at a time: stored as None.
+* Native time steps only. Open-Meteo interpolates every model to hourly ("For GFS, values
+  are interpolated from 3-hourly to 1-hourly after 120 hours"; IFS 0.25 is "3-Hourly,
+  6-hourly after 144 hours"). Only the model's own output steps (:data:`NATIVE_STEPS`) are
+  stored; with OPEN_METEO_NATIVE_STEPS_ONLY=false the other hours are kept and flagged
+  ``extra["interpolated"] = True``. Every record carries ``extra["native_step_seconds"]``.
+* Run identity. The run is read from each model's ``meta.json``
+  (``last_run_initialisation_time``). A new run is used only
+  OPEN_METEO_AVAILABILITY_WAIT_MINUTES after ``last_run_availability_time`` (Open-Meteo:
+  "please wait 10 minutes after the availability time"); until then the previous run is
+  the current one. The metadata is read again before and after the data requests, and a
+  run that changed meanwhile is never stored under the old key. Hours past the run's
+  ``data_end_time`` (which Open-Meteo fills from an older, longer run) and hours before its
+  initialisation are dropped. Every model run behind the data is recorded
+  (``RunInfo.model_runs``; ``gfs_seamless`` = HRRR plus GFS).
+* Gusts. ``extra["gust_kind"]`` says what the gust is (``gfs_instantaneous``: GFS's GUST is
+  an instantaneous surface diagnostic, often below the 10 m mean wind; ``ecmwf_max_3h``).
+* Sea level. ``sea_level_height_msl`` is not requested: it is a modelled sea surface height
+  above global mean sea level, "not suitable for coastal navigation", not a tide
+  prediction. Tides come from app.services.tides.
+
+Calls are weighted (``quota.call_weight``) and charged to the shared Open-Meteo budget
+before they are sent; responses are kept in the bounded Redis cache (``provider_cache``)
+for the model's update interval, so a retried run does not download them again.
 """
 
 from __future__ import annotations
 
+import contextlib
+import itertools
+import json
 import logging
-from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
-from typing import Any
+import math
+import re
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Any, ClassVar, Literal
 
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.core.database import utcnow
+from app.services.forecasts import provider_cache
 from app.services.forecasts.base import (
+    EXTRA_GUST_KIND,
+    EXTRA_INTERPOLATED,
+    EXTRA_NATIVE_STEP_S,
+    EXTRA_WAVE_CELL,
+    EXTRA_WAVE_MODEL,
+    EXTRA_WIND_CELL,
+    FORECAST_FIELDS,
     FetchResult,
+    FetchStats,
     ForecastProvider,
     ForecastRecord,
+    ModelRunRef,
     RunInfo,
     SourceInfo,
     SpotPoint,
-    nominal_gfs_cycle,
 )
-from app.services.forecasts.families import family_for_open_meteo_model, period_kind_for_open_meteo
-from app.services.http import PermanentProviderError, TransientProviderError, request_with_retries
+from app.services.forecasts.grib import haversine_km
+from app.services.forecasts.provider_cache import ProviderCacheKey, coords_hash
+from app.services.forecasts.quota import call_weight, consume_open_meteo_budget
+from app.services.http import (
+    RETRYABLE_STATUS,
+    HttpTally,
+    PermanentProviderError,
+    ProviderError,
+    QuotaExhaustedError,
+    RunNotServedError,
+    TransientProviderError,
+    request_with_retries,
+)
 
 logger = logging.getLogger(__name__)
 
-WAVE_CORE = {
+HTTP_PROVIDER = "open_meteo"
+USER_AGENT = (
+    "SwellTravelAgent/1.0 (forecast ingestion; +https://github.com/eliasghizusfca/swellinformant)"
+)
+HostKind = Literal["marine", "api"]
+NO_DATA_REASON = "No data is available for this location"
+DEFAULT_UPDATE_INTERVAL_S = 6 * 3600
+
+# Wave variables of the GFS family (GFS-Wave's wave_period is its peak period PERPW).
+GFS_WAVE_CORE = {
     "wave_height": "sig_wave_height_m",
     "wave_direction": "wave_direction_deg",
     "wave_period": "wave_period_s",
@@ -49,10 +126,14 @@ WAVE_CORE = {
     "swell_wave_direction": "primary_swell_direction_deg",
     "swell_wave_period": "primary_swell_period_s",
 }
-WAVE_OPTIONAL = {
+# Dropped automatically when a model rejects them (HTTP 400 naming the variable).
+GFS_WAVE_OPTIONAL = {
     "secondary_swell_wave_height": "secondary_swell_height_m",
     "secondary_swell_wave_direction": "secondary_swell_direction_deg",
     "secondary_swell_wave_period": "secondary_swell_period_s",
+    "tertiary_swell_wave_height": "tertiary_swell_height_m",
+    "tertiary_swell_wave_direction": "tertiary_swell_direction_deg",
+    "tertiary_swell_wave_period": "tertiary_swell_period_s",
 }
 ATMOS = {
     "wind_speed_10m": "wind_speed_kmh",
@@ -60,23 +141,142 @@ ATMOS = {
     "wind_gusts_10m": "wind_gust_kmh",
     "pressure_msl": "pressure_msl_hpa",
 }
-SEA_LEVEL = {"sea_level_height_msl": "sea_level_m"}
+ATMOS_FIELDS = tuple(ATMOS.values())
+PARTITIONS = ("primary_swell", "secondary_swell", "tertiary_swell", "wind_wave")
 
-# Open-Meteo "domain" names used by the model metadata endpoint.
-META_DOMAINS = {
-    "ncep_gfswave025": "ncep_gfswave025",
-    "ncep_gfswave016": "ncep_gfswave016",
-    "gfs_global": "ncep_gfs025",
-    "gfs_seamless": "ncep_gfs025",
-    "gfs025": "ncep_gfs025",
+# The models' own output steps as (first lead h, last lead h, step h) segments, from the
+# Open-Meteo model pages (checked 2026-10-14) and NOAA's GFS / GFS-Wave file lists:
+# GFS "Hourly, 3-hourly after 120 hours"; GFS-Wave files are hourly to f120, then 3-hourly
+# to f384; IFS 0.25 open data "3-Hourly, 6-hourly after 144 hours" (ecWAM 0.25 likewise);
+# IFS HRES 9 km "1-Hourly, 3-hourly after 90 hours, 6-hourly after 144 hours".
+GFS_STEPS = ((0, 120, 1), (120, 384, 3))
+ECMWF_OPEN_STEPS = ((0, 144, 3), (144, 360, 6))
+ECMWF_HRES_STEPS = ((0, 90, 1), (90, 144, 3), (144, 360, 6))
+NATIVE_STEPS: dict[str, tuple[tuple[int, int, int], ...]] = {
+    "ncep_gfswave016": GFS_STEPS,
+    "ncep_gfswave025": GFS_STEPS,
+    "gfs_global": GFS_STEPS,
+    "gfs_seamless": GFS_STEPS,
+    "gfs025": GFS_STEPS,
+    "gfs013": GFS_STEPS,
+    "ecmwf_wam025": ECMWF_OPEN_STEPS,
+    "ecmwf_ifs025": ECMWF_OPEN_STEPS,
+    "ecmwf_wam": ECMWF_HRES_STEPS,
+    "ecmwf_ifs": ECMWF_HRES_STEPS,
 }
 
+# Metadata domains behind each API model name (``/data/{domain}/static/meta.json``).
+# gfs_global reads GFS 0.11/0.13 deg and falls back to 0.25 deg for some variables, so
+# both runs are recorded; gfs_seamless adds HRRR (hourly runs, CONUS only).
+META_DOMAINS: dict[str, tuple[tuple[HostKind, str], ...]] = {
+    "ncep_gfswave016": (("marine", "ncep_gfswave016"),),
+    "ncep_gfswave025": (("marine", "ncep_gfswave025"),),
+    "gfs_global": (("api", "ncep_gfs013"), ("api", "ncep_gfs025")),
+    "gfs_seamless": (("api", "ncep_hrrr_conus"), ("api", "ncep_gfs013"), ("api", "ncep_gfs025")),
+    "gfs025": (("api", "ncep_gfs025"),),
+    "gfs013": (("api", "ncep_gfs013"),),
+    "ecmwf_wam025": (("marine", "ecmwf_wam025"),),
+    "ecmwf_ifs025": (("api", "ecmwf_ifs025"),),
+}
+# Latitude domains used when a model's metadata has no BBOX (Open-Meteo meta.json,
+# 2026-10-14: ncep_gfswave016 BBOX[-15.0,-180.0,52.5,179.83334]).
+KNOWN_LATITUDE_DOMAINS: dict[str, tuple[float, float]] = {"ncep_gfswave016": (-15.0, 52.5)}
+# Grid spacing of the wave models (degrees). cell_selection=sea can still pick a cell the
+# wave model masks (no value in any hour: ecmwf_wam025 at Keramas and Puerto Escondido on
+# 2026-10-14); the neighbouring cells are then read (``_neighbour_cells``).
+WAVE_GRID_STEP_DEG: dict[str, float] = {
+    "ncep_gfswave016": 1 / 6,
+    "ncep_gfswave025": 0.25,
+    "ecmwf_wam025": 0.25,
+}
 
-def _chunks(items: Sequence[SpotPoint], size: int) -> Iterable[list[SpotPoint]]:
-    for i in range(0, len(items), size):
-        yield list(items[i : i + size])
+LICENCE_URL = "https://open-meteo.com/en/licence"
+ATTRIBUTION_LINK = "https://open-meteo.com/"
+_BBOX = re.compile(r"BBOX\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]")
 
 
+# --------------------------------------------------------------------------- metadata
+@dataclass(frozen=True)
+class ModelMeta:
+    """One Open-Meteo model domain's ``meta.json`` (times UTC)."""
+
+    domain: str
+    init_time: datetime
+    available_at: datetime | None
+    data_end: datetime | None
+    update_interval_s: int
+    temporal_resolution_s: int | None
+    bbox: tuple[float, float, float, float] | None  # lat_min, lon_min, lat_max, lon_max
+
+    @classmethod
+    def parse(cls, domain: str, data: dict[str, Any]) -> ModelMeta:
+        def stamp(name: str) -> datetime | None:
+            value = data.get(name)
+            return None if value in (None, "") else datetime.fromtimestamp(int(value), tz=UTC)
+
+        init = stamp("last_run_initialisation_time")
+        if init is None:
+            raise ValueError("no last_run_initialisation_time")
+        match = _BBOX.search(str(data.get("crs_wkt") or ""))
+        bbox = None
+        if match:
+            lat0, lon0, lat1, lon1 = (float(g) for g in match.groups())
+            bbox = (lat0, lon0, lat1, lon1)
+        resolution = data.get("temporal_resolution_seconds")
+        return cls(
+            domain=domain,
+            init_time=init,
+            available_at=stamp("last_run_availability_time"),
+            data_end=stamp("data_end_time"),
+            update_interval_s=int(data.get("update_interval_seconds") or DEFAULT_UPDATE_INTERVAL_S),
+            temporal_resolution_s=int(resolution) if resolution else None,
+            bbox=bbox,
+        )
+
+    def ready(self, now: datetime, wait: timedelta) -> bool:
+        """True once the newest run has been available for ``wait``."""
+        return self.available_at is None or now >= self.available_at + wait
+
+    def contains(self, lat: float, lon: float) -> bool:
+        if self.bbox is None:
+            bounds = KNOWN_LATITUDE_DOMAINS.get(self.domain)
+            return bounds is None or bounds[0] <= lat <= bounds[1]
+        lat0, lon0, lat1, lon1 = self.bbox
+        if not lat0 <= lat <= lat1:
+            return False
+        if lon1 - lon0 >= 359.0:  # global in longitude (the last column wraps)
+            return True
+        lon = ((lon + 180.0) % 360.0) - 180.0
+        return lon0 <= lon <= lon1
+
+
+def native_step_hours(model: str, lead_hours: float, fallback_s: int | None = None) -> int | None:
+    """The model's output spacing at ``lead_hours`` (forward), or None past its horizon."""
+    segments = NATIVE_STEPS.get(model)
+    if segments is None:
+        return None if not fallback_s else max(1, round(fallback_s / 3600))
+    for start, end, step in segments:
+        if start <= lead_hours < end:
+            return step
+    last_start, last_end, last_step = segments[-1]
+    return last_step if lead_hours == last_end else None
+
+
+def is_native_step(model: str, lead_hours: float, fallback_s: int | None = None) -> bool:
+    """True when the model itself outputs a value at this lead time."""
+    if lead_hours < 0 or lead_hours != math.floor(lead_hours):
+        return False
+    segments = NATIVE_STEPS.get(model)
+    if segments is None:
+        step = max(1, round((fallback_s or 3600) / 3600))
+        return int(lead_hours) % step == 0
+    return any(
+        start <= lead_hours <= end and (int(lead_hours) - start) % step == 0
+        for start, end, step in segments
+    )
+
+
+# --------------------------------------------------------------------------- errors
 class OpenMeteoError(PermanentProviderError):
     def __init__(self, reason: str, status: int) -> None:
         super().__init__(reason)
@@ -84,241 +284,789 @@ class OpenMeteoError(PermanentProviderError):
         self.status = status
 
 
-class OpenMeteoProvider(ForecastProvider):
-    code = "open_meteo_noaa"
+def _reason(resp: httpx.Response) -> str:
+    try:
+        body = resp.json()
+    except ValueError:
+        return f"HTTP {resp.status_code}"
+    if isinstance(body, dict) and body.get("reason"):
+        return str(body["reason"])
+    return f"HTTP {resp.status_code}"
+
+
+def _next_hour(now: datetime) -> float:
+    top = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    return max(60.0, (top - now).total_seconds())
+
+
+# --------------------------------------------------------------------------- records
+def _clean(values: dict[str, float | None]) -> dict[str, float | None]:
+    """Absent partitions to None, directions to [0, 360), calm wind without a direction."""
+    for prefix in PARTITIONS:
+        h = values.get(f"{prefix}_height_m")
+        if h is None or h <= 0:
+            for suffix in ("height_m", "period_s", "direction_deg"):
+                if f"{prefix}_{suffix}" in values:
+                    values[f"{prefix}_{suffix}"] = None
+            continue
+        period = values.get(f"{prefix}_period_s")
+        if period is not None and period <= 0:
+            values[f"{prefix}_period_s"] = None
+    hs = values.get("sig_wave_height_m")
+    if hs is not None and hs <= 0:
+        values["sig_wave_height_m"] = None
+    period = values.get("wave_period_s")
+    if period is not None and period <= 0:
+        values["wave_period_s"] = None
+    for name in [k for k in values if k.endswith("direction_deg")]:
+        d = values[name]
+        if d is not None:
+            values[name] = round(d % 360.0, 1) % 360.0
+    speed = values.get("wind_speed_kmh")
+    if speed is not None and speed <= 0:
+        values["wind_direction_deg"] = None  # calm: no direction (geo.wind_from_uv)
+    return values
+
+
+def _cell(item: dict[str, Any], lat: float, lon: float) -> dict[str, float] | None:
+    clat, clon = item.get("latitude"), item.get("longitude")
+    if clat is None or clon is None:
+        return None
+    return {
+        "lat": round(float(clat), 4),
+        "lon": round(float(clon), 4),
+        "distance_km": round(haversine_km(lat, lon, float(clat), float(clon)), 1),
+    }
+
+
+@dataclass
+class Series:
+    """One location's hourly arrays from one response."""
+
+    model: str
+    item: dict[str, Any]
+    mapping: dict[str, str]
+
+    def by_time(self) -> dict[int, dict[str, float | None]]:
+        hourly = self.item.get("hourly") or {}
+        times = hourly.get("time") or []
+        out: dict[int, dict[str, float | None]] = {}
+        for idx, ts in enumerate(times):
+            row: dict[str, float | None] = {}
+            for api_name, name in self.mapping.items():
+                values = hourly.get(api_name)
+                value = values[idx] if values is not None and idx < len(values) else None
+                row[name] = None if value is None else float(value)
+            out[int(ts)] = row
+        return out
+
+    def has_wave_height(self) -> bool:
+        """Whether any hour has a significant wave height (False: a masked cell)."""
+        names = [api for api, name in self.mapping.items() if name == "sig_wave_height_m"]
+        hourly = self.item.get("hourly") or {}
+        return any(v is not None for api in names for v in hourly.get(api) or [])
+
+
+@dataclass
+class _Fetch:
+    """State of one fetch() call."""
+
+    labelled: dict[str, datetime]
+    metas: dict[str, ModelMeta]
+    cache_writes: list[tuple[ProviderCacheKey, bytes, int]] = field(default_factory=list)
+    data_requests: int = 0
+    cache_hits: int = 0
+    weighted_calls: float = 0.0
+    warnings: list[str] = field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- provider
+class OpenMeteoFamilyProvider(ForecastProvider):
+    """Shared Open-Meteo logic; subclasses choose the models, variables and labels."""
+
+    family: ClassVar[str]
+    atmos_path: ClassVar[str]
+    gust_kind: ClassVar[str] = "unknown"
+    # Only runs initialised at these UTC hours are read (None = every run).
+    cycle_hours: ClassVar[tuple[int, ...] | None] = None
+    max_forecast_days: ClassVar[int] = 16
+    period_kind: ClassVar[str | None] = "tp"
 
     def __init__(
         self,
         settings: Settings | None = None,
         client: httpx.Client | None = None,
         backoff_seconds: float = 1.0,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.client = client or httpx.Client(
             timeout=self.settings.forecast_http_timeout_seconds,
-            headers={"User-Agent": "SwellTravelAgent/1.0 (forecast ingestion)"},
+            headers={"User-Agent": USER_AGENT},
         )
+        self.tally = HttpTally()
+        self.tally.install(self.client)
         self.backoff_seconds = backoff_seconds
+        self.clock = clock or utcnow
         key = self.settings.open_meteo_api_key
         prefix = "customer-" if key else ""
-        self.marine_url = f"https://{prefix}marine-api.open-meteo.com/v1/marine"
-        self.gfs_url = f"https://{prefix}api.open-meteo.com/v1/gfs"
-        self.marine_meta_host = f"https://{prefix}marine-api.open-meteo.com"
-        self.gfs_meta_host = f"https://{prefix}api.open-meteo.com"
-        self.wave_model = self.settings.open_meteo_wave_model
-        self.atmos_model = self.settings.open_meteo_atmos_model
+        self.hosts: dict[HostKind, str] = {
+            "marine": f"https://{prefix}marine-api.open-meteo.com",
+            "api": f"https://{prefix}api.open-meteo.com",
+        }
+        self.wait = timedelta(minutes=self.settings.open_meteo_availability_wait_minutes)
+        self.days = min(self.settings.forecast_days, self.max_forecast_days)
         self.request_count = 0
+        # Weighted calls charged by this instance, failed fetches included (ingestion
+        # records the share of a fetch that raised).
+        self.weighted_calls_total = 0.0
 
-    # ------------------------------------------------------------------ metadata
+    # ---------------------------------------------------------------- subclass hooks
+    def wave_models(self) -> list[str]:
+        raise NotImplementedError
+
+    def atmos_model(self) -> str:
+        raise NotImplementedError
+
+    def wave_variables(self, optional: bool) -> dict[str, str]:
+        raise NotImplementedError
+
+    def wave_extra(self, row: dict[str, float | None]) -> dict[str, object]:
+        """Values of a wave row that go to ``extra`` instead of ``values``."""
+        return {}
+
+    def gust_kind_at(self, lead_hours: float) -> str:
+        return self.gust_kind
+
+    def attribution(self) -> str:
+        raise NotImplementedError
+
+    def display_name(self) -> str:
+        raise NotImplementedError
+
+    # ---------------------------------------------------------------- metadata
     def source_info(self) -> SourceInfo:
         return SourceInfo(
             code=self.code,
-            name="NOAA GFS + GFS-Wave (WAVEWATCH III) via Open-Meteo",
+            name=self.display_name(),
             provider="open_meteo",
-            wave_model=self.wave_model,
-            atmosphere_model=self.atmos_model,
+            wave_model=",".join(self.wave_models()),
+            atmosphere_model=self.atmos_model(),
             is_demo=False,
-            attribution="Weather data by Open-Meteo.com (CC BY 4.0); model data NOAA/NCEP.",
+            attribution=self.attribution(),
             license_notes=(
-                "Free tier is non-commercial and rate limited; commercial use requires an "
-                "Open-Meteo API subscription (OPEN_METEO_API_KEY)."
+                f"Open-Meteo data are CC BY 4.0 ({LICENCE_URL}): credit Open-Meteo with a link "
+                f"({ATTRIBUTION_LINK}) next to the data and the model providers. The free API "
+                "is for non-commercial use only (600 calls/min, 5,000/h, 10,000/day, "
+                "300,000/month); commercial use needs an Open-Meteo API subscription "
+                "(OPEN_METEO_API_KEY). Values are sampled at Open-Meteo's chosen grid cell "
+                "and only the models' own output steps are kept."
             ),
-            family=family_for_open_meteo_model(self.wave_model),
+            family=self.family,
+            kind="deterministic",
         )
 
-    def _get(self, url: str, params: dict[str, Any]) -> httpx.Response:
+    def domains(self) -> list[tuple[str, HostKind, str]]:
+        """(model, host kind, meta domain) for every model this provider requests."""
+        requested: list[tuple[str, HostKind]] = [(m, "marine") for m in self.wave_models()]
+        requested.append((self.atmos_model(), "api"))
+        out: list[tuple[str, HostKind, str]] = []
+        for model, kind in requested:
+            for host, domain in META_DOMAINS.get(model, ((kind, model),)):
+                out.append((model, host, domain))
+        return out
+
+    def _params(self, params: dict[str, Any]) -> dict[str, Any]:
         if self.settings.open_meteo_api_key:
-            params = {**params, "apikey": self.settings.open_meteo_api_key}
-        self.request_count += 1
-        return request_with_retries(
-            self.client,
-            "GET",
-            url,
-            provider="open_meteo",
-            quota=self.settings.forecast_daily_request_quota,
-            backoff_seconds=self.backoff_seconds,
-            params=params,
-        )
+            return {**params, "apikey": self.settings.open_meteo_api_key}
+        return params
 
-    def _model_run_time(self, host: str, model: str) -> datetime | None:
-        domain = META_DOMAINS.get(model, model)
-        try:
-            resp = self._get(f"{host}/data/{domain}/static/meta.json", {})
-        except TransientProviderError as exc:
-            logger.warning("Open-Meteo metadata unavailable for %s: %s", domain, exc)
-            return None
-        if resp.status_code != 200:
-            logger.warning("Open-Meteo metadata for %s returned HTTP %s", domain, resp.status_code)
-            return None
-        try:
-            ts = resp.json().get("last_run_initialisation_time")
-            return datetime.fromtimestamp(int(ts), tz=UTC) if ts else None
-        except (ValueError, TypeError):
-            return None
+    def read_metas(self) -> dict[str, ModelMeta]:
+        """``meta.json`` of every domain (free calls: not charged to the budget)."""
+        metas: dict[str, ModelMeta] = {}
+        for _, host, domain in self.domains():
+            if domain in metas:
+                continue
+            url = f"{self.hosts[host]}/data/{domain}/static/meta.json"
+            resp = request_with_retries(
+                self.client,
+                "GET",
+                url,
+                provider=HTTP_PROVIDER,
+                backoff_seconds=self.backoff_seconds,
+                params=self._params({}),
+            )
+            if resp.status_code != 200:
+                raise TransientProviderError(
+                    f"Open-Meteo metadata for {domain} returned HTTP {resp.status_code}: the "
+                    "model run cannot be identified, so nothing is fetched"
+                )
+            try:
+                metas[domain] = ModelMeta.parse(domain, resp.json())
+            except (ValueError, TypeError) as exc:
+                raise TransientProviderError(
+                    f"Open-Meteo metadata for {domain} is unreadable ({exc}): the model run "
+                    "cannot be identified, so nothing is fetched"
+                ) from exc
+        return metas
+
+    def _allowed(self, init: datetime) -> bool:
+        return self.cycle_hours is None or init.hour in self.cycle_hours
+
+    def labelled_init(self, meta: ModelMeta, now: datetime) -> datetime:
+        """The run this provider treats as current for one domain (see module docstring)."""
+        if meta.ready(now, self.wait) and self._allowed(meta.init_time):
+            return meta.init_time
+        step = timedelta(seconds=meta.update_interval_s)
+        t = meta.init_time - step
+        for _ in range(48):
+            if self._allowed(t):
+                return t
+            t -= step
+        return meta.init_time - step
 
     def current_run(self, now: datetime) -> RunInfo:
-        wave_run = self._model_run_time(self.marine_meta_host, self.wave_model)
-        atmos_run = self._model_run_time(self.gfs_meta_host, self.atmos_model)
-        meta_source = "open_meteo_meta"
-        if wave_run is None or atmos_run is None:
-            # Unavailable metadata (endpoint down or changed): assume the nominal NOAA cycle.
-            cycle = nominal_gfs_cycle(now)
-            wave_run = wave_run or cycle
-            atmos_run = atmos_run or cycle
-            meta_source = "nominal_cycle"
-        run_key = f"{self.wave_model}:{wave_run:%Y%m%d%H}|{self.atmos_model}:{atmos_run:%Y%m%d%H}"
+        metas = self.read_metas()
+        refs: list[ModelRunRef] = []
+        seen: set[str] = set()
+        for _, _, domain in self.domains():
+            if domain in seen:
+                continue
+            seen.add(domain)
+            meta = metas[domain]
+            init = self.labelled_init(meta, now)
+            available = meta.available_at if init == meta.init_time else None
+            refs.append(ModelRunRef(model=domain, init_time=init, available_at=available))
+        by_domain = {r.model: r.init_time for r in refs}
+        wave_domains = {d for m, _, d in self.domains() if m in self.wave_models()}
+        atmos_domains = {d for m, _, d in self.domains() if m == self.atmos_model()}
+        key = "|".join(f"{r.model.removeprefix('ncep_')}:{r.init_time:%Y%m%d%H}" for r in refs)
         return RunInfo(
-            run_key=run_key,
-            issued_at=min(wave_run, atmos_run),
-            wave_model_run_at=wave_run,
-            atmosphere_model_run_at=atmos_run,
-            metadata_source=meta_source,
+            run_key=key,
+            issued_at=min(by_domain.values()),
+            wave_model_run_at=min(by_domain[d] for d in wave_domains),
+            atmosphere_model_run_at=min(by_domain[d] for d in atmos_domains),
+            metadata_source="open_meteo_meta",
+            model_runs=tuple(refs),
         )
 
-    # ------------------------------------------------------------------ data
-    def _request_points(
+    def ensure_servable(self, run: RunInfo, now: datetime | None = None) -> dict[str, ModelMeta]:
+        """Raise :class:`RunNotServedError` unless Open-Meteo serves exactly ``run`` now.
+
+        Called by ingestion before a run is recorded, and again by :meth:`fetch`.
+        """
+        now = now or self.clock()
+        metas = self.read_metas()
+        labelled = {ref.model: ref.init_time for ref in run.model_runs}
+        for domain, init in labelled.items():
+            meta = metas.get(domain)
+            if meta is None:
+                raise RunNotServedError(f"Open-Meteo has no metadata for {domain}")
+            if meta.init_time == init and meta.ready(now, self.wait):
+                continue
+            if meta.init_time > init and not meta.ready(now, self.wait):
+                assert meta.available_at is not None  # ready() is True without it
+                wait_s = (meta.available_at + self.wait - now).total_seconds()
+                raise RunNotServedError(
+                    f"Open-Meteo is publishing {domain} run {meta.init_time:%Y-%m-%d %H}Z "
+                    f"(available {meta.available_at:%H:%M} UTC); it is read "
+                    f"{self.wait.total_seconds() / 60:g} min after that",
+                    retry_after_s=max(30.0, wait_s + 30.0),
+                )
+            if meta.init_time > init and self._allowed(meta.init_time):
+                raise RunNotServedError(
+                    f"Open-Meteo published {domain} run {meta.init_time:%Y-%m-%d %H}Z while run "
+                    f"{init:%Y-%m-%d %H}Z was being acquired; the newer run is read on the retry",
+                    retry_after_s=60.0,
+                )
+            if meta.init_time > init:
+                raise RunNotServedError(
+                    f"Open-Meteo now serves {domain} run {meta.init_time:%Y-%m-%d %H}Z, which "
+                    f"this source does not read (only {self._cycles_text()} runs), and fills "
+                    f"the hours after its horizon from older runs: run {init:%Y-%m-%d %H}Z can "
+                    "no longer be read unmixed; the next one is read once it is published"
+                )
+            raise RunNotServedError(
+                f"Open-Meteo serves {domain} run {meta.init_time:%Y-%m-%d %H}Z, older than the "
+                f"run being acquired ({init:%Y-%m-%d %H}Z)",
+                retry_after_s=300.0,
+            )
+        return metas
+
+    def _cycles_text(self) -> str:
+        hours = self.cycle_hours or ()
+        return "/".join(f"{h:02d}" for h in hours) + "Z"
+
+    # ---------------------------------------------------------------- requests
+    def _charge(self, state: _Fetch, weight: float) -> Callable[[], None]:
+        def charge() -> None:
+            consume_open_meteo_budget(weight, settings=self.settings)
+            state.weighted_calls += weight
+            self.weighted_calls_total += weight
+
+        return charge
+
+    def _request(
         self,
-        url: str,
+        state: _Fetch,
+        host: HostKind,
+        path: str,
+        model: str,
         lats: list[float],
         lons: list[float],
         variables: list[str],
         extra: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        cell_selection = self.settings.open_meteo_cell_selection
         params = {
             "latitude": ",".join(f"{x:.4f}" for x in lats),
             "longitude": ",".join(f"{x:.4f}" for x in lons),
             "hourly": ",".join(variables),
-            "forecast_days": self.settings.forecast_days,
+            "models": model,
+            "forecast_days": self.days,
             "timezone": "GMT",
             "timeformat": "unixtime",
+            "cell_selection": cell_selection,
             **extra,
         }
-        resp = self._get(url, params)
-        if resp.status_code != 200:
-            reason = f"HTTP {resp.status_code}"
-            try:
-                body = resp.json()
-                reason = str(body.get("reason") or reason)
-            except ValueError:
-                pass
-            raise OpenMeteoError(reason, resp.status_code)
-        data = resp.json()
+        runs = {
+            d: state.labelled[d] for m, _, d in self.domains() if m == model and d in state.labelled
+        }
+        inits = list(runs.values())
+        # Every domain's run is part of the key: gfs_global reads GFS 0.13 and 0.25 deg,
+        # which Open-Meteo publishes minutes apart, so a body fetched while only one of them
+        # was new must not be served for the run in which both are.
+        run_ids = ",".join(f"{d}:{t:%Y%m%d%H%M}" for d, t in sorted(runs.items()))
+        key = ProviderCacheKey(
+            provider=self.code,
+            model=model,
+            run_init_time=max(inits) if inits else None,
+            coords_hash=coords_hash(
+                lats, lons, cell_selection, str(self.days), json.dumps(extra), run_ids
+            ),
+            variables=",".join(variables),
+        )
+        body = provider_cache.get(key, self.settings) if inits else None
+        if body is not None:
+            state.cache_hits += 1
+        else:
+            weight = call_weight(len(lats), len(variables), self.days)
+            state.data_requests += 1
+            resp = request_with_retries(
+                self.client,
+                "GET",
+                f"{self.hosts[host]}{path}",
+                provider=HTTP_PROVIDER,
+                backoff_seconds=self.backoff_seconds,
+                retry_statuses=RETRYABLE_STATUS - {429},
+                before_attempt=self._charge(state, weight),
+                params=self._params(params),
+            )
+            self._raise_for_status(resp)
+            body = resp.content
+            ttl = max(
+                (state.metas[d].update_interval_s for m, _, d in self.domains() if m == model),
+                default=DEFAULT_UPDATE_INTERVAL_S,
+            )
+            if inits:
+                state.cache_writes.append((key, body, ttl))
+        try:
+            data = json.loads(body)
+        except ValueError as exc:
+            raise TransientProviderError(f"Open-Meteo returned unreadable JSON: {exc}") from exc
         items = data if isinstance(data, list) else [data]
         if len(items) != len(lats):
             raise PermanentProviderError(
                 f"Open-Meteo returned {len(items)} locations for {len(lats)} requested"
             )
-        return items
+        return [i for i in items if isinstance(i, dict)]
 
-    def _fetch_group(
-        self,
-        url: str,
-        points: list[SpotPoint],
-        mapping: dict[str, str],
-        optional: dict[str, str],
-        extra: dict[str, Any],
-        use_forecast_point: bool,
-    ) -> tuple[dict[int, dict[int, dict[str, float | None]]], dict[int, str]]:
-        """Fetch one variable group for a batch; on a location error, isolate per spot."""
-        lats = [p.forecast_latitude if use_forecast_point else p.latitude for p in points]
-        lons = [p.forecast_longitude if use_forecast_point else p.longitude for p in points]
-        variables = {**mapping, **optional}
-        try:
-            items = self._request_points(url, lats, lons, list(variables), extra)
-        except OpenMeteoError as exc:
-            if optional and exc.status == 400 and any(v in exc.reason for v in optional):
-                logger.info(
-                    "Open-Meteo rejected optional variables (%s); retrying without", exc.reason
+    def _raise_for_status(self, resp: httpx.Response) -> None:
+        if resp.status_code == 200:
+            return
+        reason = _reason(resp)
+        if resp.status_code == 429:
+            low = reason.lower()
+            if "daily" in low or "monthly" in low:
+                raise QuotaExhaustedError(f"Open-Meteo: {reason}")
+            retry = _next_hour(self.clock()) if "hourly" in low else 60.0
+            raise TransientProviderError(f"Open-Meteo: {reason}", retry_after_s=retry)
+        if resp.status_code >= 500:
+            raise TransientProviderError(f"Open-Meteo HTTP {resp.status_code}: {reason}")
+        raise OpenMeteoError(reason, resp.status_code)
+
+    def _fetch_waves(
+        self, state: _Fetch, points: list[SpotPoint]
+    ) -> tuple[dict[int, Series], dict[int, str]]:
+        """Each spot's wave series from the first model whose domain holds its point."""
+        models = self.wave_models()
+        route: dict[int, int] = {}
+        for p in points:
+            idx = next(
+                (
+                    i
+                    for i, m in enumerate(models)
+                    if all(
+                        state.metas[d].contains(p.forecast_latitude, p.forecast_longitude)
+                        for mm, _, d in self.domains()
+                        if mm == m
+                    )
+                ),
+                len(models) - 1,
+            )
+            route[p.spot_id] = idx
+        series: dict[int, Series] = {}
+        errors: dict[int, str] = {}
+        for idx, model in enumerate(models):
+            group = [p for p in points if route.get(p.spot_id) == idx]
+            for chunk in _chunks(group, self.settings.forecast_batch_size):
+                self._wave_chunk(state, model, idx, chunk, route, series, errors)
+        self._neighbour_cells(state, points, series)
+        return series, errors
+
+    def _neighbour_cells(
+        self, state: _Fetch, points: list[SpotPoint], series: dict[int, Series]
+    ) -> None:
+        """Replace a wave cell without data in any hour by the nearest neighbouring cell
+        that has data.
+
+        The direct GRIB ingesters sample the nearest valid wave cell; Open-Meteo's
+        cell_selection=sea can still answer from a cell the wave model masks. The eight
+        cells one grid step around it (inside the model's domain) are read in one request
+        per model, and the one nearest the forecast point with data, at most
+        GRIB_MAX_CELL_DISTANCE_KM away, is used (recorded in the run's warnings and the
+        spot's extra.wave_cell). Without one, the spot stays without wave data.
+        """
+        groups: dict[tuple[str, tuple[str, ...]], list[SpotPoint]] = {}
+        for p in points:
+            s = series.get(p.spot_id)
+            if s is not None and not s.has_wave_height() and s.model in WAVE_GRID_STEP_DEG:
+                groups.setdefault((s.model, tuple(s.mapping)), []).append(p)
+        limit = self.settings.grib_max_cell_distance_km
+        for (model, _), group in groups.items():
+            step = WAVE_GRID_STEP_DEG[model]
+            mapping = series[group[0].spot_id].mapping
+            metas = [state.metas[d] for m, _, d in self.domains() if m == model]
+            owners: list[tuple[SpotPoint, float, float]] = []
+            for p in group:
+                item = series[p.spot_id].item
+                clat = float(item.get("latitude", p.forecast_latitude))
+                clon = float(item.get("longitude", p.forecast_longitude))
+                for dj, di in itertools.product((-1, 0, 1), repeat=2):
+                    lat, lon = clat + dj * step, (clon + di * step + 180.0) % 360.0 - 180.0
+                    if (dj or di) and -90 <= lat <= 90 and all(m.contains(lat, lon) for m in metas):
+                        owners.append((p, lat, lon))
+            found: dict[int, tuple[float, Series]] = {}
+            size = max(1, self.settings.forecast_batch_size)
+            for start in range(0, len(owners), size):
+                chunk = owners[start : start + size]
+                try:
+                    items = self._request(
+                        state,
+                        "marine",
+                        "/v1/marine",
+                        model,
+                        [o[1] for o in chunk],
+                        [o[2] for o in chunk],
+                        list(mapping),
+                        {},
+                    )
+                except OpenMeteoError as exc:
+                    state.warnings.append(f"{model}: neighbouring cells not read ({exc.reason})")
+                    break
+                for (p, _, _), item in zip(chunk, items, strict=True):
+                    candidate = Series(model, item, mapping)
+                    cell = _cell(item, p.forecast_latitude, p.forecast_longitude)
+                    if cell is None or cell["distance_km"] > limit:
+                        continue
+                    best = found.get(p.spot_id)
+                    if candidate.has_wave_height() and (
+                        best is None or cell["distance_km"] < best[0]
+                    ):
+                        found[p.spot_id] = (cell["distance_km"], candidate)
+            for p in group:
+                old = series[p.spot_id].item
+                where = f"cell ({old.get('latitude')}, {old.get('longitude')})"
+                if p.spot_id not in found:
+                    state.warnings.append(
+                        f"{p.slug}: {model} {where} has no wave data, nor has any neighbouring "
+                        f"cell within {limit:g} km"
+                    )
+                    continue
+                distance, replacement = found[p.spot_id]
+                series[p.spot_id] = replacement
+                new = replacement.item
+                state.warnings.append(
+                    f"{p.slug}: {model} {where} has no wave data; the neighbouring cell "
+                    f"({new.get('latitude')}, {new.get('longitude')}), {distance:g} km from "
+                    "the forecast point, is used"
                 )
-                return self._fetch_group(url, points, mapping, {}, extra, use_forecast_point)
-            if len(points) > 1 and exc.status == 400:
-                # One bad location (e.g. outside the model domain) fails the whole batch.
-                out: dict[int, dict[int, dict[str, float | None]]] = {}
-                errs: dict[int, str] = {}
-                for p in points:
-                    o, e = self._fetch_group(url, [p], mapping, optional, extra, use_forecast_point)
-                    out.update(o)
-                    errs.update(e)
-                return out, errs
-            return {}, {p.spot_id: exc.reason for p in points}
-        result: dict[int, dict[int, dict[str, float | None]]] = {}
-        for point, item in zip(points, items, strict=True):
-            hourly = item.get("hourly") or {}
-            times = hourly.get("time") or []
-            series: dict[int, dict[str, float | None]] = {}
-            for idx, ts in enumerate(times):
-                row: dict[str, float | None] = {}
-                for api_name, field in variables.items():
-                    values = hourly.get(api_name)
-                    val = values[idx] if values is not None and idx < len(values) else None
-                    row[field] = float(val) if val is not None else None
-                series[int(ts)] = row
-            result[point.spot_id] = series
-        return result, {}
 
+    def _wave_chunk(
+        self,
+        state: _Fetch,
+        model: str,
+        idx: int,
+        chunk: list[SpotPoint],
+        route: dict[int, int],
+        series: dict[int, Series],
+        errors: dict[int, str],
+        optional: bool = True,
+    ) -> None:
+        mapping = self.wave_variables(optional)
+        lats = [p.forecast_latitude for p in chunk]
+        lons = [p.forecast_longitude for p in chunk]
+        try:
+            items = self._request(
+                state, "marine", "/v1/marine", model, lats, lons, list(mapping), {}
+            )
+        except OpenMeteoError as exc:
+            optional_names = set(self.wave_variables(True)) - set(self.wave_variables(False))
+            if optional and exc.status == 400 and any(n in exc.reason for n in optional_names):
+                logger.info("Open-Meteo %s rejected optional variables (%s)", model, exc.reason)
+                state.warnings.append(f"{model}: optional variables dropped ({exc.reason})")
+                self._wave_chunk(state, model, idx, chunk, route, series, errors, optional=False)
+                return
+            if exc.status == 400 and len(chunk) > 1:
+                # One point outside the model's domain fails the whole request.
+                for p in chunk:
+                    self._wave_chunk(state, model, idx, [p], route, series, errors, optional)
+                return
+            if exc.status == 400 and idx + 1 < len(self.wave_models()):
+                nxt = self.wave_models()[idx + 1]
+                state.warnings.append(f"{chunk[0].slug}: {model} refused ({exc.reason}); {nxt}")
+                route[chunk[0].spot_id] = idx + 1  # read with the next model's group
+                return
+            for p in chunk:
+                errors[p.spot_id] = f"wave data ({model}): {exc.reason}"
+            return
+        for p, item in zip(chunk, items, strict=True):
+            series[p.spot_id] = Series(model, item, mapping)
+            errors.pop(p.spot_id, None)
+
+    def _fetch_atmos(
+        self, state: _Fetch, points: list[SpotPoint]
+    ) -> tuple[dict[int, Series], dict[int, str]]:
+        model = self.atmos_model()
+        series: dict[int, Series] = {}
+        errors: dict[int, str] = {}
+        pending = [list(c) for c in _chunks(points, self.settings.forecast_batch_size)]
+        while pending:
+            chunk = pending.pop(0)
+            try:
+                items = self._request(
+                    state,
+                    "api",
+                    self.atmos_path,
+                    model,
+                    [p.latitude for p in chunk],
+                    [p.longitude for p in chunk],
+                    list(ATMOS),
+                    {"wind_speed_unit": "kmh"},
+                )
+            except OpenMeteoError as exc:
+                if exc.status == 400 and len(chunk) > 1:
+                    pending = [[p] for p in chunk] + pending
+                    continue
+                for p in chunk:
+                    errors[p.spot_id] = f"{model}: {exc.reason}"
+                continue
+            for p, item in zip(chunk, items, strict=True):
+                series[p.spot_id] = Series(model, item, ATMOS)
+        return series, errors
+
+    # ---------------------------------------------------------------- fetch
     def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+        """Waves and wind for every spot, for exactly the run ``run`` names."""
         result = FetchResult()
         self.request_count = 0
-        for batch in _chunks(spots, self.settings.forecast_batch_size):
-            try:
-                waves, wave_err = self._fetch_group(
-                    self.marine_url,
-                    batch,
-                    WAVE_CORE,
-                    WAVE_OPTIONAL,
-                    {"models": self.wave_model},
-                    use_forecast_point=True,
+        before = self.tally.snapshot()
+        if not run.model_runs:
+            raise PermanentProviderError(
+                f"run {run.run_key!r} lists no model runs: an Open-Meteo run is identified by "
+                "current_run()"
+            )
+        metas = self.ensure_servable(run)
+        state = _Fetch(labelled={r.model: r.init_time for r in run.model_runs}, metas=metas)
+        try:
+            waves, wave_errors = self._fetch_waves(state, spots)
+            atmos, atmos_errors = self._fetch_atmos(state, spots) if waves else ({}, {})
+        except ProviderError:
+            # A later request failed (a call budget, a timeout): keep the responses that
+            # arrived for this run, so the task's retry does not download and pay for them
+            # again (only if the run is still the one Open-Meteo serves).
+            with contextlib.suppress(ProviderError):
+                if not self._changed_runs(state):
+                    self._save_responses(state)
+            raise
+        if waves:
+            changed = self._changed_runs(state)
+            if changed:
+                raise TransientProviderError(
+                    "Open-Meteo published a new run during the fetch ("
+                    + ", ".join(changed)
+                    + "): the responses may mix runs, so nothing is stored",
+                    retry_after_s=self.wait.total_seconds() + 60.0,
                 )
-            except (TransientProviderError, PermanentProviderError) as exc:
-                for p in batch:
-                    result.errors[p.spot_id] = f"wave data: {exc}"
-                continue
-            try:
-                atmos, atmos_err = self._fetch_group(
-                    self.gfs_url,
-                    batch,
-                    ATMOS,
-                    {},
-                    {"models": self.atmos_model, "wind_speed_unit": "kmh"},
-                    use_forecast_point=False,
-                )
-            except (TransientProviderError, PermanentProviderError) as exc:
-                atmos, atmos_err = {}, {p.spot_id: str(exc) for p in batch}
-            try:
-                tides, _ = self._fetch_group(
-                    self.marine_url, batch, SEA_LEVEL, {}, {}, use_forecast_point=True
-                )
-            except (TransientProviderError, PermanentProviderError) as exc:
-                result.warnings.append(f"sea level unavailable: {exc}")
-                tides = {}
+        self._save_responses(state)
 
-            for p in batch:
-                if p.spot_id in wave_err or p.spot_id not in waves:
-                    result.errors[p.spot_id] = f"wave data: {wave_err.get(p.spot_id, 'missing')}"
-                    continue
-                if p.spot_id in atmos_err:
-                    result.warnings.append(
-                        f"{p.slug}: wind data unavailable ({atmos_err[p.spot_id]})"
-                    )
-                records: list[ForecastRecord] = []
-                for ts, wave_vals in sorted(waves[p.spot_id].items()):
-                    if all(v is None for v in wave_vals.values()):
-                        continue
-                    values = dict(wave_vals)
-                    values.update(atmos.get(p.spot_id, {}).get(ts, {}))
-                    values.update(tides.get(p.spot_id, {}).get(ts, {}))
-                    records.append(
-                        ForecastRecord(
-                            valid_time=datetime.fromtimestamp(ts, tz=UTC),
-                            values=values,
-                            period_kind=period_kind_for_open_meteo(self.wave_model),
-                        )
-                    )
-                if records:
-                    result.records[p.spot_id] = records
-                else:
-                    result.errors[p.spot_id] = (
-                        "no wave data at forecast point (land or outside model)"
-                    )
-        result.request_count = self.request_count
+        for p in spots:
+            if p.spot_id not in waves:
+                result.errors[p.spot_id] = wave_errors.get(p.spot_id, "wave data: missing")
+                continue
+            records = self._records(p, waves[p.spot_id], atmos.get(p.spot_id), state)
+            if not records:
+                result.errors[p.spot_id] = (
+                    "no wave data at the forecast point (land or outside model)"
+                )
+                continue
+            result.records[p.spot_id] = records
+            if p.spot_id in atmos_errors or p.spot_id not in atmos:
+                reason = atmos_errors.get(p.spot_id, "missing")
+                result.errors[p.spot_id] = f"incomplete: wind and pressure unavailable ({reason})"
+        responses, wire_bytes, statuses = self.tally.snapshot()
+        statuses = {
+            k: v - before[2].get(k, 0) for k, v in statuses.items() if v - before[2].get(k, 0)
+        }
+        result.request_count = responses - before[0]
+        self.request_count = result.request_count
+        result.stats = FetchStats(
+            bytes_downloaded=wire_bytes - before[1],
+            requests=result.request_count,
+            http_status_counts=statuses,
+            weighted_calls=round(state.weighted_calls, 3),
+        )
+        result.warnings.insert(
+            0,
+            f"Open-Meteo: {state.data_requests} data requests ({state.cache_hits} more served "
+            f"from the cache), {state.weighted_calls:.1f} weighted calls, "
+            f"{(wire_bytes - before[1]) / 1e3:.1f} kB in {result.request_count} HTTP responses",
+        )
+        result.warnings.extend(state.warnings)
         return result
+
+    def _changed_runs(self, state: _Fetch) -> list[str]:
+        """Domains whose current run differs from the one being fetched (meta.json, free)."""
+        after = self.read_metas()
+        return [
+            f"{d} {after[d].init_time:%Y-%m-%d %H}Z"
+            for d, init in state.labelled.items()
+            if d in after and after[d].init_time != init
+        ]
+
+    def _save_responses(self, state: _Fetch) -> None:
+        for key, body, ttl in state.cache_writes:
+            provider_cache.put(key, body, ttl, self.settings)
+        state.cache_writes.clear()
+
+    def _model_meta(self, state: _Fetch, model: str) -> tuple[datetime, datetime | None, int]:
+        """(run init, data end, temporal resolution in s) of one requested model.
+
+        A model read from several metadata domains (gfs_global: GFS 0.13 and 0.25 deg)
+        takes the earliest init and end, so no hour of a newer or longer run slips in.
+        """
+        domains = [d for m, _, d in self.domains() if m == model]
+        inits = [state.labelled[d] for d in domains if d in state.labelled]
+        ends = [e for d in domains if (e := state.metas[d].data_end) is not None]
+        resolutions = [r for d in domains if (r := state.metas[d].temporal_resolution_s)]
+        init = min(inits) if inits else min(state.labelled.values())
+        return init, (min(ends) if ends else None), (min(resolutions) if resolutions else 3600)
+
+    def _records(
+        self, p: SpotPoint, wave: Series, atmos: Series | None, state: _Fetch
+    ) -> list[ForecastRecord]:
+        atmos_model = self.atmos_model()
+        wave_init, wave_end, wave_res = self._model_meta(state, wave.model)
+        atmos_init, atmos_end, atmos_res = self._model_meta(state, atmos_model)
+        max_lead = self.days * 24
+        native_only = self.settings.open_meteo_native_steps_only
+        atmos_rows = atmos.by_time() if atmos is not None else {}
+        records: list[ForecastRecord] = []
+        for ts, row in sorted(wave.by_time().items()):
+            t = datetime.fromtimestamp(ts, tz=UTC)
+            lead = (t - wave_init).total_seconds() / 3600.0
+            # Before the run's initialisation or after its last step: other runs' data.
+            if lead < 0 or lead > max_lead or (wave_end is not None and t >= wave_end):
+                continue
+            native = is_native_step(wave.model, lead, wave_res)
+            if native_only and not native:
+                continue
+            values: dict[str, float | None] = dict.fromkeys(FORECAST_FIELDS)
+            values.update({k: v for k, v in row.items() if k in values})
+            values = _clean(values)
+            if all(values[k] is None for k in row if k in values):
+                continue  # masked cell (land, ice) at this hour
+            extra: dict[str, object] = {}
+            interpolated = [] if native else [k for k in row if values.get(k) is not None]
+            a_row = atmos_rows.get(ts)
+            a_lead = (t - atmos_init).total_seconds() / 3600.0
+            if a_row is not None and a_lead >= 0 and (atmos_end is None or t < atmos_end):
+                values.update(a_row)
+                values = _clean(values)
+                if not is_native_step(atmos_model, a_lead, atmos_res):
+                    interpolated += [k for k in ATMOS_FIELDS if values.get(k) is not None]
+                if values.get("wind_gust_kmh") is not None:
+                    extra[EXTRA_GUST_KIND] = self.gust_kind_at(a_lead)
+            step = native_step_hours(wave.model, lead, wave_res)
+            if step is not None:
+                extra[EXTRA_NATIVE_STEP_S] = step * 3600
+            if interpolated:
+                extra[EXTRA_INTERPOLATED] = True
+                extra["interpolated_fields"] = sorted(interpolated)
+            extra.update({k: v for k, v in self.wave_extra(row).items() if v is not None})
+            records.append(
+                ForecastRecord(
+                    valid_time=t, values=values, period_kind=self.period_kind, extra=extra
+                )
+            )
+        if records:
+            first = records[0].extra
+            first[EXTRA_WAVE_MODEL] = wave.model
+            wave_cell = _cell(wave.item, p.forecast_latitude, p.forecast_longitude)
+            if wave_cell is not None:
+                first[EXTRA_WAVE_CELL] = wave_cell
+            if atmos is not None:
+                wind_cell = _cell(atmos.item, p.latitude, p.longitude)
+                if wind_cell is not None:
+                    first[EXTRA_WIND_CELL] = {**wind_cell, "model": atmos_model}
+        return records
+
+
+def _chunks(items: Sequence[SpotPoint], size: int) -> Iterable[list[SpotPoint]]:
+    for i in range(0, len(items), max(1, size)):
+        yield list(items[i : i + size])
+
+
+class OpenMeteoProvider(OpenMeteoFamilyProvider):
+    """NOAA GFS + GFS-Wave (WAVEWATCH III) via Open-Meteo: the ``ncep_gfs`` family."""
+
+    code = "open_meteo_noaa"
+    family = "ncep_gfs"
+    atmos_path = "/v1/gfs"
+    max_forecast_days = 16
+    period_kind = "tp"  # GFS-Wave wave_period is PERPW, the peak period
+
+    def wave_models(self) -> list[str]:
+        return self.settings.open_meteo_gfs_wave_model_list
+
+    def atmos_model(self) -> str:
+        return self.settings.open_meteo_gfs_atmos_model_name
+
+    def wave_variables(self, optional: bool) -> dict[str, str]:
+        return {**GFS_WAVE_CORE, **(GFS_WAVE_OPTIONAL if optional else {})}
+
+    def gust_kind_at(self, lead_hours: float) -> str:
+        # GFS GUST is an instantaneous surface diagnostic; HRRR (gfs_seamless) is not.
+        model = self.atmos_model()
+        return "gfs_instantaneous" if model in ("gfs_global", "gfs025", "gfs013") else "unknown"
+
+    def display_name(self) -> str:
+        return "NOAA GFS + GFS-Wave (WAVEWATCH III) via Open-Meteo"
+
+    def attribution(self) -> str:
+        return (
+            f"Weather data by Open-Meteo.com ({ATTRIBUTION_LINK}, CC BY 4.0); model data NOAA "
+            "NCEP GFS and GFS-Wave (WAVEWATCH III). Modified: sampled at Open-Meteo's nearest "
+            "sea grid cell, hours Open-Meteo interpolated are not stored, absent swell "
+            "partitions are left empty."
+        )

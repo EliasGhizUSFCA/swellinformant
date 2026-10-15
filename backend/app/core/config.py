@@ -82,7 +82,9 @@ class Settings(BaseSettings):
     forecast_days: int = Field(default=16, ge=3, le=16)
     forecast_refresh_minutes: int = 180
     forecast_stale_hours: int = 18
-    forecast_batch_size: int = Field(default=10, ge=1, le=50)
+    # Spots per Open-Meteo request (one weighted call per location either way; 50 = every
+    # seeded spot in one request per model, fewer round trips).
+    forecast_batch_size: int = Field(default=50, ge=1, le=50)
     forecast_http_timeout_seconds: float = 30.0
     forecast_daily_request_quota: int = 5000
     open_meteo_api_key: str | None = None
@@ -321,9 +323,10 @@ class Settings(BaseSettings):
     # ingestion look-back window (OBSERVATION_LOOKBACK_HOURS): beyond it, the hourly job
     # can no longer fill the gap by itself.
     data_health_observation_stale_hours: float | None = Field(default=None, gt=0)
-    # Degraded once the database is larger than this (GB). None = no limit. Size it from
-    # the disk and the growth per day in docs/operations.md ("Capacity").
-    data_health_database_max_gb: float | None = Field(default=None, gt=0)
+    # Degraded once the database is larger than this (GB; an alert only, nothing is
+    # deleted). None = no limit. Size it from the disk and the growth per day in
+    # docs/operations.md ("Capacity").
+    data_health_database_max_gb: float | None = Field(default=5.0, gt=0)
     # Degraded once Redis uses more than this fraction of its maxmemory.
     data_health_redis_max_fraction: float = Field(default=0.8, gt=0, le=1)
 

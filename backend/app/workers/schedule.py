@@ -8,6 +8,7 @@ object, e.g. in the API process or in tests, without importing Celery's app inst
 from __future__ import annotations
 
 from datetime import timedelta
+from fnmatch import fnmatchcase
 from typing import Any
 
 from celery.schedules import crontab, schedule
@@ -32,6 +33,30 @@ NEXT_STAGE = {
 
 DATA_HEALTH_TASK = "ops.data_health"
 
+# Queues. Long downloads and bulk data jobs go to "bulk", so account emails, alert delivery
+# and the per-user stages never wait behind a multi-minute acquisition. The default worker
+# consumes both (WORKER_QUEUES=celery,bulk, docker-entrypoint.sh); a second worker can take
+# "bulk" alone (docker-compose.yml, profile "bulk-worker").
+DEFAULT_QUEUE = "celery"
+BULK_QUEUE = "bulk"
+# Every queue a task can be routed to: a worker started without -Q consumes all of them.
+QUEUES = (DEFAULT_QUEUE, BULK_QUEUE)
+BULK_TASK_PATTERNS = ("forecasts.*", "observations.*", "verification.*", "tides.*")
+# GEFS-Wave mean/spread files of a cycle are complete about 7 h after it (ensemble.py).
+GEFS_JOB_DELAY = timedelta(hours=7, minutes=40)
+
+
+def task_routes() -> dict[str, dict[str, str]]:
+    """celery_app.conf.task_routes: glob pattern -> queue (anything else: DEFAULT_QUEUE)."""
+    return {pattern: {"queue": BULK_QUEUE} for pattern in BULK_TASK_PATTERNS}
+
+
+def queue_for(task_name: str) -> str:
+    """The queue a task is routed to (same rule as :func:`task_routes`)."""
+    if any(fnmatchcase(task_name, p) for p in BULK_TASK_PATTERNS):
+        return BULK_QUEUE
+    return DEFAULT_QUEUE
+
 
 def map_fields_standalone(settings: Settings) -> bool:
     # Imported here: app.services.map_fields pulls in the models.
@@ -51,10 +76,13 @@ def optional_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
             "schedule": timedelta(minutes=settings.forecast_refresh_minutes),
         }
     if settings.gefs_enabled:
-        # GEFS-Wave 00/06/12/18Z output is complete ~7 h after the cycle.
+        # GEFS-Wave output is complete ~7 h after the cycle: one run per GEFS_CYCLES cycle
+        # (00/06/12/18Z by default, i.e. 01:40, 07:40, 13:40 and 19:40 UTC).
+        delay = int(GEFS_JOB_DELAY.total_seconds() // 60)
+        starts = sorted((h * 60 + delay) % 1440 for h in settings.gefs_cycle_hours)
         jobs["ensemble-acquisition"] = {
             "task": "forecasts.acquire_ensemble",
-            "schedule": crontab(hour="1,7,13,19", minute=40),
+            "schedule": crontab(hour=",".join(str(m // 60) for m in starts), minute=delay % 60),
         }
     if settings.tide_provider_list:
         # Tide predictions change slowly: one daily request (or local computation) per station.
@@ -81,6 +109,24 @@ def optional_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
 
 def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
     """Every periodic job for these settings (entry name -> task and schedule)."""
+    return _beat_entries(settings)
+
+
+def celery_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
+    """:func:`build_beat_schedule` as handed to Celery: each entry's message expires after
+    its own interval (``options["expires"]``).
+
+    When the worker is down, beat keeps sending (notifications.deliver every 2 min); without
+    an expiry the queue would grow without bound and replay every missed run on restart.
+    """
+    entries = build_beat_schedule(settings)
+    for entry in entries.values():
+        expires = max_interval(entry["schedule"]).total_seconds()
+        entry["options"] = {**entry.get("options", {}), "expires": expires}
+    return entries
+
+
+def _beat_entries(settings: Settings) -> dict[str, dict[str, Any]]:
     return {
         "forecast-acquisition": {
             "task": "forecasts.acquire",

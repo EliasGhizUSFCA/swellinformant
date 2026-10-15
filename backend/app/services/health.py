@@ -19,7 +19,11 @@ It checks, with plain reasons:
 * **Observations** (when OBSERVATIONS_ENABLED): the newest buoy observation per provider
   against DATA_HEALTH_OBSERVATION_STALE_HOURS (default: the ingestion look-back window).
 * **Heartbeat**: the newest finished job of any kind (this check's own job excluded).
-* **Storage**: the database size, against DATA_HEALTH_DATABASE_MAX_GB when that is set.
+* **Storage**: the database size, against DATA_HEALTH_DATABASE_MAX_GB when that is set
+  (default 5 GB: an alert only, nothing is deleted); Redis memory against its cap
+  (Redis's maxmemory, or REDIS_MAXMEMORY when Redis runs without one), degraded above
+  DATA_HEALTH_REDIS_MAX_FRACTION or with an evicting maxmemory-policy (the Celery broker
+  must never lose messages), or when Redis does not answer.
 * **Tides**: the problems app.services.tides.health.tide_freshness reports.
 
 Overall status: ``failing`` when the product cannot serve fresh forecasts (no forecast
@@ -38,11 +42,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import redis
 from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
+from app.core.redis import parse_memory_size, redis_memory
 from app.models import BackgroundJobLog, BuoyObservation, BuoyStation, ForecastRun, ForecastSource
 from app.models.enums import JobStatus
 from app.schemas.health import (
@@ -56,6 +62,7 @@ from app.schemas.health import (
     ObservationProviderHealthOut,
     ObservationsHealthOut,
     OverallStatus,
+    RedisHealthOut,
     Severity,
     SourceHealthOut,
     SourceRole,
@@ -631,17 +638,69 @@ def _check_storage(db: Session, settings: Settings) -> tuple[StorageOut, list[Pr
     """
     size = int(db.scalar(select(func.pg_database_size(func.current_database()))) or 0)
     limit = settings.data_health_database_max_gb
-    out = StorageOut(database_bytes=size, database_max_gb=limit)
-    if limit is None or size <= limit * 1024**3:
-        return out, []
-    return out, [
-        Problem(
-            "database_size",
-            "degraded",
-            f"The database holds {size / 1024**3:.1f} GB, more than DATA_HEALTH_DATABASE_MAX_GB "
-            f"({limit:g} GB): check the retention settings and the free disk space.",
+    redis_out, problems = _check_redis(settings)
+    out = StorageOut(database_bytes=size, database_max_gb=limit, redis=redis_out)
+    if limit is not None and size > limit * 1024**3:
+        problems.append(
+            Problem(
+                "database_size",
+                "degraded",
+                f"The database holds {size / 1024**3:.1f} GB, more than "
+                f"DATA_HEALTH_DATABASE_MAX_GB ({limit:g} GB): check the retention settings and "
+                "the free disk space.",
+            )
         )
-    ]
+    return out, problems
+
+
+def _check_redis(settings: Settings) -> tuple[RedisHealthOut, list[Problem]]:
+    """Redis memory (INFO memory) against its cap and the eviction policy."""
+    alert = settings.data_health_redis_max_fraction
+    try:
+        info = redis_memory()
+    except redis.RedisError:
+        return RedisHealthOut(available=False, alert_fraction=alert), [
+            Problem(
+                "redis_unavailable",
+                "degraded",
+                "Redis does not answer: background jobs, locks and call budgets depend on it.",
+            )
+        ]
+    used, maxmemory = int(info["used_memory"]), int(info["maxmemory"])
+    policy = str(info.get("maxmemory_policy") or "") or None
+    cap = maxmemory or parse_memory_size(settings.redis_maxmemory) or None
+    fraction = round(used / cap, 4) if cap else None
+    out = RedisHealthOut(
+        available=True,
+        used_memory_bytes=used,
+        maxmemory_bytes=maxmemory or None,
+        maxmemory_policy=policy,
+        cap_bytes=cap,
+        cap_source=None if cap is None else "redis" if maxmemory else "setting",
+        used_fraction=fraction,
+        alert_fraction=alert,
+    )
+    problems: list[Problem] = []
+    if fraction is not None and cap is not None and fraction > alert:
+        problems.append(
+            Problem(
+                "redis_memory",
+                "degraded",
+                f"Redis memory: {used / 1024**2:.0f} MB used, {fraction:.0%} of the "
+                f"{cap / 1024**2:.0f} MB cap (alert above {alert:.0%}). A full Redis refuses "
+                "new jobs: check the queue lengths and the provider response cache.",
+            )
+        )
+    if policy is not None and policy != "noeviction":
+        problems.append(
+            Problem(
+                "redis_eviction_policy",
+                "degraded",
+                f"Redis maxmemory-policy is {policy}: under memory pressure it deletes keys, "
+                "including queued jobs. Run it with --maxmemory-policy noeviction.",
+            )
+        )
+    return out, problems
 
 
 # --------------------------------------------------------------------------- report

@@ -11,17 +11,36 @@ keep backups that restore, and size the machine. Every number below was measured
 | Process | Role | Instances | Health check |
 |---|---|---|---|
 | `backend` | FastAPI API; applies migrations and seeds on start (`RUN_MIGRATIONS=true`) | 1+ (`API_WORKERS` uvicorn workers each) | `GET /api/health/ready` (database and Redis) |
-| `worker` | Celery worker: every job in docs/ARCHITECTURE.md §2 | 1+ (`WORKER_CONCURRENCY` slots each) | `celery inspect ping` |
+| `worker` | Celery worker: every job in docs/ARCHITECTURE.md §2, from the queues in `WORKER_QUEUES` (default `celery,bulk`) | 1+ (`WORKER_CONCURRENCY` slots each) | `celery inspect ping` |
+| `worker-bulk` | optional (`--profile bulk-worker`): a second worker for the `bulk` queue only (data downloads); then set `WORKER_QUEUES=celery` for the main worker | 0-1 | `celery inspect ping` |
 | `beat` | Celery beat: the schedule (`app/workers/schedule.py`) | **exactly 1** | its schedule file was written in the last 10 min |
 | `frontend` | Next.js server; proxies `/api/*` to the backend | 1+ | `GET /` |
 | `postgres` | PostgreSQL 16 (all persistent state) | 1 | `pg_isready` |
-| `redis` | Celery broker and results, locks, rate limits (transient only) | 1 | `redis-cli ping` |
+| `redis` | Celery broker and results, locks, rate limits, Open-Meteo call budgets and the small provider response cache (transient only); `--maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy noeviction` | 1 | `redis-cli ping` |
 | `mailpit` | development inbox (not needed with real email) | 0-1 | built in |
 | `backup` | optional (`--profile backup`): `scripts/backup-db.sh` every `BACKUP_INTERVAL_HOURS` | 0-1 | newest backup younger than the interval + 1 h |
 
 Redis holds nothing that must survive: on a Redis restart beat re-sends the schedule, a
 lost lock only allows one duplicate run (every job is idempotent), and queued alert
-deliveries are rows in PostgreSQL, not Redis messages.
+deliveries are rows in PostgreSQL, not Redis messages. The Open-Meteo call-budget counters
+restart from zero (Open-Meteo still enforces its own limits), and cached provider responses
+are fetched again.
+
+**Queues.** Data acquisition (`forecasts.*`, `observations.*`, `verification.*`,
+`tides.*`) is routed to the `bulk` queue, everything else (account emails, alert
+delivery, matching, the data-health check) to the default `celery` queue
+(`app/workers/schedule.py`, `task_routes`), so a verification email never waits behind a
+download. The default worker consumes both. A queue that no worker consumes stalls
+silently: if you run a bulk-only worker, the main worker must still list `celery`.
+Every beat message expires after its own interval, so a worker that was down does not
+replay a backlog of missed runs.
+
+**Retries.** A transient acquisition failure (timeout, HTTP 5xx, an Open-Meteo minute or
+hour limit, a model run still being published) makes the task retry itself after 2, 4
+and 8 min (or the provider's own wait, at most 1 h), up to 3 times. A permanent one (an
+exhausted daily or monthly quota, a refused request) ends that provider's run FAILED and
+waits for the next schedule. When every provider failed, the job is logged FAILED and
+does not chain to the blend.
 
 ## 2. Deploy on one server (Docker Compose)
 
@@ -40,7 +59,7 @@ deliveries are rows in PostgreSQL, not Redis messages.
    API_BASE_URL=https://your-domain
    CORS_ORIGINS=https://your-domain
    POSTGRES_PASSWORD=<random>
-   FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs
+   FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf   # docs/API_SETUP_REQUIRED.md
    GEFS_ENABLED=true
    # Publish only on the loopback interface; a reverse proxy (Caddy, nginx) terminates TLS.
    POSTGRES_PORT=127.0.0.1:5432
@@ -84,7 +103,7 @@ rebuild after a code-only change took 1.6 s (the dependency layer is cached).
 
 | Check | Problem when | Severity |
 |---|---|---|
-| Each `FORECAST_PROVIDERS` source | newest successful run older than the source's own stale limit (`queries.stale_after_hours`: NOAA 16 h, ECMWF 25 h, others `FORECAST_STALE_HOURS`), or no successful run | degraded |
+| Each `FORECAST_PROVIDERS` source | newest successful run older than the source's own stale limit (`queries.stale_after_hours`: Open-Meteo GFS family 17.2 h, Open-Meteo ECMWF family 24.7 h, NOAA direct 16 h, ECMWF direct 25 h, others `FORECAST_STALE_HOURS`), or no successful run | degraded |
 | All forecast sources at once | none of them is fresh: forecasts, events and alerts run on stale data | **failing** |
 | Blend (two or more independent families) | stale or missing although every member is fresh and no `forecasts.acquire` / `forecasts.blend` run is in progress (`forecasts.blend` broken; during an acquisition the blend trails its first refreshed member until the chained blend stage runs) | degraded |
 | GEFS-Wave (`GEFS_ENABLED`) | older than 18.5 h or missing (uncertainty only) | degraded |
@@ -92,7 +111,8 @@ rebuild after a code-only change took 1.6 s (the dependency layer is cached).
 | Heartbeat | no job of any kind finished for `DATA_HEALTH_HEARTBEAT_MINUTES` (30; `notifications.deliver` alone runs every 2 min): worker or beat down | **failing** |
 | Map ocean layers (unless off) | served GFS cycle older than the NOAA limit (16 h), or no complete field set | degraded |
 | Buoy observations (`OBSERVATIONS_ENABLED`) | newest observation of a provider older than `DATA_HEALTH_OBSERVATION_STALE_HOURS` (default: the 48 h ingestion look-back, beyond which the hourly job cannot fill the gap) | degraded |
-| Storage | database larger than `DATA_HEALTH_DATABASE_MAX_GB` (unset: reported, no limit) | degraded |
+| Storage | database larger than `DATA_HEALTH_DATABASE_MAX_GB` (default 5 GB; an alert only, nothing is deleted) | degraded |
+| Redis | used memory above `DATA_HEALTH_REDIS_MAX_FRACTION` (0.8) of its cap (Redis's `maxmemory`, or `REDIS_MAXMEMORY` when Redis runs without one); an evicting `maxmemory-policy`; Redis not answering | degraded |
 
 The overall status is `failing` if any problem is failing, `degraded` if any is degraded,
 else `ok`, and `reasons` lists one plain sentence per problem, the most severe first. The
@@ -293,6 +313,38 @@ every source is stale the report says `failing` (`forecasts_unavailable`).
    and tells you every 12 h). Removing it from `FORECAST_PROVIDERS` silences the alert
    but also turns the blend off.
 
+### Open-Meteo refuses requests (quota or rate limit)
+
+**What you see.** A FAILED `open_meteo_noaa` or `open_meteo_ecmwf` run whose error is
+Open-Meteo's own reason ("Daily API request limit exceeded. Please try again tomorrow.",
+"Minutely API request limit exceeded ...") or the app's budget ("Open-Meteo day budget of
+10000 weighted calls (OPEN_METEO_CALLS_PER_DAY) would be exceeded ..."), and later
+`forecast_stale:<source>`. `python -m app.cli engine budget` prints the weighted calls the
+app has used per window.
+
+**What the system already does.** A minute or hour limit is transient: the task retries
+after the window resets, and the responses already received are read from the cache.
+A daily or monthly limit ends the run FAILED without retrying; the previous run stays in
+use until it goes stale. The two Open-Meteo families share one budget.
+
+**What to do.** The free tier counts calls per IP address: on shared hosting other users
+of the address use the same allowance (this happened in the sandbox on 2026-10-14, after
+the app itself had used 143 weighted calls; the next acquisition re-read the waves it had
+already received from the cache and paid only for the refused wind request). Use a paid
+plan (`OPEN_METEO_API_KEY`, then raise `OPEN_METEO_CALLS_PER_DAY` /
+`OPEN_METEO_CALLS_PER_MONTH`), or wait for the reset. Never lower
+`OPEN_METEO_AVAILABILITY_WAIT_MINUTES` to read runs sooner.
+
+### Redis memory high
+
+`redis_memory` (degraded) means Redis uses more than 80 % of its cap. With `noeviction` a
+full Redis refuses writes, so new jobs fail to queue. Look at the queue lengths
+(`docker compose exec redis redis-cli llen celery`, `... llen bulk`: a stopped worker lets
+them grow until the beat messages expire), then at the provider cache
+(`python -m app.cli engine budget` shows its entry count; it is bounded by
+`PROVIDER_RESPONSE_CACHE_MAX_KEYS` and `PROVIDER_RESPONSE_CACHE_MAX_BYTES`). Raise
+`REDIS_MAXMEMORY` (and keep the setting and the compose value equal) only after that.
+
 ### Worker or beat down, jobs overdue or stuck
 
 * `jobs_not_running` (failing) or many `job_overdue:*`: `docker compose ps`; restart the
@@ -305,7 +357,7 @@ every source is stale the report says `failing` (`forecasts_unavailable`).
 
 ### Database or disk full
 
-`database_size` (when `DATA_HEALTH_DATABASE_MAX_GB` is set), failed jobs with "No space
+`database_size` (above `DATA_HEALTH_DATABASE_MAX_GB`, default 5 GB), failed jobs with "No space
 left on device", or PostgreSQL refusing writes. Free space first (old local backups,
 Docker build cache: `docker builder prune`), then lower the retention settings (§6) and
 run `maintenance.cleanup`. PostgreSQL reuses the space of deleted rows; it only returns
@@ -324,13 +376,45 @@ accounts, searches, alerts and the prediction archive come only from the backup.
 
 ## 6. Capacity
 
-### Measured run (Docker, 2026-10-12, NOAA 00Z / ECMWF 00Z / GEFS 00Z, 50 spots)
+### API-first setup (`FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf`, 2026-10-14)
+
+Measured live on a fresh scratch database (50 spots, GFS and ECMWF 12Z runs of
+2026-10-14, every response fetched, nothing from the cache; `forecast_runs.details.stats`):
+
+| Item | Per run | Per day (default schedule) | Basis |
+|---|---|---|---|
+| Open-Meteo GFS family, 50 spots, 16 days | 142.9 weighted calls (waves 85.7: 50 locations x 15 variables / 10 x 16 / 14 days; wind 57.1), 3 data requests, 11 HTTP responses with the metadata, 345.6 kB, 6.3 s; 10,200 rows | 4 runs: 571 weighted calls, 1.4 MB | measured |
+| Open-Meteo ECMWF family, 50 spots, 15 days | 124.3 weighted calls (waves 53.6, wind 53.6, 17.1 for the neighbouring cells of the 2 spots whose `ecmwf_wam025` cell has no data), 7 HTTP responses, 175.1 kB, 4.7 s; 4,100 rows | 2 runs (00Z, 12Z): 249 weighted calls, 0.35 MB | measured |
+| Blend and predictions | blend 9.9 s (10,200 rows + 10,200 comparisons); `quality.predict` 19.7 s for the 3 runs (24,500 predictions, 4,050 archive rows) | | measured |
+| Both families | 267 weighted calls | about 820 weighted calls a day, about 24,600 a month: 8 % of the free tier's 10,000 a day and 300,000 a month | per run measured; per day computed |
+| GEFS-Wave, HTSGW and PERPW only (41 steps) | about 65 MB | 4 cycles: about 0.26 GB | computed from record sizes |
+| Map fields, standalone (61 map hours) | about 0.16 GB; 0.48 GB with the partition layers | 2 cycles: 0.33-0.96 GB | computed in the audit |
+
+The whole acquisition took 47.6 s of wall time; the two providers' own runs took 6.3 s and
+4.7 s, the rest went to the metadata reads before each run (`current_run`,
+`ensure_servable`). One cycle of both families added 89 MB to the database (12.2 MB after
+`init-db`, 101.3 MB after): `surf_quality_predictions` 63.6 MB (24,500 rows, 2.29 kB
+each), `wave_forecasts` 14.6 MB (24,500 rows: GFS family 407 B, ECMWF family 597 B, blend
+535 B per row on average), `forecast_comparisons` 7.7 MB (10,200 rows), `prediction_archive`
+3.0 MB (4,050 rows, 555 B each with the confidence digest). The nightly cleanup removes the
+predictions of superseded member runs, so only the newest runs keep theirs. Redis grew from
+1.98 MB to 2.53 MB (6 cached responses and the budget counters).
+
+Acquisitions run every `FORECAST_REFRESH_MINUTES` (180), but a run already stored costs
+only the free metadata requests, and a retry reads the responses it already received from
+the cache (seen live: a run whose ECMWF wind request was refused re-read its waves from the
+cache and paid only for the wind). Nothing is written to disk: a traced acquisition
+(`strace -f -e openat,creat,rename,unlink,mkdir`) opened no file for writing other than
+the test driver's own report and a joblib semaphore in `/dev/shm` (shared memory). Before
+the change, the direct GRIB setup downloaded about 10 GB a day (next section).
+
+### Measured run, direct GRIB setup (Docker, 2026-10-12, NOAA 00Z / ECMWF 00Z / GEFS 00Z, 50 spots)
 
 | Step | Duration | Downloaded | Rows written |
 |---|---|---|---|
 | NOAA GFS-Wave + GFS (81 steps to 240 h, 811 requests, incl. map fields) | 2.5 min | 1,908 MB | 4,050 forecast rows, 486 map-field rows |
-| ECMWF IFS (65 steps, 438 requests, 173 of 611 HTTP attempts answered 503 SlowDown and retried) | 8.5 min (start to stored, alongside NOAA) | ≈ 0.9 GB (see below) | 3,250 |
-| `forecasts.acquire` (both of the above, in parallel) | 8.5 min (511 s) | 2.82 GB received by the worker | |
+| ECMWF IFS (65 steps, 438 requests, 173 of 611 HTTP attempts answered 503 SlowDown and retried) | about 6 min (its run recorded 8.5 min because both runs were stamped with the job's start time, audit PLAT-1; fixed since) | ≈ 0.9 GB (see below) | 3,250 |
+| `forecasts.acquire` (both of the above, one after the other) | 8.5 min (511 s) | 2.82 GB received by the worker | |
 | Blend | 3.2 s | | 4,050 forecast + 4,050 comparison rows |
 | `quality.predict` (3 runs) | 13 s | | 11,350 predictions, 4,050 archive rows |
 | Detection, matching, flights, alerts, delivery | 2 s | | |
@@ -367,12 +451,12 @@ full run. Rows per day assume the default schedule: 4 NOAA cycles, 2 ECMWF cycle
 
 | Table | Bytes per row | Rows per day | Per day | Kept | Steady state |
 |---|---|---|---|---|---|
-| `surf_quality_predictions` | 2,529 | 47,000 | 119 MB | with its forecast run, `RETENTION_FORECAST_DAYS` (10) | ~1.2 GB |
+| `surf_quality_predictions` | 2,529 | 47,000 | 119 MB | blend runs: `RETENTION_FORECAST_DAYS` (10); member runs: until superseded (pruned nightly, the newest run per source kept) | ~1.2 GB before the pruning; the member share (about half the rows) now stays at one run per source |
 | `wave_forecasts` | 631 | 47,000 | 30 MB | 10 days | ~0.3 GB |
 | `forecast_comparisons` | 771 | 24,300 | 19 MB | 10 days | ~0.19 GB |
 | `forecast_ensemble_stats` | 156-352 | 8,200 | 1.3-2.9 MB | 10 days | ≤ 29 MB |
 | `map_fields` | 84,800 (41 MB per run) | 4 runs | 165 MB written | the 2 best runs | ~82 MB |
-| `prediction_archive` | 1,706 | 24,300 | 41.5 MB | `RETENTION_ARCHIVE_DAYS` (730) | 15 GB after 1 year, 30 GB after 2 |
+| `prediction_archive` | 1,706 before; 746 with the confidence digest (`ARCHIVE_CONFIDENCE_DIGEST`; heap, TOAST and indexes, 555 B of it the row itself, measured on the 4,050 rows of the 2026-10-14 live run) | 24,300 | 41.5 MB before; about 18 MB with the digest (computed) | `RETENTION_ARCHIVE_DAYS` (730) | 30 GB after 2 years before; about 13 GB with the digest (computed) |
 | `background_job_logs` | ~330 (+ index) | ~1,150 | ~0.5 MB | `RETENTION_JOB_LOG_DAYS` (30) | ~15 MB |
 
 The second session's 24-hour run (1,350 forecast rows and predictions, 450 comparison and
@@ -380,23 +464,47 @@ archive rows) grew the same tables by 2,555 (predictions), 655 (`wave_forecasts`
 (`forecast_comparisons`) and 1,839 (`prediction_archive`) bytes per row: within 8 % of the
 figures above (small deltas are rounded to whole 8 kB pages).
 
-So with the defaults the database settles at about **1.8 GB plus the archive**, which
-grows by about **42 MB a day** (15 GB a year) until it reaches its 730-day retention
-(about 30 GB). Forecast runs and their rows are deleted by `maintenance.cleanup` (daily
-03:30 UTC), always keeping the two newest usable runs per source; map fields are pruned
-to two runs after every acquisition. Buoy observations, point forecasts and verification
-pairs (when enabled) also follow `RETENTION_ARCHIVE_DAYS`; they were not enabled in this
-run.
+So with the direct GRIB setup and the full archive rows the database settled at about
+**1.8 GB plus the archive**, which grew by about **42 MB a day** (15 GB a year) until it
+reached its 730-day retention (about 30 GB). With the confidence digest (default) the
+archive grows by about 18 MB a day (about 13 GB at 730 days, computed), and pruning the
+superseded member runs' predictions removes about half of the 1.2 GB of predictions
+(computed from the run mix above). Forecast runs and their rows are deleted by
+`maintenance.cleanup` (daily 03:30 UTC), always keeping the two newest usable runs per
+source; map fields are pruned to two runs after every acquisition. Buoy observations,
+point forecasts and verification pairs (when enabled) follow `RETENTION_ARCHIVE_DAYS`
+(quality-controlled buoy observations `OBSERVATION_RETENTION_DAYS`); they were not
+enabled in this run.
 
-**Bandwidth:** about **10 GB downloaded per day** (NOAA 4 × 1.91 GB, ECMWF 2 × 0.85-0.9
-GB, GEFS 4 × 0.20 GB), about 300 GB a month, all from NOAA's and ECMWF's open-data
-buckets. Uploads are negligible (requests only).
+**API-first setup, steady state (computed** from the per-run sizes measured on
+2026-10-14, heap, TOAST and indexes per row: predictions 2,596 B, `wave_forecasts`
+510 B GFS family / 700 B ECMWF family / 638 B blend, comparisons 759 B, archive 746 B).
+Four GFS-family runs, two ECMWF-family runs and six blends a day write about 66 MB of
+forecasts, 47 MB of comparisons and 159 MB of blend predictions, about 0.27 GB a day, so
+the 10 days of `RETENTION_FORECAST_DAYS` hold about 2.7 GB; the member runs' predictions
+stay at one run per source (about 37 MB) after the nightly pruning. A GFS-family cycle can
+be stored twice when Open-Meteo publishes `ncep_gfs025` well after `ncep_gfs013` (2.2 h
+apart for the 06Z run of 2026-10-15) and an acquisition falls in between; each such run
+adds about 0.05 GB of rows. The archive adds about 18 MB a day. With the defaults the
+database therefore passes the default `DATA_HEALTH_DATABASE_MAX_GB` of 5 GB after about
+four months and reaches about 16 GB at the 730-day archive retention: set the limit to
+what the disk allows, or shorten `RETENTION_ARCHIVE_DAYS` (the alert only reports; nothing
+is deleted).
+
+**Bandwidth:** the direct GRIB setup downloaded about **10 GB per day** (NOAA 4 × 1.91 GB,
+ECMWF 2 × 0.85-0.9 GB, GEFS 4 × 0.20 GB), about 300 GB a month. The API-first setup
+needs about 1.7 MB a day for the spot forecasts (4 GFS-family runs of 345.6 kB and 2
+ECMWF-family runs of 175.1 kB, measured) plus about 0.26 GB for GEFS-Wave and 0.33-0.96 GB
+for the map layers (computed, see "API-first setup" above). Uploads are
+negligible (requests only).
 
 **Backups:** the measured dump was 52 % of the database size, dominated by the
 incompressible map fields (about 74 MB); the other tables compressed about 5:1. From
 this one measurement, expect roughly 0.2 × (database − map fields) + 75 MB per dump:
-about 3.4 GB per dump once the archive holds a year, 6.5 GB at two years, times the
-number of local copies (`BACKUP_KEEP`, default 7). Keep the history off the server.
+with the API-first setup and the archive digest about 2 GB per dump once the archive
+holds a year and 3.3 GB at two years (computed; 3.4 and 6.5 GB with the full archive
+rows), times the number of local copies (`BACKUP_KEEP`, default 7). Keep the history off
+the server.
 
 ### A single small server
 
@@ -404,21 +512,25 @@ number of local copies (`BACKUP_KEEP`, default 7). Keep the history off the serv
 |---|---|---|
 | CPU | 2 vCPUs (acquisitions take longer) | 4 vCPUs |
 | Memory | 4 GB (about 1.8 GiB measured peak plus the OS) | 8 GB |
-| Disk | 40 GB: `RETENTION_ARCHIVE_DAYS=365` (database ≤ ~17 GB) and `BACKUP_KEEP=3` (~10 GB) | 120 GB with the defaults (database ~32 GB, 7 local dumps ~45 GB at two years) |
-| Network | 10 GB/day inbound | |
+| Disk | 30 GB: `RETENTION_ARCHIVE_DAYS=365` (database ≤ ~10 GB) and `BACKUP_KEEP=3` (~6 GB) | 60 GB with the defaults (database ~16 GB, 7 local dumps ~23 GB at two years) |
+| Network | about 0.6-1.2 GB/day inbound with the API-first setup (GEFS-Wave and the map layers; 10 GB/day with the direct GRIB providers) | |
 
-Plus about 2.2 GB for the images. Recommended settings for the 40 GB case, in `.env`:
+Disk and database sizes are computed for the API-first setup with the archive digest
+(above); the direct GRIB setup with full archive rows needed about twice as much. Plus
+about 2.2 GB for the images. Recommended settings for the 30 GB case, in `.env`:
 
 ```env
-RETENTION_ARCHIVE_DAYS=365        # archive ~15 GB instead of ~30 GB; it is the record of
+RETENTION_ARCHIVE_DAYS=365        # archive ~6.6 GB instead of ~13 GB; it is the record of
                                   # past forecasts used for verification, so keep what you can
 BACKUP_KEEP=3                     # local copies; ship every backup off the server
-DATA_HEALTH_DATABASE_MAX_GB=20    # degraded alert well before the disk fills
+DATA_HEALTH_DATABASE_MAX_GB=12    # degraded alert well before the disk fills
 ```
 
-Lowering `RETENTION_FORECAST_DAYS` below 10 saves little (each day is ~170 MB) and the
-two newest runs per source are always kept. `GEFS_ENABLED=false` saves 0.8 GB/day of
-bandwidth at the cost of ensemble-based uncertainty. `NOAA_MAX_LEAD_HOURS=168` /
+Each day of `RETENTION_FORECAST_DAYS` holds about 0.27 GB with the API-first setup
+(about 0.17 GB with the direct GRIB setup): lowering it from 10 to 5 days saves about
+1.3 GB, and the two newest runs per source are always kept. `GEFS_ENABLED=false` saves
+about 0.26 GB/day of bandwidth (0.8 GB/day before `GEFS_STAT_FIELDS` trimmed it) at the cost
+of ensemble-based uncertainty. `NOAA_MAX_LEAD_HOURS=168` /
 `ECMWF_MAX_LEAD_HOURS=168` read about 30 % fewer NOAA steps (57 of 81) and about 18 %
 fewer ECMWF steps (53 of 65), and shorten the forecast to 7 days.
 
@@ -431,9 +543,16 @@ fewer ECMWF steps (53 of 65), and shorten the forecast to 7 days.
 | `DATA_HEALTH_ALERT_REPEAT_HOURS` | 12 | at most one email per problem in this interval |
 | `DATA_HEALTH_HEARTBEAT_MINUTES` | 30 | no finished job for this long = worker or beat down (failing) |
 | `DATA_HEALTH_OBSERVATION_STALE_HOURS` | `OBSERVATION_LOOKBACK_HOURS` (48) | buoy provider stale after this |
-| `DATA_HEALTH_DATABASE_MAX_GB` | unset | degraded above this database size |
+| `DATA_HEALTH_DATABASE_MAX_GB` | 5 | degraded above this database size (alert only) |
+| `DATA_HEALTH_REDIS_MAX_FRACTION` | 0.8 | degraded above this fraction of the Redis memory cap |
+| `REDIS_MAXMEMORY` | 256mb | Redis `--maxmemory` in docker-compose; also what the health check measures against when Redis runs without a cap |
+| `WORKER_QUEUES` | celery,bulk | queues the worker consumes |
+| `OPEN_METEO_CALLS_PER_MINUTE` / `_HOUR` / `_DAY` / `_MONTH` | 600 / 5,000 / 10,000 / 300,000 | the app's Open-Meteo weighted-call budget (free tier); raise for a paid plan |
+| `PROVIDER_RESPONSE_CACHE_ENABLED`, `_MAX_BYTES`, `_MAX_KEYS` | true, 2,000,000, 200 | bounded Redis cache of provider responses (one model run) |
+| `ARCHIVE_CONFIDENCE_DIGEST` | true | archive rows keep a digest of the confidence inputs |
+| `OBSERVATION_RETENTION_DAYS` | 3650 | quality-controlled buoy observations (others follow `RETENTION_ARCHIVE_DAYS`) |
 | `RETENTION_FORECAST_DAYS` | 10 | forecast runs and their rows (two newest per source always kept) |
-| `RETENTION_ARCHIVE_DAYS` | 730 | prediction archive, buoy observations, point forecasts, verification pairs |
+| `RETENTION_ARCHIVE_DAYS` | 730 | prediction archive, unchecked buoy observations, point forecasts, verification pairs |
 | `RETENTION_JOB_LOG_DAYS` | 30 | job logs (also the alert de-duplication state) |
 | `RETENTION_FLIGHT_DAYS` / `RETENTION_NOTIFICATION_DAYS` | 30 / 365 | flight searches / notifications |
 | `BACKUP_DIR`, `BACKUP_KEEP`, `BACKUP_MAX_AGE_DAYS`, `BACKUP_PREFIX` | ./backups, 7, 30, swell | `scripts/backup-db.sh` |

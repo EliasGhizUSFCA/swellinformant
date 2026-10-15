@@ -10,11 +10,11 @@ import httpx
 import pytest
 
 from app.core.config import Settings
-from app.services.forecasts.base import SpotPoint, nominal_gfs_cycle
+from app.services.forecasts.base import SpotPoint
 from app.services.forecasts.demo import DemoForecastProvider, DemoSeriesGenerator, SwellOverride
 from app.services.forecasts.open_meteo import OpenMeteoProvider
 from app.services.forecasts.windy import WindyProvider
-from app.services.http import PermanentProviderError
+from app.services.http import PermanentProviderError, TransientProviderError
 from app.services.surf_quality.models import SpotParams
 
 NOW = datetime(2026, 10, 9, 18, tzinfo=UTC)
@@ -76,14 +76,8 @@ def standard_handler(request: httpx.Request) -> httpx.Response:
     url = urlparse(str(request.url))
     q = parse_qs(url.query)
     if url.path.endswith("meta.json"):
-        return httpx.Response(
-            200,
-            json={
-                "last_run_initialisation_time": int(
-                    datetime(2026, 10, 9, 6, tzinfo=UTC).timestamp()
-                )
-            },
-        )
+        # SYNTHETIC metadata: every model's run is 2026-10-09 00Z, published long ago.
+        return httpx.Response(200, json={"last_run_initialisation_time": T0})
     variables = q["hourly"][0].split(",")
     n = len(q["latitude"][0].split(","))
     return httpx.Response(200, json=[location(variables) for _ in range(n)])
@@ -92,30 +86,45 @@ def standard_handler(request: httpx.Request) -> httpx.Response:
 def provider(handler, **kw) -> tuple[OpenMeteoProvider, Recorder]:  # type: ignore[no-untyped-def]
     rec = Recorder(handler)
     p = OpenMeteoProvider(
-        settings(**kw), client=httpx.Client(transport=httpx.MockTransport(rec)), backoff_seconds=0
+        settings(provider_response_cache_enabled=False, **kw),
+        client=httpx.Client(transport=httpx.MockTransport(rec)),
+        backoff_seconds=0,
+        clock=lambda: NOW,
     )
     return p, rec
 
 
 class TestOpenMeteo:
+    """Synthetic-response checks; tests/unit/test_open_meteo_adapter.py has the ones built
+    on recorded Open-Meteo responses."""
+
     def test_run_key_from_model_metadata(self) -> None:
         p, _ = provider(standard_handler)
         run = p.current_run(NOW)
-        assert run.run_key == "ncep_gfswave025:2026100906|gfs_seamless:2026100906"
+        # One entry per model run (both GFS-Wave grids, GFS 0.13 and 0.25 deg), replacing
+        # the single "wave model|atmosphere model" key of the one-model adapter.
+        assert run.run_key == (
+            "gfswave016:2026100900|gfswave025:2026100900|gfs013:2026100900|gfs025:2026100900"
+        )
         assert run.metadata_source == "open_meteo_meta"
+        assert len(run.model_runs) == 4
 
-    def test_metadata_unavailable_falls_back_to_nominal_cycle(self) -> None:
+    def test_metadata_unavailable_is_transient_not_a_guessed_cycle(self) -> None:
+        """Without metadata the run cannot be identified. The adapter used to assume the
+        nominal NOAA cycle, which could store an older run under a newer key (audit API-06);
+        it now fails transiently and the job retries."""
+
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path.endswith("meta.json"):
                 return httpx.Response(404)
             return standard_handler(request)
 
-        p, _ = provider(handler)
-        run = p.current_run(NOW)
-        assert run.metadata_source == "nominal_cycle"
-        assert run.issued_at == nominal_gfs_cycle(NOW) == datetime(2026, 10, 9, 12, tzinfo=UTC)
+        p, rec = provider(handler)
+        with pytest.raises(TransientProviderError, match="cannot be identified"):
+            p.current_run(NOW)
+        assert all(c.url.path.endswith("meta.json") for c in rec.calls)
 
-    def test_batched_fetch_merges_wave_wind_and_sea_level(self) -> None:
+    def test_batched_fetch_merges_wave_and_wind(self) -> None:
         p, rec = provider(standard_handler)
         result = p.fetch(SPOTS, p.current_run(NOW))
         assert not result.errors
@@ -126,18 +135,23 @@ class TestOpenMeteo:
             "sig_wave_height_m",
             "primary_swell_period_s",
             "wind_speed_kmh",
-            "sea_level_m",
             "secondary_swell_height_m",
+            "tertiary_swell_height_m",
         ):
             assert rec0.values[field] is not None
+        assert rec0.values["sea_level_m"] is None  # no sea-level request any more
         data_calls = [c for c in rec.calls if not c.url.path.endswith("meta.json")]
-        assert len(data_calls) == 3  # marine + gfs + sea level, both spots in ONE batch
-        marine = parse_qs(urlparse(str(data_calls[0].url)).query)
-        assert marine["models"] == ["ncep_gfswave025"]
-        assert marine["latitude"] == ["-34.1500,21.8000"]  # offshore forecast points
-        gfs = parse_qs(urlparse(str(data_calls[1].url)).query)
+        # J-Bay's forecast point lies south of ncep_gfswave016's domain (15S), Pipeline's
+        # inside it: one marine request per wave model, then one wind request for both.
+        assert len(data_calls) == 3
+        marine = [parse_qs(urlparse(str(c.url)).query) for c in data_calls[:2]]
+        assert [(m["models"], m["latitude"]) for m in marine] == [
+            (["ncep_gfswave016"], ["21.8000"]),
+            (["ncep_gfswave025"], ["-34.1500"]),
+        ]
+        gfs = parse_qs(urlparse(str(data_calls[2].url)).query)
         assert gfs["latitude"] == ["-34.0300,21.6600"]  # wind at the break itself
-        assert gfs["wind_speed_unit"] == ["kmh"]
+        assert gfs["wind_speed_unit"] == ["kmh"] and gfs["cell_selection"] == ["sea"]
 
     def test_rejected_optional_variables_are_dropped_and_retried(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -159,23 +173,30 @@ class TestOpenMeteo:
         assert result.records[1][0].values["primary_swell_height_m"] is not None
 
     def test_one_bad_location_does_not_fail_the_batch(self) -> None:
+        nazare = SpotPoint(3, "nazare", 39.61, -9.09, 39.65, -9.28, PARAMS)
+
         def handler(request: httpx.Request) -> httpx.Response:
             q = parse_qs(urlparse(str(request.url)).query)
-            if q.get("models") == ["ncep_gfswave025"] and "21.8000" in q["latitude"][0]:
+            if (
+                "models" in q
+                and q["models"][0].startswith("ncep")
+                and "21.8000" in q["latitude"][0]
+            ):
                 return httpx.Response(
                     400, json={"error": True, "reason": "No data is available for this location"}
                 )
             return standard_handler(request)
 
         p, _ = provider(handler)
-        result = p.fetch(SPOTS, p.current_run(NOW))
-        assert 1 in result.records
+        result = p.fetch([SPOTS[1], nazare], p.current_run(NOW))
+        assert 3 in result.records
+        # Refused by ncep_gfswave016, retried alone with ncep_gfswave025, refused again.
         assert "No data is available" in result.errors[2]
 
     def test_land_points_with_all_null_waves_are_reported(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             q = parse_qs(urlparse(str(request.url)).query)
-            if q.get("models") == ["ncep_gfswave025"]:
+            if request.url.path == "/v1/marine":
                 variables = q["hourly"][0].split(",")
                 n = len(q["latitude"][0].split(","))
                 return httpx.Response(
@@ -201,27 +222,27 @@ class TestOpenMeteo:
         result = p.fetch(SPOTS, p.current_run(NOW))
         assert set(result.records) == {1, 2}
 
-    def test_persistent_outage_is_recorded_per_spot(self) -> None:
+    def test_persistent_outage_fails_the_fetch_transiently(self) -> None:
+        """A persistent 5xx used to leave a run with only spot errors, which was never
+        retried before the next scheduled poll; it now raises TransientProviderError so
+        the acquisition task retries within minutes (audit PLAT-2)."""
+
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path.endswith("meta.json"):
                 return standard_handler(request)
             return httpx.Response(503)
 
         p, _ = provider(handler)
-        result = p.fetch(SPOTS, p.current_run(NOW))
-        assert not result.records and len(result.errors) == 2
+        with pytest.raises(TransientProviderError):
+            p.fetch(SPOTS, p.current_run(NOW))
 
-    def test_missing_sea_level_is_tolerated(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            q = parse_qs(urlparse(str(request.url)).query)
-            if q.get("hourly") == ["sea_level_height_msl"]:
-                return httpx.Response(400, json={"error": True, "reason": "unsupported"})
-            return standard_handler(request)
-
-        p, _ = provider(handler)
+    def test_sea_level_is_never_requested(self) -> None:
+        p, rec = provider(standard_handler)
         result = p.fetch(SPOTS, p.current_run(NOW))
-        assert set(result.records) == {1, 2}
-        assert result.records[1][0].values.get("sea_level_m") is None
+        assert all(
+            r.values["sea_level_m"] is None for rows in result.records.values() for r in rows
+        )
+        assert not any("sea_level" in str(c.url) for c in rec.calls)
 
     def test_api_key_uses_customer_hosts(self) -> None:
         p, rec = provider(standard_handler, open_meteo_api_key="secret-key")
@@ -255,6 +276,11 @@ class TestWindy:
                         "swell1_height-surface": [1.9, 2.0],
                         "swell1_period-surface": [15, 15],
                         "swell1_direction-surface": [214, 214],
+                        # Documented key names of the windWaves parameter (SYNTHETIC values;
+                        # the second hour has no wind sea, as a 0 would say).
+                        "wwaves_height-surface": [0.6, 0.0],
+                        "wwaves_period-surface": [5.0, 0.0],
+                        "wwaves_direction-surface": [250, 0],
                     },
                 )
             return httpx.Response(
@@ -283,6 +309,36 @@ class TestWindy:
         assert r0.values["wind_speed_kmh"] == pytest.approx(10.8)
         assert r1.values["wind_direction_deg"] == pytest.approx(0.0)  # v<0: from north
         assert r0.values["pressure_msl_hpa"] == pytest.approx(1013.0)
+        # Wind sea from the wwaves_* keys (the old windWaves_* names never matched).
+        assert r0.values["wind_wave_height_m"] == 0.6 and r0.values["wind_wave_period_s"] == 5.0
+        assert r0.values["wind_wave_direction_deg"] == 250
+        assert r1.values["wind_wave_height_m"] is None and r1.values["wind_wave_period_s"] is None
+        assert r0.extra["gust_kind"] == "unknown"
+        assert result.stats is not None and result.stats.requests == 2
+
+    def test_refused_without_the_terms_acknowledgement(self) -> None:
+        from pydantic import ValidationError
+
+        from app.services.forecasts.registry import build_provider
+
+        with pytest.raises(ValidationError, match="WINDY_TERMS_ACKNOWLEDGED"):
+            Settings(forecast_providers="windy", windy_api_key="k")
+        unacknowledged = Settings(windy_api_key="k")  # e.g. built by a script, not from env
+        with pytest.raises(PermanentProviderError, match="terms forbid storing"):
+            build_provider("windy", unacknowledged)
+        ok = Settings(forecast_providers="windy", windy_api_key="k", windy_terms_acknowledged=True)
+        assert isinstance(build_provider("windy", ok), WindyProvider)
+
+
+def test_both_open_meteo_families_validate_and_build() -> None:
+    from app.services.forecasts.open_meteo_ecmwf import OpenMeteoEcmwfProvider
+    from app.services.forecasts.registry import build_provider, configured_source_codes
+
+    s = Settings(forecast_providers="open_meteo,open_meteo_ecmwf")
+    assert s.forecast_provider_list == ["open_meteo", "open_meteo_ecmwf"]
+    assert configured_source_codes(s) == ["open_meteo_noaa", "open_meteo_ecmwf"]
+    assert isinstance(build_provider("open_meteo", s), OpenMeteoProvider)
+    assert isinstance(build_provider("open_meteo_ecmwf", s), OpenMeteoEcmwfProvider)
 
 
 class TestDemo:

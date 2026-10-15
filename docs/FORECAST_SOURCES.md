@@ -1,107 +1,165 @@
 # Forecast and travel data sources
 
-Every source below is an official, documented API, used within its terms. Nothing in this
-project scrapes websites, bypasses anti-bot systems or calls private endpoints.
+Every source below is an official, documented API. Nothing in this project scrapes
+websites, bypasses anti-bot systems or calls private endpoints. Licences, keys, free tiers
+and costs of every service: [API_SETUP_REQUIRED.md](API_SETUP_REQUIRED.md). Windy is the
+exception to "used within its terms" unless a licence allows storage: its token is
+refused by default (below).
 
 ## Forecasts
 
-| Source (`FORECAST_PROVIDERS` value → source code, family) | Status in this repo | Data | Access |
+**Recommended setup (API-first):** `FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf`. Spot
+forecasts come from Open-Meteo as two independent model families, the map layers from
+NOAA NODD byte ranges, the ensemble spread from GEFS-Wave (HTSGW and PERPW only). The
+direct GRIB ingesters stay as tested, key-free fallbacks, off by default.
+
+| Source (`FORECAST_PROVIDERS` token → source code, family) | Status | Data | Access |
 |--------|---------------------|------|--------|
-| **NOAA GFS-Wave + GFS, direct** (`noaa_gfs` → `noaa_gfs_direct`, `ncep_gfs`) | Implemented (`forecasts/noaa.py`), synthetic-GRIB tests. **Verified live** on 2026-10-11: run `noaa-gfs:2026101100`, all 50 spots, f000–f240 every 3 h, 4,050 records, 0 errors, 811 requests, 1.91 GB, about 4 min | Hs, Tp, peak direction, 3 swell partitions + wind sea (height/period/direction), 10 m wind, gust, MSL pressure. Native WW3 grids `global.0p16` / `gsouth.0p25`, `global.0p25` only north of 52.5°N | NOAA Open Data Dissemination bucket on AWS, GRIB2 by HTTP Range from the `.idx` offsets. No key. Details: [noaa-direct-ingestion.md](noaa-direct-ingestion.md) |
-| **ECMWF IFS open data** (`ecmwf_ifs` → `ecmwf_ifs_open`, `ecmwf_ifs`) | Implemented (`forecasts/ecmwf.py`), synthetic-GRIB tests. **Verified live** on 2026-10-11: run `ecmwf-ifs:2026101012`, 65 steps to 240 h, 3,250 records, 0 errors, 438 requests, 847 MB, 112 s (two HTTP 503 SlowDown responses, retried) | ecWAM Hs (`swh`), Tp (`pp1d`), mean direction, Tm-1,0, Tm02, period-band heights, IFS 10 m wind, gust, MSL pressure. **No swell partitions** in open data | ECMWF open-data bucket (00Z/12Z cycles, 0.25°), JSON `.index` offsets, HTTP Range. CC BY 4.0: attribution "Copyright ECMWF" required, shown on the spot page |
-| **NOAA GEFS-Wave ensemble statistics** (job `forecasts.acquire_ensemble`, `GEFS_ENABLED=true` → `noaa_gefs_wave`, `ncep_gefs`) | Implemented (`forecasts/ensemble.py`), synthetic-GRIB tests. **Verified live** on 2026-10-11: run `gefs-wave:2026101018`, 50 spots, 41 steps (6-hourly to 240 h), 2,050 rows, 0 errors, 201 MB, 29 s; partition order check passed on 503,541 ocean cells | Ensemble mean and spread (31 members) of Hs, Tp, wind and swell partition 1. Stored in `forecast_ensemble_stats`, used only for uncertainty ranges, never as a forecast | Same NOAA bucket, no key |
-| **Open-Meteo**, serving NOAA GFS + GFS-Wave (`open_meteo` → `open_meteo_noaa`, `ncep_gfs`) | Implemented (`forecasts/open_meteo.py`), mock-tested. Verified live on 2026-10-09 (19,200 records, 0 errors) | Hourly, up to 16 days: combined sea, primary/secondary swell, wind sea, wind, gusts, pressure, sea level | Free for non-commercial use; `OPEN_METEO_API_KEY` for the commercial hosts |
-| **Windy Point Forecast API v2** (`windy` → `windy_gfswave`, `ncep_gfs`) | Implemented (`forecasts/windy.py`), mock-tested only | `gfsWave` waves/swells/wind waves, `gfs` wind | Paid key, `WINDY_API_KEY`. Trial keys return randomised data and must never drive real alerts |
-| **Demo provider** (`demo`) | Implemented, default | Synthetic but physically plausible swells, winds and tides | None. Labelled DEMO in the UI, API and every alert |
-| Copernicus Marine (MFWAM) | Not implemented (family `mfwam` reserved) | 10-day wave forecast, a third independent family | Free account; the `ForecastProvider` interface is ready for it |
+| **Open-Meteo, NOAA GFS + GFS-Wave** (`open_meteo` → `open_meteo_noaa`, `ncep_gfs`) | Recommended. `forecasts/open_meteo.py`; mock tests on recorded responses; live runs below | Waves from `ncep_gfswave016` (0.16°, about 15°S-52.5°N) or `ncep_gfswave025` elsewhere: Hs, peak period, direction, primary/secondary/tertiary swell and wind sea. Wind, gust (GFS instantaneous), MSL pressure from `gfs_global`. Hourly to 120 h, then 3-hourly (the model's own steps) | Free for non-commercial use; `OPEN_METEO_API_KEY` for the commercial hosts |
+| **Open-Meteo, ECMWF IFS + ecWAM** (`open_meteo_ecmwf` → `open_meteo_ecmwf`, `ecmwf_ifs`) | Recommended. `forecasts/open_meteo_ecmwf.py`; mock tests; live runs below | `ecmwf_wam025`: Hs, peak period (`wave_peak_period`; the mean period only in `extra`), mean direction; no swell partitions. `ecmwf_ifs025`: wind, gust (3-hour maximum), MSL pressure. 3-hourly to 144 h, then 6-hourly, 00Z and 12Z runs only | same |
+| **NOAA GFS-Wave + GFS, direct** (`noaa_gfs` → `noaa_gfs_direct`, `ncep_gfs`) | Optional fallback, off by default. `forecasts/noaa.py`. Verified live 2026-10-11: 4,050 records, 811 requests, 1.91 GB | as above, 3-hourly, from the native WW3 grids, sampled at our nearest valid sea cell | NOAA NODD on AWS, GRIB2 by HTTP Range. No key. [noaa-direct-ingestion.md](noaa-direct-ingestion.md) |
+| **ECMWF IFS open data, direct** (`ecmwf_ifs` → `ecmwf_ifs_open`, `ecmwf_ifs`) | Optional fallback, off by default. `forecasts/ecmwf.py`. Now reads only `ECMWF_WAVE_PARAMS` (default `swh,mwd,pp1d,mwp`: 3.69 MB per step instead of 10.06 MB; `wmb` once per run) and records its bytes | Hs, Tp (`pp1d`), mean direction, Tm-1,0, wind, gust, pressure | ECMWF open-data bucket, HTTP Range. CC BY 4.0, "Copyright ECMWF" |
+| **NOAA GEFS-Wave ensemble statistics** (`GEFS_ENABLED=true` → `noaa_gefs_wave`, `ncep_gefs`) | `forecasts/ensemble.py`. Now reads only `GEFS_STAT_FIELDS` (default HTSGW, PERPW: 4 records, 1.60 MB per step instead of 10 records, about 4.9 MB) for the cycles in `GEFS_CYCLES` | Mean and spread of Hs and Tp, used only for uncertainty ranges and forecast confidence | NOAA bucket, no key |
+| **Windy Point Forecast API v2** (`windy` → `windy_gfswave`, `ncep_gfs`) | Refused unless `WINDY_TERMS_ACKNOWLEDGED=true`: Windy's terms forbid storing the data and derived databases. Wind-sea keys fixed to `wwaves_*`. Mock-tested only | `gfsWave` waves, `gfs` wind | Paid key, `WINDY_API_KEY` |
+| **Demo provider** (`demo`) | Default | Synthetic but physically plausible swells, winds and tides | None. Labelled DEMO everywhere |
+| Copernicus Marine (MFWAM) | Not implemented (family `mfwam` reserved) | | Free account |
 | Surfline, Windy website | **Not integrated** | — | No authorised access; scraping would violate their terms |
 
 ### Families, the blend and what "our prediction" is built from
 
 * Every source has a **dependency family** (`forecasts/families.py`). NOAA direct,
-  Open-Meteo's GFS-Wave and Windy's `gfsWave` are the same model (`ncep_gfs`), so their
-  agreement is not evidence; GEFS (`ncep_gefs`) is related to it; ECMWF (`ecmwf_ifs`) is
-  independent.
+  Open-Meteo's GFS family and Windy's `gfsWave` are the same model (`ncep_gfs`), so their
+  agreement is not evidence; GEFS (`ncep_gefs`) is related to it; ECMWF (`ecmwf_ifs`,
+  direct or through Open-Meteo) is independent. With `open_meteo` and `noaa_gfs` both
+  configured, the higher-priority one is the GFS member and the other only an integrity
+  cross-check.
 * With two or more independent families, job A2 (`forecasts.blend`) builds a **blend**
   run (`forecasts/blend.py`): one member per family, weighted by the best linear unbiased
   combination for correlated errors (prior error correlation 0.6 related / 0.3
   independent; per-member error from verification when it exists, otherwise a lead-time
-  prior). Hs is combined geometrically, Tp only over peak-period members, directions as
-  unit vectors, swell partitions come from the member that has them (NOAA) scaled to the
-  blended Hs. Nothing is averaged equally.
+  prior). Hs is combined geometrically, Tp only over peak-period members, wind direction
+  as unit vectors, swell partitions come from the member that has them (GFS-Wave) scaled
+  to the blended Hs; a partition the member does not have stays empty. Gusts are averaged
+  only over members with the same gust definition as the highest-weight member
+  (`extra.gust_kind`, with every member's in `extra.gust_kinds`): a GFS instantaneous
+  gust and an ECMWF 3-hour maximum are different quantities. Nothing is averaged equally.
+* Members are aligned in time by linear interpolation between their own steps (at most
+  6 h apart, never extrapolated). A blended hour that uses such an interpolated member
+  value is marked `extra.interpolated = true` with the members in
+  `extra.interpolated_members`, so it is never shown as all-native model output (with
+  the GFS family hourly to 120 h and ECMWF 3-hourly, two of three hours in that range use
+  an interpolated ECMWF value).
 * Each hour stores a `forecast_comparisons` row: Hs log ratio, Tp, direction and wind
   differences, and flags (`hs_disagree` above a ratio of 1.4, `period_disagree` above 3 s,
-  `direction_disagree` above 30°, `wind_disagree` above 15 km/h). Flagged hours widen
-  the forecast range and cap forecast confidence at Moderate (Low when Hs differs by more
-  than a factor 2); the spot page shows every model's raw values next to our prediction.
-* **First live comparison (2026-10-11, GFS 00Z vs ECMWF 12Z the day before):** 1,334 of
-  4,050 spot-hours flagged (705 Hs, 604 period, 564 direction, 181 wind). In the first
-  48 h, Hs disagreement was concentrated at sheltered Southern California spots: at
-  Rincon ECMWF had 2.1–2.4 m of 7–8 s wind sea under 30–39 km/h westerlies where GFS had
-  0.5–0.9 m and weaker wind; Trestles and Mundaka were similar. These are real model
-  differences at different grid cells, not ingestion errors; they are the reason the blend
-  widens the range rather than picking one model.
+  `direction_disagree` above 30°, `wind_disagree` above 15 km/h; heuristic thresholds).
+  Flagged hours widen the forecast range and cap forecast confidence at Moderate (Low when
+  Hs differs by more than a factor 2).
 * Predictions are computed for every run; the blend (or the single primary source when no
   blend exists) is authoritative for detection, matching and alerts. Only authoritative
-  runs are archived in `prediction_archive`.
+  runs are archived in `prediction_archive`. Predictions of superseded member runs are
+  pruned nightly (derived data; see "Storage").
 
-### How ingestion works (job A)
+### How the Open-Meteo adapters match direct sampling
 
-* **One centralised fetch** per upstream model run for all active spots, independent of
-  how many users exist. The run key (`noaa-gfs:2026101100`, `ecmwf-ifs:2026101012`,
-  `ncep_gfswave025:…|gfs_seamless:…`) makes ingestion idempotent.
-* Each spot is forecast at `forecast_latitude/longitude`, a point just offshore. The GRIB
-  ingesters sample the **nearest valid sea cell** (land-masked cells are never used, and
-  nothing is interpolated across land) within `GRIB_MAX_CELL_DISTANCE_KM`, falling back to
-  the break location; wind comes from the nearest sea cell to the break. The chosen
-  cells are stored in `wave_forecasts.extra` of each spot's first record.
-* **Run discovery.** NOAA: the newest cycle whose last needed step is published for every
-  file (`NOAA_AVAILABILITY_LAG_HOURS`, default 5 h). ECMWF: the newest 00Z/12Z cycle with
-  its last needed step published (`ECMWF_AVAILABILITY_LAG_HOURS`, 8 h). GEFS: same as NOAA
-  with `GEFS_AVAILABILITY_LAG_HOURS` (7.5 h).
-* **Failure isolation.** Transient errors (timeouts, 429, 5xx, ECMWF 503 SlowDown) retry
-  with exponential backoff; ECMWF requests are paced and capped at 4 in flight. A missing
-  step is a gap with a warning and marks the spots it affects `incomplete`, a spot without
-  a valid cell is an error for that spot (either makes the run `PARTIAL`), and a run where
-  nothing could be read fails without replacing the last good data. A `FAILED` run is
-  fetched again on the next schedule (the acquisition jobs record provider failures as
-  outcomes instead of raising them, so Celery's `autoretry_for` does not fire for them).
-* **Staleness (per source, ADR-015).** A run is stale once it is older than its source's
-  cycle interval + publication lag + acquisition interval (`FORECAST_REFRESH_MINUTES`) + 2 h:
-  **NOAA GFS 16 h** (6 + 5 + 3 + 2), **GEFS-Wave 18.5 h** (6 + 7.5 + 3 + 2), **ECMWF 25 h**
-  (12 + 8 + 3 + 2, two long cycles a day); demo, Open-Meteo and Windy keep
-  `FORECAST_STALE_HOURS` (18). A blend is stale when any member is stale by its own rule.
-  Stale runs are left out of the blend, lose to fresh runs as the authoritative source, carry
-  the index's ×0.8 factor and at most Moderate forecast confidence
-  ([forecast-confidence.md](forecast-confidence.md)), are flagged in the UI and
-  `/api/system/status` (each source lists its `stale_after_hours`), and alerts are not
-  generated once a run is twice its stale-after age. Before this rule a single 18 h limit made
-  the newest ECMWF run stale for several hours every day (it is routinely 20-23 h old before
-  the next cycle is fetched), which silently dropped ECMWF from the blend.
-* **Retention.** Forecast runs older than `RETENTION_FORECAST_DAYS` are deleted nightly
-  (the two newest successful runs per source are kept). The prediction archive keeps the
-  authoritative predictions for `RETENTION_ARCHIVE_DAYS` (730).
+The point of the API-first design is the same model data for kilobytes instead of
+gigabytes, without losing accuracy. What the adapters do (`forecasts/open_meteo.py`):
 
-### Bandwidth and timing (measured live, 2026-10-11, this sandbox's proxy)
+* **Sea cells.** Every request sends `cell_selection=sea` (`OPEN_METEO_CELL_SELECTION`).
+  Open-Meteo's default picks a land cell of similar elevation for weather, which gave
+  18.4 instead of 28.0 km/h mean wind at Pipeline in the audit. Waves are requested at the
+  spot's offshore forecast point, wind at the break; the cells Open-Meteo used and their
+  distances are stored in each spot's first record (`extra.wave_cell`, `extra.wind_cell`).
+  A wave cell with no value in any hour (masked by the wave model although Open-Meteo
+  calls it sea: `ecmwf_wam025` at Keramas and Puerto Escondido on 2026-10-14) is replaced
+  by the nearest of its eight neighbouring cells that has data, at most
+  `GRIB_MAX_CELL_DISTANCE_KM` (60) from the forecast point, as the GRIB ingesters take the
+  nearest valid cell; the replacement is listed in the run's warnings.
+* **Native wave grids.** `ncep_gfswave016` where its domain (read from the model's
+  metadata) contains the point, `ncep_gfswave025` elsewhere; one request never mixes
+  models, and a spot refused with HTTP 400 "No data is available for this location" is
+  retried with the next model.
+* **Partitions.** Primary, secondary and tertiary swell and wind sea. Open-Meteo returns
+  0 m / 0 s / 0° for a partition the model does not have at that time; it is stored as
+  empty, never as a 0 m swell from the north.
+* **Native steps only.** Open-Meteo interpolates every model to hourly. Only the model's
+  own output steps are stored (GFS: hourly to 120 h, then 3-hourly; IFS/WAM 0.25:
+  3-hourly to 144 h, then 6-hourly); every record carries `extra.native_step_seconds`.
+  With `OPEN_METEO_NATIVE_STEPS_ONLY=false` the other hours are kept and flagged
+  `extra.interpolated`.
+* **Run identity.** The run is read from each model's `meta.json` and used only
+  `OPEN_METEO_AVAILABILITY_WAIT_MINUTES` (10) after its availability time, as Open-Meteo
+  advises. The metadata is read again after the data requests: a run published in between
+  is never stored under the old key. Hours past the run's last step (which Open-Meteo fills
+  from older, longer runs) are dropped. Every model run behind the data is stored in
+  `forecast_runs.details.model_runs` (for `gfs_seamless`: HRRR and GFS). The ECMWF family
+  reads only the 00Z and 12Z runs: the 06Z/18Z runs stop at 144 h and Open-Meteo fills the
+  rest of their series from the previous run.
+* **No tide from the wave API.** `sea_level_height_msl` is not requested (a modelled sea
+  surface height, "not suitable for coastal navigation"); tides come from `app.services.tides`.
 
-| Job | Per run | Time |
-|-----|---------|------|
-| NOAA GFS-Wave + GFS, 81 steps | 1.91 GB, 811 requests (~24 MB per step with all three wave grids) | ~4 min with 6 workers |
-| ECMWF IFS, 65 steps | 847 MB, 438 requests (~13 MB per step) | 112 s |
-| GEFS-Wave statistics, 41 steps | 201 MB, 410 requests (~5 MB per step) | 29 s |
-| Blend + predictions for 3 runs (11,350 predictions) + archive | — | ~12 s |
+### Quotas, cache and retries
 
-At four GFS cycles and two ECMWF cycles a day this is about 9.5 GB per day of egress from
-the NOAA and ECMWF buckets (free to the user). Reduce it with `NOAA_STEP_HOURS=6` or a
-shorter `NOAA_MAX_LEAD_HOURS`/`ECMWF_MAX_LEAD_HOURS`.
+* **Weighted call budget** (`forecasts/quota.py`): each request is charged
+  `locations x max(1, variables/10) x max(1, days/14)` weighted calls before it is sent,
+  atomically against minute, hour, day and month windows in Redis
+  (`OPEN_METEO_CALLS_PER_*`, free-tier defaults 600 / 5,000 / 10,000 / 300,000). A full
+  minute or hour window is transient (the task retries when it resets); a full day or
+  month is `QuotaExhaustedError`: that provider's run ends FAILED with the reason and the
+  next provider still runs. Open-Meteo's own HTTP 429 reasons are mapped the same way.
+  Metadata requests are free and not charged. `python -m app.cli engine budget` prints
+  the counters.
+* **Response cache** (`forecasts/provider_cache.py`): bodies of one model run are kept in
+  Redis for the model's update interval (6 h), zlib-compressed, at most
+  `PROVIDER_RESPONSE_CACHE_MAX_KEYS` (200) entries, bodies above
+  `PROVIDER_RESPONSE_CACHE_MAX_BYTES` (2 MB) never cached. A retried run reads what it
+  already received instead of paying for it again. Redis errors never fail a fetch.
+* **Retries and bookkeeping** (`forecasts/ingestion.py`, `workers/tasks.py`): providers
+  run one after another; each run records its own `started_at`, its cost in
+  `details.stats` (bytes on the wire, HTTP responses by status, weighted calls; also for a
+  FAILED run) and its model runs. Any exception ends only that provider's run, FAILED,
+  never RUNNING. A transient failure retries the Celery task after 2, 4, 8 min (or the
+  provider's wait, at most 1 h); an acquisition where every provider failed is logged
+  FAILED and does not chain to the blend.
+
+### Staleness (per source, ADR-015)
+
+A run is stale once it is older than its source's cycle interval + publication lag +
+acquisition interval (`FORECAST_REFRESH_MINUTES`) + 2 h: **Open-Meteo GFS family 17.2 h**
+(6 + 6 + 0.17 + 3 + 2; Open-Meteo published the GFS domains 5.3-6.0 h after
+initialisation on 2026-10-14, plus the 10-minute wait), **Open-Meteo ECMWF family 24.7 h**
+(12 + 7.5 + 0.17 + 3 + 2; 7.0-7.2 h, 00Z/12Z only), **NOAA GFS direct 16 h**, **GEFS-Wave
+18.5 h** (24.5 h with `GEFS_CYCLES=00,12`), **ECMWF direct 25 h**; demo and Windy keep
+`FORECAST_STALE_HOURS` (18). A blend is stale when any member is stale by its own rule.
+Publication lags vary: for the 06Z run of 2026-10-15 Open-Meteo published `ncep_gfs025`
+8.2 h after initialisation (`ncep_gfs013` 6.0 h, the waves 5.3 h). A run's issue time is
+its oldest model run, so in such a cycle the GFS family can read stale for a few minutes
+before the next acquisition; the 2 h margin covers most of it.
+Stale runs are left out of the blend, lose to fresh runs as the authoritative source, cap
+forecast confidence at Moderate, are flagged in the UI and `/api/system/status`, and alerts
+are not generated once a run is twice its stale-after age.
+
+### Storage
+
+* Forecast runs older than `RETENTION_FORECAST_DAYS` (10) are deleted nightly, keeping the
+  two newest usable runs per source.
+* The predictions of superseded member runs are deleted nightly: derived, recomputable
+  data (about 2.5 kB per row), never the blend's, never the newest run of a source, never
+  a run that is still authoritative for a spot.
+* The prediction archive keeps the authoritative predictions for
+  `RETENTION_ARCHIVE_DAYS` (730) with a digest of the confidence inputs
+  (`ARCHIVE_CONFIDENCE_DIGEST`): measured on the real 2026-10-11 blend, 562 B per row
+  instead of 1,506 B.
+* Open-Meteo bodies are never written to disk; GRIB is decoded in memory. A trace of a
+  live acquisition (`strace -e openat,creat,rename,unlink,mkdir`) showed no file opened
+  for writing by the acquisition.
 
 ### Switching to live forecasts
 
 ```env
-FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs  # first = primary; two independent families enable the blend
-GEFS_ENABLED=true                      # ensemble spread for the uncertainty ranges
+FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf   # first = primary; two families -> blend
+GEFS_ENABLED=true                                # ensemble spread for the uncertainty ranges
 FORECAST_BLEND_ENABLED=true
-# optional: OPEN_METEO_API_KEY / WINDY_API_KEY if "open_meteo" / "windy" are listed
+OPEN_METEO_API_KEY=                              # only for commercial use
 ```
 
 `demo` cannot be combined with a live provider (the settings validator rejects it), so
@@ -109,25 +167,101 @@ synthetic and real data never mix. To try it once from the command line:
 
 ```bash
 cd backend
-GEFS_ENABLED=true python -m app.cli engine ensemble   # GEFS-Wave mean/spread
-FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs python -m app.cli pipeline
+FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf python -m app.cli pipeline
+python -m app.cli engine budget                    # weighted calls used
+GEFS_ENABLED=true python -m app.cli engine ensemble # GEFS-Wave mean/spread
 ```
 
-Open-Meteo's free API is for **non-commercial** use with fair-use limits; a deployment
-that charges users needs a commercial key.
+The direct GRIB ingesters (`noaa_gfs`, `ecmwf_ifs`) remain available as key-free
+fallbacks, for example if Open-Meteo is unavailable or its terms change; they download
+about 1.9 GB (NOAA) and 0.48 GB (ECMWF, trimmed; computed) per run.
 
 ### Limitations
 
-* All sources here are **offshore** models (WW3 at 1/6°–1/4°, ecWAM at 0.25°). Breaking
+* All sources here are **offshore** models (WW3 at 1/6°-1/4°, ecWAM at 0.25°). Breaking
   heights come from our nearshore model (`docs/SURF_SCORING.md`), not from the providers.
 * ECMWF open data has no swell partitions, so an ECMWF-only run uses the bulk sea state
   for the breaking estimate; in the blend the partitions come from GFS-Wave.
-* GFS 0.25° winds under-resolve sea breezes and terrain effects near the coast.
+* Open-Meteo picks its own grid cell; it was our nearest valid sea cell at 47 of 50 spots
+  for GFS-Wave on 2026-10-14 (the other 3 a neighbouring valid cell). For `ecmwf_wam025`
+  it chose a masked cell at 2 spots, replaced by a neighbouring cell 14.3 km (Puerto
+  Escondido) and 26 km (Keramas) from the forecast point. The cells used are stored with
+  each run.
+* One vendor for spot forecasts: the free tier is non-commercial, counts calls per IP
+  address and its terms can change; the direct GRIB providers stay as tested fallbacks.
+* GFS 0.25° and Open-Meteo `gfs_global` winds under-resolve sea breezes and terrain effects
+  near the coast.
 * GFS v17 (expected late 2026) will rename NOAA files: the bucket and path templates are
   settings (`NOAA_GFS_BASE_URL`, `NOAA_GFS_WAVE_PATH_TEMPLATE`,
-  `NOAA_GFS_ATMOS_PATH_TEMPLATE`), and verification statistics should restart after the
-  switch.
-* No tide model is ingested from NOAA or ECMWF (`sea_level_m` stays empty for them).
+  `NOAA_GFS_ATMOS_PATH_TEMPLATE`, `MAP_FIELD_ATMOS_PATH_TEMPLATE`), and verification
+  statistics should restart after the switch.
+* No tide comes from the forecast providers (`sea_level_m` stays empty); tides come from
+  `app.services.tides` (NOAA CO-OPS and harmonic constants, labelled with their datum).
+
+### API-first acquisition (measured live, 2026-10-14, this sandbox's proxy)
+
+One acquisition with `FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf` on a fresh scratch
+database (`init-db`, the 50 seeded spots), every response fetched live (empty cache), then
+the blend and the predictions (`build_blend`, `compute_pending_predictions`: jobs A2 and
+B). The numbers are what `forecast_runs.details.stats` and the parity scripts recorded;
+nothing here is extrapolated unless it says so.
+
+| Run (GFS and ECMWF 12Z runs of 2026-10-14) | Result |
+|---|---|
+| `open_meteo_noaa` (GFS family, 16 days) | SUCCESS, 50 of 50 spots, 10,200 rows (120 hourly steps to f119, then 84 3-hourly), 3 data requests (`ncep_gfswave016` for 32 spots, `ncep_gfswave025` for 18, `gfs_global`), 11 HTTP responses with the metadata, **345.6 kB**, **142.9 weighted calls**, 6.3 s. Model runs recorded: `ncep_gfswave016`, `ncep_gfswave025`, `ncep_gfs013`, `ncep_gfs025`, all 12Z |
+| `open_meteo_ecmwf` (ECMWF family, 15 days) | SUCCESS, 50 of 50 spots, 4,100 rows (48 3-hourly steps, then 34 6-hourly), 3 data requests, 7 HTTP responses, **175.1 kB**, **124.3 weighted calls** (17.1 of them for the neighbouring cells of Keramas and Puerto Escondido), 4.7 s; `extra.gust_kind` `ecmwf_max_3h` on every row |
+| Blend | SUCCESS, 2 independent families (`ncep_gfs`, `ecmwf_ifs`), 10,200 rows and 10,200 comparison rows, 9.9 s; 5,650 rows marked `interpolated` (an ECMWF value aligned in time); gust kind of the highest-weight member: `gfs_instantaneous` 9,650, `ecmwf_max_3h` 550 |
+| Predictions | 24,500 for the 3 runs, 4,050 archived (the blend's), 19.7 s |
+| Storage | database 12.2 MB after `init-db`, 101.3 MB after this cycle: `surf_quality_predictions` 63.6 MB (2.29 kB per row), `wave_forecasts` 14.6 MB (GFS family 407 B, ECMWF family 597 B, blend 535 B per row), `forecast_comparisons` 7.7 MB, `prediction_archive` 3.0 MB (555 B per row). Redis 1.98 MB before, 2.53 MB after |
+| Files written (`strace -f -e openat,creat,rename,unlink,mkdir`) | None by the acquisition: the only files opened for writing were the test driver's own report and a joblib semaphore in `/dev/shm` (shared memory) |
+| Open-Meteo refusals | Earlier the same day the Forecast API answered "Daily API request limit exceeded. Please try again tomorrow." for this sandbox's shared egress address (other users of the address; the app had used 143 weighted calls). Those runs ended FAILED, not retried, with their cost recorded, and the next acquisition read the wave responses it had already received from the cache and paid only for the wind request |
+
+**Same-cycle parity** (valid time 2026-10-14 18:00 UTC = lead 6 h of both 12Z runs; the
+direct samples were read by byte range and decoded in memory, at the cell Open-Meteo
+reported for each spot):
+
+| Comparison, 50 spots | Hs | Peak period | Wind speed | Wind direction |
+|---|---|---|---|---|
+| GFS family vs NOAA NODD `gfswave` `global.0p16`/`global.0p25` (HTSGW, PERPW) | **50 of 50 within 0.05 m**; mean 0.004 m, max 0.01 m | mean 0.009 s, max 0.02 s | | |
+| GFS family vs NOAA NODD `gfs.t12z.sfluxgrbf006` (UGRD/VGRD 10 m on the same ~13 km Gaussian grid Open-Meteo's `gfs_global` wind comes from, `ncep_gfs013`) | | | mean 0.08 km/h, max 0.21 km/h | mean 0.4°, max 2.4° |
+| GFS family vs NOAA NODD `pgrb2.0p25` (the 0.25° grid our direct ingester reads), nearest 0.25° cell | | | mean 2.7 km/h, max 9.7 km/h | mean 7.4°, max 32° |
+| ECMWF family vs ECMWF open data `wave`/`oper` step 6 (swh, pp1d, mwd, 10u/10v) | **50 of 50 within 0.05 m**; mean 0.005 m, max 0.01 m | mean 0.013 s, max 0.025 s | mean 0.09 km/h, max 0.24 km/h | mean 0.4°, max 3.1° |
+
+The remaining differences are of the size of Open-Meteo's output rounding (0.01 m,
+0.05 s, 0.1 km/h, 1°) and the GRIB packing precision; the largest direction differences
+are at light wind (3.1° at 0.8 km/h at Ocean Beach SF, 2.4° at 4.5 km/h at Punta Roca).
+The wind difference against `pgrb2.0p25` is the grid, not the transport: the same GFS run
+on a coarser grid. The direct samples cost 4.3 MB (waves and the `pgrb2.0p25` wind), 7.3 MB
+(sflux wind) and 4.6 MB (ECMWF) for this single step. Open-Meteo's GFS-Wave cell was our
+nearest valid sea cell at 47 of 50 spots; at Desert Point, G-Land and Mundaka it chose a
+neighbouring valid cell. The 12Z and 06Z waves-only checks earlier the same day gave the
+same Hs agreement (mean 0.004-0.005 m, max 0.01 m). An independent re-check on the 06Z
+run of 2026-10-15 (50 spots, lead 6 h, a fresh live acquisition) gave Hs 50 of 50 within
+0.05 m (mean 0.005 m, max 0.01 m), Tp max 0.02 s, and against the `sfluxgrbf006` wind
+mean 0.09 km/h, max 0.24 km/h, direction max 4.6°; the GFS-family run cost 142.9 weighted
+calls and 341.0 kB.
+
+Examples (Hs m / Tp s / wind km/h, from degrees; Open-Meteo as served, the direct
+samples to 2 decimals and 0.1°):
+
+| Spot | GFS family | NOAA direct | ECMWF family | ECMWF direct |
+|---|---|---|---|---|
+| Pipeline (`ncep_gfswave016`) | 1.62 / 12.65 / 20.0 from 76° | 1.61 / 12.64 / 20.00 from 76.5° | 2.04 / 13.10 / 17.1 from 75° | 2.03 / 13.08 / 17.18 from 74.9° |
+| Mavericks (`ncep_gfswave016`) | 1.26 / 13.70 / 8.4 from 263° | 1.25 / 13.70 / 8.29 from 263.8° | 1.80 / 15.10 / 4.0 from 265° | 1.81 / 15.10 / 3.97 from 263.3° |
+| Nazaré (`ncep_gfswave016`) | 1.72 / 14.10 / 13.7 from 14° | 1.72 / 14.09 / 13.80 from 13.3° | 1.62 / 13.15 / 14.5 from 19° | 1.62 / 13.16 / 14.50 from 19.0° |
+| Jeffreys Bay (`ncep_gfswave025`) | 2.20 / 10.20 / 15.3 from 246° | 2.20 / 10.20 / 15.45 from 246.7° | 2.04 / 10.65 / 14.6 from 250° | 2.04 / 10.65 / 14.41 from 249.6° |
+| Thurso East (`ncep_gfswave025`) | 2.84 / 12.75 / 34.7 from 236° | 2.84 / 12.74 / 34.77 from 235.9° | 2.20 / 11.40 / 41.8 from 188° | 2.21 / 11.42 / 41.68 from 188.3° |
+
+The NOAA direct wind is the sflux sample (same grid). The two families differ from each
+other by far more than either differs from its source (Pipeline Hs 1.62 vs 2.04 m,
+Thurso East wind from 236° vs 188°): that disagreement is what the blend and the forecast
+confidence use.
+
+**Bytes per cycle, before and after.** Direct GRIB (measured 2026-10-11): NOAA 1.91 GB
+per GFS cycle, ECMWF 847 MB per run, GEFS-Wave 201.6 MB. API-first (measured above): the
+GFS family 345.6 kB, the ECMWF family 175.1 kB for 50 spots. GEFS-Wave trimmed to
+HTSGW/PERPW: about 65 MB per run (computed from record sizes). Map layers, standalone:
+about 0.16 GB per cycle, 0.48 GB with the partition layers (computed in the audit).
 
 ## Flights
 

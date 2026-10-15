@@ -47,6 +47,48 @@ class NotPublishedError(PermanentProviderError):
     """The requested file does not exist (yet) on the server (HTTP 403/404)."""
 
 
+class RangeNotHonouredError(GribError):
+    """The server answered a byte-range request with the whole file (HTTP 200)."""
+
+
+def _range_bounds(header: str) -> tuple[int, int | None] | None:
+    """(start, inclusive end or None) of a single ``bytes=a-b`` Range header."""
+    if not header.startswith("bytes=") or "," in header:
+        return None
+    start_s, _, end_s = header.removeprefix("bytes=").partition("-")
+    try:
+        return int(start_s), (int(end_s) if end_s else None)
+    except ValueError:
+        return None
+
+
+def refuse_ignored_range(response: httpx.Response) -> None:
+    """httpx response hook: refuse a 200 to a Range request before its body is read.
+
+    A server that ignores ``Range`` sends the whole file (548 MB for a GFS ``pgrb2.0p25``
+    file) where a few MB were asked for. Response hooks run before httpx reads the body,
+    and an exception here closes the response unread, so nothing beyond the headers is
+    downloaded. A 200 is accepted only for ``bytes=0-`` or when its Content-Length is no
+    larger than the range asked for (a range covering the whole file).
+    """
+    if response.status_code != 200:
+        return
+    bounds = _range_bounds(response.request.headers.get("Range", ""))
+    if bounds is None:
+        return
+    start, end = bounds
+    length = response.headers.get("Content-Length")
+    whole_file_asked = start == 0 and (
+        end is None or (length is not None and length.isdigit() and int(length) <= end + 1)
+    )
+    if not whole_file_asked:
+        raise RangeNotHonouredError(
+            f"{response.request.url} answered the byte-range request "
+            f"{response.request.headers['Range']} with the whole file (HTTP 200, "
+            f"Content-Length {length or 'unknown'}): refused unread"
+        )
+
+
 # --------------------------------------------------------------------------- indexes
 @dataclass(frozen=True)
 class IndexEntry:
@@ -145,6 +187,13 @@ class GribFetcher:
         self.backoff_seconds = backoff_seconds
         self.request_count = 0
         self.bytes_downloaded = 0
+        # First in line, so no other hook (e.g. a byte tally) reads a refused body.
+        hooks = client.event_hooks
+        if refuse_ignored_range not in hooks.get("response", []):
+            client.event_hooks = {
+                "request": list(hooks.get("request", [])),
+                "response": [refuse_ignored_range, *hooks.get("response", [])],
+            }
 
     def _get(self, url: str, headers: dict[str, str] | None = None) -> httpx.Response:
         self.request_count += 1
@@ -206,8 +255,12 @@ class GribFetcher:
             response = self._get(url, {"Range": f"bytes={first.offset}-{end}"})
             data = response.content
             if response.status_code != 206 and first.offset > 0:
-                # Server ignored the Range header and sent the whole file.
-                data = data[first.offset :]
+                # The hook refuses this unread; a client whose hooks were replaced after
+                # this fetcher was built still never slices records out of a whole file.
+                raise RangeNotHonouredError(
+                    f"{self.provider}: {url} ignored the Range header (HTTP "
+                    f"{response.status_code}, {len(data)} bytes)"
+                )
             pos = 0
             for e in group:
                 size = len(data) - pos if e.length is None else e.length

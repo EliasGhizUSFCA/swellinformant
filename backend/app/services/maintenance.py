@@ -2,6 +2,11 @@
 
 * forecast runs older than RETENTION_FORECAST_DAYS are deleted (their wave forecasts and
   predictions cascade), always keeping the two newest usable runs per source;
+* the surf-quality predictions of superseded runs of the blend's member sources are
+  deleted (:func:`prune_superseded_predictions`): derived, recomputable data, about 2 kB
+  per row and every member run scored as well as the blend. The newest usable run of every
+  source and every run that is authoritative for some spot keep theirs; blend predictions
+  are never pruned here;
 * map fields (the map's ocean layers, about 0.1 MB per field and 0.5 deg) are kept for the
   two best servable runs only (:func:`prune_map_fields`, also run after every acquisition
   that stores fields); other map_fields rows are deleted (a deleted forecast run also
@@ -13,7 +18,9 @@
 * notifications older than RETENTION_NOTIFICATION_DAYS are deleted;
 * the prediction archive, forecasts at observation stations, buoy observations and
   verification pairs are kept for RETENTION_ARCHIVE_DAYS (they are the only record of
-  past forecast skill, so they outlive forecast runs by far);
+  past forecast skill, so they outlive forecast runs by far); quality-controlled buoy
+  observations (qc_flag good or probably_good) are kept for OBSERVATION_RETENTION_DAYS
+  instead (default 10 years; a measured record, not recomputable);
 * past tide predictions are pruned by app.services.tides.maintenance.
 """
 
@@ -22,7 +29,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, delete, exists, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -33,23 +40,76 @@ from app.models import (
     FlightOffer,
     FlightSearch,
     ForecastRun,
+    ForecastSource,
     Notification,
     OpportunityMatch,
     OpportunityOffer,
     PointForecast,
     PredictionArchive,
     PredictionValidation,
+    SurfQualityPrediction,
     UserSession,
     UserToken,
 )
 from app.models.enums import ForecastRunStatus, MatchStatus
 from app.models.forecast_engine import MapField
+from app.services.forecasts.queries import PREDICTIONS_PRUNED_KEY, latest_runs_by_spot
 from app.services.map_fields import servable_runs_query
 from app.services.tides.maintenance import prune_tide_predictions
 
 logger = logging.getLogger(__name__)
 
 MAP_FIELD_RUNS_KEPT = 2
+QC_PASSED = ("good", "probably_good")
+BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: cycle)
+USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
+
+
+def prune_superseded_predictions(db: Session, now: datetime | None = None) -> int:
+    """Delete the predictions of superseded non-blend runs; returns the rows deleted.
+
+    Kept: every blend run's predictions, the newest usable run of each source, and every
+    run that is authoritative for at least one spot now (a partial newest run can leave an
+    older run serving some spots). A pruned run keeps its forecasts and is marked
+    ``details["predictions_pruned_at"]``; resetting its ``predictions_computed_at`` makes
+    the prediction job score it again. The caller commits.
+    """
+    keep = {run.id for run in latest_runs_by_spot(db, now).values()}
+    ranked = (
+        select(
+            ForecastRun.id,
+            func.row_number()
+            .over(
+                partition_by=ForecastRun.source_id,
+                order_by=(ForecastRun.issued_at.desc(), ForecastRun.id.desc()),
+            )
+            .label("rank"),
+        )
+        .where(ForecastRun.status.in_(USABLE))
+        .subquery()
+    )
+    keep.update(db.scalars(select(ranked.c.id).where(ranked.c.rank == 1)).all())
+    superseded = (
+        select(ForecastRun)
+        .join(ForecastSource)
+        .where(
+            ForecastSource.code != BLEND_CODE,
+            ForecastRun.predictions_computed_at.is_not(None),
+            exists().where(SurfQualityPrediction.run_id == ForecastRun.id),
+        )
+    )
+    if keep:
+        superseded = superseded.where(ForecastRun.id.notin_(keep))
+    runs = list(db.scalars(superseded))
+    if not runs:
+        return 0
+    stamp = utcnow().isoformat()  # wall clock, as predictions_computed_at (queries)
+    for run in runs:
+        run.details = {**(run.details or {}), PREDICTIONS_PRUNED_KEY: stamp}
+    stmt = delete(SurfQualityPrediction).where(
+        SurfQualityPrediction.run_id.in_([run.id for run in runs])
+    )
+    return db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
 
 
 def prune_map_fields(db: Session, keep: int = MAP_FIELD_RUNS_KEPT) -> int:
@@ -95,6 +155,10 @@ def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
     if keep_ids:
         stmt = stmt.where(ForecastRun.id.notin_(keep_ids))
     out["forecast_runs"] = db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
+    # PRUNE_SUPERSEDED_MEMBER_PREDICTIONS (default on); read with a default until the
+    # setting is declared in app.core.config.
+    if getattr(s, "prune_superseded_member_predictions", True):
+        out["superseded_predictions"] = prune_superseded_predictions(db, now)
 
     referenced = exists().where(
         and_(
@@ -171,10 +235,27 @@ def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
     for key, model, column in (
         ("prediction_archive", PredictionArchive, PredictionArchive.valid_time),
         ("point_forecasts", PointForecast, PointForecast.valid_time),
-        ("buoy_observations", BuoyObservation, BuoyObservation.observed_at),
         ("prediction_validation", PredictionValidation, PredictionValidation.valid_time),
     ):
         out[key] = db.execute(delete(model).where(column < archive_cutoff)).rowcount or 0  # type: ignore[attr-defined]
+    qc_cutoff = now - timedelta(days=s.observation_retention_days)
+    out["buoy_observations"] = (
+        db.execute(  # type: ignore[attr-defined]
+            delete(BuoyObservation).where(
+                or_(
+                    and_(
+                        BuoyObservation.qc_flag.in_(QC_PASSED),
+                        BuoyObservation.observed_at < qc_cutoff,
+                    ),
+                    and_(
+                        BuoyObservation.qc_flag.notin_(QC_PASSED),
+                        BuoyObservation.observed_at < archive_cutoff,
+                    ),
+                )
+            )
+        ).rowcount
+        or 0
+    )
     out["tide_predictions"] = prune_tide_predictions(db, now)
     db.commit()
     logger.info("Cleanup: %s", out)

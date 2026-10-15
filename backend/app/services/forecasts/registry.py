@@ -6,6 +6,7 @@ from app.core.config import Settings, get_settings
 from app.services.forecasts.base import ForecastProvider
 from app.services.forecasts.demo import DemoForecastProvider, SwellOverride
 from app.services.forecasts.open_meteo import OpenMeteoProvider
+from app.services.forecasts.open_meteo_ecmwf import OpenMeteoEcmwfProvider
 from app.services.forecasts.windy import WindyProvider
 from app.services.http import PermanentProviderError
 
@@ -14,9 +15,13 @@ from app.services.http import PermanentProviderError
 NOAA_GFS_CODE = "noaa_gfs_direct"
 ECMWF_IFS_CODE = "ecmwf_ifs_open"
 GEFS_WAVE_CODE = "noaa_gefs_wave"
+OPEN_METEO_NOAA_CODE = OpenMeteoProvider.code  # "open_meteo_noaa", family ncep_gfs
+OPEN_METEO_ECMWF_CODE = OpenMeteoEcmwfProvider.code  # "open_meteo_ecmwf", family ecmwf_ifs
 
+# FORECAST_PROVIDERS token -> source code.
 SOURCE_CODES = {
-    "open_meteo": OpenMeteoProvider.code,
+    "open_meteo": OPEN_METEO_NOAA_CODE,
+    "open_meteo_ecmwf": OPEN_METEO_ECMWF_CODE,
     "windy": WindyProvider.code,
     "demo": DemoForecastProvider.code,
     "noaa_gfs": NOAA_GFS_CODE,
@@ -37,7 +42,16 @@ def build_provider(
     settings = settings or get_settings()
     if name == "open_meteo":
         return OpenMeteoProvider(settings)
+    if name == "open_meteo_ecmwf":
+        return OpenMeteoEcmwfProvider(settings)
     if name == "windy":
+        if not settings.windy_terms_acknowledged:
+            # The settings validator refuses this already; kept for settings built elsewhere.
+            raise PermanentProviderError(
+                "Windy's API terms forbid storing its data and building derived databases: set "
+                "WINDY_TERMS_ACKNOWLEDGED=true only with a licence that allows this use "
+                "(docs/API_SETUP_REQUIRED.md)"
+            )
         return WindyProvider(settings)
     if name == "demo":
         return DemoForecastProvider(
@@ -51,10 +65,4 @@ def build_provider(
         from app.services.forecasts.ecmwf import EcmwfIfsProvider
 
         return EcmwfIfsProvider(settings)
-    if name == "open_meteo_ecmwf":
-        # Accepted by the settings validator; the adapter is not part of this version yet.
-        raise PermanentProviderError(
-            "The Open-Meteo ECMWF provider (open_meteo_ecmwf) is not implemented yet: "
-            "remove it from FORECAST_PROVIDERS for now."
-        )
     raise ValueError(f"Unknown forecast provider {name!r}")

@@ -54,6 +54,10 @@ def test_ecmwf_run_is_stored_with_period_kind_extras_and_no_partitions(
     assert run is not None and run.issued_at == CYCLE and run.wave_model_run_at == CYCLE
     assert run.request_count == provider.last_fetch_stats["requests"] > 0
     assert run.details["metadata_source"] == "ecmwf_index_probe"
+    # The bytes of the run are stored, not only logged (audit DA-10).
+    assert run.details["stats"]["bytes_downloaded"] == provider.last_fetch_stats["bytes"] > 0
+    assert run.details["stats"]["requests"] > 0
+    assert [m["init_time"] for m in run.details["model_runs"]] == [CYCLE.isoformat()] * 2
 
     rows = db.scalars(select(WaveForecast).where(WaveForecast.run_id == run.id)).all()
     assert len(rows) == outcome.records
@@ -66,15 +70,11 @@ def test_ecmwf_run_is_stored_with_period_kind_extras_and_no_partitions(
         assert "sig_wave_height_m" not in row.missing_fields
         assert row.wind_speed_kmh == pytest.approx(18.0, abs=0.05)
         assert row.pressure_msl_hpa == pytest.approx(1013.25, abs=0.01)
-        assert set(row.extra["hs_band_m"]) == {
-            "10-12s",
-            "12-14s",
-            "14-17s",
-            "17-21s",
-            "21-25s",
-            "25-30s",
-        }
-        assert row.extra["hs_ge_12s_m"] == pytest.approx(0.885, abs=2e-3)
+        # Trimmed default ECMWF_WAVE_PARAMS: the mean period is kept, the unused period-band
+        # heights are no longer downloaded or stored (audit DA-3; the unit tests cover them
+        # when configured).
+        assert row.extra["mean_period_tm10_s"] == pytest.approx(9.5, abs=0.01)
+        assert "hs_band_m" not in row.extra and "hs_ge_12s_m" not in row.extra
         assert row.extra["wave_cell"]["distance_km"] <= 400
         # Waves at the offshore point, wind at the break: both cells are recorded.
         assert "wind_cell" in row.extra
@@ -82,6 +82,7 @@ def test_ecmwf_run_is_stored_with_period_kind_extras_and_no_partitions(
             assert row.wind_gust_kmh is None  # no gust window at step 0
         else:
             assert row.wind_gust_kmh == pytest.approx(36.0, abs=0.05)
+            assert row.extra["gust_kind"] == "ecmwf_max_since_pp"
 
     again = acquire_from_provider(db, provider, now=NOW)
     assert again.status == "skipped" and again.run_id == outcome.run_id
