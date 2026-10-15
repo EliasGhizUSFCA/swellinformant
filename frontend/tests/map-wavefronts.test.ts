@@ -7,6 +7,7 @@ import {
   LATTICE_PX,
   MAX_CORNER_SPREAD_DEG,
   packetCrests,
+  packetsFor,
   vertexBudget,
   WaveAnimator,
   type Packet,
@@ -84,10 +85,10 @@ const isTrough = (l: Polyline) => l.style.startsWith("rgba(0, 8, 20");
 const segments = (lines: Polyline[]) =>
   lines.flatMap((l) => l.pts.slice(1).map((p, i) => [l.pts[i]![0], l.pts[i]![1], p[0], p[1]] as const)).filter(([x0, y0, x1, y1]) => Math.hypot(x1 - x0, y1 - y0) > 0.5);
 
-function draw(view: PixelView, families: WaveFamilyGrids[], t = 0, still = false) {
+function draw(view: PixelView, families: WaveFamilyGrids[], t = 0, still = false, budget = vertexBudget(view.width, view.height)) {
   const { ctx, lines } = recorder();
   const lattice = buildLattice(view, families);
-  const stats = drawCrests(ctx, view, lattice, { t, still, budget: vertexBudget(view.width, view.height) });
+  const stats = drawCrests(ctx, view, lattice, { t, still, budget });
   return { lines, stats, lattice };
 }
 
@@ -202,8 +203,10 @@ describe("crest motion", () => {
           l.pts.filter(([x, y]) => x > 300 + (v === b ? 0 : 100) && x < 900 + (v === b ? 0 : 100) && y > 200 && y < 700).map(([x, y]) => `${(x + v.originX).toFixed(2)},${(y + v.originY).toFixed(2)}`),
         ),
       );
-    const pa = world(a, draw(a, fam, 5).lines);
-    const pb = world(b, draw(b, fam, 5).lines);
+    // Unlimited vertices: over the budget a frame leaves out a share of the sets in view, and
+    // the views differ (that cut has its own test below).
+    const pa = world(a, draw(a, fam, 5, false, 1e6).lines);
+    const pb = world(b, draw(b, fam, 5, false, 1e6).lines);
     expect(pb.size).toBeGreaterThan(200);
     expect([...pb].filter((k) => !pa.has(k))).toEqual([]);
     expect([...pa].filter((k) => !pb.has(k))).toEqual([]);
@@ -233,6 +236,59 @@ describe("crest motion", () => {
     const pts = a.lines.flatMap((l) => l.pts).filter(([x, y]) => x > 40 && y > 40 && x < view.width - 40 && y < view.height - 40);
     expect(pts.length).toBeGreaterThan(500);
     expect(pts.filter(([x, y]) => !inB.has(key(x, y)))).toEqual([]);
+  });
+
+  it("moves the crests of a swell from the SW toward the NE (FROM is turned into TOWARD)", () => {
+    // Every crest of a uniform sea lies on p . W = n s + v t (p the travel vector, W world
+    // px): its phase along p, modulo the spacing, is v t. With FROM and TOWARD swapped it
+    // would be -v t, which differs by half a spacing at the time chosen here.
+    const tp = 12;
+    const s = crestSpacingPx(tp);
+    const v = crestSpeedPxPerS(tp, s);
+    const t = s / 4 / v; // v t = s / 4, so -v t = 3 s / 4 (mod s)
+    const view = viewAt(3, -40, -30);
+    const { lines } = draw(view, [family("primary", 3, tp, 225)], t);
+    const p = [Math.SQRT1_2, -Math.SQRT1_2]; // toward the NE: x east, y up the screen
+    const crests = lines.filter((l) => l.style.startsWith("rgba(244, 247, 251") && l.width < 3.2); // crest lines, no glow
+    expect(crests.length).toBeGreaterThan(50);
+    const offPhase = (x: number, y: number) => {
+      const m = (((p[0]! * (x + view.originX) + p[1]! * (y + view.originY) - v * t) % s) + s) % s;
+      return Math.min(m, s - m);
+    };
+    for (const l of crests) for (const [x, y] of l.pts) expect(offPhase(x, y)).toBeLessThan(0.05 * s);
+  });
+
+  it("keeps one crest lattice across the antimeridian and world copies (no seam)", () => {
+    // A 1440 px view at zoom 2 shows 1.4 worlds. With the phase measured in one world copy,
+    // the crests east of 180° would sit 1024 mod 48 = 17 px off those west of it.
+    const tp = 16;
+    const s = crestSpacingPx(tp);
+    const v = crestSpeedPxPerS(tp, s);
+    const t = 1.3;
+    const view = viewAt(2, -45, 180);
+    const { lines } = draw(view, [family("primary", 3, tp, 270)], t, false, 1e6);
+    const crests = lines.filter((l) => l.style.startsWith("rgba(244, 247, 251") && l.width < 3.2);
+    const xs = crests.flatMap((l) => l.pts.map(([x]) => x));
+    expect(xs.some((x) => x < 300)).toBe(true);
+    expect(xs.some((x) => x > 1140)).toBe(true);
+    for (const x of xs) {
+      const m = (((x + view.originX - v * t) % s) + s) % s;
+      expect(Math.min(m, s - m)).toBeLessThan(0.05 * s);
+    }
+  });
+
+  it("reduced motion: the arrowheads point where the waves travel (a swell from the S goes N)", () => {
+    const { lines } = draw(viewAt(3, -40, -30), [family("primary", 3, 12, 180)], 0, true);
+    const heads = lines.filter((l) => l.style === "rgba(255, 255, 255, 0.85)" && l.pts.length === 3);
+    expect(heads.length).toBeGreaterThan(3);
+    for (const { pts } of heads) {
+      const [a, tip, b] = pts as [[number, number], [number, number], [number, number]];
+      // the tip is ahead of the middle of the two barbs, up the screen
+      const dx = tip[0] - (a[0] + b[0]) / 2;
+      const dy = tip[1] - (a[1] + b[1]) / 2;
+      expect(dy).toBeLessThan(-4);
+      expect(Math.abs(dx)).toBeLessThan(1e-6);
+    }
   });
 
   it("advances by time, not frames: 60 Hz and 120 Hz give the same clock", () => {
@@ -342,6 +398,30 @@ describe("systems, reduced motion and budget", () => {
     }
     expect(vertexBudget(1440, 900)).toBe(20_000);
     expect(vertexBudget(390, 844)).toBeLessThan(10_000);
+  });
+});
+
+describe("sets", () => {
+  it("puts a set in a cell that is partly without data (land, ice): several places are tried", () => {
+    // SYNTHETIC: data in 10° bands of longitude, none in the 10° bands between them. A set
+    // cell (about 45° at zoom 3) always has data somewhere, but one jittered place per cell
+    // would miss it about half the time.
+    const view = viewAt(3, -40, -30);
+    const banded = (v: number) => globalGrid((_lat, lon) => (Math.floor((lon + 180) / 10) % 2 ? NaN : v));
+    const sets = (fam: WaveFamilyGrids) => {
+      const l = buildLattice(view, [fam]);
+      return packetsFor(l, l.families[0]!, view).length;
+    };
+    const full = sets(family("primary", 3, 12, 250));
+    const partial = sets(family("primary", banded(3), banded(12), banded(250)));
+    expect(full).toBeGreaterThan(30);
+    expect(partial).toBeGreaterThan(0.85 * full);
+    // Every set sits where its system has data.
+    const l = buildLattice(view, [family("primary", banded(3), banded(12), banded(250))]);
+    for (const p of packetsFor(l, l.families[0]!, view)) {
+      const lon = mercLon((view.originX + p.ax) / view.worldPx);
+      expect(Math.floor((lon + 180) / 10) % 2, `set at ${lon.toFixed(2)}°`).toBe(0);
+    }
   });
 });
 

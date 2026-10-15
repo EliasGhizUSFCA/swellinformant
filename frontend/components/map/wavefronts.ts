@@ -69,7 +69,7 @@ const GLOW_LEVELS = [2.5, 4, 6, 8.5, 11];
 /** Trough lines: dark, a little wider than the crest, faint. */
 const TROUGH_STYLE: FamilyStyle = { ...FAMILY_STYLES.primary, label: "trough", color: "#000814", dash: [], glow: false };
 const TROUGH_WIDTH = 1.6;
-const TROUGH_ALPHA = 0.24;
+const TROUGH_ALPHA = 0.14;
 const TROUGH_LENGTH = 0.8;
 /** Halo under dashed and dotted crests: extra width (px) and opacity relative to the crest. */
 const HALO_PX = 1.6;
@@ -243,6 +243,13 @@ function sampleLattice(l: Lattice, f: FamilyLattice, x: number, y: number): bool
   return true;
 }
 
+/** Whether a view point lies inside the lattice (whatever the data there). */
+function insideLattice(l: Lattice, x: number, y: number): boolean {
+  const fx = (x - l.x0) / LATTICE_PX;
+  const fy = (y - l.y0) / LATTICE_PX;
+  return fx >= 0 && fy >= 0 && fx < l.nx - 1 && fy < l.ny - 1;
+}
+
 /** Deterministic hash of integers to [0, 1). */
 function hash01(a: number, b: number, c: number): number {
   let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x9e3779b1);
@@ -257,7 +264,8 @@ export interface Packet {
   /** Anchor, view px. */
   ax: number;
   ay: number;
-  /** World px of the anchor (for the phase reference). */
+  /** World px of the anchor in the view's continuous pixel plane (the phase reference; not
+   * wrapped to one world copy, so the crest lattice has no seam at the antimeridian). */
   wx: number;
   wy: number;
   px: number;
@@ -281,6 +289,16 @@ export interface Packet {
  * full envelope (reduced motion).
  */
 export function packetCrests(p: Packet, crests: number, t: number, still = false): Array<{ u: number; w: number; n: number }> {
+  const count = crestsInto(p, crests, t, still);
+  return Array.from({ length: count }, (_, i) => ({ u: crestU[i]!, w: crestW[i]!, n: crestN[i]! }));
+}
+
+/** packetCrests into reused buffers (no allocation per frame); returns the crest count. */
+const CREST_BUFFER = 64;
+const crestU = new Float64Array(CREST_BUFFER);
+const crestW = new Float64Array(CREST_BUFFER);
+const crestN = new Float64Array(CREST_BUFFER);
+function crestsInto(p: Packet, crests: number, t: number, still: boolean): number {
   const s = p.spacing;
   const half = (crests * s) / 2;
   const flat = half * ENVELOPE_FLAT;
@@ -296,17 +314,22 @@ export function packetCrests(p: Packet, crests: number, t: number, still = false
   const shift = still ? 0 : p.speed * t;
   // First lattice crest at or after the envelope's back edge.
   const n0 = Math.ceil((centre - half + ref - shift) / s);
-  const out: Array<{ u: number; w: number; n: number }> = [];
-  for (let n = n0; ; n++) {
+  let count = 0;
+  for (let n = n0; count < CREST_BUFFER; n++) {
     const u = n * s + shift - ref;
     const d = Math.abs(u - centre);
     if (u > centre + half) break;
     // Flat-top envelope: full weight in the middle, a cosine taper over the outer part.
     const taper = d <= flat ? 1 : Math.cos((Math.PI / 2) * ((d - flat) / (half - flat))) ** 2;
     const w = taper * fade;
-    if (w >= MIN_WEIGHT) out.push({ u, w, n });
+    if (w >= MIN_WEIGHT) {
+      crestU[count] = u;
+      crestW[count] = w;
+      crestN[count] = n;
+      count++;
+    }
   }
-  return out;
+  return count;
 }
 
 /** 0 -> 0, 1 -> 1, smooth in between (clamped). */
@@ -359,6 +382,10 @@ function hexRgb(hex: string): string {
   return `${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}`;
 }
 
+/** Opacity levels of one crest's taper parts (crest line and halo), reused per crest. */
+const crestLevel = new Int32Array(TAPER.length);
+const haloLevel = new Int32Array(TAPER.length);
+
 const nearestLevel = (levels: number[], x: number) => {
   let best = 0;
   for (let i = 1; i < levels.length; i++) if (Math.abs(levels[i]! - x) < Math.abs(levels[best]! - x)) best = i;
@@ -366,11 +393,11 @@ const nearestLevel = (levels: number[], x: number) => {
 };
 
 /** Packet cell size for a system and view (world px; divides the world width exactly). */
-function cellSize(f: FamilyLattice, view: PixelView, scale: number): number {
+function cellSize(f: FamilyLattice, view: PixelView): number {
   const s = Number.isFinite(f.medianSpacing) ? f.medianSpacing : 20;
   // A few crest spacings more than one packet, in 0.25 log2 steps so that a small change of
   // period between forecast steps keeps the same packets.
-  const raw = Math.min(MAX_CELL_PX, Math.max(MIN_CELL_PX, f.style.cellSpacings * s)) * scale;
+  const raw = Math.min(MAX_CELL_PX, Math.max(MIN_CELL_PX, f.style.cellSpacings * s));
   const q = 2 ** (Math.round(Math.log2(raw) * 4) / 4);
   const nWorld = Math.max(1, Math.round(view.worldPx / q));
   return view.worldPx / nWorld;
@@ -379,20 +406,22 @@ function cellSize(f: FamilyLattice, view: PixelView, scale: number): number {
 /** Packet cell size limits, px. */
 const MIN_CELL_PX = 40;
 const MAX_CELL_PX = 320;
+/** Jittered anchor positions tried per cell before the cell is left without a set. */
+const ANCHOR_TRIES = 6;
 
-const packetCache = new WeakMap<FamilyLattice, { scale: number; packets: Packet[] }>();
+const packetCache = new WeakMap<FamilyLattice, Packet[]>();
 
 /** Packets of a system in view (anchors on valid lattice points only); cached per lattice. */
-export function packetsFor(l: Lattice, f: FamilyLattice, view: PixelView, scale = 1): Packet[] {
+export function packetsFor(l: Lattice, f: FamilyLattice, view: PixelView): Packet[] {
   const hit = packetCache.get(f);
-  if (hit && hit.scale === scale) return hit.packets;
-  const packets = computePackets(l, f, view, scale);
-  packetCache.set(f, { scale, packets });
+  if (hit) return hit;
+  const packets = computePackets(l, f, view);
+  packetCache.set(f, packets);
   return packets;
 }
 
-function computePackets(l: Lattice, f: FamilyLattice, view: PixelView, scale: number): Packet[] {
-  const cell = cellSize(f, view, scale);
+function computePackets(l: Lattice, f: FamilyLattice, view: PixelView): Packet[] {
+  const cell = cellSize(f, view);
   const nWorld = Math.round(view.worldPx / cell);
   const zoomKey = Math.round(Math.log2(view.worldPx / 256) * 100);
   const sys = ["primary", "secondary", "windsea", "combined"].indexOf(f.system) + 1;
@@ -405,15 +434,26 @@ function computePackets(l: Lattice, f: FamilyLattice, view: PixelView, scale: nu
   for (let cj = cj0; cj <= cj1; cj++) {
     for (let ci = ci0; ci <= ci1; ci++) {
       const wrapped = ((ci % nWorld) + nWorld) % nWorld;
-      const wx = (ci + 0.15 + 0.7 * hash01(wrapped, cj, zoomKey * 8 + sys)) * cell;
-      const wy = (cj + 0.15 + 0.7 * hash01(cj, wrapped, zoomKey * 8 + sys + 4)) * cell;
+      // A few jittered places per cell: a cell that is partly land, ice or a partition swap
+      // still gets its set at its first place with data. The choice depends on the data only,
+      // never on the view: a place outside this view's lattice ends the search (no set), so a
+      // pan never moves a set to another place.
+      let wx = 0;
+      let wy = 0;
+      let found = false;
+      for (let k = 0; k < ANCHOR_TRIES && !found; k++) {
+        wx = (ci + 0.15 + 0.7 * hash01(wrapped + 7919 * k, cj, zoomKey * 8 + sys)) * cell;
+        wy = (cj + 0.15 + 0.7 * hash01(cj, wrapped + 7919 * k, zoomKey * 8 + sys + 4)) * cell;
+        if (!insideLattice(l, wx - view.originX, wy - view.originY)) break;
+        found = sampleLattice(l, f, wx - view.originX, wy - view.originY);
+      }
+      if (!found) continue;
       const ax = wx - view.originX;
       const ay = wy - view.originY;
-      if (!sampleLattice(l, f, ax, ay)) continue;
       out.push({
         ax,
         ay,
-        wx: wx - Math.floor(ci / nWorld) * view.worldPx,
+        wx,
         wy,
         px: sample.px,
         py: sample.py,
@@ -425,7 +465,8 @@ function computePackets(l: Lattice, f: FamilyLattice, view: PixelView, scale: nu
       });
     }
   }
-  return out;
+  // In their fixed random order (the `keep` hash), the order a frame over budget visits them.
+  return out.sort((a, b) => a.keep - b.keep);
 }
 
 /** Direction-only lattice sample (the tracer needs nothing else): the unit travel vector. */
@@ -558,12 +599,17 @@ interface TracedCrest {
 const crestCache = new WeakMap<Packet, Map<number, TracedCrest>>();
 export const RETRACE_PX = 2;
 
-const copyHalf = (n: number): TracedLine => ({
-  x: Float32Array.from(half.x.slice(0, n)),
-  y: Float32Array.from(half.y.slice(0, n)),
-  part: Uint8Array.from(half.part.slice(0, n)),
-  n,
-});
+/** Copies the traced half (n vertices) into `into` when it has room, else into a new line. */
+function copyHalf(n: number, into?: TracedLine): TracedLine {
+  const line = into && into.x.length >= n ? into : { x: new Float32Array(n), y: new Float32Array(n), part: new Uint8Array(n), n };
+  for (let i = 0; i < n; i++) {
+    line.x[i] = half.x[i]!;
+    line.y[i] = half.y[i]!;
+    line.part[i] = half.part[i]!;
+  }
+  line.n = n;
+  return line;
+}
 
 /** Taper part (index into TAPER) at a share of the half crest's length. */
 function taperPart(share: number): number {
@@ -579,8 +625,6 @@ export interface DrawOptions {
   still: boolean;
   /** Vertex budget for this frame. */
   budget: number;
-  /** Packet-density scale (> 1 spreads packets out). */
-  cellScale?: number;
 }
 
 /**
@@ -591,14 +635,12 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   const frame = ++poolFrame;
   const used: Batch[] = [];
   const stats: FrameStats = { crests: 0, vertices: 0, strokes: 0, packets: 0, arrows: 0, families: [] };
-  const batch = (kind: StrokeKind, style: FamilyStyle, sys: number, width: number, alpha: number): Batch => {
-    const levels = kind === "glow" ? GLOW_LEVELS : WIDTH_LEVELS;
-    const wl = nearestLevel(levels, width);
-    const al = nearestLevel(ALPHA_LEVELS, alpha);
+  /** The stroke batch for a kind, system, width level and opacity level (see `level`). */
+  const batch = (kind: StrokeKind, style: FamilyStyle, sys: number, wl: number, al: number): Batch => {
     const key = ((KIND_INDEX[kind] * 16 + sys) * 16 + wl) * 16 + al;
     let b = batchPool.get(key);
     if (!b) {
-      b = { kind, style, sys, width: levels[wl]!, alpha: ALPHA_LEVELS[al]!, starts: [], ns: 0, pts: [], np: 0, frame: 0 };
+      b = { kind, style, sys, width: (kind === "glow" ? GLOW_LEVELS : WIDTH_LEVELS)[wl]!, alpha: ALPHA_LEVELS[al]!, starts: [], ns: 0, pts: [], np: 0, frame: 0 };
       batchPool.set(key, b);
     }
     if (b.frame !== frame) {
@@ -629,38 +671,42 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     const style = f.style;
     const left = o.budget - stats.vertices;
     const cap = stats.vertices + (rank === order.length - 1 ? left : left * BUDGET_SHARE);
-    const plans = packetsFor(l, f, view, o.cellScale ?? 1).map((p) => ({ p, crests: packetCrests(p, style.crests, o.t, o.still) }));
+    // Packets in a fixed random order (their `keep` hash): when the budget runs out, the ones
+    // left out are an even, random share of the view, never a region, and the same each frame.
+    // `f.limit` (packets in that order) only shrinks when the budget is hit and grows back one
+    // packet a frame while well under it, so a packet at the margin does not flicker.
+    const packets = packetsFor(l, f, view);
     // Vertices per crest: measured on earlier frames of this system (straight crests need
     // few), at first an upper bound (every trace step kept, glow, halo and trough included).
     const steps = (p: Packet) => Math.ceil((style.halfLength * p.spacing) / TRACE_STEP_PX);
     const bound = (p: Packet) => 2 * (steps(p) + 3) * (style.dash.length ? 2 : 1) + (style.glow ? 2 * (Math.ceil(steps(p) / 2) + 1) + 2 * (Math.ceil(steps(p) * TROUGH_LENGTH) + 1) : 0);
     const perCrest = perCrestBySystem.get(f.system) ?? 0;
-    const cost = ({ p, crests }: (typeof plans)[number]) => crests.length * (perCrest > 0 ? perCrest : bound(p));
-    // Packets in a fixed random order (their `keep` hash): when the budget runs out, the ones
-    // left out are an even, random share of the view, never a region, and the same each frame.
-    // `f.limit` (packets in that order) only shrinks when the budget is hit and grows back one
-    // packet a frame while well under it, so a packet at the margin does not flicker.
-    plans.sort((a, b) => a.p.keep - b.p.keep);
+    const halo = TROUGH_STYLE_OF[style.look] ?? style;
     const before = stats.vertices;
     const crestsBefore = stats.crests;
     let visited = 0;
     let hit = false;
-    for (const plan of plans) {
-      const { p, crests } = plan;
+    for (const p of packets) {
       if (visited >= f.limit) break;
-      if (stats.vertices + cost(plan) > cap) {
+      const count = crestsInto(p, style.crests, o.t, o.still);
+      const upper = count * bound(p);
+      if (stats.vertices + (perCrest > 0 ? count * perCrest : upper) > cap) {
         hit = true;
         break;
       }
       visited++;
       // The frame's total never exceeds the budget: skip a packet that could overrun it.
-      if (stats.vertices + crests.length * bound(p) > o.budget) continue;
+      if (stats.vertices + upper > o.budget) continue;
       stats.packets++;
-      let lead: { x: number; y: number } | null = null;
+      let leadX = 0;
+      let leadY = 0;
       let leadU = -Infinity;
       let cache = crestCache.get(p);
       if (!cache) crestCache.set(p, (cache = new Map()));
-      for (const { u, w, n: crestNo } of crests) {
+      for (let k = 0; k < count; k++) {
+        const u = crestU[k]!;
+        const w = crestW[k]!;
+        const crestNo = crestN[k]!;
         let c = cache.get(crestNo);
         if (!c || Math.abs(u - c.u) > RETRACE_PX) {
           const cx = p.ax + p.px * u;
@@ -669,17 +715,19 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
             cache.delete(crestNo);
             continue;
           }
+          // Traced again: the line buffers of the earlier shape are reused.
+          const old = c;
           c = { u, hs: sample.hs, lines: [], troughs: [], frame };
           for (const sign of [1, -1]) {
             // Each half starts at the crest centre, so dash patterns stay anchored on the crest.
             const n = traceHalf(l, f, cx, cy, sign, style.halfLength * p.spacing, true);
-            if (n) c.lines.push(copyHalf(n));
+            if (n) c.lines.push(copyHalf(n, old?.lines[c.lines.length]));
           }
           if (style.glow) {
             // The trough behind the crest: a faint dark line half a spacing back.
             for (const sign of [1, -1]) {
               const n = traceHalf(l, f, cx - (p.px * p.spacing) / 2, cy - (p.py * p.spacing) / 2, sign, style.halfLength * p.spacing * TROUGH_LENGTH, false);
-              if (n) c.troughs.push(copyHalf(n));
+              if (n) c.troughs.push(copyHalf(n, old?.troughs[c.troughs.length]));
             }
           }
           cache.set(crestNo, c);
@@ -690,45 +738,55 @@ export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: La
         const dy = p.py * (u - c.u);
         const alpha = crestAlpha(c.hs) * w;
         const width = lineWidth(c.hs);
+        // Width and opacity levels, once per crest: crest and halo per taper part, glow, trough.
+        const wl = nearestLevel(WIDTH_LEVELS, width);
+        const hl = nearestLevel(WIDTH_LEVELS, width + HALO_PX);
+        for (let t = 0; t < TAPER.length; t++) {
+          crestLevel[t] = nearestLevel(ALPHA_LEVELS, alpha * TAPER[t]![1]);
+          haloLevel[t] = nearestLevel(ALPHA_LEVELS, alpha * TAPER[t]![1] * HALO_ALPHA);
+        }
         for (const line of c.lines) {
           // Full opacity near the packet's ray, fading toward the crest ends (no hard tips).
           let from = 0;
           for (let i = 1; i <= line.n; i++) {
-            if (i < line.n && line.part[i] === line.part[from + 1]) continue;
-            const k = TAPER[line.part[from + 1]!]![1];
+            const part = line.part[from + 1]!;
+            if (i < line.n && line.part[i] === part) continue;
             const last = i === line.n ? line.n - 1 : i - 1;
-            push(batch("crest", style, sys, width, alpha * k), line, from, last, dx, dy);
+            push(batch("crest", style, sys, wl, crestLevel[part]!), line, from, last, dx, dy);
             // Dashes and dots get a dark halo, so they read on bright colours too.
-            if (style.dash.length) push(batch("halo", TROUGH_STYLE_OF[style.look] ?? style, sys, width + HALO_PX, alpha * k * HALO_ALPHA), line, from, last, dx, dy);
+            if (style.dash.length) push(batch("halo", halo, sys, hl, haloLevel[part]!), line, from, last, dx, dy);
             // The glow follows the bright inner part only.
-            if (style.glow && line.part[from + 1] === 0) push(batch("glow", style, sys, width * GLOW_WIDTH, alpha * GLOW_ALPHA), line, from, last, dx, dy);
+            if (style.glow && part === 0) {
+              push(batch("glow", style, sys, nearestLevel(GLOW_LEVELS, width * GLOW_WIDTH), nearestLevel(ALPHA_LEVELS, alpha * GLOW_ALPHA)), line, from, last, dx, dy);
+            }
             from = last;
           }
         }
         stats.crests++;
         if (c.troughs.length) {
-          const tb = batch("trough", TROUGH_STYLE, sys, width * TROUGH_WIDTH, alpha * TROUGH_ALPHA);
+          const tb = batch("trough", TROUGH_STYLE, sys, nearestLevel(WIDTH_LEVELS, width * TROUGH_WIDTH), nearestLevel(ALPHA_LEVELS, alpha * TROUGH_ALPHA));
           for (const line of c.troughs) push(tb, line, 0, line.n - 1, dx, dy);
         }
-        const cx = p.ax + p.px * u;
-        const cy = p.ay + p.py * u;
         if (u > leadU) {
           leadU = u;
-          lead = { x: cx, y: cy };
+          leadX = p.ax + p.px * u;
+          leadY = p.ay + p.py * u;
         }
       }
       // Crests that left the set are forgotten.
-      for (const [k, c] of cache) if (c.frame !== frame) cache.delete(k);
+      cache.forEach((c, n, m) => {
+        if (c.frame !== frame) m.delete(n);
+      });
       // Reduced motion: an arrowhead on the leading crest shows which way the packet travels.
-      if (o.still && lead && (f.system === "primary" || f.system === "combined")) {
-        arrows.push(lead.x, lead.y, p.px, p.py);
+      if (o.still && leadU > -Infinity && (f.system === "primary" || f.system === "combined")) {
+        arrows.push(leadX, leadY, p.px, p.py);
         stats.arrows++;
       }
     }
     const n = stats.crests - crestsBefore;
     if (n >= 20) perCrestBySystem.set(f.system, perCrest > 0 ? 0.8 * perCrest + (0.2 * (stats.vertices - before)) / n : (stats.vertices - before) / n);
     if (hit) f.limit = visited;
-    else if (f.limit < plans.length && stats.vertices - before < 0.75 * (cap - before)) f.limit++;
+    else if (f.limit < packets.length && stats.vertices - before < 0.75 * (cap - before)) f.limit++;
   });
 
   ctx.lineJoin = "round";
