@@ -15,7 +15,7 @@ Code: `frontend/components/forecast/*` (rows, cursor, summary, selection store),
 
 | Part | Test id | What it shows |
 |---|---|---|
-| Selected-time summary | `selected-summary` | "Thursday, Oct 15 · 7:00 AM SAST", the step length ("3-hour step"), surf quality (class, x.x/10 and a rank glyph), breaking waves (typical–sets, the central value and the likely range), the wave systems (the one that drives the surf first), wind (speed, FROM direction, relation, strength and favourability when rated, gust on its own line), tide, and forecast confidence with confidence at the break as a separate badge. "Why this forecast?" expands below. |
+| Selected-time summary | `selected-summary` | "Thursday, Oct 15 · 7:00 AM SAST", the step length ("3-hour step"), surf quality (class, x.x/10 and a rank glyph), breaking waves (typical–sets, the central value and the likely range), the wave systems (the one that drives the surf first), wind (speed, FROM direction, relation, strength and favourability when rated, gust on its own line), tide (height, rising or falling, datum, and the next high or low water with its height and time), and forecast confidence with confidence at the break as a separate badge. "Why this forecast?" expands below. |
 | Day buttons | `day-nav`, `day-YYYY-MM-DD` | One button per local day with steps: weekday, date, the day's best daylight class and score, duration-weighted good hours. `aria-pressed` marks the selected step's day; a button selects the day's best daylight step and scrolls the timeline to the day's start. Previous / next day buttons. |
 | Header | `timeline-header` | Day names with local dates (they stick to the left edge while the day is in view), hour ticks, the selected time pill, the "Now" marker. |
 | Surf quality | `quality-strip` | Our rating per step, coloured on the ordinal ramp, with the class written in each run of equal steps ("Very Good", or "VG" where narrow). |
@@ -26,7 +26,9 @@ Code: `frontend/components/forecast/*` (rows, cursor, summary, selection store),
 | Legend | `quality-chart-legend` | Every mark, the arrow convention, the tide's station, source and datum, and the spot's tide preference. Collapsed under "How to read these charts" on phones. |
 | Table | `timeline-table` | "Table of every forecast step": all values as an HTML table (mounted when opened). |
 
-The timeline root keeps the old chart's test id `quality-chart`. Below the timeline,
+The timeline root keeps the old chart's test id `quality-chart`; the swell and wind rows'
+plots keep `swell-chart` and `wind-chart`, and the pointer surface inside the slider keeps
+`hour-slider` (the ids of the charts and the hour slider it replaced). Below the timeline,
 "Our prediction and the model data" (`forecast-hour`, with `forecast-breakdown`,
 `our-prediction`, `raw-model`, `uncertainty-range`) shows the selected step's full breakdown
 from `/forecast`, and "Compare forecast models" keeps the model comparison chart.
@@ -41,9 +43,10 @@ another request (for selection, asserted in `e2e/timeline.spec.ts`).
   `days` ahead), so a step's score and label equal the forecast point's
   (`tests/integration/test_timeline_api.py`).
 * `steps[]` are the run's stored valid times at the model's own spacing. `step_hours` is the
-  time to the run's next stored valid time (the last step gets the run's next stored time
-  beyond the window, else the median gap). `steps_meta.segments` lists where the spacing
-  changes; `interpolation` is always `"none"`.
+  time to the run's next stored valid time (the last step: the run's next stored time
+  beyond the window; at the end of the run's horizon, the spacing of the steps before it; a
+  lone step, the gap from the run's stored time before it). `steps_meta.segments` lists
+  where the spacing changes; `interpolation` is always `"none"`.
 * `days[]`: local midnight to local midnight from `timesteps.local_day_bounds` (23 or 25 hours
   on clock-change days), sunrise and sunset from `surf_quality.sun`, first and last light =
   sunrise − / sunset + `TWILIGHT_MARGIN`, polar state, the best daylight step and
@@ -61,8 +64,10 @@ another request (for selection, asserted in `e2e/timeline.spec.ts`).
   rising or falling from the next high or low water. Today both blocks are stubs that say
   "unavailable"; the tides package fills them.
 * Caching: `Cache-Control: public, max-age=300` and a weak `ETag` over the run key, algorithm
-  version, tide fetch time, first and last step, staleness, window and newest observation;
-  `If-None-Match` returns `304`.
+  version, tide fetch time and preference text, calibration, first and last step, staleness,
+  window, newest observation and every step's rating, central and sets height, confidence
+  classes and wind favourability (a re-score after new research evidence keeps the run key
+  and algorithm version but changes these); `If-None-Match` returns `304`.
 
 Units are fixed in the response (`units`): breaking heights in feet, offshore heights and
 tide in metres, wind in km/h. The client converts: heights follow the account's ft/m setting,

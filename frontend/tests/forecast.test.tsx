@@ -84,7 +84,7 @@ describe("the swell that drives the surf (CH-8)", () => {
     breaking: {
       partitions: [
         { name: "primary_swell", height_m: 0.4, period_s: 13, direction_deg: 210, breaking_m: 0.35 },
-        { name: "wind_wave", height_m: 1.6, period_s: 6, direction_deg: 250, breaking_m: 0.9 },
+        { name: "wind_sea", height_m: 1.6, period_s: 6, direction_deg: 250, breaking_m: 0.9 },
         { name: "secondary_swell", height_m: 0.2, period_s: 9, direction_deg: 180, breaking_m: 0 },
       ],
     },
