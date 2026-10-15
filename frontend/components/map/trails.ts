@@ -5,6 +5,8 @@
  * white veil builds up wherever particles have been. This renderer instead keeps each
  * particle's recent positions, clears the canvas every frame and strokes each trail with
  * the same age-based fade, so nothing is left behind once a trail is older than TRAIL_MS.
+ * A respawned particle leaves its old trail behind to fade out (a "ghost" in a second slot),
+ * as the dimming renderer does, instead of wiping it at once.
  *
  * Fade: a segment drawn `age` ms ago has alpha HEAD_ALPHA x FADE^(age / FRAME_MS), the same
  * curve as the dimming renderer, quantised into AGE_BUCKETS (one stroke per bucket).
@@ -36,9 +38,12 @@ export class TrailRenderer {
   private xs = new Float32Array(0);
   private ys = new Float32Array(0);
   private ts = new Float64Array(0);
-  /** Ring start (newest point) and length per particle. */
+  /** Ring start (newest point) and length per slot: two slots per particle, the live trail
+   * and the fading trail it left when it last respawned. */
   private head = new Int32Array(0);
   private len = new Int32Array(0);
+  /** The live slot of each particle (i or i + n). */
+  private slot = new Int32Array(0);
   /** Per-bucket segment buffers (x0, y0, x1, y1 per segment), reused. */
   private buffers: Float32Array[] = AGE_BUCKETS.map(() => new Float32Array(0));
   private counts = new Int32Array(AGE_BUCKETS.length);
@@ -46,24 +51,35 @@ export class TrailRenderer {
   /** Resets every trail for `count` particles. */
   reset(count: number): void {
     this.n = count;
-    this.xs = new Float32Array(count * CAPACITY);
-    this.ys = new Float32Array(count * CAPACITY);
-    this.ts = new Float64Array(count * CAPACITY);
-    this.head = new Int32Array(count);
-    this.len = new Int32Array(count);
+    this.xs = new Float32Array(2 * count * CAPACITY);
+    this.ys = new Float32Array(2 * count * CAPACITY);
+    this.ts = new Float64Array(2 * count * CAPACITY);
+    this.head = new Int32Array(2 * count);
+    this.len = new Int32Array(2 * count);
+    this.slot = Int32Array.from({ length: count }, (_, i) => i);
   }
 
-  /** Forgets one particle's trail (respawned elsewhere: no segment across the jump). */
+  /**
+   * Starts a new trail for particle `i` (respawned elsewhere: no segment across the jump).
+   * The old trail stays behind and fades out with its age; it is dropped early only if the
+   * particle respawns twice within TRAIL_MS.
+   */
   clear(i: number): void {
-    if (i < this.n) this.len[i] = 0;
+    if (i >= this.n) return;
+    const s = this.slot[i]!;
+    if (!this.len[s]) return; // nothing drawn yet: keep the slot (and the ghost in the other)
+    const next = s < this.n ? s + this.n : s - this.n;
+    this.slot[i] = next;
+    this.len[next] = 0;
   }
 
   /** Records particle `i` at (x, y) at animation time `t` (ms). */
   push(i: number, x: number, y: number, t: number): void {
     if (i >= this.n) return;
-    const base = i * CAPACITY;
-    let h = this.head[i]!;
-    const l = this.len[i]!;
+    const s = this.slot[i]!;
+    const base = s * CAPACITY;
+    let h = this.head[s]!;
+    const l = this.len[s]!;
     // Keep one stored point per SAMPLE_MS: within that, the newest point follows the particle.
     // The previous stored point (h + 1) is at least SAMPLE_MS older than a fresh one.
     if (l >= 2 && t - this.ts[base + ((h + 1) % CAPACITY)]! < SAMPLE_MS) {
@@ -73,26 +89,26 @@ export class TrailRenderer {
       return;
     }
     h = (h - 1 + CAPACITY) % CAPACITY;
-    this.head[i] = h;
+    this.head[s] = h;
     this.xs[base + h] = x;
     this.ys[base + h] = y;
     this.ts[base + h] = t;
-    this.len[i] = Math.min(CAPACITY, l + 1);
+    this.len[s] = Math.min(CAPACITY, l + 1);
   }
 
-  /** Points stored for particle `i` (tests and diagnostics). */
+  /** Points stored for particle `i`'s live trail (tests and diagnostics). */
   length(i: number): number {
-    return this.len[i] ?? 0;
+    return i < this.n ? this.len[this.slot[i]!]! : 0;
   }
 
   /**
-   * Clears the canvas and strokes every trail younger than TRAIL_MS at time `now`.
-   * Returns the number of segments drawn.
+   * Clears the canvas and strokes every trail (live or left behind) younger than TRAIL_MS at
+   * time `now`. Returns the number of segments drawn.
    */
   draw(ctx: CanvasRenderingContext2D, width: number, height: number, now: number, lineWidth = 1.1): number {
     ctx.clearRect(0, 0, width, height);
     this.counts.fill(0);
-    for (let i = 0; i < this.n; i++) {
+    for (let i = 0; i < 2 * this.n; i++) {
       const l = this.len[i]!;
       if (l < 2) continue;
       const base = i * CAPACITY;

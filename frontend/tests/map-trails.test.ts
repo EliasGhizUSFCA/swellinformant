@@ -86,7 +86,7 @@ describe("8-bit trail renderer (Firefox, Safari, iOS)", () => {
     expect(ink()).toEqual([]);
   });
 
-  it("forgets a respawned particle's trail (no segment across the jump)", () => {
+  it("starts a new trail for a respawned particle (no segment across the jump)", () => {
     const r = new TrailRenderer();
     r.reset(2);
     r.push(0, 0, 0, 0);
@@ -97,6 +97,37 @@ describe("8-bit trail renderer (Firefox, Safari, iOS)", () => {
     r.push(0, 500, 500, 80);
     const { ctx, ink } = canvas();
     r.draw(ctx, 1000, 1000, 80);
-    expect(ink()).toEqual([]);
+    // Only the old trail, left behind; nothing joins it to the new position.
+    expect(ink().map((s) => s.seg)).toEqual([[0, 0, 10, 0]]);
+  });
+
+  it("lets the trail a respawned particle left behind fade out like the dimming renderer", () => {
+    const r = new TrailRenderer();
+    r.reset(1);
+    for (let t = 0; t <= 320; t += 16) r.push(0, t / 4, 0, t);
+    r.clear(0); // respawned at t = 320 ms
+    let brightest = Infinity;
+    for (let t = 336; t <= 1000; t += 16) {
+      r.push(0, 600, 50 + t / 4, t);
+      const { ctx, ink } = canvas();
+      r.draw(ctx, 1000, 1000, t);
+      const left = ink().filter((s) => s.seg[1] === 0 && s.seg[3] === 0); // the old trail (y = 0)
+      if (t - 320 < AGE_BUCKETS[0]!) expect(left.length).toBeGreaterThan(0); // still there just after the respawn
+      const top = Math.max(0, ...left.map((s) => s.alpha));
+      expect(top).toBeLessThanOrEqual(brightest); // fading with its age, never brightening
+      brightest = top;
+      if (t - 320 >= AGE_BUCKETS[2]!) expect(top).toBeLessThan(fadeAlpha(AGE_BUCKETS[1]!));
+      if (t - 320 >= TRAIL_MS) expect(left).toEqual([]); // gone after TRAIL_MS
+    }
+    // Respawning again before anything was drawn keeps the trail left behind.
+    const q = new TrailRenderer();
+    q.reset(1);
+    q.push(0, 0, 0, 0);
+    q.push(0, 10, 0, 40);
+    q.clear(0);
+    q.clear(0);
+    const { ctx, ink } = canvas();
+    q.draw(ctx, 100, 100, 50);
+    expect(ink().length).toBe(1);
   });
 });
