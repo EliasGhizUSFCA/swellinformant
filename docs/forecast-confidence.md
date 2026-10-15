@@ -41,8 +41,13 @@ them on every prediction).
 
 ## 1. Starting point: the 0-100 confidence index
 
-The existing index (`surf_quality_predictions.confidence`, `confidence_label`; kept unchanged
-and still shown where it was) is
+The existing index (`surf_quality_predictions.confidence`, `confidence_label`; kept unchanged)
+is shown only inside details and under its own name, **"Offshore spread index N / 100 (not a
+probability)"**: it measures how settled the offshore forecast is and is not the
+forecast-confidence class (its class differed from the forecast class on 20.5 % of blend
+hours, audit CT-8). The matching engine's "confidence" component is this index and is
+relabelled the same way on the opportunity page; its weight and the ranking are unchanged.
+The index is
 
 ```
 index = 100 · exp(−σ_f / 0.4) · (0.6 + 0.4 · completeness) · (0.8 if the run is stale)
@@ -241,11 +246,22 @@ through the note; that the note itself changes no class or score is covered by t
   its original rows (in the 2026-10-11 live clone: 3,850 such rows).
 * API: `Conditions` and `ForecastPoint` (map snapshot, spot summaries `current` /
   `best_upcoming`, spot detail, spot forecast) have `forecast_confidence_class`,
-  `local_confidence_class`, `confidence_reasons` (forecast reasons first, then the disputed-wind
-  note of §3a when it applies, then the research
-  reason), `lead_hours` and `local_confidence_reason`; `EventOut` has the classes, reasons and
-  local reason of the event's peak hour (stored at detection, with the read-time staleness cap
-  below); `DailySummary` the classes of the day's best hour.
+  `local_confidence_class`, `forecast_confidence_reasons`, `wind_dispute_note`,
+  `local_confidence_reason`, `lead_hours` and the deprecated `confidence_reasons`; `EventOut`
+  has the same fields for the event's peak hour (stored at detection, with the read-time
+  staleness cap below) plus `stale`; `DailySummary` the classes of the day's best hour;
+  `MatchSummary`, `MatchDetail` and `NotificationOut` carry the event's peak-hour classes and
+  local reason exactly as `EventOut` shows them (and `MatchSummary.stale`).
+  * `forecast_confidence_reasons`: the forecast rules' reasons only (lead time, ensemble
+    spread, model agreement, run change, verification, missing data, staleness), most
+    important first, with the staleness reason first when the read-time cap applies. It
+    never holds the research sentence, the disputed-wind note of §3a or the constant
+    "Not yet checked against buoys near this spot." note, which fires on every hour while no
+    buoy near the spot has been checked and is said once in the details instead.
+  * `wind_dispute_note`: the §3a note, or `null`.
+  * `confidence_reasons` (deprecated, unchanged): forecast reasons, then the disputed-wind
+    note, then the research reason. Events detected before the split get the two new
+    fields from this list (`swell_detection.peak_confidence`).
   `local_confidence_reason` is the single reason the local class is lower than the forecast
   class (always the research sentence, since local confidence is the min of the two), and
   `null` when the classes are equal (including after the read-time staleness cap below).
@@ -257,8 +273,11 @@ through the note; that the note itself changes no class or score is covered by t
   hour, as in the API; the distance is from when the alert is built) and "Confidence at this
   break: Low — How this break responds to swell is not well documented yet." The reason
   after the local class is `local_confidence_reason`, so it appears only when the local class
-  is lower ("Confidence at this break: Low" when both are Low). Older snapshots keep the
-  index wording.
+  is lower ("Confidence at this break: Low" when both are Low). Snapshots from before
+  forecast-v1 have no class and read "Not assessed (offshore spread index N/100, not a
+  probability)". The email's provenance rows are "Model runs" (each model with its own init
+  time: a blend's issue time is only its oldest member's) and "Fetched" (when the data
+  arrived); older snapshots show "Model run" with the run's issue time.
 * **Read-time staleness:** when the authoritative run has gone stale since it was scored, the
   API caps both classes at Moderate and puts the staleness reason first. The same cap applies
   to an event's peak-hour fields (`EventOut`) and to alert snapshots when the event's run is
@@ -279,6 +298,65 @@ through the note; that the note itself changes no class or score is covered by t
 `assessment_id`, `variables`} and, only when §3a applies, `wind_dispute` {`profile_offshore_deg`,
 `alternative_offshore_deg`, `basis`, `sources`, `relation`, `relation_alternative`,
 `differs`, `reason`}.
+
+## 4a. Freshness and provenance in the app (2026-10 upgrade)
+
+What the app says about a forecast's age and origin, and the rules behind each label:
+
+* **Never "Now" or "live" for model output.** The spot page's forecast card is titled
+  "Forecast" with the step's valid time in the spot's zone and how far away it is ("Mon
+  8:00 AM GMT+2 · in 2 h"). Its step is the stored step nearest to now, within one step of
+  it (`spot_views._nearest_step`); with 3-hourly steps at 04:00 that is 03:00 ("1 h ago"),
+  where the old rule took the first step after now − 30 min (06:00, but still called
+  "Now"). Nothing between steps is interpolated. The landing page says "demo forecast" for
+  synthetic data and otherwise "Forecast · model run 6 h ago", or "Forecast out of date" when
+  the events' run or every source is stale.
+* **Model-run age, not "about N hours ahead".** Details give the valid time's distance from
+  now ("in 2 h") and the run's age ("model run 16 h ago"; for a blend "oldest model run",
+  since its issue time is its oldest member's). The old "about 18 hours ahead" counted from
+  the run's issue time and contradicted the hour shown.
+* **Stale state.** `MapSnapshotOut.stale`, `newest_run_issued_at` and `last_updated_at`
+  (the newest authoritative run behind the snapshot); `EventOut.stale` and
+  `MatchSummary.stale` (the event's run is past its stale limit, §5); cards then show an
+  "Out of date" tag and the dashboard and opportunity page a banner. The banner says that
+  confidence is capped at Moderate, and that new alerts are paused **only** when
+  `SpotForecastOut.alerts_paused` says so: the alert job holds alerts back from
+  `STALE_ALERT_FACTOR` (2) × the stale-after age, not as soon as a run is stale (a blend
+  with a NOAA GFS member, stale after 16 h, is stale from GFS + 16 h and its alerts pause
+  from GFS + 32 h).
+* **Provenance.** `ForecastRunOut.members` lists every model run behind a forecast with its
+  own init time (a blend's members, else the run itself); the app shows them as "Model runs:
+  NOAA GFS 18Z Oct 11 · ECMWF 12Z Oct 11" with "Fetched 3 hours ago" (the run's
+  `completed_at`).
+* **Confidence at the break on cards.** Event, opportunity and alert cards show an "At the
+  break: Low" badge next to forecast confidence when it is the lower class (38 of 49 events
+  on the real run); one badge when the classes are equal.
+* **Likely range.** Our breaking-height range is called "Likely range … (unverified)": it is
+  meant to hold the breaking height about 8 times in 10 but comes from an assumed error model
+  or the ensemble spread and has not been checked at any break. Against NDBC buoys the app's
+  offshore 80 % range held the measured height 53 % of the time at 24 h and 85-89 % beyond
+  5 days ([ml-evaluation.md](ml-evaluation.md) §12); the "Learn more" popover says so. Only a
+  calibrated range would be called an "80% range".
+* **Good hours.** `DailySummary.good_hours` sums the durations of the Good-or-better daylight
+  steps (`timesteps.weighted_hours`, each step clipped to its local day), so a 3-hourly step
+  counts 3 hours; it used to count steps (325 of 508 day cards on the real run).
+
+`GET /api/spots/{slug}` is built from that spot's predictions and events only
+(`spot_views.spot_detail`); its `current` and `best_upcoming` are the ones the list gives
+the spot (integration test `test_spot_detail_single.py`). On a clone of the real 2026-10-11
+runs at 2026-10-12 04:00 UTC (Pipeline, 9 calls each, this 4-CPU machine under load from a
+parallel job): median 32 ms and 7 SQL statements, against 925 ms and 56 statements for the
+old path that built all 50 summaries (the audit measured 412-501 ms for that path under
+lighter load).
+
+Live check of these rules on the same clone, at 2026-10-12 04:00 UTC: the forecast card's
+step was 03:00 for 50 of 50 spots; the mixed list carried a research sentence on all 50
+current hours and `forecast_confidence_reasons` on none; the map snapshot was fresh at
+04:00 and stale at 2026-10-13 20:00 UTC; Cloudbreak's forecast at 2026-10-13 00:00 UTC
+(GFS + 30 h) was stale with `alerts_paused` false, and at 10:00 UTC (GFS + 40 h) both were
+true, with members NOAA GFS 18Z and ECMWF 12Z;
+daily good hours were 3.0 for the partial first day and 15.0 for full days (five Good
+3-hourly daylight steps).
 
 ## 5. Per-source staleness
 
