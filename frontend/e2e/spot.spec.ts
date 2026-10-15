@@ -25,7 +25,8 @@ test.describe("spot page forecast", () => {
     expect(fc.models.some((m) => m.role === "authoritative")).toBe(true);
 
     await page.goto("/spots/jeffreys-bay");
-    await expect(page.getByTestId("quality-chart-legend")).toContainText("80% forecast range");
+    // The timeline's legend names the whisker band honestly: an unverified, heuristic range.
+    await expect(page.getByTestId("quality-chart-legend")).toContainText("likely range (p10–p90 of an assumed error model, not yet verified)");
     const hour = page.getByTestId("forecast-hour");
     await expect(hour.getByTestId("raw-model")).toContainText("Significant wave height (offshore)");
     await expect(hour.getByTestId("our-prediction")).toContainText("typical–sets");
@@ -41,9 +42,9 @@ test.describe("spot page forecast", () => {
     await expect(page.getByTestId(`day-${day.date}`)).toHaveAttribute("aria-pressed", "true");
     await expect.poll(() => hour.getByTestId("forecast-breakdown").innerText()).not.toBe(before);
 
-    // Step forward three hours with the arrow control.
+    // Step forward one forecast step (not "three hours": steps are 1, 3 or 6 hours long).
     const atDay = await hour.getByTestId("forecast-breakdown").innerText();
-    await hour.getByRole("button", { name: "Three hours later" }).click();
+    await page.getByRole("button", { name: "Next forecast step" }).click();
     await expect.poll(() => hour.getByTestId("forecast-breakdown").innerText()).not.toBe(atDay);
   });
 

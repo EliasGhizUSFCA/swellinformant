@@ -29,13 +29,46 @@
   --seafoam: #2bb3a3;
   --sand: #f6efe2;
   --coral: #f26b5b;
+  /* Surf quality: one ordinal ocean ramp, deeper = better on light surfaces (lib/quality.ts). */
   --q-none: #9ca3af;
-  --q-poor: #2563eb;
-  --q-fair: #eab308;
-  --q-good: #16a34a;
-  --q-very-good: #0f766e;
-  --q-excellent: #c2410c;
-  --q-exceptional: #7c3aed;
+  --q-poor: #6995a7;
+  --q-fair: #417d98;
+  --q-good: #25698e;
+  --q-very-good: #085486;
+  --q-excellent: #013e77;
+  --q-exceptional: #002767;
+  /* Forecast charts (components/forecast): the selected time, marks and backgrounds. */
+  --chart-select: #d9472f;
+  --chart-select-band: rgba(217, 71, 47, 0.07);
+  --chart-hover: #587080;
+  --chart-now: #b4532a;
+  --chart-wave: #2a9d8f;
+  --chart-wave-selected: #146c63;
+  --chart-wave-range: #0b3a4d;
+  --chart-wave-band: rgba(42, 157, 143, 0.17);
+  --chart-offshore: #8a6d3b;
+  --chart-swell: #0b3a52;
+  --chart-night: rgba(6, 38, 58, 0.055);
+  --chart-grid: #e6eff2;
+  --chart-day: #b9cdd6;
+  --chart-tick: #c3d4db;
+  --wind-favourable: #2f8f4e;
+  --wind-workable: #b7791f;
+  --wind-unfavourable: #c2563f;
+  --wind-unrated: #8fa3b1;
+  --tide-line: #6d5ba3;
+  --tide-fill: rgba(109, 91, 163, 0.12);
+}
+
+/* The ramp stepped for dark surfaces (brighter = better), for dark containers such as the
+   map's panels; nothing in the app sets the class yet. */
+.dark {
+  --q-poor: #4b869c;
+  --q-fair: #589bb7;
+  --q-good: #6dadd2;
+  --q-very-good: #8bc0e8;
+  --q-excellent: #acd2fb;
+  --q-exceptional: #d6e6ff;
 }
 
 @theme inline {
@@ -133,6 +166,42 @@
   .wave-layer,
   .wave-layer-slow {
     animation: none;
+  }
+}
+
+/* Forecast timeline (components/forecast): the selected step's marks in every row get
+   data-selected from the selection store, without re-rendering the rows. */
+.tl-root [data-selected] .tl-bar {
+  filter: brightness(0.78) saturate(1.15);
+}
+.tl-root [data-selected].tl-quality {
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+.tl-root [data-selected].tl-swell .tl-arrow,
+.tl-root [data-selected].tl-swell .tl-arrow-drive {
+  stroke-width: 1.6;
+}
+.tl-root [data-selected] {
+  opacity: 1;
+}
+/* Hour labels under the selected-time and "Now" pills (set by the cursor layer). */
+.tl-root [data-tick-label][data-covered] {
+  visibility: hidden;
+}
+.tl-fav-favourable {
+  background: var(--wind-favourable);
+}
+.tl-fav-workable {
+  background: repeating-linear-gradient(45deg, var(--wind-workable) 0 3px, color-mix(in srgb, var(--wind-workable) 45%, white) 3px 4.5px);
+}
+.tl-fav-unfavourable {
+  background: repeating-linear-gradient(-45deg, var(--wind-unfavourable) 0 1.6px, color-mix(in srgb, var(--wind-unfavourable) 40%, white) 1.6px 2.6px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tl-root * {
+    scroll-behavior: auto !important;
+    transition: none !important;
   }
 }
 

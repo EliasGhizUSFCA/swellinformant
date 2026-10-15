@@ -32,12 +32,14 @@ describe("quality scale (mirrors backend thresholds)", () => {
   it("colours by label", () => {
     expect(colorForScore(96)).toBe(QUALITY_COLORS.exceptional);
     expect(colorForScore(null)).toBe(NO_FORECAST_COLOR);
-    // Spec legend: blue poor, yellow fair, green good, orange excellent, purple exceptional.
-    expect(colorForScore(10)).toBe("#2563eb");
-    expect(colorForScore(45)).toBe("#eab308");
-    expect(colorForScore(60)).toBe("#16a34a");
-    expect(colorForScore(88)).toBe("#c2410c");
-    expect(colorForScore(99)).toBe("#7c3aed");
+    // The accessible ordinal ramp (Upgrade 3, CH-13; it replaces the earlier blue / yellow /
+    // green / orange / purple legend, whose "fair" had 1.92:1 contrast on white): one ocean
+    // hue, deeper = better. tests/quality-palette.test.ts checks contrast and order.
+    expect(colorForScore(10)).toBe("#6995a7");
+    expect(colorForScore(45)).toBe("#417d98");
+    expect(colorForScore(60)).toBe("#25698e");
+    expect(colorForScore(88)).toBe("#013e77");
+    expect(colorForScore(99)).toBe("#002767");
   });
 });
 

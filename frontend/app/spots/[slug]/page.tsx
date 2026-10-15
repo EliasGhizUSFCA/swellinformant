@@ -1,17 +1,19 @@
 "use client";
 
-import { AlertTriangle, ChevronLeft, ChevronRight, Clock, Database, GitCompareArrows, Info, Plane, Waves, Wind } from "lucide-react";
+import { AlertTriangle, CalendarRange, Clock, Database, GitCompareArrows, Info, Plane, RefreshCw, Waves, Wind } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect } from "react";
 
-import { DailyStrip, QualityChart, SwellChart, uncertaintyLabel, WindChart } from "@/components/charts/forecast-charts";
+import { uncertaintyLabel } from "@/components/charts/forecast-charts";
 import { ModelComparisonChart } from "@/components/charts/model-comparison";
 import { ConditionsSummary } from "@/components/conditions";
 import { ForecastConfidence, LocalConfidence, ResearchConfidence } from "@/components/confidence";
 import { EventCard } from "@/components/event-card";
 import { ForecastBreakdown, methodLabel } from "@/components/forecast-breakdown";
+import { SpotForecastTimeline } from "@/components/forecast/forecast-timeline";
+import { TimelineSelectionProvider, useTimelineActions, useTimelineSelection, useTimelineStore } from "@/components/forecast/timeline-selection";
 import { InfoPopover } from "@/components/info-popover";
 import { AppShell } from "@/components/layout/app-shell";
 import { OpportunityCard } from "@/components/opportunity-card";
@@ -24,12 +26,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Disclosure } from "@/components/ui/disclosure";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WindDisputeNote } from "@/components/wind-dispute";
-import { useForecast, useMe, useSpot, useSpotEvents, useSpotOpportunities } from "@/hooks/queries";
+import { useForecast, useMe, useSpot, useSpotEvents, useSpotOpportunities, useSpotTimeline } from "@/hooks/queries";
 import { nearestPointIndex, pointToConditions } from "@/lib/forecast";
 import { compass, formatDateTime, heightRange, kmh, metres, relativeTime, seconds, titleCase, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors, ratingReason } from "@/lib/rating";
-import type { ForecastPoint, SpotDetail, SpotForecast } from "@/types/api";
+import { openingStepIndex, parseTimeParam } from "@/lib/timeline";
+import type { ForecastPoint, SpotDetail, SpotForecast, SpotTimeline } from "@/types/api";
 
 const SurfMap = dynamic(() => import("@/components/map/surf-map"), { ssr: false, loading: () => <Skeleton className="h-56" /> });
 
@@ -80,8 +83,9 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs">
             <span className="font-semibold tracking-wide text-muted-foreground uppercase">Best surf, next 7 days</span>
             {c && (
-              <span className="text-muted-foreground">
+              <span className="flex items-center gap-2 text-muted-foreground">
                 {formatDateTime(c.valid_time, s.timezone)} local{c.is_daylight ? "" : " · night"}
+                <ShowInTimeline iso={c.valid_time} />
               </span>
             )}
           </div>
@@ -139,55 +143,114 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
   );
 }
 
-/** Pick a forecast hour (by day or step) and see our prediction next to the raw model data. */
-function ForecastHour({
-  fc,
-  s,
-  units,
-  selected,
-  onSelect,
-}: {
-  fc: SpotForecast;
-  s: SpotDetail;
-  units: Units;
-  selected: string | null;
-  onSelect: (iso: string) => void;
-}) {
-  const points = fc.points;
-  const idx = nearestPointIndex(points, selected);
-  const point = points[idx];
-  if (!point) return null;
-  const step = (delta: number) => {
-    const next = points[Math.min(points.length - 1, Math.max(0, idx + delta))];
-    if (next) onSelect(next.valid_time);
-  };
+/** Selects the week's best step in the timeline below and brings it into view. */
+function ShowInTimeline({ iso }: { iso: string }) {
+  const { select } = useTimelineActions();
   return (
-    <Card data-testid="forecast-hour">
-      <CardHeader className="flex-row items-center justify-between gap-2">
-        <CardTitle>Hour by hour</CardTitle>
-        <div className="flex items-center gap-1">
-          <button type="button" aria-label="Three hours earlier" onClick={() => step(-3)} className="rounded-md border p-1.5 hover:bg-muted">
-            <ChevronLeft className="size-4" />
-          </button>
-          <button type="button" aria-label="Three hours later" onClick={() => step(3)} className="rounded-md border p-1.5 hover:bg-muted">
-            <ChevronRight className="size-4" />
-          </button>
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 font-medium text-ocean transition-colors hover:bg-secondary"
+      onClick={() => {
+        select(Date.parse(iso));
+        document.getElementById("surf-forecast")?.scrollIntoView({ block: "start", behavior: "smooth" });
+      }}
+    >
+      <CalendarRange className="size-3" aria-hidden="true" /> Show in timeline
+    </button>
+  );
+}
+
+/** Seeds the shared selection once the timeline arrives: the ?t= deep link, else the step the
+ * page opens on (now, or the next daylight step). */
+function InitialSelection({ timeline }: { timeline: SpotTimeline | undefined }) {
+  const store = useTimelineStore();
+  useEffect(() => {
+    if (!timeline?.steps.length) return;
+    let linked: number | null = null;
+    try {
+      linked = parseTimeParam(new URLSearchParams(window.location.search).get("t"));
+    } catch {
+      linked = null;
+    }
+    const i = openingStepIndex(timeline, Date.now());
+    store.initialise(linked ?? (i >= 0 ? Date.parse(timeline.steps[i]!.t) : null));
+  }, [timeline, store]);
+  return null;
+}
+
+/** The spot's forecast section: summary, day buttons and the synchronised chart rows. */
+function ForecastSection({
+  query,
+  units,
+}: {
+  query: ReturnType<typeof useSpotTimeline>;
+  units: Units;
+}) {
+  const tl = query.data;
+  const p = tl?.provenance;
+  const method = p ? (
+    <>
+      Breaking heights: {methodLabel(p.breaking_method)}
+      {p.algorithm_version ? ` (v${p.algorithm_version})` : ""}
+      {p.calibrated ? "" : ", not yet calibrated against surf observations at this break"}.
+    </>
+  ) : null;
+  return (
+    <Card id="surf-forecast" className="mb-6 scroll-mt-20" data-testid="surf-forecast">
+      <CardHeader className="flex-row flex-wrap items-end justify-between gap-x-4 gap-y-1 px-4 pb-3 sm:px-5">
+        <div>
+          <CardTitle className="font-display text-xl sm:text-2xl">Surf forecast</CardTitle>
+          {p && (
+            <p className="mt-0.5 text-xs text-muted-foreground" data-testid="timeline-provenance">
+              {p.source.name}
+              {p.run.init_time ? ` · model run ${formatDateTime(p.run.init_time, "UTC")} UTC` : ""}
+              {p.run.age_hours != null ? ` (${Math.round(p.run.age_hours)} h ago)` : ""}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {tl?.stale && <Badge variant="warn">Stale data</Badge>}
+          {p?.source.is_demo && <DemoBadge />}
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <input
-          type="range"
-          min={0}
-          max={points.length - 1}
-          value={idx}
-          onChange={(e) => {
-            const next = points[Number(e.target.value)];
-            if (next) onSelect(next.valid_time);
-          }}
-          className="w-full accent-[var(--ocean)]"
-          aria-label="Forecast hour"
-          data-testid="hour-slider"
-        />
+      <CardContent className="px-3 pb-4 sm:px-5 sm:pb-5">
+        {query.isLoading && <Skeleton className="h-[34rem]" />}
+        {query.isError && (
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-10 text-center text-sm text-muted-foreground" data-testid="timeline-error">
+            <p>The forecast timeline could not be loaded.</p>
+            <button type="button" onClick={() => query.refetch()} className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 font-medium text-ink hover:bg-muted">
+              <RefreshCw className="size-3.5" aria-hidden="true" /> Try again
+            </button>
+          </div>
+        )}
+        {tl && !tl.available && (
+          <p className="py-10 text-center text-sm text-muted-foreground" data-testid="timeline-unavailable">
+            {tl.message ?? "No forecast is available for this spot yet."}
+          </p>
+        )}
+        {tl && tl.available && tl.steps.length > 0 && <SpotForecastTimeline timeline={tl} units={units} method={method} />}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The selected step in full: our prediction (rating, breaking-wave estimate and its range,
+ * confidence) next to the raw offshore model data it comes from, from the same run as the
+ * timeline (the /forecast point at the selected valid time).
+ */
+function SelectedStepDetails({ fc, s, units }: { fc: SpotForecast; s: SpotDetail; units: Units }) {
+  const selectedT = useTimelineSelection((x) => x.selectedT);
+  const points = fc.points;
+  const point = points[nearestPointIndex(points, selectedT == null ? null : new Date(selectedT).toISOString())];
+  if (!point) return null;
+  return (
+    <Card data-testid="forecast-hour">
+      <CardHeader>
+        <CardTitle>Our prediction and the model data</CardTitle>
+        <p className="text-xs text-muted-foreground">For the step selected in the timeline. Offshore model values are not surf heights.</p>
+      </CardHeader>
+      <CardContent>
         <ForecastBreakdown
           c={pointToConditions(point, fc)}
           tz={s.timezone}
@@ -266,15 +329,34 @@ function ForecastSource({ fc }: { fc: SpotForecast }) {
   );
 }
 
+/** The first sentence of a spot description, and the rest (shown on request). */
+function splitDescription(text: string): [string, string] {
+  const m = /^(.+?[.!?])\s+(?=[A-Z0-9"“(])/.exec(text.trim());
+  return m ? [m[1]!, text.trim().slice(m[0].length)] : [text.trim(), ""];
+}
+
+function SpotDescription({ text }: { text: string }) {
+  const [first, rest] = splitDescription(text);
+  if (!rest) return <p>{first}</p>;
+  return (
+    <div data-testid="spot-description">
+      <p>{first}</p>
+      <Disclosure summary="More about this break" className="mt-1" contentClassName="mt-1 text-sm text-muted-foreground">
+        <p>{rest}</p>
+      </Disclosure>
+    </div>
+  );
+}
+
 export default function SpotPage() {
   const { slug } = useParams<{ slug: string }>();
   const { data: user } = useMe();
   const units = (user?.profile.units as Units) ?? "ft";
   const spot = useSpot(slug);
   const forecast = useForecast(slug, 10);
+  const timeline = useSpotTimeline(slug, 10);
   const events = useSpotEvents(slug);
   const opps = useSpotOpportunities(slug, !!user);
-  const [selected, setSelected] = useState<string | null>(null);
 
   if (spot.isLoading) {
     return (
@@ -294,10 +376,6 @@ export default function SpotPage() {
   }
   const fc = forecast.data;
   const points = fc?.points ?? [];
-  const selectedDay = (() => {
-    const p = points[nearestPointIndex(points, selected)];
-    return p ? new Intl.DateTimeFormat("en-CA", { timeZone: s.timezone }).format(new Date(p.valid_time)) : null;
-  })();
   const profile = s.physical_profile;
 
   return (
@@ -305,7 +383,7 @@ export default function SpotPage() {
       <PageHeader
         eyebrow={`${s.region} · ${s.country}`}
         title={s.name}
-        description={s.description}
+        description={<SpotDescription text={s.description} />}
         actions={
           <div className="flex flex-wrap gap-2">
             <Badge variant="secondary" className="capitalize">
@@ -328,172 +406,140 @@ export default function SpotPage() {
         </Alert>
       )}
 
-      <SurfOutlook s={s} units={units} points={points} />
+      {/* One selection per spot: a new spot starts from its own default (or ?t=). */}
+      <TimelineSelectionProvider key={slug} initialT={null}>
+        <InitialSelection timeline={timeline.data} />
+        <SurfOutlook s={s} units={units} points={points} />
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-        <div className="min-w-0 space-y-6">
-          <Card>
-            <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
-              <CardTitle>Surf quality & breaking waves</CardTitle>
-              <span className="text-xs text-muted-foreground">{s.timezone} · shaded = night</span>
-            </CardHeader>
-            <CardContent>
-              {forecast.isLoading && <Skeleton className="h-72" />}
-              {fc && !fc.available && <p className="py-10 text-center text-sm text-muted-foreground">{fc.message}</p>}
-              {points.length > 0 && <QualityChart points={points} tz={s.timezone} units={units} />}
-            </CardContent>
-          </Card>
-          {fc && fc.daily.length > 0 && (
-            <section>
-              <SectionTitle>Daily outlook · tap a day for its best hour</SectionTitle>
-              <DailyStrip daily={fc.daily} units={units} selected={selected ? selectedDay : null} onSelect={(d) => d.best_time && setSelected(d.best_time)} />
-            </section>
-          )}
-          {fc && points.length > 0 && <ForecastHour fc={fc} s={s} units={units} selected={selected} onSelect={setSelected} />}
-          {points.length > 0 && (
-            <div className="grid gap-6 xl:grid-cols-2">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Offshore swell height & period</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <SwellChart points={points} tz={s.timezone} />
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Wind</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <WindChart points={points} tz={s.timezone} />
-                </CardContent>
-              </Card>
-            </div>
-          )}
-          {fc && fc.models.length > 0 && (
-            <Disclosure
-              variant="card"
-              lazy
-              className="shadow-sm"
-              summary={
-                <>
-                  <GitCompareArrows className="size-4 text-ocean" /> Compare forecast models
-                </>
-              }
-              hint={`${fc.models.length} model${fc.models.length === 1 ? "" : "s"}`}
-            >
-              <ModelComparisonChart series={fc.models} ensemble={fc.ensemble} tz={s.timezone} />
-            </Disclosure>
-          )}
-
-          <section>
-            <SectionTitle>Upcoming swell events</SectionTitle>
-            {(events.data ?? []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">No qualifying swell windows in the current forecast.</p>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {(events.data ?? []).map((e) => (
-                  <EventCard key={e.id} event={e} units={units} />
-                ))}
-              </div>
+        <ForecastSection query={timeline} units={units} />
+        <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+          <div className="min-w-0 space-y-6">
+            {fc && points.length > 0 && <SelectedStepDetails fc={fc} s={s} units={units} />}
+            {fc && fc.models.length > 0 && (
+              <Disclosure
+                variant="card"
+                lazy
+                className="shadow-sm"
+                summary={
+                  <>
+                    <GitCompareArrows className="size-4 text-ocean" /> Compare forecast models
+                  </>
+                }
+                hint={`${fc.models.length} model${fc.models.length === 1 ? "" : "s"}`}
+              >
+                <ModelComparisonChart series={fc.models} ensemble={fc.ensemble} tz={s.timezone} />
+              </Disclosure>
             )}
-          </section>
 
-          {user && (
             <section>
-              <SectionTitle>Your travel opportunities here</SectionTitle>
-              {(opps.data ?? []).length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  None yet. <Link href="/searches/new" className="text-ocean hover:underline">Create a search</Link> that includes this spot.
-                </p>
+              <SectionTitle>Upcoming swell events</SectionTitle>
+              {(events.data ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">No qualifying swell windows in the current forecast.</p>
               ) : (
-                <div className="space-y-3">
-                  {(opps.data ?? []).map((m) => (
-                    <OpportunityCard key={m.id} match={m} units={units} />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {(events.data ?? []).map((e) => (
+                    <EventCard key={e.id} event={e} units={units} />
                   ))}
                 </div>
               )}
             </section>
-          )}
-        </div>
 
-        <aside className="min-w-0 space-y-6">
-          {s.current && (
-            <ConditionsSummary c={s.current} tz={s.timezone} units={units} title="Now" spotRange={{ minFt: s.wave_height_min_ft, maxFt: s.wave_height_max_ft }} />
-          )}
-          <div className="h-56 overflow-hidden rounded-2xl border">
-            <SurfMap spots={[s]} selected={s.slug} zoom={8} center={[s.latitude, s.longitude]} />
+            {user && (
+              <section>
+                <SectionTitle>Your travel opportunities here</SectionTitle>
+                {(opps.data ?? []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    None yet. <Link href="/searches/new" className="text-ocean hover:underline">Create a search</Link> that includes this spot.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {(opps.data ?? []).map((m) => (
+                      <OpportunityCard key={m.id} match={m} units={units} />
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
           </div>
-          <Card>
-            <CardHeader>
-              <CardTitle>Spot characteristics</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <dl className="grid grid-cols-2 gap-4">
-                <Fact k="Best swell" v={`${compass(s.optimal_swell_direction_min)}–${compass(s.optimal_swell_direction_max)}`} />
-                <Fact k="Offshore wind" v={`from ${compass(s.offshore_wind_direction)}`} />
-                <Fact k="Swell period" v={`${s.min_swell_period_s}s+ (ideal ${s.ideal_swell_period_s}s)`} />
-                <Fact k="Working size" v={heightRange(s.wave_height_min_ft, s.wave_height_max_ft, units)} />
-                <Fact k="Tide" v={s.tide_preference ? titleCase(s.tide_preference) : "Not established"} />
-                <Fact k="Best months" v={s.best_months.map((m) => MONTHS[m - 1]).join(", ")} />
-              </dl>
-              <p className="flex gap-2 text-sm text-amber-800">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {s.hazards}
-              </p>
-              <Disclosure summary="Season and technical details" contentClassName="space-y-3">
-                <p className="text-sm text-muted-foreground">{s.seasonality}</p>
+
+          <aside className="min-w-0 space-y-6">
+            {s.current && (
+              <ConditionsSummary c={s.current} tz={s.timezone} units={units} title="Now" spotRange={{ minFt: s.wave_height_min_ft, maxFt: s.wave_height_max_ft }} />
+            )}
+            <div className="h-56 overflow-hidden rounded-2xl border">
+              <SurfMap spots={[s]} selected={s.slug} zoom={8} center={[s.latitude, s.longitude]} />
+            </div>
+            <Card>
+              <CardHeader>
+                <CardTitle>Spot characteristics</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
                 <dl className="grid grid-cols-2 gap-4">
-                  <Fact
-                    k={
-                      <span className="inline-flex items-center gap-1">
-                        Swell window <InfoPopover term="swellWindow" />
-                      </span>
-                    }
-                    v={`${s.swell_window_min}°–${s.swell_window_max}°`}
-                  />
-                  <Fact k="Skill" v={titleCase(s.skill_level)} />
-                  {profile && (
-                    <Fact
-                      k="Shore normal (model input)"
-                      v={`${Math.round(profile.shore_normal_deg)}° · ${PROVENANCE_LABEL[profile.data_quality.shore_normal_deg ?? "unknown"]}`}
-                    />
-                  )}
-                  {profile && (
-                    <Fact
-                      k="Offshore point depth"
-                      v={profile.forecast_point_depth_m != null ? `${Math.round(profile.forecast_point_depth_m)} m` : "unknown (deep water assumed)"}
-                    />
-                  )}
-                  {profile && (
-                    <Fact k="Controlling depth" v={profile.controlling_depth_m != null ? `${Math.round(profile.controlling_depth_m)} m` : "unknown"} />
-                  )}
+                  <Fact k="Best swell" v={`${compass(s.optimal_swell_direction_min)}–${compass(s.optimal_swell_direction_max)}`} />
+                  <Fact k="Offshore wind" v={`from ${compass(s.offshore_wind_direction)}`} />
+                  <Fact k="Swell period" v={`${s.min_swell_period_s}s+ (ideal ${s.ideal_swell_period_s}s)`} />
+                  <Fact k="Working size" v={heightRange(s.wave_height_min_ft, s.wave_height_max_ft, units)} />
+                  <Fact k="Tide" v={s.tide_preference ? titleCase(s.tide_preference) : "Not established"} />
+                  <Fact k="Best months" v={s.best_months.map((m) => MONTHS[m - 1]).join(", ")} />
                 </dl>
-                {profile?.notes && <p className="text-xs text-muted-foreground">{profile.notes}</p>}
-              </Disclosure>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Getting there</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {s.airports.map((a) => (
-                <div key={a.airport.iata} className="rounded-xl border p-3">
-                  <div className="flex items-center gap-2 font-medium">
-                    <Plane className="size-4 text-ocean" /> {a.airport.iata} · {a.airport.city}
-                    {a.is_primary && <Badge variant="good">primary</Badge>}
+                <p className="flex gap-2 text-sm text-amber-800">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {s.hazards}
+                </p>
+                <Disclosure summary="Season and technical details" contentClassName="space-y-3">
+                  <p className="text-sm text-muted-foreground">{s.seasonality}</p>
+                  <dl className="grid grid-cols-2 gap-4">
+                    <Fact
+                      k={
+                        <span className="inline-flex items-center gap-1">
+                          Swell window <InfoPopover term="swellWindow" />
+                        </span>
+                      }
+                      v={`${s.swell_window_min}°–${s.swell_window_max}°`}
+                    />
+                    <Fact k="Skill" v={titleCase(s.skill_level)} />
+                    {profile && (
+                      <Fact
+                        k="Shore normal (model input)"
+                        v={`${Math.round(profile.shore_normal_deg)}° · ${PROVENANCE_LABEL[profile.data_quality.shore_normal_deg ?? "unknown"]}`}
+                      />
+                    )}
+                    {profile && (
+                      <Fact
+                        k="Offshore point depth"
+                        v={profile.forecast_point_depth_m != null ? `${Math.round(profile.forecast_point_depth_m)} m` : "unknown (deep water assumed)"}
+                      />
+                    )}
+                    {profile && (
+                      <Fact k="Controlling depth" v={profile.controlling_depth_m != null ? `${Math.round(profile.controlling_depth_m)} m` : "unknown"} />
+                    )}
+                  </dl>
+                  {profile?.notes && <p className="text-xs text-muted-foreground">{profile.notes}</p>}
+                </Disclosure>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Getting there</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {s.airports.map((a) => (
+                  <div key={a.airport.iata} className="rounded-xl border p-3">
+                    <div className="flex items-center gap-2 font-medium">
+                      <Plane className="size-4 text-ocean" /> {a.airport.iata} · {a.airport.city}
+                      {a.is_primary && <Badge variant="good">primary</Badge>}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      ~{Math.round(a.transfer_minutes / 6) / 10} h by {a.transfer_mode.replaceAll("_", " ").replace("+", " + ")}. {a.notes}
+                    </div>
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    ~{Math.round(a.transfer_minutes / 6) / 10} h by {a.transfer_mode.replaceAll("_", " ").replace("+", " + ")}. {a.notes}
-                  </div>
-                </div>
-              ))}
-              <p className="text-muted-foreground">{s.accessibility_notes}</p>
-            </CardContent>
-          </Card>
-          {fc && <ForecastSource fc={fc} />}
-        </aside>
-      </div>
+                ))}
+                <p className="text-muted-foreground">{s.accessibility_notes}</p>
+              </CardContent>
+            </Card>
+            {fc && <ForecastSource fc={fc} />}
+          </aside>
+        </div>
+      </TimelineSelectionProvider>
     </AppShell>
   );
 }

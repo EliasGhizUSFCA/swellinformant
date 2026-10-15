@@ -75,6 +75,8 @@ test.describe.serial("upgrade specification: 15-step scenario", () => {
       await page.getByRole("link", { name: /Full forecast & charts/ }).click();
       await page.waitForURL(`**/spots/${SPOT.slug}`);
       await expect(page.getByTestId("quality-chart")).toBeVisible();
+      for (const row of ["timeline-header", "quality-strip", "wave-bars", "swell-partitions", "wind-row", "tide-row"]) await expect(page.getByTestId(row)).toBeVisible();
+      await expect(page.getByTestId("selected-summary")).toBeVisible();
       await expect(page.getByTestId("forecast-hour").getByTestId("raw-model")).toBeVisible();
       await expect(page.getByTestId("forecast-hour").getByTestId("uncertainty-range")).toBeVisible();
     });
