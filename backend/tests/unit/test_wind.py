@@ -209,6 +209,11 @@ class TestSpeedRegimes:
         gusts = [q_wind(20, 0, WEST_FACING, gust_kmh=g) for g in (20, 25, 30, 40, 60)]
         assert gusts[0] == pytest.approx(base)
         assert all(b < a for a, b in zip(gusts, gusts[1:], strict=False))
+        # The reported components stay those of the mean wind.
+        gusty = wind_fit(20, 45, WEST_FACING, gust_kmh=60)
+        assert gusty.gust_used is True
+        assert gusty.v_offshore_kmh == pytest.approx(v_dot_n(20, 45, 90))
+        assert math.hypot(gusty.v_offshore_kmh, gusty.v_cross_kmh or 0.0) == pytest.approx(20)
 
 
 class TestLabels:
@@ -269,6 +274,13 @@ class TestSpotWindProfile:
         fit = wind_fit(20, 0.0, sheltered)
         assert fit.shelter_factor == pytest.approx(0.5)
         assert fit.params["shelter_factor"]["sources"] == ["synthetic-source"]
+        # Shelter changes the fit, not the reported components of the forecast wind.
+        assert fit.q == pytest.approx(q_wind(10, 0.0, WEST_FACING))
+        assert fit.v_offshore_kmh == pytest.approx(0.0, abs=1e-9)
+        assert fit.v_cross_kmh == pytest.approx(20.0)
+        nw = wind_fit(20, 315.0, sheltered)  # 22.5 deg outside the sector: a little shelter
+        assert 0.0 < nw.shelter_factor < 0.01
+        assert nw.v_offshore_kmh == pytest.approx(v_dot_n(20, 315.0, 90.0))
         # Shelter fades out outside the sector over about 15 deg: continuous in direction
         # (no step at the sector edge; at most 0.006 per 0.1 deg).
         qs = [q_wind(30, d / 10, sheltered) for d in range(0, 3601)]
@@ -290,6 +302,20 @@ class TestSpotWindProfile:
         assert q_wind(38, 90, WEST_FACING) < 0.8
         tol = wind_fit(38, 90, tolerant).params["offshore_tolerance_kmh"]
         assert tol == {"value": 39.0, "provenance": "research", "sources": ["synthetic-source"]}
+        # A number taken from the Beaufort scale for a source's word ("strong offshore") is
+        # labelled beaufort, not research; a heuristic profile's number is heuristic.
+        worded = replace(
+            tolerant,
+            wind_profile=replace(tolerant.wind_profile, tolerance_provenance="beaufort"),
+        )
+        tol = wind_fit(38, 90, worded).params["offshore_tolerance_kmh"]
+        assert tol == {"value": 39.0, "provenance": "beaufort", "sources": ["synthetic-source"]}
+        owner = replace(
+            WEST_FACING, wind_profile=WindProfile(offshore_tolerance_kmh=33.0)
+        )  # data_quality "heuristic default"
+        assert wind_fit(38, 90, owner).params["offshore_tolerance_kmh"]["provenance"] == (
+            "heuristic"
+        )
 
     def test_extra_offshore_direction_takes_the_best_fit(self) -> None:
         two_faces = replace(

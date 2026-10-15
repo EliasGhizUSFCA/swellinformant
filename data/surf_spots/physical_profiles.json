@@ -569,13 +569,14 @@
   "padang-padang": {
     "wind_profile": {
       "offshore_tolerance_kmh": 39.0,
+      "tolerance_provenance": "beaufort",
       "sources": [
         "isg-padang"
       ],
       "shelter": [],
       "extra_offshore_deg": [],
       "data_quality": "research",
-      "notes": "isg-padang (read directly): \"It is offshore in the SE trade winds, and because it is tucked up tight under the cliffs, it can cope with a strong offshore very well.\" The tolerance 39 km/h is the lower bound of Beaufort force 6, 'strong breeze' (Met Office), instead of the 28 km/h default; the source gives no number."
+      "notes": "isg-padang (read directly): \"It is offshore in the SE trade winds, and because it is tucked up tight under the cliffs, it can cope with a strong offshore very well.\" The tolerance 39 km/h is the lower bound of Beaufort force 6, 'strong breeze' (Met Office), instead of the 28 km/h default; the source gives no number, so the value's provenance is 'beaufort' (the claim is research, the number is the Beaufort scale's)."
     }
   },
   "punta-de-lobos": {

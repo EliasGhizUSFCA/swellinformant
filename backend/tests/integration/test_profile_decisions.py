@@ -65,6 +65,7 @@ def test_seeded_profiles_carry_the_researched_wind_profiles(db: Session) -> None
     assert params.wind_profile is not None
     assert params.wind_profile.offshore_tolerance_kmh == 39.0
     assert params.wind_profile.data_quality == "research"
+    assert params.wind_profile.tolerance_provenance == "beaufort"
 
 
 @pytest.fixture

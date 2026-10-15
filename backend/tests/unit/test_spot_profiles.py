@@ -181,6 +181,8 @@ def test_committed_wind_profiles_cite_directly_read_claims() -> None:
             assert sector.factor == 0.3  # the one heuristic strength for "some shelter"
             assert (sector.from_max - sector.from_min) % 360 == 45.0
     assert winds["padang-padang"]["offshore_tolerance_kmh"] == 39.0
+    # "copes with a strong offshore" gives no number: 39 km/h is the Beaufort scale's.
+    assert winds["padang-padang"]["tolerance_provenance"] == "beaufort"
 
 
 def _seed_files(tmp_path: Path, wind_profile: Any) -> Path:
@@ -244,6 +246,24 @@ GOOD_WIND_PROFILE: dict[str, Any] = {
         ({"offshore_tolerance_kmh": -1}, "offshore_tolerance_kmh must be a number"),
         ({"extra_offshore_deg": [400]}, "extra_offshore_deg must be a list of degrees"),
         ({"data_quality": "measured"}, "data_quality must be one of"),
+        ({"tolerance_provenance": "beaufort"}, "tolerance_provenance needs offshore_tolerance_kmh"),
+        (
+            {
+                "offshore_tolerance_kmh": 39.0,
+                "sources": ["read-source"],
+                "tolerance_provenance": "guess",
+            },
+            "tolerance_provenance must be one of",
+        ),
+        (
+            {
+                "offshore_tolerance_kmh": 39.0,
+                "tolerance_provenance": "research",
+                "data_quality": "heuristic default",
+                "shelter": [],
+            },
+            "tolerance_provenance 'research' needs a research profile",
+        ),
     ],
 )
 def test_seed_rejects_a_malformed_wind_profile(
@@ -264,6 +284,18 @@ def test_a_valid_wind_profile_passes_validation(tmp_path: Path) -> None:
         )
         == []
     )
+    worded = {
+        **GOOD_WIND_PROFILE,
+        "offshore_tolerance_kmh": 39.0,
+        "tolerance_provenance": "beaufort",
+        "sources": ["read-source"],
+    }
+    assert (
+        validate_profile("burleigh-heads", {"wind_profile": worded}, retrievals["burleigh-heads"])
+        == []
+    )
+    profile = wind_profile_from_dict(worded)
+    assert profile is not None and profile.tolerance_provenance == "beaufort"
     # A heuristic default (e.g. an owner's setting) needs no sources.
     heuristic = {
         **GOOD_WIND_PROFILE,

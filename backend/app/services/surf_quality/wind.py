@@ -28,10 +28,11 @@ The wind fit, continuous in speed and direction, with no floor:
     Q_strong= 1 / (1 + (max(0, V_off - tolerance) / soft)^2)   strong offshore
     Q       = Q_chop * Q_strong
 
-Calm and light offshore wind score 1. Spot shelter scales the wind before the components are
-taken (``V`` -> ``(1 - s(theta)) V``) and a researched tolerance replaces the default. Every
-number in :class:`WindParams` is a HEURISTIC default (not fitted to observations: none exist
-for these spots); the strength classes follow the Met Office Beaufort scale. See
+Calm and light offshore wind score 1. Spot shelter scales the wind the fit uses
+(``V`` -> ``(1 - s(theta)) V``) and a researched tolerance replaces the default; the reported
+components (``WindFit.v_offshore_kmh``, ``v_cross_kmh``) stay those of the forecast wind.
+Every number in :class:`WindParams` is a HEURISTIC default (not fitted to observations: none
+exist for these spots); the strength classes follow the Met Office Beaufort scale. See
 docs/SURF_SCORING.md, section 3b.
 """
 
@@ -40,7 +41,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from app.services.geo import window_distance
 
@@ -128,6 +129,10 @@ class WindProfile:
     every field left empty falls back to :class:`WindParams`."""
 
     offshore_tolerance_kmh: float | None = None
+    # Where the tolerance's number comes from: "research" when a source states it, "beaufort"
+    # when a source's word ("strong offshore") is mapped to the Beaufort scale, "heuristic"
+    # otherwise. None = "research" for a research profile, else "heuristic".
+    tolerance_provenance: Provenance | None = None
     # Evidence keys of the tolerance and the extra offshore directions.
     sources: tuple[str, ...] = ()
     shelter: tuple[ShelterSector, ...] = ()
@@ -142,6 +147,9 @@ class WindFit:
     """The wind fit of one hour and how it was obtained (stored as ``wind_detail``)."""
 
     q: float
+    # V . n and abs(V x n) of the forecast mean wind against the spot's offshore direction
+    # (before shelter and gusts, which only change the speed the fit uses); None without a
+    # direction.
     v_offshore_kmh: float | None
     v_cross_kmh: float | None
     strength: WindStrength
@@ -290,25 +298,30 @@ def wind_fit(
         tolerance = profile.offshore_tolerance_kmh
         tolerance_prov = {
             "value": tolerance,
-            "provenance": "research" if profile.data_quality == "research" else "heuristic",
+            "provenance": tolerance_provenance(profile),
             "sources": list(profile.sources),
         }
     used_offshore = offshore_deg
-    v_off: float | None
-    v_cross: float | None
     if v == 0.0:
-        q, v_off, v_cross = 1.0, 0.0, 0.0
+        q = 1.0
     elif from_deg is None:
         v_e = params.cross_weight * v
         q = 1.0 / (1.0 + (v_e / params.v_half_kmh) ** params.p)
-        v_off = v_cross = None
     else:
-        q, comps = _q_for_direction(v, from_deg, offshore_deg, tolerance, params)
-        v_off, v_cross = comps.v_offshore_kmh, comps.v_cross_kmh
+        q, _ = _q_for_direction(v, from_deg, offshore_deg, tolerance, params)
         for extra in profile.extra_offshore_deg if profile is not None else ():
             q_extra, _ = _q_for_direction(v, from_deg, extra, tolerance, params)
             if q_extra > q:
                 q, used_offshore = q_extra, extra
+    # The reported components are those of the forecast mean wind against the profile's
+    # offshore direction (the relation's), not of the sheltered or gust-weighted speed.
+    v_off: float | None
+    v_cross: float | None
+    if from_deg is None:
+        v_off = v_cross = None if speed_kmh > 0 else 0.0
+    else:
+        comps = wind_components(max(0.0, speed_kmh), from_deg, offshore_deg)
+        v_off, v_cross = comps.v_offshore_kmh, comps.v_cross_kmh
     detail: dict[str, dict[str, Any]] = {
         "offshore_wind_direction": {"value": used_offshore, "provenance": "research"},
         "glassy_max_kmh": {"value": GLASSY_MAX_KMH, "provenance": "beaufort"},
@@ -346,6 +359,13 @@ def wind_fit(
     )
 
 
+def tolerance_provenance(profile: WindProfile) -> Provenance:
+    """Provenance of a profile's offshore tolerance (see WindProfile.tolerance_provenance)."""
+    if profile.tolerance_provenance is not None:
+        return profile.tolerance_provenance
+    return "research" if profile.data_quality == "research" else "heuristic"
+
+
 def q_wind(
     speed_kmh: float,
     from_deg: float | None,
@@ -360,8 +380,17 @@ def q_wind(
 
 # --------------------------------------------------------------------------- profiles
 WIND_PROFILE_KEYS = frozenset(
-    {"offshore_tolerance_kmh", "sources", "shelter", "extra_offshore_deg", "data_quality", "notes"}
+    {
+        "offshore_tolerance_kmh",
+        "tolerance_provenance",
+        "sources",
+        "shelter",
+        "extra_offshore_deg",
+        "data_quality",
+        "notes",
+    }
 )
+PROVENANCES: tuple[Provenance, ...] = ("research", "beaufort", "heuristic")
 SHELTER_KEYS = frozenset({"from_min", "from_max", "factor", "sources"})
 
 
@@ -395,6 +424,14 @@ def validate_wind_profile(
     tolerance = raw.get("offshore_tolerance_kmh")
     if tolerance is not None and (not _is_number(tolerance) or not 0 < tolerance <= 150):
         problems.append(f"{where}.offshore_tolerance_kmh must be a number in (0, 150] or null")
+    tolerance_prov = raw.get("tolerance_provenance")
+    if tolerance_prov is not None:
+        if tolerance_prov not in PROVENANCES:
+            problems.append(f"{where}.tolerance_provenance must be one of {list(PROVENANCES)}")
+        elif tolerance is None:
+            problems.append(f"{where}.tolerance_provenance needs offshore_tolerance_kmh")
+        elif tolerance_prov == "research" and not research:
+            problems.append(f"{where}.tolerance_provenance 'research' needs a research profile")
     sources = raw.get("sources", [])
     if not _is_keys(sources):
         problems.append(f"{where}.sources must be a list of evidence keys")
@@ -459,8 +496,10 @@ def wind_profile_from_dict(raw: Mapping[str, Any] | None) -> WindProfile | None:
     )
     tolerance = raw.get("offshore_tolerance_kmh")
     quality = raw.get("data_quality")
+    prov = raw.get("tolerance_provenance")
     return WindProfile(
         offshore_tolerance_kmh=None if tolerance is None else float(tolerance),
+        tolerance_provenance=cast(Provenance, prov) if prov in PROVENANCES else None,
         sources=tuple(raw.get("sources") or ()),
         shelter=shelter,
         extra_offshore_deg=tuple(float(d) for d in raw.get("extra_offshore_deg") or ()),
