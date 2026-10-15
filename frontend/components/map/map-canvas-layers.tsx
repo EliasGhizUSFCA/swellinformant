@@ -339,6 +339,7 @@ function WaveCanvas({ families, mode, land, oceanMask }: { families: WaveFamilyG
         c.dataset.drawMs = s.drawMs.toFixed(2);
         c.dataset.drawMsP95 = s.drawMsP95.toFixed(2);
         c.dataset.latticeMs = s.latticeMs.toFixed(1);
+        c.dataset.frames = String(s.frames);
       }
     });
     l.addTo(map);
