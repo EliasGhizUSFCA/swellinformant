@@ -4,13 +4,14 @@ import "./map.css";
 
 import { Info, LocateFixed, Loader2 } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { LayerTabs } from "@/components/map/layer-tabs";
 import { LegendDrawer, LegendTab } from "@/components/map/legend-drawer";
 import type { ParticleMode } from "@/components/map/map-canvas-layers";
+import { MapFreshness, mapStaleness, ModelRunLabel } from "@/components/map/map-freshness";
 import { FOCUS, GLASS } from "@/components/map/map-ui";
 import { SettingsPopover } from "@/components/map/settings-popover";
 import { NO_FILTERS, passes, type Filters } from "@/components/map/spot-filters";
@@ -27,6 +28,7 @@ import { isobarsFor } from "@/lib/map-geo";
 import { layerDef, layerScale, type DisplayUnits } from "@/lib/map-layers";
 import { bubbleLabel, longTimeLabel, nearestStepIndex, timelineSteps } from "@/lib/map-time";
 import { QUALITY_LABELS } from "@/lib/quality";
+import { score10 } from "@/lib/rating";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
 
@@ -37,6 +39,12 @@ const ForecastMap = dynamic(() => import("@/components/map/forecast-map"), {
 
 /** A spot prediction is shown for a step only if the server found one within this window. */
 const PREDICTION_WINDOW_MS = 90 * 60_000;
+/** City labels (and their airports request) from this zoom in. */
+const CITY_ZOOM = 4;
+/** Phones: the spot panel is a bottom sheet up to this fraction of the map's height. */
+const SHEET_FRACTION = 0.72;
+/** Phones: CSS pixels under the layer tabs at the top of the map. */
+const TABS_INSET = 64;
 
 export default function MapPage() {
   const { data: spots = [], isLoading, isError } = useSpots();
@@ -54,7 +62,9 @@ export default function MapPage() {
   const [legendOpen, setLegendOpen] = useState(false);
   const [listOpen, setListOpen] = useState<boolean | null>(null);
   const [playing, setPlaying] = useState(false);
-  const [zoom, setZoom] = useState(2);
+  // Only crossing CITY_ZOOM matters to the page: other zoom changes do not re-render it.
+  const [cityZoom, setCityZoom] = useState(false);
+  const onZoom = useCallback((z: number) => setCityZoom(z >= CITY_ZOOM), []);
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number; key: number } | null>(null);
   const [locating, setLocating] = useState(false);
   const [selectedTime, setSelectedTime] = useState<string | null>(null); // null = the server's "now"
@@ -115,7 +125,7 @@ export default function MapPage() {
   const isobars = useMemo(() => (pressureGrid ? isobarsFor(pressureGrid) : null), [pressureGrid]);
   const scale = useMemo(() => layerScale(layer, index), [layer, index]);
   const particleMode: ParticleMode = !settings.particles || !pageVisible ? "off" : reducedMotion ? "static" : "animated";
-  const cities = useCityAirports(zoom >= 4 && settings.basemap === "dark");
+  const cities = useCityAirports(cityZoom && settings.basemap === "dark");
   const cityLabels = useMemo(() => {
     const seen = new Set<string>();
     return (cities.data ?? [])
@@ -137,7 +147,7 @@ export default function MapPage() {
       out[s.slug] = c
         ? {
             score: c.score,
-            tooltip: `${QUALITY_LABELS[c.label as QualityLabel] ?? c.label} ${c.score}/100 · ${heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, heightUnits)} surf (our prediction)`,
+            tooltip: `${QUALITY_LABELS[c.label as QualityLabel] ?? c.label} ${score10(c.score)}/10 · ${heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, heightUnits)} surf (our prediction)`,
             highlight: !!bySlug.get(s.slug)?.event_at_time,
           }
         : { score: null, tooltip: predictionsCover ? "No usable forecast at this time" : "No surf prediction this far ahead" };
@@ -188,12 +198,15 @@ export default function MapPage() {
 
   const listIsOpen = listOpen ?? isDesktop;
   const timeText = at ? bubbleLabel(at, tz) : "";
+  // A selected spot lands above the phone's bottom sheet, below the layer tabs.
+  const cover = useMemo(() => (isDesktop ? undefined : { top: TABS_INSET, bottom: SHEET_FRACTION }), [isDesktop]);
   // The canvas keeps the previous step's field until the next one arrives: describe what it shows.
   const fieldTime = layerFields.servedValidTime ?? at;
   const fieldTimeText = fieldTime ? longTimeLabel(fieldTime, tz) : "";
   // One short line for everyone; the backend's setup message (for whoever runs the site) is in
   // the legend. Its full text covered a block of the map on phones and ran under the spot list.
   const notice = !fieldIndex.isLoading && !fieldsAvailable ? "Ocean layers are unavailable right now." : null;
+  const stale = mapStaleness(index, nowSnapshot.data, nowSnapshot.dataUpdatedAt).stale;
 
   const spotList = (
     <SpotList
@@ -205,6 +218,7 @@ export default function MapPage() {
       onOpenChange={setListOpen}
       updating={snapshot.isFetching}
       note={predictionNote}
+      timeLabel={at && stepIndex !== nowIndex ? timeText : null}
       className={isDesktop ? "max-h-full" : "max-h-[45dvh]"}
     />
   );
@@ -222,8 +236,10 @@ export default function MapPage() {
             <div className="pointer-events-auto w-fit max-w-full">
               <LayerTabs layer={layer} onLayer={(l) => updateSettings({ layer: l })} pressure={settings.pressure} onPressure={(p) => updateSettings({ pressure: p })} />
             </div>
-            {(notice || isError || noForecastAnywhere || layerFields.error) && (
+            {(notice || stale || isError || noForecastAnywhere || layerFields.error) && (
               <div className="pointer-events-auto flex w-fit max-w-full flex-col gap-1.5 pl-1">
+                {/* The newest model run is out of date: the layers and markers still show it. */}
+                <MapFreshness index={index} snapshot={nowSnapshot.data} now={nowSnapshot.dataUpdatedAt} />
                 {notice && (
                   <p role="status" data-testid="fields-notice" className={cn("flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs", GLASS)}>
                     <Info className="size-3.5 shrink-0 text-[#c4ec4a]" aria-hidden />
@@ -287,6 +303,7 @@ export default function MapPage() {
               <SpotPanel
                 spot={selectedSpot}
                 at={bySlug.get(selectedSpot.slug)?.conditions ?? null}
+                time={at}
                 units={heightUnits}
                 signedIn={!!user}
                 onClose={() => setSelected(null)}
@@ -303,19 +320,23 @@ export default function MapPage() {
             </div>
           ))}
 
-        {/* Bottom: locate, (small screens) best spots, and the timeline. */}
+        {/* Bottom: locate, (small screens) best spots, and the timeline with the model run
+            beside its bubble. From 640 px wide (landscape phones, tablets) the best spots share
+            the first row, so a short map keeps room for its own controls. */}
         <div ref={bottomRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-[1100] flex flex-col gap-2 p-2 sm:p-3">
-          <div className="pointer-events-auto w-fit">
-            <button
-              type="button"
-              onClick={locate}
-              aria-label="Show my location"
-              className={cn("flex size-11 items-center justify-center rounded-full hover:bg-[#23292f]/90", GLASS, FOCUS)}
-            >
-              {locating ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <LocateFixed className="size-5" aria-hidden />}
-            </button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="pointer-events-auto w-fit">
+              <button
+                type="button"
+                onClick={locate}
+                aria-label="Show my location"
+                className={cn("flex size-11 items-center justify-center rounded-full hover:bg-[#23292f]/90", GLASS, FOCUS)}
+              >
+                {locating ? <Loader2 className="size-5 animate-spin" aria-hidden /> : <LocateFixed className="size-5" aria-hidden />}
+              </button>
+            </div>
+            {!isDesktop && !selectedSpot && <div className="pointer-events-auto flex flex-col sm:ml-auto sm:w-[340px] sm:shrink-0">{spotList}</div>}
           </div>
-          {!isDesktop && !selectedSpot && <div className="pointer-events-auto flex flex-col">{spotList}</div>}
           <div className="pointer-events-auto">
             <Timeline
               steps={steps}
@@ -326,16 +347,18 @@ export default function MapPage() {
               onPlaying={setPlaying}
               tz={tz}
               busy={layerFields.loading || snapshot.isFetching}
+              aside={<ModelRunLabel index={index} at={at} />}
             />
           </div>
         </div>
 
         {/* Small screens: the spot panel is a bottom sheet over the timeline. */}
         {!isDesktop && selectedSpot && (
-          <div className="absolute inset-x-0 bottom-0 z-[1200] flex max-h-[72%] p-1.5">
+          <div className="absolute inset-x-0 bottom-0 z-[1200] flex p-1.5" style={{ maxHeight: `${SHEET_FRACTION * 100}%` }}>
             <SpotPanel
               spot={selectedSpot}
               at={bySlug.get(selectedSpot.slug)?.conditions ?? null}
+              time={at}
               units={heightUnits}
               signedIn={!!user}
               onClose={() => setSelected(null)}
@@ -362,8 +385,9 @@ export default function MapPage() {
             particles={particleMode}
             units={units}
             cities={cityLabels.length ? cityLabels : null}
-            onZoom={setZoom}
+            onZoom={onZoom}
             userLocation={userLocation}
+            cover={cover}
             fieldLabel={fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : `Ocean layers unavailable, ${timeText}`}
             // The map's credit strip names the source; its full attribution sentence is in the
             // legend (on a phone the sentence alone covered three lines of the map, and markers).

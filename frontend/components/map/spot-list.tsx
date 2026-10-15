@@ -14,7 +14,10 @@ export function rankKey(c: Conditions | null | undefined): number {
   return (c.is_daylight ? 1000 : 0) + c.score;
 }
 
-/** Collapsible "Best spots now" sheet: the 15 best visible spots at the selected time. */
+/**
+ * Collapsible best-spots sheet: the 15 best visible spots at the selected time, titled "Best
+ * spots now" at the current step and "Best spots · 9am Sun PDT" at any other (`timeLabel`).
+ */
 export function SpotList({
   spots,
   total,
@@ -24,6 +27,7 @@ export function SpotList({
   onOpenChange,
   updating,
   note,
+  timeLabel,
   className,
 }: {
   spots: SpotSummary[];
@@ -34,14 +38,17 @@ export function SpotList({
   onOpenChange: (open: boolean) => void;
   updating: boolean;
   note?: string | null;
+  /** The selected time when it is not the current step (null = now). */
+  timeLabel?: string | null;
   className?: string;
 }) {
+  const title = timeLabel ? `Best spots · ${timeLabel}` : "Best spots now";
   const ranked = [...spots]
     // Daylight first: a high score at night is not surf anyone can ride.
     .sort((a, b) => rankKey(conditions(b.slug)) - rankKey(conditions(a.slug)))
     .slice(0, 15);
   return (
-    <section aria-label="Best spots now" className={cn("flex min-h-0 flex-col overflow-hidden rounded-2xl", GLASS, className)}>
+    <section aria-label={title} className={cn("flex min-h-0 flex-col overflow-hidden rounded-2xl", GLASS, className)}>
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
@@ -50,8 +57,10 @@ export function SpotList({
         className={cn("flex w-full items-center gap-2 rounded-2xl px-4 py-3 text-left", FOCUS)}
       >
         <MapPin className="size-4 text-[#c4ec4a]" aria-hidden />
-        <span className="text-sm font-semibold">Best spots now</span>
-        <span className="ml-auto text-xs text-white/70" data-testid="visible-count">
+        <span className="min-w-0 truncate text-sm font-semibold" data-testid="best-spots-title">
+          {title}
+        </span>
+        <span className="ml-auto shrink-0 text-xs text-white/70" data-testid="visible-count">
           Showing {spots.length} of {total} spots
           {updating && " · updating…"}
         </span>

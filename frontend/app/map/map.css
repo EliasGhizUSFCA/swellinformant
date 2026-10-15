@@ -56,3 +56,10 @@
   outline: 2px solid #d9f75e;
   outline-offset: -2px;
 }
+/* Touch screens with a short map (phones in landscape): pinch zooms, and the buttons would sit
+   under the settings button, so they are left out there. */
+@media (pointer: coarse) and (max-height: 480px) {
+  .forecast-map .leaflet-control-zoom {
+    display: none;
+  }
+}

@@ -10,7 +10,8 @@ import { DemoBadge, MatchStatusBadge, QualityBadge } from "@/components/quality"
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSpotEvents, useSpotOpportunities } from "@/hooks/queries";
-import { formatMoney, formatRange, heightRange, leadLabel, type Units } from "@/lib/format";
+import { formatMoney, formatRange, formatSpotDateTime, heightRange, leadLabel, type Units } from "@/lib/format";
+import { timeParam } from "@/lib/map-time";
 import { cn } from "@/lib/utils";
 import type { Conditions, SpotSummary } from "@/types/api";
 
@@ -18,11 +19,14 @@ import { DARK_TOKENS, GLASS } from "./map-ui";
 
 /**
  * One spot at the selected time: the raw offshore model data next to our own surf
- * prediction, upcoming swell events and (signed in) the user's travel opportunities.
+ * prediction, upcoming swell events and (signed in) the user's travel opportunities. `time`
+ * is the map's selected time: shown in the spot's own zone (the map timeline uses the
+ * viewer's), and carried to the full forecast as `?t=`.
  */
 export function SpotPanel({
   spot,
   at,
+  time,
   units,
   signedIn,
   onClose,
@@ -30,12 +34,15 @@ export function SpotPanel({
 }: {
   spot: SpotSummary;
   at: Conditions | null;
+  time?: string | null;
   units: Units;
   signedIn: boolean;
   onClose: () => void;
   className?: string;
 }) {
   const events = useSpotEvents(spot.slug);
+  // The time of the prediction shown (within the map step), else the step itself.
+  const shownTime = at?.valid_time ?? time;
   const opps = useSpotOpportunities(spot.slug, signedIn);
   return (
     <section
@@ -59,6 +66,11 @@ export function SpotPanel({
               </span>{" "}
               · fly into {spot.primary_airport ?? "—"}
             </div>
+            {shownTime && (
+              <div className="mt-1 text-xs text-muted-foreground" data-testid="panel-local-time">
+                <span className="font-medium text-foreground">{formatSpotDateTime(shownTime, spot.timezone, { zone: true })}</span> at the break
+              </div>
+            )}
           </div>
           <Button size="icon" variant="ghost" aria-label="Close spot details" onClick={onClose}>
             <X />
@@ -136,7 +148,7 @@ export function SpotPanel({
           )}
         </div>
         <Button asChild className="w-full">
-          <Link href={`/spots/${spot.slug}`}>
+          <Link href={time ? `/spots/${spot.slug}?t=${encodeURIComponent(timeParam(time))}` : `/spots/${spot.slug}`} data-testid="panel-full-forecast">
             Full forecast & charts <ArrowRight />
           </Link>
         </Button>
