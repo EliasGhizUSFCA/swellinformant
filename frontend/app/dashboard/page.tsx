@@ -12,6 +12,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { OpportunityCard } from "@/components/opportunity-card";
 import { EmptyState, PageHeader, SectionTitle } from "@/components/page-header";
 import { RequireAuth } from "@/components/require-auth";
+import { StaleBanner } from "@/components/stale-banner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -130,6 +131,8 @@ function Dashboard({ user }: { user: User }) {
   const withFlights = opps.filter((o) => o.status === "flight_found");
   const surfOnly = opps.filter((o) => o.status !== "flight_found");
   const activeSearches = (searches.data ?? []).filter((s) => s.status === "active").length;
+  // The forecast behind the trips or the top swells is past its stale limit (classes capped).
+  const stale = opps.some((o) => o.stale) || (events.data ?? []).some((e) => e.stale);
 
   return (
     <>
@@ -149,6 +152,7 @@ function Dashboard({ user }: { user: User }) {
         <Welcome />
       </Suspense>
       {!user.email_verified && <VerifyBanner email={user.email} />}
+      <StaleBanner stale={stale} />
 
       <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat icon={<SearchIcon />} label="Active searches" value={searches.isLoading ? "–" : activeSearches} href="/searches" />

@@ -7,13 +7,14 @@ import { useParams } from "next/navigation";
 import { toast } from "sonner";
 
 import { DailyStrip } from "@/components/charts/forecast-charts";
-import { ForecastConfidence } from "@/components/confidence";
+import { ForecastConfidence, LocalConfidence } from "@/components/confidence";
 import { InfoPopover } from "@/components/info-popover";
 import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
 import { RatingHeadline } from "@/components/rating";
 import { RequireAuth } from "@/components/require-auth";
+import { StaleBanner } from "@/components/stale-banner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,14 +25,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { WindDisputeNote } from "@/components/wind-dispute";
 import { qk, useOpportunity } from "@/hooks/queries";
 import { errorMessage, post } from "@/lib/api";
-import { hasField, legacyIndexText } from "@/lib/confidence";
+import { forecastReasonsOf, LEGACY_INDEX_LABEL, legacyIndexText } from "@/lib/confidence";
 import {
   compass,
   formatCalendarDate,
-  formatDateTime,
   formatDuration,
   formatMoney,
   formatRange,
+  formatSpotDateTime,
   heightRange,
   metres,
   relativeTime,
@@ -116,10 +117,12 @@ function OfferCard({ offer, best }: { offer: Offer; best: boolean }) {
   );
 }
 
+// The match score's "confidence" component is the legacy 0–100 index: an offshore spread
+// index, not the forecast-confidence class (that class is shown with the swell above).
 const SCORE_LABELS: Record<string, string> = {
   surf: "Surf quality",
   affordability: "Travel affordability",
-  confidence: "Forecast confidence",
+  confidence: `${LEGACY_INDEX_LABEL} (not a probability)`,
   convenience: "Trip convenience",
 };
 
@@ -187,6 +190,8 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
         }
       />
 
+      <StaleBanner stale={m.stale || e.stale} />
+
       {m.status === "surf_only" && (
         <Alert variant="warn" className="mb-6">
           <Waves />
@@ -219,7 +224,13 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                 size="lg"
                 label={m.peak_label}
                 score={m.peak_score}
-                reason={ratingReason({ periodS: e.peak_swell_period_s, windRelation: e.peak_wind_relation, windSpeedKmh: e.peak_wind_speed_kmh })}
+                reason={ratingReason({
+                  periodS: e.peak_swell_period_s,
+                  windRelation: e.peak_wind_relation,
+                  windSpeedKmh: e.peak_wind_speed_kmh,
+                  windStrength: e.wind_strength,
+                  windFavourability: e.wind_favourability,
+                })}
               />
               <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
                 <Measure
@@ -231,8 +242,8 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                 >
                   <span className="font-display text-2xl font-semibold">{heightRange(m.breaking_height_min_ft, m.breaking_height_max_ft, units)}</span>
                 </Measure>
-                <Measure label={`Best surf window (${tz})`}>
-                  {formatDateTime(m.window_start, tz)} → {formatDateTime(m.window_end, tz)}
+                <Measure label="Best surf window (local time at the break)">
+                  {formatSpotDateTime(m.window_start, tz)} → {formatSpotDateTime(m.window_end, tz, { zone: true })}
                   <div className="text-xs font-normal text-muted-foreground">{m.qualifying_hours} daylight hours meet your criteria</div>
                 </Measure>
                 <Measure label="Swell (offshore)">
@@ -246,21 +257,22 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                     {e.peak_wind_speed_kmh != null ? `${Math.round(e.peak_wind_speed_kmh)} km/h` : "—"} from {compass(e.peak_wind_direction_deg)} ·{" "}
                     {WIND_RELATION_LABEL[e.peak_wind_relation] ?? e.peak_wind_relation}
                   </span>
-                  <WindDisputeNote reasons={e.confidence_reasons} className="mt-1 font-normal" />
+                  <WindDisputeNote note={e.wind_dispute_note} reasons={e.confidence_reasons} className="mt-1 font-normal" />
                 </Measure>
               </dl>
               <p className="text-xs text-muted-foreground">
                 Swell event v{e.version}, updated {relativeTime(e.last_updated_at)}.
               </p>
-              {/* Only when the API sends a class for this swell: nothing rather than a guess. */}
-              {(hasField(e, "forecast_confidence_class") || hasField(m, "forecast_confidence_class")) && (
-                <ForecastConfidence
-                  className="border-t pt-3"
-                  value={hasField(e, "forecast_confidence_class") ? e.forecast_confidence_class : m.forecast_confidence_class}
+              {/* The swell's peak-hour classes from the API ("Not assessed yet" when it has none). */}
+              <div className="space-y-1.5 border-t pt-3">
+                <ForecastConfidence value={e.forecast_confidence_class ?? m.forecast_confidence_class} reasons={forecastReasonsOf(e)} notes={e.confidence_reasons} validTime={e.peak_time} />
+                <LocalConfidence
+                  value={e.local_confidence_class ?? m.local_confidence_class}
+                  forecastValue={e.forecast_confidence_class ?? m.forecast_confidence_class}
+                  reason={e.local_confidence_reason ?? m.local_confidence_reason}
                   reasons={e.confidence_reasons}
-                  legacyIndex={m.confidence}
                 />
-              )}
+              </div>
               <Disclosure summary="How this trip is scored" contentClassName="mt-3 space-y-3" data-testid="match-scoring">
                 <div className="flex items-center gap-3">
                   <ScoreRing score={m.overall_score} size={64} />
@@ -276,7 +288,9 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                     <div key={k}>
                       <div className="mb-1 flex justify-between gap-3 text-xs">
                         <span>{SCORE_LABELS[k] ?? k}</span>
-                        <span className="text-right font-medium tabular-nums">{k === "confidence" ? legacyIndexText(Number(v)) : `${Math.round(Number(v))}/100`}</span>
+                        <span className="text-right font-medium tabular-nums" data-testid={k === "confidence" ? "match-index-value" : undefined}>
+                          {k === "confidence" ? legacyIndexText(Number(v)) : `${Math.round(Number(v))}/100`}
+                        </span>
                       </div>
                       {/* No bar for the confidence index: a filled bar reads like a percentage. */}
                       {k !== "confidence" && <Progress value={Number(v)} />}
@@ -347,12 +361,12 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
               {m.travel_window && (
                 <div className="space-y-1 text-xs text-muted-foreground">
                   <div>
-                    Land at {m.destination_iata} between {formatDateTime(m.travel_window.arrive_after, m.travel_window.destination_timezone)} and{" "}
-                    {formatDateTime(m.travel_window.arrive_by, m.travel_window.destination_timezone)}
+                    Land at {m.destination_iata} between {formatSpotDateTime(m.travel_window.arrive_after, m.travel_window.destination_timezone)} and{" "}
+                    {formatSpotDateTime(m.travel_window.arrive_by, m.travel_window.destination_timezone, { zone: true })}
                   </div>
                   <div>
-                    Fly home between {formatDateTime(m.travel_window.depart_after, m.travel_window.destination_timezone)} and{" "}
-                    {formatDateTime(m.travel_window.depart_before, m.travel_window.destination_timezone)}
+                    Fly home between {formatSpotDateTime(m.travel_window.depart_after, m.travel_window.destination_timezone)} and{" "}
+                    {formatSpotDateTime(m.travel_window.depart_before, m.travel_window.destination_timezone, { zone: true })}
                   </div>
                   <div>All times local to {m.travel_window.destination_timezone}.</div>
                 </div>
