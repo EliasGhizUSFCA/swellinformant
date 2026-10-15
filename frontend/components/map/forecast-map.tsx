@@ -19,7 +19,7 @@ import type { SpotSummary } from "@/types/api";
 
 import type { CityLabel, IsobarPath } from "./basemap-draw";
 import { fieldSampler, MapDataLayers, type ParticleMode } from "./map-canvas-layers";
-import { BOUNDED_MAP_OPTIONS, CentreWatcher, FlyToSpot, MapBounds, useWrapCentre, type MarkerState } from "./surf-map";
+import { BOUNDED_MAP_OPTIONS, CentreWatcher, flyOrJump, FlyToSpot, MapBounds, useWrapCentre, type MapCover, type MarkerState } from "./surf-map";
 
 const TILES = tileConfig(process.env.NEXT_PUBLIC_MAP_TILE_URL, process.env.NEXT_PUBLIC_MAP_ATTRIBUTION, process.env.NEXT_PUBLIC_CARTO_API_KEY);
 const FAILED_TILES_BEFORE_NOTICE = 4;
@@ -43,7 +43,7 @@ const USER_PATH: PathOptions = { color: "#ffffff", weight: 2.5, fillColor: "#3b8
 function FlyToUser({ at }: { at: { lat: number; lon: number; key: number } | null }) {
   const map = useMap();
   useEffect(() => {
-    if (at) map.flyTo([at.lat, nearestCopy(at.lon, map.getCenter().lng)], Math.max(map.getZoom(), 7), { duration: 1 });
+    if (at) flyOrJump(map, [at.lat, nearestCopy(at.lon, map.getCenter().lng)], Math.max(map.getZoom(), 7), 1);
   }, [at, map]);
   return null;
 }
@@ -202,11 +202,11 @@ export interface ForecastMapProps {
   /** Short credit for the ocean layers in Leaflet's attribution strip (plain text, escaped here). */
   fieldAttribution?: string;
   /**
-   * What covers the map while a spot is open: `bottom` the fraction of its height under a
-   * bottom sheet (phones), `top` the CSS pixels under the top controls. A selected spot then
-   * lands in the strip between them instead of at the map centre.
+   * What covers a map of the given size while a spot is open (the top controls, a bottom sheet
+   * on phones, a side sheet in landscape). A selected spot then lands in the middle of the rest
+   * instead of at the map centre.
    */
-  cover?: { top: number; bottom: number };
+  cover?: (size: { x: number; y: number }) => MapCover;
 }
 
 function ZoomWatcher({ onZoom }: { onZoom?: (z: number) => void }) {
@@ -293,11 +293,13 @@ function ForecastMap(props: ForecastMapProps) {
   const { layer, basemap } = settings;
   const [tilesFailed, setTilesFailed] = useState(false);
   const selectedSpot = spots.find((s) => s.slug === selected);
-  const lons = useMemo(() => spots.map((s) => s.longitude), [spots]);
-  const { centreLng, onMove, onRecentre } = useWrapCentre(lons, INITIAL_CENTRE[1]);
   const user = props.userLocation;
+  // The user's position changes world copy like a spot does, so it is part of the wrap key.
+  const lons = useMemo(() => (user ? [...spots.map((s) => s.longitude), user.lon] : spots.map((s) => s.longitude)), [spots, user]);
+  const { centreLng, onMove, onRecentre } = useWrapCentre(lons, INITIAL_CENTRE[1]);
   // Re-placed only when the position or its nearest world copy changes, as the spot markers are.
-  const userCentre = useMemo<[number, number] | null>(() => (user ? [user.lat, nearestCopy(user.lon, centreLng)] : null), [user, centreLng]);
+  const userLng = user ? nearestCopy(user.lon, centreLng) : null;
+  const userCentre = useMemo<[number, number] | null>(() => (user && userLng != null ? [user.lat, userLng] : null), [user, userLng]);
   // The container is measured before the map exists, so it opens at its final zoom.
   const [start, setStart] = useState<{ zoom: number; minZoom: number } | null>(null);
   const measure = useCallback((el: HTMLDivElement | null) => {

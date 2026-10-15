@@ -43,6 +43,8 @@ const PREDICTION_WINDOW_MS = 90 * 60_000;
 const CITY_ZOOM = 4;
 /** Phones: the spot panel is a bottom sheet up to this fraction of the map's height. */
 const SHEET_FRACTION = 0.72;
+/** Short, wide screens (phones in landscape): the spot panel is a side sheet this wide (px). */
+const SIDE_SHEET_WIDTH = 360;
 /** Phones: CSS pixels under the layer tabs at the top of the map. */
 const TABS_INSET = 64;
 
@@ -56,6 +58,9 @@ export default function MapPage() {
   const reducedMotion = usePrefersReducedMotion();
   const pageVisible = usePageVisible();
   const isDesktop = useMediaQuery("(min-width: 1024px)");
+  // Phones in landscape: a bottom sheet left a strip of about 30 px of map above it, so the
+  // spot panel opens beside the map (and the timeline) instead.
+  const sideSheet = useMediaQuery("(min-width: 640px) and (max-height: 500px)") && !isDesktop;
 
   const [selected, setSelected] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
@@ -187,19 +192,35 @@ export default function MapPage() {
 
   // Leaflet's own bottom controls (zoom, attribution) sit just above the timeline.
   const bottomRef = useRef<HTMLDivElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
   const [bottomInset, setBottomInset] = useState(96);
+  // The timeline alone (without the locate row above it), from the bottom of the map.
+  const [timelineInset, setTimelineInset] = useState(76);
   useEffect(() => {
     const el = bottomRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setBottomInset(Math.round(el.getBoundingClientRect().height)));
+    const ro = new ResizeObserver(() => {
+      const box = el.getBoundingClientRect();
+      setBottomInset(Math.round(box.height));
+      const timeline = timelineRef.current?.getBoundingClientRect();
+      if (timeline) setTimelineInset(Math.round(box.bottom - timeline.top));
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
   const listIsOpen = listOpen ?? isDesktop;
   const timeText = at ? bubbleLabel(at, tz) : "";
-  // A selected spot lands above the phone's bottom sheet, below the layer tabs.
-  const cover = useMemo(() => (isDesktop ? undefined : { top: TABS_INSET, bottom: SHEET_FRACTION }), [isDesktop]);
+  // A selected spot lands below the layer tabs and clear of the open panel: above the phone's
+  // bottom sheet, or left of the side sheet and above the timeline (the locate button at the
+  // far left is clear of the middle, where the spot lands).
+  const cover = useCallback(
+    (size: { y: number }) =>
+      sideSheet
+        ? { top: TABS_INSET, right: SIDE_SHEET_WIDTH, bottom: timelineInset, left: 0 }
+        : { top: TABS_INSET, right: 0, bottom: size.y * SHEET_FRACTION, left: 0 },
+    [sideSheet, timelineInset],
+  );
   // The canvas keeps the previous step's field until the next one arrives: describe what it shows.
   const fieldTime = layerFields.servedValidTime ?? at;
   const fieldTimeText = fieldTime ? longTimeLabel(fieldTime, tz) : "";
@@ -324,7 +345,12 @@ export default function MapPage() {
         {/* Bottom: locate, (small screens) best spots, and the timeline with the model run
             beside its bubble. From 640 px wide (landscape phones, tablets) the best spots share
             the first row, so a short map keeps room for its own controls. */}
-        <div ref={bottomRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-[1100] flex flex-col gap-2 p-2 sm:p-3">
+        <div
+          ref={bottomRef}
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-[1100] flex flex-col gap-2 p-2 sm:p-3"
+          // Beside an open side sheet, so the whole timeline stays usable.
+          style={sideSheet && selectedSpot ? { right: SIDE_SHEET_WIDTH } : undefined}
+        >
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
             <div className="pointer-events-auto w-fit">
               <button
@@ -338,7 +364,7 @@ export default function MapPage() {
             </div>
             {!isDesktop && !selectedSpot && <div className="pointer-events-auto flex flex-col sm:ml-auto sm:w-[340px] sm:shrink-0">{spotList}</div>}
           </div>
-          <div className="pointer-events-auto">
+          <div ref={timelineRef} className="pointer-events-auto">
             <Timeline
               steps={steps}
               index={stepIndex}
@@ -353,9 +379,13 @@ export default function MapPage() {
           </div>
         </div>
 
-        {/* Small screens: the spot panel is a bottom sheet over the timeline. */}
+        {/* Small screens: the spot panel is a bottom sheet over the timeline; short, wide ones
+            (phones in landscape) get a side sheet below the settings button instead. */}
         {!isDesktop && selectedSpot && (
-          <div className="absolute inset-x-0 bottom-0 z-[1200] flex p-1.5" style={{ maxHeight: `${SHEET_FRACTION * 100}%` }}>
+          <div
+            className={cn("absolute z-[1200] flex p-1.5", sideSheet ? "top-16 right-0 bottom-0" : "inset-x-0 bottom-0")}
+            style={sideSheet ? { width: SIDE_SHEET_WIDTH } : { maxHeight: `${SHEET_FRACTION * 100}%` }}
+          >
             <SpotPanel
               spot={selectedSpot}
               at={bySlug.get(selectedSpot.slug)?.conditions ?? null}
@@ -389,7 +419,7 @@ export default function MapPage() {
             cities={cityLabels.length ? cityLabels : null}
             onZoom={onZoom}
             userLocation={userLocation}
-            cover={cover}
+            cover={isDesktop ? undefined : cover}
             fieldLabel={fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : `Ocean layers unavailable, ${timeText}`}
             // The map's credit strip names the source; its full attribution sentence is in the
             // legend (on a phone the sentence alone covered three lines of the map, and markers).

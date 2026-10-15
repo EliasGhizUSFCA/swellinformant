@@ -2,6 +2,7 @@
 
 import "leaflet/dist/leaflet.css";
 
+import type { LatLngExpression, Map as LeafletMap } from "leaflet";
 import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap } from "react-leaflet";
 import { memo, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
@@ -115,10 +116,28 @@ export function CentreWatcher({ onCentre }: { onCentre: (lng: number) => void })
 }
 
 /**
+ * Moves the map to `centre` the way a flight should: animated, or in one jump when the user
+ * prefers reduced motion (Leaflet's own animations do not check that preference).
+ */
+export function flyOrJump(map: LeafletMap, centre: LatLngExpression, zoom: number, duration: number) {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) map.setView(centre, zoom, { animate: false });
+  else map.flyTo(centre, zoom, { duration });
+}
+
+/** CSS pixels of the map hidden under floating controls and panels, by edge. */
+export interface MapCover {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/**
  * Flies to a spot's nearest world copy when `slug` changes, and only then: a filter that hides
  * and re-shows the selected spot, or a new forecast hour, never moves the map. With `cover`
- * (`top` CSS pixels under the top controls, `bottom` the fraction of the height under a bottom
- * sheet) the spot lands in the middle of the strip left uncovered, not at the map centre.
+ * (what the controls and the open spot panel hide of a map of the given size: a bottom sheet on
+ * phones, a side sheet in landscape) the spot lands in the middle of the part left uncovered,
+ * not at the map centre.
  */
 export function FlyToSpot({
   slug,
@@ -131,16 +150,19 @@ export function FlyToSpot({
   lat?: number;
   lon?: number;
   minZoom?: number;
-  cover?: { top: number; bottom: number };
+  cover?: (size: { x: number; y: number }) => MapCover;
 }) {
   const map = useMap();
   const fly = useEffectEvent(() => {
     if (lat == null || lon == null) return;
     const zoom = Math.max(map.getZoom(), minZoom);
     const target: [number, number] = [lat, nearestCopy(lon, map.getCenter().lng)];
-    const h = map.getSize().y;
-    const dy = cover && cover.bottom > 0 ? h / 2 - (cover.top + h * (1 - cover.bottom)) / 2 : 0;
-    map.flyTo(dy ? map.unproject(map.project(target, zoom).add([0, dy]), zoom) : target, zoom, { duration: 0.8 });
+    const c = cover?.(map.getSize());
+    // The map centre goes this far right of and below the spot, which then sits in the middle
+    // of the uncovered part.
+    const dx = c ? (c.right - c.left) / 2 : 0;
+    const dy = c ? (c.bottom - c.top) / 2 : 0;
+    flyOrJump(map, dx || dy ? map.unproject(map.project(target, zoom).add([dx, dy]), zoom) : target, zoom, 0.8);
   });
   useEffect(() => {
     if (slug) fly();

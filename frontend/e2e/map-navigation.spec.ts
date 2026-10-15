@@ -226,6 +226,40 @@ test.describe("map navigation · date line (1440x900)", () => {
     await shot(page, "nav-1440x900-after-inertial-drags");
   });
 
+  test("the user's position marker is drawn in its nearest world copy too", async ({ page, context, baseURL }) => {
+    // A position with no spot within 1.5 degrees of its longitude (the central United States),
+    // so no spot changes copy while the view crosses the position's antimeridian.
+    const me = { latitude: 39, longitude: -100 };
+    await context.grantPermissions(["geolocation"], { origin: baseURL });
+    await context.setGeolocation(me);
+    await openMap(page);
+    const spots = await spotList(page);
+    expect(spots.filter((s) => Math.abs(((((s.longitude - me.longitude) % 360) + 540) % 360) - 180) < 1.5)).toEqual([]);
+    await page.getByRole("button", { name: "Show my location" }).click();
+    await expect(page.locator("path.user-location-marker")).toBeVisible();
+    await mapSettled(page);
+    const zoom = (await liveView(page)).minZoom;
+    // Just before and just after the position's antimeridian, both ways: the marker sits where
+    // Leaflet projects its copy nearest the view centre (at the screen edge, one world wide).
+    for (const centre of [me.longitude + 179, me.longitude + 181, me.longitude - 179, me.longitude - 181]) {
+      await setMapView(page, 20, centre, zoom);
+      await mapSettled(page);
+      const off = await page.evaluate(
+        ({ lat, lon }) => {
+          const maps = (window as unknown as ProbeWindow).__maps!;
+          const m = maps[maps.length - 1]!;
+          const c = m.getCenter().lng;
+          const p = m.latLngToContainerPoint([lat, lon + 360 * Math.round((c - lon) / 360)]);
+          const box = m.getContainer().getBoundingClientRect();
+          const r = document.querySelector("path.user-location-marker")!.getBoundingClientRect();
+          return Math.hypot(r.x + r.width / 2 - box.left - p.x, r.y + r.height / 2 - box.top - p.y);
+        },
+        { lat: me.latitude, lon: me.longitude },
+      );
+      expect(off, `centre ${centre}: marker offset from its nearest copy (px)`).toBeLessThanOrEqual(2);
+    }
+  });
+
   test("endless panning east re-centres silently on the same meridian", async ({ page }) => {
     await openMap(page);
     const spots = await spotList(page);
@@ -286,6 +320,32 @@ test.describe("map navigation · regressions (1440x900)", () => {
     expect(await mapMoves(page)).toEqual([]);
     const after = await liveView(page);
     expect(after.centre.lng).toBeCloseTo(before.centre.lng, 6);
+  });
+
+  test("keyboard: Enter on a marker opens the spot; '-' and the arrow keys stay inside the limits", async ({ page }) => {
+    await openMap(page);
+    await page.locator("path.spot-pipeline").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("panel-spot-name")).toHaveText(/Pipeline/);
+    await mapSettled(page);
+    expect((await liveView(page)).zoom, "the map flew in to the spot").toBeGreaterThanOrEqual(5);
+    await page.getByRole("button", { name: "Close spot details" }).click();
+    await page.locator(".leaflet-container").focus();
+    for (let i = 0; i < 8; i++) {
+      await page.keyboard.press("Minus");
+      await mapSettled(page, 300);
+    }
+    const out = await liveView(page);
+    expect(out.zoom, "'-' stops at the one-world zoom").toBeCloseTo(out.minZoom, 6);
+    let lat = out.centre.lat;
+    for (const key of ["ArrowUp", "ArrowDown"]) {
+      for (let i = 0; i < 12; i++) await page.keyboard.press(key);
+      await mapSettled(page);
+      const v = await liveView(page);
+      expectBounded(v, `after 12 ${key} presses`);
+      expect(key === "ArrowUp" ? v.centre.lat > lat : v.centre.lat < lat, `${key} moved the map`).toBe(true);
+      lat = v.centre.lat;
+    }
   });
 
   test("timeline steps re-style only markers whose colour changes; a zoom click touches no marker", async ({ page }) => {
@@ -452,7 +512,7 @@ for (const viewport of [
   test.describe(`map navigation · phone layout ${viewport.width}x${viewport.height}`, () => {
     test.use({ viewport, hasTouch: true });
 
-    test("a selected spot lands above the bottom sheet and below the tabs; controls never overlap", { tag: "@mobile" }, async ({ page }) => {
+    test("a selected spot lands clear of the open sheet and below the tabs; controls never overlap", { tag: "@mobile" }, async ({ page }) => {
       await openMapWithFields(page);
       const overlaps = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
@@ -491,9 +551,20 @@ for (const viewport of [
         const sheet = (await panel.boundingBox())!;
         const m = await markerCentre(page, slug);
         expect(m.y, `${slug} below the tabs`).toBeGreaterThan(tabsBottom);
-        expect(m.y, `${slug} above the sheet (top ${sheet.y})`).toBeLessThan(sheet.y);
         expect(m.x).toBeGreaterThan(0);
-        expect(m.x).toBeLessThan(viewport.width);
+        if (short) {
+          // Landscape: a side sheet below Settings; the marker, and the whole timeline, sit left of it.
+          const timeline = (await controls.timeline.boundingBox())!;
+          expect(sheet.y, "the side sheet starts below Settings").toBeGreaterThanOrEqual(boxes.settings!.y + boxes.settings!.height);
+          const map = (await page.locator(".leaflet-container").boundingBox())!;
+          expect(sheet.height, `the side sheet is most of the map's height (${map.height})`).toBeGreaterThan(map.height * 0.7);
+          expect(timeline.x + timeline.width, "the timeline ends left of the side sheet").toBeLessThanOrEqual(sheet.x);
+          expect(m.x, `${slug} left of the sheet (left ${sheet.x})`).toBeLessThan(sheet.x);
+          expect(m.y, `${slug} above the timeline (top ${timeline.y})`).toBeLessThan(timeline.y);
+        } else {
+          expect(m.y, `${slug} above the sheet (top ${sheet.y})`).toBeLessThan(sheet.y);
+          expect(m.x).toBeLessThan(viewport.width);
+        }
         await shot(page, `nav-phone-${viewport.width}x${viewport.height}-selected-${slug}`);
       }
     });

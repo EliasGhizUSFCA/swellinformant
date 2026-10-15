@@ -1,13 +1,13 @@
 import { act, render } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { CircleMarker as LeafletCircleMarker, Evented, type Map as LeafletMap } from "leaflet";
+import { CircleMarker as LeafletCircleMarker, Evented, Map as LeafletMap } from "leaflet";
 import { Profiler, useMemo } from "react";
 import { MapContainer } from "react-leaflet";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SpotMarker } from "@/components/map/forecast-map";
-import { CentreWatcher, FlyToSpot, MapBounds, useWrapCentre, type MarkerState } from "@/components/map/surf-map";
+import { CentreWatcher, FlyToSpot, MapBounds, useWrapCentre, type MapCover, type MarkerState } from "@/components/map/surf-map";
 import { nearestCopy, wrapCentre } from "@/lib/map-bounds";
 import type { SpotSummary } from "@/types/api";
 
@@ -82,7 +82,7 @@ interface HarnessProps {
   spots: SpotSummary[];
   markers: Record<string, MarkerState>;
   selected?: string | null;
-  cover?: { top: number; bottom: number };
+  cover?: (size: { x: number; y: number }) => MapCover;
   onCommit?: () => void;
 }
 
@@ -232,15 +232,45 @@ describe("flying to the selected spot", () => {
     expect(map().getZoom()).toBe(4);
   });
 
+  it("jumps instead of flying when the user prefers reduced motion", () => {
+    // jsdom has no matchMedia: answer the reduced-motion query only.
+    const original = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: q === "(prefers-reduced-motion: reduce)", media: q })) as unknown as typeof window.matchMedia;
+    const fly = vi.spyOn(LeafletMap.prototype, "flyTo");
+    const setView = vi.spyOn(LeafletMap.prototype, "setView");
+    try {
+      const { map, rerender } = setup({ spots: SPOTS, markers: states(60), selected: null });
+      setView.mockClear();
+      rerender({ spots: SPOTS, markers: states(60), selected: "pipeline" });
+      expect(fly).not.toHaveBeenCalled();
+      expect(setView).toHaveBeenCalledWith(expect.anything(), 5, expect.objectContaining({ animate: false }));
+      const pipeline = SPOTS.find((s) => s.slug === "pipeline")!;
+      expect(map().getCenter().lng).toBeCloseTo(nearestCopy(pipeline.longitude, 10), 6);
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   it("lands the spot above a bottom sheet and below the top controls", () => {
-    const cover = { top: 64, bottom: 0.72 };
+    // A phone's bottom sheet: up to 72 % of the map's height.
+    const cover = (size: { y: number }) => ({ top: 64, right: 0, bottom: size.y * 0.72, left: 0 });
     const { map } = setup({ spots: SPOTS, markers: states(60), selected: "nazare", cover });
     const nazare = SPOTS.find((s) => s.slug === "nazare")!;
     const p = map().latLngToContainerPoint([nazare.latitude, nazare.longitude]);
-    const sheetTop = SIZE.y * (1 - cover.bottom);
-    expect(p.y).toBeGreaterThan(cover.top);
+    const sheetTop = SIZE.y * (1 - 0.72);
+    expect(p.y).toBeGreaterThan(64);
     expect(p.y).toBeLessThan(sheetTop);
-    expect(p.y).toBeCloseTo((cover.top + sheetTop) / 2, 0);
+    expect(p.y).toBeCloseTo((64 + sheetTop) / 2, 0);
     expect(p.x).toBeCloseTo(SIZE.x / 2, 0);
+  });
+
+  it("lands the spot left of a side sheet and above the timeline", () => {
+    // Landscape: a 360 px side sheet on the right, the timeline stack (120 px) at the bottom.
+    const cover = () => ({ top: 64, right: 360, bottom: 120, left: 0 });
+    const { map } = setup({ spots: SPOTS, markers: states(60), selected: "nazare", cover });
+    const nazare = SPOTS.find((s) => s.slug === "nazare")!;
+    const p = map().latLngToContainerPoint([nazare.latitude, nazare.longitude]);
+    expect(p.x).toBeCloseTo((SIZE.x - 360) / 2, 0);
+    expect(p.y).toBeCloseTo((64 + SIZE.y - 120) / 2, 0);
   });
 });
