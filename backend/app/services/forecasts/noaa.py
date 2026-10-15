@@ -1338,8 +1338,9 @@ class NoaaGfsProvider(ForecastProvider):
 class NoaaGfsFieldsProvider(NoaaGfsProvider):
     """Only the global map fields of one GFS cycle, as a source of their own.
 
-    The standalone map-fields mode (MAP_FIELDS_ENABLED=true while "noaa_gfs" is not a
-    forecast provider). Its runs belong to the source ``noaa_gfs_fields`` (kind
+    The standalone map-fields mode (:func:`app.services.map_fields.map_fields_mode`:
+    "noaa_gfs" is not a forecast provider, and MAP_FIELDS_ENABLED is true, or unset with
+    live spot providers). Its runs belong to the source ``noaa_gfs_fields`` (kind
     ``fields``), hold map_fields rows and no spot records, and are never selected for spot
     forecasts, blending, comparisons, verification or the status page: those only read the
     configured providers' sources (``registry.configured_source_codes``) or ensembles.
