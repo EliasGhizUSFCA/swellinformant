@@ -15,7 +15,8 @@ equations 73-78, 227 and 235. These are the corrections FES-type models such as 
 used with (pyTMD's "FES" set); scripts/extract_tide_constants.py --check-pytmd compares this
 module with pyTMD 3.0.9. Mean longitudes of the Moon (s), Sun (h), lunar perigee (p), node
 (N) and solar perigee (p1) are the polynomials of Meeus, "Astronomical Algorithms" (2nd ed.,
-chapters 22 and 47), evaluated in UTC (the difference to TT shifts them by under 0.01 deg).
+chapters 22 and 47), evaluated in UTC (TT - UTC, about 69 s, would move the Moon's mean
+longitude by about 0.01 deg, under 3 s of M2 timing).
 
 Heights are relative to the model's mean sea level (datum "model_msl"), never a chart
 datum: no datum offset is known at a model point. No minor constituents are inferred, and

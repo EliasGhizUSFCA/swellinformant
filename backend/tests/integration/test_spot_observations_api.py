@@ -109,6 +109,32 @@ def test_recent_readings_are_listed_by_relation_and_distance(db: Session) -> Non
     assert later.status == "stale" and later.items[0].stale
 
 
+def test_upstream_regional_stations_are_never_listed(db: Session) -> None:
+    """Pipeline is paired with 51201 (offshore_reference, 6.7 km) and 51101
+    (upstream_regional, 508 km). With 51101's readings newer (2026-10-09) than 51201's
+    (2026-08-29), the block still lists 51201 alone, stale, never the regional buoy."""
+    seed_stations(db)
+    assert _store(
+        db,
+        "ndbc:51201",
+        "ndbc_51201_20260829.realtime2.txt",
+        "ndbc_51201_20260829.realtime2.spec",
+    )
+    assert _store(
+        db,
+        "ndbc:51101",
+        "ndbc_51101_20261009.realtime2.txt",
+        "ndbc_51101_20261009.realtime2.spec",
+    )
+    now = datetime(2026, 10, 9, 3, 0, tzinfo=UTC)
+    block = tide_api.spot_observations_block(
+        db, _spot(db, "pipeline"), now - timedelta(hours=48), now, now
+    )
+    assert [i.station_code for i in block.items] == ["ndbc:51201"]
+    assert block.status == "stale" and block.items[0].stale
+    assert block.items[0].relation == "offshore_reference"
+
+
 def test_spots_without_reference_stations_say_so(app_client: ApiClient, db: Session) -> None:
     seed_stations(db)
     block = _block(db, "nazare")

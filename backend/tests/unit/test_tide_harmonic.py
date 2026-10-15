@@ -110,6 +110,33 @@ def test_mean_tide_over_a_month_is_near_zero() -> None:
     assert 3.0 < float(np.ptp(heights)) < 5.5  # Bay of Biscay spring range about 4 m
 
 
+def test_nodal_corrections_match_the_textbook_series() -> None:
+    """f and u against the usual series in the node longitude N (Pugh, "Tides, Surges and
+    Mean Sea-Level", 1987, chapter 4): an independent check of the Schureman formulas,
+    including the sign of u, which the 72-hour comparison above is too short to pin."""
+    n_deg = np.array([0.0, 60.0, 90.0, 180.0, 270.0, 300.0])
+    n = np.radians(n_deg)
+    f, u = hm.nodal_corrections(n_deg)
+    series_f = {
+        "m2": 1.0004 - 0.0373 * np.cos(n) + 0.0002 * np.cos(2 * n),
+        "k1": 1.006 + 0.115 * np.cos(n) - 0.009 * np.cos(2 * n),
+        "o1": 1.009 + 0.187 * np.cos(n) - 0.015 * np.cos(2 * n),
+        "k2": 1.024 + 0.286 * np.cos(n) + 0.008 * np.cos(2 * n),
+    }
+    series_u = {
+        "m2": -2.14 * np.sin(n),
+        "k1": -8.86 * np.sin(n) + 0.68 * np.sin(2 * n),
+        "o1": 10.80 * np.sin(n) - 1.34 * np.sin(2 * n),
+        "k2": -17.74 * np.sin(n) + 0.68 * np.sin(2 * n),
+    }
+    # The series are truncated: measured differences are at most 0.0018 (f) and 0.19 deg (u).
+    for group, expected in series_f.items():
+        assert np.max(np.abs(f[group] - expected)) < 0.003, group
+    for group, expected in series_u.items():
+        assert np.max(np.abs(u[group] - expected)) < 0.25, group
+    assert np.all(f["none"] == 1.0) and np.all(u["none"] == 0.0)
+
+
 def test_naive_times_are_refused() -> None:
     constants = hm.load_constants(CONSTANTS)["mavericks"]
     with pytest.raises(ValueError, match="timezone-aware"):

@@ -485,6 +485,11 @@ measured, kept apart from every forecast:
   OBS-TIDE-9); Jaws `stale` (51205, last report 2026-10-13 18:56 UTC); Ocean Beach
   `available` (46026 at 28.6 km and 46237 at 11.1 km); Pipeline and Trestles `available`;
   Nazare `unavailable` (no reference station).
+* The same day at 20:31 UTC (review, another own database, 48 h NDBC ingest: 11 stations,
+  23 requests, 855,389 bytes, 820 records, 0 errors) 46053 was reporting waves again (16
+  wave readings in the window, the newest 19:40 UTC), so Rincon's block was `available`:
+  the flag follows the stored readings. Jaws was `unavailable` there (51205 had no reading
+  in the 48 h window and no backfill was run).
 
 ## Operation
 
