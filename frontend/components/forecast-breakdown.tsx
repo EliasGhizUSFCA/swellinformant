@@ -137,7 +137,7 @@ export function ForecastBreakdown({
   return (
     <div className="space-y-3" data-testid="forecast-breakdown">
       <div className="text-xs text-muted-foreground" data-testid="breakdown-time">
-        Forecast for <span className="font-medium text-foreground/80">{formatSpotDateTime(c.valid_time, tz, { zone: true })}</span>
+        Forecast for <span className="font-medium text-foreground/80">{formatSpotDateTime(c.valid_time, tz, { zone: true })}</span> (local time)
         {away ? ` · ${away}` : ""}
         {c.is_daylight ? "" : " · night"}
       </div>

@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConditionsSummary } from "@/components/conditions";
+import { ForecastBreakdown } from "@/components/forecast-breakdown";
 import { cycleLabel, ForecastProvenance } from "@/components/forecast-provenance";
 import { ageText, StaleBanner, StaleBadge } from "@/components/stale-banner";
 import type { Conditions, RunMember, SwellEvent, SystemStatus } from "@/types/api";
@@ -226,6 +227,14 @@ describe("ConditionsSummary (model output, never 'Now')", () => {
     render(<ConditionsSummary c={conditions({ valid_time: hoursFromNow(-1) })} tz="UTC" units="m" title="Best surf window, next 7 days" nowMs={NOW} />);
     expect(screen.getByTestId("conditions-title")).toHaveTextContent("Best surf window, next 7 days");
     expect(screen.getByTestId("conditions-time")).toHaveTextContent("1 h ago");
+  });
+
+  it("the step breakdown names the forecast time in the spot's zone and how far away it is", () => {
+    render(<ForecastBreakdown c={conditions()} tz="Africa/Johannesburg" units="ft" nowMs={NOW} />);
+    expect(screen.getByTestId("breakdown-time")).toHaveTextContent("Forecast for Mon, Oct 12, 8:00 AM GMT+2 (local time) · in 2 h");
+    // The raw model data names its run's age, never "now" or "live".
+    expect(screen.getByTestId("raw-model-runs")).toHaveTextContent("Synthetic test source (not real data) · model run 16 h ago");
+    expect(document.body.textContent).not.toMatch(/\blive\b/i);
   });
 
   it("names night steps without calling them unsurfable data gaps", () => {
