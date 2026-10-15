@@ -401,3 +401,18 @@ def test_cli_seed_and_list(db: Session, capsys: pytest.CaptureFixture[str]) -> N
     assert pillar["spots"] == ["mavericks (primary)"] and pillar["predictions"] == 0
     assert main(["tides", "prune"]) == 0
     assert json.loads(capsys.readouterr().out) == {"tide_predictions_deleted": 0}
+
+
+def test_a_tide_model_setting_without_its_constants_is_reported(
+    db: Session, tide_spots: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "tide_model", "fes2022")
+    monkeypatch.setattr(get_settings(), "tide_providers", "harmonic_model")
+    out = acquire_tides(db, NOW)
+    model = out["providers"]["harmonic_model"]
+    assert "fes2022" in model["warnings"][0] and "'eot20'" in model["warnings"][0]
+    assert {e["events"] > 0 for e in model["stations"].values()} == {True}
+    sources = db.scalars(select(TidePrediction.source_code).distinct()).all()
+    assert sources == ["eot20"]  # labelled by what was computed

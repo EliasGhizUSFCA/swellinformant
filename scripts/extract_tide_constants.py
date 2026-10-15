@@ -42,6 +42,8 @@ app/services/tides/harmonic_model.py against an independent implementation).
 
     python scripts/extract_tide_constants.py --work /tmp/eot20      # download + extract
     python scripts/extract_tide_constants.py --work /tmp/eot20 --from-cache
+    python scripts/extract_tide_constants.py --work /tmp/eot20 --check-pytmd
+    python scripts/extract_tide_constants.py --work /tmp/coops --validate 2026-10-14
 
 Network: about 1.21 GB streamed (the ocean-tide part of the archive), nothing kept.
 """
@@ -518,6 +520,128 @@ def check_pytmd(out_path: Path, days: int = 30) -> float:
     return worst
 
 
+# (spot, CO-OPS station, kind): the stations the catalog uses for the US spots, plus two
+# harmonic stations near subordinate ones (their full curve can be compared).
+VALIDATION_PAIRS = (
+    ("pipeline", "1612668", "subordinate"),
+    ("sunset-beach", "1612668", "subordinate"),
+    ("waimea-bay", "1612668", "subordinate"),
+    ("jaws-peahi", "1615680", "harmonic"),
+    ("mavericks", "9414131", "harmonic"),
+    ("ocean-beach-sf", "9414275", "subordinate"),
+    ("ocean-beach-sf", "9414290", "harmonic"),
+    ("trestles", "TWC0419", "subordinate"),
+    ("trestles", "9410580", "harmonic"),
+    ("rincon", "9411270", "harmonic"),
+)
+COOPS_API = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
+
+
+def _coops(
+    client: httpx.Client, cache: Path, station: str, product: str, start: datetime, days: int
+) -> list[tuple[datetime, float, str | None]]:
+    """CO-OPS predictions (``product`` "hilo": MLLW high/low waters; "six": 6-minute curve,
+    MSL), read from ``cache`` or fetched once and kept there."""
+    path = cache / f"{product}_{station}.json"
+    if not path.exists():
+        params = {
+            "product": "predictions",
+            "application": "SwellTravelAgent",
+            "station": station,
+            "begin_date": start.strftime("%Y%m%d"),
+            "range": str(24 * days),
+            "datum": "MLLW" if product == "hilo" else "MSL",
+            "time_zone": "gmt",
+            "units": "metric",
+            "interval": "hilo" if product == "hilo" else "6",
+            "format": "json",
+        }
+        r = client.get(COOPS_API, params=params)
+        r.raise_for_status()
+        if "error" in r.json():
+            raise SystemExit(f"CO-OPS {station} {product}: {r.json()['error']}")
+        cache.mkdir(parents=True, exist_ok=True)
+        path.write_text(r.text)
+    rows = json.loads(path.read_text())["predictions"]
+    return [
+        (
+            datetime.strptime(x["t"], "%Y-%m-%d %H:%M").replace(tzinfo=UTC),
+            float(x["v"]),
+            x.get("type"),
+        )
+        for x in rows
+    ]
+
+
+def validate(constants_path: Path, cache: Path, start: datetime, days: int) -> list[dict[str, Any]]:
+    """The EOT20 synthesis at each US spot's tide point against the CO-OPS predictions of
+    the station the catalog pairs it with, over ``days`` days from ``start``:
+
+    * curve (harmonic stations, 6-minute values, datum MSL): RMSE after removing the mean
+      offset (the datum difference), correlation, range ratio;
+    * high and low waters (every station, MLLW): each CO-OPS event matched with the
+      model's nearest event of the same kind within 3 h; the share matched, the median
+      absolute timing error and the event-height RMSE after removing the mean offset.
+
+    The model events are app.services.tides.harmonic_model.predict_events, as stored by
+    the app.
+    """
+    from datetime import timedelta
+
+    sys.path.insert(0, str(REPO / "backend"))
+    from app.services.tides.harmonic_model import load_constants, predict, predict_events
+
+    constants = load_constants(constants_path)
+    end = start + timedelta(days=days)
+    out: list[dict[str, Any]] = []
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=60) as client:
+        for slug, station, kind in VALIDATION_PAIRS:
+            spot = constants[slug]
+            row: dict[str, Any] = {"spot": slug, "station": station, "kind": kind}
+            if kind == "harmonic":
+                six = _coops(client, cache, station, "six", start, days)
+                times = [t for t, _, _ in six if start <= t < end]
+                ref = np.array([v for t, v, _ in six if start <= t < end])
+                mod = predict(spot, times)
+                offset = float(np.mean(ref) - np.mean(mod))
+                row.update(
+                    curve_points=len(times),
+                    rmse_cm=round(100 * float(np.sqrt(np.mean((mod + offset - ref) ** 2))), 1),
+                    r=round(float(np.corrcoef(mod, ref)[0, 1]), 4),
+                    range_ratio=round(float(np.ptp(mod) / np.ptp(ref)), 3),
+                    msl_offset_m=round(offset, 3),
+                )
+            events = [
+                (t, v, "high" if typ in ("H", "HH") else "low")
+                for t, v, typ in _coops(client, cache, station, "hilo", start, days)
+                if start <= t < end
+            ]
+            model = predict_events(spot, start - timedelta(hours=6), end + timedelta(hours=6))
+            dts: list[float] = []
+            dhs: list[float] = []
+            for t, v, k in events:
+                same = [(abs((mt - t).total_seconds()), mt, mh) for mt, mh, mk in model if mk == k]
+                if not same:
+                    continue
+                gap, mt, mh = min(same)
+                if gap <= 3 * 3600:
+                    dts.append((mt - t).total_seconds() / 60.0)
+                    dhs.append(mh - v)
+            dh = np.array(dhs)
+            row.update(
+                events=len(events),
+                events_matched=len(dts),
+                median_abs_timing_min=round(float(np.median(np.abs(dts))), 1) if dts else None,
+                mean_timing_min=round(float(np.mean(dts)), 1) if dts else None,
+                event_height_rmse_cm=round(100 * float(np.sqrt(np.mean((dh - dh.mean()) ** 2))), 1)
+                if dts
+                else None,
+            )
+            out.append(row)
+            print(json.dumps(row))
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--spots", type=Path, default=DEFAULT_SPOTS)
@@ -525,9 +649,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work", type=Path, required=True, help="scratch directory")
     parser.add_argument("--from-cache", action="store_true", help="reuse --work's windows")
     parser.add_argument("--check-pytmd", action="store_true", help="compare with pyTMD")
+    parser.add_argument(
+        "--validate",
+        metavar="YYYY-MM-DD",
+        help="compare the model with CO-OPS predictions for 14 days from this date (UTC); "
+        "CO-OPS answers are cached in --work",
+    )
     args = parser.parse_args(argv)
     if args.check_pytmd:
         return 0 if check_pytmd(args.out) < 0.005 else 1
+    if args.validate:
+        start = datetime.strptime(args.validate, "%Y-%m-%d").replace(tzinfo=UTC)
+        validate(args.out, args.work, start, 14)
+        return 0
     spots = json.loads(args.spots.read_text())
     log: dict[str, Any] = {}
     cache = args.work / "eot20_windows.npz"

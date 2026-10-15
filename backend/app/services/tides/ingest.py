@@ -232,15 +232,26 @@ def _acquire_coops(
 
 
 def _acquire_model(
-    db: Session, stations: list[TideStation], start: datetime, end: datetime, now: datetime
+    db: Session,
+    stations: list[TideStation],
+    start: datetime,
+    end: datetime,
+    now: datetime,
+    settings: Settings,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"stations": {}}
     try:
-        constants = harmonic_model.load_constants()
+        meta, constants = harmonic_model.load_model()
     except harmonic_model.ConstantsError as exc:
         for station in stations:
             out["stations"][station.code] = {"error": str(exc)[:300], "transient": False}
         return out
+    if meta.get("source") != settings.tide_model:
+        # The file decides what is computed (and how it is labelled); say so.
+        out["warnings"] = [
+            f"TIDE_MODEL is {settings.tide_model!r} but {settings.tide_constants_path} holds "
+            f"{meta.get('source')!r} constants; those are used and labelled as such"
+        ]
     times = harmonic_model.regular_times(start, end, CURVE_STEP)
     for station in stations:
         slug = station.code.split(":", 1)[-1]
@@ -309,7 +320,7 @@ def acquire_tides(
                 db, stations, start, end, now, settings, client, backoff_seconds
             )
         elif provider == "harmonic_model":
-            summary = _acquire_model(db, stations, start, end, now)
+            summary = _acquire_model(db, stations, start, end, now, settings)
         else:
             result["providers"][provider] = {"error": f"unknown tide provider {provider!r}"}
             failed += 1
