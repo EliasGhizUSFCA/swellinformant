@@ -102,7 +102,7 @@ def _scored(db: Session, run: ForecastRun) -> list[tuple[SurfQualityPrediction, 
             select(SurfQualityPrediction, WaveForecast)
             .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
             .where(SurfQualityPrediction.run_id == run.id)
-        ).tuples()
+        ).all()
     ]
 
 
@@ -124,11 +124,12 @@ def test_the_real_strong_wind_hours_meet_the_acceptance_rules(db: Session) -> No
         assert sum(c["contributions"].values()) + p.score == pytest.approx(100, abs=0.6)
         detail = c["wind_detail"]
         assert detail["strength"] == "strong"  # every fixture hour is 30 km/h or more
+        speed, direction = f.wind_speed_kmh, f.wind_direction_deg
+        assert speed is not None and direction is not None
         offshore = detail["params"]["offshore_wind_direction"]["value"]
-        expected = f.wind_speed_kmh * math.cos(math.radians(f.wind_direction_deg - offshore))
+        expected = speed * math.cos(math.radians(direction - offshore))
         if detail["params"].get("shelter_factor") is None:
             assert detail["v_offshore_kmh"] == pytest.approx(expected, abs=0.1)
-        speed = f.wind_speed_kmh
         assert not (p.wind_relation == "offshore" and speed >= 45 and p.score >= very_good)
         assert not (p.wind_relation == "cross-shore" and speed >= 30 and p.score >= good)
         old, label = v200[f.id], str(getattr(p.label, "value", p.label))

@@ -551,11 +551,12 @@ labelled heuristic. Nearshore translation is reported separately as uncalibrated
 ## 6. Swell events (`swell_detection/`)
 
 * Steps are the run's stored valid times at the source's native spacing (hourly, 3-hourly
-  or 6-hourly, depending on the source and the lead time); nothing is interpolated. Event and match hour counts currently count every step as one
-  hour (`clustering.Step.duration` defaults to one hour; the detection service does not yet
-  pass each step's length), so they undercount 3-hourly runs. **Only daylight steps** are
-  considered. Nights neither qualify nor break an event, so a swell that is good on
-  consecutive mornings is *one* event.
+  or 6-hourly, depending on the source and the lead time); nothing is interpolated. Event
+  and match hour counts currently count every step as one hour (`clustering.Step.duration`
+  defaults to one hour; the detection service does not yet pass each step's length), so
+  they undercount 3-hourly runs. **Only daylight steps** are considered. Nights neither
+  qualify nor break an event, so a swell that is good on consecutive mornings is *one*
+  event.
 * A daylight step qualifies when `score ≥ SWELL_EVENT_MIN_SCORE` (default 40 = Fair).
   This is deliberately permissive. Each saved search later extracts its own sub-window
   using its own thresholds (see MATCHING_AND_FLIGHTS.md).

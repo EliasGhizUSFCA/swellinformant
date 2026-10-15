@@ -150,7 +150,7 @@ def test_direction_and_period_follow_the_breaking_energy_flux() -> None:
 
 def test_consistency_counts_the_tertiary_swell_and_ignores_wind_sea_leaving_the_break() -> None:
     s = spot("jeffreys-bay")  # offshore from 290 deg
-    swells = {
+    swells: dict[str, Any] = {
         "primary_swell_height_m": 1.2,
         "primary_swell_period_s": 14.0,
         "primary_swell_direction_deg": 215.0,
