@@ -112,7 +112,7 @@ describe("deep-water physics and the stated scales", () => {
     expect(exaggeration(8, 0)).toBeCloseTo(73.4, 1);
     expect(exaggeration(2, 60)).toBeCloseTo(exaggeration(2, 0) / 2, 6); // Mercator scale at 60 deg
     expect(exaggeration(20, 0)).toBe(1); // true scale
-    expect(scaleStatement(2, 0)).toBe("Crest spacing ×4,700 at this zoom; time runs 4× faster than real.");
+    expect(scaleStatement(2, 0)).toBe("Crest spacing ×4,700 at the map centre; time runs 4× faster than real.");
     expect(scaleStatement(8, 0)).toContain("×73 ");
     expect(scaleStatement(20, 0)).toContain("true scale");
     expect([formatFactor(4696), formatFactor(73.4), formatFactor(1.64), formatFactor(NaN)]).toEqual(["4,700", "73", "1.6", "—"]);

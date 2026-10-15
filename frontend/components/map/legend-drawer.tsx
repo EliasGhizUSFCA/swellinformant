@@ -167,7 +167,7 @@ export function LegendDrawer({
             </p>
           )}
           <p className="text-white/60" data-testid="legend-convention">
-            {ARROW_CONVENTION_TEXT} Streaks and crests move the same way; readouts say where the wind or waves come from.
+            {ARROW_CONVENTION_TEXT} Readouts say where the wind or waves come from.
           </p>
         </section>
       )}
@@ -189,7 +189,8 @@ export function LegendDrawer({
             {validTime && (
               <div className="mt-0.5" data-testid="legend-valid">
                 Valid {formatSpotDateTime(validTime, tz, { zone: true })}
-                {lead && ` · ${lead}`} (forecast, not observed)
+                {/* The cycle's own time is the model's analysis, not a forecast (and not an observation). */}
+                {lead === "analysis" ? " · model analysis (not observed)" : `${lead ? ` · ${lead}` : ""} (forecast, not observed)`}
               </div>
             )}
           </>

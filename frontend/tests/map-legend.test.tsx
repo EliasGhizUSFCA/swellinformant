@@ -44,7 +44,7 @@ describe("map legend", () => {
     legend(INDEX);
     const items = screen.getByRole("list", { name: "Wave systems drawn" }).querySelectorAll("li");
     expect([...items].map((li) => li.textContent)).toEqual(["Primary swell (solid)", "Secondary swell (dashed)"]);
-    expect(screen.getByTestId("legend-scales").textContent).toBe("Crest spacing ×4,700 at this zoom; time runs 4× faster than real.");
+    expect(screen.getByTestId("legend-scales").textContent).toBe("Crest spacing ×4,700 at the map centre; time runs 4× faster than real.");
     expect(screen.getByTestId("legend-crests").textContent).toContain("Stylised crests from the forecast model, not individual waves.");
     expect(screen.getByTestId("legend-convention").textContent).toContain("Arrows point where the wind or waves are going.");
     expect(screen.getByTestId("legend-valid").textContent).toMatch(/^Valid .+ · \+6 h \(forecast, not observed\)$/);
@@ -58,7 +58,9 @@ describe("map legend", () => {
     expect(screen.getByTestId("legend-title").textContent).toBe("Wind speed (mph)");
     expect(screen.getByTestId("legend-wind").textContent).toContain("visual speed (not ground speed)");
     expect(screen.queryByTestId("legend-crests")).toBeNull();
-    expect(screen.getByTestId("legend-valid").textContent).toContain("analysis");
+    // At the cycle time itself the field is the model's analysis: not a forecast, not observed.
+    expect(screen.getByTestId("legend-valid").textContent).toMatch(/ · model analysis \(not observed\)$/);
+    expect(screen.getByTestId("legend-valid").textContent).not.toContain("forecast");
   });
 
   it("says when the model run is out of date", () => {

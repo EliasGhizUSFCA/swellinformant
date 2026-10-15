@@ -1051,7 +1051,7 @@ test.describe("wave crests (synthetic partitions)", () => {
     await expect(legend.getByTestId("legend-title")).toHaveText("Offshore wave height, Hs (ft)");
     await expect(legend.getByTestId("legend-crests")).toContainText("Primary swell (solid)");
     await expect(legend.getByTestId("legend-crests")).toContainText("Secondary swell (dashed)");
-    await expect(legend.getByTestId("legend-scales")).toHaveText(/^Crest spacing ×[\d,]+ at this zoom; time runs 4× faster than real\.$/);
+    await expect(legend.getByTestId("legend-scales")).toHaveText(/^Crest spacing ×[\d,]+ at the map centre; time runs 4× faster than real\.$/);
     await expect(legend.getByTestId("legend-crests")).toContainText("Stylised crests from the forecast model, not individual waves.");
     await expect(legend.getByTestId("legend-convention")).toContainText("Arrows point where the wind or waves are going.");
     await expect(legend.getByTestId("legend-source")).toContainText("Model cycle");

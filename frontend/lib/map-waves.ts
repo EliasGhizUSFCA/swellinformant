@@ -202,7 +202,7 @@ export function effectiveSystems(chosen: readonly WaveSystem[], available: Reado
 /** Legend sentence for the stated scales at a zoom and latitude. */
 export function scaleStatement(zoom: number, latDeg: number): string {
   const e = exaggeration(zoom, latDeg);
-  const spacing = e > 1 ? `Crest spacing ×${formatFactor(e)} at this zoom` : "Crest spacing to true scale at this zoom";
+  const spacing = e > 1 ? `Crest spacing ×${formatFactor(e)} at the map centre` : "Crest spacing to true scale at the map centre";
   return `${spacing}; time runs ${TIME_SCALE}× faster than real.`;
 }
 
