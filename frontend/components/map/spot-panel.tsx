@@ -20,13 +20,15 @@ import { DARK_TOKENS, GLASS } from "./map-ui";
 /**
  * One spot at the selected time: the raw offshore model data next to our own surf
  * prediction, upcoming swell events and (signed in) the user's travel opportunities. `time`
- * is the map's selected time: shown in the spot's own zone (the map timeline uses the
- * viewer's), and carried to the full forecast as `?t=`.
+ * is the map's selected time, shown in the spot's own zone (the map timeline uses the
+ * viewer's). `linkTime`, a time the user picked on the timeline, opens the full forecast there
+ * (`?t=`); without one it opens on its own default step.
  */
 export function SpotPanel({
   spot,
   at,
   time,
+  linkTime,
   units,
   signedIn,
   onClose,
@@ -35,6 +37,7 @@ export function SpotPanel({
   spot: SpotSummary;
   at: Conditions | null;
   time?: string | null;
+  linkTime?: string | null;
   units: Units;
   signedIn: boolean;
   onClose: () => void;
@@ -148,7 +151,7 @@ export function SpotPanel({
           )}
         </div>
         <Button asChild className="w-full">
-          <Link href={time ? `/spots/${spot.slug}?t=${encodeURIComponent(timeParam(time))}` : `/spots/${spot.slug}`} data-testid="panel-full-forecast">
+          <Link href={linkTime ? `/spots/${spot.slug}?t=${encodeURIComponent(timeParam(linkTime))}` : `/spots/${spot.slug}`} data-testid="panel-full-forecast">
             Full forecast & charts <ArrowRight />
           </Link>
         </Button>

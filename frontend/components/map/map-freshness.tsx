@@ -65,7 +65,8 @@ export function MapFreshness({
 /**
  * Beside the timeline bubble: the model run and the selected step's lead time after it,
  * "GFS 18Z Oct 11 · +6 h", or "analysis" at the run's own time (still model output, not an
- * observation). Phones show the lead time only; the run is in the legend and the tooltip.
+ * observation). Phones show the lead time only (screen readers still get the run); the full
+ * source is in the tooltip and the legend.
  */
 export function ModelRunLabel({ index, at }: { index: FieldIndex | null | undefined; at: string | null }) {
   if (!index?.available || !index.source || !index.cycle_time) return null;
@@ -74,11 +75,11 @@ export function ModelRunLabel({ index, at }: { index: FieldIndex | null | undefi
   return (
     <span
       data-testid="map-lead-time"
-      title={`${index.source.name}, model run of ${cycleLabel(index.cycle_time)} UTC. Forecast values, not observations.`}
-      className="inline-flex items-center rounded-full bg-[#15191d]/90 px-2 py-0.5 text-[11px] font-medium text-white/85 tabular-nums shadow ring-1 ring-white/15"
+      title={`${index.source.name}, model run ${cycleLabel(index.cycle_time)} (Z = UTC). Forecast values, not observations.`}
+      className="pointer-events-auto inline-flex items-center rounded-full bg-[#15191d]/90 px-2 py-0.5 text-[11px] font-medium text-white/85 tabular-nums shadow ring-1 ring-white/15"
     >
       <span className="sr-only">Model run </span>
-      <span className="hidden sm:inline">
+      <span className="sr-only sm:not-sr-only">
         {run}
         {lead && " · "}
       </span>

@@ -82,6 +82,8 @@ test.describe("interactive map", () => {
     }
     await expect(panel.getByText("Upcoming swell events")).toBeVisible();
     await expect(panel.getByTestId("opps-signed-out")).toBeVisible(); // signed out: no private data
+    // At the map's current step the full forecast opens on its own default time (no ?t=).
+    await expect(panel.getByTestId("panel-full-forecast")).toHaveAttribute("href", "/spots/jeffreys-bay");
     await expect(panel.getByTestId("forecast-confidence-slot")).toBeVisible();
     // Research confidence is its own per-spot line; the demo backend has no evidence loaded
     // in e2e (reset database + seed), so it reads whatever the API says, never a default.

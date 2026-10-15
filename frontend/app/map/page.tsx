@@ -304,6 +304,7 @@ export default function MapPage() {
                 spot={selectedSpot}
                 at={bySlug.get(selectedSpot.slug)?.conditions ?? null}
                 time={at}
+                linkTime={selectedTime ? at : null}
                 units={heightUnits}
                 signedIn={!!user}
                 onClose={() => setSelected(null)}
@@ -359,6 +360,7 @@ export default function MapPage() {
               spot={selectedSpot}
               at={bySlug.get(selectedSpot.slug)?.conditions ?? null}
               time={at}
+              linkTime={selectedTime ? at : null}
               units={heightUnits}
               signedIn={!!user}
               onClose={() => setSelected(null)}
