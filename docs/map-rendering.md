@@ -375,4 +375,4 @@ the renderer measured p95 9.2 ms in this suite with the recorder on and unsettle
   fields; with all three systems on, a zoomed-in view of a busy sea reaches the vertex budget
   and leaves out an even share of the sets.
 * Without a GPU (headless Chromium here) the crest layer keeps the main thread busy with
-  software rasterisation; the glow and the trough lines are about a third of that cost each.
+  software rasterisation; the glow and the trough lines are 29 % and 26 % of that cost (section 7).
