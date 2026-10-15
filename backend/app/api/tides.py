@@ -20,6 +20,9 @@ from app.services.tides.api import spot_observations_block, spot_tide_block
 
 router = APIRouter(prefix="/api/spots", tags=["tides"])
 
+# Longest window one request may ask for (the job stores TIDE_HORIZON_DAYS <= 31 ahead).
+MAX_WINDOW = timedelta(days=31)
+
 
 def active_spot(db: Session, slug: str) -> SurfSpot:
     spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == slug, SurfSpot.is_active))
@@ -42,7 +45,11 @@ def spot_tides(
     ),
     db: Session = Depends(get_db),
 ) -> TideBlockOut:
-    """Predicted tide heights and high/low waters at the spot's tide station."""
+    """Predicted tide heights and high/low waters at the spot's tide station.
+
+    Astronomical tide predictions (never observed water levels), relative to the stated
+    datum; ``status`` says whether they are real, synthetic (demo) or unavailable.
+    """
     spot = active_spot(db, slug)
     now = utcnow()
     window_start = _as_utc(start) if start is not None else now
@@ -53,6 +60,8 @@ def spot_tides(
     )
     if window_end <= window_start:
         raise AppError("end must be after start.")
+    if window_end - window_start > MAX_WINDOW:
+        raise AppError("The window may span at most 31 days.")
     response.headers["Cache-Control"] = "public, max-age=300"
     return spot_tide_block(db, spot, window_start, window_end, now)
 
