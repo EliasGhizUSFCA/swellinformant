@@ -53,7 +53,7 @@ from app.models import (
 )
 from app.models.enums import ForecastRunStatus, MatchStatus
 from app.models.forecast_engine import MapField
-from app.services.forecasts.queries import latest_runs_by_spot
+from app.services.forecasts.queries import PREDICTIONS_PRUNED_KEY, latest_runs_by_spot
 from app.services.map_fields import servable_runs_query
 from app.services.tides.maintenance import prune_tide_predictions
 
@@ -103,9 +103,9 @@ def prune_superseded_predictions(db: Session, now: datetime | None = None) -> in
     runs = list(db.scalars(superseded))
     if not runs:
         return 0
-    stamp = (now or utcnow()).isoformat()
+    stamp = utcnow().isoformat()  # wall clock, as predictions_computed_at (queries)
     for run in runs:
-        run.details = {**(run.details or {}), "predictions_pruned_at": stamp}
+        run.details = {**(run.details or {}), PREDICTIONS_PRUNED_KEY: stamp}
     stmt = delete(SurfQualityPrediction).where(
         SurfQualityPrediction.run_id.in_([run.id for run in runs])
     )

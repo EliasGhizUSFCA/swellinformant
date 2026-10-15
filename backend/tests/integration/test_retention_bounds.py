@@ -211,6 +211,37 @@ def test_a_superseded_run_still_authoritative_for_a_spot_keeps_its_predictions(
     assert _predictions(db, old) > 0
 
 
+def test_a_pruned_run_never_covers_a_spot_until_it_is_scored_again(
+    db: Session, codes: list[str]
+) -> None:
+    """The blend covered every spot, so the older GFS run was pruned. Later the blend is no
+    longer current and the newest GFS run covers 2 spots: the other 3 fall back to the
+    ECMWF run (which has predictions), not to the pruned GFS run (which has none)."""
+    old = _ingest(db, SyntheticProvider("t_gfs", "ncep_gfs", 2.0, NOW - timedelta(hours=12)))
+    two = {"pipeline", "nazare"}
+    mid = _ingest(db, SyntheticProvider("t_gfs", "ncep_gfs", 2.1, NOW - timedelta(hours=9), two))
+    ec = _ingest(db, SyntheticProvider("t_ecmwf", "ecmwf_ifs", 2.6, NOW - timedelta(hours=9)), 1)
+    assert blend.build_blend(db, NOW).status == "success"
+    compute_pending_predictions(db, NOW)
+    assert prune_superseded_predictions(db, NOW) > 0
+    db.commit()
+    assert _predictions(db, old) == 0
+    # A newer GFS run (scored), and no new blend yet: the blend's GFS member is superseded.
+    new = _ingest(db, SyntheticProvider("t_gfs", "ncep_gfs", 2.2, NOW - timedelta(hours=6), two))
+    compute_pending_predictions(db, NOW)
+    chosen = {s: r.id for s, r in queries.latest_runs_by_spot(db, NOW).items()}
+    assert set(chosen.values()) == {new.id, ec.id} and old.id not in chosen.values()
+    assert mid.id not in chosen.values()  # its 2 spots are the newer run's
+    # Scored again (e.g. predictions_computed_at reset by an operator), it serves again.
+    old_run = db.get(ForecastRun, old.id)
+    assert old_run is not None
+    old_run.predictions_computed_at = None
+    db.commit()
+    compute_pending_predictions(db, NOW)
+    assert _predictions(db, old) > 0
+    assert old.id in {r.id for r in queries.latest_runs_by_spot(db, NOW).values()}
+
+
 def test_quality_controlled_observations_follow_their_own_retention(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

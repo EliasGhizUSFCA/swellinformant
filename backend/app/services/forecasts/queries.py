@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import DateTime, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -45,6 +45,9 @@ from app.services.forecasts.registry import (
 
 USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
 BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: cycle)
+# run.details key maintenance.prune_superseded_predictions sets when it deletes a run's
+# predictions.
+PREDICTIONS_PRUNED_KEY = "predictions_pruned_at"
 
 # Hours between the model cycles each direct ingester fetches (noaa.CYCLE_HOURS,
 # ensemble.CYCLE_HOURS; ECMWF open data runs its long 00Z/12Z cycles, ecmwf.CYCLE_HOURS).
@@ -254,7 +257,14 @@ def candidate_runs(db: Session, require_predictions: bool = True) -> list[Foreca
         .limit(200)
     )
     if require_predictions:
-        stmt = stmt.where(ForecastRun.predictions_computed_at.is_not(None))
+        # A run whose predictions maintenance pruned keeps predictions_computed_at (so it is
+        # not scored again) but has nothing to serve: it never covers a spot, unless it was
+        # scored again after the pruning.
+        pruned_at = ForecastRun.details[PREDICTIONS_PRUNED_KEY].astext.cast(DateTime(timezone=True))
+        stmt = stmt.where(
+            ForecastRun.predictions_computed_at.is_not(None),
+            or_(pruned_at.is_(None), pruned_at < ForecastRun.predictions_computed_at),
+        )
     return list(db.scalars(stmt).all())
 
 
