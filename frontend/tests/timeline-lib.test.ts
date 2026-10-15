@@ -160,6 +160,20 @@ describe("steps are drawn as wide as the time they stand for", () => {
   it("names the step length", () => {
     expect(stepLengthText(3)).toBe("3-hour step");
     expect(stepLengthText(1)).toBe("1-hour step");
+    expect(stepLengthText(0)).toBe("single forecast time");
+  });
+  it("keeps a step without a length visible and never claims one (SYNTHETIC 0 h step)", () => {
+    const tl = jbay();
+    // A lone last step of unknown length: as wide as the gap before it.
+    tl.steps[tl.steps.length - 1]!.step_hours = 0;
+    const steps = stepExtents(tl.steps);
+    const last = steps[steps.length - 1]!;
+    expect((last.x1 - last.x0) / H).toBe(3);
+    // The run's only time: drawn one hour wide (display only), so the axis is not empty.
+    const one = stepExtents([{ ...tl.steps[0]!, step_hours: 0 }]);
+    expect((one[0]!.x1 - one[0]!.x0) / H).toBe(1);
+    const model = timelineModel({ ...tl, steps: [{ ...tl.steps[0]!, step_hours: 0 }] });
+    expect(model.end - model.start).toBe(H);
   });
 });
 

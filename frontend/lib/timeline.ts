@@ -191,13 +191,17 @@ export interface StepInfo {
   step: TimelineStep;
 }
 
-/** Extents [t - gap_prev/2, t + gap_next/2) of each step (the first uses its own length). */
+/** Extents [t - gap_prev/2, t + gap_next/2) of each step (the first uses its own length).
+ * A step the API gives no length (0 h: the run's only stored time) is drawn one hour wide so
+ * it stays visible; its text says "single forecast time", never a length. */
 export function stepExtents(steps: readonly TimelineStep[]): StepInfo[] {
   const ts = steps.map((s) => Date.parse(s.t));
   return steps.map((s, i) => {
     const t = ts[i]!;
-    const next = s.step_hours * HOUR_MS;
-    const prev = i > 0 ? t - ts[i - 1]! : next;
+    const own = s.step_hours * HOUR_MS;
+    const before = i > 0 ? t - ts[i - 1]! : 0;
+    const next = own > 0 ? own : before > 0 ? before : HOUR_MS;
+    const prev = i > 0 ? before : next;
     return { i, t, x0: t - prev / 2, x1: t + next / 2, hours: s.step_hours, step: s };
   });
 }
@@ -227,8 +231,9 @@ export function nextDay(times: readonly number[], i: number, dir: 1 | -1): numbe
   return j === i ? (dir > 0 ? nextStep(times.length, i) : prevStep(i)) : j;
 }
 
-/** "3-hour step" / "1-hour step" / "6-hour step". */
+/** "3-hour step" / "1-hour step" / "6-hour step" ("single forecast time" without a length). */
 export function stepLengthText(hours: number): string {
+  if (!(hours > 0)) return "single forecast time";
   const h = Math.round(hours * 10) / 10;
   return `${Number.isInteger(h) ? h : h.toFixed(1)}-hour step`;
 }
