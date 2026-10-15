@@ -48,7 +48,7 @@ def _hilo_body() -> dict[str, object]:
     return _json("hilo14_9414131.json")  # type: ignore[return-value]
 
 
-def _synthetic_curve_body(params: httpx.QueryParams) -> dict[str, object]:
+def _synthetic_curve_body() -> dict[str, object]:
     """SYNTHETIC 30-minute curve: cosine interpolation of the real events."""
     events = coops.parse_predictions(_hilo_body(), "MLLW")
     curve = coops.cosine_curve(events, timedelta(minutes=30), datetime(2026, 10, 14, tzinfo=UTC))
@@ -83,7 +83,7 @@ def coops_transport(
             assert request.url.params["datum"] == "MLLW"
             if request.url.params["interval"] == "hilo":
                 return httpx.Response(200, json=_hilo_body())
-            return httpx.Response(200, json=_synthetic_curve_body(request.url.params))
+            return httpx.Response(200, json=_synthetic_curve_body())
         return httpx.Response(404)
 
     return httpx.Client(transport=httpx.MockTransport(handler))
