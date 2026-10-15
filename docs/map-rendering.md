@@ -61,9 +61,9 @@ Code:
   the ocean (section 4.6). The wind colour is not cut (it is defined over land).
 * The basemap rings are not closed with `closePath()`: `fill()` closes every subpath and the
   Natural Earth rings repeat their first point. One `closePath()` per ring (2,558 rings) cost
-  214 ms of a 234 ms redraw at zoom 2 (audit MAPNAV-5); without it the e2e run measured
-  **5.1 ms** for the dark basemap at zoom 2, 1440 x 900 (`data-draw-ms` on
-  `canvas.map-basemap-canvas`, guard < 30 ms).
+  214 ms of a 234 ms redraw at zoom 2 (audit MAPNAV-5); without it the e2e runs measured
+  **5.1 to 9.4 ms** for the dark basemap at zoom 2, 1440 x 900 (`data-draw-ms` on
+  `canvas.map-basemap-canvas`, guard < 30 ms; 6.2 ms in the final run).
 
 ## 3. Wind particles
 
@@ -107,6 +107,8 @@ Two renderers with the same fade curve, `alpha(age) = HEAD_ALPHA x FADE^(age / F
   follows the particle), clears the canvas every frame and strokes each trail with the same
   fade, quantised into age buckets ending at 60, 140, 250, 390 and `TRAIL_MS = 560` ms (alpha
   0.05 at 560 ms). A still particle leaves no ink, so nothing remains once the particles stop.
+  A particle that respawns leaves its old trail behind in a second slot, where it fades out
+  with its age as it would on the dimming renderer, instead of vanishing at once.
 
 The particle canvas reports `data-color-type` and `data-trails` ("fade" or "explicit"). E2E:
 the alpha histogram after 5 s has no spike at 6 with either renderer (Chromium, plus Chromium
@@ -124,10 +126,10 @@ grid, 7 to 18 px long (8 px per px-per-frame of flow), pointing downwind, drawn 
 
 | System | Variables | Style (dash, colour) | Crests per set | Crest half-length | Set cell |
 |---|---|---|---|---|---|
-| Primary swell | `swell1_hs/_tp/_dir` | solid, `#f4f7fb`, glow + trough | 6 | 1.8 spacings | 6 spacings |
-| Secondary swell | `swell2_*` | dashed `[7, 5]`, `#ffc46b` | 5 | 1.5 | 5.5 |
-| Wind sea | `windsea_*` | dotted `[2, 4]` round caps, `#7fe3ff` | 4 | 1.4 | 4.5 |
-| Combined sea (peak) | `hs`, `tp`, `wave_dir` | solid, white, glow + trough | 6 | 1.8 | 6 |
+| Primary swell | `swell1_hs/_tp/_dir` | solid, `#f4f7fb`, glow + trough | 6 | 2 spacings | 5 spacings |
+| Secondary swell | `swell2_*` | dashed `[7, 5]`, `#ffc46b` | 5 | 1.7 | 4.75 |
+| Wind sea | `windsea_*` | dotted `[2, 4]` round caps, `#7fe3ff` | 4 | 1.5 | 3.75 |
+| Combined sea (peak) | `hs`, `tp`, `wave_dir` | solid, white, glow + trough | 6 | 2 | 5 |
 
 Systems are told apart by dash pattern **and** colour (never colour alone), and the legend
 shows a swatch of each one drawn. Partitions exist only when the model run stores them (the
@@ -179,10 +181,12 @@ scale by
 | 10 | 18.3 | 13.0 |
 
 E is at least 1: zoomed in so far that `S x metres per pixel < 1`, the true wavelength
-`L / (metres per pixel)` is drawn (8 to 256 px). The legend states E for the zoom and the
-latitude of the view centre, for example "Crest spacing ×4,700 at this zoom; time runs 4×
-faster than real." (`scaleStatement`; E is rounded to the nearest 100 from 1,000, to a whole
-number from 10, else to one decimal).
+`L / (metres per pixel)` is drawn (8 to 256 px). Because the Mercator scale changes with
+latitude, E does too (half the equator's value at 60°), so the legend states E for the zoom
+and the latitude of the view centre, for example "Crest spacing ×4,700 at the map centre;
+time runs 4× faster than real." (`scaleStatement`; E is rounded to the nearest 100 from
+1,000, to a whole number from 10, else to one decimal). Where the spacing is clamped (periods
+under 6.5 s or over 18.5 s) the drawn spacing is 8 or 64 px and E does not apply exactly.
 
 ### 4.4 Motion and its time scale
 
@@ -209,17 +213,26 @@ and 120 Hz (unit test).
   invalid without data (NaN height, period or direction), with `Hs < MIN_DRAW_HS_M = 0.2 m`,
   where the direction corners disagree (section 4.1) or over land (4.6). Sampling between
   nodes is bilinear and needs all four nodes valid.
-* **Sets** sit one per cell of a jittered grid in world pixels (cell = 6 / 5.5 / 4.5 crest
+* **Sets** sit one per cell of a jittered grid in world pixels (cell = 5 / 4.75 / 3.75 crest
   spacings of the view's median spacing, 40 to 320 px, quantised to quarter octaves so a small
-  change of period between steps keeps the same sets). Anchored in world pixels, they stay in
-  place geographically when the map pans (unit test: a 100 px pan gives identical crests) and
-  when the timeline steps.
+  change of period between steps keeps the same sets). A set is placed at the first of up to
+  `ANCHOR_TRIES = 6` jittered places in its cell where its system has data, so a cell that is
+  partly land, sea ice or a partition swap still gets one; the choice depends on the data only
+  (a place outside the view's lattice ends the search). Anchored in world pixels, the sets stay
+  in place geographically when the map pans (unit test: a 100 px pan gives identical crests)
+  and when the timeline steps. (Drawing the real NOAA GFS-Wave fields of the 2026-10-15 00Z
+  run with this renderer, primary and secondary swell, zoom 2: one place per cell with
+  6-spacing cells gave 23 sets on a 1440 x 807 world view and 5 on a 412 x 730 phone view,
+  where most of the ocean showed no crests; these values give 79 and 23.)
 * **Crest positions**: the crests of a set lie on the lattice `p . W = n s + v t` (W in world
   px, p the travel vector), the same lines for every set of a uniform sea, so neighbouring sets
-  agree. The envelope is flat over its middle half (`ENVELOPE_FLAT = 0.5`) with a cosine
-  taper outside, `crests x s` long; it travels the cell once per cycle at `v / 2` and fades in
-  and out over the first and last `CYCLE_FADE = 15 %` of the cycle. Crests under weight 0.04
-  are not drawn.
+  agree. W is measured in the view's continuous pixel plane, not wrapped to one world copy, so
+  the lattice has no seam where two copies meet at the antimeridian (a 1440 px view at zoom 2
+  shows 1.4 worlds; wrapped, the crests east of 180° sat `1024 mod s` px off, 17 px at 16 s).
+  The envelope is flat over its middle half (`ENVELOPE_FLAT = 0.5`) with a cosine taper
+  outside, `crests x s` long; it travels the cell once per cycle at `v / 2` and fades in and
+  out over the first and last `CYCLE_FADE = 15 %` of the cycle. Crests under weight 0.04 are
+  not drawn.
 * **Tracing**: each crest is traced from its centre along the local crest-tangent field
   (perpendicular to the travel vector) in `TRACE_STEP_PX = 8` px midpoint steps, so it curves
   where the field turns and is straight where it is uniform. It stops at an invalid lattice
@@ -229,7 +242,7 @@ and 120 Hz (unit test).
   toward the crest ends (full over the inner half of each half-crest, 0.6 to 78 %, 0.28 to the
   tip), so crests have no hard tips. Solid systems add a soft glow (3.2 x the width, 0.22 x the
   opacity, over the inner half of each half-crest) and a faint dark trough line (`#000814`,
-  1.6 x the width, 0.24 x the opacity, 80 % of the crest length) half a spacing behind each
+  1.6 x the width, 0.14 x the opacity, 80 % of the crest length) half a spacing behind each
   crest, so the bands read as crests and troughs. Dashed and dotted systems get a dark halo
   under their dashes (1.6 px wider, 0.55 x the opacity, same dash pattern), so they stay
   visible on bright colours. Strokes are batched by system, kind (crest, glow, trough,
@@ -283,8 +296,11 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
 `canvas.map-wave-canvas`: `data-mode` (animated, static, off), `data-families` (systems
 drawn, in drawing order), `data-crests`, `data-vertices`, `data-strokes`, `data-drawn`,
 `data-arrows` (still mode), `data-exaggeration` (E rounded), `data-view` (origin, size, world
-px), `data-ocean-mask`, `data-draw-ms`, `data-draw-ms-p95` (last 120 frames) and
-`data-lattice-ms`.
+px), `data-ocean-mask`, `data-draw-ms`, `data-draw-ms-p95` (last 120 frames), `data-frames`
+(frames drawn) and `data-lattice-ms`. The first frames after the layer opens (or after a pan,
+zoom or new fields) trace every crest afresh and cost several times a settled frame, so the e2e
+frame-cost test (`e2e/map-performance.spec.ts`, run without the Playwright trace recorder)
+reads the p95 once more than 160 frames are drawn.
 `canvas.map-particle-canvas`: `data-mode`, `data-color-type`, `data-trails`, `data-arrows`.
 
 ## 5. Field client and freshness
@@ -302,8 +318,8 @@ px), `data-ocean-mask`, `data-draw-ms`, `data-draw-ms-p95` (last 120 frames) and
 * Partitions are optional: one that fails to load is simply not drawn; the core variables of
   the layer are required.
 * The legend shows the source, model cycle (UTC), the valid time of the fields on screen in
-  the viewer's time zone with its abbreviation, the lead ("+30 h", or "analysis"), and
-  "(forecast, not observed)".
+  the viewer's time zone with its abbreviation, and the lead: "+30 h ... (forecast, not
+  observed)", or at the cycle time itself "model analysis (not observed)".
 
 ## 6. Units
 
@@ -314,27 +330,36 @@ follow the account's ft/m preference. The legend title states the unit of the co
 
 ## 7. Measured (e2e, synthetic fields, headless Chromium, 1440 x 900, shared 4-CPU machine)
 
-Final full e2e run (chromium and Pixel 7 projects, 82 tests passed):
+Final full e2e run after the review (2026-10-15, chromium and Pixel 7 projects, 82 tests
+passed; the machine is shared with other test runs, so times vary from run to run):
 
 | Check | Result |
 |---|---|
-| Crest orientation, uniform swell from 225° at 12 s (structure tensor) | 45.0°, coherence 0.97 (0.96 on the Pixel 7 project) |
-| Crest motion along the travel direction | 5.0 px in 0.55 s (expected about 4.9) |
+| Crest orientation, uniform swell from 225° at 12 s (structure tensor) | 45.0°, coherence 0.98 (0.97 on the Pixel 7 project) |
+| Crest motion along the travel direction | 5.0 px in 0.61 s (expected about 5.5) |
 | Crest spacing 8 s / 16 s | 12 px / 48 px (ratio 4.00) |
-| Ink, Hs 1 m / 4 m | 6,872 / 24,660 |
-| Orientation peaks, swell1 from 270° + swell2 from 180° | 92.5° and 177.5° (one peak, 87.5°, without swell2) |
-| Crest frame draw time, p95 (combined sea, whole world) | 6.0 ms, 6,726 vertices |
-| Basemap redraw at zoom 2 | 7.8 ms |
-| Colour-field redraw at 1440 x 900 (median of 6 pans) | 11.2 ms |
-| Particle canvas after 5 s: alpha 5 / 6 / 7 counts, fade renderer (float16) | 12,107 / 9,493 / 7,872 (no spike at 6) |
-| Same, explicit renderer (8-bit canvas) | 2,402 / 3,706 / 2,655 (no spike at 6; antialiased trail edges, gone once the particles stop) |
+| Ink, Hs 1 m / 4 m | 10,117 / 35,411 |
+| Orientation peaks, swell1 from 270° + swell2 from 180° | 92.5° and 2.5° (one peak, 92.5°, without swell2) |
+| Crest frame draw time, p95 once settled (combined sea, whole world, no trace recorder) | 3.8 ms, 9,531 vertices |
+| Basemap redraw at zoom 2 | 6.2 ms |
+| Colour-field redraw at 1440 x 900 (median of 6 pans) | 16.8 ms (12.7 to 25.5) |
+| Particle canvas after 5 s: alpha 5 / 6 / 7 counts, fade renderer (float16) | 11,290 / 8,922 / 8,647 (no spike at 6) |
+| Same, explicit renderer (8-bit canvas) | 4,071 / 6,423 / 4,012 (1.6 x its neighbours, limit 3: antialiased trail edges, gone once the particles stop) |
 | Field cache after 48 downloads | array buffers 23.5 -> 56.7 MB (cache at most 49.9 MB decoded) |
 
-Main-thread cost per animation frame in that run: crests 2.5 ms script (22.5 ms task), wind
-particles 1.4 ms script (23.3 ms task), idle map 0.07 ms script (0.3 ms task). "Task"
+Main-thread cost per animation frame in that run: crests 2.7 ms script (33.6 ms task), wind
+particles 1.7 ms script (28.4 ms task), idle map 0.07 ms script (0.3 ms task). "Task"
 includes the software rasterisation of headless Chromium, which a GPU-backed canvas does off
-the main thread; no browser with a GPU was available here. On a quieter moment (load about 6,
-dev server) a crest frame took 1.4 to 1.7 ms to draw (p95 2.6 to 5.4 ms).
+the main thread; no browser with a GPU was available here. In the dev build on a quieter
+moment, the crest layer took 99 % of the main thread in software raster (988 ms of task time
+per second, 77 ms of it script); without the glow it was 701 ms, without the troughs 728 ms.
+
+Crest frame draw time: the first frames after the layer opens trace every crest afresh, so the
+120-frame p95 read 17.9 ms one second after opening and about 4 ms from five seconds on
+(production build). In the dev build (same view and fields) a settled frame took 2.7 ms
+(p50), p95 4.5 ms without the Playwright trace recorder and 6.7 ms with it. Before the review
+the renderer measured p95 9.2 ms in this suite with the recorder on and unsettled, with
+7,000 vertices.
 
 ## 8. Limitations
 
@@ -344,3 +369,10 @@ dev server) a crest frame took 1.4 to 1.7 ms to draw (p95 2.6 to 5.4 ms).
 * Wind-sea crests often sit at the 8 px minimum spacing (periods under 6.5 s).
 * Firefox and WebKit were not run here (their browsers are not installed in this sandbox):
   the 8-bit renderer is verified in unit tests and in Chromium forced to an 8-bit canvas.
+* Where the swell turns fast (around storms, at partition swaps) crests stop or are left out
+  rather than drawn through a direction no wave has, so such areas can show few crests.
+* The set density was tuned by eye on one real run (GFS-Wave 2026-10-15 00Z) and synthetic
+  fields; with all three systems on, a zoomed-in view of a busy sea reaches the vertex budget
+  and leaves out an even share of the sets.
+* Without a GPU (headless Chromium here) the crest layer keeps the main thread busy with
+  software rasterisation; the glow and the trough lines are about a third of that cost each.
