@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { HEADER_H, rowOffsets, type RowProps } from "@/components/forecast/timeline-header";
 import { tideScale } from "@/components/forecast/tide-row";
@@ -29,8 +29,28 @@ export function CursorLayer({ model, scale, width, units }: RowProps & { units: 
   const s = model.steps[sel];
   const h = hov !== sel ? model.steps[hov] : undefined;
   const total = offsets.total;
+  const ref = useRef<SVGSVGElement>(null);
+  // Hide the header's hour labels that the time pills would partly cover (a "12" peeking out
+  // beside "2:00 PM"), without re-rendering the header: same x origin, attribute only.
+  useLayoutEffect(() => {
+    const svg = ref.current;
+    const root = svg?.parentElement;
+    if (!svg || !root) return;
+    const pills = [...svg.querySelectorAll("[data-selected-pill] rect, [data-now-label] rect")].map((r) => {
+      const x = Number(r.getAttribute("x"));
+      return [x, x + Number(r.getAttribute("width"))] as const;
+    });
+    for (const label of root.querySelectorAll<SVGTextElement>("[data-tick-label]")) {
+      const x = Number(label.getAttribute("x"));
+      const half = (label.textContent ?? "").length * 3 + 3; // about half the 10px label
+      const covered = pills.some(([a, b]) => x + half > a - 2 && x - half < b + 2);
+      if (covered) label.setAttribute("data-covered", "");
+      else label.removeAttribute("data-covered");
+    }
+  });
   return (
     <svg
+      ref={ref}
       className="pointer-events-none absolute top-0 z-10 block"
       style={{ left: "var(--tl-gutter)" }}
       width={width}

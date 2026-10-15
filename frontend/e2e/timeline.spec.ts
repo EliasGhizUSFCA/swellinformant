@@ -175,6 +175,21 @@ test.describe("spot forecast timeline", () => {
     const m = (await marker.boundingBox())!;
     const cursor = (await page.locator('[data-cursor="selected"] line').boundingBox())!;
     expect(Math.abs(m.x + m.width / 2 - (cursor.x + cursor.width / 2))).toBeLessThanOrEqual(1);
+    // ...and sits on the drawn curve (the overlay's row offsets match the rows as laid out).
+    const curveY = await page.locator("[data-tide-curve]").evaluate((path: SVGPathElement, x) => {
+      const svg = path.ownerSVGElement!.getBoundingClientRect();
+      let best = { dx: Infinity, y: 0 };
+      for (let l = 0; l <= path.getTotalLength(); l += 0.5) {
+        const pt = path.getPointAtLength(l);
+        const dx = Math.abs(svg.left + pt.x - x);
+        if (dx < best.dx) best = { dx, y: svg.top + pt.y };
+      }
+      return best.y;
+    }, m.x + m.width / 2);
+    expect(Math.abs(m.y + m.height / 2 - curveY)).toBeLessThanOrEqual(1.5);
+    // Nothing is clipped at the bottom of the frame (the last row fits the content height).
+    const fit = await scroller(page).evaluate((el) => el.scrollHeight - el.clientHeight);
+    expect(fit).toBeLessThanOrEqual(0);
     await expect(page.getByTestId("summary-tide")).toContainText(/(rising|falling)/);
   });
 

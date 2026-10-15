@@ -185,6 +185,10 @@
 .tl-root [data-selected] {
   opacity: 1;
 }
+/* Hour labels under the selected-time and "Now" pills (set by the cursor layer). */
+.tl-root [data-tick-label][data-covered] {
+  visibility: hidden;
+}
 .tl-fav-favourable {
   background: var(--wind-favourable);
 }

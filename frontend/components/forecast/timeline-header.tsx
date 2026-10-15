@@ -32,13 +32,17 @@ export const TIDE_H = 84;
 
 export const swellHeight = (lanes: number) => Math.max(1, lanes) * SWELL_LANE_H + 8;
 
-/** Top of each row (px from the top of the header) for a timeline with `lanes` swell lanes. */
+/** The separator above every row below the header (TimelineRow's top border). */
+export const ROW_BORDER = 1;
+
+/** Top of each row's plot (px from the top of the header, below the row's 1 px top border)
+ * for a timeline with `lanes` swell lanes, and the total height of all rows. */
 export function rowOffsets(lanes: number) {
-  const quality = HEADER_H;
-  const waves = quality + QUALITY_H;
-  const swell = waves + WAVE_H;
-  const wind = swell + swellHeight(lanes);
-  const tide = wind + WIND_H;
+  const quality = HEADER_H + ROW_BORDER;
+  const waves = quality + QUALITY_H + ROW_BORDER;
+  const swell = waves + WAVE_H + ROW_BORDER;
+  const wind = swell + swellHeight(lanes) + ROW_BORDER;
+  const tide = wind + WIND_H + ROW_BORDER;
   return { header: 0, quality, waves, swell, wind, tide, total: tide + TIDE_H };
 }
 
@@ -60,6 +64,7 @@ export function TimelineRow({
   /** Accessible name of the row (read in the data table's place by screen readers). */
   label: string;
 }) {
+  // The top border is ROW_BORDER px, counted in rowOffsets (the header, first, has none).
   return (
     <div className={cn("flex border-t border-[var(--chart-grid)] first:border-t-0", className)} data-testid={testId} data-row>
       <div
@@ -125,7 +130,7 @@ export const TimelineHeader = memo(function TimelineHeader({ model, scale, width
             <g key={tick.t} data-tick={tick.label} data-t={tick.t}>
               <line x1={x} x2={x} y1={HEADER_H - 7} y2={HEADER_H} stroke="var(--chart-tick)" />
               {x > 16 && x < width - 16 && (
-                <text x={x} y={HEADER_H - 11} textAnchor="middle" className="fill-muted-foreground text-[10px] tabular-nums">
+                <text x={x} y={HEADER_H - 11} textAnchor="middle" className="fill-muted-foreground text-[10px] tabular-nums" data-tick-label="">
                   {tick.label}
                 </text>
               )}

@@ -60,7 +60,8 @@ export const SwellPartitions = memo(function SwellPartitions({ model, scale, wid
         </div>
       }
     >
-      <svg width={width} height={height} className="block" aria-hidden="true">
+      {/* swell-chart: the test id of the chart this row replaced. */}
+      <svg width={width} height={height} className="block" aria-hidden="true" data-testid="swell-chart">
         <RowBackground model={model} scale={scale} height={height} />
         {kinds.slice(1).map((k, i) => (
           <line key={k} x1={0} x2={width} y1={4 + (i + 1) * SWELL_LANE_H} y2={4 + (i + 1) * SWELL_LANE_H} stroke="var(--chart-grid)" strokeDasharray="1 3" />

@@ -64,6 +64,10 @@ describe("1. every row loads", () => {
     expect(screen.getByTestId("tide-row")).toHaveTextContent("Tide data unavailable");
     expect(screen.getByTestId("quality-chart")).toBeInTheDocument();
     expect(screen.getByTestId("quality-chart-legend")).toHaveTextContent("likely range");
+    // The test ids of the charts and the hour slider the timeline replaced are kept.
+    expect(within(screen.getByTestId("swell-partitions")).getByTestId("swell-chart")).toBeInTheDocument();
+    expect(within(screen.getByTestId("wind-row")).getByTestId("wind-chart")).toBeInTheDocument();
+    expect(within(scroller()).getByTestId("hour-slider")).toBeInTheDocument();
   });
 });
 
@@ -78,6 +82,23 @@ describe("2. hour labels", () => {
     expect(new Set(drawn.map((g) => g.getAttribute("data-tick")))).toEqual(new Set(["6 AM", "12 PM", "6 PM"]));
     // 6 AM SAST is 04:00 UTC.
     expect(drawn.find((g) => g.getAttribute("data-tick") === "6 AM")!.getAttribute("data-t")).toBe(String(Date.parse("2026-10-12T04:00:00Z")));
+  });
+
+  it("hides the hour labels the selected-time pill would partly cover, and only those", () => {
+    const tl = jbay();
+    const { store } = renderTimeline(tl, { select: 5 });
+    const covered = () => [...document.querySelectorAll("[data-tick-label][data-covered]")].map((e) => e.closest("[data-tick]")!.getAttribute("data-t"));
+    const pill = document.querySelector("[data-selected-pill] rect")!;
+    const [a, b] = [Number(pill.getAttribute("x")), Number(pill.getAttribute("x")) + Number(pill.getAttribute("width"))];
+    const labels = [...document.querySelectorAll<SVGTextElement>("[data-tick-label]")];
+    const under = labels.filter((l) => Math.abs(Number(l.getAttribute("x")) - (a + b) / 2) < (b - a) / 2 + 8);
+    expect(under.length).toBeGreaterThan(0);
+    expect(covered()).toEqual(expect.arrayContaining(under.map((l) => l.closest("[data-tick]")!.getAttribute("data-t"))));
+    const far = labels.filter((l) => Math.abs(Number(l.getAttribute("x")) - (a + b) / 2) > (b - a) / 2 + 40);
+    expect(far.every((l) => !l.hasAttribute("data-covered"))).toBe(true);
+    // Another selection uncovers them again.
+    act(() => store.select(Date.parse(tl.steps[18]!.t)));
+    expect(under.every((l) => !l.hasAttribute("data-covered"))).toBe(true);
   });
 });
 

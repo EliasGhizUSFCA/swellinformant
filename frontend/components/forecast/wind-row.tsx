@@ -78,7 +78,8 @@ export const WindRow = memo(function WindRow({ model, scale, width, unit }: RowP
         </div>
       }
     >
-      <svg width={width} height={WIND_H} className="block" aria-hidden="true">
+      {/* wind-chart: the test id of the chart this row replaced. */}
+      <svg width={width} height={WIND_H} className="block" aria-hidden="true" data-testid="wind-chart">
         <defs>
           <pattern id={`${uid}-sparse`} width={5} height={5} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <line x1={0} y1={0} x2={0} y2={5} stroke="var(--card)" strokeWidth={1.4} strokeOpacity={0.75} />

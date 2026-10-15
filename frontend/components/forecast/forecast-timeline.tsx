@@ -300,10 +300,12 @@ export function SpotForecastTimeline({
 
       <div className="relative" data-testid="timeline-frame">
         <TimelineSlider model={model} units={units} scrollerRef={scrollerRef} onKeyDown={onKeyDown} onLeave={() => hover(null)}>
+          {/* hour-slider: the test id of the hour slider this pointer surface replaced. */}
           <div
             ref={contentRef}
             className="relative cursor-crosshair select-none"
             style={{ width: gutter + width, height: offsets.total }}
+            data-testid="hour-slider"
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
