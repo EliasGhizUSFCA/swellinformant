@@ -13,14 +13,17 @@ import { arrowRotationDeg } from "@/lib/directions";
 import { asQuality, QUALITY_COLORS, QUALITY_LABELS, QUALITY_RANK, WIND_RELATION_LABEL } from "@/lib/quality";
 import { score10 } from "@/lib/rating";
 import {
+  clockTime,
   directionText,
   drivingPartition,
+  localDate,
   nearestStepIndex,
   nextStep,
   PARTITION_LABEL,
   partitionText,
   prevStep,
   selectedTimeTitle,
+  shortTime,
   stepLengthText,
   tideHeightText,
   type TimelineModel,
@@ -144,6 +147,8 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
   const tide = timeline.tide;
   const n = model.steps.length;
   const go = (j: number) => select(model.times[j] ?? null);
+  // The next high or low water after the selected time (the tide block's own event).
+  const nextTide = model.tide?.events.find((e) => e.t > info.t);
   return (
     <section className="rounded-2xl border bg-gradient-to-br from-secondary/60 via-card to-card p-3.5 sm:p-5" data-testid="selected-summary">
       <div className="flex items-start justify-between gap-3">
@@ -249,6 +254,12 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
                   above {datumText(tide.datum)}
                   {tide.status === "demo" ? " · demo tide (synthetic)" : ""}
                 </span>
+                {nextTide && (
+                  <span className="block text-xs text-muted-foreground tabular-nums" data-testid="summary-next-tide">
+                    Next {nextTide.kind} {tideHeightText(nextTide.h, units)} at{" "}
+                    {localDate(nextTide.t, model.tz) === localDate(info.t, model.tz) ? clockTime(nextTide.t, model.tz) : shortTime(nextTide.t, model.tz)}
+                  </span>
+                )}
               </>
             ) : (
               <span className="text-muted-foreground">{tide.status === "unavailable" ? TIDE_UNAVAILABLE : "No tide value at this step"}</span>

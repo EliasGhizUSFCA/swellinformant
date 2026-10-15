@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { SelectedTimeSummary } from "@/components/forecast/selected-summary";
 import { SelectionStore, TimelineSelectionProvider } from "@/components/forecast/timeline-selection";
 import { QUALITY_LABELS } from "@/lib/quality";
-import { partitionText, selectedTimeTitle, timelineModel } from "@/lib/timeline";
+import { clockTime, localDate, partitionText, selectedTimeTitle, shortTime, tideHeightText, timelineModel } from "@/lib/timeline";
 import { formatHeightRange, formatWind } from "@/lib/units";
 import type { SpotTimeline } from "@/types/api";
 
@@ -65,7 +65,13 @@ describe("selected-time summary", () => {
     expect(screen.getByTestId("summary-wind")).toHaveTextContent(formatWind(tl.steps[6]!.wind!.speed_kmh, "mph"));
     const b = tl.steps[6]!.breaking;
     expect(screen.getByTestId("summary-breaking")).toHaveTextContent(`${formatHeightRange(b.typical_ft, b.sets_ft, "m")}typical–sets`);
-    expect(screen.getByTestId("summary-tide")).toHaveTextContent(/^Tide-?\d\.\d m · (rising|falling)above model mean sea level · demo tide \(synthetic\)$/);
+    expect(screen.getByTestId("summary-tide")).toHaveTextContent(/^Tide-?\d\.\d m · (rising|falling)above model mean sea level · demo tide \(synthetic\)Next (high|low) -?\d\.\d m at .+$/);
+    // The next high or low water after the selected step, from the block's events.
+    const next = tl.tide.events.find((e) => Date.parse(e.t) > Date.parse(tl.steps[6]!.t))!;
+    // (with the weekday when it falls on the next local day)
+    const when = localDate(Date.parse(next.t), tl.timezone) === localDate(Date.parse(tl.steps[6]!.t), tl.timezone) ? clockTime(Date.parse(next.t), tl.timezone) : shortTime(Date.parse(next.t), tl.timezone);
+    expect(screen.getByTestId("summary-next-tide")).toHaveTextContent(`Next ${next.kind} ${tideHeightText(next.height_m, "m")} at ${when}`);
+    expect(screen.getByTestId("summary-tide")).toHaveTextContent(next.kind === "high" ? "rising" : "falling");
     fireEvent.click(screen.getByRole("button", { name: "Previous forecast step" }));
     expect(screen.getByTestId("summary-time")).toHaveTextContent(selectedTimeTitle(Date.parse(tl.steps[5]!.t), tl.timezone));
     fireEvent.click(screen.getByRole("button", { name: "Next forecast step" }));
