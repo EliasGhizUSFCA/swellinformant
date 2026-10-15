@@ -176,13 +176,16 @@ def validate_catalog(
     return problems
 
 
-def _model_points(constants_path: str | Path | None) -> tuple[dict[str, Any], dict[str, Any]]:
+def _model_points(
+    constants_path: str | Path | None,
+) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    """(file metadata, slug -> cell position, why the file is unusable or None)."""
     try:
         meta, constants = load_model(constants_path)
     except ConstantsError as exc:
         logger.warning("Tide constants unavailable: %s", exc)
-        return {}, {}
-    return meta, {slug: (c.latitude, c.longitude) for slug, c in constants.items()}
+        return {}, {}, f"tide model constants unavailable: {exc}"[:300]
+    return meta, {slug: (c.latitude, c.longitude) for slug, c in constants.items()}, None
 
 
 def seed_tide_catalog(
@@ -191,19 +194,39 @@ def seed_tide_catalog(
     """Upsert ``tide_stations`` and replace ``spot_tide_stations`` from the catalog.
 
     Idempotent; keys the acquisition job wrote into a station's metadata survive. Spots
-    that are not in the database (not seeded yet) are skipped. The caller commits.
+    that are not in the database (not seeded yet) are skipped. A spot entry that fails
+    validation gets no links (``rejected_spots`` in the result says why); an unusable
+    constants file links no model point (``model_constants_error``). The caller commits.
     """
     catalog = load_catalog(path)
     spot_rows = db.execute(
         select(SurfSpot.id, SurfSpot.slug, SurfSpot.name, SurfSpot.latitude, SurfSpot.longitude)
     ).all()
     spots = {row.slug: (row.latitude, row.longitude) for row in spot_rows}
-    meta, points = _model_points(constants_path)
-    # Spots missing from the database (or from the catalog) are skipped, not errors: the
-    # spot seed and the tide catalog can be deployed in either order.
-    problems = validate_catalog(catalog, spots, points if meta else None, complete=False)
+    meta, points, constants_error = _model_points(constants_path)
+    # A broken station list is an error. A spot entry that does not match the database (a
+    # moved spot, a wrong distance) costs only that spot its tide links, so one bad entry
+    # never stops the other spots' tides. Spots missing from the database (or from the
+    # catalog) are skipped, not errors: the spot seed and the tide catalog can be deployed
+    # in either order.
+    problems = validate_catalog({**catalog, "spots": {}}, complete=False)
+    if not isinstance(catalog.get("spots"), dict):
+        problems.append("catalog has no 'spots' object")
     if problems:
         raise CatalogError("; ".join(problems))
+    rejected: dict[str, str] = {}
+    for slug, entry in catalog["spots"].items():
+        if slug not in spots:
+            continue
+        entry_problems = validate_catalog(
+            {"stations": catalog["stations"], "spots": {slug: entry}},
+            spots,
+            points if meta else None,
+            complete=False,
+        )
+        if entry_problems:
+            rejected[slug] = "; ".join(entry_problems)[:500]
+            logger.warning("Tide catalog entry %s not used: %s", slug, rejected[slug])
     existing = {(s.provider, s.code): s for s in db.scalars(select(TideStation)).all()}
     created = updated = 0
 
@@ -250,7 +273,7 @@ def seed_tide_catalog(
     for row in spot_rows:
         entry = catalog["spots"].get(row.slug)
         db.execute(delete(SpotTideStation).where(SpotTideStation.spot_id == row.id))
-        if entry is None or "unavailable" in entry:
+        if entry is None or "unavailable" in entry or row.slug in rejected:
             continue
         for link in entry["stations"]:
             if link["provider"] == "harmonic_model":
@@ -293,7 +316,16 @@ def seed_tide_catalog(
     logger.info(
         "Seeded %d tide stations (%d new), %d spot links", created + updated, created, links
     )
-    return {"tide_stations": created + updated, "created": created, "spot_links": links}
+    out: dict[str, Any] = {
+        "tide_stations": created + updated,
+        "created": created,
+        "spot_links": links,
+    }
+    if rejected:
+        out["rejected_spots"] = rejected
+    if constants_error:
+        out["model_constants_error"] = constants_error
+    return out
 
 
 def spot_links(db: Session, spot_id: int) -> list[tuple[SpotTideStation, TideStation]]:

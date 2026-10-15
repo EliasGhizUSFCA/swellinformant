@@ -36,6 +36,7 @@ from tests.conftest import ApiClient
 pytestmark = pytest.mark.integration
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "coops"
+REPO = Path(__file__).resolve().parents[3]
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 ACTIVE = ["mavericks", "ocean-beach-sf", "pipeline", "nazare", "cloudbreak"]
 
@@ -124,8 +125,10 @@ def test_tides_are_unavailable_rather_than_invented(app_client: ApiClient, db: S
     assert block.reason == "No tide source configured for this spot."
     assert block.curve == [] and block.events == [] and block.station is None
     assert block.datum is None and block.source is None and block.units == "m"
-    # The preference still follows the research rule (see the preference test below).
+    # The preference still follows the research rule (see the preference test below); for
+    # Mavericks (tide research low, decision disputed) it is never established.
     assert block.preference == tide_api.tide_preference(db, _spot(db, "mavericks"))
+    assert block.preference.text == TIDE_PREFERENCE_NOT_ESTABLISHED
 
     window = app_client.get(
         "/api/spots/mavericks/tides",
@@ -288,6 +291,75 @@ def test_a_failed_coops_station_falls_back_to_the_model_without_mixing(
     problems = tide_freshness(db, NOW)
     assert [p["key"] for p in problems] == ["tides_stale:noaa_coops"]
     assert problems[0]["severity"] == "degraded" and "1612668" in problems[0]["detail"]
+
+
+def test_a_moved_high_or_low_water_replaces_the_stored_one(
+    db: Session, tide_spots: list[str]
+) -> None:
+    """A re-run whose answer moved an event by a minute stores the new time and deletes
+    the old row, so the station never shows two versions of one high or low water."""
+    acquire_tides(db, NOW, client=coops_transport([]), backoff_seconds=0)
+    rows = json.loads((FIXTURES / "hilo14_9414131.json").read_text())["predictions"]
+    old_t = datetime.strptime(rows[5]["t"], "%Y-%m-%d %H:%M").replace(tzinfo=UTC)
+    new_t = old_t + timedelta(minutes=1)
+    rows[5]["t"] = new_t.strftime("%Y-%m-%d %H:%M")
+
+    def moved(request: httpx.Request) -> httpx.Response | None:
+        if request.url.params.get("interval") == "hilo":
+            return httpx.Response(200, json={"predictions": rows})
+        return None
+
+    out = acquire_tides(db, NOW, client=coops_transport([], moved), backoff_seconds=0)
+    entry = out["providers"]["noaa_coops"]["stations"]["9414131"]
+    assert (entry["inserted"], entry["removed"]) == (1, 1), entry
+    station = db.scalar(select(TideStation).where(TideStation.code == "9414131"))
+    assert station is not None
+    events = db.scalars(
+        select(TidePrediction.valid_time).where(
+            TidePrediction.station_id == station.id, TidePrediction.is_event
+        )
+    ).all()
+    assert new_t in events and old_t not in events
+    assert len(events) == len(set(events)) == len(rows)
+
+
+def test_a_wrong_catalog_entry_costs_only_that_spot(
+    app_client: ApiClient, db: Session, tmp_path: Path
+) -> None:
+    catalog = json.loads((REPO / "data" / "tide_stations.json").read_text())
+    catalog["spots"]["rincon"]["stations"][0]["distance_km"] = 40.0  # wrong position
+    path = tmp_path / "tide_stations.json"
+    path.write_text(json.dumps(catalog))
+    out = seed_tide_catalog(db, path)
+    db.commit()
+    assert set(out["rejected_spots"]) == {"rincon"}
+    assert "distance is 4.3 km, not 40.0" in out["rejected_spots"]["rincon"]
+    assert out["spot_links"] == 56  # 58 less Rincon's two
+    rincon = _spot(db, "rincon")
+    linked = db.scalar(
+        select(func.count())
+        .select_from(SpotTideStation)
+        .where(SpotTideStation.spot_id == rincon.id)
+    )
+    assert linked == 0
+    block = _block(app_client, "rincon", "2026-10-15T00:00:00Z", "2026-10-16T00:00:00Z")
+    assert block.status == "unavailable" and block.station is None and block.curve == []
+
+
+def test_a_missing_constants_file_is_reported(
+    db: Session, tide_spots: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the constants file no model point is linked: the job and the health check
+    say so instead of the model spots' tides vanishing quietly."""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "tide_constants_path", str(tmp_path / "none.json"))
+    out = acquire_tides(db, NOW, client=coops_transport([]), backoff_seconds=0)
+    assert out["status"] == "partial"
+    assert out["catalog"]["spot_links"] == 8  # the CO-OPS links of the 8 US spots only
+    assert "constants unavailable" in out["providers"]["harmonic_model"]["error"]
+    problems = {p["key"]: p["severity"] for p in tide_freshness(db, NOW)}
+    assert problems == {"tides_constants:harmonic_model": "failing"}
 
 
 def test_tide_stages_and_pruning(db: Session, tide_spots: list[str]) -> None:

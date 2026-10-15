@@ -9,7 +9,9 @@ Per provider in TIDE_PROVIDERS, over the stations linked to an active spot: a st
 stored predictions end less than MIN_AHEAD from now is short. Some short stations are
 "degraded", no station of the provider with any future prediction is "failing". A station
 the daily job has not tried yet (no predictions, no attempt recorded) is not counted: a new
-deployment is covered by the job schedule check (tides.acquire overdue) instead.
+deployment is covered by the job schedule check (tides.acquire overdue) instead. With
+harmonic_model configured, an unreadable constants file is "failing" on its own
+(``tides_constants:harmonic_model``).
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models import SpotTideStation, SurfSpot, TidePrediction, TideStation
+from app.services.tides import harmonic_model
 
 # The daily job stores TIDE_HORIZON_DAYS + 1 day; two days left means it missed two runs.
 MIN_AHEAD = timedelta(days=2)
@@ -50,6 +53,21 @@ def tide_freshness(db: Session, now: datetime) -> list[dict[str, Any]]:
         .group_by(TideStation.id)
     ).all()
     problems: list[dict[str, Any]] = []
+    if "harmonic_model" in providers:
+        # Without its constants file the seed links no model point, so no station would be
+        # counted below and the model spots' tides would vanish without a problem.
+        try:
+            harmonic_model.load_model()
+        except harmonic_model.ConstantsError as exc:
+            problems.append(
+                {
+                    "key": "tides_constants:harmonic_model",
+                    "severity": "failing",
+                    "message": "The tide model's constants file cannot be read; "
+                    "model tides are unavailable.",
+                    "detail": str(exc)[:2000],
+                }
+            )
     for provider in providers:
         mine = [r for r in rows if r[0] == provider]
         tried = [r for r in mine if r[3] is not None or (r[2] or {}).get("last_error")]

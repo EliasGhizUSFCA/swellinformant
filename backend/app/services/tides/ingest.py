@@ -181,6 +181,20 @@ def _acquire_coops(
     backoff_seconds: float,
 ) -> dict[str, Any]:
     client = coops.CoopsClient(settings, http, backoff_seconds=backoff_seconds)
+    try:
+        return _acquire_coops_stations(db, client, stations, start, end, now)
+    finally:
+        client.close()
+
+
+def _acquire_coops_stations(
+    db: Session,
+    client: coops.CoopsClient,
+    stations: list[TideStation],
+    start: datetime,
+    end: datetime,
+    now: datetime,
+) -> dict[str, Any]:
     out: dict[str, Any] = {"stations": {}, "warnings": []}
     consecutive_transient = 0
     for station in stations:
@@ -313,7 +327,13 @@ def acquire_tides(
     for provider in providers:
         stations = _linked_stations(db, provider)
         if not stations:
-            result["providers"][provider] = {"skipped": "no stations linked to active spots"}
+            missing = catalog.get("model_constants_error") if provider == "harmonic_model" else None
+            if missing:
+                # The seed links no model point without constants: say why, as a failure.
+                result["providers"][provider] = {"error": missing}
+                failed += 1
+            else:
+                result["providers"][provider] = {"skipped": "no stations linked to active spots"}
             continue
         if provider == "noaa_coops":
             summary = _acquire_coops(

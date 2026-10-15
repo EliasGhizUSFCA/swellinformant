@@ -251,6 +251,8 @@ class CoopsClient:
         self.settings = settings or get_settings()
         self.base_url = self.settings.noaa_coops_base_url.rstrip("/")
         self.application = application_name(self.settings)
+        # A client passed in belongs to the caller; one made here is closed by close().
+        self._owns_client = client is None
         self.client = client or httpx.Client(
             timeout=self.settings.forecast_http_timeout_seconds,
             headers={"User-Agent": "SwellTravelAgent/1.0 (tides)"},
@@ -258,6 +260,10 @@ class CoopsClient:
         self.backoff_seconds = backoff_seconds
         self.requests = 0
         self.bytes_downloaded = 0
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
 
     def _get_json(self, path: str, params: dict[str, str]) -> Any:
         self.requests += 1

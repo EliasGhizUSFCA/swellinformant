@@ -33,7 +33,7 @@ station sources for Thurso, Raglan and Mullaghmore; not integrated).
 
 | Source | Datum in the API (`datum`) | Meaning |
 |---|---|---|
-| CO-OPS | `MLLW` | Mean Lower Low Water of the station's tidal epoch (1983-2001). For stations that publish datums, the block's `reason` also states mean sea level above MLLW (0.91 m at Pillar Point, 0.86 m at Rincon Island, 0.34 m at Kahului, 0.28 m at Haleiwa; mdapi `datums.json`, 2026-10-15). Subordinate stations 9414275 and TWC0419 publish none (`"datums": null`). |
+| CO-OPS | `MLLW` | Mean Lower Low Water of the station's tidal datum epoch (1983-2001 at Pillar Point, mdapi `datums.json`). For stations that publish datums, the block's `reason` also states mean sea level above MLLW (0.91 m at Pillar Point, 0.86 m at Rincon Island, 0.34 m at Kahului, 0.28 m at Haleiwa; mdapi `datums.json`, 2026-10-15). Subordinate stations 9414275 and TWC0419 publish none (`"datums": null`). |
 | EOT20 | `model_msl` | The model's mean sea level at the cell. Not a chart datum: no chart datum (LAT, MLLW) is known at a model point, and none is claimed. The UI text says "relative to model mean sea level, not a chart datum". |
 | Demo | none (`null`) | Synthetic; no datum. |
 
@@ -60,7 +60,7 @@ job).
 | Rincon | 9411270 Rincon Island, Mussel Shoals | harmonic | 4.3 km | Same open coast |
 
 Elsewhere the tide point is the EOT20 cell nearest the break at which all 17 constituents
-are defined: 1.1 km (Teahupoo) to 13.3 km (Punta Roca) away, median 7.9 km; the distances
+are defined: 1.1 km (Teahupoo) to 13.3 km (Punta Roca) away, median 7.8 km; the distances
 to the spots' forecast points are recorded too (2.3-29.7 km). Twelve model links carry a
 caveat, shown with the tide: Mundaka (estuary mouth), Cloudbreak and Restaurants (Mamanuca
 barrier reef), Teahupoo (reef pass, very small tide), Bocas del Toro and Salsa Brava (small
@@ -70,7 +70,11 @@ Gracetown (small, mostly diurnal tide: form factor 3.5 from the constants).
 
 `python -m app.cli tides seed` loads the catalog into `tide_stations` and
 `spot_tide_stations` (idempotent: 56 stations, 58 links); every `tides.acquire` run does it
-first, so a new deployment needs no extra step.
+first, so a new deployment needs no extra step. A spot entry that no longer matches the
+database (for example a spot moved by more than 0.5 km) costs only that spot its links: it
+is listed under `rejected_spots` in the result and logged, and its block says "unavailable";
+an unreadable station list stops the seed. Without the constants file no model point is
+linked (`model_constants_error`).
 
 ## Method
 
@@ -146,7 +150,8 @@ are deleted. Measured live on 2026-10-15 (own database, all 50 spots):
 56 stations x about 940 rows: 52,504 rows, 12 MB with indexes. Retention keeps future
 predictions and TIDE_RETENTION_PAST_DAYS (2) of the past (`maintenance.cleanup`). One
 station failing does not stop the others (the station records `last_error`); the job fails
-only if every station fails.
+only if every station fails. A missing constants file is reported as an error of the
+`harmonic_model` provider (status `partial` while CO-OPS works).
 
 ### Tide stage (`stage.py`, for the quality score)
 
@@ -191,7 +196,9 @@ public, max-age=300`) returns `TideBlockOut`, also embedded in the timeline:
 Health (`tide_freshness`, in the data-health report): `tides_stale:<provider>` is
 "degraded" when some linked stations have predictions for less than 2 more days and
 "failing" when none has a future prediction. Stations the job has not tried yet are not
-counted (the job schedule check covers a new deployment).
+counted (the job schedule check covers a new deployment). With `harmonic_model` in
+TIDE_PROVIDERS, an unreadable constants file is `tides_constants:harmonic_model`,
+"failing".
 
 ## Validation
 
@@ -236,6 +243,12 @@ Minor constituents: a probe with pyTMD 3.0.9 `infer_minor` (not in the app) lowe
 14-day curve RMSE from 3.9 to 3.1 cm at Pillar Point, 3.1 to 2.1 cm at Rincon Island and
 3.1 to 2.5 cm at Newport, and raised it from 2.1 to 2.3 cm at Kahului; inferred minors
 reached 8 cm.
+
+A second period, checked in review on 2026-10-15 against fresh CO-OPS answers for
+2026-12-20 to 2026-12-30 (6-minute MSL curve, high/low waters): Rincon Island 4.4 cm,
+r = 0.9980, median timing error 7 min (39 of 39 events); Kahului 2.7 cm, 0.9953, 10 min
+(39 of 39); Pillar Point 4.4 cm, 0.9978, 6 min (39 of 39). Rerunning `--check-pytmd` with
+pyTMD 3.0.9 in review gave the same worst difference, 0.012 mm.
 
 There is no comparison outside the US: no other spot has a station source in the app.
 The caveats above mark where a global model is known to be weaker.
