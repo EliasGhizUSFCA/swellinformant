@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { apiGet, apiPost, verifyEmailFromOutbox } from "./helpers";
 import { syntheticValidTimes } from "./map-fields.mock";
-import { field, openMap, openMapWithFields, REAL_TILES, requested, screenPoint, shot, type Snapshot, type Spot } from "./map-helpers";
+import { field, mapSettled, markerCalls, openMap, openMapWithFields, REAL_TILES, requested, resetProbe, screenPoint, shot, type Snapshot, type Spot } from "./map-helpers";
 
 /**
  * Interactive map against the production build: markers, the spot panel, filters, the
@@ -352,6 +352,19 @@ test.describe("ocean layers (synthetic fields)", () => {
         return Math.hypot(b.x + b.width / 2 - (map.x + map.width / 2), b.y + b.height / 2 - (map.y + map.height / 2));
       }, { message: "map centred on the user", timeout: 10_000 })
       .toBeLessThan(30);
+    // New forecast steps re-render the map: neither the user's marker nor any spot moves.
+    await mapSettled(page);
+    await resetProbe(page);
+    const slider = page.getByRole("slider", { name: "Forecast time" });
+    await slider.focus();
+    for (let i = 0; i < 2; i++) {
+      const before = await page.getByTestId("time-label").innerText();
+      await page.keyboard.press("ArrowRight");
+      await expect(page.getByTestId("time-label")).not.toHaveText(before);
+      await page.waitForTimeout(300);
+    }
+    expect((await markerCalls(page)).setLatLng, "markers re-placed by 2 timeline steps").toBe(0);
+    await expect(me).toHaveCount(1);
   });
 
   test("a denied location shows an error and leaves the map as it was", async ({ page }) => {

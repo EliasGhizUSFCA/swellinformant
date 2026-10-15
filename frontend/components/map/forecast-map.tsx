@@ -2,7 +2,7 @@
 
 import "leaflet/dist/leaflet.css";
 
-import { svg, type Map as LeafletMap } from "leaflet";
+import { svg, type Map as LeafletMap, type PathOptions } from "leaflet";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap, useMapEvents, ZoomControl } from "react-leaflet";
 
@@ -37,6 +37,8 @@ const INITIAL_CENTRE: [number, number] = [8, 10];
 const INITIAL_ZOOM = 2;
 /** Spots open at this zoom or closer. */
 const SPOT_ZOOM = 5;
+/** The user's position marker (one shared object, so a page render does not restyle it). */
+const USER_PATH: PathOptions = { color: "#ffffff", weight: 2.5, fillColor: "#3b82f6", fillOpacity: 1 };
 
 function FlyToUser({ at }: { at: { lat: number; lon: number; key: number } | null }) {
   const map = useMap();
@@ -293,6 +295,9 @@ function ForecastMap(props: ForecastMapProps) {
   const selectedSpot = spots.find((s) => s.slug === selected);
   const lons = useMemo(() => spots.map((s) => s.longitude), [spots]);
   const { centreLng, onMove, onRecentre } = useWrapCentre(lons, INITIAL_CENTRE[1]);
+  const user = props.userLocation;
+  // Re-placed only when the position or its nearest world copy changes, as the spot markers are.
+  const userCentre = useMemo<[number, number] | null>(() => (user ? [user.lat, nearestCopy(user.lon, centreLng)] : null), [user, centreLng]);
   // The container is measured before the map exists, so it opens at its final zoom.
   const [start, setStart] = useState<{ zoom: number; minZoom: number } | null>(null);
   const measure = useCallback((el: HTMLDivElement | null) => {
@@ -377,18 +382,10 @@ function ForecastMap(props: ForecastMapProps) {
               />
             );
           })}
-          {props.userLocation && (
-            <CircleMarker
-              center={[props.userLocation.lat, nearestCopy(props.userLocation.lon, centreLng)]}
-              radius={7}
-              pathOptions={{ color: "#ffffff", weight: 2.5, fillColor: "#3b82f6", fillOpacity: 1 }}
-              className="user-location-marker"
-              interactive={false}
-            />
-          )}
+          {userCentre && <CircleMarker center={userCentre} radius={7} pathOptions={USER_PATH} className="user-location-marker" interactive={false} />}
           <Readout sample={sample} layer={layer} units={units} />
           <FlyToSpot slug={selected} lat={selectedSpot?.latitude} lon={selectedSpot?.longitude} minZoom={SPOT_ZOOM} cover={cover} />
-          <FlyToUser at={props.userLocation} />
+          <FlyToUser at={user} />
           <ZoomWatcher onZoom={props.onZoom} />
           <MaxZoom zoom={basemap === "dark" ? DARK_MAX_ZOOM : TILES.maxZoom} />
           <MapBounds onRecentre={onRecentre} />
