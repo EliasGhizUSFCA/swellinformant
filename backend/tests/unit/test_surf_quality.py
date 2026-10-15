@@ -146,7 +146,8 @@ class TestComponents:
         assert score_wind(50, 290, JBAY) < 0.5
         assert score_wind(25, 110, JBAY) < 0.15
         assert score_wind(50, 110, JBAY) < score_wind(25, 110, JBAY)
-        assert 0.3 < score_wind(15, 200, JBAY) < 0.9  # cross-shore
+        # Cross-shore: V_e = 0.5 x 15 km/h, so Q = 1 / (1 + (7.5 / 12.5)^3) = 0.822.
+        assert score_wind(15, 200, JBAY) == pytest.approx(1 / (1 + 0.6**3), abs=1e-6)
         assert score_wind(None, 200, JBAY) is None
 
     def test_tide(self) -> None:
