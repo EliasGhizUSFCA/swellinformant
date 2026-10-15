@@ -103,7 +103,8 @@ def _peak_prediction(match: OpportunityMatch) -> SurfQualityPrediction | None:
 
 
 def _peak_range(pred: SurfQualityPrediction | None) -> dict[str, Any]:
-    """The 80 % range of our prediction at the event's peak."""
+    """The likely range of our prediction at the event's peak (heuristic: meant to hold
+    the breaking height about 8 times in 10, not yet verified)."""
     if pred is None or pred.breaking_p10_ft is None or pred.breaking_p90_ft is None:
         return {}
     return {
@@ -131,6 +132,26 @@ def _peak_confidence(
         "peak_in_hours": round((pred.valid_time - now).total_seconds() / 3600.0, 1),
         # Only when local confidence is lower than forecast confidence (as in the API).
         "local_confidence_reason": fields["local_confidence_reason"],
+    }
+
+
+def _model_runs(db: Session | None, run: ForecastRun | None) -> dict[str, Any]:
+    """The model runs behind the alert (a blend lists each member with its own init time)
+    and when the data was fetched (the run's completed_at), for the email's provenance."""
+    if db is None or run is None:
+        return {}
+    from app.services.spot_views import run_members  # spot_views imports this module
+
+    return {
+        "model_runs": [
+            {
+                "name": m.name,
+                "code": m.code,
+                "init_time": m.init_time.isoformat() if m.init_time else None,
+            }
+            for m in run_members(db, run)
+        ],
+        "forecast_fetched": run.completed_at.isoformat() if run.completed_at else None,
     }
 
 
@@ -191,6 +212,7 @@ def build_snapshot(
         "currency": match.currency,
         **_peak_range(peak),
         **_peak_confidence(peak, now, stale=stale),
+        **_model_runs(db, event.latest_run),
     }
     if offer is not None and match.best_price is not None:
         snap.update(

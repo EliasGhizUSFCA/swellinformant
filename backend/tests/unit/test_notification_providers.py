@@ -17,6 +17,7 @@ from app.services.http import PermanentProviderError, TransientProviderError
 from app.services.notifications import providers as prov
 from app.services.notifications.alerts import decide_kind, dedup_key
 from app.services.notifications.templates import alert_subject, render_alert_email, render_alert_sms
+from app.services.opportunity_views import limitations
 
 
 def client(handler) -> httpx.Client:  # type: ignore[no-untyped-def]
@@ -217,16 +218,19 @@ class TestTemplates:
         subject, text, html = render_alert_email(snap, links)
         for expected in (
             "Swell dates:",
-            "Predicted breaking waves (our estimate): 6–9 ft faces (80% range 4.5–12 ft, from "
-            "the ensemble spread, not yet verified)",
+            "Predicted breaking waves (our estimate): 6–9 ft faces (likely range 4.5–12 ft: "
+            "meant as an 80% range, from the ensemble spread, not yet verified)",
+            "Predicted quality: Excellent (9.1/10)",
             "Main offshore waves (raw model forecast): 2.4 m @ 16 s from SW",
             "Round-trip flight: $780 per traveller",
             "Suggested travel dates: Jul 10 – Jul 15",
             "Travel buffers: arrive 2 day(s) before the swell, leave 1 day(s) after",
             "Departure airport: SFO",
             "Destination airport: PLZ",
-            "Forecast confidence: Moderate",
-            "Forecast updated: 2026-07-03 06:00 UTC · NOAA GFS-Wave",
+            # No forecast-confidence class in this (pre forecast-v1) snapshot.
+            "Forecast confidence: Not assessed (offshore spread index 60/100",
+            # A snapshot without model runs names the run's issue time for what it is.
+            "Model run: 2026-07-03 06:00 UTC · NOAA GFS-Wave",
             "Price checked:",
             "Flight offers: https://flights",
             "Your dashboard: https://app/dashboard",
@@ -235,6 +239,43 @@ class TestTemplates:
         ):
             assert expected in text, expected
         assert "https://app/u?t=1" in html and "https://app/settings#alerts" in html
+        # The heuristic range is a likely range whose 80% intent is stated, never presented
+        # as a verified probability interval; the score uses the app's 0-10 scale.
+        assert "(80% range" not in text and "91/100" not in text
+        assert "Forecast updated" not in text
+
+    def test_model_runs_and_fetched_time(self) -> None:
+        """A blend lists every member with its own init time (the blend's issue time is
+        only its oldest member's) and when the data was fetched."""
+        snap = {
+            **SNAP,
+            "forecast_issued": "2026-10-11T12:00:00+00:00",
+            "forecast_source": "Swell Travel Agent multi-model blend",
+            "model_runs": [
+                {
+                    "name": "NOAA GFS-Wave + GFS (direct)",
+                    "code": "noaa_gfs_direct",
+                    "init_time": "2026-10-11T18:00:00+00:00",
+                },
+                {
+                    "name": "ECMWF IFS open data",
+                    "code": "ecmwf_ifs_open",
+                    "init_time": "2026-10-11T12:00:00+00:00",
+                },
+            ],
+            "forecast_fetched": "2026-10-12T03:47:10+00:00",
+        }
+        _, text, html = render_alert_email(snap, LINKS)
+        assert (
+            "Model runs: NOAA GFS-Wave + GFS (direct) (2026-10-11 18:00 UTC); "
+            "ECMWF IFS open data (2026-10-11 12:00 UTC)" in text
+        )
+        assert "Fetched: 2026-10-12 03:47 UTC" in text
+        assert "Model runs" in html and "Fetched" in html
+        assert "Forecast updated" not in text
+        # One model run is singular.
+        _, single, _ = render_alert_email({**snap, "model_runs": snap["model_runs"][:1]}, LINKS)
+        assert "Model run: NOAA GFS-Wave + GFS (direct) (2026-10-11 18:00 UTC)" in single
 
     def test_forecast_and_local_confidence_in_words(self) -> None:
         snap = {
@@ -254,9 +295,14 @@ class TestTemplates:
         # The distance is measured from when the alert was built, when that is known.
         _, sent_later, _ = render_alert_email({**snap, "peak_in_hours": 130.0}, LINKS)
         assert "Forecast confidence: Moderate — about 5 days away" in sent_later
-        # Snapshots from before forecast-v1 keep the index wording.
+        # Snapshots from before forecast-v1 have no class: the 0-100 index is shown under its
+        # own name, never as the forecast-confidence class.
         _, legacy, _ = render_alert_email(SNAP, LINKS)
-        assert "Forecast confidence: Moderate (60/100)" in legacy
+        assert (
+            "Forecast confidence: Not assessed (offshore spread index 60/100, not a "
+            "probability)" in legacy
+        )
+        assert "Forecast confidence: Moderate" not in legacy
         assert "Confidence at this break" not in legacy
 
     def test_demo_and_mock_are_labelled(self) -> None:
@@ -440,3 +486,36 @@ def test_settings_guard_rails() -> None:
         s.missing_live_credentials()
     )
     assert datetime.now(UTC)
+
+
+def fake_opportunity(**kw: object) -> SimpleNamespace:
+    base: dict[str, object] = dict(
+        is_demo=False, best_offer=None, confidence_label=SimpleNamespace(value="moderate")
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+class TestOpportunityLimitations:
+    def test_method_label_follows_the_stored_method(self) -> None:
+        notes = limitations(fake_opportunity(), method="linear_wave_v2")  # type: ignore[arg-type]
+        assert "linear wave theory" in notes[0]
+        assert "Komar" not in " ".join(notes)
+        old = limitations(fake_opportunity(), method="komar_gaughan_v1_uncalibrated")  # type: ignore[arg-type]
+        assert "Komar–Gaughan" in old[0]
+        # An unknown or missing method names none rather than a wrong one.
+        none = limitations(fake_opportunity())  # type: ignore[arg-type]
+        assert "Komar" not in none[0] and "linear wave" not in none[0]
+        assert "not observations" in none[0]
+
+    def test_low_note_follows_the_forecast_class_not_the_index(self) -> None:
+        low_index = fake_opportunity(confidence_label=SimpleNamespace(value="low"))
+        assert not any(
+            "confidence is low" in n
+            for n in limitations(low_index, forecast_class="moderate")  # type: ignore[arg-type]
+        )
+        moderate_index = fake_opportunity()
+        assert any(
+            "confidence is low" in n
+            for n in limitations(moderate_index, forecast_class="low")  # type: ignore[arg-type]
+        )
