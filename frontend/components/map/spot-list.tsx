@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, MapPin } from "lucide-react";
+import { ChevronDown, Loader2, MapPin } from "lucide-react";
 
 import { QualityBadge } from "@/components/quality";
 import { cn } from "@/lib/utils";
@@ -54,15 +54,29 @@ export function SpotList({
         onClick={() => onOpenChange(!open)}
         aria-expanded={open}
         aria-controls="map-top-spots"
-        className={cn("flex w-full items-center gap-2 rounded-2xl px-4 py-3 text-left", FOCUS)}
+        className={cn("flex w-full items-center gap-1.5 rounded-2xl px-3.5 py-3 text-left", FOCUS)}
       >
-        <MapPin className="size-4 text-[#c4ec4a]" aria-hidden />
-        <span className="min-w-0 truncate text-sm font-semibold" data-testid="best-spots-title">
-          {title}
+        {/* The pin turns into a spinner while the list refreshes, so the header never reflows. */}
+        {updating ? (
+          <Loader2 className="size-4 shrink-0 text-[#c4ec4a] motion-safe:animate-spin" aria-hidden />
+        ) : (
+          <MapPin className="size-4 shrink-0 text-[#c4ec4a]" aria-hidden />
+        )}
+        {/* The selected time is the point of the title: it may wrap (between "·" and the time),
+            never be cut off. */}
+        <span className="min-w-0 text-sm leading-snug font-semibold" data-testid="best-spots-title">
+          {timeLabel ? (
+            <>
+              Best spots · <span className="whitespace-nowrap">{timeLabel}</span>
+            </>
+          ) : (
+            title
+          )}
         </span>
-        <span className="ml-auto shrink-0 text-xs text-white/70" data-testid="visible-count">
-          Showing {spots.length} of {total} spots
-          {updating && " · updating…"}
+        <span className="ml-auto shrink-0 pl-1 text-[11px] text-white/70" data-testid="visible-count">
+          <span className="sr-only">Showing </span>
+          {spots.length} of {total} spots
+          {updating && <span className="sr-only"> · updating…</span>}
         </span>
         <ChevronDown className={cn("size-4 shrink-0 transition-transform", open && "rotate-180")} aria-hidden />
       </button>

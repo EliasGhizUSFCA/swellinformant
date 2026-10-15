@@ -102,14 +102,15 @@ export function Timeline({
       <div className="relative min-w-0 flex-1 select-none">
         {/* Bubble over the thumb; slides from left- to right-aligned so it never overflows. */}
         <div
-          className="pointer-events-none absolute -top-[26px] z-10 flex items-center gap-1.5 whitespace-nowrap"
+          className="pointer-events-none absolute -top-[26px] z-10 whitespace-nowrap"
           style={{ left: `${pos * 100}%`, transform: `translateX(-${pos * 100}%)` }}
         >
           <span className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold shadow", ACTIVE_PILL)} data-testid="time-label">
             {bubbleLabel(current, tz, weekdaysRepeat(days))}
-            {busy && <Loader2 className="size-3 animate-spin" aria-hidden />}
+            {busy && <Loader2 className="size-3 motion-safe:animate-spin" aria-hidden />}
           </span>
-          {aside}
+          {/* Beside the bubble on the side with more room, so the bubble stays over the thumb. */}
+          {aside && <span className={cn("absolute top-1/2 w-max -translate-y-1/2", pos < 0.5 ? "left-full ml-1.5" : "right-full mr-1.5")}>{aside}</span>}
         </div>
         <div
           ref={setTrack}

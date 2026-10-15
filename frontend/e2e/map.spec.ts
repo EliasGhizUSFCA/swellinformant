@@ -13,7 +13,8 @@ import { field, mapSettled, markerCalls, openMap, openMapWithFields, REAL_TILES,
  * patterns, not a forecast); the backend in this suite has no live NOAA data.
  */
 
-const visibleCount = async (page: Page) => Number(/Showing (\d+) of/.exec(await page.getByTestId("visible-count").innerText())![1]);
+// "Showing" is screen-reader text, so innerText puts it on a line of its own.
+const visibleCount = async (page: Page) => Number(/Showing\s+(\d+) of/.exec(await page.getByTestId("visible-count").innerText())![1]);
 
 /** "Thu, Oct 15, 7:00 AM GMT+1", the way the spot panel writes a time in the spot's zone. */
 function spotTime(iso: string, tz: string): string {

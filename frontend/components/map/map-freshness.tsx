@@ -76,7 +76,8 @@ export function ModelRunLabel({ index, at }: { index: FieldIndex | null | undefi
     <span
       data-testid="map-lead-time"
       title={`${index.source.name}, model run ${cycleLabel(index.cycle_time)} (Z = UTC). Forecast values, not observations.`}
-      className="pointer-events-auto inline-flex items-center rounded-full bg-[#15191d]/90 px-2 py-0.5 text-[11px] font-medium text-white/85 tabular-nums shadow ring-1 ring-white/15"
+      // Inline, not a flex box: flex items would drop the spaces around the "·".
+      className="pointer-events-auto inline-block rounded-full bg-[#15191d]/90 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-white/85 tabular-nums shadow ring-1 ring-white/15"
     >
       <span className="sr-only">Model run </span>
       <span className="sr-only sm:not-sr-only">
