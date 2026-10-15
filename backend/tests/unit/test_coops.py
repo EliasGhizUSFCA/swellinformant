@@ -52,6 +52,10 @@ def test_hourly_curve_and_msl_offset_of_a_harmonic_station() -> None:
     datums = coops.parse_datums(_load("datums_9414131.json"))
     assert datums["MLLW"] == 0.0 and datums["MSL"] == pytest.approx(0.911)
     assert "GT" not in datums and "HWI" not in datums  # ranges and intervals are not levels
+    # A station without datums answers "datums": null (9414275 on 2026-10-15).
+    assert coops.parse_datums({"units": "meters", "datums": None, "epoch": None}) == {}
+    with pytest.raises(PermanentProviderError):
+        coops.parse_datums({"units": "meters"})
 
 
 def test_an_error_body_at_http_200_raises() -> None:

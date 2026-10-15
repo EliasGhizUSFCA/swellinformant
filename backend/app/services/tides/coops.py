@@ -185,9 +185,13 @@ def parse_station_list(body: Any) -> dict[str, CoopsStation]:
 
 def parse_datums(body: Any) -> dict[str, float]:
     """``datums.json?units=metric`` -> metres above MLLW (e.g. {"MSL": 0.911, "MLLW": 0.0})."""
-    rows = body.get("datums") if isinstance(body, dict) else None
-    if not isinstance(rows, list):
+    if not isinstance(body, dict) or "datums" not in body:
         raise PermanentProviderError("noaa_coops: datums answer has no 'datums'")
+    rows = body["datums"]
+    if rows is None:
+        return {}  # the station publishes no datums (many subordinate stations)
+    if not isinstance(rows, list):
+        raise PermanentProviderError("noaa_coops: unreadable datums")
     units = str(body.get("units") or "").lower()
     if units not in ("meters", "metres", "m"):
         raise PermanentProviderError(f"noaa_coops: datums in {units!r}, metres expected")

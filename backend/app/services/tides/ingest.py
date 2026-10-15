@@ -8,9 +8,10 @@ TIDE_PROVIDERS:
   (``interval=hilo``) and, for a harmonic station, its own curve every 30 minutes
   (``interval=30``), both relative to MLLW. A subordinate station only has high and low
   waters: its curve is the cosine interpolation of :func:`coops.cosine_curve`, stored with
-  ``interpolated = true``. Once a day the station's kind and reference station are checked
-  against CO-OPS's station list and its datums (MSL above MLLW ...) are refreshed.
-  About 2 small requests per station and day, plus the station list (about 2 MB).
+  ``interpolated = true``. Once a week the station's kind and reference station are
+  checked against CO-OPS's station list (about 2 MB) and its datums (MSL above MLLW ...)
+  are refreshed. Otherwise 1 small request per subordinate station and 2 per harmonic
+  station a day (9 requests, 119 KB for the 6 US stations, measured 2026-10-15).
 * ``harmonic_model``: every model point (EOT20 cell) linked to an active spot: the curve
   every 30 minutes and the high and low waters (2-minute synthesis, parabolic vertex)
   computed locally from the committed constants, datum ``model_msl``, source ``eot20``.
@@ -47,7 +48,8 @@ logger = logging.getLogger(__name__)
 
 CURVE_STEP = timedelta(minutes=30)
 UPSERT_CHUNK = 2000
-STATION_CHECK_INTERVAL = timedelta(hours=24)
+# Station kinds and datums change rarely; the station list is about 2 MB.
+STATION_CHECK_INTERVAL = timedelta(days=7)
 UNIQUE_CONSTRAINT = "uq_tide_predictions_station_id_valid_time_datum_is_event"
 
 
@@ -138,7 +140,8 @@ def _note(station: TideStation, **values: Any) -> None:
 def _check_coops_station(
     client: coops.CoopsClient, station: TideStation, now: datetime, warnings: list[str]
 ) -> None:
-    """Refresh kind, reference station and datums from CO-OPS at most once a day."""
+    """Refresh kind, reference station and datums from CO-OPS at most once per
+    STATION_CHECK_INTERVAL (many subordinate stations publish no datums: kept empty)."""
     checked = (station.metadata_ or {}).get("coops_checked_at")
     if checked and now - datetime.fromisoformat(checked) < STATION_CHECK_INTERVAL:
         return

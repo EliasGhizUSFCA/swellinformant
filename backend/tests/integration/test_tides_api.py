@@ -75,7 +75,8 @@ def coops_transport(
         if path.endswith("/datums.json"):
             if "/9414131/" in path:
                 return httpx.Response(200, json=_json("datums_9414131.json"))
-            return httpx.Response(200, json={"units": "meters", "datums": []})
+            # Shape of a station without datums (9414275 on 2026-10-15).
+            return httpx.Response(200, json={"units": "meters", "datums": None})
         if path == "/api/prod/datagetter":
             assert request.url.params["time_zone"] == "gmt"
             assert request.url.params["units"] == "metric"
