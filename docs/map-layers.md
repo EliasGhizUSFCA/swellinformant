@@ -389,7 +389,7 @@ than with the 0.25° box mean before, because the 0.5° cells are not smoothed.
 | Download per day | about 0.97 GB | about 0.33 GB |
 | Stored per run | about 71 MB (61 × 1.16 MB) | about 31.5 MB |
 | Stored, 2 retained runs | about 142 MB | about 63 MB |
-| Job time per cycle | about 1 min (4.3 to 5.6 s per hour, 6 in parallel) | |
+| Job time per cycle | about 1 to 2.5 min (4.3 to 12.9 s per hour measured, 6 in parallel; depends on the network) | |
 | Within `MAP_FIELD_MAX_BYTES_PER_RUN` (600 MB) | yes | yes |
 
 Before this change the standalone job read every cycle (4 a day) at 81 hours with the
@@ -408,6 +408,17 @@ run (newest cycle) with valid times 00Z, 03Z and 09Z: the gap stays a gap, and
 `at=06Z` is answered with the 03Z field, labelled 03Z in `X-Field-Meta`. The scheduled
 job avoids such runs because `current_run` waits for the cycle's last map hour.
 
+**The same cycle once complete** (re-checked at 13:40 UTC on a fresh scratch database,
+`engine map-fields --max-lead-hours 9` without `--cycle`: the nominal 06Z cycle is not a
+map cycle and was skipped, so it picked 2026-10-15 00Z itself): status `success`, 60
+fields, 4 of 4 hours complete, no warnings, 28 requests, 31.8 MB downloaded (7.90, 7.96,
+7.96 and 7.96 MB for f000 to f009, 7 requests each), 4.65 MB stored (1.16 MB per valid
+time, 516 kB of it core; per field within 2 kB of the table above), peak resident memory
+574 MB. The job took 13.9 s, about 12 s per hour against 4 to 6 s at 03:39: the
+sandbox's proxy was slower then, so the job time above is a range, not a constant. The
+run's `details.warnings` record the download ("downloaded 31.8 MB in 28 requests for 4
+map hours f000-f009 (7.9 MB per hour)").
+
 ### Served over HTTP
 
 uvicorn on port 28731 on the scratch database (both runs stored):
@@ -422,6 +433,12 @@ uvicorn on port 28731 on the scratch database (both runs stored):
   `max-age=300`.
 * `run=noaa-gfs-fields:2026101300` (not retained): 404, error code `run_not_retained`,
   `no-store`. `swell3_hs`: 422.
+* Again at 13:40 UTC on the database holding only the complete 00Z run (uvicorn on port
+  28732): the index served it with `age_hours` 13.67 and **`stale` true** (the 12Z cycle
+  was not published yet; see "Freshness with two cycles a day" under Limitations), 15
+  variables. `windsea_tp?at=07:40Z` was answered with the 09Z field, labelled 09Z in
+  `X-Field-Meta`; `hs?at=20:00Z` (beyond 09Z plus one 3 h step) was 404; the 12Z run of
+  the day before, never stored there, was 404 `run_not_retained`.
 
 ### Independent decode check (3 points and more)
 
@@ -451,6 +468,14 @@ within half a quantisation step (largest differences: 0.047 m, 0.046 s, 0.72°, 
 22.5N 158.5W, which the independent guard also masks. Partition directions are FROM, like
 the core direction, with no +180.
 
+The same check on f006 of the complete 2026-10-15 00Z cycle (records downloaded again
+independently, 7.9 MB, then deleted), at the same five points: all 15 variables within
+half a quantisation step again (largest differences 0.048 m, 0.049 s, 0.72°, 0.23 m/s,
+0.37 hPa), the served bytes identical to the stored rows, and the nodata agreeing
+(secondary swell at 50S 120E and 22.5N 158.5W, wind sea at 40N 30W, 0N 140W and
+34S 25E). For example at 50S 120E: `hs` 7.714 / 7.7 m, `swell1_dir` 249.3 / 249.0°,
+`windsea_dir` 334.6 / 334.5°, `wind_u` 14.44 / 14.5 m/s, `pressure` 987.1 / 987 hPa.
+
 ### Mixing guard on a real hour
 
 Same hour (2026-10-14 12Z f006), computed independently over every node, and compared
@@ -463,7 +488,9 @@ with the stored masks:
 | wind sea | 109,908 | 0.25 % | 0.5 % | 13.0 % | 86.7 % |
 
 The stored valid masks equal the independent ones at every node for all three
-partitions (0 differing nodes). The secondary swell is the patchiest layer, as expected
+partitions (0 differing nodes). On f006 of 2026-10-15 00Z the figures were nearly the
+same (resultant ≤ 0.8: 7.2 %, 14.7 % and 0.45 %; served 89.5 %, 78.0 % and 87.8 %), again
+with 0 differing nodes. The secondary swell is the patchiest layer, as expected
 from WW3's per-cell ordering; the wind sea loses mostly thin edges.
 
 ### Against NDBC buoys (direction sanity, no 180° flip)
@@ -480,15 +507,16 @@ the same pairs flipped by 180° would give 171.9°. Peak wave direction against 
   providers; the newest complete map cycle found with the 18Z cycle skipped; all 15
   variables downloaded, regridded, stored and served for 4 hours (and f120, f240);
   per-hour bytes with and without partitions; the `pgrb2.0p50` → `pgrb2.0p25` fallback and
-  a missing wave hour on a cycle still being uploaded; the index freshness fields; the
-  `run` parameter (retained run 200, unknown run 404); the independent decode at five
-  points; the guard masks over every node; the NDBC direction check.
+  a missing wave hour on a cycle still being uploaded, then the same cycle complete; the
+  index freshness fields (`stale` false at 3.67 h and true at 13.67 h); the `run`
+  parameter (retained run 200, unknown run 404); the independent decode at five points on
+  two cycles; the guard masks over every node on two cycles; the NDBC direction check.
 * **Synthetic data only (tests):** the byte budget (partitions first, then the run, and a
   budget too small for one hour), a partition record missing from the index, a record
   failing half-way through a file, `with_noaa` mode with partitions (free for a spot on
   `global.0p25`) and with a cycle outside `MAP_FIELD_CYCLES`, the 0p50 fallback inside
-  `current_run`, `stale` = true, pruning of a no longer retained run, and the stored
-  6-variable runs of before this change staying servable.
+  `current_run`, pruning of a no longer retained run, and the stored 6-variable runs of
+  before this change staying servable.
 * **Not verified:** a full 61-hour cycle (its bytes and time are extrapolated above), the
   Celery job against NOAA, a `with_noaa` acquisition with partitions against NOAA, and
   behaviour across a GFS version change.
@@ -699,7 +727,8 @@ mean of the raw `global.0p25` cells around that node (1.82 MB download).
   is complete about 5 h after its nominal time and the next map cycle 12 h later, so the
   served cycle is up to about 17 h old just before the next one lands. With
   `MAP_FIELD_STALE_AFTER_HOURS=12` the index calls the layers stale for about the last
-  5 h of every 12 (the layers are still drawn, with a badge). Raise the threshold to
+  5 h of every 12 (the layers are still drawn, with a badge); seen live at 13:40 UTC on
+  2026-10-15, when the newest map cycle (00Z) was 13.67 h old. Raise the threshold to
   about 18 h, or add `06,18` to `MAP_FIELD_CYCLES` (about 0.97 GB a day more), to avoid
   that.
 * GFS v17 (proposed) is expected to rename files, drop the 0.5° and 1° atmosphere files
