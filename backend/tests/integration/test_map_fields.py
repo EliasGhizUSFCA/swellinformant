@@ -1,8 +1,9 @@
 """Map ocean layers end to end: ingestion, the standalone job, the API, retention, jobs.
 
-Every field here is built from SYNTHETIC GRIB2 files (tests.synthetic_gfs: made-up
-constant values in the real NODD layout, served by httpx.MockTransport); nothing is real
-model output. The live check against NOAA is documented in docs/map-layers.md.
+Every field here is built from SYNTHETIC GRIB2 files (tests.synthetic_gfs and
+tests.synthetic_map_fields: made-up constant values in the real NODD layout, served by
+httpx.MockTransport); nothing is real model output. The live check against NOAA is
+documented in docs/map-layers.md.
 """
 
 from __future__ import annotations
@@ -30,7 +31,11 @@ from app.models import (
     WaveForecast,
 )
 from app.models.enums import ForecastRunStatus
-from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES, MapField
+from app.models.forecast_engine import (
+    CORE_MAP_FIELD_VARIABLES,
+    PARTITION_MAP_FIELD_VARIABLES,
+    MapField,
+)
 from app.services import map_fields as map_fields_service
 from app.services.forecasts.base import FetchResult, RunInfo, SpotPoint
 from app.services.forecasts.fields import QUANTISATION, TargetGrid, decode_bytes
@@ -41,7 +46,8 @@ from app.services.maintenance import cleanup, prune_map_fields
 from app.services.pipeline import run_pipeline
 from app.services.surf_quality.predict import compute_pending_predictions
 from tests.conftest import ApiClient
-from tests.synthetic_gfs import PATHS, SyntheticGfs, map_settings
+from tests.synthetic_gfs import PATHS, SyntheticGfs
+from tests.synthetic_map_fields import add_map_hours, field_settings
 
 pytestmark = pytest.mark.integration
 
@@ -52,14 +58,18 @@ TIMES = [CYCLE + timedelta(hours=h) for h in HOURS]
 KEEP = ["pipeline", "jeffreys-bay"]  # global.0p16 and gsouth.0p25 (not global.0p25)
 
 
-def fields_only(world: SyntheticGfs, map_lead: int = 24) -> NoaaGfsFieldsProvider:
-    s = map_settings(map_lead=map_lead, providers="demo", map_fields_enabled=True)
+def fields_only(
+    world: SyntheticGfs, map_lead: int = 24, partitions: str = "off", **kw: Any
+) -> NoaaGfsFieldsProvider:
+    s = field_settings(
+        map_lead=map_lead, providers="demo", map_fields_enabled=True, partitions=partitions, **kw
+    )
     return NoaaGfsFieldsProvider(s, client=world.client(), backoff_seconds=0)
 
 
 def standalone_world(cycle: datetime = CYCLE, hours: list[int] = HOURS) -> SyntheticGfs:
     world = SyntheticGfs()
-    world.add_field_hours(cycle, hours)
+    add_map_hours(world, cycle, hours)
     return world
 
 
@@ -88,7 +98,7 @@ def test_noaa_acquisition_stores_map_fields_idempotently(db: Session) -> None:
     keep_spots(db, KEEP)
     world = SyntheticGfs()
     world.add_cycle(CYCLE, HOURS)
-    provider = NoaaGfsProvider(map_settings(), client=world.client(), backoff_seconds=0)
+    provider = NoaaGfsProvider(field_settings(), client=world.client(), backoff_seconds=0)
     assert provider.map_fields  # FORECAST_PROVIDERS=noaa_gfs: the "with_noaa" mode
 
     outcome = acquire_from_provider(db, provider, now=NOW)
@@ -102,6 +112,7 @@ def test_noaa_acquisition_stores_map_fields_idempotently(db: Session) -> None:
         "count": 18,
         "bytes": sum(len(r.data) for r in rows),
         "valid_times": [t.isoformat() for t in TIMES],
+        "partition_times": [],  # MAP_FIELD_PARTITIONS=off here
         "warnings": [],
     }
     assert any(w.startswith("map fields: 18 fields") for w in run.details["warnings"])
@@ -129,7 +140,7 @@ def test_a_noaa_run_without_map_fields_has_none(db: Session) -> None:
     keep_spots(db, KEEP)
     world = SyntheticGfs()
     world.add_cycle(CYCLE, HOURS)
-    provider = NoaaGfsProvider(map_settings(), client=world.client(), backoff_seconds=0)
+    provider = NoaaGfsProvider(field_settings(), client=world.client(), backoff_seconds=0)
     provider.map_fields = False
     outcome = acquire_from_provider(db, provider, now=NOW)
     run = db.get(ForecastRun, outcome.run_id)
@@ -142,7 +153,7 @@ def test_map_fields_the_database_refuses_never_cost_the_spot_records(db: Session
     keep_spots(db, KEEP)
     world = SyntheticGfs()
     world.add_cycle(CYCLE, HOURS)
-    provider = NoaaGfsProvider(map_settings(), client=world.client(), backoff_seconds=0)
+    provider = NoaaGfsProvider(field_settings(), client=world.client(), backoff_seconds=0)
     fetch = provider.fetch
 
     def refused(spots: list[SpotPoint], run: RunInfo) -> FetchResult:
@@ -228,7 +239,7 @@ def test_standalone_job_skips_a_cycle_the_noaa_run_already_stored(db: Session) -
     keep_spots(db, KEEP)
     world = SyntheticGfs()
     world.add_cycle(CYCLE, HOURS)
-    noaa = NoaaGfsProvider(map_settings(), client=world.client(), backoff_seconds=0)
+    noaa = NoaaGfsProvider(field_settings(), client=world.client(), backoff_seconds=0)
     acquire_from_provider(db, noaa, now=NOW)
     out = acquire_map_fields(db, now=NOW, provider=fields_only(world))
     assert out["status"] == "skipped" and out["message"] == "fields of this cycle already stored"
@@ -390,7 +401,9 @@ def test_field_bytes_and_their_metadata(
     resp = app_client.get("/api/map/fields/hs", params={"at": TIMES[0].isoformat()})
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/octet-stream"
-    assert "public, max-age=3600" in resp.headers.get_list("cache-control")
+    # Without ``run`` the current run is served, which the next cycle replaces: 5 minutes
+    # (a URL with ``run`` never changes and is cached for an hour, see the run tests).
+    assert resp.headers.get_list("cache-control") == ["public, max-age=300"]
     assert resp.headers["access-control-expose-headers"] == "X-Field-Meta"
     row = db.scalar(
         select(MapField).where(
@@ -461,6 +474,173 @@ def test_naive_and_default_times_are_utc(
     assert _iso(json.loads(default.headers["x-field-meta"])["valid_time"]) == TIMES[2]
 
 
+# --------------------------------------------------------------------------- partitions
+@pytest.fixture
+def partition_run(db: Session) -> ForecastRun:
+    """A standalone fields run of the synthetic 18Z cycle with MAP_FIELD_PARTITIONS=on."""
+    provider = fields_only(standalone_world(), partitions="on")
+    out = acquire_map_fields(db, now=NOW, provider=provider)
+    assert out["status"] == "success" and out["fields"] == 3 * 15, out
+    run = db.get(ForecastRun, out["run_id"])
+    assert run is not None
+    return run
+
+
+def test_a_six_variable_run_lists_no_partitions(
+    fields_run: ForecastRun, app_client: ApiClient
+) -> None:
+    body = app_client.get("/api/map/fields").json()
+    assert [v["name"] for v in body["variables"]] == list(CORE_MAP_FIELD_VARIABLES)
+    assert {(v["group"], v["system"]) for v in body["variables"]} == {("core", None)}
+    assert [_iso(t) for t in body["valid_times"]] == TIMES
+    resp = app_client.get("/api/map/fields/swell1_dir", params={"at": TIMES[0].isoformat()})
+    assert resp.status_code == 404
+
+
+def test_partitions_are_listed_and_served_when_stored(
+    db: Session, partition_run: ForecastRun, app_client: ApiClient
+) -> None:
+    summary = partition_run.details["map_fields"]
+    assert summary["partition_times"] == summary["valid_times"] == [t.isoformat() for t in TIMES]
+    body = app_client.get("/api/map/fields").json()
+    variables = {v["name"]: v for v in body["variables"]}
+    assert list(variables) == list(CORE_MAP_FIELD_VARIABLES) + list(PARTITION_MAP_FIELD_VARIABLES)
+    systems = {v["name"]: (v["group"], v["system"]) for v in body["variables"]}
+    assert systems["swell1_hs"] == ("partition", "primary")
+    assert systems["swell2_tp"] == ("partition", "secondary")
+    assert systems["windsea_dir"] == ("partition", "windsea")
+    assert systems["hs"] == ("core", None)
+    assert variables["swell1_dir"]["unit"] == "deg" and "from" in variables["swell1_dir"]["label"]
+    # Partition periods are "period" (NCEP: mean periods), never "peak period".
+    assert variables["swell1_tp"]["label"] == "Primary swell period"
+    assert "largest swell partition" in variables["swell1_hs"]["label"]
+
+    resp = app_client.get("/api/map/fields/swell1_dir", params={"at": TIMES[0].isoformat()})
+    assert resp.status_code == 200
+    meta = json.loads(resp.headers["x-field-meta"])
+    assert (meta["variable"], meta["group"], meta["unit"]) == ("swell1_dir", "partition", "deg")
+    assert (meta["scale"], meta["offset"], meta["nodata"]) == (1.5, 0.0, 255)
+    values = decode_bytes(resp.content, meta["nx"], meta["ny"], meta["scale"], meta["offset"])
+    t = TargetGrid(0.5)
+    assert values[t.node(58.5, -3.5)] == pytest.approx(290.0, abs=0.75)  # synthetic SWDIR 1
+    raw = zlib.decompress(resp.content)
+    assert raw[t.node(58.5, 20.0)[0] * t.nx + t.node(58.5, 20.0)[1]] == 255  # no wave data
+
+    # A valid time missing only a partition stays complete (core) and listed; that
+    # partition is then not found at that time.
+    db.execute(
+        delete(MapField).where(
+            MapField.variable.in_(["swell2_hs", "swell2_tp", "swell2_dir"]),
+            MapField.valid_time == TIMES[1],
+        )
+    )
+    db.commit()
+    body = app_client.get("/api/map/fields").json()
+    assert [_iso(t) for t in body["valid_times"]] == TIMES
+    assert "swell2_dir" in {v["name"] for v in body["variables"]}  # still stored elsewhere
+    gone = app_client.get("/api/map/fields/swell2_dir", params={"at": TIMES[1].isoformat()})
+    assert gone.status_code == 404
+    kept = app_client.get("/api/map/fields/swell1_dir", params={"at": TIMES[1].isoformat()})
+    assert kept.status_code == 200
+    # A system stored nowhere any more is not listed.
+    db.execute(delete(MapField).where(MapField.variable == "windsea_tp"))
+    db.commit()
+    names = {v["name"] for v in app_client.get("/api/map/fields").json()["variables"]}
+    assert not names & {"windsea_hs", "windsea_tp", "windsea_dir"}
+
+
+def test_the_byte_budget_leaves_a_partial_run(db: Session) -> None:
+    probe = fields_only(standalone_world(), grib_download_workers=1)
+    probe.fetch([], probe.run_for_cycle(CYCLE))
+    budget = probe.last_step_bytes[0] + probe.last_step_bytes[12] // 2
+    provider = fields_only(standalone_world(), grib_download_workers=1, max_bytes=budget)
+    out = acquire_map_fields(db, now=NOW, provider=provider)
+    assert out["status"] == "partial" and out["complete_hours"] == 1
+    assert out["downloaded_bytes"] <= budget
+    assert any("MAP_FIELD_MAX_BYTES_PER_RUN" in w for w in out["warnings"])
+    run = db.get(ForecastRun, out["run_id"])
+    assert run is not None and run.status == ForecastRunStatus.PARTIAL
+    assert map_fields_service.field_index(db).valid_times == [CYCLE]
+
+
+# --------------------------------------------------------------------------- run parameter
+def test_the_run_parameter_serves_a_retained_run(
+    db: Session, fields_run: ForecastRun, app_client: ApiClient
+) -> None:
+    newer = CYCLE + timedelta(hours=6)
+    out = acquire_map_fields(db, cycle=newer, provider=fields_only(standalone_world(newer, [0]), 0))
+    assert out["status"] == "success"
+    assert app_client.get("/api/map/fields").json()["run_key"] == "noaa-gfs-fields:2026101100"
+
+    # The older run is still retained (two runs are kept): its own bytes are served.
+    params = {"at": TIMES[1].isoformat(), "run": fields_run.run_key}
+    resp = app_client.get("/api/map/fields/hs", params=params)
+    assert resp.status_code == 200
+    meta = json.loads(resp.headers["x-field-meta"])
+    assert meta["run_key"] == fields_run.run_key and _iso(meta["valid_time"]) == TIMES[1]
+    row = db.scalar(
+        select(MapField.data).where(
+            MapField.run_id == fields_run.id,
+            MapField.variable == "hs",
+            MapField.valid_time == TIMES[1],
+        )
+    )
+    assert resp.content == row
+    # A run's field never changes: cached for an hour, and public.
+    assert resp.headers.get_list("cache-control") == ["public, max-age=3600"]
+    # Without run, the current run: its only valid time is the nearest one.
+    current = app_client.get("/api/map/fields/hs", params={"at": newer.isoformat()})
+    assert json.loads(current.headers["x-field-meta"])["run_key"] == out["run_key"]
+
+    # An unknown run is "not retained", never another run's field.
+    unknown = app_client.get("/api/map/fields/hs", params={"run": "noaa-gfs-fields:2026100100"})
+    assert unknown.status_code == 404
+    error = unknown.json()["error"]
+    assert error["code"] == "run_not_retained" and "run not retained" in error["message"]
+    assert unknown.headers.get_list("cache-control") == ["no-store"]
+
+    # Once a third cycle arrives, the oldest run's fields are pruned: no longer retained.
+    third = newer + timedelta(hours=6)
+    acquire_map_fields(db, cycle=third, provider=fields_only(standalone_world(third, [0]), 0))
+    pruned = app_client.get("/api/map/fields/hs", params=params)
+    assert pruned.status_code == 404 and pruned.json()["error"]["code"] == "run_not_retained"
+
+
+def test_a_run_without_a_complete_time_is_not_retained(
+    db: Session, fields_run: ForecastRun, app_client: ApiClient
+) -> None:
+    db.execute(delete(MapField).where(MapField.variable == "tp"))
+    db.commit()
+    resp = app_client.get("/api/map/fields/hs", params={"run": fields_run.run_key})
+    assert resp.status_code == 404 and resp.json()["error"]["code"] == "run_not_retained"
+
+
+# --------------------------------------------------------------------------- freshness
+def test_the_index_reports_its_age_and_staleness(
+    db: Session, fields_run: ForecastRun, app_client: ApiClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fresh = map_fields_service.field_index(db, CYCLE + timedelta(hours=6, minutes=30))
+    assert (fresh.age_hours, fresh.stale_after_hours, fresh.stale) == (6.5, 12.0, False)
+    assert fresh.updated_at == fields_run.completed_at and fresh.updated_at is not None
+
+    monkeypatch.setattr("app.api.map_fields.utcnow", lambda: CYCLE + timedelta(hours=13))
+    body = app_client.get("/api/map/fields").json()
+    assert body["stale"] is True and body["age_hours"] == 13.0
+    assert body["stale_after_hours"] == 12.0 and body["available"] is True
+    assert _iso(body["updated_at"]) == fields_run.completed_at
+    # Stale layers are still served (the client shows the badge).
+    assert (
+        app_client.get("/api/map/fields/hs", params={"at": TIMES[0].isoformat()}).status_code == 200
+    )
+
+
+def test_an_empty_index_is_not_stale(app_client: ApiClient) -> None:
+    body = app_client.get("/api/map/fields").json()
+    assert body["available"] is False and body["stale"] is False
+    assert body["age_hours"] is None and body["updated_at"] is None
+    assert body["stale_after_hours"] == 12.0
+
+
 @pytest.fixture
 def statements() -> Iterator[list[str]]:
     seen: list[str] = []
@@ -507,7 +687,7 @@ def test_of_two_runs_of_one_cycle_the_more_complete_is_served(
     keep_spots(db, KEEP)
     world = SyntheticGfs()
     world.add_cycle(CYCLE, HOURS)
-    noaa = NoaaGfsProvider(map_settings(), client=world.client(), backoff_seconds=0)
+    noaa = NoaaGfsProvider(field_settings(), client=world.client(), backoff_seconds=0)
     newer = acquire_from_provider(db, noaa, now=NOW)
     assert newer.run_id is not None and newer.run_id > fields_run.id
     # Same cycle and the same three complete times: the newer run wins the tie.
