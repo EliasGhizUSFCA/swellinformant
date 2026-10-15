@@ -130,6 +130,10 @@ initialisation on 2026-10-14, plus the 10-minute wait), **Open-Meteo ECMWF famil
 (12 + 7.5 + 0.17 + 3 + 2; 7.0-7.2 h, 00Z/12Z only), **NOAA GFS direct 16 h**, **GEFS-Wave
 18.5 h** (24.5 h with `GEFS_CYCLES=00,12`), **ECMWF direct 25 h**; demo and Windy keep
 `FORECAST_STALE_HOURS` (18). A blend is stale when any member is stale by its own rule.
+Publication lags vary: for the 06Z run of 2026-10-15 Open-Meteo published `ncep_gfs025`
+8.2 h after initialisation (`ncep_gfs013` 6.0 h, the waves 5.3 h). A run's issue time is
+its oldest model run, so in such a cycle the GFS family can read stale for a few minutes
+before the next acquisition; the 2 h margin covers most of it.
 Stale runs are left out of the blend, lose to fresh runs as the authoritative source, cap
 forecast confidence at Moderate, are flagged in the UI and `/api/system/status`, and alerts
 are not generated once a run is twice its stale-after age.
@@ -231,7 +235,11 @@ on a coarser grid. The direct samples cost 4.3 MB (waves and the `pgrb2.0p25` wi
 (sflux wind) and 4.6 MB (ECMWF) for this single step. Open-Meteo's GFS-Wave cell was our
 nearest valid sea cell at 47 of 50 spots; at Desert Point, G-Land and Mundaka it chose a
 neighbouring valid cell. The 12Z and 06Z waves-only checks earlier the same day gave the
-same Hs agreement (mean 0.004-0.005 m, max 0.01 m).
+same Hs agreement (mean 0.004-0.005 m, max 0.01 m). An independent re-check on the 06Z
+run of 2026-10-15 (50 spots, lead 6 h, a fresh live acquisition) gave Hs 50 of 50 within
+0.05 m (mean 0.005 m, max 0.01 m), Tp max 0.02 s, and against the `sfluxgrbf006` wind
+mean 0.09 km/h, max 0.24 km/h, direction max 4.6°; the GFS-family run cost 142.9 weighted
+calls and 341.0 kB.
 
 Examples (Hs m / Tp s / wind km/h, from degrees; Open-Meteo as served, the direct
 samples to 2 decimals and 0.1°):
