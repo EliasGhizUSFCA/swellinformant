@@ -56,11 +56,13 @@ def assemble(  # type: ignore[no-untyped-def]
     tide: TideBlockOut = NO_TIDE,
     stages=None,
     after: datetime | None = None,
+    before: datetime | None = None,
 ):
     return assemble_timeline(
         site or jbay_spot(),
         rows,
         after=after,
+        before=before,
         stale=stale,
         provenance=None,
         tide=tide,
@@ -119,6 +121,17 @@ def test_last_step_lasts_until_the_next_stored_time_beyond_the_window() -> None:
     assert [(s.start, s.end, s.step_hours) for s in tl.steps_meta.segments] == [
         (s.start, s.end, s.step_hours) for s in whole
     ]
+
+
+def test_a_lone_last_step_keeps_the_runs_spacing_before_it() -> None:
+    """A window that holds only the run's last stored time: the step lasts as long as the
+    gap from the stored time before it, never 0 h (which would draw nothing)."""
+    times = regular_times(datetime(2026, 10, 12, 0, tzinfo=UTC), 6, 1)  # synthetic
+    tl = assemble(build_rows(times), before=times[0] - timedelta(hours=6))
+    assert [s.step_hours for s in tl.steps] == [6.0]
+    assert tl.steps_meta.segments[0].end == times[0] + timedelta(hours=6)
+    # Without any other stored time there is nothing to measure: 0 h, not a made-up length.
+    assert assemble(build_rows(times)).steps[0].step_hours == 0.0
 
 
 def test_no_rows_is_unavailable_and_says_why() -> None:
@@ -438,6 +451,11 @@ def test_etag_ignores_generation_time_but_follows_the_data() -> None:
     assert timeline_etag(a, 10) != timeline_etag(a, 5)
     assert timeline_etag(a, 10) != timeline_etag(assemble(rows, stale=True), 10)
     assert timeline_etag(a, 10) != timeline_etag(assemble(rows[1:]), 10)
+    # A re-score of the same run (same run key and algorithm version, e.g. after new
+    # research evidence) changes the ratings, so the validator changes too.
+    rescored = build_rows()
+    rescored[5][0].score -= 7
+    assert timeline_etag(a, 10) != timeline_etag(assemble(rescored), 10)
     obs = a.model_copy(
         update={
             "observations": ObservationsBlockOut(

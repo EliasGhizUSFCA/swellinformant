@@ -224,3 +224,15 @@ def test_timeline_last_step_lasts_until_the_next_stored_time(
     tl = _timeline(app_client, "jeffreys-bay", days=2)
     assert tl.steps[-1].t < times[-1]
     assert tl.steps[-1].step_hours == 6.0
+
+
+def test_timeline_lone_last_step_keeps_the_runs_spacing(app_client: ApiClient, db: Session) -> None:
+    """A run whose only stored time inside the window is its last one: that step lasts as
+    long as the gap from the stored time before it (6 h here), not 0 h."""
+    start = utcnow().replace(minute=0, second=0, microsecond=0) - timedelta(hours=29)
+    times = [start + timedelta(hours=6 * i) for i in range(6)]  # synthetic: last at +1 h
+    _store_run(db, "jeffreys-bay", times, timedelta(0))
+    tl = _timeline(app_client, "jeffreys-bay")
+    assert [s.t for s in tl.steps] == [times[-1]]
+    assert tl.steps[0].step_hours == 6.0
+    assert tl.steps_meta.segments[0].end == times[-1] + timedelta(hours=6)

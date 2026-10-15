@@ -434,7 +434,23 @@ def spot_timeline(
         .order_by(SurfQualityPrediction.valid_time)
         .limit(1)
     )
-    durations = step_durations(times, after)
+    # A window holding a single step at the end of the run: its length is the gap from the
+    # stored time before it (the run's own spacing), not a guess.
+    before = (
+        db.scalar(
+            select(SurfQualityPrediction.valid_time)
+            .where(
+                SurfQualityPrediction.run_id == run.id,
+                SurfQualityPrediction.spot_id == spot.id,
+                SurfQualityPrediction.valid_time < times[0],
+            )
+            .order_by(SurfQualityPrediction.valid_time.desc())
+            .limit(1)
+        )
+        if after is None and len(times) == 1
+        else None
+    )
+    durations = step_durations(times, after, before)
     tide, observations = _blocks(
         db, spot, times[0], times[-1] + timedelta(hours=durations[-1]), now
     )
@@ -442,6 +458,7 @@ def spot_timeline(
         spot,
         rows,
         after=after,
+        before=before,
         stale=is_stale(run, now),
         provenance=_provenance(db, spot, run, rows[0][0], now),
         tide=tide,
@@ -451,12 +468,16 @@ def spot_timeline(
     )
 
 
-def step_durations(times: Sequence[datetime], after: datetime | None = None) -> list[float]:
+def step_durations(
+    times: Sequence[datetime], after: datetime | None = None, before: datetime | None = None
+) -> list[float]:
     """Hours each step stands for: the gap to the next stored time (``timesteps.step_hours``).
 
     The last step lasts until ``after`` (the run's next stored time beyond the window) when
     there is one; at the end of the run's horizon it keeps the spacing of the steps before
-    it, not the series' median (in a 3-hourly-then-6-hourly run the last step is 6 h).
+    it, not the series' median (in a 3-hourly-then-6-hourly run the last step is 6 h). A
+    lone step at the end of the horizon keeps the gap from ``before`` (the run's stored time
+    before it), and 0 h when the run has no other time at all.
     """
     if not times:
         return []
@@ -465,6 +486,8 @@ def step_durations(times: Sequence[datetime], after: datetime | None = None) -> 
     hours = timesteps.step_hours(times)
     if len(hours) >= 2:
         hours[-1] = hours[-2]
+    elif before is not None and before < times[0]:
+        hours = [_hours(times[0] - before)]
     return hours
 
 
@@ -488,6 +511,7 @@ def assemble_timeline(
     rows: Sequence[tuple[SurfQualityPrediction, WaveForecast]],
     *,
     after: datetime | None = None,
+    before: datetime | None = None,
     stale: bool,
     provenance: ProvenanceOut | None,
     tide: TideBlockOut,
@@ -497,9 +521,10 @@ def assemble_timeline(
 ) -> SpotTimelineOut:
     """The timeline from stored rows (prediction, forecast) sorted by valid time, plus the
     tide and observation blocks: no database access, so it is unit-tested directly.
-    ``after`` is the run's next stored valid time beyond the rows, if any."""
+    ``after`` is the run's next stored valid time beyond the rows, if any, and ``before`` the
+    one before a lone row (see :func:`step_durations`)."""
     times = [p.valid_time for p, _ in rows]
-    durations = step_durations(times, after)
+    durations = step_durations(times, after, before)
     segments = step_segments(times, durations)
     steps = [
         _step(p, f, hours, stale, tide, stages.get(p.valid_time))
@@ -570,14 +595,19 @@ def _step(
 
 def timeline_etag(timeline: SpotTimelineOut, days: int) -> str:
     """A weak validator for the response: it changes when the run, the scoring algorithm,
-    the tide predictions, the first step in the window, the staleness or the newest
-    observation change (``generated_at`` and the run's age are not part of it)."""
+    the tide predictions, the first step in the window, the staleness, the newest
+    observation or a step's rating changes (``generated_at`` and the run's age are not part
+    of it). The ratings are included because a re-score after new research evidence
+    (``predict.outdated_authoritative_runs``) rewrites the shown run's predictions under the
+    same run key and algorithm version."""
     provenance = timeline.provenance
     parts: list[Any] = [
         provenance.run.run_key if provenance else "",
         provenance.algorithm_version if provenance else "",
         timeline.tide.fetched_at.isoformat() if timeline.tide.fetched_at else "",
         timeline.tide.status,
+        timeline.tide.preference.text,
+        provenance.calibrated if provenance else "",
         timeline.steps[0].t.isoformat() if timeline.steps else "",
         timeline.steps[-1].t.isoformat() if timeline.steps else "",
         timeline.stale,
@@ -585,6 +615,18 @@ def timeline_etag(timeline: SpotTimelineOut, days: int) -> str:
         days,
         max((o.t for o in timeline.observations.items), default=None),
         timeline.observations.status,
+        *(
+            (
+                s.quality.score,
+                s.quality.label,
+                s.quality.forecast_confidence_class,
+                s.quality.local_confidence_class,
+                s.breaking.central_ft,
+                s.breaking.sets_ft,
+                s.wind.favourability if s.wind else None,
+            )
+            for s in timeline.steps
+        ),
     ]
     digest = hashlib.sha1("|".join(str(p) for p in parts).encode(), usedforsecurity=False)
     return f'W/"{digest.hexdigest()}"'
