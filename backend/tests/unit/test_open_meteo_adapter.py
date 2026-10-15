@@ -627,6 +627,37 @@ def test_a_retried_fetch_of_the_same_run_reads_the_cache() -> None:
     assert [r.values for r in second.records[1]] == [r.values for r in first.records[1]]
 
 
+def test_a_cached_body_is_never_served_for_a_run_with_another_domain_run() -> None:
+    """gfs_global reads GFS 0.13 and 0.25 deg, which Open-Meteo publishes minutes apart: the
+    wind body fetched while only ncep_gfs013 had the new run must not be served once
+    ncep_gfs025 has it too (SYNTHETIC metadata: ncep_gfs025 one run behind)."""
+    try:
+        get_redis().ping()
+    except redis.RedisError:
+        pytest.skip("Redis not available")
+    older = INIT - timedelta(hours=6)
+    lagging = {
+        **META,
+        "ncep_gfs025": {
+            **META["ncep_gfs025"],
+            "last_run_initialisation_time": int(older.timestamp()),
+            "last_run_availability_time": int((older + timedelta(hours=6)).timestamp()),
+        },
+    }
+    rec = Recorder(meta=lagging)
+    p = provider(rec)
+    mixed = p.current_run(NOW)
+    assert "gfs013:2026101318" in mixed.run_key and "gfs025:2026101312" in mixed.run_key
+    p.fetch([PIPELINE], mixed)
+    calls = len(rec.data_calls())
+    rec.meta = META  # ncep_gfs025 now serves the 18Z run as well
+    both = p.current_run(NOW)
+    assert both.run_key != mixed.run_key
+    p.fetch([PIPELINE], both)
+    again = rec.data_calls()[calls:]
+    assert [c["path"] for c in again] == [["/v1/gfs"]]  # waves from the cache, wind refetched
+
+
 def test_a_retry_after_a_failed_wind_request_reads_the_waves_from_the_cache() -> None:
     """The waves arrived, then the forecast API refused (a transient minute limit): the
     task's retry reads the waves from the cache and pays only for the wind request."""

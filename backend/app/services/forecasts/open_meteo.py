@@ -629,14 +629,21 @@ class OpenMeteoFamilyProvider(ForecastProvider):
             "cell_selection": cell_selection,
             **extra,
         }
-        inits = [
-            state.labelled[d] for m, _, d in self.domains() if m == model and d in state.labelled
-        ]
+        runs = {
+            d: state.labelled[d] for m, _, d in self.domains() if m == model and d in state.labelled
+        }
+        inits = list(runs.values())
+        # Every domain's run is part of the key: gfs_global reads GFS 0.13 and 0.25 deg,
+        # which Open-Meteo publishes minutes apart, so a body fetched while only one of them
+        # was new must not be served for the run in which both are.
+        run_ids = ",".join(f"{d}:{t:%Y%m%d%H%M}" for d, t in sorted(runs.items()))
         key = ProviderCacheKey(
             provider=self.code,
             model=model,
             run_init_time=max(inits) if inits else None,
-            coords_hash=coords_hash(lats, lons, cell_selection, str(self.days), json.dumps(extra)),
+            coords_hash=coords_hash(
+                lats, lons, cell_selection, str(self.days), json.dumps(extra), run_ids
+            ),
             variables=",".join(variables),
         )
         body = provider_cache.get(key, self.settings) if inits else None
@@ -682,9 +689,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
             low = reason.lower()
             if "daily" in low or "monthly" in low:
                 raise QuotaExhaustedError(f"Open-Meteo: {reason}")
-            retry = 3600.0 if "hourly" in low else 60.0
-            if "hourly" in low:
-                retry = _next_hour(self.clock())
+            retry = _next_hour(self.clock()) if "hourly" in low else 60.0
             raise TransientProviderError(f"Open-Meteo: {reason}", retry_after_s=retry)
         if resp.status_code >= 500:
             raise TransientProviderError(f"Open-Meteo HTTP {resp.status_code}: {reason}")
