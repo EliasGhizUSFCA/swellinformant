@@ -1,17 +1,32 @@
+"use client";
+
 import { Waves, Wind } from "lucide-react";
 
 import { ForecastConfidence } from "@/components/confidence";
+import { useNowMs } from "@/components/forecast-provenance";
+import { InfoPopover } from "@/components/info-popover";
 import { RatingHeadline } from "@/components/rating";
 import { WindDisputeNote } from "@/components/wind-dispute";
-import { compass, formatDateTime, heightRange, kmh, metres, seconds, type Units } from "@/lib/format";
+import { forecastReasonsOf, rangeWords, validInText } from "@/lib/confidence";
+import { compass, formatSpotDateTime, formatSpotTime, heightRange, kmh, metres, seconds, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingReason } from "@/lib/rating";
 import type { Conditions } from "@/types/api";
 
+const WEEK_MS = 6.5 * 24 * 3_600_000;
+
+/** "Thu 6:00 PM GMT+2" within the coming week, the full date further out (spot's zone). */
+export function spotWhen(iso: string, tz: string, nowMs: number): string {
+  return Math.abs(Date.parse(iso) - nowMs) < WEEK_MS ? formatSpotTime(iso, tz) : formatSpotDateTime(iso, tz, { zone: true });
+}
+
 /**
- * Compact summary of one forecast hour: rating, our breaking-wave estimate, the offshore
- * swell and wind behind it, and forecast confidence. ``spotRange`` (the spot's working range
- * in feet) sharpens the one-line reason; without it the API's explanation is used.
+ * Compact summary of one forecast step: rating, our breaking-wave estimate and its likely
+ * range, the offshore swell and wind behind it, and forecast confidence. It is model output,
+ * so it is titled "Forecast" with the step's valid time in the spot's zone and how far away
+ * it is ("in 2 h"), never "Now". `title` names what the step is (e.g. "Best surf window,
+ * next 7 days"); the legacy title "Now" is not shown. `spotRange` (the spot's working range in
+ * feet) sharpens the one-line reason; without it the API's explanation is used.
  */
 export function ConditionsSummary({
   c,
@@ -19,17 +34,24 @@ export function ConditionsSummary({
   units,
   title,
   spotRange,
+  nowMs,
 }: {
   c: Conditions;
   tz: string;
   units: Units;
-  title: string;
+  title?: string;
   spotRange?: { minFt: number; maxFt: number } | null;
+  /** The time "in 2 h" is counted from (defaults to the browser clock). */
+  nowMs?: number;
 }) {
+  const clock = useNowMs();
+  const now = nowMs ?? clock;
   const reason = ratingReason({
     periodS: c.swell_period_s,
     windRelation: c.wind_relation,
     windSpeedKmh: c.wind_speed_kmh,
+    windStrength: c.wind_strength,
+    windFavourability: c.wind_favourability,
     explanation: c.explanation,
     breakingMinFt: c.breaking_height_min_ft,
     breakingMaxFt: c.breaking_height_max_ft,
@@ -37,38 +59,51 @@ export function ConditionsSummary({
     spotMinFt: spotRange?.minFt,
     spotMaxFt: spotRange?.maxFt,
   });
+  const label = title && title.trim().toLowerCase() !== "now" ? title : "Forecast";
+  const away = validInText(c.valid_time, now);
+  const range = rangeWords(c.uncertainty_kind);
   return (
     <div className="rounded-xl border bg-card p-4" data-testid="conditions-summary">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-2">
-        <div className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{title}</div>
-        <div className="text-xs text-muted-foreground">
-          {formatDateTime(c.valid_time, tz)} local{c.is_daylight ? "" : " · night (not surfable)"}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5" data-testid="conditions-title">
+        <div className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{label}</div>
+        <div className="text-xs text-muted-foreground" data-testid="conditions-time">
+          <span className="font-medium text-foreground/80">{spotWhen(c.valid_time, tz, now)}</span>
+          {away ? ` · ${away}` : ""}
+          {c.is_daylight ? "" : " · night"}
         </div>
       </div>
       <RatingHeadline label={c.label} score={c.score} reason={reason} size="sm" className="mt-2" />
       <div className="mt-2 flex flex-wrap items-baseline gap-x-2">
         <span className="font-display text-2xl font-semibold">{heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, units)}</span>
-        <span className="text-xs text-muted-foreground">est. breaking faces</span>
+        <span className="text-xs text-muted-foreground">breaking (est.)</span>
       </div>
       {c.breaking_p10_ft != null && c.breaking_p90_ft != null && (
-        <div className="text-xs text-muted-foreground">80% range {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)}</div>
+        <div className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="likely-range">
+          {range.name} {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)} ({range.note}) <InfoPopover term="likelyRange" />
+        </div>
       )}
       <div className="mt-2 space-y-0.5 text-sm text-muted-foreground">
         <div className="flex items-center gap-1.5">
-          <Waves className="size-3.5 shrink-0" />
+          <Waves className="size-3.5 shrink-0" aria-hidden="true" />
           {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} {compass(c.swell_direction_deg)} offshore swell
         </div>
         <div className="flex items-center gap-1.5">
-          <Wind className="size-3.5 shrink-0" />
+          <Wind className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="sr-only">Wind: </span>
           {kmh(c.wind_speed_kmh)} {compass(c.wind_direction_deg)} · {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
         </div>
       </div>
-      <WindDisputeNote reasons={c.confidence_reasons} className="mt-1.5" />
+      <WindDisputeNote note={c.wind_dispute_note} reasons={c.confidence_reasons} className="mt-1.5" />
       <ForecastConfidence
         className="mt-2"
         value={c.forecast_confidence_class}
-        reasons={c.confidence_reasons}
-        leadHours={c.lead_hours}
+        reasons={forecastReasonsOf(c)}
+        notes={c.confidence_reasons}
+        validTime={c.valid_time}
+        runIssuedAt={c.run_issued_at}
+        blend={c.source_code === "blend"}
+        nowMs={now}
+        showReason={false}
         legacyIndex={c.confidence}
       />
     </div>

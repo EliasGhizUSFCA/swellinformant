@@ -89,6 +89,24 @@ export function formatSpotDateTime(
   return opts.zone ? `${text} ${part(parts, "timeZoneName")}` : text;
 }
 
+/**
+ * A short forecast time in the spot's zone for compact cards: "Thu 7:00 AM GMT+2" (weekday,
+ * time and zone; no date, so only for times within the coming week). Use
+ * formatSpotDateTime when the date matters.
+ */
+export function formatSpotTime(iso: string, tz: string, opts: { zone?: boolean } = {}): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hourCycle: "h12",
+    ...(opts.zone === false ? {} : { timeZoneName: "short" as const }),
+  }).formatToParts(new Date(iso));
+  const text = `${part(parts, "weekday")} ${part(parts, "hour")}:${part(parts, "minute")} ${part(parts, "dayPeriod")}`;
+  return opts.zone === false ? text : `${text} ${part(parts, "timeZoneName")}`;
+}
+
 /** Hour-axis label at epoch milliseconds `t` in `tz`: "12 AM", "6 AM", "12 PM", "6 PM" ("6:30 AM"
  * where the zone's offset is not a whole hour from the tick). */
 export function formatHourTick(t: number, tz: string): string {

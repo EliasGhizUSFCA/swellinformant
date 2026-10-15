@@ -8,6 +8,7 @@ import {
   formatMoney,
   formatRange,
   formatSpotDateTime,
+  formatSpotTime,
   fromUnits,
   heightRange,
   leadLabel,
@@ -88,6 +89,24 @@ describe("spot-local times", () => {
     expect(second).toBe("Sun, Nov 1, 1:30 AM EST");
     expect(zoneAbbrev("2026-11-01T05:30:00Z", "America/New_York")).toBe("EDT");
     expect(zoneAbbrev("2026-11-01T06:30:00Z", "America/New_York")).toBe("EST");
+  });
+
+  it("names the zone on both sides of the US Pacific fall-back (08:00Z PDT, 09:00Z PST)", () => {
+    // America/Los_Angeles returns to PST at 09:00Z on 2026-11-01: both instants read 1:00 AM.
+    const before = formatSpotDateTime("2026-11-01T08:00:00Z", "America/Los_Angeles", { zone: true });
+    const after = formatSpotDateTime("2026-11-01T09:00:00Z", "America/Los_Angeles", { zone: true });
+    expect(before).toBe("Sun, Nov 1, 1:00 AM PDT");
+    expect(after).toBe("Sun, Nov 1, 1:00 AM PST");
+    expect(before).not.toBe(after);
+    expect(formatSpotTime("2026-11-01T08:00:00Z", "America/Los_Angeles")).toBe("Sun 1:00 AM PDT");
+    expect(formatSpotTime("2026-11-01T09:00:00Z", "America/Los_Angeles")).toBe("Sun 1:00 AM PST");
+  });
+
+  it("names zones without a common abbreviation by their offset (Asia/Makassar: GMT+8)", () => {
+    expect(formatSpotDateTime("2026-10-15T00:00:00Z", "Asia/Makassar", { zone: true })).toBe("Thu, Oct 15, 8:00 AM GMT+8");
+    expect(formatSpotTime("2026-10-15T00:00:00Z", "Asia/Makassar")).toBe("Thu 8:00 AM GMT+8");
+    expect(formatSpotTime("2026-10-15T00:00:00Z", "Asia/Makassar", { zone: false })).toBe("Thu 8:00 AM");
+    expect(zoneAbbrev("2026-10-15T00:00:00Z", "Asia/Makassar")).toBe("GMT+8");
   });
 
   it("names zones whose offset is not a whole hour", () => {

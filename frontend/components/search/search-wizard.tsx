@@ -298,7 +298,7 @@ function SurfStep({ state, set, errors = {} }: StepProps) {
                 <SelectContent>
                   <SelectItem value="any">Any wind (score decides)</SelectItem>
                   <SelectItem value="not_onshore">No onshore wind</SelectItem>
-                  <SelectItem value="offshore">Offshore or glassy only</SelectItem>
+                  <SelectItem value="offshore">Offshore, cross-offshore or glassy</SelectItem>
                 </SelectContent>
               </Select>
             </Field>

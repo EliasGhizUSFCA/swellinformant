@@ -1,8 +1,6 @@
 import { Plane, Sparkles, Waves } from "lucide-react";
 
-import { ConfidenceBadge as ClassBadge } from "@/components/confidence";
 import { Badge } from "@/components/ui/badge";
-import { legacyIndexText } from "@/lib/confidence";
 import { asQuality, colorForScore, MATCH_STATUS, QUALITY_COLORS, QUALITY_LABELS, QUALITY_TEXT } from "@/lib/quality";
 import { score10 } from "@/lib/rating";
 import { cn } from "@/lib/utils";
@@ -51,19 +49,6 @@ export function ScoreRing({ score, size = 56, label, caption }: { score: number;
         {caption && <span className="mt-0.5 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">{caption}</span>}
       </span>
     </div>
-  );
-}
-
-/**
- * @deprecated Kept for existing callers; use ConfidenceBadge from components/confidence.
- * ``label`` is the class of the earlier 0–100 confidence index, not the forecast-confidence
- * class, so it is labelled as an index; the number appears only in the tooltip.
- */
-export function ConfidenceBadge({ label, value }: { label: string; value?: number }) {
-  return (
-    <span title={value != null ? `Confidence ${legacyIndexText(value)}` : undefined}>
-      <ClassBadge value={label} kind="forecast" label="Confidence index" data-testid="confidence-index-badge" />
-    </span>
   );
 }
 
