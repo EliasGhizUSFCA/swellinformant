@@ -96,7 +96,7 @@ controlling depth (every break coordinate is a shoreline position). Trestles' fo
 lies in NBS Generalization cells (758.7 m there, kept under `provenance.not_applied`; review
 of 2026-10-13: the first run had written it as "measured"); at that depth every period is
 deep water, so leaving it unknown changes nothing. Effect on the real 2026-10-11 blend run
-(81 hours each; scores re-computed by the prediction job on a re-seeded clone, identical to
+(81 steps each; scores re-computed by the prediction job on a re-seeded clone, identical to
 `scripts/profile_sensitivity.py rescore --physical`):
 
 | Spot | Changed | Mean central breaking height (ft) | Mean \|Δ score\| | Labels changed |
@@ -229,8 +229,8 @@ the unrounded score are exactly 100.
 | Field | Type | Meaning |
 |---|---|---|
 | `q` | float 0–1 | The wind fit used in the score |
-| `v_offshore_kmh` | float | `V . n`, with `V` the wind velocity (where the air goes) and `n` the seaward unit normal (bearing `offshore_wind_direction + 180`): positive = offshore component, negative = onshore; after any shelter (section 3b); None for an unknown direction |
-| `v_cross_kmh` | float | Size of the cross-shore component, `abs(V x n)` |
+| `v_offshore_kmh` | float | `V . n`, with `V` the forecast mean wind velocity (where the air goes) and `n` the seaward unit normal (bearing `offshore_wind_direction + 180`): positive = offshore component, negative = onshore. Shelter and scored gusts change only the speed the fit uses, not these components (section 3b); None for an unknown direction |
+| `v_cross_kmh` | float | Size of the cross-shore component of the same wind, `abs(V x n)` |
 | `strength` | `glassy` \| `light` \| `moderate` \| `strong` | Speed class (Beaufort-based, km/h): glassy at most 5.0; light below 12.0; moderate below 29.0; strong from 29.0 |
 | `favourability` | `favourable` \| `workable` \| `unfavourable` | From `q`: favourable at 0.75 or more, workable at 0.4 or more, otherwise unfavourable |
 | `gust_used` | bool | Whether gusts entered `q` (only with `WIND_GUST_SCORING=scored` and a documented gust definition) |
@@ -293,14 +293,17 @@ Q_strong = 1 / (1 + (max(0, V_off − tolerance) / soft)^2)
 Q_wind   = Q_chop · Q_strong
 ```
 
-Calm (speed 0, no direction) and light or moderate offshore wind give 1. `Q_wind` is
-continuous in speed and direction, non-increasing in speed at every direction, and has no
-floor (2.0.0 kept 1.0 for offshore wind up to 35 km/h and never went below 0.4, and kept 0.5
-for cross-shore wind from 20 to 35 km/h). Its steepest slope is that of the chop curve,
-`x^(p−1)·(p+1)²/(4·p·v_half)` per km/h with `x^p = (p−1)/(p+1)`: 0.067 per km/h at the
-defaults (onshore near 10 km/h). A wind with a speed but no direction is scored as pure
-cross-shore. With extra offshore directions (section 3b, spot profiles) the best of them
-counts.
+Calm (speed 0, no direction) and straight offshore wind up to the tolerance (28 km/h) give
+1; an offshore wind at an angle loses a little to its cross-shore component (0.85 at 20 km/h
+and ψ = 45°). `Q_wind` is continuous in speed and direction, non-increasing in speed at
+every direction, and has no floor (2.0.0 kept 1.0 for offshore wind up to 35 km/h and never
+went below 0.4, and kept 0.5 for cross-shore wind from 20 to 35 km/h). Its steepest slope is
+that of the chop curve, `x^(p−1)·(p+1)²/(4·p·v_half)` per km/h with `x^p = (p−1)/(p+1)`:
+0.067 per km/h at the defaults (onshore near 10 km/h). A wind with a speed but no direction
+is scored as pure cross-shore. With extra offshore directions (section 3b, spot profiles)
+the best of them counts. Shelter and scored gusts change only the speed the fit uses
+(`(1 − s)·V`, `V + gust_weight·(gust − V)`); `wind_detail` still reports the components of
+the forecast mean wind.
 
 Values at the defaults, west-facing beach (offshore from 90°; ψ in brackets), computed by
 `wind.q_wind`:
@@ -318,7 +321,9 @@ Values at the defaults, west-facing beach (offshore from 90°; ψ in brackets), 
 | W 270 (180) | onshore | −10.0, 0.0 | 1.00 | 0.94 | 0.66 | 0.37 | 0.20 | 0.11 | 0.07 | 0.04 | 0.03 | 0.02 | 0.02 | 0.01 | 0.00 | 0.00 |
 
 Score of an ideal swell (2.0 m, 16 s, from 215° at a Jeffreys Bay-like spot: offshore from
-290°, window 180–250°, optimal 200–230°, 4–12 ft), computed by `scoring.evaluate`:
+290°, window 180–250°, optimal 200–230°, 4–12 ft, minimum and ideal period 11 and 15 s,
+height factor 0.9: `JBAY` in `tests/unit/test_surf_quality.py`), computed by
+`scoring.evaluate`:
 
 | ψ (relation) | 0 | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | 60 | 80 km/h |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -331,7 +336,7 @@ Score of an ideal swell (2.0 m, 16 s, from 215° at a Jeffreys Bay-like spot: of
 **Parameters and their provenance.** `research` = from the spot's researched profile or
 evidence; `beaufort` = the Beaufort wind scale; `heuristic` = a reasoned default, not fitted
 (no observations exist to fit it). The defaults below are checked against
-`wind.WindParams` by `tests/unit/test_wind.py`.
+`wind.WindParams` by `tests/unit/test_surf_scoring_doc.py`.
 
 | Parameter | Default | Provenance | Meaning |
 |---|---:|---|---|
@@ -339,7 +344,7 @@ evidence; `beaufort` = the Beaufort wind scale; `heuristic` = a reasoned default
 | `v_half_kmh` | 12.5 | heuristic | Onshore-equivalent speed that halves `Q_chop` (about 6.7 kt) |
 | `p` | 3.0 | heuristic | Steepness of the chop curve |
 | `cross_weight` | 0.5 | heuristic | Share of the cross-shore component counted as chop |
-| `offshore_tolerance_kmh` | 28.0 | heuristic | Offshore speed that does not hurt (about 15 kt); replaced by a researched spot value where one exists |
+| `offshore_tolerance_kmh` | 28.0 | heuristic | Offshore speed that does not hurt (about 15 kt); replaced by a spot profile's value where one exists, stored with that value's own provenance (`tolerance_provenance`) |
 | `soft_kmh` | 15.0 | heuristic | How quickly offshore wind beyond the tolerance hurts |
 | `gust_weight` | 0.25 | heuristic | Share of the gust excess (gust − mean) added to the speed when gusts are scored |
 | `glassy_max_kmh` | 5.0 | beaufort | "glassy" relation and strength (forces 0–1) |
@@ -359,7 +364,7 @@ to 45°, cross-offshore up to 75°, cross-shore up to 105°, cross-onshore up to
 beyond; "glassy" at 5.0 km/h or less whatever the direction (and for a calm wind, whose
 direction is None); "unknown" without a speed, or with a speed above 5 km/h and no
 direction. 2.0.0 used 45 / 80 / 110 / 135°: its cross-shore sector reached 20° onshore of
-perpendicular but only 10° offshore of it (422 hours of the 2026-10-11 run lay 0–20° onshore
+perpendicular but only 10° offshore of it (422 steps of the 2026-10-11 run lay 0–20° onshore
 of perpendicular); 2.1.0's cross-shore sector is 15° either side.
 
 **Strength** (`wind_detail.strength`, `wind.wind_strength`), the km/h form of the Beaufort
@@ -372,16 +377,20 @@ form used here.
 
 **Favourability** (`wind_detail.favourability`): favourable when `q ≥ 0.75`, workable when
 `q ≥ 0.4`, otherwise unfavourable. A 5.8 km/h onshore breeze is "light", "onshore" and
-"favourable" (q 0.95); a 45 km/h offshore wind is "strong", "offshore" and "workable".
+"favourable" (q 0.91); a 45 km/h offshore wind is "strong", "offshore" and "workable".
 
 **Spot wind profiles** (`spot_physical_profiles.wind_profile`, from
 `data/surf_spots/physical_profiles.json`). Optional per-spot knowledge, filled only from
 claims read directly from a source (evidence `retrieval` "fetched"), with the evidence key of
 every value; the seed rejects malformed profiles and research values whose evidence key does
-not exist or was not read directly, and `research lint` reports them
-(`decisions.wind_profile_issues`). Fields: `offshore_tolerance_kmh` (+ `sources`),
-`shelter` sectors `{from_min, from_max, factor, sources}` (winds FROM the clockwise sector
-are scaled by `1 − factor` before the components are taken; outside it the shelter fades as
+not exist or was not read directly. `decisions.lint` reports the same problems when it is
+given the stored profiles and the evidence retrievals (`decisions.wind_profile_issues`); the
+`research lint` command does not pass them yet. Fields: `offshore_tolerance_kmh` (with
+`sources`, and `tolerance_provenance`: `research` when the source states the number,
+`beaufort` when a word such as "strong offshore" is mapped to the Beaufort scale, `heuristic`
+otherwise; without it, `research` for a research profile), `shelter` sectors
+`{from_min, from_max, factor, sources}` (the fit scales winds FROM the clockwise sector by
+`1 − factor`; outside it the shelter fades as
 `factor·exp(−2·(d/15°)²)`), `extra_offshore_deg` (further straight-offshore bearings of
 breaks with several wave faces), `data_quality` (`research` or `heuristic default`) and
 `notes`. A factor f scales the wind from the sector by 1 − f (0.5 would halve it, so the
@@ -394,17 +403,18 @@ same fit would need twice the speed). The committed profiles:
 | Mundaka | "some shelter here from west winds" (surf-forecast-mundaka) | shelter W (247.5–292.5°), 0.3 |
 | Ocean Beach SF | "some shelter here from northwest winds" (surf-forecast-ocean-beach) | shelter NW (292.5–337.5°), 0.3 |
 | Punta de Lobos | "sheltered from the dreaded, and almost daily, SW wind by the cliffs" (wavelength-wsr-punta-de-lobos) | shelter SW (202.5–247.5°), 0.3 |
-| Padang Padang | "it can cope with a strong offshore very well" (isg-padang) | offshore tolerance 39 km/h (lower bound of force 6, "strong breeze", in the km/h form) |
+| Padang Padang | "it can cope with a strong offshore very well" (isg-padang) | offshore tolerance 39 km/h (lower bound of force 6, "strong breeze", in the km/h form; provenance `beaufort`: the claim is research, the number is not) |
 
 The sector of a compass word is that point ±22.5° (an 8-point compass sector) and every
 qualitative shelter gets the same heuristic factor 0.3: the direction is research, the
 strength is not. The factor is deliberately conservative: none of the claims says how much
-shelter there is. With 0.5, one Ocean Beach hour of the 2026-10-11 run with a 19 km/h
+shelter there is. With 0.5, one Ocean Beach step of the 2026-10-11 run with a 19 km/h
 northwest wind (ψ = 135°, the onshore edge of cross-onshore) went from Fair (41) to Very
-Good (80) when only the wind part changed; with 0.3 it stays Fair (44 under all of 2.1.0). Not encoded: Macaronis ("performs well at any size, any tide, and any
-wind", one community page that also names a best wind; no direction or strength to encode,
-left for owner review), and Rifles and Skeleton Bay ("no shelter here from cross shore
-breezes"), which is the default. The other 44 spots use the defaults. No spot has extra
+Good (80) when only the wind part changed; with 0.3 it stays Fair (44 under all of 2.1.0).
+Not encoded: Macaronis ("performs well at any size, any tide, and any wind", one community
+page that also names a best wind; no direction or strength to encode, left for owner
+review), and Rifles and Skeleton Bay ("no shelter here from cross shore breezes"), which is
+the default. The other 44 spots use the defaults. No spot has extra
 offshore directions yet.
 
 **Gusts.** Stored and shown, not scored: `WIND_GUST_SCORING=off` (default). With `scored`,
@@ -424,7 +434,7 @@ when the profile's direction is wrong. No local observations exist to fit any of
 ## 3c. Wind requirements in matching (`matching/evaluate.py`)
 
 Saved searches keep working on the direction classes: "offshore" accepts glassy, offshore
-and cross-offshore hours (`GOOD_WIND`); "not onshore" rejects onshore and cross-onshore
+and cross-offshore steps (`GOOD_WIND`); "not onshore" rejects onshore and cross-onshore
 (`BAD_WIND`). Strong offshore is penalised through the score (a search's minimum quality),
 not by redefining "offshore" (owner decision, 2026-10-14). Two optional rules exist behind
 constants, both off: `EXCLUDE_STRONG_OFFSHORE` (a "strong" offshore or cross-offshore hour,
@@ -444,9 +454,9 @@ all three hold:
 * it has a tide preference.
 
 Otherwise the component is left out (weights renormalise) and `tide_excluded_reason` says
-why; this is the same rule as the tide block's "Tide preference not well established." Hours
+why; this is the same rule as the tide block's "Tide preference not well established." Steps
 without a tide prediction are scored exactly as before, with "No tide prediction for this
-time." Until tide predictions are stored (the tides package), no real hour scores its tide.
+time." Until tide predictions are stored (the tides package), no real step scores its tide.
 On the committed research and decisions 18 of 50 spots pass (Dungeons, Mundaka, Teahupoo
 and Thurso East at high, 14 at moderate; 8 of the 18 prefer "all" tides, which always fit
 1); 21 are excluded because sources disagree, 6 for a low research class and 5 without a
@@ -464,37 +474,49 @@ direction and period fits; a tiny blocked partition changes the direction fit by
 0.02.
 
 **Effect on the real blend run of 2026-10-11** (blend of NOAA GFS 18Z and ECMWF 12Z, 4,050
-hours, 50 spots), rescored by the prediction job with 2.0.0 and then 2.1.0 on a copy of the
+3-hourly steps, 50 spots), rescored by the prediction job with 2.0.0 and then 2.1.0 on a copy of the
 database whose spot profiles were re-seeded from `data/surf_spots` (2026-10-14):
 
 | | 2.0.0 | 2.1.0 |
 |---|---:|---:|
 | Labels: poor / fair / good / very good / excellent / exceptional | 1,342 / 485 / 570 / 681 / 801 / 171 | 1,238 / 618 / 531 / 674 / 880 / 109 |
-| Offshore hours at 45 km/h or more, Very Good or better | 0 of 3 | 0 of 3 |
-| Offshore hours at 30 km/h or more, Very Good or better | 37 | 19 |
-| Cross-shore hours at 30 km/h or more, Good or better | 37 of 127 | 0 of 151 |
+| Offshore steps at 45 km/h or more, Very Good or better | 0 of 3 | 0 of 3 |
+| Offshore steps at 30 km/h or more, Very Good or better | 37 | 19 |
+| Cross-shore steps at 30 km/h or more, Good or better | 37 of 127 | 0 of 151 |
 
 1,313 labels change (32.4 %; 696 of them in daylight; 623 up, 690 down); the mean absolute
-score change is 7.7 points (mean +0.25, 25 % of hours by 10 points or more). 205 hours change
+score change is 7.7 points (mean +0.25, 25 % of steps by 10 points or more). 205 steps change
 relation, only through the new sector bounds (124 cross-offshore to cross-shore, 81
 cross-shore to cross-onshore). Switching one part on at a time (the others at 2.0.0;
 the parts overlap, so the counts do not add up): partition weighting 966 labels (mean
 |Δ| 5.6), wind fit with its gate, sectors and spot profiles 687 (3.4), consistency 130
 (0.5), window taper 26 (0.1), continuous spreading 7 (0.03). The six spot wind profiles
-alone change 96 hours at five spots (mean +4.2, at most +19) and 29 labels (Ocean Beach 11,
+alone change 96 steps at five spots (mean +4.2, at most +19) and 29 labels (Ocean Beach 11,
 Punta de Lobos 10, Mundaka 4, G-Land 4); Padang Padang's tolerance changes nothing on this
-run. The wind part's largest changes are strong cross-shore hours that 2.0.0 rated Very Good,
+run. The wind part's largest changes are strong cross-shore steps that 2.0.0 rated Very Good,
 now Fair: Sunset Beach 2026-10-19 06Z (38 km/h from 75°, offshore 135°: 80 → 47), Bells Beach
 2026-10-13 00Z (35 km/h from 231°, offshore 300°: 82 → 49), Raglan 2026-10-16 03Z (41 km/h
 from 197°, offshore 140°: 77 → 44), Teahupoo 2026-10-12 12Z (36 km/h from 118°, offshore 30°:
-80 → 48). The largest changes are partition effects: hours
+80 → 48). The largest changes are partition effects: steps
 whose primary swell is a short local sea or a blocked remnant while a well-aligned secondary
 or tertiary groundswell makes the surf rise by up to 64 points (La Graviere 2026-10-20 09Z:
 primary 0.9 m 6 s from 357°, secondary 0.9 m 15 s WNW with 85 % of the breaking flux, 28 →
-92), and hours whose tiny long-period primary swell hid a dominant wind sea fall by up to 63
+92), and steps whose tiny long-period primary swell hid a dominant wind sea fall by up to 63
 (Anchor Point 2026-10-11 18Z: primary 0.09 m 14 s, wind sea 1.5 m 5 s with 98 % of the flux,
 36 km/h cross-offshore, 77 → 14). These changes reach events, matches and alerts at the
 next rescoring.
+
+**Limitation: wind sea raised by an offshore wind.** The nearshore model decides how much of
+a partition reaches the break from the wave-approach normal β (section 2), not from the wind
+normal. Where β + 180° is far from the offshore direction (points and wrapping reefs), wind
+sea coming from close to the offshore direction, which travels away from the coast, can keep
+a large share of the breaking flux. On the 2026-10-11 run, wind sea from within 45° of the
+offshore direction carried the largest share in 44 of 4,050 steps at six spots (Cloudbreak
+19, Restaurants 17, Snapper Rocks 5, Burleigh Heads, Kirra and Safi 1 each). Example:
+Cloudbreak 2026-10-20 03Z, 36 km/h from 133° (offshore 135°), a 2.6 m 9.6 s wind sea from
+156° with 94 % of the breaking flux, 92 → 31. There the wind sea sets the breaking height (as
+in 2.0.0) and now also the direction and period fits, which usually lowers the score. 2.1.0 does not correct this;
+it needs a decision on how wind sea is transmitted at such breaks.
 
 ## 4. Daylight
 

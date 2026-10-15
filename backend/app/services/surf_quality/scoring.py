@@ -16,7 +16,8 @@ Algorithm 2.1.0 (this module and ``wind.py``):
 * outside the swell window the direction fit tapers smoothly (``exp(-2 (d / 15)^2)``, the
   nearshore model's taper) instead of dropping to 0;
 * consistency is the share of the breaking energy flux carried by swell (all three swell
-  partitions), so wind sea travelling away from the break no longer counts against it;
+  partitions), so wind sea the nearshore model sends away from the break no longer counts
+  against it;
 * the tide is scored only when the tide research class is moderate or high, the tide
   decision is not disputed and the spot has a preference; otherwise the reason is stored;
 * every prediction stores the wind breakdown, the weights used and the points each factor
@@ -245,8 +246,11 @@ def score_consistency(sea: SeaState, flux: list[PartitionFlux] | None = None) ->
     """Share of the wave energy at the break carried by organised swell rather than wind sea.
 
     With a breaking breakdown it is the swell partitions' share of the breaking energy flux
-    (sum of Hb_i^2.5), so wind sea that travels away from the break (R about 0 under offshore
-    wind) costs nothing; otherwise the offshore energy share (H^2) of the three swells.
+    (sum of Hb_i^2.5), so wind sea the nearshore model sends away from the break (directional
+    factor R about 0: travelling away from the shore normal beta) costs nothing; otherwise the
+    offshore energy share (H^2) of the three swells. Where beta + 180 is far from the offshore
+    wind direction (points, wrapping reefs), wind sea raised by an offshore wind can keep a
+    large R (docs/SURF_SCORING.md section 3e, limitations).
     """
     if sea.primary_swell_height_m is None:
         return None
