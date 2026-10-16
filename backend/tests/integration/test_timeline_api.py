@@ -236,3 +236,44 @@ def test_timeline_lone_last_step_keeps_the_runs_spacing(app_client: ApiClient, d
     assert [s.t for s in tl.steps] == [times[-1]]
     assert tl.steps[0].step_hours == 6.0
     assert tl.steps_meta.segments[0].end == times[-1] + timedelta(hours=6)
+
+
+def test_timeline_reads_stored_model_tides_across_its_whole_window(
+    app_client: ApiClient, db: Session, few_spots: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Integration of the tides package with the timeline: predictions computed locally from
+    the committed EOT20 constants (no network) fill every step of the 10-day window, read
+    linearly between the block's 30-minute points, with rising/falling from the next event
+    and the EOT20 credit and model-datum caveat on the block."""
+    from app.core.config import get_settings
+    from app.services.tides.api import MODEL_NOTE
+    from app.services.tides.ingest import acquire_tides
+
+    monkeypatch.setattr(get_settings(), "tide_providers", "harmonic_model")
+    run_pipeline(db)
+    out = acquire_tides(db, utcnow())
+    assert out["providers"]["harmonic_model"]["stations"]
+    tl = _timeline(app_client, "jeffreys-bay", days=10)
+    tide = tl.tide
+    assert tide.status == "available" and tide.source == "eot20" and tide.datum == "model_msl"
+    assert tide.attribution is not None
+    assert "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE" in tide.attribution
+    assert tide.reason is not None and tide.reason.startswith(MODEL_NOTE)
+    assert tide.station is not None and tide.station.kind == "model"
+    # The block covers the whole timeline window, at 30-minute spacing.
+    assert tide.curve[0].t <= tl.steps[0].t and tide.curve[-1].t >= tl.steps[-1].t
+    gaps = {b.t - a.t for a, b in zip(tide.curve, tide.curve[1:], strict=False)}
+    assert gaps == {timedelta(minutes=30)}
+    assert all(s.tide is not None for s in tl.steps)
+    times = [p.t for p in tide.curve]
+    for step in tl.steps[:: max(1, len(tl.steps) // 20)]:
+        assert step.tide is not None
+        i = next(k for k, t in enumerate(times) if t >= step.t)
+        a, b = tide.curve[max(i - 1, 0)], tide.curve[i]
+        if b.t == step.t:
+            expected = b.height_m
+        else:
+            expected = a.height_m + (b.height_m - a.height_m) * ((step.t - a.t) / (b.t - a.t))
+        assert step.tide.height_m == pytest.approx(expected, abs=0.0006)
+        following = next(e for e in tide.events if e.t > step.t)
+        assert step.tide.rising is (following.kind == "high")
