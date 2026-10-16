@@ -1,3 +1,4 @@
+import math
 from datetime import UTC, date, datetime
 
 import pytest
@@ -13,6 +14,7 @@ from app.services.geo import (
     window_distance,
 )
 from app.services.surf_quality.sun import is_daylight, sun_times
+from app.services.surf_quality.wind import wind_vector
 from app.services.units import ft_to_m, height_to_ft, m_to_ft, round_half
 
 
@@ -46,6 +48,21 @@ class TestAngles:
         assert direction == pytest.approx(0.0, abs=1e-6)
         _, from_west = wind_from_uv(5.0, 0.0)
         assert from_west == pytest.approx(270.0)
+
+    @pytest.mark.parametrize("speed", [0.4, 7.5, 33.0])
+    def test_one_wind_convention_for_providers_and_scoring(self, speed: float) -> None:
+        """geo.wind_from_uv (providers) and wind.wind_vector (the offshore component of the
+        score) are exact inverses: u = -V sin(theta), v = -V cos(theta), theta FROM."""
+        for i in range(72):
+            theta = i * 5.0
+            u, v = wind_vector(speed, theta)
+            assert u == pytest.approx(-speed * math.sin(math.radians(theta)), abs=1e-12)
+            assert v == pytest.approx(-speed * math.cos(math.radians(theta)), abs=1e-12)
+            back_speed, back_dir = wind_from_uv(u, v)
+            assert back_speed == pytest.approx(speed, abs=1e-9)
+            assert back_dir is not None
+            assert angular_diff(back_dir, theta) < 1e-9
+        assert wind_from_uv(0.0, 0.0) == (0.0, None)  # calm has no direction
 
     def test_haversine(self) -> None:
         # SFO → HNL is ~3,860 km

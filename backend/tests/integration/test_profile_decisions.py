@@ -14,6 +14,7 @@ from app.cli import main as cli_main
 from app.models import SpotPhysicalProfile, SpotResearchAssessment, SurfSpot
 from app.services.research.assess import seed_research
 from app.services.seed import DEFAULT_DATA_DIR
+from app.services.surf_quality.models import SpotParams
 
 pytestmark = pytest.mark.integration
 
@@ -44,6 +45,27 @@ def test_seeded_profiles_carry_the_measured_bathymetry(db: Session) -> None:
         assert row.controlling_depth_m is None
     # A spot without measurements keeps the derived profile.
     assert _profile(db, "pipeline").data_quality["forecast_point_depth_m"] == "unknown"
+
+
+def test_seeded_profiles_carry_the_researched_wind_profiles(db: Session) -> None:
+    padang = _profile(db, "padang-padang")
+    assert padang.wind_profile is not None
+    assert padang.wind_profile["offshore_tolerance_kmh"] == 39.0
+    assert padang.wind_profile["sources"] == ["isg-padang"]
+    burleigh = _profile(db, "burleigh-heads").wind_profile
+    assert burleigh is not None and burleigh["data_quality"] == "research"
+    assert burleigh["shelter"][0]["sources"] == ["surf-forecast-burleigh"]
+    # Ocean Beach keeps its measured depth and gains the wind profile.
+    ocean_beach = _profile(db, "ocean-beach-sf")
+    assert ocean_beach.forecast_point_depth_m == pytest.approx(36.4)
+    assert ocean_beach.wind_profile is not None
+    assert _profile(db, "pipeline").wind_profile is None
+    spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == "padang-padang"))
+    params = SpotParams.from_orm(spot)
+    assert params.wind_profile is not None
+    assert params.wind_profile.offshore_tolerance_kmh == 39.0
+    assert params.wind_profile.data_quality == "research"
+    assert params.wind_profile.tolerance_provenance == "beaufort"
 
 
 @pytest.fixture

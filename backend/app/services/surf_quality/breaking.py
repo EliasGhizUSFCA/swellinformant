@@ -26,7 +26,12 @@ from typing import Any
 
 from app.services.geo import window_distance
 from app.services.surf_quality import nearshore
-from app.services.surf_quality.models import BreakingEstimate, SeaState, SpotParams
+from app.services.surf_quality.models import (
+    BreakingEstimate,
+    PartitionFlux,
+    SeaState,
+    SpotParams,
+)
 from app.services.units import m_to_ft, round_half
 
 G = nearshore.G
@@ -133,6 +138,10 @@ def estimate_breaking_height(sea: SeaState, spot: SpotParams) -> BreakingEstimat
         ],
         assumptions=result.assumptions,
         depth_limited=result.depth_limited,
+        flux=[
+            PartitionFlux(p.name, p.height_m, p.period_s, p.direction_deg, p.breaking_m)
+            for p in result.partitions
+        ],
     )
 
 

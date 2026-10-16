@@ -41,13 +41,20 @@ def test_both_relations_are_named_when_they_differ_and_the_score_is_unchanged() 
     plain = evaluate(SEA, SPOT)
     disputed = evaluate(SEA, SPOT, alternative_offshore_deg=67.5)
     assert disputed.score == plain.score and disputed.components == plain.components
+    # The stored wind breakdown (2.1.0) uses the profile's direction too.
+    assert disputed.stored_components() == plain.stored_components()
+    assert plain.stored_components()["wind_detail"]["params"]["offshore_wind_direction"] == {
+        "value": 150.0,
+        "provenance": "research",
+    }
     assert disputed.wind_relation == plain.wind_relation == "offshore"
     alt = disputed_wind_relation(SEA.wind_speed_kmh, SEA.wind_direction_deg, SPOT, 67.5)
     assert alt == "cross-shore"  # 82.5 deg from the alternative direction
-    assert "wind 15 km/h from SSE, offshore or cross-shore: sources disagree" in (
+    assert "moderate wind 15 km/h from SSE, offshore or cross-shore: sources disagree" in (
         disputed.explanation
     )
-    assert "offshore wind 15 km/h" in plain.explanation
+    # 2.1.0 names the wind's strength class (Beaufort-based) before the relation.
+    assert "moderate offshore wind 15 km/h from SSE" in plain.explanation
     # The rest of the explanation is untouched (the frontend parses the size part).
     assert disputed.explanation.split("; ")[0] == plain.explanation.split("; ")[0]
     assert disputed.explanation.split("; ")[-1] == plain.explanation.split("; ")[-1]
