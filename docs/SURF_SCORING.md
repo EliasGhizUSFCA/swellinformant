@@ -506,6 +506,21 @@ primary 0.9 m 6 s from 357°, secondary 0.9 m 15 s WNW with 85 % of the breaking
 36 km/h cross-offshore, 77 → 14). These changes reach events, matches and alerts at the
 next rescoring.
 
+Re-checked on the integrated tree on 2026-10-16 (a new clone of `swell_live2`, migrated and
+re-seeded from `data/surf_spots`, rescored by the prediction job with the 2.0.0 code and
+then with 2.1.0): the 2.0.0 scores equal the earlier dump at every step, and 2.1.0 gives the
+same 1,313 label changes, 0 of 3 and 0 of 151. That clone has no stored tides, so every
+step is unscored for tide. With the real tide predictions for the run's window stored first
+(`acquire_tides` for 2026-10-11 to 2026-10-29: CO-OPS at 6 stations, EOT20 at the other
+spots), 2.1.0 scores the tide at 1,354 of 4,050 steps (18 spots; the others' tide research
+is low, disputed or has no preference); 988 scores change by -4 to +2 points (mean -0.4)
+and 126 labels move one class (1,346 changes against 2.0.0 in all, 33.2 %). The acceptance
+numbers do not change (0 of 3, 0 of 151). 104 steps at 10 spots keep no tide stage although
+predictions exist: the low and high water around them differ by less than `MIN_RANGE_M`
+(0.15 m: mostly Teahupoo, Pipeline and Sunset Beach, and neap tides in Indonesia and
+Western Australia), and the stored `tide_excluded_reason` then reads "No tide prediction for this
+time." (not shown in the app, which says only that tide is not part of the rating).
+
 **Limitation: wind sea raised by an offshore wind.** The nearshore model decides how much of
 a partition reaches the break from the wave-approach normal β (section 2), not from the wind
 normal. Where β + 180° is far from the offshore direction (points and wrapping reefs), wind

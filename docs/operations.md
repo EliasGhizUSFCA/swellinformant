@@ -387,7 +387,7 @@ Measured live on a fresh scratch database (50 spots, GFS and ECMWF 12Z runs of
 | Open-Meteo ECMWF family, 50 spots, 15 days | 124.3 weighted calls (waves 53.6, wind 53.6, 17.1 for the neighbouring cells of the 2 spots whose `ecmwf_wam025` cell has no data), 7 HTTP responses, 175.1 kB, 4.7 s; 4,100 rows | 2 runs (00Z, 12Z): 249 weighted calls, 0.35 MB | measured |
 | Blend and predictions | blend 9.9 s (10,200 rows + 10,200 comparisons); `quality.predict` 19.7 s for the 3 runs (24,500 predictions, 4,050 archive rows) | | measured |
 | Both families | 267 weighted calls | about 820 weighted calls a day, about 24,600 a month: 8 % of the free tier's 10,000 a day and 300,000 a month | per run measured; per day computed |
-| GEFS-Wave, HTSGW and PERPW only (41 steps) | about 65 MB | 4 cycles: about 0.26 GB | computed from record sizes |
+| GEFS-Wave, HTSGW and PERPW only (41 steps) | 69.4 MB, 165 requests, 11.8 s (2026-10-16 00Z) | 4 cycles: about 0.28 GB | measured 2026-10-16 (65 MB computed from record sizes before) |
 | Map fields, standalone (61 map hours, `pgrb2.0p50` atmosphere) | 7.85-8.10 MB per map hour with the partition layers (about 484 MB per cycle), 2.69-2.72 MB without (about 165 MB) | 2 cycles (00Z, 12Z): about 0.97 GB with the partitions, 0.33 GB without | per hour measured (2026-10-14 12Z, map-layers.md); per cycle and day extrapolated |
 
 The whole acquisition took 47.6 s of wall time; the two providers' own runs took 6.3 s and
@@ -485,16 +485,23 @@ the 10 days of `RETENTION_FORECAST_DAYS` hold about 2.7 GB; the member runs' pre
 stay at one run per source (about 37 MB) after the nightly pruning. A GFS-family cycle can
 be stored twice when Open-Meteo publishes `ncep_gfs025` well after `ncep_gfs013` (2.2 h
 apart for the 06Z run of 2026-10-15) and an acquisition falls in between; each such run
-adds about 0.05 GB of rows. The archive adds about 18 MB a day. With the defaults the
-database therefore passes the default `DATA_HEALTH_DATABASE_MAX_GB` of 5 GB after about
-four months and reaches about 16 GB at the 730-day archive retention: set the limit to
-what the disk allows, or shorten `RETENTION_ARCHIVE_DAYS` (the alert only reports; nothing
-is deleted).
+adds about 0.05 GB of rows. The archive adds about 18 MB a day.
+
+Re-measured on 2026-10-16 with algorithm 2.1.0 (docs/FORECAST_SOURCES.md, "Measured on
+2026-10-16"): a prediction row is 3,403 B (wind detail, contributions, direction partitions
+and tide detail; +31 %), `wave_forecasts` 517 B GFS family / 763 B ECMWF family / 614 B
+blend, comparisons 759 B, archive 760 B, and the GFS family stores 10,400 steps per run.
+Six blends a day then write about 0.30 GB a day, the 10 days hold about 3.3 GB, and the
+archive adds about 18.5 MB a day. With the defaults the database therefore passes the
+default `DATA_HEALTH_DATABASE_MAX_GB` of 5 (GiB) after about 100 days and reaches about
+17 GB at the 730-day archive retention (computed; fresh tables, so a lower bound): set the
+limit to what the disk allows, or shorten `RETENTION_ARCHIVE_DAYS` (the alert only reports;
+nothing is deleted).
 
 **Bandwidth:** the direct GRIB setup downloaded about **10 GB per day** (NOAA 4 × 1.91 GB,
 ECMWF 2 × 0.85-0.9 GB, GEFS 4 × 0.20 GB), about 300 GB a month. The API-first setup
 needs about 1.7 MB a day for the spot forecasts (4 GFS-family runs of 345.6 kB and 2
-ECMWF-family runs of 175.1 kB, measured) plus about 0.26 GB for GEFS-Wave and 0.33-0.97 GB
+ECMWF-family runs of 175.1 kB, measured) plus about 0.28 GB for GEFS-Wave and 0.33-0.97 GB
 for the map layers (without / with the partition layers; per map hour measured, per day
 extrapolated, see "API-first setup" above). Uploads are
 negligible (requests only).
@@ -514,7 +521,7 @@ the server.
 | CPU | 2 vCPUs (acquisitions take longer) | 4 vCPUs |
 | Memory | 4 GB (about 1.8 GiB measured peak plus the OS) | 8 GB |
 | Disk | 30 GB: `RETENTION_ARCHIVE_DAYS=365` (database ≤ ~10 GB) and `BACKUP_KEEP=3` (~6 GB) | 60 GB with the defaults (database ~16 GB, 7 local dumps ~23 GB at two years) |
-| Network | about 0.6-1.2 GB/day inbound with the API-first setup (GEFS-Wave and the map layers; 10 GB/day with the direct GRIB providers) | |
+| Network | about 0.6-1.25 GB/day inbound with the API-first setup (GEFS-Wave and the map layers; about 1.25 GB measured and extrapolated on 2026-10-16; 10 GB/day with the direct GRIB providers) | |
 
 Disk and database sizes are computed for the API-first setup with the archive digest
 (above); the direct GRIB setup with full archive rows needed about twice as much. Plus
@@ -527,11 +534,11 @@ BACKUP_KEEP=3                     # local copies; ship every backup off the serv
 DATA_HEALTH_DATABASE_MAX_GB=12    # degraded alert well before the disk fills
 ```
 
-Each day of `RETENTION_FORECAST_DAYS` holds about 0.27 GB with the API-first setup
-(about 0.17 GB with the direct GRIB setup): lowering it from 10 to 5 days saves about
-1.3 GB, and the two newest runs per source are always kept. `GEFS_ENABLED=false` saves
-about 0.26 GB/day of bandwidth (0.8 GB/day before `GEFS_STAT_FIELDS` trimmed it) at the cost
-of ensemble-based uncertainty. `NOAA_MAX_LEAD_HOURS=168` /
+Each day of `RETENTION_FORECAST_DAYS` holds about 0.33 GB with the API-first setup and
+algorithm 2.1.0 (0.27 GB with 2.0.0; about 0.17 GB with the direct GRIB setup): lowering it
+from 10 to 5 days saves about 1.6 GB, and the two newest runs per source are always kept.
+`GEFS_ENABLED=false` saves about 0.28 GB/day of bandwidth (0.8 GB/day before
+`GEFS_STAT_FIELDS` trimmed it) at the cost of ensemble-based uncertainty. `NOAA_MAX_LEAD_HOURS=168` /
 `ECMWF_MAX_LEAD_HOURS=168` read about 30 % fewer NOAA steps (57 of 81) and about 18 %
 fewer ECMWF steps (53 of 65), and shorten the forecast to 7 days.
 

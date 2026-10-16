@@ -260,11 +260,78 @@ confidence use.
 **Bytes per cycle, before and after.** Direct GRIB (measured 2026-10-11): NOAA 1.91 GB
 per GFS cycle, ECMWF 847 MB per run, GEFS-Wave 201.6 MB. API-first (measured above): the
 GFS family 345.6 kB, the ECMWF family 175.1 kB for 50 spots. GEFS-Wave trimmed to
-HTSGW/PERPW: about 65 MB per run (computed from record sizes). Map layers, standalone
+HTSGW/PERPW: 69.4 MB per run (measured 2026-10-16, below; about 65 MB computed from record
+sizes before). Map layers, standalone
 (`pgrb2.0p50` atmosphere, 61 map hours, cycles 00Z and 12Z): measured 7.85-8.10 MB per map
 hour with the partition layers and 2.69-2.72 MB without (2026-10-14 12Z, map-layers.md),
 so about 484 MB per cycle (0.97 GB a day) with them and 165 MB (0.33 GB a day) without
 (extrapolated from the measured hours).
+
+### Measured on 2026-10-16: the whole recommended setup on a fresh database
+
+One pass of every acquisition job with the recommended live configuration
+(`FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf`, `GEFS_ENABLED=true` with the default
+`GEFS_STAT_FIELDS`, map fields standalone with the partition layers, `TIDE_PROVIDERS`
+default, `OBSERVATIONS_ENABLED=true` for NDBC) on a fresh scratch database after `init-db`
+(50 spots), 00Z cycles of 2026-10-16, through this sandbox's proxy. The map-field download
+was capped at the first 24 h (`MAP_FIELD_MAX_LEAD_HOURS=24`: 9 of the 61 default map hours)
+to keep the bytes modest. Each job ran in its own process; bytes on the wire and HTTP
+responses were counted independently of the app (an httpx transport tally of
+`num_bytes_downloaded`) and agree with the runs' own `details.stats`. Table growth is
+`pg_total_relation_size` (heap, TOAST and indexes) before and after each job.
+
+| Job | HTTP responses | Bytes on the wire | Wall time | Rows | Table growth |
+|---|---|---|---|---|---|
+| Tides: NOAA CO-OPS (6 US stations) and EOT20 (50 model points, computed locally) | 16 (CO-OPS, with the station list and datums) | 140,355 B (2,173,270 B of JSON once decoded) | 20.0 s | 53,230 (5,673 CO-OPS, 47,557 EOT20) | `tide_predictions` 12.5 MB |
+| Open-Meteo GFS family, run 00Z (16 days) | 11 for the run (3 data requests), 142.9 weighted calls | 329,421 B | 4.7 s for the run; 72 s for the job (2 TLS handshake time-outs to the API, retried) | 10,400 | `wave_forecasts` 5.37 MB (517 B per row) |
+| Open-Meteo ECMWF family, run 00Z (15 days) | 7 for the run, 124.3 weighted calls | 172,195 B | 4.1 s for the run | 4,200 | 3.20 MB (763 B per row) |
+| GEFS-Wave mean and spread, HTSGW and PERPW, 41 steps | 165 (83 `.idx`, 82 byte ranges) | 69,357,546 B (1.69 MB per step) | 11.8 s | 2,050 | `forecast_ensemble_stats` 0.57 MB |
+| Map fields, standalone, partitions on, f000-f024 (9 map hours) | 65 (63 for the fields, 2 cycle checks) | 71,266,858 B: 7.82-7.98 MB per map hour | 14.0 s | 135 fields, 9 of 9 hours complete with partitions | `map_fields` 11.0 MB (10.4 MB of field data) |
+| NDBC buoys (`5day2`), 11 stations, 48 h | 23 (with `activestations.xml`) | 120,816 B (859,171 B of files once decoded) | 3.9 s | 864 observations (+26 stations seeded) | 0.30 MB |
+| Blend (2 independent families) | none | 0 | 7.3 s | 10,400 + 10,400 comparisons | 6.38 MB (614 B per row) + 7.90 MB (759 B per row) |
+| Predictions, algorithm 2.1.0 (3 runs) | none | 0 | 26.5 s | 25,000 predictions, 4,050 archived | 85.1 MB (3,403 B per row) + 3.08 MB (760 B per row) |
+
+Database: 12.4 MB after `init-db`, 148.8 MB after this pass (with 9 map hours). Redis: 1.90 MB
+before, 2.43 MB after (15 keys: cached responses and budget counters). Peak memory per job:
+98 MB (NDBC) to 627 MB (predictions); GEFS 418 MB, map fields 568 MB. Files written: none
+by any job (`strace -f -e openat,creat,rename,unlink,mkdir` over every job: only the
+driver's own report and joblib's semaphores in `/dev/shm`, removed again), so no GRIB or
+temporary file remains on disk. The ECMWF IFS 00Z run appeared on Open-Meteo at 08:27:30 UTC
+(8.5 h after initialisation; 7.0-7.2 h on 2026-10-14): an acquisition at 08:14 correctly
+skipped the family instead of mixing runs, and the next one read it.
+
+**Per cycle and per day** ("measured" is per run above; "computed" or "extrapolated" is
+arithmetic on it with the default schedule):
+
+| Stream | Per cycle | Cycles a day | Per day | Basis |
+|---|---|---|---|---|
+| Open-Meteo GFS family | 0.33 MB, 142.9 weighted calls | 4 | 1.3 MB, 571 weighted calls | measured; computed |
+| Open-Meteo ECMWF family | 0.17 MB, 124.3 weighted calls | 2 (00Z, 12Z) | 0.34 MB, 249 weighted calls | measured; computed |
+| GEFS-Wave (HTSGW, PERPW) | 69.4 MB | 4 (`GEFS_CYCLES` default) | 0.28 GB (0.14 GB with `GEFS_CYCLES=00,12`) | measured; computed |
+| Map fields, 61 map hours with the partition layers | about 477-487 MB (61 x 7.82-7.98 MB) | 2 (`MAP_FIELD_CYCLES`) | about 0.96 GB | per map hour measured; per cycle extrapolated (the hours got slightly smaller with lead time; the later hours are assumed no larger than f000) |
+| Tides (CO-OPS) | 0.14 MB | 1 | 0.14 MB | measured (first run, with the station list) |
+| NDBC buoys | 0.12 MB | 24 | at most 2.9 MB | measured; computed |
+| **All** | | | **about 1.25 GB a day** (1.1 GB with GEFS at 2 cycles; about 0.6 GB without the partition layers) | computed |
+
+**Before and after.** The direct GRIB setup measured in the audit downloaded, per set of
+cycles, 1,913.8 MB (NOAA GFS + GFS-Wave, with the map fields) + about 0.85-0.9 GB (ECMWF)
++ 201.6 MB (GEFS-Wave), about 3.0 GB, and about 10.2 GB a day (4 NOAA, 2 ECMWF, 4 GEFS
+cycles). The same set now costs about 0.55 GB (0.5 MB for both spot-forecast families,
+69.4 MB GEFS-Wave, about 483 MB map layers), about 82 % less, and about 1.25 GB a day,
+about 88 % less (extrapolated as above). The spot forecasts alone went from about 2.8 GB
+to 0.5 MB per set of cycles. The map layers are now three quarters of the bandwidth.
+
+**Storage, computed from the per-row sizes above** (a fresh table, no dead rows, so a lower
+bound). Algorithm 2.1.0 stores more per prediction than 2.0.0 (wind detail, contributions,
+direction partitions, tide detail): 3,403 B per row instead of 2,596 B (2026-10-14), +31 %.
+Six blends a day (one per new member run) of 10,400 steps write about 0.30 GB a day of blend
+forecasts, comparisons and predictions; with the member runs (about 28 MB a day) the 10 days
+of `RETENTION_FORECAST_DAYS` hold about 3.3 GB, plus about 0.15 GB of map fields (two runs
+of about 75 MB, extrapolated from 1.23 MB per map hour) and 12.5 MB of tides. The archive
+adds about 18.5 MB a day (760 B per row, 6 x 4,050 rows). The database therefore passes the
+default `DATA_HEALTH_DATABASE_MAX_GB` alert (5, compared in GiB) after about 100 days and
+reaches about 17 GB at the 730-day archive retention (computed); see docs/operations.md,
+section 6.
 
 ## Flights
 

@@ -396,11 +396,11 @@ GEFS_ENABLED=true                       # ensemble spread for the uncertainty ra
   if present. They are deprecated single-model aliases and, when set, override the
   per-latitude GFS wave models.
 * With the defaults the database passes the default 5 GB data-health alert
-  (`DATA_HEALTH_DATABASE_MAX_GB`, an alert only) after about four months; size it from the
-  disk ([`docs/operations.md`](docs/operations.md)). The worker consumes the `celery` and
-  `bulk` (data downloads) queues, also when started without `-Q` (`WORKER_QUEUES` narrows
-  it), and Redis runs with `maxmemory` 256 MB (`REDIS_MAXMEMORY`) and `noeviction` in
-  `docker-compose.yml`.
+  (`DATA_HEALTH_DATABASE_MAX_GB`, an alert only) after about 100 days (row sizes measured
+  on 2026-10-16); size it from the disk ([`docs/operations.md`](docs/operations.md)). The
+  worker consumes the `celery` and `bulk` (data downloads) queues, also when started
+  without `-Q` (`WORKER_QUEUES` narrows it), and Redis runs with `maxmemory` 256 MB
+  (`REDIS_MAXMEMORY`) and `noeviction` in `docker-compose.yml`.
 
 Key-free fallback that reads NOAA and ECMWF open data directly (GRIB2 by byte range):
 
