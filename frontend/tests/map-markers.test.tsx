@@ -6,9 +6,11 @@ import { Profiler, useMemo } from "react";
 import { MapContainer } from "react-leaflet";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SpotMarker } from "@/components/map/forecast-map";
+import { OCEAN_BACKGROUND, SpotMarker } from "@/components/map/forecast-map";
+import { markerLegend } from "@/components/map/legend-drawer";
 import { CentreWatcher, FlyToSpot, MapBounds, useWrapCentre, type MapCover, type MarkerState } from "@/components/map/surf-map";
 import { nearestCopy, wrapCentre } from "@/lib/map-bounds";
+import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_COLORS_DARK, QUALITY_LABELS } from "@/lib/quality";
 import type { SpotSummary } from "@/types/api";
 
 // The 50 monitored spots from the seed data (vitest runs in frontend/): positions only, and
@@ -84,12 +86,13 @@ interface HarnessProps {
   selected?: string | null;
   cover?: (size: { x: number; y: number }) => MapCover;
   onCommit?: () => void;
+  surface?: "light" | "dark";
 }
 
 const noop = () => undefined;
 
 /** The forecast map's marker layer without its canvas layers. */
-function Markers({ spots, markers, selected = null, cover, onCommit }: HarnessProps) {
+function Markers({ spots, markers, selected = null, cover, onCommit, surface }: HarnessProps) {
   const lons = useMemo(() => spots.map((s) => s.longitude), [spots]);
   const { centreLng, onMove, onRecentre } = useWrapCentre(lons, 10);
   const sel = spots.find((s) => s.slug === selected);
@@ -106,6 +109,7 @@ function Markers({ spots, markers, selected = null, cover, onCommit }: HarnessPr
             selected={s.slug === selected}
             highlight={!!markers[s.slug]?.highlight}
             onSelect={noop}
+            surface={surface}
           />
         ))}
       </Profiler>
@@ -138,6 +142,22 @@ function setup(props: HarnessProps) {
 
 const states = (score: number | null): Record<string, MarkerState> =>
   Object.fromEntries(SPOTS.map((s) => [s.slug, { score, tooltip: score == null ? "No usable forecast" : `Synthetic ${score}` }]));
+const markerFill = (map: LeafletMap, slug: string) => {
+  let fill: string | undefined;
+  map.eachLayer((l) => {
+    if (l instanceof LeafletCircleMarker && (l.options.className ?? "").split(" ").includes(`spot-${slug}`)) fill = l.options.fillColor;
+  });
+  return fill;
+};
+/** WCAG 2.x contrast ratio of two #rrggbb colours. */
+function contrast(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((x) => (x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!;
+  };
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+  return (x! + 0.05) / (y! + 0.05);
+}
 const markerLng = (map: LeafletMap, slug: string) => {
   let lng: number | null = null;
   map.eachLayer((l) => {
@@ -272,5 +292,28 @@ describe("flying to the selected spot", () => {
     const p = map().latLngToContainerPoint([nazare.latitude, nazare.longitude]);
     expect(p.x).toBeCloseTo((SIZE.x - 360) / 2, 0);
     expect(p.y).toBeCloseTo((64 + SIZE.y - 120) / 2, 0);
+  });
+
+  it("uses the dark-surface ramp on the dark basemap and the default ramp on light tiles", () => {
+    // SYNTHETIC scores: 90 = Excellent, null = no forecast.
+    const markers = { ...states(90), nazare: { score: null, tooltip: "No usable forecast" } };
+    const dark = setup({ spots: SPOTS, markers, surface: "dark" });
+    expect(markerFill(dark.map(), "pipeline")).toBe(QUALITY_COLORS_DARK.excellent);
+    expect(markerFill(dark.map(), "nazare")).toBe(NO_FORECAST_COLOR);
+    dark.rerender({ spots: SPOTS, markers, surface: "light" });
+    expect(markerFill(dark.map(), "pipeline")).toBe(QUALITY_COLORS.excellent);
+  });
+
+  it("keeps every dark-basemap marker colour at 3:1 or more against the map's sea", () => {
+    for (const color of [...Object.values(QUALITY_COLORS_DARK), NO_FORECAST_COLOR]) {
+      expect(contrast(color, OCEAN_BACKGROUND), color).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("keys the legend in the ramp the markers use", () => {
+    const dark = markerLegend("dark");
+    expect(dark[0]).toEqual({ label: "No usable forecast", color: NO_FORECAST_COLOR });
+    expect(dark.slice(1)).toEqual(Object.entries(QUALITY_COLORS_DARK).map(([q, color]) => ({ label: QUALITY_LABELS[q as keyof typeof QUALITY_LABELS], color })));
+    expect(markerLegend("streets").slice(1).map((l) => l.color)).toEqual(Object.values(QUALITY_COLORS));
   });
 });

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ConditionsSummary } from "@/components/conditions";
 import { ConfidenceBadge } from "@/components/confidence";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
+import { AttributionLinks } from "@/components/forecast-provenance";
 import { DemoBadge, MatchStatusBadge, QualityBadge } from "@/components/quality";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,7 +14,7 @@ import { useSpotEvents, useSpotOpportunities } from "@/hooks/queries";
 import { formatMoney, formatRange, formatSpotDateTime, heightRange, leadLabel, type Units } from "@/lib/format";
 import { timeParam } from "@/lib/map-time";
 import { cn } from "@/lib/utils";
-import type { Conditions, SpotSummary } from "@/types/api";
+import type { AttributionLink, Conditions, SpotSummary } from "@/types/api";
 
 import { DARK_TOKENS, GLASS } from "./map-ui";
 
@@ -22,7 +23,9 @@ import { DARK_TOKENS, GLASS } from "./map-ui";
  * prediction, upcoming swell events and (signed in) the user's travel opportunities. `time`
  * is the map's selected time, shown in the spot's own zone (the map timeline uses the
  * viewer's). `linkTime`, a time the user picked on the timeline, opens the full forecast there
- * (`?t=`); without one it opens on its own default step.
+ * (`?t=`); without one it opens on its own default step. `links` are the credit and licence
+ * links of the sources behind the map's predictions (the snapshot's `attribution_links`),
+ * shown under the model data.
  */
 export function SpotPanel({
   spot,
@@ -32,6 +35,7 @@ export function SpotPanel({
   units,
   signedIn,
   onClose,
+  links,
   className,
 }: {
   spot: SpotSummary;
@@ -41,6 +45,7 @@ export function SpotPanel({
   units: Units;
   signedIn: boolean;
   onClose: () => void;
+  links?: readonly AttributionLink[] | null;
   className?: string;
 }) {
   const events = useSpotEvents(spot.slug);
@@ -69,7 +74,8 @@ export function SpotPanel({
               </span>{" "}
               · fly into {spot.primary_airport ?? "—"}
             </div>
-            {shownTime && (
+            {/* With a prediction the breakdown below names the same time (breakdown-time): once. */}
+            {!at && shownTime && (
               <div className="mt-1 text-xs text-muted-foreground" data-testid="panel-local-time">
                 <span className="font-medium text-foreground">{formatSpotDateTime(shownTime, spot.timezone, { zone: true })}</span> at the break
               </div>
@@ -81,7 +87,10 @@ export function SpotPanel({
         </div>
 
         {at ? (
-          <ForecastBreakdown c={at} tz={spot.timezone} units={units} />
+          <>
+            <ForecastBreakdown c={at} tz={spot.timezone} units={units} />
+            <AttributionLinks links={links} dark className="-mt-2" />
+          </>
         ) : (
           <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground" data-testid="no-forecast">
             No usable forecast for this spot at the selected time.

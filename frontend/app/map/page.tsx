@@ -329,6 +329,7 @@ export default function MapPage() {
                 units={heightUnits}
                 signedIn={!!user}
                 onClose={() => setSelected(null)}
+                links={(snapshot.data ?? nowSnapshot.data)?.attribution_links}
                 className="w-full"
               />
             </div>
@@ -394,6 +395,7 @@ export default function MapPage() {
               units={heightUnits}
               signedIn={!!user}
               onClose={() => setSelected(null)}
+              links={(snapshot.data ?? nowSnapshot.data)?.attribution_links}
               className="w-full rounded-b-xl"
             />
           </div>

@@ -12,17 +12,18 @@ import type { FieldIndex } from "@/lib/map-fields";
 import { layerDef, layerUnit, legendTicks, type DisplayUnits } from "@/lib/map-layers";
 import type { MapSettings } from "@/lib/map-settings";
 import { FAMILY_STYLES, scaleStatement, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
-import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_LABELS } from "@/lib/quality";
+import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_COLORS_DARK, QUALITY_LABELS } from "@/lib/quality";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
 
 import { FOCUS, GLASS } from "./map-ui";
 import type { ParticleMode } from "./map-canvas-layers";
 
-const MARKER_LEGEND: Array<{ label: string; color: string }> = [
-  { label: "No usable forecast", color: NO_FORECAST_COLOR },
-  ...(Object.keys(QUALITY_COLORS) as QualityLabel[]).map((q) => ({ label: QUALITY_LABELS[q], color: QUALITY_COLORS[q] })),
-];
+/** The marker key in the ramp the markers use: the dark-surface ramp on the dark basemap. */
+export function markerLegend(basemap: MapSettings["basemap"]): Array<{ label: string; color: string }> {
+  const ramp = basemap === "dark" ? QUALITY_COLORS_DARK : QUALITY_COLORS;
+  return [{ label: "No usable forecast", color: NO_FORECAST_COLOR }, ...(Object.keys(ramp) as QualityLabel[]).map((q) => ({ label: QUALITY_LABELS[q], color: ramp[q] }))];
+}
 
 /** A short line in a wave system's colour and dash pattern (the key of the crest styles). */
 export function CrestSwatch({ system, className }: { system: WaveSystem; className?: string }) {
@@ -205,7 +206,7 @@ export function LegendDrawer({
           Our predicted surf quality at each break for the selected time (not the offshore wave height above).
         </p>
         <ul className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-white/90" aria-label="Spot marker colours" data-testid="map-legend">
-          {MARKER_LEGEND.map((l) => (
+          {markerLegend(settings.basemap).map((l) => (
             <li key={l.label} className="flex items-center gap-1.5">
               <span className="size-2.5 shrink-0 rounded-full ring-1 ring-white/60" style={{ backgroundColor: l.color }} />
               {l.label}

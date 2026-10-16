@@ -23,7 +23,8 @@ import { BOUNDED_MAP_OPTIONS, CentreWatcher, flyOrJump, FlyToSpot, MapBounds, us
 
 const TILES = tileConfig(process.env.NEXT_PUBLIC_MAP_TILE_URL, process.env.NEXT_PUBLIC_MAP_ATTRIBUTION, process.env.NEXT_PUBLIC_CARTO_API_KEY);
 const FAILED_TILES_BEFORE_NOTICE = 4;
-const OCEAN_BACKGROUND = "#151a21";
+/** The map's sea colour under the dark basemap (and under the layers while they load). */
+export const OCEAN_BACKGROUND = "#151a21";
 
 /** Natural Earth 1:50m outlines turn visibly angular beyond this zoom; Streets go further. */
 const DARK_MAX_ZOOM = 8;
@@ -218,6 +219,8 @@ function ZoomWatcher({ onZoom }: { onZoom?: (z: number) => void }) {
  * One spot marker, an SVG path `path.spot-<slug>` coloured by our surf-quality prediction.
  * Memoised with stable props, so a new forecast hour restyles only the markers whose colour
  * changed and a zoom or pan touches none; `lng` is the spot's world copy nearest the view.
+ * `surface` "dark" (the dark basemap) uses the brighter-is-better ramp made for dark
+ * backgrounds (at least 3:1 against them); "light" (the Streets tiles) the default ramp.
  */
 export const SpotMarker = memo(function SpotMarker({
   spot,
@@ -227,6 +230,7 @@ export const SpotMarker = memo(function SpotMarker({
   selected,
   highlight,
   onSelect,
+  surface = "light",
 }: {
   spot: SpotSummary;
   lng: number;
@@ -235,9 +239,10 @@ export const SpotMarker = memo(function SpotMarker({
   selected: boolean;
   highlight: boolean;
   onSelect: (slug: string) => void;
+  surface?: "light" | "dark";
 }) {
   const center = useMemo<[number, number]>(() => [spot.latitude, lng], [spot.latitude, lng]);
-  const fill = colorForScore(score);
+  const fill = colorForScore(score, surface);
   const pathOptions = useMemo(() => ({ color: "#ffffff", weight: selected ? 3 : 1.5, fillColor: fill, fillOpacity: 0.95 }), [selected, fill]);
   const slug = spot.slug;
   const eventHandlers = useMemo(
@@ -381,6 +386,7 @@ function ForecastMap(props: ForecastMapProps) {
                 selected={s.slug === selected}
                 highlight={!!m?.highlight}
                 onSelect={onSelect}
+                surface={basemap === "dark" ? "dark" : "light"}
               />
             );
           })}

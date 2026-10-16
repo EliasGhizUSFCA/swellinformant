@@ -124,7 +124,10 @@ test.describe("interactive map", () => {
     const nazare = (await apiGet(request, "/api/spots/nazare")) as { timezone: string };
     const shownAt = (await apiGet(request, `/api/map/conditions?at=${encodeURIComponent(at.toISOString())}`)) as Snapshot;
     const validTime = shownAt.spots.find((s) => s.slug === "nazare")?.conditions?.valid_time ?? at.toISOString();
-    await expect(page.getByTestId("panel-local-time")).toHaveText(`${spotTime(validTime, nazare.timezone)} at the break`);
+    // The time appears once: in the breakdown's "Forecast for …" line (the panel's own time line
+    // is only for a spot without a prediction at the selected time).
+    await expect(page.getByTestId("breakdown-time")).toContainText(`Forecast for ${spotTime(validTime, nazare.timezone)} (local time)`);
+    await expect(page.getByTestId("map-spot-panel").getByTestId("panel-local-time")).toHaveCount(0);
     await expect(page.getByTestId("panel-full-forecast")).toHaveAttribute("href", `/spots/nazare?t=${encodeURIComponent(at.toISOString().replace(".000Z", "Z"))}`);
     await page.getByRole("button", { name: "Close spot details" }).click();
     await page.getByRole("button", { name: "Now", exact: true }).click();
