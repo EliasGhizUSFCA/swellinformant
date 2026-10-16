@@ -36,6 +36,8 @@ next-env.d.ts
 *.log
 # alternate Next.js build dirs (NEXT_DIST_DIR), e.g. .next-e2e/
 .next-*/
+# written by `next dev` 16.x for coding agents (agentRules: false in next.config.ts)
+frontend/AGENTS.md
 
 # Redis local dumps
 dump.rdb

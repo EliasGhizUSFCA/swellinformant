@@ -45,6 +45,9 @@ const nextConfig: NextConfig = {
   // Separate build directories let the e2e build (pointed at a test backend) coexist with dev.
   distDir: process.env.NEXT_DIST_DIR ?? ".next",
   poweredByHeader: false,
+  // `next dev` (16.4) writes an AGENTS.md rules block when it detects a coding agent; the repo
+  // keeps its own docs, so the generated file is off (and ignored in .gitignore).
+  agentRules: false,
   // `next dev` blocks dev resources for origins other than localhost; allow the loopback IP too.
   allowedDevOrigins: ["127.0.0.1"],
   reactStrictMode: true,
