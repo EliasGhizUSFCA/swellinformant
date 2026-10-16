@@ -734,9 +734,15 @@ def test_current_is_the_stored_step_nearest_to_now(db: Session, scored: dict[str
         assert current["pipeline"] is not None, at
         assert current["pipeline"].valid_time == expected, at
     # Beyond the end of the run there is no step within one step of now: no "current".
-    end = max(p.valid_time for p in _preds(db, scored["run"].id, "pipeline"))
-    late = {s.slug: s.current for s in spot_summaries(db, now=end + timedelta(hours=7))}
+    times = sorted(p.valid_time for p in _preds(db, scored["run"].id, "pipeline"))
+    late = {s.slug: s.current for s in spot_summaries(db, now=times[-1] + timedelta(hours=7))}
     assert late["pipeline"] is None
+    # Before the first step: 2 h ahead is within its 3 h step, 4 h ahead is not.
+    assert times[1] - times[0] == timedelta(hours=3)
+    soon = {s.slug: s.current for s in spot_summaries(db, now=times[0] - timedelta(hours=2))}
+    assert soon["pipeline"] is not None and soon["pipeline"].valid_time == times[0]
+    early = {s.slug: s.current for s in spot_summaries(db, now=times[0] - timedelta(hours=4))}
+    assert early["pipeline"] is None
 
 
 def test_map_snapshot_and_forecast_report_freshness(db: Session, scored: dict[str, Any]) -> None:
