@@ -1,16 +1,20 @@
+"use client";
+
 import { Bot, Waves, Wind } from "lucide-react";
 
 import { uncertaintyLabel } from "@/components/charts/forecast-charts";
 import { ForecastConfidence, LocalConfidence } from "@/components/confidence";
+import { cycleLabel, ForecastProvenance, useNowMs } from "@/components/forecast-provenance";
 import { InfoPopover } from "@/components/info-popover";
 import { DemoBadge } from "@/components/quality";
 import { RatingHeadline, WhyThisRating } from "@/components/rating";
 import { Disclosure } from "@/components/ui/disclosure";
 import { WindDisputeNote } from "@/components/wind-dispute";
-import { compass, formatDateTime, heightRange, kmh, metres, seconds, type Units } from "@/lib/format";
+import { forecastReasonsOf, modelRunText, rangeWords, validInText } from "@/lib/confidence";
+import { compass, formatSpotDateTime, heightRange, kmh, metres, seconds, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors, ratingReason } from "@/lib/rating";
-import type { Conditions, ForecastPoint } from "@/types/api";
+import type { Conditions, ForecastPoint, ForecastRunInfo, ForecastSourceInfo } from "@/types/api";
 
 const METHOD_LABEL: Record<string, string> = {
   komar_gaughan_v1_uncalibrated: "Komar–Gaughan breaker height with an uncalibrated spot factor",
@@ -62,14 +66,28 @@ function MoreOffshoreData({ p }: { p: ForecastPoint }) {
   );
 }
 
+/** "NOAA GFS 18Z + ECMWF 12Z"-style short label of the model runs behind a step. */
+function runsLabel(c: Conditions, run: ForecastRunInfo | null | undefined, nowMs: number): string | null {
+  const members = (run?.members ?? []).filter((m) => m.init_time);
+  if (members.length > 1) return members.map((m) => `${m.name.split(" (")[0]} ${cycleLabel(m.init_time!)}`).join(" + ");
+  if (members.length === 1) return `${c.source_name ?? members[0]!.name} ${cycleLabel(members[0]!.init_time!)}`;
+  if (!c.run_issued_at) return c.source_name ?? null;
+  const age = modelRunText(c.run_issued_at, nowMs);
+  // A blend's issue time is only its oldest member's.
+  return `${c.source_name ?? "Forecast source"} · ${c.source_code === "blend" ? `oldest ${age}` : age}`;
+}
+
 /**
- * One forecast hour: our prediction first (rating, breaking-wave estimate and its range,
- * forecast confidence), then the raw numerical-model data it is based on. They are different
+ * One forecast step: our prediction first (rating, breaking-wave estimate and its likely
+ * range, the swell and wind behind it, forecast and local confidence), then the raw
+ * numerical-model data it is based on, folded under "Offshore model data". They are different
  * physical quantities, so their difference is never shown as an error.
  *
  * Optional, additive inputs: ``components`` (the API's score components, for "Why this
- * rating?"), ``point`` (the full forecast point, for secondary swells and sea level) and
- * ``spotRange`` (the spot's working range in feet, for the one-line reason).
+ * rating?"), ``point`` (the full forecast point, for secondary swells and sea level),
+ * ``spotRange`` (the spot's working range in feet, for the one-line reason) and ``source`` /
+ * ``run`` / ``generatedAt`` (the forecast's provenance: each model run with its init time and
+ * when the data was fetched).
  */
 export function ForecastBreakdown({
   c,
@@ -78,6 +96,10 @@ export function ForecastBreakdown({
   components,
   point,
   spotRange,
+  source,
+  run,
+  generatedAt,
+  nowMs,
 }: {
   c: Conditions;
   tz: string;
@@ -85,12 +107,20 @@ export function ForecastBreakdown({
   components?: Record<string, unknown> | null;
   point?: ForecastPoint | null;
   spotRange?: { minFt: number; maxFt: number } | null;
+  source?: ForecastSourceInfo | null;
+  run?: ForecastRunInfo | null;
+  generatedAt?: string | null;
+  nowMs?: number;
 }) {
+  const clock = useNowMs();
+  const now = nowMs ?? clock;
   const dir = c.swell_direction_deg;
   const factorInput = {
     periodS: c.swell_period_s,
     windRelation: c.wind_relation,
     windSpeedKmh: c.wind_speed_kmh,
+    windStrength: c.wind_strength,
+    windFavourability: c.wind_favourability,
     components,
     explanation: c.explanation,
     breakingMinFt: c.breaking_height_min_ft,
@@ -100,15 +130,21 @@ export function ForecastBreakdown({
     spotMaxFt: spotRange?.maxFt,
   };
   const reason = ratingReason(factorInput);
+  const away = validInText(c.valid_time, now);
+  const range = rangeWords(c.uncertainty_kind);
+  const runs = runsLabel(c, run, now);
+  const wind = `${kmh(c.wind_speed_kmh)} ${compass(c.wind_direction_deg)} · ${WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}`;
   return (
     <div className="space-y-3" data-testid="forecast-breakdown">
-      <div className="text-xs text-muted-foreground">
-        {formatDateTime(c.valid_time, tz)} local · {c.is_daylight ? "daylight" : "night (not surfable)"}
+      <div className="text-xs text-muted-foreground" data-testid="breakdown-time">
+        Forecast for <span className="font-medium text-foreground/80">{formatSpotDateTime(c.valid_time, tz, { zone: true })}</span> (local time)
+        {away ? ` · ${away}` : ""}
+        {c.is_daylight ? "" : " · night"}
       </div>
 
       <section className="rounded-xl border border-ocean/30 bg-ocean/5 p-3" data-testid="our-prediction">
         <div className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-ocean uppercase">
-          <Bot className="size-3.5" /> Our surf prediction
+          <Bot className="size-3.5" aria-hidden="true" /> Our surf prediction
         </div>
         <RatingHeadline label={c.label} score={c.score} reason={reason} className="mt-1.5" />
         <div className="mt-2 flex flex-wrap items-baseline gap-x-2" data-testid="breaking-height">
@@ -118,14 +154,38 @@ export function ForecastBreakdown({
           </span>
         </div>
         {c.breaking_p10_ft != null && c.breaking_p90_ft != null && (
-          <div className="text-xs text-muted-foreground" data-testid="uncertainty-range">
-            80% range {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)} · {uncertaintyLabel(c.uncertainty_kind)} <InfoPopover term="range80" />
+          <div className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="uncertainty-range">
+            {range.name} {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)} ({range.note})
+            {/* The popover explains the range; screen readers get its intent and basis inline. */}
+            <span className="sr-only">: meant as an 80% range, {uncertaintyLabel(c.uncertainty_kind)}</span>
+            <InfoPopover term="likelyRange" />
           </div>
         )}
-        <WindDisputeNote reasons={c.confidence_reasons} className="mt-1.5" />
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground" data-testid="prediction-inputs">
+          <span className="inline-flex items-center gap-1">
+            <Waves className="size-3.5 shrink-0" aria-hidden="true" />
+            {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} {compass(dir)} swell
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Wind className="size-3.5 shrink-0" aria-hidden="true" />
+            {wind}
+          </span>
+        </div>
+        <WindDisputeNote note={c.wind_dispute_note} reasons={c.confidence_reasons} className="mt-1.5" />
+        {/* The classes on the first screen; their reasons are in "Confidence details". */}
         <div className="mt-2.5 space-y-1.5">
-          <ForecastConfidence value={c.forecast_confidence_class} reasons={c.confidence_reasons} leadHours={c.lead_hours} legacyIndex={c.confidence} />
-          <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} reason={c.local_confidence_reason} />
+          <ForecastConfidence
+            value={c.forecast_confidence_class}
+            reasons={forecastReasonsOf(c)}
+            notes={c.confidence_reasons}
+            validTime={c.valid_time}
+            runIssuedAt={c.run_issued_at}
+            blend={c.source_code === "blend"}
+            nowMs={now}
+            showReason={false}
+            legacyIndex={c.confidence}
+          />
+          <LocalConfidence compact explain value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} reason={c.local_confidence_reason} />
         </div>
         <WhyThisRating
           className="mt-2"
@@ -144,23 +204,28 @@ export function ForecastBreakdown({
         />
       </section>
 
-      <section className="rounded-xl border p-3" data-testid="raw-model">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-            <Waves className="size-3.5" /> Offshore model data
-            <InfoPopover title="Offshore vs. breaking height">
-              <p>
-                Offshore height is the open-water sea state from the numerical model; breaking height is our estimate of wave faces at this break.
-                They are different quantities, so their difference is not a forecast error.
-              </p>
-            </InfoPopover>
-          </div>
-          {c.is_demo && <DemoBadge />}
-        </div>
-        <div className="mt-0.5 text-[11px] text-muted-foreground">
-          {c.source_name ?? "Forecast source"}
-          {c.run_issued_at ? ` · model run ${formatDateTime(c.run_issued_at, "UTC")} UTC` : ""}
-        </div>
+      <Disclosure
+        variant="card"
+        className="border-border"
+        data-testid="raw-model"
+        summary={
+          <span className="flex min-w-0 flex-col items-start gap-0.5">
+            <span className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+              <Waves className="size-3.5" aria-hidden="true" /> Offshore model data
+            </span>
+            {runs && (
+              <span className="max-w-full text-left text-[11px] font-normal text-muted-foreground" data-testid="raw-model-runs">
+                {runs}
+              </span>
+            )}
+          </span>
+        }
+        hint={c.is_demo ? <DemoBadge /> : undefined}
+        contentClassName="px-3 pb-3"
+      >
+        <p className="text-[11px] text-muted-foreground">
+          Open-water values from the numerical model, not surf heights: their difference from our breaking estimate is not a forecast error.
+        </p>
         <dl className="mt-2 text-sm">
           <Row
             k={
@@ -176,14 +241,22 @@ export function ForecastBreakdown({
             k="Wind"
             v={
               <span className="inline-flex items-center gap-1">
-                <Wind className="size-3.5" />
+                <Wind className="size-3.5" aria-hidden="true" />
                 {kmh(c.wind_speed_kmh)} from {compass(c.wind_direction_deg)} · {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
               </span>
             }
           />
         </dl>
         {point && <MoreOffshoreData p={point} />}
-      </section>
+        <ForecastProvenance
+          className="mt-2 border-t pt-2"
+          source={source ?? (c.source_name ? { name: c.source_name, is_demo: c.is_demo ?? false } : null)}
+          // A blend's own issue time is only its oldest member's: not shown as "the" run.
+          run={run ?? (c.run_issued_at && c.source_code !== "blend" ? { issued_at: c.run_issued_at } : null)}
+          members={run?.members}
+          generatedAt={generatedAt}
+        />
+      </Disclosure>
     </div>
   );
 }

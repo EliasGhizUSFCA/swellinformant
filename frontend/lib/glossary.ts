@@ -5,6 +5,12 @@
 import { FORECAST_CONFIDENCE_MEANING, LOCAL_CONFIDENCE_MEANING, RESEARCH_CONFIDENCE_MEANING } from "@/lib/confidence";
 import { GROUNDSWELL_PERIOD_S } from "@/lib/rating";
 
+/** What the likely range is: an intended 80% range that has not been verified at the break
+ * (docs/ml-evaluation.md, section 12: against NDBC buoys the app's offshore 80% range covered
+ * 53% at 24 h and 85-89% beyond 5 days). */
+const LIKELY_RANGE_BODY =
+  "Meant to contain the real breaking height about 8 times in 10, from an assumed error model (lead time or ensemble spread). It has not been checked against surf observations at the break. Against offshore buoys, the same kind of range held the measured wave height only 53% of the time one day ahead (85–89% beyond 5 days). Treat it as a guide, not a probability.";
+
 export interface GlossaryEntry {
   title: string;
   body: string;
@@ -19,9 +25,14 @@ export const GLOSSARY = {
     title: "Breaking wave height (our estimate)",
     body: "Our estimate of the wave faces (trough to crest) where the waves break at this spot, worked out from the offshore swell, its period and direction and the break's exposure. “Typical” is the significant breaking height (roughly the average of the bigger third of waves); “sets” are the bigger waves (about 1.27 × typical). It is a model estimate, not a measurement.",
   },
+  likelyRange: {
+    title: "Likely range (unverified)",
+    body: LIKELY_RANGE_BODY,
+  },
+  /** The same range under its earlier name (kept for existing links and tests). */
   range80: {
     title: "80% range",
-    body: "The range our error model expects to contain the real breaking height about 8 times in 10. That error model is an assumption (based on lead time or ensemble spread) that has not been checked against surf observations yet, so treat the range as a guide.",
+    body: LIKELY_RANGE_BODY,
   },
   groundswell: {
     title: "Groundswell",
@@ -52,7 +63,7 @@ export const GLOSSARY = {
   },
   overallMatch: {
     title: "Overall match",
-    body: "Combines surf quality, price, a forecast confidence index and trip convenience into one ranking number, weighted by your search's priority. It is a heuristic index, not a probability.",
+    body: "Combines surf quality, price, an offshore spread index (how settled the offshore forecast is) and trip convenience into one ranking number, weighted by your search's priority. It is a heuristic index, not a probability.",
   },
 } satisfies Record<string, GlossaryEntry>;
 

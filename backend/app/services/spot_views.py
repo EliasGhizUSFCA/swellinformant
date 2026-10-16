@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from collections.abc import Sequence
+from datetime import date, datetime, timedelta
+from typing import Any, get_args
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -20,7 +22,7 @@ from app.models import (
     SwellEvent,
     WaveForecast,
 )
-from app.models.enums import SwellEventStatus
+from app.models.enums import QualityLabel, SwellEventStatus
 from app.schemas.spots import (
     AirportOut,
     BlendInfo,
@@ -31,17 +33,23 @@ from app.schemas.spots import (
     ForecastPoint,
     ForecastRunOut,
     ForecastSourceOut,
+    GustKind,
     MapSnapshotOut,
     MapSpotOut,
     ModelPoint,
     ModelSeries,
     PhysicalProfileOut,
+    RunMemberOut,
     SpotAirportOut,
     SpotDetail,
     SpotForecastOut,
     SpotMini,
     SpotSummary,
+    WindFavourability,
+    WindStrength,
 )
+from app.services import timesteps
+from app.services.forecasts.base import EXTRA_GUST_KIND
 from app.services.forecasts.queries import (
     USABLE,
     is_stale,
@@ -50,13 +58,36 @@ from app.services.forecasts.queries import (
     source_attribution_links,
 )
 from app.services.forecasts.registry import configured_source_codes
+from app.services.notifications.alerts import STALE_ALERT_FACTOR
 from app.services.research.views import research_classes, research_out
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.forecast_confidence import api_fields
-from app.services.surf_quality.scoring import label_for_score
-from app.services.swell_detection.service import peak_confidence
+from app.services.surf_quality.scoring import label_for_score, min_score_for_label
+from app.services.swell_detection.service import peak_confidence, peak_wind
 
 MODEL_SERIES_STEP_HOURS = 3
+# The current conditions are the stored step nearest to now, searched this far back (the
+# longest step any source uses: ECMWF and GEFS are 6-hourly at long leads).
+CURRENT_LOOKBACK = timedelta(hours=6)
+# The best upcoming hour may be up to this far in the past (it is still today's surf).
+BEST_LOOKBACK = timedelta(hours=1)
+_WIND_STRENGTHS = frozenset(get_args(WindStrength))
+_WIND_FAVOURABILITY = frozenset(get_args(WindFavourability))
+_GUST_KINDS = frozenset(get_args(GustKind))
+
+
+def wind_fields(components: dict[str, Any] | None, extra: dict[str, Any] | None) -> dict[str, Any]:
+    """Wind strength and favourability from the prediction's stored ``wind_detail``
+    (scoring 2.1.0; None for older rows) and the gust definition the record names."""
+    detail = (components or {}).get("wind_detail") or {}
+    strength = detail.get("strength") if isinstance(detail, dict) else None
+    favourability = detail.get("favourability") if isinstance(detail, dict) else None
+    gust_kind = (extra or {}).get(EXTRA_GUST_KIND)
+    return {
+        "wind_strength": strength if strength in _WIND_STRENGTHS else None,
+        "wind_favourability": favourability if favourability in _WIND_FAVOURABILITY else None,
+        "gust_kind": gust_kind if gust_kind in _GUST_KINDS else None,
+    }
 
 
 def spot_mini(spot: SurfSpot) -> SpotMini:
@@ -110,7 +141,9 @@ def event_out(
         is_demo=event.is_demo,
         source_code=event.source_code,
         history=event.history if include_history else [],
+        stale=stale,
         **peak_confidence(event, stale=stale),
+        **peak_wind(event),
     )
 
 
@@ -154,6 +187,7 @@ def _conditions(
         confidence_label=p.confidence_label.value,
         is_daylight=p.is_daylight,
         **api_fields(p, stale=stale),
+        **wind_fields(p.components, f.extra),
     )
 
 
@@ -171,70 +205,133 @@ def _summary_fields(spot: SurfSpot) -> dict[str, object]:
     }
 
 
+def _nearest_step(times: Sequence[datetime], now: datetime) -> int | None:
+    """Index of the stored step nearest to ``now`` (the earlier one on a tie), provided it
+    is at most one step (its own duration) away; None otherwise. The steps are the model's
+    native valid times, so nothing between them is invented."""
+    if not times:
+        return None
+    durations = timesteps.step_hours(times)
+    best = min(range(len(times)), key=lambda i: (abs((times[i] - now).total_seconds()), i))
+    gap_h = abs((times[best] - now).total_seconds()) / 3600.0
+    return best if gap_h <= max(durations[best], 0.0) + 1e-9 else None
+
+
+def _current_and_best(
+    db: Session,
+    runs: dict[int, ForecastRun],
+    now: datetime,
+    horizon_days: int,
+    spot_id: int | None = None,
+) -> tuple[dict[int, Conditions], dict[int, Conditions]]:
+    """Per spot: the current conditions (the stored step nearest to now, within one step)
+    and the best daylight hour of the next ``horizon_days``, from each spot's authoritative
+    run. ``spot_id`` restricts the query to that spot's predictions."""
+    if spot_id is not None:
+        runs = {spot_id: runs[spot_id]} if spot_id in runs else {}
+    run_ids = {r.id for r in runs.values()}
+    if not run_ids:
+        return {}, {}
+    stale = {r.id: is_stale(r, now) for r in runs.values()}
+    stmt = (
+        select(SurfQualityPrediction, WaveForecast)
+        .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
+        .where(
+            SurfQualityPrediction.run_id.in_(run_ids),
+            SurfQualityPrediction.valid_time >= now - CURRENT_LOOKBACK,
+            SurfQualityPrediction.valid_time <= now + timedelta(days=horizon_days),
+        )
+        .order_by(SurfQualityPrediction.spot_id, SurfQualityPrediction.valid_time)
+    )
+    if spot_id is not None:
+        stmt = stmt.where(SurfQualityPrediction.spot_id == spot_id)
+    by_spot: dict[int, list[tuple[SurfQualityPrediction, WaveForecast]]] = defaultdict(list)
+    for p, f in db.execute(stmt).all():
+        run = runs.get(p.spot_id)
+        if run is not None and run.id == p.run_id:
+            by_spot[p.spot_id].append((p, f))
+
+    current: dict[int, Conditions] = {}
+    best: dict[int, Conditions] = {}
+    for sid, rows in by_spot.items():
+        run = runs[sid]
+        i = _nearest_step([p.valid_time for p, _ in rows], now)
+        if i is not None:
+            current[sid] = _conditions(*rows[i], run, stale=stale[run.id])
+        top: tuple[SurfQualityPrediction, WaveForecast] | None = None
+        for p, f in rows:
+            if p.valid_time < now - BEST_LOOKBACK or not p.is_daylight:
+                continue
+            if top is None or p.score > top[0].score:
+                top = (p, f)
+        if top is not None:
+            best[sid] = _conditions(*top, run, stale=stale[run.id])
+    return current, best
+
+
+def _active_events(
+    db: Session, now: datetime, spot_id: int | None = None
+) -> dict[int, list[SwellEvent]]:
+    stmt = (
+        select(SwellEvent)
+        .where(SwellEvent.status == SwellEventStatus.ACTIVE, SwellEvent.end_time >= now)
+        .order_by(SwellEvent.start_time)
+    )
+    if spot_id is not None:
+        stmt = stmt.where(SwellEvent.spot_id == spot_id)
+    events: dict[int, list[SwellEvent]] = defaultdict(list)
+    for e in db.scalars(stmt).all():
+        events[e.spot_id].append(e)
+    return events
+
+
+def _summary(
+    spot: SurfSpot,
+    current: dict[int, Conditions],
+    best: dict[int, Conditions],
+    events: dict[int, list[SwellEvent]],
+    research_class: str | None,
+    now: datetime,
+) -> SpotSummary:
+    upcoming = events.get(spot.id, [])
+    return SpotSummary(
+        **_summary_fields(spot),  # type: ignore[arg-type]
+        current=current.get(spot.id),
+        best_upcoming=best.get(spot.id),
+        next_event=event_out(upcoming[0], now) if upcoming else None,
+        upcoming_event_count=len(upcoming),
+        research_class=research_class,
+    )
+
+
 def spot_summaries(
     db: Session, now: datetime | None = None, horizon_days: int = 7
 ) -> list[SpotSummary]:
     """All active spots with current conditions, best upcoming window and next event."""
     now = now or utcnow()
     spots = db.scalars(select(SurfSpot).where(SurfSpot.is_active).order_by(SurfSpot.name)).all()
-    runs = latest_runs_by_spot(db, now)
-    run_ids = {r.id for r in runs.values()}
-    stale = {r.id: is_stale(r, now) for r in runs.values()}
-
-    current: dict[int, Conditions] = {}
-    best: dict[int, Conditions] = {}
-    if run_ids:
-        rows = db.execute(
-            select(SurfQualityPrediction, WaveForecast)
-            .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
-            .where(
-                SurfQualityPrediction.run_id.in_(run_ids),
-                SurfQualityPrediction.valid_time >= now - timedelta(hours=1),
-                SurfQualityPrediction.valid_time <= now + timedelta(days=horizon_days),
-            )
-            .order_by(SurfQualityPrediction.valid_time)
-        ).all()
-        for p, f in rows:
-            if runs.get(p.spot_id) is None or runs[p.spot_id].id != p.run_id:
-                continue
-            run = runs[p.spot_id]
-            if p.spot_id not in current and p.valid_time >= now - timedelta(minutes=30):
-                current[p.spot_id] = _conditions(p, f, run, stale=stale[run.id])
-            if p.is_daylight and (p.spot_id not in best or p.score > best[p.spot_id].score):
-                best[p.spot_id] = _conditions(p, f, run, stale=stale[run.id])
-
-    events: dict[int, list[SwellEvent]] = defaultdict(list)
-    for e in db.scalars(
-        select(SwellEvent)
-        .where(SwellEvent.status == SwellEventStatus.ACTIVE, SwellEvent.end_time >= now)
-        .order_by(SwellEvent.start_time)
-    ).all():
-        events[e.spot_id].append(e)
-
+    current, best = _current_and_best(db, latest_runs_by_spot(db, now), now, horizon_days)
+    events = _active_events(db, now)
     research = research_classes(db)  # one query for all spots
-    out: list[SpotSummary] = []
-    for s in spots:
-        upcoming = events.get(s.id, [])
-        out.append(
-            SpotSummary(
-                **_summary_fields(s),  # type: ignore[arg-type]
-                current=current.get(s.id),
-                best_upcoming=best.get(s.id),
-                next_event=event_out(upcoming[0], now) if upcoming else None,
-                upcoming_event_count=len(upcoming),
-                research_class=research.get(s.id),
-            )
-        )
-    return out
+    return [_summary(s, current, best, events, research.get(s.id), now) for s in spots]
 
 
-def spot_detail(db: Session, spot: SurfSpot, now: datetime | None = None) -> SpotDetail:
-    summary = next((s for s in spot_summaries(db, now) if s.id == spot.id), None)
-    base = summary.model_dump() if summary else _summary_fields(spot)
+def spot_detail(
+    db: Session, spot: SurfSpot, now: datetime | None = None, horizon_days: int = 7
+) -> SpotDetail:
+    """One spot's page data. Only this spot's predictions and events are read; the
+    ``current`` and ``best_upcoming`` hours are the ones :func:`spot_summaries` gives it."""
+    now = now or utcnow()
+    current, best = _current_and_best(
+        db, latest_runs_by_spot(db, now), now, horizon_days, spot_id=spot.id
+    )
+    events = _active_events(db, now, spot_id=spot.id)
     research = research_out(db, spot.id)
-    base["research_class"] = research.research_class if research else None
+    summary = _summary(
+        spot, current, best, events, research.research_class if research else None, now
+    )
     return SpotDetail(
-        **base,
+        **summary.model_dump(),
         research=research,
         forecast_latitude=spot.forecast_latitude,
         forecast_longitude=spot.forecast_longitude,
@@ -283,26 +380,32 @@ def _profile_out(spot: SurfSpot) -> PhysicalProfileOut | None:
 
 
 def daily_summaries(points: list[ForecastPoint], tz: str) -> list[DailySummary]:
+    """One summary per spot-local day with daylight steps. ``good_hours`` sums the
+    durations of the Good-or-better daylight steps (``timesteps.weighted_hours``, each step
+    clipped to its local day), so a 3-hourly step counts 3 hours, not 1."""
     zone = ZoneInfo(tz)
-    by_day: dict[object, list[ForecastPoint]] = defaultdict(list)
+    by_day: dict[date, list[ForecastPoint]] = defaultdict(list)
     for p in points:
         if p.is_daylight:
             by_day[p.valid_time.astimezone(zone).date()].append(p)
+    times = [p.valid_time for p in points]
+    good = min_score_for_label(QualityLabel.GOOD)
+    good_mask = [p.is_daylight and p.score >= good for p in points]
     out: list[DailySummary] = []
-    for day in sorted(by_day):  # type: ignore[type-var]
+    for day in sorted(by_day):
         items = by_day[day]
         top = max(items, key=lambda p: p.score)
         winds = [p.wind_speed_kmh for p in items if p.wind_speed_kmh is not None]
         out.append(
             DailySummary(
-                date=day,  # type: ignore[arg-type]
+                date=day,
                 best_score=top.score,
                 best_label=label_for_score(top.score).value,
                 best_time=top.valid_time,
                 height_min_ft=min(p.breaking_height_min_ft for p in items),
                 height_max_ft=max(p.breaking_height_max_ft for p in items),
                 avg_wind_kmh=round(sum(winds) / len(winds), 1) if winds else None,
-                good_hours=sum(1 for p in items if p.score >= 57),
+                good_hours=round(timesteps.weighted_hours(times, good_mask, tz=tz, day=day), 2),
                 confidence=round(sum(p.confidence for p in items) / len(items)),
                 forecast_confidence_class=top.forecast_confidence_class,
                 local_confidence_class=top.local_confidence_class,
@@ -374,6 +477,7 @@ def forecast_points(
             explanation=p.explanation,
             components=p.components,
             **api_fields(p, stale=stale),
+            **wind_fields(p.components, f.extra),
         )
         for p, f in rows
     ]
@@ -527,6 +631,46 @@ def source_attribution(db: Session, run: ForecastRun) -> str:
     return " ".join(dict.fromkeys(parts))
 
 
+def _member_out(source: ForecastSource, run_key: str, init_time: datetime | None) -> RunMemberOut:
+    return RunMemberOut(
+        code=source.code,
+        name=source.name,
+        family=source.family,
+        run_key=run_key,
+        init_time=init_time,
+        wave_model=source.wave_model,
+        atmosphere_model=source.atmosphere_model,
+    )
+
+
+def run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
+    """The model runs behind ``run`` with their own init times: a blend's members (from its
+    details; the blend's ``issued_at`` is only the oldest member's), otherwise the run
+    itself."""
+    if run.source.kind != "blend":
+        return [_member_out(run.source, run.run_key, run.issued_at)]
+    members = [m for m in (run.details or {}).get("members", []) if m.get("code")]
+    codes = [str(m["code"]) for m in members]
+    sources = {
+        s.code: s
+        for s in db.scalars(select(ForecastSource).where(ForecastSource.code.in_(codes))).all()
+    }
+    out: list[RunMemberOut] = []
+    for m in members:
+        source = sources.get(str(m["code"]))
+        if source is None:
+            continue
+        issued = m.get("issued_at")
+        out.append(
+            _member_out(
+                source,
+                str(m.get("run_key") or ""),
+                datetime.fromisoformat(str(issued)) if issued else None,
+            )
+        )
+    return out
+
+
 def spot_forecast(
     db: Session, spot: SurfSpot, days: int = 10, now: datetime | None = None
 ) -> SpotForecastOut:
@@ -567,8 +711,15 @@ def spot_forecast(
             wave_model_run_at=run.wave_model_run_at,
             atmosphere_model_run_at=run.atmosphere_model_run_at,
             status=run.status.value,
+            members=run_members(db, run),
         ),
         stale=stale,
+        # The alert job's own rule (notifications.alerts): alerts are held back only from
+        # STALE_ALERT_FACTOR times the stale-after age, not as soon as the run is stale.
+        alerts_paused=is_stale(run, now, factor=STALE_ALERT_FACTOR),
+        # generated_at stays None here: the rest of this response depends only on the stored
+        # data, and a per-request clock value would make identical forecasts compare
+        # unequal (the spot timeline carries its own generated_at).
         breaking_height_method=method,
         algorithm_version=points[0].algorithm_version if points else None,
         calibrated=bool(spot.calibration),
@@ -662,7 +813,12 @@ def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) 
         upcoming[e.spot_id] += 1
         if e.start_time <= target <= e.end_time:
             covering[e.spot_id] += 1
+    # Freshness of the newest authoritative run behind the snapshot.
+    newest = max(runs.values(), key=lambda r: (r.issued_at, r.id), default=None)
     return MapSnapshotOut(
+        stale=newest is not None and is_stale(newest, now),
+        newest_run_issued_at=newest.issued_at if newest is not None else None,
+        last_updated_at=newest.completed_at if newest is not None else None,
         requested_at=at,
         valid_time=target if run_ids else None,
         range_start=range_start,

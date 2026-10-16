@@ -26,8 +26,25 @@ export interface Scenario {
   name: string;
   forecastClass: "high" | "moderate" | "low" | null;
   localClass: "high" | "moderate" | "low" | null;
+  /** Forecast-confidence reasons (the API's forecast_confidence_reasons: forecast rules only). */
   reasons: string[];
+  /** Why confidence at the break is lower (local_confidence_reason); null when the classes match. */
+  localReason: string | null;
+  /** The disputed-wind note (wind_dispute_note), when the sources disagree. */
+  windNote?: string | null;
   research: Research | null;
+}
+
+/** The deprecated mixed confidence_reasons list, built the way the backend builds it: the
+ * forecast reasons, then the disputed-wind note, then the local (research) reason. */
+export function mixedReasons(sc: Scenario): string[] {
+  return [...sc.reasons, ...(sc.windNote ? [sc.windNote] : []), ...(sc.localReason ? [sc.localReason] : [])];
+}
+
+/** The wind fields the API adds from its wind model (synthetic speeds; the backend's classes). */
+function windFields(kmh: number) {
+  const strength = kmh <= 5 ? "glassy" : kmh < 12 ? "light" : kmh < 29 ? "moderate" : "strong";
+  return { wind_strength: strength, wind_favourability: "favourable" } as const;
 }
 
 const SOURCES: Research["sources"] = [
@@ -58,6 +75,7 @@ export const SCENARIOS = {
       "Synthetic reason: the swell forecast is about seven days away, so conditions may change.",
       "Synthetic reason: the forecast models disagree on the swell size.",
     ],
+    localReason: null,
     research: {
       research_class: "high",
       summary: "Synthetic summary: the break's preferred swell direction, tide and wind are supported by multiple test sources.",
@@ -77,10 +95,10 @@ export const SCENARIOS = {
     name: "low research + high forecast",
     forecastClass: "high",
     localClass: "moderate",
-    reasons: [
-      "Synthetic reason: the swell is about two days away and the models agree.",
-      "Synthetic reason: this break's preferred tide is not documented in the research, so the breaking-wave estimate is less certain.",
-    ],
+    reasons: ["Synthetic reason: the swell is about two days away and the models agree."],
+    // The backend's own sentence for a Moderate research basis (forecast_confidence.RESEARCH_REASONS):
+    // local reasons are always one of these, and the mixed list carries it too.
+    localReason: "How this break responds to swell is only partly documented.",
     research: {
       research_class: "low",
       summary: "Synthetic summary: only one test source describes this break.",
@@ -105,7 +123,7 @@ export const SCENARIOS = {
       research_updated_at: null,
     },
   },
-  notAssessed: { name: "not assessed", forecastClass: null, localClass: null, reasons: [], research: null },
+  notAssessed: { name: "not assessed", forecastClass: null, localClass: null, reasons: [], localReason: null, research: null },
 } satisfies Record<string, Scenario>;
 
 function iso(offsetHours: number): string {
@@ -171,9 +189,12 @@ function point(h: number, sc: Scenario): ForecastPoint {
     components: { swell_direction: 0.95, swell_period: Math.min(1, w.period / 15), wave_size: 0.8, wind: 0.9, consistency: 0.8, size_gate: 1, period_gate: 1, wind_gate: 1 },
     forecast_confidence_class: sc.forecastClass,
     local_confidence_class: sc.localClass,
-    confidence_reasons: sc.reasons,
-    forecast_confidence_reasons: [],
+    confidence_reasons: mixedReasons(sc),
+    forecast_confidence_reasons: sc.reasons,
+    local_confidence_reason: sc.localReason,
+    wind_dispute_note: sc.windNote ?? null,
     lead_hours: h,
+    ...windFields(Math.round(w.wind)),
   };
 }
 
@@ -209,6 +230,10 @@ function toConditions(p: ForecastPoint): Conditions {
     local_confidence_class: p.local_confidence_class ?? null,
     confidence_reasons: p.confidence_reasons ?? [],
     forecast_confidence_reasons: p.forecast_confidence_reasons ?? [],
+    local_confidence_reason: p.local_confidence_reason ?? null,
+    wind_dispute_note: p.wind_dispute_note ?? null,
+    wind_strength: p.wind_strength ?? null,
+    wind_favourability: p.wind_favourability ?? null,
     lead_hours: p.lead_hours ?? null,
   };
 }
@@ -294,7 +319,17 @@ export function spotForecast(sc: Scenario): SpotForecast {
     available: true,
     message: null,
     source: { code: "demo", name: "Synthetic test forecast (not real data)", is_demo: true, attribution: "Synthetic test fixture.", wave_model: "synthetic", atmosphere_model: "synthetic", attribution_links: [] },
-    run: { run_key: "synthetic-test", issued_at: iso(-6), completed_at: iso(-5), wave_model_run_at: iso(-6), atmosphere_model_run_at: iso(-6), status: "success", members: [] },
+    run: {
+      run_key: "synthetic-test",
+      issued_at: iso(-6),
+      completed_at: iso(-5),
+      wave_model_run_at: iso(-6),
+      atmosphere_model_run_at: iso(-6),
+      status: "success",
+      members: [
+        { code: "demo", name: "Synthetic test forecast (not real data)", family: "synthetic", run_key: "synthetic-test", init_time: iso(-6), wave_model: "synthetic", atmosphere_model: "synthetic" },
+      ],
+    },
     stale: false,
     breaking_height_method: "linear_wave_v2",
     algorithm_version: "2.0.0",
@@ -340,8 +375,11 @@ export function swellEvent(sc: Scenario, opts: { id: string; name: string; start
     history: [],
     forecast_confidence_class: sc.forecastClass,
     local_confidence_class: sc.localClass,
-    confidence_reasons: sc.reasons,
-    forecast_confidence_reasons: [],
+    confidence_reasons: mixedReasons(sc),
+    forecast_confidence_reasons: sc.reasons,
+    local_confidence_reason: sc.localReason,
+    wind_dispute_note: sc.windNote ?? null,
+    ...windFields(8),
     stale: false,
   };
 }
@@ -417,6 +455,8 @@ export function matchSummary(sc: Scenario): MatchSummary {
     created_at: iso(-24),
     updated_at: iso(-2),
     forecast_confidence_class: sc.forecastClass,
+    local_confidence_class: sc.localClass,
+    local_confidence_reason: sc.localReason,
     stale: false,
   };
 }
@@ -465,6 +505,8 @@ export function notifications(sc: Scenario): NotificationPage {
         window_label: "7 days out (synthetic)",
         is_demo: true,
         forecast_confidence_class: sc.forecastClass,
+        local_confidence_class: sc.localClass,
+        local_confidence_reason: sc.localReason,
       },
     ],
   };

@@ -4,7 +4,7 @@ import { Bell, ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
-import { ConfidenceBadge } from "@/components/confidence";
+import { ConfidenceBadge, LocalConfidence } from "@/components/confidence";
 import { InfoPopover } from "@/components/info-popover";
 import { AppShell } from "@/components/layout/app-shell";
 import { EmptyState, PageHeader } from "@/components/page-header";
@@ -14,9 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNotifications } from "@/hooks/queries";
-import { hasField } from "@/lib/confidence";
 import { deliveryStatus } from "@/lib/delivery";
-import { formatDateTime, formatMoney, titleCase } from "@/lib/format";
+import { formatMoney, formatSpotDateTime, titleCase } from "@/lib/format";
 
 const PAGE = 25;
 
@@ -27,7 +26,9 @@ const PAGE = 25;
 function History() {
   const [offset, setOffset] = useState(0);
   const { data, isLoading } = useNotifications(offset, PAGE);
+  // The viewer's own zone, named on every time (alerts are not tied to one spot's clock).
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const when = (iso: string) => formatSpotDateTime(iso, tz, { zone: true });
   if (isLoading) return <Skeleton className="h-96" />;
   if (!data || data.total === 0)
     return <EmptyState icon={<Bell />} title="No alerts yet" description="When a swell matches one of your searches, the alert is recorded here." />;
@@ -62,7 +63,7 @@ function History() {
               return (
                 <tr key={n.id} className="block border-t py-2 align-top first:border-t-0 md:table-row md:py-0 md:first:border-t" role="row">
                   <td className={`${cell} whitespace-nowrap text-xs text-muted-foreground md:text-sm`} role="cell">
-                    {formatDateTime(n.created_at, tz)}
+                    {when(n.created_at)}
                   </td>
                   <td className={cell} role="cell">
                     <div className="font-medium">
@@ -77,7 +78,6 @@ function History() {
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                       <Badge variant="secondary">{titleCase(n.kind)}</Badge>
                       {n.peak_label && <QualityBadge label={n.peak_label} />}
-                      {hasField(n, "forecast_confidence_class") && <ConfidenceBadge value={n.forecast_confidence_class} />}
                       {n.window_label && <span>{n.window_label}</span>}
                       {n.is_demo && <DemoBadge />}
                     </div>
@@ -98,10 +98,10 @@ function History() {
                     </div>
                     {n.sent_at && (
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {n.status === "captured" ? "Captured" : "Handed to"} {n.provider ?? "provider"} · {formatDateTime(n.sent_at, tz)}
+                        {n.status === "captured" ? "Captured" : "Handed to"} {n.provider ?? "provider"} · {when(n.sent_at)}
                       </div>
                     )}
-                    {n.delivered_at && <div className="mt-1 text-xs text-emerald-700">Delivered {formatDateTime(n.delivered_at, tz)}</div>}
+                    {n.delivered_at && <div className="mt-1 text-xs text-emerald-700">Delivered {when(n.delivered_at)}</div>}
                     {n.last_error && !["accepted", "captured", "delivered"].includes(n.status) && (
                       <div className={`mt-1 max-w-[260px] text-xs ${n.status === "suppressed" ? "text-amber-800" : "text-destructive"}`}>{n.last_error}</div>
                     )}
@@ -114,6 +114,13 @@ function History() {
                     <span className={label}>Trip now</span>
                     {n.match_status ? <MatchStatusBadge status={n.match_status} /> : <span className="text-xs text-muted-foreground">removed</span>}
                     {n.event_status && <div className="mt-1 text-xs text-muted-foreground md:block">swell {n.event_status}</div>}
+                    {/* The alerted swell's confidence as the forecast stands now. */}
+                    {n.match_id && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        <ConfidenceBadge value={n.forecast_confidence_class} />
+                        <LocalConfidence compact value={n.local_confidence_class} forecastValue={n.forecast_confidence_class} reason={n.local_confidence_reason} />
+                      </div>
+                    )}
                   </td>
                 </tr>
               );

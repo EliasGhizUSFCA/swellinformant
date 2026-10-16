@@ -92,11 +92,48 @@ RANGE_NOTES = {
 
 
 def _height(s: dict[str, Any]) -> str:
+    """Typical-to-sets faces plus the likely range. The range is heuristic: it is meant to
+    hold the breaking height about 8 times in 10 (an intended 80% range) but has not been
+    verified, so it is called a likely range and its intent is stated, not implied as a
+    probability (docs/forecast-confidence.md)."""
     text = f"{s['height_min_ft']:g}–{s['height_max_ft']:g} ft faces"
     if s.get("range_p10_ft") is not None and s.get("range_p90_ft") is not None:
         note = RANGE_NOTES.get(str(s.get("range_kind")), "not yet verified")
-        text += f" (80% range {s['range_p10_ft']:g}–{s['range_p90_ft']:g} ft, {note})"
+        text += (
+            f" (likely range {s['range_p10_ft']:g}–{s['range_p90_ft']:g} ft: meant as an 80% "
+            f"range, {note})"
+        )
     return text
+
+
+def score10(score: int | float) -> str:
+    """85 -> "8.5" (the 0-100 score divided by ten, one decimal, as in the app)."""
+    return f"{max(0, min(100, round(score))) / 10:.1f}"
+
+
+def _provenance(s: dict[str, Any]) -> list[tuple[str, str]]:
+    """'Model runs' (each model's own init time; a blend's issue time is only its oldest
+    member's) and 'Fetched' (when the data arrived). Snapshots built before the model runs
+    were recorded show the run's issue time as 'Model run'."""
+    runs = [r for r in s.get("model_runs") or [] if r.get("name")]
+    if runs:
+        rows = [
+            (
+                "Model runs" if len(runs) > 1 else "Model run",
+                "; ".join(f"{r['name']} ({fmt_utc(r.get('init_time'))})" for r in runs),
+            )
+        ]
+    else:
+        rows = [
+            (
+                "Model run",
+                fmt_utc(s.get("forecast_issued"))
+                + (f" · {s['forecast_source']}" if s.get("forecast_source") else ""),
+            )
+        ]
+    if s.get("forecast_fetched"):
+        rows.append(("Fetched", fmt_utc(s["forecast_fetched"])))
+    return rows
 
 
 CONFIDENCE_WORDS = {"high": "High", "moderate": "Moderate", "low": "Low"}
@@ -105,10 +142,11 @@ CONFIDENCE_WORDS = {"high": "High", "moderate": "Moderate", "low": "Low"}
 def _forecast_confidence(s: dict[str, Any]) -> str:
     """'Moderate — about 6 days away' (forecast-v1 class at the event's peak hour, as in
     the API; the distance is from when the alert was built). Older snapshots without the
-    class show the 0-100 index as before."""
+    class say so and show the 0-100 index under its own name."""
     cls = s.get("forecast_confidence_class")
     if not cls:
-        return f"{s['confidence_label'].title()} ({s['confidence']}/100)"
+        # The 0-100 index is not the forecast-confidence class; name it for what it is.
+        return f"Not assessed (offshore spread index {s['confidence']}/100, not a probability)"
     text = CONFIDENCE_WORDS.get(str(cls), str(cls).title())
     ahead = s.get("peak_in_hours")
     lead = lead_phrase(ahead if ahead is not None else s.get("confidence_lead_hours"))
@@ -150,14 +188,10 @@ def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
         ),
         (
             "Predicted quality",
-            f"{LABELS.get(s['peak_label'], s['peak_label'])} ({s['peak_score']}/100)",
+            f"{LABELS.get(s['peak_label'], s['peak_label'])} ({score10(s['peak_score'])}/10)",
         ),
         *confidence,
-        (
-            "Forecast updated",
-            fmt_utc(s.get("forecast_issued"))
-            + (f" · {s['forecast_source']}" if s.get("forecast_source") else ""),
-        ),
+        *_provenance(s),
     ]
     if s.get("price") is not None:
         rows += [

@@ -9,7 +9,10 @@ plus the deferred exclusion constraint guarantee no duplicate overlapping active
 
 The peak hour's forecast and local confidence classes, reasons and lead time
 (forecast-v1) are stored in each history snapshot; the newest snapshot is the event's
-current assessment (``peak_confidence``), so no extra column is needed.
+current assessment (``peak_confidence``), so no extra column is needed. Snapshots also keep
+the forecast-only reasons, the disputed-wind note and the peak hour's wind strength,
+favourability and gust definition (``peak_wind``); older snapshots without them get the
+reasons split from the mixed list and no wind regime.
 """
 
 from __future__ import annotations
@@ -30,7 +33,12 @@ from app.models.enums import QualityLabel, SwellEventStatus
 from app.services.forecasts.queries import latest_runs_by_spot
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.confidence import confidence_label
-from app.services.surf_quality.forecast_confidence import api_fields, cap_for_staleness
+from app.services.surf_quality.forecast_confidence import (
+    WIND_DISPUTE_REASON,
+    api_fields,
+    cap_for_staleness,
+    forecast_only,
+)
 from app.services.surf_quality.scoring import label_for_score
 from app.services.swell_detection.clustering import Cluster, Step, cluster_steps, overlaps
 
@@ -76,8 +84,12 @@ EVENT_CONFIDENCE_KEYS = (
     "local_confidence_class",
     "confidence_reasons",
     "local_confidence_reason",
+    "forecast_confidence_reasons",
+    "wind_dispute_note",
 )
 SNAPSHOT_CONFIDENCE_KEYS = (*EVENT_CONFIDENCE_KEYS, "lead_hours")
+# Peak-hour wind regime of EventOut (from the prediction's stored wind_detail).
+EVENT_WIND_KEYS = ("wind_strength", "wind_favourability", "gust_kind")
 
 
 def _confidence_snapshot(peak: SurfQualityPrediction) -> dict[str, Any]:
@@ -91,14 +103,36 @@ def _confidence_snapshot(peak: SurfQualityPrediction) -> dict[str, Any]:
     }
 
 
+def _wind_snapshot(peak: SurfQualityPrediction, fc: WaveForecast) -> dict[str, Any]:
+    """Wind strength, favourability and gust definition of the peak hour (None values are
+    left out, so older predictions add nothing)."""
+    from app.services.spot_views import wind_fields  # spot_views imports this module
+
+    return {k: v for k, v in wind_fields(peak.components, fc.extra).items() if v is not None}
+
+
 def peak_confidence(event: SwellEvent, *, stale: bool = False) -> dict[str, Any]:
     """EventOut's peak-hour confidence fields from the newest history snapshot (may be empty
     for events last updated before forecast-v1). ``stale``: the event's run has gone stale
     since detection, so the read-time staleness rule applies, exactly as for the same hour
-    in the forecast (``forecast_confidence.cap_for_staleness``)."""
+    in the forecast (``forecast_confidence.cap_for_staleness``). Snapshots taken before the
+    reason split get ``forecast_confidence_reasons`` and ``wind_dispute_note`` from their
+    mixed ``confidence_reasons``."""
     latest = (event.history or [])[-1:] or [{}]
     fields = {k: latest[0][k] for k in EVENT_CONFIDENCE_KEYS if k in latest[0]}
+    mixed = [str(r) for r in fields.get("confidence_reasons") or []]
+    if "confidence_reasons" in fields and "forecast_confidence_reasons" not in fields:
+        fields["forecast_confidence_reasons"] = forecast_only(mixed)
+    if "confidence_reasons" in fields and "wind_dispute_note" not in fields:
+        fields["wind_dispute_note"] = WIND_DISPUTE_REASON if WIND_DISPUTE_REASON in mixed else None
     return cap_for_staleness(fields) if stale else fields
+
+
+def peak_wind(event: SwellEvent) -> dict[str, Any]:
+    """EventOut's peak-hour wind strength, favourability and gust definition from the
+    newest history snapshot (absent keys stay None)."""
+    latest = (event.history or [])[-1:] or [{}]
+    return {k: latest[0][k] for k in EVENT_WIND_KEYS if k in latest[0]}
 
 
 def _apply_cluster(event: SwellEvent, cluster: Cluster, run: ForecastRun, keep_start: bool) -> None:
@@ -137,6 +171,7 @@ def _apply_cluster(event: SwellEvent, cluster: Cluster, run: ForecastRun, keep_s
         "peak_height_ft": [event.peak_breaking_height_min_ft, event.peak_breaking_height_max_ft],
         "confidence": event.confidence,
         **_confidence_snapshot(peak_pred),
+        **_wind_snapshot(peak_pred, peak_fc),
     }
     event.history = [*(event.history or [])[-19:], snapshot]
 

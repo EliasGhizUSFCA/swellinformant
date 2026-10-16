@@ -1,16 +1,17 @@
 import { ArrowRight, CalendarDays, Plane } from "lucide-react";
 import Link from "next/link";
 
-import { ConfidenceBadge } from "@/components/confidence";
+import { ConfidenceBadge, LocalConfidence } from "@/components/confidence";
 import { DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
-import { hasField } from "@/lib/confidence";
+import { StaleBadge } from "@/components/stale-banner";
 import { formatCalendarDate, formatMoney, formatRange, heightRange, leadLabel, type Units } from "@/lib/format";
 import type { MatchSummary } from "@/types/api";
 
 /**
  * A matched trip: overall match, our breaking-wave estimate and rating at the peak, the surf
- * window and the best flight. Forecast confidence appears only when the API includes it for
- * the opportunity (nothing is shown rather than a guess).
+ * window and the best flight, with the swell's forecast confidence from the API ("Not
+ * assessed yet" when it has none), confidence at the break when that is lower, and an "Out of
+ * date" tag when the forecast run behind the match is stale.
  */
 export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; units?: Units }) {
   const tz = match.spot.timezone;
@@ -54,7 +55,11 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
           )}
         </div>
         <div className="mt-2 flex items-center justify-between gap-2">
-          {hasField(match, "forecast_confidence_class") ? <ConfidenceBadge value={match.forecast_confidence_class} /> : <span />}
+          <span className="flex flex-wrap items-center gap-1.5">
+            <ConfidenceBadge value={match.forecast_confidence_class} />
+            <LocalConfidence compact value={match.local_confidence_class} forecastValue={match.forecast_confidence_class} reason={match.local_confidence_reason} />
+            <StaleBadge stale={match.stale} />
+          </span>
           <span className="flex items-center gap-1 text-xs font-medium text-ocean opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
             Details <ArrowRight className="size-3.5" />
           </span>

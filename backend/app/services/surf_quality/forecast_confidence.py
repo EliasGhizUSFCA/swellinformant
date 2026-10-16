@@ -100,7 +100,14 @@ RESEARCH_REASONS = {
 }
 STALE_REASON = "Forecast data is out of date; a newer model run is overdue."
 WIND_DISPUTE_REASON = "Sources disagree about which wind is offshore here."
+# A note (no class change) that fires on every hour while no buoy near the spot has been
+# checked. It is kept in the stored reasons and the deprecated mixed list, but not repeated
+# in ``forecast_confidence_reasons``: the method note says it once (docs/forecast-confidence.md).
+NOT_VERIFIED_REASON = "Not yet checked against buoys near this spot."
 MAX_REASON_CHARS = 90
+# Reasons that never belong among forecast-confidence reasons: the research sentences of
+# local confidence and the disputed-wind note.
+NON_FORECAST_REASONS = frozenset({*RESEARCH_REASONS.values(), WIND_DISPUTE_REASON})
 
 
 def index_class(index: float) -> str:
@@ -478,7 +485,7 @@ def classify_forecast(inp: ForecastInputs) -> ForecastConfidence:
     if poor:
         cap("verification_poor", MODERATE, "Recent checks against buoys show large errors.", 40)
     if not any(v.near_spot for v in inp.verification):
-        note("not_verified_near_spot", "Not yet checked against buoys near this spot.", 10)
+        note("not_verified_near_spot", NOT_VERIFIED_REASON, 10)
 
     # Staleness (per source, queries.stale_after_hours).
     if inp.stale:
@@ -600,17 +607,41 @@ def confidence_inputs(
 
 def stored_reasons(inputs: dict[str, Any] | None) -> list[str]:
     """Forecast reasons first, then the disputed-wind note (if any), then the local
-    (research) reason, from stored inputs."""
+    (research) reason, from stored inputs. This is the deprecated mixed list
+    (``confidence_reasons``); :func:`forecast_reasons` and :func:`wind_dispute_note` give
+    the parts separately."""
     if not inputs:
         return []
     out = [str(r) for r in inputs.get("reasons") or []]
-    dispute_reason = (inputs.get("wind_dispute") or {}).get("reason")
+    dispute_reason = wind_dispute_note(inputs)
     if dispute_reason and dispute_reason not in out:
-        out.append(str(dispute_reason))
+        out.append(dispute_reason)
     local_reason = (inputs.get("local") or {}).get("reason")
     if local_reason and local_reason not in out:
         out.append(str(local_reason))
     return out
+
+
+def forecast_only(reasons: Iterable[str]) -> list[str]:
+    """The forecast-confidence reasons of a list: without the research sentences, the
+    disputed-wind note and the constant not-verified note (order kept, duplicates dropped).
+    Used for stored inputs and for older event snapshots that only kept the mixed list."""
+    skip = NON_FORECAST_REASONS | {NOT_VERIFIED_REASON}
+    return list(dict.fromkeys(str(r) for r in reasons if r and str(r) not in skip))
+
+
+def forecast_reasons(inputs: dict[str, Any] | None) -> list[str]:
+    """Forecast-confidence reasons of one hour from its stored inputs: the forecast rules
+    only (lead time, model agreement, data, freshness), most important first."""
+    if not inputs:
+        return []
+    return forecast_only(inputs.get("reasons") or [])
+
+
+def wind_dispute_note(inputs: dict[str, Any] | None) -> str | None:
+    """The disputed-wind note stored with the hour (forecast-v1.1), else None."""
+    reason = ((inputs or {}).get("wind_dispute") or {}).get("reason")
+    return str(reason) if reason else None
 
 
 def local_reason(
@@ -635,6 +666,7 @@ def cap_for_staleness(fields: dict[str, Any]) -> dict[str, Any]:
     or an event's stored peak-hour fields): a run that has gone stale since it was scored
     is shown at most Moderate, local confidence follows (it is a min), the staleness reason
     comes first and the local reason stays only while local is still the lower class.
+    ``forecast_confidence_reasons`` (when present) then starts with STALE_REASON as well.
     Fields without a forecast class (scored before forecast-v1) are returned unchanged."""
     fc_cls = fields.get("forecast_confidence_class")
     if fc_cls not in _RANK:
@@ -649,19 +681,26 @@ def cap_for_staleness(fields: dict[str, Any]) -> dict[str, Any]:
     reason = fields.get("local_confidence_reason")
     if local_cls not in _RANK or _RANK[local_cls] >= _RANK[capped]:
         reason = None
-    return {
+    out = {
         **fields,
         "forecast_confidence_class": capped,
         "local_confidence_class": local_cls,
         "confidence_reasons": reasons,
         "local_confidence_reason": reason,
     }
+    if "forecast_confidence_reasons" in fields:
+        rest = [r for r in fields["forecast_confidence_reasons"] or [] if r != STALE_REASON]
+        out["forecast_confidence_reasons"] = [STALE_REASON, *rest]
+    return out
 
 
 def api_fields(prediction: Any, *, stale: bool = False) -> dict[str, Any]:
     """forecast/local class, reasons and lead for the API, from a stored prediction.
 
-    ``stale`` applies the staleness rule at read time (:func:`cap_for_staleness`).
+    ``forecast_confidence_reasons`` holds the forecast rules' reasons only; the research
+    sentence is ``local_confidence_reason`` (when local is the lower class) and the
+    disputed-wind note is ``wind_dispute_note``. ``confidence_reasons`` keeps the deprecated
+    mixed list. ``stale`` applies the staleness rule at read time (:func:`cap_for_staleness`).
     """
     fc_cls = prediction.forecast_confidence_class
     local_cls = prediction.local_confidence_class
@@ -670,6 +709,8 @@ def api_fields(prediction: Any, *, stale: bool = False) -> dict[str, Any]:
         "forecast_confidence_class": fc_cls,
         "local_confidence_class": local_cls,
         "confidence_reasons": stored_reasons(inputs),
+        "forecast_confidence_reasons": forecast_reasons(inputs),
+        "wind_dispute_note": wind_dispute_note(inputs),
         "lead_hours": None if prediction.lead_hours is None else round(prediction.lead_hours, 1),
         "local_confidence_reason": local_reason(fc_cls, local_cls, inputs),
     }
