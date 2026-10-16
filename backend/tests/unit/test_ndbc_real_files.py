@@ -515,3 +515,36 @@ def test_fetch_reads_the_5day_files_and_measures_the_saving() -> None:
     # 46026's two 5-day files are 84,081 bytes; its realtime2 files were 749,151 bytes at
     # the same time (600,190 + 148,961): 8.9 times more.
     assert result.bytes_downloaded == 67210 + 16871 + 18330
+
+
+def test_bytes_downloaded_counts_gzip_encoded_files_as_transferred() -> None:
+    # NDBC compresses its text files on the wire (live 2026-10-16: 23 responses, 120,816
+    # bytes transferred for 859,171 decoded). bytes_downloaded is "as transferred".
+    now = datetime(2026, 10, 15, 2, 40, tzinfo=UTC)
+    raw = {
+        "/data/5day2/46026_5day.txt": (FIXTURES / "ndbc_46026_20261015.5day2.txt").read_bytes(),
+        "/data/5day2/46026_5day.spec": (FIXTURES / "ndbc_46026_20261015.5day2.spec").read_bytes(),
+    }
+    packed = {path: gzip.compress(body) for path, body in raw.items()}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = packed.get(request.url.path)
+        if body is None:
+            return httpx.Response(404)
+        return httpx.Response(
+            200, stream=httpx.ByteStream(body), headers={"Content-Encoding": "gzip"}
+        )
+
+    p = ndbc.NdbcProvider(
+        Settings(ndbc_base_url="https://ndbc.example"),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        backoff_seconds=0,
+        now=now,
+    )
+    result = p.fetch(
+        [StationRef("ndbc:46026", "46026", 37.75, -122.84)], now - timedelta(hours=48), now
+    )
+    assert result.stations["ndbc:46026"].files == 2
+    assert len(result.stations["ndbc:46026"].records) > 0  # decoded and parsed as usual
+    assert result.bytes_downloaded == sum(len(b) for b in packed.values())
+    assert result.bytes_downloaded < sum(len(b) for b in raw.values()) / 3

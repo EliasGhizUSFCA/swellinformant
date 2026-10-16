@@ -277,7 +277,9 @@ class CoopsClient:
         )
         if response.status_code != 200:
             raise PermanentProviderError(f"noaa_coops: HTTP {response.status_code} for {path}")
-        self.bytes_downloaded += len(response.content)
+        # As transferred: CO-OPS gzips its JSON, so the body is about 15 times larger.
+        # Bodies built in memory (test transports) report 0 bytes on the wire.
+        self.bytes_downloaded += response.num_bytes_downloaded or len(response.content)
         try:
             return response.json()
         except ValueError as exc:

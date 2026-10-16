@@ -150,6 +150,11 @@ are deleted. Measured live on 2026-10-15 (own database, all 50 spots):
 | First (with the station list and datums) | 16 | 2,171,649 | 52,504 / 0 / 0 | 19.2 s (whole command) |
 | Second, same day | 9 | 119,363 | 0 / 52,504 / 0 | - |
 
+The bytes above are the decoded JSON. CO-OPS gzips its answers: the first run on a fresh
+database on 2026-10-16 transferred 140,355 bytes for 2,173,270 bytes of JSON (16 requests,
+19.96 s for the whole job, both providers, 53,230 rows). Since then `bytes_downloaded`
+counts the bytes as transferred, like the forecast providers.
+
 56 stations x about 940 rows: 52,504 rows, 12 MB with indexes. Retention keeps future
 predictions and TIDE_RETENTION_PAST_DAYS (2) of the past (`maintenance.cleanup`). One
 station failing does not stop the others (the station records `last_error`); the job fails

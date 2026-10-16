@@ -3,6 +3,7 @@ it sends, the HTTP-200 error body, subordinate-station rules and the cosine curv
 
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -168,3 +169,24 @@ def test_cosine_curve_refuses_mixed_datums() -> None:
     ]
     with pytest.raises(ValueError, match="datums"):
         coops.cosine_curve(events, timedelta(minutes=30))
+
+
+def test_bytes_downloaded_counts_the_gzipped_body_as_transferred() -> None:
+    # CO-OPS answers gzip-encoded JSON (live 2026-10-16: 16 responses, 140,355 bytes on the
+    # wire for 2,173,270 bytes of JSON). The budget is about bandwidth, so the compressed
+    # size is what counts.
+    raw = (FIXTURES / "hilo_1612668.json").read_bytes()
+    packed = gzip.compress(raw)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=httpx.ByteStream(packed), headers={"Content-Encoding": "gzip"}
+        )
+
+    client = _client(handler)
+    start = datetime(2026, 10, 14, tzinfo=UTC)
+    points = client.predictions(
+        "1612668", start, start + timedelta(days=2), "hilo", "MLLW", kind="subordinate"
+    )
+    assert len(points) == 8  # decoded as usual
+    assert client.bytes_downloaded == len(packed) < len(raw)

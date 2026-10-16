@@ -593,9 +593,11 @@ class NdbcProvider:
             return None
         if response.status_code != 200:
             raise PermanentProviderError(f"ndbc: HTTP {response.status_code} for {path}")
-        body = response.content
-        self.bytes_downloaded += len(body)
-        return body
+        # As transferred (ProviderFetch.bytes_downloaded): NDBC gzips its text files on the
+        # wire, so the decoded body is several times larger. Bodies built in memory (test
+        # transports) report 0 bytes on the wire.
+        self.bytes_downloaded += response.num_bytes_downloaded or len(response.content)
+        return response.content
 
     def active_stations(self) -> dict[str, dict[str, Any]]:
         """Parsed ``activestations.xml``, cached for ACTIVE_STATIONS_TTL_S per base URL."""

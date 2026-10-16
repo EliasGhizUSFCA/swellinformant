@@ -259,6 +259,11 @@ Measured live on 2026-10-15 02:49 UTC (own database, `obs ingest --provider ndbc
 Computed from these two runs, the hourly job in a long-running worker (activestations.xml
 once a day) moves about 0.58 MB per run, about 14 MB a day, instead of about 134 MB
 (5.6 MB x 24).
+These byte counts are the decoded files: NDBC also compresses them on the wire. On a fresh
+database on 2026-10-16 08:17 UTC the same 48 h job (11 stations, 23 requests with
+`activestations.xml`, 864 records) transferred 120,816 bytes for 859,171 bytes of files,
+so the hourly job moves at most about 0.12 MB per run, about 2.9 MB a day (computed). Since
+then `bytes_downloaded` counts the bytes as transferred (its definition in `records.py`).
 
 * A station keeps what its readable files gave: a file that fails to download or parse is
   reported in the station's `errors` while the other files' records are still stored.
