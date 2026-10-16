@@ -3,6 +3,8 @@ map-field cadence parsing and the deprecated single-model Open-Meteo aliases."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -47,6 +49,33 @@ def test_defaults_resolve_to_the_documented_values() -> None:
     assert s.noaa_coops_application_name == s.app_name
     assert s.worker_queue_list == ["celery", "bulk"]
     assert s.windy_terms_acknowledged is False and s.wind_gust_scoring == "off"
+    # Integration: 18 h, not 12 h. With MAP_FIELD_CYCLES=00,12 the served map cycle is
+    # normally 17-20 h old before the next one replaces it, so 12 h flagged the layers stale
+    # for 5-8 h of every 12 (docs/map-layers.md, Limitations).
+    assert s.map_field_stale_after_hours == 18.0
+    # Declared at integration (point-data read it with getattr until then): on by default.
+    assert s.prune_superseded_member_predictions is True
+    assert s.forecast_batch_size == 50
+    assert make(prune_superseded_member_predictions=False).prune_superseded_member_predictions is (
+        False
+    )
+
+
+def test_env_example_matches_the_integration_defaults() -> None:
+    """.env.example must not override the code defaults the upgrade changed (an old value
+    there wins over the default: FORECAST_BATCH_SIZE=10 meant five requests per model)."""
+    env = (Path(__file__).resolve().parents[3] / ".env.example").read_text()
+    values = dict(
+        line.split("=", 1)
+        for line in env.splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    assert values["FORECAST_BATCH_SIZE"] in ("", "50")
+    assert values["MAP_FIELD_STALE_AFTER_HOURS"] in ("", "18")
+    assert values["PRUNE_SUPERSEDED_MEMBER_PREDICTIONS"] == "true"
+    assert values["DATA_HEALTH_DATABASE_MAX_GB"] == ""
+    assert "MAP_FIELD_STEP_HOURS" not in values  # deprecated: documented as a comment only
+    assert "FORECAST_PROVIDERS=" in env and "open_meteo,open_meteo_ecmwf" in env
 
 
 def test_deprecated_open_meteo_aliases_win_only_when_set() -> None:

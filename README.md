@@ -426,29 +426,38 @@ tile policy). For more traffic on that basemap use a tile provider:
 ### Map ocean layers
 
 The map's global layers (offshore significant wave height, not surf height; peak period
-and direction; 10 m wind; sea-level pressure) are NOAA GFS-Wave and GFS model output,
-regridded to 0.5° and served by `GET /api/map/fields`. Without them the map shows the
+and direction; the primary swell, secondary swell and wind-sea partitions; 10 m wind;
+sea-level pressure) are NOAA GFS-Wave and GFS model output, regridded to 0.5° and served by
+`GET /api/map/fields`. Without them the map shows the
 spots only, with a one-line notice; its legend repeats the index's message saying what to
 set.
 
 ```env
-# With live NOAA spot forecasts the layers come with every NOAA acquisition (automatic):
-FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs
-# Real ocean layers with demo (or any other) spot forecasts: the standalone mode.
-MAP_FIELDS_ENABLED=true
-# MAP_FIELDS_ENABLED=false switches them off. Tuning (defaults):
+# Empty (automatic): standalone with any live FORECAST_PROVIDERS (e.g. open_meteo,
+# open_meteo_ecmwf); with noaa_gfs as a provider the layers come with its acquisition.
+MAP_FIELDS_ENABLED=
+# true = real ocean layers even with demo spot forecasts; false = off. Tuning (defaults):
+MAP_FIELD_STEPS=0-120:3,120-240:6
+MAP_FIELD_CYCLES=00,12
+MAP_FIELD_PARTITIONS=on
+MAP_FIELD_STALE_AFTER_HOURS=18
 MAP_FIELD_RESOLUTION_DEG=0.5
 MAP_FIELD_MAX_LEAD_HOURS=240
-MAP_FIELD_STEP_HOURS=3
+# MAP_FIELD_STEP_HOURS is deprecated and no longer read (MAP_FIELD_STEPS replaces it).
 ```
 
 * In the standalone mode the job `forecasts.map_fields` reads only the global fields of
-  the newest complete GFS cycle (every 3 h, under the separate source
-  `noaa_gfs_fields`, never used for spot forecasts). Measured live on 2026-10-11:
-  about 380 MB download, 66 s and 39 MB stored per cycle (f000 to f240 every 3 h). With
-  `noaa_gfs` as a provider the fields come from the files it reads anyway, plus at most
-  1.8 MB per forecast hour (none with the default spots, two of which use the global
-  wave grid).
+  the 00Z and 12Z GFS cycles (`MAP_FIELD_CYCLES`; checked every
+  `FORECAST_REFRESH_MINUTES`, under the separate source `noaa_gfs_fields`, never used for
+  spot forecasts): GFS-Wave `global.0p25` and the GFS `pgrb2.0p50` atmosphere
+  (`pgrb2.0p25` as a per-hour fallback), 61 map hours per cycle. Measured per map hour
+  (2026-10-14 12Z): 7.85 to 8.10 MB downloaded with the partitions, 2.69 to 2.74 MB
+  without; extrapolated, about 0.97 GB a day (0.33 GB without partitions) and about
+  142 MB stored for the 2 retained runs ([`docs/map-layers.md`](docs/map-layers.md)).
+  With `noaa_gfs` as a provider the fields come from the files it reads anyway.
+* The layers show an "out of date" badge once their model cycle is older than
+  `MAP_FIELD_STALE_AFTER_HOURS` (18 h: a 00/12Z cycle is normally 17 to 20 h old when the
+  next one replaces it).
 * Fetch them now: `python -m app.cli engine map-fields [--cycle YYYYMMDDHH]
   [--max-lead-hours N] [--force]` (any mode except off).
 * Encoding, sources, licence, measurements and limitations:

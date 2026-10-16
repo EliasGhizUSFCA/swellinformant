@@ -205,6 +205,8 @@ class Settings(BaseSettings):
     map_fields_enabled: bool | None = None
     map_field_resolution_deg: float = Field(default=0.5, ge=0.25, le=2.0)
     map_field_max_lead_hours: int = Field(default=240, ge=24, le=384)
+    # Deprecated: no longer read. MAP_FIELD_STEPS decides the map hours; kept so that old
+    # .env files that set MAP_FIELD_STEP_HOURS still load.
     map_field_step_hours: int = Field(default=3, ge=1, le=12)
     # GFS atmosphere grid read for the map's wind and pressure in standalone mode, and its
     # file layout ({grid} is MAP_FIELD_ATMOS_GRID; other placeholders as in
@@ -219,8 +221,12 @@ class Settings(BaseSettings):
     map_field_partitions: Literal["on", "off"] = "on"
     # A map-field run that would download more than this is stopped (bytes).
     map_field_max_bytes_per_run: int = Field(default=600_000_000, ge=1)
-    # The map's ocean layers are flagged stale once their model cycle is older than this.
-    map_field_stale_after_hours: float = Field(default=12.0, gt=0)
+    # The map's ocean layers are flagged stale once their model cycle is older than this (the
+    # map index and the data-health page use the same limit). With MAP_FIELD_CYCLES=00,12 a
+    # cycle is normally replaced when it is 17-20 h old (12 h cycle + 5 h NOAA lag + up to one
+    # FORECAST_REFRESH_MINUTES interval), so 12 h flagged the layers for 5-8 h of every 12;
+    # 18 h flags at most the last 2 h of a late pick-up (docs/map-layers.md, Limitations).
+    map_field_stale_after_hours: float = Field(default=18.0, gt=0)
     windy_api_key: str | None = None
     # Demo provider only: false = calm background seas, so only simulated swells create
     # events (used by the end-to-end tests for deterministic results).
@@ -307,6 +313,10 @@ class Settings(BaseSettings):
     retention_archive_days: int = 730
     # Archive a short digest of the confidence inputs instead of the full inputs.
     archive_confidence_digest: bool = True
+    # Daily cleanup deletes the predictions of superseded non-blend runs that no spot is
+    # served from (app.services.maintenance.prune_superseded_predictions). Derived data: the
+    # run's forecast records are kept, so the predictions can be recomputed.
+    prune_superseded_member_predictions: bool = True
 
     # ------------------------------------------------------------------ data health
     # The ``ops.data_health`` beat job (app.services.health) checks forecast, map-field,
@@ -324,8 +334,9 @@ class Settings(BaseSettings):
     # can no longer fill the gap by itself.
     data_health_observation_stale_hours: float | None = Field(default=None, gt=0)
     # Degraded once the database is larger than this (GB; an alert only, nothing is
-    # deleted). None = no limit. Size it from the disk and the growth per day in
-    # docs/operations.md ("Capacity").
+    # deleted). An empty env var keeps this 5 GB default (env_ignore_empty); None (only in
+    # code) = no limit. Size it from the disk and the growth per day in docs/operations.md
+    # ("Capacity").
     data_health_database_max_gb: float | None = Field(default=5.0, gt=0)
     # Degraded once Redis uses more than this fraction of its maxmemory.
     data_health_redis_max_fraction: float = Field(default=0.8, gt=0, le=1)

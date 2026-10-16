@@ -28,6 +28,7 @@ from app.models import (
 from app.models.enums import ForecastRunStatus, JobStatus
 from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES, MapField
 from app.services.health import data_health, expected_jobs
+from app.services.map_fields import field_index
 from app.services.notifications.ops_alerts import run_data_health_check
 from app.workers import tasks
 from app.workers.celery_app import celery_app
@@ -358,16 +359,24 @@ def test_map_fields_freshness_in_standalone_mode(db: Session, env: pytest.Monkey
     assert report.out.map_fields.mode == "standalone"
     assert report.out.map_fields.status == "missing" and "map_fields_missing" in keys(db)
     now = utcnow()
-    cycle = (now - timedelta(hours=17)).replace(minute=0, second=0, microsecond=0)
-    fields_run = run(db, "noaa_gfs_fields", 17, kind="fields")
+    # MAP_FIELD_STALE_AFTER_HOURS (18 h by default), the map index's own limit: the data-health
+    # page and the map's "out of date" badge must agree (was the NOAA GFS point-source limit,
+    # 16 h, so a normal 17 h old 00/12Z cycle showed as stale here but not on the map).
+    cycle = (now - timedelta(hours=20)).replace(minute=0, second=0, microsecond=0)
+    fields_run = run(db, "noaa_gfs_fields", 20, kind="fields")
     map_fields(db, fields_run, cycle)
-    out = data_health(db).out.map_fields
+    out = data_health(db, now=now).out.map_fields
     assert out.status == "stale" and out.complete_valid_times == 2
+    assert out.stale_after_hours == 18.0 == get_settings().map_field_stale_after_hours
+    assert field_index(db, now).stale is True
     assert out.last_valid_time == cycle + timedelta(hours=3)
+    later = now - timedelta(hours=3)  # the same cycle 17-18 h old: normal, not stale
+    assert data_health(db, now=later).out.map_fields.status == "ok"
+    assert field_index(db, later).stale is False
     fresh_cycle = cycle + timedelta(hours=12)
     fresh = run(db, "noaa_gfs_fields", 5, kind="fields")
     map_fields(db, fresh, fresh_cycle)
-    out = data_health(db).out.map_fields
+    out = data_health(db, now=now).out.map_fields
     assert out.status == "ok" and out.cycle_time == fresh_cycle and out.run_key == fresh.run_key
 
 

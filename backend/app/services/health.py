@@ -14,8 +14,8 @@ It checks, with plain reasons:
   runs (no run started for ``2 x longest interval + 30 min``; a run in progress counts)
   and stuck runs (still "running" 15 min after the hard task time limit: the worker
   process was killed).
-* **Map fields** (unless the mode is "off"): the served run's model cycle against the
-  NOAA GFS stale limit, since the fields come from the same 6-hourly cycles.
+* **Map fields** (unless the mode is "off"): the served run's model cycle against
+  MAP_FIELD_STALE_AFTER_HOURS, the limit the map index uses for its "out of date" badge.
 * **Observations** (when OBSERVATIONS_ENABLED): the newest buoy observation per provider
   against DATA_HEALTH_OBSERVATION_STALE_HOURS (default: the ingestion look-back window).
 * **Heartbeat**: the newest finished job of any kind (this check's own job excluded).
@@ -71,7 +71,6 @@ from app.schemas.health import (
 from app.services.forecasts.queries import USABLE, is_stale, stale_after_hours
 from app.services.forecasts.registry import (
     GEFS_WAVE_CODE,
-    NOAA_GFS_CODE,
     configured_source_codes,
 )
 from app.services.map_fields import map_fields_mode, servable_runs
@@ -513,7 +512,9 @@ def _check_map_fields(
     mode = map_fields_mode(settings)
     if mode == "off":
         return MapFieldsHealthOut(mode=mode, status="off"), []
-    limit = stale_after_hours(NOAA_GFS_CODE, settings)
+    # The map index's own limit (app.services.map_fields.field_index), so the data-health
+    # page and the map's "out of date" badge agree.
+    limit = settings.map_field_stale_after_hours
     best = servable_runs(db, limit=1)
     if not best:
         return MapFieldsHealthOut(mode=mode, status="missing", stale_after_hours=limit), [

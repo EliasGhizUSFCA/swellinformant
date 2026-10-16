@@ -67,7 +67,7 @@ longitude, not 335°.
   (model output still, not an observation). Phones show the lead time only; the full source and
   run are in its tooltip and the legend.
 * Once the newest run behind the ocean layers (`FieldIndexOut.stale`, `age_hours`, limit
-  `MAP_FIELD_STALE_AFTER_HOURS`, default 12 h) or behind the spot markers
+  `MAP_FIELD_STALE_AFTER_HOURS`, default 18 h) or behind the spot markers
   (`MapSnapshotOut.stale`, `newest_run_issued_at`) is out of date, a status chip under the layer
   tabs reads "Forecast out of date — model run 54 h old". The layers and markers keep drawing
   that run.

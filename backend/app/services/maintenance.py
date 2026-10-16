@@ -155,9 +155,7 @@ def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
     if keep_ids:
         stmt = stmt.where(ForecastRun.id.notin_(keep_ids))
     out["forecast_runs"] = db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
-    # PRUNE_SUPERSEDED_MEMBER_PREDICTIONS (default on); read with a default until the
-    # setting is declared in app.core.config.
-    if getattr(s, "prune_superseded_member_predictions", True):
+    if s.prune_superseded_member_predictions:
         out["superseded_predictions"] = prune_superseded_predictions(db, now)
 
     referenced = exists().where(
