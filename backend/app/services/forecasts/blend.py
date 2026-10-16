@@ -30,13 +30,23 @@ What is blended
     matched index by index. A partition the member does not have stays None (never 0);
   * wave direction: from the structure member (GFS-Wave publishes the peak direction,
     ECMWF the mean direction — different quantities, compared but not averaged);
-  * wind: speed as a weighted mean, direction as the weighted vector mean of unit
-    vectors; pressure as a weighted mean; sea level from the first member that has it.
+  * wind: direction of the weighted mean wind vector (u, v), so each member pulls in
+    proportion to its speed and a calm member barely turns a strong one; speed as the
+    weighted mean of the members' speeds (the vector mean's length would report calm where
+    the members blow from different directions, which neither forecasts). Members of
+    independent families that disagree on the direction by more than
+    WIND_DIRECTION_FLAG_DEG while both blow at least WIND_DIRECTION_FLAG_MIN_KMH are
+    flagged ``wind_direction_disagree`` (forecast confidence is then at most Moderate and
+    the wind is shown with a "models disagree" note); pressure as a weighted mean; sea
+    level from the first member that has it.
   * gust: members define gusts differently (GFS: an instantaneous diagnostic; ECMWF:
     a maximum over the preceding 3 h or since the previous post-processing step), so
     gusts are only averaged over members with the same definition as the highest-weight
     member that has one; ``extra["gust_kind"]`` names it and ``extra["gust_kinds"]``
-    records every member's definition.
+    records every member's definition. When those members are fewer than the members
+    behind the mean wind, ``extra["gust_members"]`` lists them and
+    ``extra["gust_member_mean_kmh"]`` is their own mean wind, so a gust below the blended
+    mean is not mistaken for a source artefact.
   Members are aligned in time by linear interpolation between their own steps (circular
   for directions) across gaps of at most MAX_INTERP_GAP; never extrapolated. A blended
   step that uses such an interpolated member value (or a member value its source marked
@@ -45,7 +55,8 @@ What is blended
 
 Disagreement
   For every pair of independent families: |ln(Hs_a/Hs_b)|, |ΔTp| (peak periods only),
-  angular Δ direction and |Δ wind speed|. Thresholds (heuristic, documented) raise flags;
+  angular Δ wave direction, |Δ wind speed| and angular Δ wind direction (when both winds
+  are at least WIND_DIRECTION_FLAG_MIN_KMH). Thresholds (heuristic, documented) raise flags;
   ``agreement`` in [0, 1] summarises them. The uncertainty model widens the forecast range
   by the between-model spread, and forecast confidence uses the flags and log ratios
   (``surf_quality.confidence_context``).
@@ -104,6 +115,10 @@ DIRECTION_DIFF_FLAG_DEG = 30.0
 DIRECTION_DIFF_FLAG_MIXED_DEG = 45.0  # peak vs mean direction legitimately differ more
 MEAN_DIRECTION_FAMILIES = frozenset({"ecmwf_ifs", "ecmwf_aifs"})
 WIND_DIFF_FLAG_KMH = 15.0
+# Wind directions this far apart with both winds at least this strong change which side of
+# the beach the wind blows from (offshore vs onshore); below it the direction matters little.
+WIND_DIRECTION_FLAG_DEG = 60.0
+WIND_DIRECTION_FLAG_MIN_KMH = 10.0
 # Two copies of the same model should be close; beyond this one ingestion is suspect.
 SAME_FAMILY_LOG_RATIO_FLAG = math.log(1.2)
 # Scales of the agreement summary (heuristic).
@@ -323,6 +338,46 @@ class HourValues:
     interpolated: bool = False
 
 
+def blend_wind_direction(hours: list[HourValues], weights: dict[str, float]) -> float | None:
+    """Direction (FROM, degrees) of the weighted mean wind vector of the members.
+
+    Each member's velocity is u = -V sin(theta), v = -V cos(theta); the blended direction is
+    the direction the mean (u, v) comes from, so members pull in proportion to w * V. When
+    the vectors cancel exactly (or every member is calm), the direction of the member with
+    the largest weighted speed is kept; members with a direction but no speed count with
+    unit length only if no member has a speed.
+    """
+    with_speed = [
+        h
+        for h in hours
+        if weights.get(h.code, 0.0) > 0
+        and h.values.get("wind_direction_deg") is not None
+        and h.values.get("wind_speed_kmh") is not None
+    ]
+    directed = with_speed or [
+        h
+        for h in hours
+        if weights.get(h.code, 0.0) > 0 and h.values.get("wind_direction_deg") is not None
+    ]
+    if not directed:
+        return None
+
+    def length(h: HourValues) -> float:
+        speed = h.values.get("wind_speed_kmh")
+        scale = max(float(speed), 0.0) if with_speed and speed is not None else 1.0
+        return weights[h.code] * scale
+
+    u = v = 0.0
+    for h in directed:
+        theta = math.radians(float(h.values["wind_direction_deg"] or 0.0))
+        u -= length(h) * math.sin(theta)
+        v -= length(h) * math.cos(theta)
+    if math.hypot(u, v) > 1e-9:
+        return math.degrees(math.atan2(-u, -v)) % 360.0
+    strongest = max(directed, key=length)
+    return float(strongest.values["wind_direction_deg"] or 0.0) % 360.0
+
+
 def blend_hour(
     hours: list[HourValues], skill: SkillTable
 ) -> tuple[dict[str, float | None], dict[str, float], str | None, str | None]:
@@ -382,19 +437,39 @@ def blend_hour(
         same = [h for h in gusty if (h.gust_kind or "unknown") == gust_kind]
         out["wind_gust_kmh"] = wmean("wind_gust_kmh", same)
     out["pressure_msl_hpa"] = wmean("pressure_msl_hpa", hours)
-    vx = vy = 0.0
-    for h in hours:
-        d, w = h.values.get("wind_direction_deg"), weights.get(h.code, 0.0)
-        if d is not None and w > 0:
-            vx += w * math.sin(math.radians(d))
-            vy += w * math.cos(math.radians(d))
-    out["wind_direction_deg"] = (
-        math.degrees(math.atan2(vx, vy)) % 360.0 if math.hypot(vx, vy) > 1e-9 else None
-    )
+    out["wind_direction_deg"] = blend_wind_direction(hours, weights)
     out["sea_level_m"] = next(
         (h.values["sea_level_m"] for h in hours if h.values.get("sea_level_m") is not None), None
     )
     return out, weights, period_kind, gust_kind
+
+
+def gust_members(
+    hours: list[HourValues], weights: dict[str, float], gust_kind: str | None
+) -> tuple[list[str], float | None]:
+    """(codes of the members the blended gust came from, their own weighted mean wind) when
+    they are not every member behind the blended mean wind; ([], None) otherwise."""
+    if gust_kind is None:
+        return [], None
+    same = [
+        h
+        for h in hours
+        if weights.get(h.code)
+        and h.values.get("wind_gust_kmh") is not None
+        and (h.gust_kind or "unknown") == gust_kind
+    ]
+    windy = {
+        h.code for h in hours if weights.get(h.code) and h.values.get("wind_speed_kmh") is not None
+    }
+    if not same or {h.code for h in same} == windy:
+        return [], None
+    total = acc = 0.0
+    for h in same:
+        speed = h.values.get("wind_speed_kmh")
+        if speed is not None:
+            total += weights[h.code]
+            acc += weights[h.code] * speed
+    return sorted(h.code for h in same), (acc / total if total > 0 else None)
 
 
 def angular_diff(a: float, b: float) -> float:
@@ -405,7 +480,7 @@ def compare_hour(hours: list[HourValues], duplicates: list[HourValues]) -> dict[
     """Pairwise disagreement between independent families, plus same-family checks."""
     hs_r = tp_d = dir_d = wind_d = None
     flags: list[str] = []
-    direction_flag = False
+    direction_flag = wind_direction_flag = False
     for i, a in enumerate(hours):
         for b in hours[i + 1 :]:
             if not are_independent(a.family, b.family):
@@ -431,6 +506,14 @@ def compare_hour(hours: list[HourValues], duplicates: list[HourValues]) -> dict[
             wa, wb = a.values.get("wind_speed_kmh"), b.values.get("wind_speed_kmh")
             if wa is not None and wb is not None:
                 wind_d = max(wind_d or 0.0, abs(wa - wb))
+                ta, tb = a.values.get("wind_direction_deg"), b.values.get("wind_direction_deg")
+                if (
+                    ta is not None
+                    and tb is not None
+                    and min(wa, wb) >= WIND_DIRECTION_FLAG_MIN_KMH
+                    and angular_diff(ta, tb) > WIND_DIRECTION_FLAG_DEG
+                ):
+                    wind_direction_flag = True
     if hs_r is not None and hs_r > HS_LOG_RATIO_FLAG:
         flags.append("hs_disagree")
     if tp_d is not None and tp_d > TP_DIFF_FLAG_S:
@@ -439,6 +522,8 @@ def compare_hour(hours: list[HourValues], duplicates: list[HourValues]) -> dict[
         flags.append("direction_disagree")
     if wind_d is not None and wind_d > WIND_DIFF_FLAG_KMH:
         flags.append("wind_disagree")
+    if wind_direction_flag:
+        flags.append("wind_direction_disagree")
     by_family = {h.family: h for h in hours}
     for dup in duplicates:
         ref = by_family.get(dup.family)
@@ -581,6 +666,10 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
                     for h in hours
                     if h.values.get("wind_gust_kmh") is not None
                 }
+                codes, member_mean = gust_members(hours, weights, gust_kind)
+                if member_mean is not None:
+                    extra["gust_members"] = codes
+                    extra["gust_member_mean_kmh"] = round(member_mean, 2)
             if corrected:
                 extra["ml_corrections"] = corrected
             out.append(ForecastRecord(t, values, period_kind=kind, extra=extra))

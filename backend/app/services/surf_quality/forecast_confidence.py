@@ -1,4 +1,4 @@
-"""Forecast confidence and local confidence per forecast hour, methodology "forecast-v1.1".
+"""Forecast confidence and local confidence per forecast hour, methodology "forecast-v1.2".
 
 Two classes (High / Moderate / Low), each with short plain-language reasons
 (docs/forecast-confidence.md has every threshold with the evidence behind it):
@@ -25,6 +25,11 @@ Two classes (High / Moderate / Low), each with short plain-language reasons
   WIND_DISPUTE_REASON and a ``wind_dispute`` entry in its stored inputs (the profile and
   the main contradicting offshore direction and the wind relation under each). Forecast
   and local classes are computed exactly as in forecast-v1.
+* **Wind direction disagreement** (forecast-v1.2): when the blend flags that two
+  independent families blow from directions more than 60 degrees apart, both at 10 km/h or
+  more (``blend.WIND_DIRECTION_FLAG_*``), forecast confidence is at most Moderate, like the
+  other disagreement caps. It fires only with two independent families, so single-source
+  classes are those of forecast-v1.
 
 Research confidence itself is a separate assessment (docs/research-confidence.md) that is
 stored and shown on its own; only the documented ``min`` above connects the two. None of
@@ -44,8 +49,9 @@ from typing import Any
 
 from app.services.forecasts.families import are_independent
 
-# forecast-v1.1 = forecast-v1 plus the disputed-wind note (no class changes).
-METHOD = "forecast-v1.1"
+# forecast-v1.1 = forecast-v1 plus the disputed-wind note (no class changes); forecast-v1.2
+# adds the blend's wind-direction disagreement cap (two independent families only).
+METHOD = "forecast-v1.2"
 
 HIGH, MODERATE, LOW = "high", "moderate", "low"
 _RANK = {LOW: 0, MODERATE: 1, HIGH: 2}
@@ -460,6 +466,13 @@ def classify_forecast(inp: ForecastInputs) -> ForecastConfidence:
             cap("period_disagree", MODERATE, f"{pair} disagree on swell period.", 56)
         if "direction_disagree" in dis.flags:
             cap("direction_disagree", MODERATE, f"{pair} disagree on swell direction.", 55)
+        if "wind_direction_disagree" in dis.flags:
+            cap(
+                "wind_direction_disagree",
+                MODERATE,
+                f"{pair} disagree on the wind direction.",
+                53,
+            )
         if "wind_disagree" in dis.flags:
             cap("wind_disagree", MODERATE, f"{pair} disagree on the wind.", 52)
         if (

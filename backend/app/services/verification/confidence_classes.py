@@ -79,10 +79,12 @@ from app.services.verification.ranges import log_error
 
 CLASSES = (HIGH, MODERATE, LOW)
 _BY_RANK = {rank(c): c for c in CLASSES}
-# The class rules validated here are forecast-v1's. The shipped method forecast-v1.1 adds
-# only the disputed-wind note (no class rule), so it is accepted as the same rules.
+# The class rules validated here are forecast-v1's, on one model family (FAMILIES).
+# forecast-v1.1 adds only the disputed-wind note (no class rule) and the shipped
+# forecast-v1.2 a cap that fires only with two independent families, so on this data both
+# are the same rules.
 METHOD = "forecast-v1"
-SAME_CLASS_RULES = ("forecast-v1.1",)
+SAME_CLASS_RULES = ("forecast-v1.1", "forecast-v1.2")
 # The candidate of section 12.3 (not adopted): forecast-v1 plus the cap C2_RULE.
 CANDIDATE_C2 = "candidate-c2"
 METHODS = (METHOD, CANDIDATE_C2)

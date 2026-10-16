@@ -1,6 +1,6 @@
 """Job B — score every forecast timestep of a model run.
 
-Every prediction also gets its two confidence classes (methodology forecast-v1.1,
+Every prediction also gets its two confidence classes (methodology forecast-v1.2,
 ``forecast_confidence``): forecast confidence of the offshore forecast and local
 confidence of the breaking-wave estimate at the break, with the inputs and rules used,
 the run's issue time, the lead time and the research assessment local confidence used.
