@@ -16,14 +16,14 @@ Code: `frontend/components/forecast/*` (rows, cursor, summary, selection store),
 | Part | Test id | What it shows |
 |---|---|---|
 | Selected-time summary | `selected-summary` | "Thursday, Oct 15 · 7:00 AM SAST", the step length ("3-hour step"), surf quality (class, x.x/10 and a rank glyph), breaking waves (typical–sets, the central value and the likely range), the wave systems (the one that drives the surf first), wind (speed, FROM direction, relation, strength and favourability when rated, gust on its own line), tide (height, rising or falling, datum, and the next high or low water with its height and time), and forecast confidence with confidence at the break as a separate badge. "Why this forecast?" expands below. |
-| Day buttons | `day-nav`, `day-YYYY-MM-DD` | One button per local day with steps: weekday, date, the day's best daylight class and score, duration-weighted good hours. `aria-pressed` marks the selected step's day; a button selects the day's best daylight step and scrolls the timeline to the day's start. Previous / next day buttons. |
+| Day buttons | `day-nav`, `day-YYYY-MM-DD` | One button per local day with steps: weekday, date, the day's best daylight class and score, and its good hours (hours of light under Good-or-better steps, §2). `aria-pressed` marks the selected step's day; a button selects the day's best daylight step and scrolls the timeline to the day's start. Previous / next day buttons. |
 | Header | `timeline-header` | Day names with local dates (they stick to the left edge while the day is in view), hour ticks, the selected time pill, the "Now" marker. |
 | Surf quality | `quality-strip` | Our rating per step, coloured on the ordinal ramp, with the class written in each run of equal steps ("Very Good", or "VG" where narrow). |
 | Surf | `wave-bars` | Our breaking-height estimate per step (bar = central value), the likely range behind it, the sets tick, each day's peak value; optional offshore Hs (model). |
 | Swell | `swell-partitions` | One lane per wave system the model sent (primary, secondary, third swell, wind sea), an arrow per step. |
 | Wind | `wind-row` | Direction arrows, speed bars with gust ticks, the relation to this break written underneath. |
 | Tide | `tide-row` | The predicted tide curve with high and low waters, or "Tide data unavailable". |
-| Legend | `quality-chart-legend` | Every mark, the arrow convention, the tide's station, source and datum, and the spot's tide preference. Collapsed under "How to read these charts" on phones. |
+| Legend | `quality-chart-legend` | Every mark with the short forms the chart uses ("Excellent (Ex)", "X-off = cross-offshore"), the arrow convention, the tide's source and datum (the station and credit are in the note under the tide row), the spot's tide preference and the latest buoy reading with its credit. Collapsed under "How to read these charts" on phones. |
 | Table | `timeline-table` | "Table of every forecast step": all values as an HTML table (mounted when opened). |
 
 The timeline root keeps the old chart's test id `quality-chart`; the swell and wind rows'
@@ -46,18 +46,33 @@ another request (for selection, asserted in `e2e/timeline.spec.ts`).
   time to the run's next stored valid time (the last step: the run's next stored time
   beyond the window; at the end of the run's horizon, the spacing of the steps before it; a
   lone step, the gap from the run's stored time before it). `steps_meta.segments` lists
-  where the spacing changes; `interpolation` is always `"none"`.
+  where the spacing changes. The timeline adds no values between stored steps, but a blend
+  step can hold a member value the blend interpolated linearly in time between that member's
+  own steps: with the GFS family hourly and ECMWF 3-hourly, 2 of every 3 hourly steps to
+  120 h, and the 3-hourly steps after 144 h, where ECMWF is 6-hourly (5,750 of 10,400 rows of
+  the 2026-10-16 00Z blend). Such a step has `interpolated: true` and names the members in
+  `interpolated_members`; `steps_meta.interpolation` is then `"some_steps"`, otherwise
+  `"none"`.
 * `days[]`: local midnight to local midnight from `timesteps.local_day_bounds` (23 or 25 hours
   on clock-change days), sunrise and sunset from `surf_quality.sun`, first and last light =
-  sunrise − / sunset + `TWILIGHT_MARGIN`, polar state, the best daylight step and
-  duration-weighted Good-or-better hours.
+  sunrise − / sunset + `TWILIGHT_MARGIN`, polar state, the best daylight step and the
+  Good-or-better hours. Under the nearest-valid-step rule a step stands for the time from
+  halfway back to the previous valid time to halfway on to the next (as the charts draw it),
+  so `good_hours` is the part of the day between first and last light covered by the
+  intervals of Good-or-better steps: it never exceeds the day's light, and a 3-hour step at
+  dusk counts only its light part. The best time is chosen among daylight steps whose
+  interval lies mostly between sunrise and sunset.
 * Raw model values (`offshore`, `partitions`), our breaking-height prediction (`breaking`) and
   our rating (`quality`) are separate objects. Partitions appear only where the model stored
   them; `drives_surf` marks the partition with the largest predicted breaking height
   (`breaking.dominant_component`), which can be the wind sea.
 * `wind`: from `components.wind_detail` when the run was scored with it (strength,
   favourability, V·n components); older rows carry the fit and relation only, and the rest is
-  `null`. `gust_below_mean` flags a source whose gust is lower than its mean wind.
+  `null`. `gust_below_mean` flags a gust lower than the mean wind shown, with
+  `gust_below_mean_cause`: `"source"` (the gust's own model put it below its own mean) or
+  `"blend"` (the gust comes from fewer models than the blended mean and is not below their
+  own mean). `models_disagree` lists `"direction"` and/or `"speed"` when the blend's
+  independent models disagree on the wind at that step.
 * `tide` and `observations` blocks come from `services/tides/api.py`; a step's `tide` is read
   from the block's curve (never from model sea level), linearly between the curve's two
   neighbouring points (30-60 minutes apart; none when they are more than 3 hours apart), with
@@ -97,7 +112,9 @@ settings alike.
 * **Night**: shaded from each day's `last_light` to the next day's `first_light` (the API's
   sun times, not the per-step daylight flags), before the first day's first light and after
   the last day's last light; a polar night is shaded all day, a polar day not at all. Night
-  steps are dimmed, never removed.
+  steps keep their class colour and are drawn as a shorter, inset bar over the night band
+  (fading them would break the ramp: a night Exceptional read lighter than a daylight Poor);
+  they are never removed.
 * **Now**: a dotted line at the current time (refreshed each minute) with a "Now" label; when
   the selected step covers the current time the selected pill reads "Now · 5:00 PM".
 
@@ -110,8 +127,12 @@ settings alike.
   Nothing is drawn at a time the API did not send, and no hourly values are implied.
 * A selected or hovered time snaps to the **nearest valid step** (ties to the earlier one).
   Summary, tooltip and table name the step length ("3-hour step"). The header and the
-  toolbar say which spacing the run uses ("3-hour steps, from Sat 2:00 AM 6-hour steps · not
-  interpolated").
+  toolbar say which spacing the run uses ("1-hour steps, then 3-hour steps from Tue 2:00 PM ·
+  no values drawn between steps"), and name both zones when the clocks change inside the
+  window ("WEST (GMT+1), WET (GMT+0) from Sun 1:00 AM").
+* A blend step holding a member value aligned in time says so in the summary ("ECMWF value
+  aligned in time", with a tooltip); the chart itself never draws a value the API did not
+  send.
 * Model values are never interpolated in the client. The only line drawn between data points
   is the tide curve: a monotone cubic through the tide block's own 30–60 minute points (it
   never overshoots them), which depicts the astronomical tide prediction those points sample.
@@ -213,9 +234,13 @@ break". None of them is a probability.
   **Touch**: a swipe scrolls the timeline; a tap selects (selection happens on `click`, so a
   scroll gesture never selects).
 * **Keyboard**: the frame is a `role="slider"` (value = step index, `aria-valuetext` such as
-  "Thu 7:00 AM, Very Good, 5–7 ft"); ArrowLeft / ArrowRight move one API step, Page Up / Page
-  Down one day (the nearest step at the same time of day), Home / End the first / last step
-  of the selected local day. The selected step is scrolled into view (smoothly, or instantly
+  "Thu Oct 15, 7:00 AM, Very Good, 5–7 ft", with the date because a 10-day horizon has two
+  of each weekday); ArrowLeft / ArrowRight move one API step, Page Up one day later and Page
+  Down one day earlier (the nearest step at the same time of day, as the ARIA slider pattern
+  and the map's timeline do), Home / End the first / last step of the selected local day.
+* **Compact readout**: below the lg breakpoint, where the summary sits far above the rows, a
+  one-line readout of the selected step (time, rating, breaking range, wind, tide) sticks
+  under the site header while the user taps or arrows through the chart. The selected step is scrolled into view (smoothly, or instantly
   with `prefers-reduced-motion`).
 * **Deep link**: a chosen step is written to `?t=` with `history.replaceState` (debounced,
   no navigation); the default selection is not written.
@@ -272,14 +297,15 @@ Measured on this machine (4 CPUs) on 2026-10-14; see the package report for comm
 | 15 no fabricated times | `timeline-lib.test.ts`, `forecast-timeline.test.tsx` "15." (mark count, API times only, 6 h twice as wide as 3 h); e2e mixed cadence; backend segments |
 
 The e2e suite runs on demo forecasts (hourly) and on route-mocked payloads derived from them
-(a synthetic tide, a thinned 3 h / 6 h cadence). It says nothing about live tides or live
-observations, which are not configured in this package.
+(a synthetic tide, a thinned 3 h / 6 h cadence), so it draws demo and synthetic tides only.
+Live CO-OPS and EOT20 tide blocks and NDBC readings were checked on the 2026-10-16 live run
+(screenshots of Pipeline and Uluwatu in the integration notes; `docs/tides.md`).
 
 ## 12. Limitations
 
-* Real tide and observation blocks are covered by the backend's tests and by synthetic
-  frontend payloads only; the e2e backend runs the demo provider, so the e2e suite draws the
-  demo tide and no buoy markers.
+* The e2e backend runs the demo provider, so the e2e suite draws the demo tide and no buoy
+  markers; real tide and observation blocks are covered by the backend's tests, synthetic
+  frontend payloads and the live run of 2026-10-16.
 * Runs scored before the wind model (algorithm 2.0.0) have no wind strength or
   favourability, so wind bars are neutral for them.
 * Zone abbreviations come from the browser's Intl data (several English locales are tried);

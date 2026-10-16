@@ -13,8 +13,10 @@ when you can travel, your budget and home airports. Background workers then run 
 the clock, without the browser open:
 
 1. fetch wave + wind forecasts for every spot centrally, once per model run for all users:
-   NOAA GFS-Wave/GFS and ECMWF IFS read directly from their open-data buckets, plus the
-   GEFS-Wave ensemble for uncertainty, and blend the independent models;
+   small Open-Meteo point requests for two independent model families (NOAA GFS / GFS-Wave
+   and ECMWF IFS / WAM; a few hundred kB per run), plus the GEFS-Wave ensemble for
+   uncertainty, and blend the independent models (direct GRIB reads from the NOAA and
+   ECMWF open-data buckets remain a key-free fallback);
 2. turn the offshore forecast into **our prediction** of breaking wave height at each break
    (a physical nearshore model with an uncertainty range) and a separate surf-quality score;
 3. detect upcoming **swell events** 5–10 days ahead;
@@ -64,7 +66,13 @@ variables.
 * One 10-day timeline whose rows share one time axis: our surf quality, our estimated
   breaking height with its likely range, the model's offshore wave systems, wind (FROM
   direction, its relation to the break, gusts) and the tide. Each step is drawn as long as
-  it is (3-hourly, then 6-hourly), never as hourly values.
+  the source's own step: with the recommended Open-Meteo setup hourly to 5 days, then
+  3-hourly (6-hourly for ECMWF-only runs); 3- and 6-hourly steps are never shown as hourly
+  values, and a blend step that holds a member value aligned in time says so.
+* A selected-time summary above the rows (quality, breaking waves, swell, wind, tide,
+  forecast confidence) with "Why this forecast?" from the scoring engine's own record.
+  Text says where wind and swell come FROM; arrows point where they travel TO, on the
+  charts and the map alike.
 
 **Surf prediction and scoring** (algorithm 2.1.0, [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md))
 
@@ -370,7 +378,7 @@ Every external service, with its terms, free tier, cost, attribution and setup s
 | Email: Resend | `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM` on a verified domain | resend.com → API keys | console |
 | Email: SendGrid | `EMAIL_PROVIDER=sendgrid`, `SENDGRID_API_KEY`, `EMAIL_FROM` (verified sender) | app.sendgrid.com → Settings → API keys | console |
 | SMS: Twilio | `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` or `TWILIO_MESSAGING_SERVICE_SID` | console.twilio.com | `SMS_PROVIDER=console` (default) or `disabled` |
-| Map tiles | `NEXT_PUBLIC_CARTO_API_KEY`, or `NEXT_PUBLIC_MAP_TILE_URL` + `NEXT_PUBLIC_MAP_ATTRIBUTION`; optional `MAP_TILE_HOSTS`. Build time: run `docker compose build frontend` after changing | Default: OpenStreetMap, no key (OSM tile usage policy applies). A free key from carto.com/basemaps/apikey switches to CARTO Voyager | OpenStreetMap (default) |
+| Map tiles | `NEXT_PUBLIC_CARTO_API_KEY`, or `NEXT_PUBLIC_MAP_TILE_URL` + `NEXT_PUBLIC_MAP_ATTRIBUTION`; optional `MAP_TILE_HOSTS`. Build time: run `docker compose build frontend` after changing | None for the default basemap (a dark map drawn from bundled Natural Earth data). The "Streets" basemap uses OpenStreetMap tiles (OSM tile usage policy); a free key from carto.com/basemaps/apikey switches it to CARTO Voyager | Bundled Natural Earth basemap (default) |
 
 Inbound STOP/START: set your Twilio number's "A message comes in" webhook to
 `POST ${API_BASE_URL}/api/webhooks/twilio/sms`. Requests are verified with
@@ -395,6 +403,16 @@ GEFS_ENABLED=true                       # ensemble spread for the uncertainty ra
 * Upgrading an older `.env`: delete `OPEN_METEO_WAVE_MODEL` and `OPEN_METEO_ATMOS_MODEL`
   if present. They are deprecated single-model aliases and, when set, override the
   per-latitude GFS wave models.
+* Frequency and cycles: acquisition runs every `FORECAST_REFRESH_MINUTES` (180) and reads a
+  model run only once it is complete; the GFS family has 4 cycles a day, the ECMWF family
+  00Z and 12Z, GEFS-Wave the cycles in `GEFS_CYCLES` (00,06,12,18), map layers
+  `MAP_FIELD_CYCLES` (00,12).
+* Caching: provider responses are cached in Redis for one model run
+  (`PROVIDER_RESPONSE_CACHE_ENABLED`, at most `PROVIDER_RESPONSE_CACHE_MAX_KEYS` = 200
+  entries of up to `PROVIDER_RESPONSE_CACHE_MAX_BYTES` = 2 MB each, compressed), so a retry
+  or a second process never repeats a request; nothing is written to disk.
+* Retention: forecasts and predictions for `RETENTION_FORECAST_DAYS` (10), the archive of
+  issued predictions for `RETENTION_ARCHIVE_DAYS` (730).
 * With the defaults the database passes the default 5 GB data-health alert
   (`DATA_HEALTH_DATABASE_MAX_GB`, an alert only) after about 100 days (row sizes measured
   on 2026-10-16); size it from the disk ([`docs/operations.md`](docs/operations.md)). The
@@ -410,9 +428,11 @@ GEFS_ENABLED=true
 ```
 
 * No keys are needed. Each GFS cycle downloads about 1.9 GB (81 steps × ~24 MB for the 50
-  spots), each ECMWF cycle about 0.85 GB and each GEFS cycle about 0.2 GB; measured
-  2026-10-11: ~4 min, ~2 min and ~30 s. Reduce with `NOAA_STEP_HOURS=6` or shorter
-  `NOAA_MAX_LEAD_HOURS` / `ECMWF_MAX_LEAD_HOURS`.
+  spots) and each ECMWF cycle about 0.48 GB (trimmed to the variables used; computed). Before
+  that trimming, on 2026-10-11, ECMWF took about 0.85 GB and GEFS about 0.2 GB per cycle;
+  GEFS-Wave now reads only `GEFS_STAT_FIELDS`: 69.4 MB per run (1.69 MB per step, measured
+  2026-10-16). Reduce with `NOAA_STEP_HOURS=6` or shorter `NOAA_MAX_LEAD_HOURS` /
+  `ECMWF_MAX_LEAD_HOURS`.
 * Try either setup once synchronously (fresh database recommended):
 
   ```bash
@@ -694,19 +714,24 @@ E2E_MAILPIT=1 ./scripts/run-e2e.sh                      # emails via a Mailpit c
 The e2e suite uses the demo forecast and mock flights only; it never claims real email
 delivery or real fares.
 
-**Live forecast ingestion** is tested separately from the suite (it downloads ~3 GB):
+**Live forecast ingestion** is tested separately from the suite. The recommended setup
+downloads well under 1 MB for the spot forecasts and about 69 MB for GEFS-Wave:
 
 ```bash
 cd backend
 createdb swell_live    # scratch database
 DATABASE_URL=postgresql+psycopg://swell:swell@localhost:5432/swell_live \
   python -m app.cli init-db
+DATABASE_URL=… FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf python -m app.cli pipeline
 DATABASE_URL=… GEFS_ENABLED=true python -m app.cli engine ensemble
-DATABASE_URL=… FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs python -m app.cli pipeline
+DATABASE_URL=… python -m app.cli tides acquire     # CO-OPS and EOT20 tides, about 140 kB
 ```
 
 It prints the records, errors, bytes and timings per source, the blend and the
-predictions; the results of the 2026-10-11 run are in `docs/FORECAST_SOURCES.md`.
+predictions; the measured results are in `docs/FORECAST_SOURCES.md`, "Measured on
+2026-10-16". The key-free GRIB fallback is tested the same way with
+`FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs` (about 2.4 GB per cycle: 1.9 GB NOAA and 0.48 GB
+ECMWF; results of the 2026-10-11 run, before the ECMWF and GEFS trimming, in the same file).
 
 `scripts/run-e2e.sh` expects the backend virtualenv at `backend/.venv` and frontend
 dependencies installed. If Chromium is installed somewhere else, set
@@ -727,7 +752,12 @@ dependencies installed. If Chromium is installed somewhere else, set
 | `extension "btree_gist" is not available` during migration | A PostgreSQL build without contrib modules. Use the `postgres:16-alpine` image or Homebrew `postgresql@16`, which include it |
 | Redis `Connection refused` / readiness shows `"redis": "unavailable"` | Run `docker compose up -d redis`. Rate limiting fails open, but Celery and job locks need Redis |
 | Forecasts never appear / the spot page says "No forecast yet" | Check `/status` → *forecast.acquire*. `docker compose logs worker` shows provider errors. Live Open-Meteo errors (timeout, 429, 5xx) retry automatically; a 400 names the rejected variable or coordinate. Run `docker compose exec backend python -m app.cli pipeline` to see the result synchronously |
-| "Forecast data is stale" banner | The last successful run is older than `FORECAST_STALE_HOURS`. Usually the provider is unreachable or beat isn't running. Alerts pause until fresh data arrives |
+| "Forecast out of date" banner or badge | The run behind the forecast is older than its source's own limit: its cycle interval + publication lag + `FORECAST_REFRESH_MINUTES` + 2 h, i.e. about 17.2 h for the GFS family and 24.7 h for the ECMWF family (`FORECAST_STALE_HOURS`, 18 h, applies only to demo, Windy and the blend fallback; see `docs/FORECAST_SOURCES.md`, "Staleness"). Usually the provider is unreachable or beat isn't running. Forecast confidence is then at most Moderate; alerts pause only at twice that age (`STALE_ALERT_FACTOR`) |
+| Wind looks wrong: "offshore" where you expect onshore, or arrows the wrong way | Text and data say where the wind comes FROM; arrows on the charts and the map point where it travels TO (an arrow pointing east is a wind from the west). Offshore means from land to sea at that break: the spot's `offshore_wind_direction` (research profile, `data/surf_spots/`) decides it, never the compass alone. "Sources disagree about which wind is offshore" means the research is disputed (`python -m app.cli research lint`). "Models disagree on the wind direction" means GFS and ECMWF blow from directions more than 60° apart: the blend follows the stronger and forecast confidence is at most Moderate |
+| Timeline rows out of step, or a `?t=` link opens the wrong time | Every row draws from one `/api/spots/{slug}/timeline` response on one time axis; the selected time snaps to the nearest stored step. Check that response (`curl /api/spots/pipeline/timeline?days=10`) and the browser console. "The forecast timeline could not be loaded" means that request failed (the **Try again** button refetches). `?t=` takes an ISO time in UTC |
+| Worker killed, or a job stays "running" until `job_stuck` | Usually memory: the prediction job peaks at about 0.6 GB and GRIB fallbacks more (`docs/operations.md` §5 and §6). Give the worker more memory or lower `WORKER_CONCURRENCY`; `/status` shows `job_stuck` until the lock TTL expires. Redis near `REDIS_MAXMEMORY` (256 MB) shows as `redis_memory`: with `noeviction` writes then fail, so raise the cap rather than enabling eviction |
+| Map ocean layers missing, "Ocean layers are unavailable right now" or "Forecast out of date — model run … old" | Map layers need `MAP_FIELDS_ENABLED` (unset = on with a live spot provider, off with demo only; `GET /api/map/fields` says which). Run `python -m app.cli engine map-fields` once to fetch a cycle; the chip shows when the newest cycle is older than `MAP_FIELD_STALE_AFTER_HOURS` (18) |
+| No secondary swell or wind-sea row / map partition layers greyed out | Partitions exist only where the model has them: the ECMWF family publishes none, so the blend takes them from GFS-Wave; a system the model does not have is left out, never drawn as 0. Map partition layers need the standalone map fields with partitions (`docs/map-layers.md`) |
 | Opportunity is "surf only" with "flight provider error" or "flight search failed" | Invalid or expired flight credentials (HTTP 401/403 are permanent errors and are not retried). Fix `DUFFEL_ACCESS_TOKEN` / `AMADEUS_*`, run `check-config`, then press **Refresh flights** on the opportunity |
 | Opportunity says "quoted in EUR (no FX rate configured)" | Offers in another currency are never guessed into your budget. Set `FX_RATES_USD_JSON`, or use the budget currency the provider quotes |
 | Backend exits with `ValidationError` on start | A setting is invalid (e.g. `APP_ENV=production` with the default `SECRET_KEY`, `demo` mixed with live providers, or an unknown provider). The message names the field |
@@ -839,10 +869,20 @@ Checklist:
   2026-10-11: all 50 spots, 0 errors (4,050 + 3,250 records and 2,050 ensemble rows),
   then the blend, 11,350 predictions, the archive and swell detection
   ([`docs/FORECAST_SOURCES.md`](docs/FORECAST_SOURCES.md)).
+* The recommended API-first setup on fresh databases: on 2026-10-14 12Z both Open-Meteo
+  families for all 50 spots (10,200 and 4,100 records, 345.6 kB and 175.1 kB), the blend and
+  24,500 predictions; on 2026-10-16 00Z every acquisition job of that setup (10,400 and 4,200
+  records, 329 kB and 172 kB, 0 errors), the blend, 25,000 predictions, GEFS-Wave statistics
+  (69.4 MB), the standalone map fields with partition layers (7.8-8.0 MB per map hour),
+  CO-OPS and EOT20 tides (16 requests, 140 kB) and NDBC `5day2` observations; no file left on
+  disk ([`docs/FORECAST_SOURCES.md`](docs/FORECAST_SOURCES.md),
+  "API-first acquisition" and "Measured on 2026-10-16"; [`docs/tides.md`](docs/tides.md);
+  [`docs/map-layers.md`](docs/map-layers.md)).
 * Open-Meteo (NOAA GFS + GFS-Wave), on 2026-10-09: 19,200 records, 0 errors.
-* Map ocean layers from the real GFS cycle 2026-10-11 12Z (all 81 steps to 240 h),
-  served over HTTP and rendered by the map; values cross-checked against the NOAA point
-  samples ([`docs/map-layers.md`](docs/map-layers.md)).
+* Map ocean layers from the real GFS cycle 2026-10-11 12Z (all 81 steps to 240 h, the
+  pre-upgrade `pgrb2.0p25` read), served over HTTP and rendered by the map; values
+  cross-checked against the NOAA point samples; then the standalone `pgrb2.0p50` cycles
+  with partitions on 2026-10-15 and 2026-10-16 ([`docs/map-layers.md`](docs/map-layers.md)).
 * Forecast confidence on the real 2026-10-11 NOAA / ECMWF / GEFS runs, and the
   per-source staleness fix (ECMWF stays in the blend until its run is 25 h old instead of
   dropping out after 18 h).

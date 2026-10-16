@@ -1,8 +1,11 @@
-# Forecast confidence and local confidence (methodology `forecast-v1.1`)
+# Forecast confidence and local confidence (methodology `forecast-v1.2`)
 
-`forecast-v1.1` is `forecast-v1` plus the disputed-wind note of §3a, which changes no class;
-everything else below is unchanged from forecast-v1. Predictions scored with forecast-v1 are
-rescored once when their run is shown to users (§4).
+`forecast-v1.2` is `forecast-v1` plus the disputed-wind note of §3a (forecast-v1.1, which
+changes no class) and the cap `wind_direction_disagree` (forecast-v1.2, table below), which
+fires only with two independent model families; on one family the classes are those of
+forecast-v1, as validated in §12. Everything else below is unchanged from forecast-v1.
+Predictions scored with an older method are rescored once when their run is shown to users
+(§4).
 
 Every forecast hour carries two confidence classes, each **High**, **Moderate** or **Low**
 with short plain-language reasons:
@@ -86,6 +89,7 @@ agreement.
 | `hs_disagree` | independent families' Hs differ by more than a factor 1.4 | at most Moderate | "GFS and ECMWF disagree on swell size." |
 | `hs_strong_disagree` | … by more than a factor 2 | Low | "GFS and ECMWF disagree strongly on swell size." |
 | `period_disagree`, `direction_disagree`, `wind_disagree` | the blend's flags (> 3 s; > 30°, or 45° peak vs mean direction; > 15 km/h) | at most Moderate each | "GFS and ECMWF disagree on swell period." etc. |
+| `wind_direction_disagree` (forecast-v1.2) | the blend's flag: two independent families' winds more than 60° apart, both at 10 km/h or more | at most Moderate | "GFS and ECMWF disagree on the wind direction." |
 | `same_family_mismatch` | two copies of one model differ by > 20 % (integrity check) | at most Moderate | "Two copies of the same model differ here; one data feed may be faulty." |
 | `run_change` | offshore Hs at this valid time changed by more than a factor 1.4 since the previous run of the same source (heights floored at 0.5 m) | one class down (heuristic) | "Forecast changed a lot since the previous model run." |
 | `verification_poor` | the matching verification row has scatter index > 0.5 or MSE skill vs persistence ≤ 0 | at most Moderate | "Recent checks against buoys show large errors." |
@@ -236,7 +240,7 @@ through the note; that the note itself changes no class or score is covered by t
 ## 4. Where the classes are stored and shown
 
 * `surf_quality_predictions`: `forecast_confidence_class`, `local_confidence_class`,
-  `confidence_method` ("forecast-v1.1"; "forecast-v1" before the disputed-wind note), `confidence_inputs`, `issued_at`, `lead_hours`,
+  `confidence_method` ("forecast-v1.2"; "forecast-v1.1" before the wind-direction cap, "forecast-v1" before the disputed-wind note), `confidence_inputs`, `issued_at`, `lead_hours`,
   `research_assessment_id`; the legacy `confidence` (index) and `confidence_label` (index
   class) are unchanged.
 * `prediction_archive` (immutable): `forecast_confidence_class`, `local_confidence_class`,
@@ -338,9 +342,12 @@ What the app says about a forecast's age and origin, and the rules behind each l
   offshore 80 % range held the measured height 53 % of the time at 24 h and 85-89 % beyond
   5 days ([ml-evaluation.md](ml-evaluation.md) §12); the "Learn more" popover says so. Only a
   calibrated range would be called an "80% range".
-* **Good hours.** `DailySummary.good_hours` sums the durations of the Good-or-better daylight
-  steps (`timesteps.weighted_hours`, each step clipped to its local day), so a 3-hourly step
-  counts 3 hours; it used to count steps (325 of 508 day cards on the real run).
+* **Good hours.** `DailySummary.good_hours` is the time between first and last light of the
+  local day covered by the nearest-valid-step intervals of Good-or-better steps
+  (`timesteps.covered_hours`, the same rule as the spot timeline's days), so a 3-hourly step
+  counts up to 3 hours and never more than the day's light; it used to count steps (325 of
+  508 day cards on the real run), and then whole forward step durations, which could exceed
+  the day's light ("12 h good" on a 10.8 h day, integration review).
 
 `GET /api/spots/{slug}` is built from that spot's predictions and events only
 (`spot_views.spot_detail`); its `current` and `best_upcoming` are the ones the list gives

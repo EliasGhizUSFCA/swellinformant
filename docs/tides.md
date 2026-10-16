@@ -19,7 +19,7 @@ Code: `backend/app/services/tides/` (`coops.py`, `harmonic_model.py`, `catalog.p
 | Source | Used for | Licence and attribution | Account |
 |---|---|---|---|
 | NOAA CO-OPS Data API and Metadata API (`api.tidesandcurrents.noaa.gov`) | The 8 US spots: high and low waters, and the 30-minute curve of harmonic stations | US Government work, public domain; NOS asks for attribution ("NOAA/NOS/CO-OPS tide predictions (tidesandcurrents.noaa.gov)", <https://tidesandcurrents.noaa.gov/disclaimers.html>) | None. Each request sends `application=NOAA_COOPS_APPLICATION` (else `APP_NAME`), never an e-mail address |
-| EOT20 global ocean tide model (DGFI-TUM), distributed by SEANOE | The other 42 spots, and the fallback of the US spots | CC BY 4.0. Attribution shown with every model tide: "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE". Citation: Hart-Davis et al. (2021), ESSD 13, 3869-3884, <https://doi.org/10.5194/essd-13-3869-2021>; data <https://doi.org/10.17882/79489> | None; read once by the extraction script, never at run time |
+| EOT20 global ocean tide model (DGFI-TUM), distributed by SEANOE | The other 42 spots, and the fallback of the US spots | CC BY 4.0. Attribution shown with every model tide: "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE", the statement of changes (the constants of the nearest cell were extracted, amplitudes converted from cm to m, heights computed by this app) and links to the dataset and the licence (CC BY 4.0 §3(a)(1)). Citation: Hart-Davis et al. (2021), ESSD 13, 3869-3884, <https://doi.org/10.5194/essd-13-3869-2021>; data <https://doi.org/10.17882/79489> | None; read once by the extraction script, never at run time |
 | The demo forecast provider's sea level | `FORECAST_PROVIDERS=demo` only, when no prediction is stored | Synthetic (M2 + S2 shaped), labelled "Synthetic demo data" | - |
 
 Not used: Open-Meteo `sea_level_height_msl` (free tier non-commercial; a model sea level,
@@ -183,8 +183,9 @@ public, max-age=300`) returns `TideBlockOut`, also embedded in the timeline:
   `unavailable` with `reason` ("No tide source configured for this spot." or "No tide
   predictions are stored for this period yet.").
 * `station` {code, name, provider, kind (`harmonic`/`subordinate`/`model`), distance_km},
-  `source` (`noaa_coops`, `eot20`, `demo`), `datum`, `units` ("m"), `attribution`,
-  `fetched_at`.
+  `source` (`noaa_coops`, `eot20`, `demo`), `datum`, `units` ("m"), `attribution` (for
+  EOT20 with the statement of changes), `attribution_links` (EOT20: the dataset DOI and the
+  CC BY 4.0 licence; CO-OPS: tidesandcurrents.noaa.gov), `fetched_at`.
 * `curve`: 30-minute points covering the window plus one point beyond each end, each with
   `interpolated`; `events`: the high and low waters in the window plus the one before and
   the one after it.
@@ -200,8 +201,10 @@ public, max-age=300`) returns `TideBlockOut`, also embedded in the timeline:
 On the spot page an available block is drawn in the timeline's tide row, and a line under
 the charts (outside every fold, phones included; `TideSourceNote` in
 `frontend/components/forecast/tide-row.tsx`) shows the station or model point with its
-distance, the `attribution` (EOT20's CC BY 4.0 credit, or NOAA CO-OPS) and the `reason`
-caveat. The selected-time summary adds "model point / station N km away" to the datum.
+distance, the `attribution` (EOT20's CC BY 4.0 credit with its change statement, or NOAA
+CO-OPS) with the `attribution_links`, and the `reason` caveat. The chart legend names only
+the source and datum (the note is not repeated). The selected-time summary adds "model point
+/ station N km away" to the datum.
 
 16 days of tide for one spot are about 56 kB of JSON.
 

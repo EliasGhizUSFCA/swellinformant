@@ -90,7 +90,7 @@ models (`OPEN_METEO_GFS_WAVE_MODELS`) and `OPEN_METEO_GFS_ATMOS_MODEL=gfs_global
 | Free tier | "You may only use the free API services for non-commercial purposes." and "Less than 10'000 API calls per day, 5'000 per hour and 600 per minute." ([terms](https://open-meteo.com/en/terms)); 300,000 per month |
 | Call weighting | Requests "for data covering more than 10 weather variables or extending over a period of more than 2 weeks for a single location are considered multiple API calls" ([pricing](https://open-meteo.com/en/pricing)). The app charges `locations x max(1, variables/10) x max(1, days/14)` per request to a Redis budget before sending it (`backend/app/services/forecasts/quota.py`). Metadata calls are free: they are "not counted toward daily or monthly request limits" ([model updates](https://open-meteo.com/en/docs/model-updates)) |
 | Measured use | One run for all 50 spots (live, 2026-10-14 12Z): GFS family, 16 days, 142.9 weighted calls (waves 85.7, wind 57.1) and 345.6 kB on the wire including the metadata reads; ECMWF family, 15 days, 124.3 weighted calls and 175.1 kB. About 820 weighted calls a day with the default schedule, 8 % of the free tier. The full numbers are in `docs/FORECAST_SOURCES.md` ("API-first acquisition") |
-| Licence and attribution | "Attribution 4.0 International (CC BY 4.0)" and "You must include a link next to any location Open-Meteo data are displayed" ([licence](https://open-meteo.com/en/licence)). The spot API returns the links in `attribution_links` (Open-Meteo, its licence, NOAA NCEP or "Copyright ECMWF" with CC BY 4.0) |
+| Licence and attribution | "Attribution 4.0 International (CC BY 4.0)" and "You must include a link next to any location Open-Meteo data are displayed" ([licence](https://open-meteo.com/en/licence)). The API returns the links in `attribution_links` (Open-Meteo, its licence, NOAA NCEP or "Copyright ECMWF" with CC BY 4.0) for the spot forecast and timeline, the map snapshot and every swell event; they are printed next to the values on the spot page, the map's spot panel and best-spots list, the landing page's and dashboard's swell cards, the opportunity page and in alert emails |
 | Cost | Free for non-commercial use. Paid plans: "Standard: 1M calls/month. Professional: 5M calls/month. Enterprise: 50M+ calls/month." ([pricing](https://open-meteo.com/en/pricing)); the monthly prices are shown by a widget that could not be read: **confirm at checkout**. Standard covers Forecast and Marine; "Historical, climate, ensemble, and satellite radiation APIs require the Professional API Plan or higher." |
 | Env vars | `FORECAST_PROVIDERS`, `OPEN_METEO_API_KEY`, `OPEN_METEO_GFS_WAVE_MODELS`, `OPEN_METEO_GFS_ATMOS_MODEL`, `OPEN_METEO_ECMWF_WAVE_MODEL`, `OPEN_METEO_ECMWF_ATMOS_MODEL`, `OPEN_METEO_CELL_SELECTION`, `OPEN_METEO_AVAILABILITY_WAIT_MINUTES`, `OPEN_METEO_NATIVE_STEPS_ONLY`, `OPEN_METEO_CALLS_PER_MINUTE`, `OPEN_METEO_CALLS_PER_HOUR`, `OPEN_METEO_CALLS_PER_DAY`, `OPEN_METEO_CALLS_PER_MONTH`, `FORECAST_BATCH_SIZE`, `PROVIDER_RESPONSE_CACHE_ENABLED`, `PROVIDER_RESPONSE_CACHE_MAX_BYTES`, `PROVIDER_RESPONSE_CACHE_MAX_KEYS`; deprecated: `OPEN_METEO_WAVE_MODEL`, `OPEN_METEO_ATMOS_MODEL` |
 | Setup | Free: nothing. Paid: subscribe, set `OPEN_METEO_API_KEY`, and raise `OPEN_METEO_CALLS_PER_DAY`/`OPEN_METEO_CALLS_PER_MONTH` to the plan's budget (the per-minute and per-hour limits of the free tier are the app's defaults) |
@@ -143,11 +143,14 @@ header is refused before its body is read.
 | | |
 |---|---|
 | Purpose | Ensemble mean and spread of Hs and Tp for the uncertainty ranges and forecast confidence (never a forecast) |
-| Variables | `GEFS_STAT_FIELDS`, default HTSGW and PERPW (4 records per step, about 1.6 MB); WIND, SWELL, SWPER on request |
+| Variables | `GEFS_STAT_FIELDS`, default HTSGW and PERPW (4 records per step, 1.69 MB measured on 2026-10-16); WIND, SWELL, SWPER on request |
 | Docs | <https://registry.opendata.aws/noaa-gefs/> |
-| Account / key | None. Licence: "can be used as desired" (same NODD statement) |
-| Cost | Free; about 65 MB per run at 41 steps (computed from record sizes) |
+| Account / key | None |
+| Free tier / limits | No published limits (NODD, as 2.2); the app reads one run per `GEFS_CYCLES` cycle, by byte range |
+| Licence and attribution | "can be used as desired" (same NODD statement as 2.2); credited as "NOAA NCEP GEFS-Wave ensemble (modified)" |
+| Cost | Free; 69.4 MB per run at 41 steps (69,357,546 B measured on 2026-10-16, `docs/FORECAST_SOURCES.md`) |
 | Env vars | `GEFS_ENABLED`, `NOAA_GEFS_BASE_URL`, `GEFS_STAT_FIELDS`, `GEFS_CYCLES` |
+| Setup | Set `GEFS_ENABLED=true`; nothing else |
 | Test | `GEFS_ENABLED=true python -m app.cli engine ensemble`; `pytest tests/unit/test_ensemble.py` |
 
 ### 2.4 ECMWF open data (optional, key-free direct fallback)
@@ -157,10 +160,12 @@ header is refused before its body is read.
 | Purpose | ECMWF IFS + ecWAM spot forecasts read directly (`FORECAST_PROVIDERS=ecmwf_ifs`); off by default because Open-Meteo serves the same model for kilobytes |
 | Variables | `ECMWF_WAVE_PARAMS` (default `swh,mwd,pp1d,mwp`, 3.69 MB per step) and `wmb` once per run; `10u`, `10v`, `10fg`, `msl` |
 | Docs | <https://www.ecmwf.int/en/forecasts/datasets/open-data> |
-| Account / key | None. "access to the Open-Data Portal is currently limited to 500 simultaneous connections" (the app keeps 4 in flight) |
-| Licence and attribution | "Their use is governed by the Creative Commons CC-BY-4.0 licence and the ECMWF Terms of Use." Attribution "Copyright ECMWF" with a CC BY 4.0 link, shown with every ECMWF-derived value (also through Open-Meteo) |
+| Account / key | None |
+| Free tier / limits | "access to the Open-Data Portal is currently limited to 500 simultaneous connections" (the app keeps 4 in flight) |
+| Licence and attribution | "Their use is governed by the Creative Commons CC-BY-4.0 licence and the ECMWF Terms of Use." Attribution "Copyright ECMWF ... (modified)" with a CC BY 4.0 link wherever ECMWF-derived values are shown (also through Open-Meteo): on the spot page, the map's spot panel and best-spots list, the landing page's and dashboard's swell cards, the opportunity page and alert emails (the API's `attribution_links`) |
 | Cost | Free; about 0.48 GB per run when enabled (computed) |
 | Env vars | `ECMWF_BASE_URL`, `ECMWF_MAX_LEAD_HOURS`, `ECMWF_WAVE_PARAMS` |
+| Setup | Add `ecmwf_ifs` to `FORECAST_PROVIDERS` (e.g. `noaa_gfs,ecmwf_ifs`); nothing else |
 | Test | `FORECAST_PROVIDERS=ecmwf_ifs python -m app.cli pipeline`; `pytest tests/unit/test_ecmwf_provider.py` |
 
 ### 2.5 Copernicus Marine (MFWAM): not implemented
@@ -178,9 +183,11 @@ configured, the spot API adds the Copernicus Marine credit link automatically.
 | Variables | Significant wave height, peak and mean period, wave direction, wind (where the station measures it) |
 | Docs | NDBC <https://www.ndbc.noaa.gov/faq/measdes.shtml> ("Both Realtime and Historical files show times in UTC only."); CDIP buoys are read through NDBC; AODN and Met Office: `docs/observations.md` |
 | Account / key | None |
-| Licence | NDBC: US Government, public domain. CDIP: "These data may be redistributed and used without restriction." (acknowledgement requested). AODN: CC BY 4.0. Met Office marine observations: CC BY-SA 4.0 (share-alike: derived data keep the licence). Stored per station in `buoy_stations` |
+| Free tier / limits | No rate limit is documented here (not checked); the app reads each station's file once an hour (`observations.ingest`) |
+| Licence | NDBC: US Government, public domain. CDIP: "These data may be redistributed and used without restriction." (acknowledgement requested). AODN: CC BY 4.0. Met Office marine observations: CC BY-SA 4.0 (share-alike: derived data keep the licence). Stored per station in `buoy_stations`; the spot page names the provider in words, links the licence and shows the station's acknowledgement (e.g. IMOS's) as a tooltip |
 | Cost | Free; about 15 MB/day with NDBC's 5-day files (computed) |
 | Env vars | `OBSERVATIONS_ENABLED`, `OBSERVATION_PROVIDERS`, `NDBC_USE_5DAY`, `OBSERVATION_RETENTION_DAYS`, `VERIFICATION_ENABLED` |
+| Setup | Set `OBSERVATIONS_ENABLED=true` (stations are seeded by `init-db`); `VERIFICATION_ENABLED=true` adds the verification jobs |
 | Test | `OBSERVATIONS_ENABLED=true python -m app.cli obs ingest`; `pytest tests/unit/test_observation_parsers.py tests/unit/test_ndbc_real_files.py` |
 
 ### 2.7 NOAA CO-OPS tide predictions (US spots)
@@ -188,25 +195,30 @@ configured, the spot API adds the Copernicus Marine credit link automatically.
 | | |
 |---|---|
 | Purpose | Tide curves and high/low times for the US spots, datum labelled (MLLW or MSL) |
+| Variables | Predicted water level (`product=predictions`) at 30-minute spacing for harmonic stations, high/low waters (`interval=hilo`) for subordinate stations, and the station datums |
 | Docs | <https://api.tidesandcurrents.noaa.gov/api/prod/>, <https://tidesandcurrents.noaa.gov/disclaimers.html> |
 | Account / key | None. The `application` parameter identifies the caller: "Not including the parameter will make identifying issues through automated logs impossible." Set `NOAA_COOPS_APPLICATION` (falls back to the app name setting); do not put a personal email address in it |
 | Limits | "Subordinate tide prediction stations can only provide tide predictions on a high / low interval." No published rate limit |
 | Licence | Public domain; "NOS requests that attribution be given whenever NOS material is reproduced and re-disseminated." |
 | Cost | Free; a few small requests per station per day |
 | Env vars | `TIDE_PROVIDERS`, `NOAA_COOPS_BASE_URL`, `NOAA_COOPS_APPLICATION`, `TIDE_HORIZON_DAYS`, `TIDE_RETENTION_PAST_DAYS` |
-| Test | `GET /api/spots/pipeline/tides` returns the curve, high/low times and the datum (the tide adapters come with the tides package; not run in this package) |
+| Setup | Set `NOAA_COOPS_APPLICATION`; `init-db` seeds the station catalog; the daily `tides.acquire` job (02:20 UTC) does the rest |
+| Test | `python -m app.cli tides acquire` (live, 16 requests and about 140 kB for the 6 stations, measured on 2026-10-16), then `GET /api/spots/pipeline/tides` (status `available`, datum MLLW, station Haleiwa); mock tests: `pytest tests/unit/test_coops.py tests/unit/test_tide_catalog.py tests/unit/test_tide_stage.py` |
 
 ### 2.8 EOT20 harmonic tide constants (non-US spots)
 
 | | |
 |---|---|
 | Purpose | Tides for the spots without a CO-OPS station, computed locally from committed harmonic constants (no network access at runtime). Labelled "model tide, relative to model mean sea level" |
+| Variables | Amplitude and Greenwich phase of 17 tidal constituents at the EOT20 cell nearest each break (`data/tides/constants_eot20.json`) |
 | Docs | <https://www.seanoe.org/data/00683/79489/>: "The final EOT20 version is provided open access and should be used for all applications." |
 | Account / key | None |
-| Licence | CC BY 4.0 (the SEANOE record's licence, <https://creativecommons.org/licenses/by/4.0/>); credit DGFI-TUM's EOT20 wherever the curve is shown (the tide block's `attribution` field) |
+| Free tier / limits | Not applicable: nothing is fetched at runtime (the one-off extraction reads the SEANOE archive by byte range) |
+| Licence | CC BY 4.0 (the SEANOE record's licence, <https://creativecommons.org/licenses/by/4.0/>). Wherever the curve is shown the tide note credits "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE", states the changes (constants of the nearest cell extracted, amplitudes converted from cm to m, heights computed by this app) and links the dataset DOI and the licence (the tide block's `attribution` and `attribution_links`; the constants file records `licence_url`, `source_url` and `changes`) |
 | Cost | Free; no runtime downloads |
 | Env vars | `TIDE_MODEL`, `TIDE_CONSTANTS_PATH` |
-| Test | `GET /api/spots/uluwatu/tides`: status `available` with datum `model_msl` once the constants file is committed (tides package; not run in this package) |
+| Setup | Nothing: the constants file is committed. `scripts/extract_tide_constants.py` re-extracts it |
+| Test | `python -m app.cli tides acquire` computes the model tides locally, then `GET /api/spots/uluwatu/tides` (status `available`, datum `model_msl`, station "EOT20 model point near Uluwatu"); `pytest tests/unit/test_tide_harmonic.py tests/unit/test_tide_catalog.py` |
 
 FES2022 (`TIDE_MODEL=fes2022`) needs a free AVISO+ account for the one-off extraction of the
 constants; the credentials are used only by that script, never by the running app.
@@ -216,11 +228,14 @@ constants; the credentials are used only by that script, never by the running ap
 | | |
 |---|---|
 | Purpose | Alternative GFS-based point forecasts (`FORECAST_PROVIDERS=windy`) |
-| Docs | <https://api.windy.com/point-forecast/docs> (wind-sea keys `wwaves_height-surface`, `wwaves_period-surface`, `wwaves_direction-surface`) |
+| Variables | Waves, swell and wind sea (height, period, direction; e.g. the wind-sea keys `wwaves_height-surface`, `wwaves_period-surface`, `wwaves_direction-surface`), wind and gusts |
+| Docs | <https://api.windy.com/point-forecast/docs> |
 | Account / key | Paid key, `WINDY_API_KEY` |
+| Free tier / limits | None used by this app (paid plan, see Cost) |
 | Terms | "Redistribution of any part of the API or the included data to any third party is forbidden." ([terms](https://account.windy.com/agreements/windy-api-map-and-point-forecast-terms-of-use)); the same terms forbid storing the data and building derived databases. This app stores runs, blends them and archives predictions, so the token `windy` is refused unless `WINDY_TERMS_ACKNOWLEDGED=true`, which should be set only with a written licence that allows this use |
 | Cost | 990 EUR per year for the professional plan ([pricing](https://api.windy.com/point-forecast/pricing)) |
 | Env vars | `WINDY_API_KEY`, `WINDY_TERMS_ACKNOWLEDGED` |
+| Setup | Only with a written licence that allows storing and deriving: set `WINDY_API_KEY`, `WINDY_TERMS_ACKNOWLEDGED=true` and add `windy` to `FORECAST_PROVIDERS` |
 | Test | Mock only: `pytest tests/unit/test_forecast_providers.py -k windy` |
 
 ### 2.10 Flight providers
@@ -230,8 +245,11 @@ constants; the credentials are used only by that script, never by the running ap
 | Purpose | Fares and booking links for surf trips (`FLIGHT_PROVIDER=duffel`) | Same, for Amadeus Enterprise customers (`FLIGHT_PROVIDER=amadeus`) |
 | Docs | <https://duffel.com/docs/api/overview/test-mode> | <https://developers.amadeus.com/> |
 | Account / key | Self-serve account. Test tokens: "Testing tokens are easy to recognize: they start with duffel_test_" and test mode includes the sandbox airline "Duffel Airways" | Enterprise agreement only: Amadeus Self-Service was shut down on 2026-07-17 (`docs/ARCHITECTURE.md`; not re-verified on 2026-10-14, the page renders only with JavaScript) |
+| Free tier / limits | Test mode with `duffel_test_` tokens (sandbox airline); the app's own budget is `FLIGHT_DAILY_QUOTA` and `FLIGHT_MAX_QUERIES_PER_MATCH` | None (contract) |
+| Licence / terms | The provider's terms (not reviewed in this document); fares are shown with booking links, never resold | Contract |
 | Cost | "$3.00 per order" plus "1% total order value" for managed content; searches beyond a 1500:1 search-to-book ratio cost "$0.005" each ([pricing](https://duffel.com/pricing)) | Contract |
 | Env vars | `FLIGHT_PROVIDER`, `DUFFEL_ACCESS_TOKEN`, `DUFFEL_BASE_URL`, `FLIGHT_DAILY_QUOTA`, `FLIGHT_MAX_QUERIES_PER_MATCH` | `FLIGHT_PROVIDER`, `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET`, `AMADEUS_BASE_URL` |
+| Setup | app.duffel.com → Developers → Access tokens; set `FLIGHT_PROVIDER=duffel` and `DUFFEL_ACCESS_TOKEN`, then `python -m app.cli check-config` | Credentials from the Amadeus account manager; set the three `AMADEUS_*` variables and `FLIGHT_PROVIDER=amadeus` |
 | Test | Mock tests: `pytest tests/unit/test_flight_providers.py`; with a `duffel_test_` token: `FLIGHT_PROVIDER=duffel python -m app.cli pipeline` | Mock tests only |
 
 Without a key, `FLIGHT_PROVIDER=demo` produces mock offers that are always labelled as such.
@@ -245,7 +263,9 @@ Without a key, `FLIGHT_PROVIDER=demo` produces mock offers that are always label
 | Account / key | Account, verified sending domain, `RESEND_API_KEY` | Account, verified sender, `SENDGRID_API_KEY` | Host and credentials |
 | Free tier | "$0 / mo 3,000 emails / mo 100 emails a day" ([pricing](https://resend.com/pricing)) | "Sign up for a free trial—no credit card required." ([pricing](https://sendgrid.com/en-us/pricing)); plan prices not readable: confirm at signup | depends |
 | Cost | Pro "$20 / mo 50,000 emails / mo" | confirm at signup | depends |
+| Licence / terms | The provider's acceptable-use terms (not reviewed here); a verified sending domain with SPF, DKIM and DMARC | same | your provider's |
 | Env vars | `EMAIL_PROVIDER`, `EMAIL_FROM`, `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` | `EMAIL_PROVIDER`, `EMAIL_FROM`, `SENDGRID_API_KEY`, `SENDGRID_WEBHOOK_PUBLIC_KEY` | `EMAIL_PROVIDER`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`, `SMTP_USE_SSL` |
+| Setup | Verify the sending domain and add the DNS records (README, "Email delivery: sender and DNS verification"); set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM`; optional delivery webhook with `RESEND_WEBHOOK_SECRET` | Verify a sender, set `EMAIL_PROVIDER=sendgrid`, `SENDGRID_API_KEY`, `EMAIL_FROM`; optional event webhook with `SENDGRID_WEBHOOK_PUBLIC_KEY` | Set the `SMTP_*` variables and `EMAIL_FROM` |
 | Test | Mock tests: `pytest tests/unit/test_notification_providers.py`; SMTP end to end against Mailpit in Docker Compose (`EMAIL_PROVIDER=mailpit`) | | |
 
 ### 2.12 SMS (Twilio, optional)
@@ -255,15 +275,27 @@ Without a key, `FLIGHT_PROVIDER=demo` produces mock offers that are always label
 | Purpose | Optional SMS swell alerts with STOP/START handling |
 | Docs | <https://www.twilio.com/docs/messaging> |
 | Account / key | Account, a sending number or messaging service; US numbers need A2P 10DLC registration |
+| Free tier / limits | Not checked here: confirm at signup |
+| Licence / terms | Twilio's terms and the carriers' messaging rules (A2P 10DLC in the US); recipients can reply STOP |
 | Cost | US SMS "$0.0083" per segment for long codes, toll-free and short codes, plus carrier fees ([pricing](https://www.twilio.com/en-us/sms/pricing/us)) |
 | Env vars | `SMS_PROVIDER`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `TWILIO_MESSAGING_SERVICE_SID` |
+| Setup | Buy or port a number (or a messaging service), set the variables, and set the number's "A message comes in" webhook to `POST ${API_BASE_URL}/api/webhooks/twilio/sms` for STOP/START (README, "Inbound STOP/START") |
 | Test | Mock tests only: `pytest tests/unit/test_notification_providers.py -k twilio` |
 
 ### 2.13 Map tiles
 
-OpenStreetMap standard tiles work without a key for light use; CARTO needs a free key
-(`NEXT_PUBLIC_CARTO_API_KEY`); any XYZ provider can be set with `NEXT_PUBLIC_MAP_TILE_URL`
-and `NEXT_PUBLIC_MAP_ATTRIBUTION`. Details and policies: `docs/FORECAST_SOURCES.md`.
+| | |
+|---|---|
+| Purpose | Tiles for the map's optional "Streets" basemap. The default basemap is a dark map drawn from Natural Earth data bundled with the app and needs no tile server |
+| Variables | Not applicable (raster tiles) |
+| Docs | OpenStreetMap tile usage policy <https://operations.osmfoundation.org/policies/tiles/>; CARTO basemaps <https://carto.com/basemaps/>; `docs/FORECAST_SOURCES.md` ("Map tiles") |
+| Account / key | None for OpenStreetMap; a free CARTO key (`NEXT_PUBLIC_CARTO_API_KEY`) for CARTO Voyager; any XYZ provider's own key in its URL |
+| Free tier / limits | OpenStreetMap's standard tiles are for light use under its policy; heavier traffic needs a provider |
+| Licence / attribution | OpenStreetMap data are ODbL ("© OpenStreetMap contributors", shown in the map's attribution strip); CARTO and other providers add their own attribution (`NEXT_PUBLIC_MAP_ATTRIBUTION`) |
+| Cost | Free for light use; providers' plans otherwise |
+| Env vars | `NEXT_PUBLIC_CARTO_API_KEY`, `NEXT_PUBLIC_MAP_TILE_URL`, `NEXT_PUBLIC_MAP_ATTRIBUTION`, `MAP_TILE_HOSTS` |
+| Setup | Build-time variables: set them, then rebuild the frontend (`docker compose build frontend`); `MAP_TILE_HOSTS` adds a tile host to the CSP |
+| Test | Open `/map`, choose the Streets basemap in the map's settings and check that tiles load and the attribution names the provider; `npx vitest run tests/map-tiles.test.ts` |
 
 ## 3. Not used
 

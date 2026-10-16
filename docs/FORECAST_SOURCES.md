@@ -37,12 +37,23 @@ direct GRIB ingesters stay as tested, key-free fallbacks, off by default.
   run (`forecasts/blend.py`): one member per family, weighted by the best linear unbiased
   combination for correlated errors (prior error correlation 0.6 related / 0.3
   independent; per-member error from verification when it exists, otherwise a lead-time
-  prior). Hs is combined geometrically, Tp only over peak-period members, wind direction
-  as unit vectors, swell partitions come from the member that has them (GFS-Wave) scaled
+  prior). Hs is combined geometrically, Tp only over peak-period members; the wind
+  direction is the direction of the weighted mean wind vector (u, v), so each member pulls
+  in proportion to its speed and a calm member barely turns a strong one, and the wind speed
+  is the weighted mean of the members' speeds (the vector mean's length would read as calm
+  where the members blow from different directions, which neither forecasts). Until the
+  integration review the direction was a weighted mean of unit vectors: on the 2026-10-16
+  00Z run 555 of 4,199 co-located native hours had a blended direction more than 45° from
+  both members (111 with the vector mean) and 394 a wind relation neither member had (72).
+  Swell partitions come from the member that has them (GFS-Wave) scaled
   to the blended Hs; a partition the member does not have stays empty. Gusts are averaged
   only over members with the same gust definition as the highest-weight member
   (`extra.gust_kind`, with every member's in `extra.gust_kinds`): a GFS instantaneous
-  gust and an ECMWF 3-hour maximum are different quantities. Nothing is averaged equally.
+  gust and an ECMWF 3-hour maximum are different quantities. When those are fewer members
+  than the mean wind's, `extra.gust_members` and `extra.gust_member_mean_kmh` record them
+  and their own mean, so a gust below the blended mean is attributed to the blend, not to
+  the source (1,067 of 10,400 hours of the 2026-10-16 00Z blend). Nothing is averaged
+  equally.
 * Members are aligned in time by linear interpolation between their own steps (at most
   6 h apart, never extrapolated). A blended hour that uses such an interpolated member
   value is marked `extra.interpolated = true` with the members in
@@ -51,9 +62,19 @@ direct GRIB ingesters stay as tested, key-free fallbacks, off by default.
   an interpolated ECMWF value).
 * Each hour stores a `forecast_comparisons` row: Hs log ratio, Tp, direction and wind
   differences, and flags (`hs_disagree` above a ratio of 1.4, `period_disagree` above 3 s,
-  `direction_disagree` above 30°, `wind_disagree` above 15 km/h; heuristic thresholds).
-  Flagged hours widen the forecast range and cap forecast confidence at Moderate (Low when
-  Hs differs by more than a factor 2).
+  `direction_disagree` above 30°, `wind_disagree` above 15 km/h, `wind_direction_disagree`
+  when the winds blow from directions more than 60° apart with both at 10 km/h or more;
+  heuristic thresholds). Flagged hours widen the forecast range and cap forecast confidence
+  at Moderate (Low when Hs differs by more than a factor 2); the spot page notes "Models
+  disagree on the wind direction" next to the wind.
+* Rebuilding the 2026-10-16 00Z blend with the vector wind (a clone of the live run,
+  rescored with 2.1.0 and forecast-v1.2) changed 1,139 of 10,400 wind relations, 342 labels
+  (186 down, 156 up), 2,106 scores (147 by 10 points or more) and 91 forecast-confidence
+  classes from High to Moderate; 702 hours carry `wind_direction_disagree`. Example: Trestles
+  2026-10-17 18Z, GFS family 13 km/h from 79° (offshore) and ECMWF 16 km/h from 261°
+  (onshore), was blended as 14.8 km/h from 350° (cross-offshore, Excellent 9.2, High); it is
+  now 14.8 km/h from 269° (onshore, Good 6.9, Moderate, flagged). These changes reach event
+  detection, matching and alerts with the next blend.
 * Predictions are computed for every run; the blend (or the single primary source when no
   blend exists) is authoritative for detection, matching and alerts. Only authoritative
   runs are archived in `prediction_archive`. Predictions of superseded member runs are
@@ -143,12 +164,14 @@ are not generated once a run is twice its stale-after age.
 * Forecast runs older than `RETENTION_FORECAST_DAYS` (10) are deleted nightly, keeping the
   two newest usable runs per source.
 * The predictions of superseded member runs are deleted nightly: derived, recomputable
-  data (about 2.5 kB per row), never the blend's, never the newest run of a source, never
+  data (about 3.4 kB per row with algorithm 2.1.0, measured 2026-10-16; 2.3-2.5 kB with
+  2.0.0), never the blend's, never the newest run of a source, never
   a run that is still authoritative for a spot.
 * The prediction archive keeps the authoritative predictions for
   `RETENTION_ARCHIVE_DAYS` (730) with a digest of the confidence inputs
-  (`ARCHIVE_CONFIDENCE_DIGEST`): measured on the real 2026-10-11 blend, 562 B per row
-  instead of 1,506 B.
+  (`ARCHIVE_CONFIDENCE_DIGEST`): measured on the real 2026-10-11 blend with algorithm 2.0.0,
+  562 B per row of heap instead of 1,506 B; with 2.1.0 and counting heap, TOAST and
+  indexes, 760 B per row (2026-10-16, below).
 * Open-Meteo bodies are never written to disk; GRIB is decoded in memory. A trace of a
   live acquisition (`strace -e openat,creat,rename,unlink,mkdir`) showed no file opened
   for writing by the acquisition.

@@ -456,8 +456,7 @@ all three hold:
 Otherwise the component is left out (weights renormalise) and `tide_excluded_reason` says
 why; this is the same rule as the tide block's "Tide preference not well established." Steps
 without a tide prediction are scored exactly as before, with "No tide prediction for this
-time." Until tide predictions are stored (the tides package), no real step scores its tide.
-On the committed research and decisions 18 of 50 spots pass (Dungeons, Mundaka, Teahupoo
+time." Tide is scored wherever predictions are stored and this rule passes. On the committed research and decisions 18 of 50 spots pass (Dungeons, Mundaka, Teahupoo
 and Thurso East at high, 14 at moderate; 8 of the 18 prefer "all" tides, which always fit
 1); 21 are excluded because sources disagree, 6 for a low research class and 5 without a
 preference.
@@ -588,10 +587,14 @@ labelled heuristic. Nearshore translation is reported separately as uncalibrated
 ## 6. Swell events (`swell_detection/`)
 
 * Steps are the run's stored valid times at the source's native spacing (hourly, 3-hourly
-  or 6-hourly, depending on the source and the lead time); nothing is interpolated. Event
-  and match hour counts currently count every step as one hour (`clustering.Step.duration`
-  defaults to one hour; the detection service does not yet pass each step's length), so
-  they undercount 3-hourly runs. **Only daylight steps** are considered. Nights neither
+  or 6-hourly, depending on the source and the lead time); detection adds nothing between
+  them (a blend step may hold a member value the blend aligned in time, see
+  `docs/forecast-charts.md` §2). Event and match hours are real hours: each step counts the
+  part of its nearest-valid-step interval that lies between first and last light at the spot
+  (`swell_detection.service.load_steps`, `clustering.Step.daylight`), so a midday 3-hour step
+  counts 3 h, an hourly one 1 h and a step at dusk only its light part; `min_window_hours`
+  and `qualifying_hours` compare hours, not step counts (until the integration review they
+  counted every step as one hour). **Only daylight steps** are considered. Nights neither
   qualify nor break an event, so a swell that is good on consecutive mornings is *one*
   event.
 * A daylight step qualifies when `score ≥ SWELL_EVENT_MIN_SCORE` (default 40 = Fair).

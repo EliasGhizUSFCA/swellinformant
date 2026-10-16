@@ -74,8 +74,10 @@ does not chain to the blend.
    PostgreSQL and Redis off the public interface. Set `APP_BASE_URL`, `API_BASE_URL` and
    `CORS_ORIGINS` explicitly when you do this (their defaults are derived from the ports).
 3. `docker compose up -d --build`, then `docker compose ps` until every service is
-   *healthy* (about 30 s after the images are built; the first live acquisition takes
-   about 8.5 min, see §6).
+   *healthy* (about 30 s after the images are built). With this recommended setup the first
+   live acquisition takes about 1-3 min: the two spot-forecast families under 2 min, GEFS-Wave
+   about 12 s and a full map cycle about 1-2.5 min (§6); with the direct GRIB fallback
+   (`noaa_gfs,ecmwf_ifs`) about 8.5 min.
 4. Create your account in the web app, verify the email, then make it an admin (admins
    get the data-health alerts and the accuracy dashboard):
    `docker compose exec backend python -m app.cli make-admin you@your-domain`.
@@ -520,7 +522,7 @@ the server.
 |---|---|---|
 | CPU | 2 vCPUs (acquisitions take longer) | 4 vCPUs |
 | Memory | 4 GB (about 1.8 GiB measured peak plus the OS) | 8 GB |
-| Disk | 30 GB: `RETENTION_ARCHIVE_DAYS=365` (database ≤ ~10 GB) and `BACKUP_KEEP=3` (~6 GB) | 60 GB with the defaults (database ~16 GB, 7 local dumps ~23 GB at two years) |
+| Disk | 30 GB: `RETENTION_ARCHIVE_DAYS=365` (database ≤ ~10 GB) and `BACKUP_KEEP=3` (~6 GB) | 60 GB with the defaults (database ~17 GB, 7 local dumps ~23 GB at two years) |
 | Network | about 0.6-1.25 GB/day inbound with the API-first setup (GEFS-Wave and the map layers; about 1.25 GB measured and extrapolated on 2026-10-16; 10 GB/day with the direct GRIB providers) | |
 
 Disk and database sizes are computed for the API-first setup with the archive digest
