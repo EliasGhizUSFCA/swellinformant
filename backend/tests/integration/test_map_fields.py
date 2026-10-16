@@ -464,6 +464,34 @@ def test_the_nearest_valid_time_is_served(
     assert _iso(meta["valid_time"]) == CYCLE + timedelta(hours=expected_hour)
 
 
+@pytest.mark.parametrize(
+    ("offset_hours", "expected_hour"),
+    [
+        (126 + 5, 126),  # after f120 the default MAP_FIELD_STEPS step is 6 h, not 3 h
+        (126 + 7, None),
+        (120 - 2, 120),
+    ],
+)
+def test_the_tolerance_beyond_the_last_time_is_the_map_step_there(
+    db: Session,
+    app_client: ApiClient,
+    monkeypatch: pytest.MonkeyPatch,
+    offset_hours: int,
+    expected_hour: int | None,
+) -> None:
+    provider = fields_only(standalone_world(hours=[120, 126]), map_lead=240)
+    monkeypatch.setattr(provider, "map_hours", lambda: [120, 126])  # two long-lead hours
+    assert acquire_map_fields(db, now=NOW, provider=provider)["status"] == "success"
+    at = CYCLE + timedelta(hours=offset_hours)
+    resp = app_client.get("/api/map/fields/hs", params={"at": at.isoformat()})
+    if expected_hour is None:
+        assert resp.status_code == 404
+        return
+    assert resp.status_code == 200
+    meta = json.loads(resp.headers["x-field-meta"])
+    assert _iso(meta["valid_time"]) == CYCLE + timedelta(hours=expected_hour)
+
+
 def test_naive_and_default_times_are_utc(
     fields_run: ForecastRun, app_client: ApiClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

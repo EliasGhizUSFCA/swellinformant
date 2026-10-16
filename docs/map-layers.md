@@ -501,6 +501,38 @@ pairs, 13 stations, 6 valid times) median |difference| 8.1°, p90 26.3°, none a
 the same pairs flipped by 180° would give 171.9°. Peak wave direction against NDBC MWD
 (74 pairs): median 13.0°, p90 44.7° (flipped: 167.0°).
 
+### Re-check by the review (2026-10-15 12Z)
+
+Repeated at 21:26 UTC on fresh scratch databases, same settings (standalone mode with
+Open-Meteo spot providers and `MAP_FIELDS_ENABLED` unset):
+
+* `engine map-fields --max-lead-hours 9` picked **2026-10-15 12Z** itself: `success`, 60
+  fields, 28 requests, 31.96 MB downloaded (7.99 MB per hour, 7 requests each), 4.69 MB
+  stored, 7.7 s for the job, peak 584 MB. The 15 records of f006 downloaded again with
+  curl: 0.865 MB for PRMSL and UGRD/VGRD 10 m from `pgrb2.0p50` and 7.087 MB for the 12
+  wave records; with the two `.idx` files 7,993,042 bytes, exactly what the job counted
+  for f006.
+* **Whole-grid check.** A separate script decoded those records with ecCodes and
+  recomputed every node with its own 3 × 3 convolution (weights 1, 1/2, 1/4), the guard
+  and the joint mask, then compared all 258,480 nodes outside the two pole rows for all
+  15 variables with the stored rows: the nodata masks are identical for every variable,
+  and every value agrees within half a quantisation step, apart from the partition
+  periods above 25.4 s that are clamped (Limitations). In the North Atlantic trades
+  (10N to 20N, 50W to 30W) the stored u and v give a mean wind FROM 76°; in 45S to 55S
+  the circular mean of `swell1_dir` is 277° FROM (westerly swell, no 180° flip).
+* Over HTTP (uvicorn, stopped afterwards): index `age_hours` 9.49, `stale` false, 15
+  variables; all 60 fields served with `run` were byte-identical to the stored rows, with
+  `group` set and `public, max-age=3600`; without `run`, `max-age=300`; `hs` at 23:59Z was
+  served the 21Z field and at 00:01Z the next day was 404; an unstored run was 404
+  `run_not_retained` (`no-store`); `swell3_hs` and a 121-character `run` were 422.
+* **Byte budget, live.** With `MAP_FIELD_MAX_BYTES_PER_RUN=20000000` and one download
+  worker: f000 and f003 with partitions (7.99 MB each); at f006 "partition layers stopped
+  for the rest of the run ... 18.7 MB used, 5.26 MB more needed" and the core read
+  (2.73 MB); at f009 "map fields stopped ... 19.6 MB used, 1.83 MB more needed", after
+  its atmosphere (0.90 MB). Run `partial`, 19.62 MB downloaded, 3 complete valid times,
+  partitions at 2. The wind and pressure of f009 are stored but never served (no wave
+  layers at that hour).
+
 ### What was verified live, and what with mocks only
 
 * **Live (2026-10-15):** standalone mode chosen automatically with Open-Meteo spot
@@ -508,15 +540,15 @@ the same pairs flipped by 180° would give 171.9°. Peak wave direction against 
   variables downloaded, regridded, stored and served for 4 hours (and f120, f240);
   per-hour bytes with and without partitions; the `pgrb2.0p50` → `pgrb2.0p25` fallback and
   a missing wave hour on a cycle still being uploaded, then the same cycle complete; the
-  index freshness fields (`stale` false at 3.67 h and true at 13.67 h); the `run`
+  index freshness fields (`stale` false at 3.67 h and 9.49 h, true at 13.67 h); the `run`
   parameter (retained run 200, unknown run 404); the independent decode at five points on
-  two cycles; the guard masks over every node on two cycles; the NDBC direction check.
-* **Synthetic data only (tests):** the byte budget (partitions first, then the run, and a
-  budget too small for one hour), a partition record missing from the index, a record
-  failing half-way through a file, `with_noaa` mode with partitions (free for a spot on
-  `global.0p25`) and with a cycle outside `MAP_FIELD_CYCLES`, the 0p50 fallback inside
-  `current_run`, pruning of a no longer retained run, and the stored 6-variable runs of
-  before this change staying servable.
+  two cycles and over the whole grid on a third; the guard masks over every node on three
+  cycles; the NDBC direction check; the byte budget stopping the partitions, then the run.
+* **Synthetic data only (tests):** a budget too small for one hour, a partition record
+  missing from the index, a record failing half-way through a file, `with_noaa` mode with
+  partitions (free for a spot on `global.0p25`) and with a cycle outside
+  `MAP_FIELD_CYCLES`, the 0p50 fallback inside `current_run`, pruning of a no longer
+  retained run, and the stored 6-variable runs of before this change staying servable.
 * **Not verified:** a full 61-hour cycle (its bytes and time are extrapolated above), the
   Celery job against NOAA, a `with_noaa` acquisition with partitions against NOAA, and
   behaviour across a GFS version change.
@@ -721,16 +753,24 @@ mean of the raw `global.0p25` cells around that node (1.82 MB download).
   They are not for navigation.
 * Quantisation steps are 0.1 m, 0.1 s, 1.5°, 0.5 m/s and 1 hPa. Values beyond the byte
   ranges are clamped, for example Hs above 25.4 m or wind components beyond ±63.5 m/s.
+  Partition periods above 25.4 s do occur: on 2026-10-15 12Z f006, 63 primary-swell and
+  90 secondary-swell nodes had box means above 25.4 s (up to 27.6 and 28.5 s) and are
+  served as 25.4 s. They are small swells (0.0 to 0.5 m): the primary-swell ones all
+  between 72N and 77N near the sea ice, the secondary-swell ones there and in the
+  Southern Ocean. Byte 254 of a period therefore means "25.4 s or more".
 * Pressure over high terrain (Antarctica, Greenland, Tibet) is reduced to sea level and
   is not a real surface pressure.
-* **Freshness with two cycles a day.** `age_hours` counts from the model cycle. A cycle
-  is complete about 5 h after its nominal time and the next map cycle 12 h later, so the
-  served cycle is up to about 17 h old just before the next one lands. With
-  `MAP_FIELD_STALE_AFTER_HOURS=12` the index calls the layers stale for about the last
-  5 h of every 12 (the layers are still drawn, with a badge); seen live at 13:40 UTC on
-  2026-10-15, when the newest map cycle (00Z) was 13.67 h old. Raise the threshold to
-  about 18 h, or add `06,18` to `MAP_FIELD_CYCLES` (about 0.97 GB a day more), to avoid
-  that.
+* **Freshness with two cycles a day.** `age_hours` counts from the model cycle. The job
+  takes a cycle once `NOAA_AVAILABILITY_LAG_HOURS` (5 h) have passed and at its next run
+  after that (every `FORECAST_REFRESH_MINUTES`, 3 h by default), so under normal
+  operation the served cycle is 12 h + 5 h + up to 3 h, i.e. 17 to 20 h old just before
+  the next map cycle replaces it. With `MAP_FIELD_STALE_AFTER_HOURS=12` the index calls
+  the layers stale for 5 to 8 h of every 12 (they are still drawn, with a badge); seen
+  live at 13:40 UTC on 2026-10-15, when the newest map cycle (00Z) was 13.67 h old. To
+  flag only a missed cycle, the threshold must exceed that normal maximum: about 21 h
+  with `MAP_FIELD_CYCLES=00,12`. Adding `06,18` (about 0.97 GB a day more) is not enough
+  on its own: the normal maximum is then 6 + 5 + 3 = 14 h, so 12 h would still flag up to
+  2 h of every 6 (about 15 h would not).
 * GFS v17 (proposed) is expected to rename files, drop the 0.5° and 1° atmosphere files
   and move WW3 to an unstructured grid. The path templates are configuration and the
   atmosphere falls back to `pgrb2.0p25` per hour, but the `global.0p25` wave grid may

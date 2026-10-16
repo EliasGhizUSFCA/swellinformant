@@ -867,6 +867,60 @@ def test_a_spot_on_the_global_grid_gives_the_partitions_for_free() -> None:
     assert v["swell1_dir"][node] == pytest.approx(290.0, abs=0.75)  # synthetic SWDIR 1
 
 
+def coast_with_swapped_swell1(world: SyntheticGfs, fhour: int) -> None:
+    """SYNTHETIC global.0p25 hour: land west of 4.4W (no wave data there), and SWDIR 1 from
+    116 deg in every even column and 199 deg in every odd one, i.e. the primary swell
+    swapping between neighbouring cells; every other record as in WAVE_VALUES."""
+    grid = WAVE_GRID_GEOMETRY["global.0p25"]
+    lat, _ = grid.mesh()
+    swapped = np.broadcast_to(np.where(np.arange(grid.ni) % 2 == 0, 116.0, 199.0), lat.shape)
+    world.add_wave(
+        CYCLE,
+        "global.0p25",
+        fhour,
+        valid=lambda _lat, lon: lon > -4.4,
+        arrays={"SWDIR:1 in sequence": swapped.copy()},
+    )
+
+
+@pytest.mark.parametrize("reader", ["fields only", "spot on global.0p25"])
+def test_both_readers_apply_the_mixing_guard_with_the_sea_area_and_one_joint_mask(
+    reader: str,
+) -> None:
+    world = SyntheticGfs()
+    if reader == "fields only":
+        add_map_atmos(world, CYCLE, 0)
+        coast_with_swapped_swell1(world, 0)
+        p = fields_only(world, map_lead=0, partitions="on")
+        result = p.fetch([], p.run_for_cycle(CYCLE))
+    else:  # the spot reader decodes the partitions anyway and hands them to the sink
+        for h in HOURS:
+            world.add_atmos(CYCLE, h)
+            coast_with_swapped_swell1(world, h)
+        result = field_provider(world, partitions="on").fetch([NORTH], RUN)
+        assert result.records[NORTH.spot_id]
+    v = by_variable(result.fields, CYCLE)
+    t = TargetGrid(0.5)
+    # Open sea: each box mixes the two swell-1 directions (resultant 0.75), so the primary
+    # swell is nodata in height, period and direction alike; the core layers and the
+    # secondary swell are untouched.
+    for lon in (-4.0, -3.5, -3.0, -2.5):
+        node = t.node(58.5, lon)
+        assert all(np.isnan(v[f"swell1_{s}"][node]) for s in ("hs", "tp", "dir")), lon
+        assert v["hs"][node] == pytest.approx(2.0, abs=0.05)
+        assert v["wave_dir"][node] == pytest.approx(280.0, abs=0.75)
+        assert v["swell2_dir"][node] == pytest.approx(200.0, abs=0.75)
+    # Coastal node: sea covers only a quarter of its box, but the secondary swell exists in
+    # all of that sea area, so it is kept (it would be nodata against the whole box).
+    coast = t.node(58.5, -4.5)
+    assert v["hs"][coast] == pytest.approx(2.0, abs=0.05)
+    assert v["swell2_hs"][coast] == pytest.approx(0.8, abs=0.05)
+    assert v["swell2_dir"][coast] == pytest.approx(200.0, abs=0.75)
+    # Land: no core value and no partition.
+    land = t.node(58.5, -5.0)
+    assert all(np.isnan(v[name][land]) for name in ("hs", *PARTITION_FIELD_VARIABLES))
+
+
 def test_a_record_that_fails_half_way_stores_nothing_of_its_file() -> None:
     world = SyntheticGfs()
     add_map_hours(world, CYCLE, [0])
