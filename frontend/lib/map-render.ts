@@ -5,13 +5,20 @@
  * then scaled up and smoothed by the browser). Longitude depends only on the column and
  * latitude only on the row, so the grid lookups are computed once per column and once per
  * row; the inner loop is a bilinear blend with no-data handling and a colour-table lookup.
+ *
+ * Vector fields (wind) are painted as |(bilinear u, bilinear v)|: the speed of the
+ * interpolated vector, the same value the hover readout and the particles use. (Interpolating
+ * the node speeds instead gives up to ~3 m/s more where the wind turns between nodes.)
  */
 import { LUT_SIZE, type LayerScale } from "@/lib/map-colors";
-import { wrapsLongitude, type FieldGrid } from "@/lib/map-fields";
+import { wrapsLongitude, type Grid } from "@/lib/map-fields";
 import { mercLat, mercLon, type PixelView } from "@/lib/map-geo";
 
 export interface FieldPaint {
-  grid: FieldGrid;
+  /** The scalar field, or the first (east) component of a vector field with `v`. */
+  grid: Grid;
+  /** Second (north) component on the same grid: the painted value is the vector's length. */
+  v?: Grid | null;
   scale: LayerScale;
   /** RGBA table from buildLut (LUT_SIZE entries). */
   lut: Uint8ClampedArray;
@@ -54,6 +61,8 @@ export function renderField(out: PixelBuffer, view: PixelView, k: number, p: Fie
   const sqrt = transform === "sqrt";
   const top = LUT_SIZE - 1;
   const v = g.values;
+  const v2 = p.v ? p.v.values : null;
+  if (p.v && (p.v.nx !== g.nx || p.v.ny !== g.ny || p.v.lat0 !== g.lat0 || p.v.lon0 !== g.lon0)) throw new Error("Vector components are on different grids");
   let painted = 0;
   for (let y = 0; y < H; y++) {
     const lat = mercLat((view.originY + (y + 0.5) * k) / view.worldPx);
@@ -79,7 +88,38 @@ export function renderField(out: PixelBuffer, view: PixelView, k: number, p: Fie
       const wc = (1 - tx) * ty;
       const wd = tx * ty;
       let val: number;
-      if (a === a && b === b && c === c && d === d) {
+      if (v2) {
+        // Vector: the same weights for both components, corners valid in both.
+        const ea = v2[r0 + i0]!;
+        const eb = v2[r0 + i1]!;
+        const ec = v2[r1 + i0]!;
+        const ed = v2[r1 + i1]!;
+        let su = 0;
+        let sv = 0;
+        let w = 0;
+        if (a === a && ea === ea) {
+          su += a * wa;
+          sv += ea * wa;
+          w += wa;
+        }
+        if (b === b && eb === eb) {
+          su += b * wb;
+          sv += eb * wb;
+          w += wb;
+        }
+        if (c === c && ec === ec) {
+          su += c * wc;
+          sv += ec * wc;
+          w += wc;
+        }
+        if (d === d && ed === ed) {
+          su += d * wd;
+          sv += ed * wd;
+          w += wd;
+        }
+        if (!(w > 0 && w >= minWeight)) continue;
+        val = Math.hypot(su / w, sv / w);
+      } else if (a === a && b === b && c === c && d === d) {
         val = a * wa + b * wb + c * wc + d * wd;
       } else {
         let s = 0;

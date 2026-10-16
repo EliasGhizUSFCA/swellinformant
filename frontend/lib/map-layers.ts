@@ -8,12 +8,15 @@
 import { compass, type Units } from "@/lib/format";
 import { LAYER_SCALES, scalePosition, type LayerId, type LayerScale } from "@/lib/map-colors";
 import type { FieldIndex, FieldVariableName } from "@/lib/map-fields";
+import { FAMILY_STYLES, type WaveSystem } from "@/lib/map-waves";
+import { convertWind, type WindUnit } from "@/lib/units";
 
 export type { LayerId } from "@/lib/map-colors";
-export type WindUnit = "km/h" | "kn" | "m/s";
+export type { WindUnit } from "@/lib/units";
 
-export const WIND_UNITS: WindUnit[] = ["km/h", "kn", "m/s"];
-const PER_MPS: Record<WindUnit, number> = { "m/s": 1, "km/h": 3.6, kn: 1.943844 };
+/** The wind units offered on the map (one preference shared with the spot charts). */
+export const WIND_UNITS: WindUnit[] = ["km/h", "mph", "kn", "m/s"];
+const KMH_PER_MPS = 3.6;
 const FT_PER_M = 3.28084;
 
 export interface LayerDef {
@@ -36,7 +39,7 @@ export const LAYERS: LayerDef[] = [
     longName: "Wind speed",
     scaleTitle: "Wind speed",
     needs: ["wind_u", "wind_v"],
-    about: "Wind speed from the weather model. Particles drift with the wind; the readout says where the wind blows from.",
+    about: "10 m wind speed from the weather model. Particles drift with the wind; the readout says where the wind blows from.",
   },
   {
     id: "hs",
@@ -98,24 +101,25 @@ export function layerUnit(id: LayerId, u: DisplayUnits): string {
 /** Base value (m, m/s, s, kW/m) → the user's units. */
 export function toDisplay(id: LayerId, value: number, u: DisplayUnits): number {
   if (id === "hs") return u.height === "ft" ? value * FT_PER_M : value;
-  if (id === "wind") return value * PER_MPS[u.wind];
+  if (id === "wind") return convertWind(value * KMH_PER_MPS, u.wind);
   return value;
 }
 
 /** The user's units → base value. */
 export function fromDisplay(id: LayerId, value: number, u: DisplayUnits): number {
   if (id === "hs") return u.height === "ft" ? value / FT_PER_M : value;
-  if (id === "wind") return value / PER_MPS[u.wind];
+  if (id === "wind") return value / convertWind(KMH_PER_MPS, u.wind);
   return value;
 }
 
-/** "2.4 m", "8 ft", "36 km/h", "12 s", "45 kW/m" (or "—"). */
+/** "2.4 m", "8 ft", "36 km/h", "22 mph", "3.9 m/s", "12 s", "45 kW/m" (or "—"). */
 export function formatLayerValue(id: LayerId, value: number, u: DisplayUnits): string {
   if (!Number.isFinite(value)) return "—";
   const v = toDisplay(id, value, u);
   const unit = layerUnit(id, u);
   if (id === "hs") return `${u.height === "m" || v < 10 ? v.toFixed(1) : Math.round(v)} ${unit}`;
   if (id === "energy") return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${unit}`;
+  if (id === "wind" && u.wind === "m/s") return `${v.toFixed(1)} ${unit}`;
   return `${Math.round(v)} ${unit}`;
 }
 
@@ -147,6 +151,14 @@ export function legendTicks(id: LayerId, scale: LayerScale, u: DisplayUnits, max
   return out;
 }
 
+/** One wave system under the cursor (a partition of the wave model, base units). */
+export interface PartitionSample {
+  system: Exclude<WaveSystem, "combined">;
+  hs: number;
+  tp: number;
+  dir: number;
+}
+
 /** Values under the cursor (base units; NaN where the model has no data). */
 export interface PointSample {
   hs?: number;
@@ -156,9 +168,20 @@ export interface PointSample {
   windSpeed?: number;
   windDir?: number;
   pressure?: number;
+  /** Wave partitions on screen at this point, primary first (only systems with data). */
+  partitions?: PartitionSample[];
 }
 
 const fromText = (deg: number | undefined) => (deg != null && Number.isFinite(deg) ? `from ${compass(deg)}` : null);
+
+/** "Primary 1.9 m 14 s from S (195°)" (null when the system has no height here). */
+export function partitionText(p: PartitionSample, u: DisplayUnits): string | null {
+  if (!Number.isFinite(p.hs)) return null;
+  const parts = [FAMILY_STYLES[p.system].short, formatLayerValue("hs", p.hs, u)];
+  if (Number.isFinite(p.tp)) parts.push(formatLayerValue("tp", p.tp, u));
+  if (Number.isFinite(p.dir)) parts.push(`from ${compass(p.dir)} (${Math.round(p.dir) % 360}°)`);
+  return parts.join(" ");
+}
 
 /**
  * Readout for the active layer, e.g. title "Offshore waves (Hs)" and text
@@ -185,6 +208,7 @@ export function readout(id: LayerId, s: PointSample, u: DisplayUnits): { title: 
     title = "Offshore wave power";
     parts.push(formatLayerValue("energy", s.energy, u), fromText(s.waveDir));
   }
+  if (id !== "wind") for (const p of s.partitions ?? []) parts.push(partitionText(p, u));
   if (ok(s.pressure)) parts.push(`${Math.round(s.pressure)} hPa`);
   return { title, text: parts.filter(Boolean).join(" · ") };
 }
