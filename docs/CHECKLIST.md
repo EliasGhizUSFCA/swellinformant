@@ -1,7 +1,7 @@
 # Implementation checklist
 
 Status of each part of the product spec. "Verified" means the behaviour was exercised by
-an automated test or by running the stack, not merely that code exists. See README §K for
+an automated test or by running the stack, not merely that code exists. See README §M for
 limitations.
 
 ## Spec coverage
@@ -24,7 +24,7 @@ limitations.
 | 16 | Security | Argon2id, opaque sessions, CSRF, rate limits, lockout, CSP and headers, log redaction, no secrets in client bundle |
 | 18 | Tests | 171 backend (unit + integration), 29 frontend unit, 5 Playwright e2e at the first build (2026-10-09); later counts in UPGRADE_REPORT.md. See below |
 | 19 | Docker | `docker compose up --build` verified: all services healthy, worker runs jobs and delivers alerts, Mailpit profile delivers SMTP |
-| 20 | README | Sections A–K. Every command was run against this repository (Docker and non-Docker paths, from a fresh clone) |
+| 20 | README | Sections A–K at the first build (every command run against this repository, Docker and non-Docker paths, from a fresh clone); sections A–M since the 2026-10 upgrade, with the commands re-run as listed in UPGRADE_REPORT.md §35 |
 
 ## Edge cases → tests
 
