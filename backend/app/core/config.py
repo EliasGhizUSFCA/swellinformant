@@ -225,8 +225,10 @@ class Settings(BaseSettings):
     # map index and the data-health page use the same limit). With MAP_FIELD_CYCLES=00,12 a
     # cycle is normally replaced when it is 17-20 h old (12 h cycle + 5 h NOAA lag + up to one
     # FORECAST_REFRESH_MINUTES interval), so 12 h flagged the layers for 5-8 h of every 12;
-    # 18 h flags at most the last 2 h of a late pick-up (docs/map-layers.md, Limitations).
-    map_field_stale_after_hours: float = Field(default=18.0, gt=0)
+    # 18 h still flagged the last 2 h of a late pick-up in normal operation, so the default is
+    # 21 h: above the normal maximum, the badge then means a cycle was missed or is late
+    # (docs/map-layers.md, Limitations).
+    map_field_stale_after_hours: float = Field(default=21.0, gt=0)
     windy_api_key: str | None = None
     # Demo provider only: false = calm background seas, so only simulated swells create
     # events (used by the end-to-end tests for deterministic results).
@@ -334,10 +336,11 @@ class Settings(BaseSettings):
     # can no longer fill the gap by itself.
     data_health_observation_stale_hours: float | None = Field(default=None, gt=0)
     # Degraded once the database is larger than this (GB; an alert only, nothing is
-    # deleted). An empty env var keeps this 5 GB default (env_ignore_empty); None (only in
-    # code) = no limit. Size it from the disk and the growth per day in docs/operations.md
-    # ("Capacity").
-    data_health_database_max_gb: float | None = Field(default=5.0, gt=0)
+    # deleted). An empty env var keeps this 20 GB default (env_ignore_empty); None (only in
+    # code) = no limit. 20 GB sits above the computed two-year steady state (about 17 GB with
+    # the default retention), so the alert means unexpected growth. Size it from the disk and
+    # the growth per day in docs/operations.md ("Capacity").
+    data_health_database_max_gb: float | None = Field(default=20.0, gt=0)
     # Degraded once Redis uses more than this fraction of its maxmemory.
     data_health_redis_max_fraction: float = Field(default=0.8, gt=0, le=1)
 

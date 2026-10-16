@@ -43,7 +43,7 @@ configuration" below) uses only these.
 | 4 | SMS alerts (optional) | Text-message alerts and STOP handling | Twilio account and a sending number (US numbers need A2P 10DLC registration) | US SMS "$0.0083" per segment plus carrier fees (2.12) | `SMS_PROVIDER`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` or `TWILIO_MESSAGING_SERVICE_SID` |
 | 5 | CO-OPS application name (no account) | Identifies the app in NOAA's logs | None | Free | `NOAA_COOPS_APPLICATION`, e.g. the app's name and a project URL; never a personal email address |
 | 6 | A tile provider, only for a high-traffic Streets basemap | Heavy use of the optional Streets basemap | CARTO (free key) or any XYZ provider | Free CARTO keys (about 5M tiles a month, non-commercial); providers' plans otherwise (2.13) | `NEXT_PUBLIC_CARTO_API_KEY` or `NEXT_PUBLIC_MAP_TILE_URL` + `NEXT_PUBLIC_MAP_ATTRIBUTION` |
-| 7 | Size the database alert from the disk (no account) | The data-health database-size alert | None | — | `DATA_HEALTH_DATABASE_MAX_GB` (default 5: reached after about 100 days with the default retention; about 17 GB at 730 days, docs/operations.md) |
+| 7 | Size the database alert from the disk (no account) | The data-health database-size alert | None | — | `DATA_HEALTH_DATABASE_MAX_GB` (default 20, above the computed two-year steady state of about 17 GB with the default retention; lower it for a small disk, docs/operations.md) |
 
 Not needed and not recommended: **Windy** (2.9). Its terms forbid storing the data and
 building derived databases, which is what this app does; the provider is refused unless

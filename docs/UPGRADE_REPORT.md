@@ -510,7 +510,7 @@ colours from a dark-surface ramp with at least 3:1 against the sea colour.
 | Member-run predictions | kept 10 days (about 119 MB a day) | pruned once superseded (`PRUNE_SUPERSEDED_MEMBER_PREDICTIONS`) |
 | Prediction row (2.1.0 stores wind detail, contributions, partitions, tide detail) | 2,596 B (2.0.0) | 3,403 B |
 | Database size at the 730-day archive retention | about 30 GB of archive alone (audit) | about 17 GB in all (computed from fresh-table row sizes; a lower bound) |
-| Size alarm | none (`DATA_HEALTH_DATABASE_MAX_GB` unset) | 5 GB default, alert only, reached after about 100 days (owner to size it, section 36) |
+| Size alarm | none (`DATA_HEALTH_DATABASE_MAX_GB` unset) | 20 GB default, alert only, above the computed two-year steady state (lower it for a small disk, section 36) |
 | Map fields in the browser | LRU of 24 (evicted the step on screen) | LRU of 48, at most 64 MB; 56.7 MB of array buffers after 48 downloads |
 
 ## 25. Offshore wind scoring
@@ -717,12 +717,11 @@ and the long `obs ingest` / `ml train` commands (run in earlier phases).
   decide `EXCLUDE_STRONG_OFFSHORE` / `LIGHT_ONSHORE_IS_NOT_ONSHORE`, Macaronis' "any wind",
   and how wind sea raised by an offshore wind should count at points and reefs (44 of 4,050
   steps at 6 spots).
-* `DATA_HEALTH_DATABASE_MAX_GB`: the 5 GB default is reached after about 100 days with
-  730-day archive retention; size it from the disk (about 17 GB at two years), together with
-  the 12 h alert repeat.
-* `MAP_FIELD_STALE_AFTER_HOURS` is 18: with cycles 00 and 12 the map chip still shows for up
-  to about 2 h of every 12 in normal operation; 21 h, or adding cycles 06 and 18 (about
-  +0.97 GB a day), would remove that.
+* `DATA_HEALTH_DATABASE_MAX_GB` defaults to 20 GB, above the computed two-year steady state
+  (about 17 GB, a lower bound); lower it for a small disk. `MAP_FIELD_STALE_AFTER_HOURS`
+  defaults to 21 h, above the normal 17-20 h age of a 00/12Z map cycle, so the chip means a
+  late or missed cycle (both changed by the lead after the reviews: 5 GB fired after about
+  100 days and 18 h showed the chip for up to 2 h of every 12 in normal operation).
 * MAPNAV-13: at the one-world desktop zoom the best-spots list covers the Philippines and
   Japan, including Cloud 9.
 * UX-14: the second card "Our prediction and the model data" repeats the selected step below

@@ -359,15 +359,15 @@ def test_map_fields_freshness_in_standalone_mode(db: Session, env: pytest.Monkey
     assert report.out.map_fields.mode == "standalone"
     assert report.out.map_fields.status == "missing" and "map_fields_missing" in keys(db)
     now = utcnow()
-    # MAP_FIELD_STALE_AFTER_HOURS (18 h by default), the map index's own limit: the data-health
+    # MAP_FIELD_STALE_AFTER_HOURS (21 h by default), the map index's own limit: the data-health
     # page and the map's "out of date" badge must agree (was the NOAA GFS point-source limit,
     # 16 h, so a normal 17 h old 00/12Z cycle showed as stale here but not on the map).
-    cycle = (now - timedelta(hours=20)).replace(minute=0, second=0, microsecond=0)
+    cycle = (now - timedelta(hours=23)).replace(minute=0, second=0, microsecond=0)
     fields_run = run(db, "noaa_gfs_fields", 20, kind="fields")
     map_fields(db, fields_run, cycle)
     out = data_health(db, now=now).out.map_fields
     assert out.status == "stale" and out.complete_valid_times == 2
-    assert out.stale_after_hours == 18.0 == get_settings().map_field_stale_after_hours
+    assert out.stale_after_hours == 21.0 == get_settings().map_field_stale_after_hours
     assert field_index(db, now).stale is True
     assert out.last_valid_time == cycle + timedelta(hours=3)
     later = now - timedelta(hours=3)  # the same cycle 17-18 h old: normal, not stale
@@ -419,8 +419,9 @@ def test_database_size_limit(db: Session, env: pytest.MonkeyPatch) -> None:
     heartbeat(db)
     report = data_health(db)
     assert report.status == "ok" and report.out.storage.database_bytes > 0
-    # Default cap (lead decision): 5 GB, an alert only.
-    assert report.out.storage.database_max_gb == 5.0
+    # Default cap (lead decision): 20 GB, an alert only, above the computed two-year steady
+    # state (about 17 GB), so it means unexpected growth (5 GB fired after about 100 days).
+    assert report.out.storage.database_max_gb == 20.0
     set_env(env, DATA_HEALTH_DATABASE_MAX_GB="0.000001")  # about 1 kB: always exceeded
     report = data_health(db)
     assert [p.key for p in report.problems] == ["database_size"]

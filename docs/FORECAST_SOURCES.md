@@ -351,10 +351,9 @@ Six blends a day (one per new member run) of 10,400 steps write about 0.30 GB a 
 forecasts, comparisons and predictions; with the member runs (about 28 MB a day) the 10 days
 of `RETENTION_FORECAST_DAYS` hold about 3.3 GB, plus about 0.15 GB of map fields (two runs
 of about 75 MB, extrapolated from 1.23 MB per map hour) and 12.5 MB of tides. The archive
-adds about 18.5 MB a day (760 B per row, 6 x 4,050 rows). The database therefore passes the
-default `DATA_HEALTH_DATABASE_MAX_GB` alert (5, compared in GiB) after about 100 days and
-reaches about 17 GB at the 730-day archive retention (computed); see docs/operations.md,
-section 6.
+adds about 18.5 MB a day (760 B per row, 6 x 4,050 rows). The database therefore reaches
+about 17 GB at the 730-day archive retention (computed), below the default
+`DATA_HEALTH_DATABASE_MAX_GB` alert (20, compared in GiB); see docs/operations.md, section 6.
 
 ## Flights
 

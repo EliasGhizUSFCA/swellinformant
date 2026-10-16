@@ -20,7 +20,7 @@ It checks, with plain reasons:
   against DATA_HEALTH_OBSERVATION_STALE_HOURS (default: the ingestion look-back window).
 * **Heartbeat**: the newest finished job of any kind (this check's own job excluded).
 * **Storage**: the database size, against DATA_HEALTH_DATABASE_MAX_GB when that is set
-  (default 5 GB: an alert only, nothing is deleted); Redis memory against its cap
+  (default 20 GB: an alert only, nothing is deleted); Redis memory against its cap
   (Redis's maxmemory, or REDIS_MAXMEMORY when Redis runs without one), degraded above
   DATA_HEALTH_REDIS_MAX_FRACTION or with an evicting maxmemory-policy (the Celery broker
   must never lose messages), or when Redis does not answer.

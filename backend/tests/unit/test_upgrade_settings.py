@@ -49,10 +49,12 @@ def test_defaults_resolve_to_the_documented_values() -> None:
     assert s.noaa_coops_application_name == s.app_name
     assert s.worker_queue_list == ["celery", "bulk"]
     assert s.windy_terms_acknowledged is False and s.wind_gust_scoring == "off"
-    # Integration: 18 h, not 12 h. With MAP_FIELD_CYCLES=00,12 the served map cycle is
-    # normally 17-20 h old before the next one replaces it, so 12 h flagged the layers stale
-    # for 5-8 h of every 12 (docs/map-layers.md, Limitations).
-    assert s.map_field_stale_after_hours == 18.0
+    # Integration: 21 h, not 12 h or 18 h. With MAP_FIELD_CYCLES=00,12 the served map cycle
+    # is normally 17-20 h old before the next one replaces it, so 12 h flagged the layers stale
+    # for 5-8 h of every 12 and 18 h for up to 2 h (docs/map-layers.md, Limitations).
+    assert s.map_field_stale_after_hours == 21.0
+    # An alert above the computed two-year steady state (about 17 GB), not after ~100 days.
+    assert s.data_health_database_max_gb == 20.0
     # Declared at integration (point-data read it with getattr until then): on by default.
     assert s.prune_superseded_member_predictions is True
     assert s.forecast_batch_size == 50
@@ -71,7 +73,7 @@ def test_env_example_matches_the_integration_defaults() -> None:
         if line and not line.startswith("#") and "=" in line
     )
     assert values["FORECAST_BATCH_SIZE"] in ("", "50")
-    assert values["MAP_FIELD_STALE_AFTER_HOURS"] in ("", "18")
+    assert values["MAP_FIELD_STALE_AFTER_HOURS"] in ("", "21")
     assert values["PRUNE_SUPERSEDED_MEMBER_PREDICTIONS"] == "true"
     assert values["DATA_HEALTH_DATABASE_MAX_GB"] == ""
     assert "MAP_FIELD_STEP_HOURS" not in values  # deprecated: documented as a comment only

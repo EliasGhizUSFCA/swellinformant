@@ -427,9 +427,9 @@ interpolated are not stored (`OPEN_METEO_NATIVE_STEPS_ONLY=true`).
   digest).
 * **Database size**: about 0.30 GB of blend rows a day; 10 forecast days hold about 3.3 GB,
   and the archive grows about 18.5 MB a day, to about 17 GB at 730 days (computed from row
-  sizes measured on 2026-10-16). The default `DATA_HEALTH_DATABASE_MAX_GB` alert (5 GB, an
-  alert only, nothing is deleted) is therefore reached after about 100 days: size it from
-  your disk ([`docs/operations.md`](docs/operations.md), "Capacity").
+  sizes measured on 2026-10-16). The default `DATA_HEALTH_DATABASE_MAX_GB` alert (20 GB, an
+  alert only, nothing is deleted) sits above that two-year steady state, so it means
+  unexpected growth; lower it if your disk is smaller ([`docs/operations.md`](docs/operations.md), "Capacity").
 
 ### 4. Download volumes, before and after
 
@@ -525,7 +525,7 @@ MAP_FIELDS_ENABLED=
 MAP_FIELD_STEPS=0-120:3,120-240:6
 MAP_FIELD_CYCLES=00,12
 MAP_FIELD_PARTITIONS=on
-MAP_FIELD_STALE_AFTER_HOURS=18
+MAP_FIELD_STALE_AFTER_HOURS=21
 MAP_FIELD_RESOLUTION_DEG=0.5
 MAP_FIELD_MAX_LEAD_HOURS=240
 ```
@@ -679,7 +679,7 @@ layers, dark or Streets basemap, which wave systems to draw, spot filters), a *L
 locate-me, and a bottom timeline over the model's valid times with the model run and lead
 time ("GFS 18Z Oct 11 · +6 h", or "analysis" at the run's own time). The best-spots list
 names its time ("Best spots · 9am Sun PDT"). A chip reads "Forecast out of date — model run
-N h old" once the layers' cycle is older than `MAP_FIELD_STALE_AFTER_HOURS` (18 h).
+N h old" once the layers' cycle is older than `MAP_FIELD_STALE_AFTER_HOURS` (21 h).
 
 **Wind animation.** Particles move with the GFS 10 m wind (u, v at 0.5°, from `pgrb2.0p50`),
 at a visual speed of 12 CSS px per second per m/s at every zoom (not ground speed, as the
@@ -933,7 +933,7 @@ push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python
 | **Map:** ocean layers missing, "Ocean layers are unavailable right now" | Map layers need `MAP_FIELDS_ENABLED` (unset = on with a live spot provider, off with demo only; `GET /api/map/fields` says which). Run `python -m app.cli engine map-fields` once to fetch a cycle. A field whose run or valid time does not match the request is never drawn: the map re-reads the field index (at most every 30 s) and shows what the index lists |
 | **Map:** layers drawn but no particles or crests | Settings → "animated flow" is off (it switches the particles and crests off). With the system's reduced-motion setting they are drawn still (arrows, still crests). A wave system the run lacks is greyed out in the chooser ("Not available for this model run"), and crests are not drawn under 0.2 m |
 | **Wind direction looks wrong:** "offshore" where you expect onshore, or arrows the wrong way | Text and data say where the wind comes FROM; arrows on the charts and the map point where it travels TO (an arrow pointing east is a wind from the west). Offshore means from land to sea at that break: the spot's researched `offshore_wind_direction` (`data/surf_spots/`) decides it, never the compass alone. "Sources disagree about which wind is offshore" means the research is disputed (`python -m app.cli research lint`). "Models disagree on the wind direction" means GFS and ECMWF blow from directions more than 60° apart: the blend takes the direction of the mean wind vector and forecast confidence is at most Moderate. The map's 0.5° wind can differ from the spot's own point wind near coasts |
-| **Stale forecasts:** "Forecast out of date" banner, chip or badge | The run behind the forecast is older than its source's own limit: its cycle interval + publication lag + `FORECAST_REFRESH_MINUTES` + 2 h, about 17.2 h for the GFS family and 24.7 h for the ECMWF family (`FORECAST_STALE_HOURS`, 18 h, applies only to demo, Windy and the blend fallback; `docs/FORECAST_SOURCES.md`, "Staleness"); map layers after `MAP_FIELD_STALE_AFTER_HOURS` (18 h). Usually the provider is unreachable or beat is not running: check `/status` → *forecast.acquire* and `docker compose logs worker`. Forecast confidence is then at most Moderate; alerts pause only at twice that age (`STALE_ALERT_FACTOR`) |
+| **Stale forecasts:** "Forecast out of date" banner, chip or badge | The run behind the forecast is older than its source's own limit: its cycle interval + publication lag + `FORECAST_REFRESH_MINUTES` + 2 h, about 17.2 h for the GFS family and 24.7 h for the ECMWF family (`FORECAST_STALE_HOURS`, 18 h, applies only to demo, Windy and the blend fallback; `docs/FORECAST_SOURCES.md`, "Staleness"); map layers after `MAP_FIELD_STALE_AFTER_HOURS` (21 h). Usually the provider is unreachable or beat is not running: check `/status` → *forecast.acquire* and `docker compose logs worker`. Forecast confidence is then at most Moderate; alerts pause only at twice that age (`STALE_ALERT_FACTOR`) |
 | **Missing wave data:** "No forecast yet", or no secondary swell / wind-sea row | Check `/status` → *forecast.acquire*; `python -m app.cli pipeline` shows each provider's result synchronously. Partitions exist only where the model has them: the ECMWF family publishes none, so the blend takes them from GFS-Wave; a system the model does not have is left out, never drawn as 0. A spot whose nearest Open-Meteo wave cell is masked reads the nearest neighbouring cell with data (recorded in the run's warnings) |
 | **Broken chart synchronisation:** timeline rows out of step, or a `?t=` link opens the wrong time | Every row draws from one `/api/spots/{slug}/timeline` response on one time axis, and the selected time snaps to the nearest stored step. Check that response (`curl "http://localhost:8000/api/spots/pipeline/timeline?days=10"`) and the browser console. "The forecast timeline could not be loaded" means that request failed (the **Try again** button refetches). `?t=` takes an ISO time in UTC |
 | **API authentication or quota errors** from providers | A failed run shows the provider's reason on `/status` and in `docker compose logs worker`; 401/403 and other 4xx answers are permanent errors and are not retried. Open-Meteo: with `OPEN_METEO_API_KEY` set, requests go to the `customer-*` hosts, and a 4xx answer (for example a wrong key) fails the run with Open-Meteo's own reason (mock-tested only: no paid key here); "Daily API request limit exceeded" on the free tier means the IP address used its 10,000 calls (shared addresses count other users too): wait for the next day or use a key. Flights: fix `DUFFEL_ACCESS_TOKEN` / `AMADEUS_*`, run `check-config`, then **Refresh flights** on the opportunity. Email and SMS: the notification shows `failed`/`rejected` with the provider's reason. Windy without `WINDY_TERMS_ACKNOWLEDGED=true` is refused at start-up |

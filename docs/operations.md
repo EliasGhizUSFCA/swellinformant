@@ -111,9 +111,9 @@ rebuild after a code-only change took 1.6 s (the dependency layer is cached).
 | GEFS-Wave (`GEFS_ENABLED`) | older than 18.5 h or missing (uncertainty only) | degraded |
 | Every scheduled job | last real run failed (with the number in a row); no run started for 2 × its longest interval + 30 min (overdue; a run in progress counts, also when a duplicate was logged "skipped" after it); still "running" 15 min past the 30-min hard time limit (stuck: worker killed, e.g. out of memory) | degraded |
 | Heartbeat | no job of any kind finished for `DATA_HEALTH_HEARTBEAT_MINUTES` (30; `notifications.deliver` alone runs every 2 min): worker or beat down | **failing** |
-| Map ocean layers (unless off) | served GFS cycle older than `MAP_FIELD_STALE_AFTER_HOURS` (18 h, the map index's own "out of date" limit), or no complete field set | degraded |
+| Map ocean layers (unless off) | served GFS cycle older than `MAP_FIELD_STALE_AFTER_HOURS` (21 h, the map index's own "out of date" limit), or no complete field set | degraded |
 | Buoy observations (`OBSERVATIONS_ENABLED`) | newest observation of a provider older than `DATA_HEALTH_OBSERVATION_STALE_HOURS` (default: the 48 h ingestion look-back, beyond which the hourly job cannot fill the gap) | degraded |
-| Storage | database larger than `DATA_HEALTH_DATABASE_MAX_GB` (default 5 GB; an alert only, nothing is deleted) | degraded |
+| Storage | database larger than `DATA_HEALTH_DATABASE_MAX_GB` (default 20 GB; an alert only, nothing is deleted) | degraded |
 | Redis | used memory above `DATA_HEALTH_REDIS_MAX_FRACTION` (0.8) of its cap (Redis's `maxmemory`, or `REDIS_MAXMEMORY` when Redis runs without one); an evicting `maxmemory-policy`; Redis not answering | degraded |
 
 The overall status is `failing` if any problem is failing, `degraded` if any is degraded,
@@ -359,7 +359,7 @@ them grow until the beat messages expire), then at the provider cache
 
 ### Database or disk full
 
-`database_size` (above `DATA_HEALTH_DATABASE_MAX_GB`, default 5 GB), failed jobs with "No space
+`database_size` (above `DATA_HEALTH_DATABASE_MAX_GB`, default 20 GB), failed jobs with "No space
 left on device", or PostgreSQL refusing writes. Free space first (old local backups,
 Docker build cache: `docker builder prune`), then lower the retention settings (§6) and
 run `maintenance.cleanup`. PostgreSQL reuses the space of deleted rows; it only returns
@@ -494,11 +494,10 @@ Re-measured on 2026-10-16 with algorithm 2.1.0 (docs/FORECAST_SOURCES.md, "Measu
 and tide detail; +31 %), `wave_forecasts` 517 B GFS family / 763 B ECMWF family / 614 B
 blend, comparisons 759 B, archive 760 B, and the GFS family stores 10,400 steps per run.
 Six blends a day then write about 0.30 GB a day, the 10 days hold about 3.3 GB, and the
-archive adds about 18.5 MB a day. With the defaults the database therefore passes the
-default `DATA_HEALTH_DATABASE_MAX_GB` of 5 (GiB) after about 100 days and reaches about
-17 GB at the 730-day archive retention (computed; fresh tables, so a lower bound): set the
-limit to what the disk allows, or shorten `RETENTION_ARCHIVE_DAYS` (the alert only reports;
-nothing is deleted).
+archive adds about 18.5 MB a day. With the defaults the database therefore reaches about
+17 GB at the 730-day archive retention (computed; fresh tables, so a lower bound), below the
+default `DATA_HEALTH_DATABASE_MAX_GB` of 20 (GiB): lower the limit to what the disk allows,
+or shorten `RETENTION_ARCHIVE_DAYS` (the alert only reports; nothing is deleted).
 
 **Bandwidth:** the direct GRIB setup downloaded about **10 GB per day** (NOAA 4 × 1.91 GB,
 ECMWF 2 × 0.85-0.9 GB, GEFS 4 × 0.20 GB), about 300 GB a month. The API-first setup

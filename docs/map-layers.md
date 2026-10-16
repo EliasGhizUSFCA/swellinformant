@@ -124,7 +124,7 @@ wave layers: the map no longer depends on a GRIB spot provider.
 | `MAP_FIELD_ATMOS_GRID` | `0p50` | GFS atmosphere grid for wind and pressure read for the fields alone (`0p25`, `0p50` or `1p00`) |
 | `MAP_FIELD_ATMOS_PATH_TEMPLATE` | `gfs.{ymd}/{hh}/atmos/gfs.t{hh}z.pgrb2.{grid}.f{fhour:03d}` | Its file layout (`{grid}` = `MAP_FIELD_ATMOS_GRID`); `pgrb2.0p25` is the per-hour fallback |
 | `MAP_FIELD_MAX_BYTES_PER_RUN` | 600000000 | Download budget for the fields of one run (see "Byte budget") |
-| `MAP_FIELD_STALE_AFTER_HOURS` | 18 | The index (and the data-health page) flags the layers `stale` once the served model cycle is older than this. 18 h because with cycles 00,12 a cycle is normally 17 to 20 h old before the next one replaces it (see Limitations) |
+| `MAP_FIELD_STALE_AFTER_HOURS` | 21 | The index (and the data-health page) flags the layers `stale` once the served model cycle is older than this. 21 h because with cycles 00,12 a cycle is normally 17 to 20 h old before the next one replaces it, so the badge means a late or missed cycle (see Limitations) |
 | `MAP_FIELD_RESOLUTION_DEG` | 0.5 | Output grid spacing. Must divide 180 (0.25, 0.5, 1, …). Otherwise (e.g. 0.7) a NOAA spot run stores no fields and says why in `details.map_fields.warnings`, and the standalone job fails with that message; spot forecasts are unaffected |
 | `MAP_FIELD_MAX_LEAD_HOURS` | 240 | Caps `MAP_FIELD_STEPS` (the CLI's `--max-lead-hours` overrides it for one run) |
 | `MAP_FIELD_STEP_HOURS` | 3 | **Deprecated**, not read: `MAP_FIELD_STEPS` decides the map hours. Still accepted so old `.env` files load |
@@ -774,12 +774,11 @@ mean of the raw `global.0p25` cells around that node (1.82 MB download).
   operation the served cycle is 12 h + 5 h + up to 3 h, i.e. 17 to 20 h old just before
   the next map cycle replaces it. The packages' first default, 12 h, called the layers
   stale for 5 to 8 h of every 12 (seen live at 13:40 UTC on 2026-10-15, when the newest
-  map cycle (00Z) was 13.67 h old). The default is now **18 h**: the badge shows only when
-  a cycle is picked up late in its 3-hour acquisition window, for at most the last 2 h
-  before the next cycle arrives, and whenever a cycle is missed. To flag only a missed
-  cycle, the threshold must exceed the normal maximum: about 21 h with
-  `MAP_FIELD_CYCLES=00,12` (an operator choice; it also delays the badge for a real miss
-  by 3 h). Adding `06,18` (about 0.97 GB a day more) is not enough on its own: the
+  map cycle (00Z) was 13.67 h old). 18 h still showed the badge for up to the last 2 h
+  before the next cycle when a cycle was picked up late in its 3-hour acquisition window.
+  The default is now **21 h**, above the normal maximum with `MAP_FIELD_CYCLES=00,12`, so
+  the badge means a cycle was missed or is late (the cost: a real miss is flagged up to 3 h
+  later than with 18 h). Adding `06,18` (about 0.97 GB a day more) is not enough on its own: the
   normal maximum is then 6 + 5 + 3 = 14 h, so about 15 h would be needed.
 * GFS v17 (proposed) is expected to rename files, drop the 0.5° and 1° atmosphere files
   and move WW3 to an unstructured grid. The path templates are configuration and the

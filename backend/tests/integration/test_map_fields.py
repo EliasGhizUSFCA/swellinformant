@@ -652,17 +652,17 @@ def test_the_index_reports_its_age_and_staleness(
     db: Session, fields_run: ForecastRun, app_client: ApiClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fresh = map_fields_service.field_index(db, CYCLE + timedelta(hours=6, minutes=30))
-    assert (fresh.age_hours, fresh.stale_after_hours, fresh.stale) == (6.5, 18.0, False)
+    assert (fresh.age_hours, fresh.stale_after_hours, fresh.stale) == (6.5, 21.0, False)
     assert fresh.updated_at == fields_run.completed_at and fresh.updated_at is not None
-    # A 00/12Z cycle is normally 17-20 h old before the next one replaces it, so 17 h is
-    # not stale with the default MAP_FIELD_STALE_AFTER_HOURS=18.
-    normal = map_fields_service.field_index(db, CYCLE + timedelta(hours=17))
-    assert (normal.age_hours, normal.stale) == (17.0, False)
+    # A 00/12Z cycle is normally 17-20 h old before the next one replaces it, so 20 h is
+    # not stale with the default MAP_FIELD_STALE_AFTER_HOURS=21.
+    normal = map_fields_service.field_index(db, CYCLE + timedelta(hours=20))
+    assert (normal.age_hours, normal.stale) == (20.0, False)
 
-    monkeypatch.setattr("app.api.map_fields.utcnow", lambda: CYCLE + timedelta(hours=19))
+    monkeypatch.setattr("app.api.map_fields.utcnow", lambda: CYCLE + timedelta(hours=22))
     body = app_client.get("/api/map/fields").json()
-    assert body["stale"] is True and body["age_hours"] == 19.0
-    assert body["stale_after_hours"] == 18.0 and body["available"] is True
+    assert body["stale"] is True and body["age_hours"] == 22.0
+    assert body["stale_after_hours"] == 21.0 and body["available"] is True
     assert _iso(body["updated_at"]) == fields_run.completed_at
     # Stale layers are still served (the client shows the badge).
     assert (
@@ -674,7 +674,7 @@ def test_an_empty_index_is_not_stale(app_client: ApiClient) -> None:
     body = app_client.get("/api/map/fields").json()
     assert body["available"] is False and body["stale"] is False
     assert body["age_hours"] is None and body["updated_at"] is None
-    assert body["stale_after_hours"] == 18.0
+    assert body["stale_after_hours"] == 21.0
 
 
 @pytest.fixture
