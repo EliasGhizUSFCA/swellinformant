@@ -96,6 +96,20 @@ export function ConfidenceBadge({
 }
 
 /**
+ * @deprecated Kept so existing callers and the `confidence-index-badge` test id keep working;
+ * use ConfidenceBadge. ``label`` is the class of the earlier 0–100
+ * confidence index, not the forecast-confidence class, so it is labelled as an index; the
+ * number appears only in the tooltip.
+ */
+export function LegacyConfidenceBadge({ label, value }: { label: string; value?: number }) {
+  return (
+    <span title={value != null ? `Confidence index ${legacyIndexText(value)}` : undefined}>
+      <ConfidenceBadge value={label} kind="forecast" label="Confidence index" data-testid="confidence-index-badge" />
+    </span>
+  );
+}
+
+/**
  * Forecast confidence of one forecast hour (or swell): the class and its first reason, with
  * every reason and what the rating means one click away. Only forecast reasons are listed:
  * `reasons` should be the API's `forecast_confidence_reasons`; research sentences, the

@@ -179,7 +179,8 @@ export function Timeline({
             const end = last > 0 ? Math.min(1, (d.last + 1) / last) : 1;
             const px = (end - start) * width;
             const active = index >= d.first && index <= d.last;
-            const text = active && px >= 74 ? d.label : px >= 26 ? d.weekday : px >= 12 ? d.weekday.charAt(0) : "";
+            // Two letters at least ("Th" vs "Tu", "Sa" vs "Su"): a lone "T" or "S" is ambiguous.
+            const text = active && px >= 74 ? d.label : px >= 26 ? d.weekday : px >= 16 ? d.weekday.slice(0, 2) : "";
             return (
               <div
                 key={d.key}
