@@ -393,6 +393,10 @@ def test_index_lists_the_complete_valid_times(
     assert [_iso(t) for t in body["valid_times"]] == TIMES[:2]
     late = app_client.get("/api/map/fields/hs", params={"at": TIMES[2].isoformat()})
     assert late.status_code == 404
+    # An instant that cannot be expressed in UTC has no field: 404, never a 500 (SEC-4).
+    for at in ("0001-01-01T00:00:00+05:00", "9999-12-31T23:59:59-05:00"):
+        far = app_client.get("/api/map/fields/hs", params={"at": at})
+        assert far.status_code == 404, (at, far.text)
 
 
 def test_field_bytes_and_their_metadata(

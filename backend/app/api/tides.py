@@ -22,6 +22,11 @@ router = APIRouter(prefix="/api/spots", tags=["tides"])
 
 # Longest window one request may ask for (the job stores TIDE_HORIZON_DAYS <= 31 ahead).
 MAX_WINDOW = timedelta(days=31)
+# Accepted window instants: stored predictions only cover TIDE_RETENTION_PAST_DAYS back to
+# TIDE_HORIZON_DAYS ahead, so nothing is lost, and the date arithmetic (curve and event
+# margins, the default horizon) stays far from the calendar's limits (year 1 and 9999).
+EARLIEST = datetime(1900, 1, 1, tzinfo=UTC)
+LATEST = datetime(2200, 1, 1, tzinfo=UTC)
 
 
 def active_spot(db: Session, slug: str) -> SurfSpot:
@@ -33,6 +38,18 @@ def active_spot(db: Session, slug: str) -> SurfSpot:
 
 def _as_utc(when: datetime) -> datetime:
     return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
+
+
+def _bounded(when: datetime, name: str) -> datetime:
+    """``when`` in UTC, or HTTP 400 outside EARLIEST..LATEST (including instants that cannot
+    be expressed in UTC at all, e.g. 0001-01-01T00:00+05:00)."""
+    try:
+        value = _as_utc(when)
+    except OverflowError:
+        raise AppError(f"{name} is out of range.") from None
+    if not EARLIEST <= value <= LATEST:
+        raise AppError(f"{name} must lie between 1900 and 2200.")
+    return value
 
 
 @router.get("/{slug}/tides", response_model=TideBlockOut)
@@ -52,9 +69,9 @@ def spot_tides(
     """
     spot = active_spot(db, slug)
     now = utcnow()
-    window_start = _as_utc(start) if start is not None else now
+    window_start = _bounded(start, "start") if start is not None else now
     window_end = (
-        _as_utc(end)
+        _bounded(end, "end")
         if end is not None
         else window_start + timedelta(days=get_settings().tide_horizon_days)
     )

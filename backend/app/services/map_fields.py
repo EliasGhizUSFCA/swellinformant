@@ -378,7 +378,10 @@ def field_bytes(
     current = _current_run(db, run)
     if current is None:
         return None
-    when = _as_utc(at) if at is not None else utcnow()
+    try:
+        when = _as_utc(at) if at is not None else utcnow()
+    except OverflowError:
+        return None  # e.g. 0001-01-01T00:00+05:00: no stored field is anywhere near it
     times = current.valid_times
     settings = get_settings()
 

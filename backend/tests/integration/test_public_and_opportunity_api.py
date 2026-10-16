@@ -7,8 +7,11 @@ from datetime import datetime
 import pytest
 from sqlalchemy.orm import Session
 
+from app.api.system import JOB_NAMES
+from app.core.config import Settings
 from app.services.pipeline import run_pipeline
 from app.services.surf_quality.scoring import ALGORITHM_VERSION
+from app.workers.schedule import build_beat_schedule
 from tests.conftest import ApiClient, search_payload
 
 pytestmark = pytest.mark.integration
@@ -73,6 +76,18 @@ def test_system_status(app_client: ApiClient) -> None:
     assert status["mode"]["forecast_providers"] == ["demo"]
     assert status["detection"]["lead_min_days"] == 5.0
     assert {j["job"] for j in status["jobs"]} >= {"forecasts.acquire", "notifications.deliver"}
+    # The status page's fallback job list names every scheduled task, with every optional
+    # job switched on (tides.acquire and forecasts.map_fields were missing, review F3).
+    every = Settings(
+        map_fields_enabled=True,
+        gefs_enabled=True,
+        tide_providers="noaa_coops",
+        observations_enabled=True,
+        verification_enabled=True,
+    )
+    scheduled = {entry["task"] for entry in build_beat_schedule(every).values()}
+    assert scheduled <= set(JOB_NAMES), scheduled - set(JOB_NAMES)
+    assert {"tides.acquire", "forecasts.map_fields"} <= {j["job"] for j in status["jobs"]}
     ready = app_client.get("/api/health/ready").json()
     assert ready["checks"] == {"database": "ok", "redis": "ok"}
 

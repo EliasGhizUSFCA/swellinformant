@@ -145,6 +145,16 @@ def test_tides_are_unavailable_rather_than_invented(app_client: ApiClient, db: S
         params={"start": "2026-10-01T00:00:00Z", "end": "2026-11-02T00:00:00Z"},
     )
     assert too_long.status_code == 400 and "31 days" in too_long.json()["error"]["message"]
+    # Out-of-range instants are a 400, never an OverflowError and a 500 (review SEC-4).
+    for params in (
+        {"start": "9999-12-31T00:00:00Z"},
+        {"start": "0001-01-01T00:00:00Z", "end": "0001-01-05T00:00:00Z"},
+        {"start": "0001-01-01T00:00:00+05:00"},
+        {"start": "2026-10-14T00:00:00Z", "end": "9999-12-31T23:59:59-05:00"},
+    ):
+        bad = app_client.get("/api/spots/mavericks/tides", params=params)
+        assert bad.status_code == 400, (params, bad.text)
+        assert bad.json()["error"]["code"] != "internal_error"
 
 
 def test_observations_are_unavailable_rather_than_invented(app_client: ApiClient) -> None:
