@@ -214,7 +214,7 @@ export function ForecastBreakdown({
               <Waves className="size-3.5" aria-hidden="true" /> Offshore model data
             </span>
             {runs && (
-              <span className="truncate text-[11px] font-normal text-muted-foreground" data-testid="raw-model-runs">
+              <span className="max-w-full text-left text-[11px] font-normal text-muted-foreground" data-testid="raw-model-runs">
                 {runs}
               </span>
             )}

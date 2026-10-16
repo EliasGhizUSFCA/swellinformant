@@ -405,7 +405,8 @@ for (const [device, viewport] of [
       await toggleOpensAndCloses(scoring, index, device === "mobile" ? "tap" : "click");
       await (device === "mobile" ? scoring.tap() : scoring.click());
       await expect(index).toHaveText("61 / 100 (not a probability)");
-      await expect(page.getByTestId("match-scoring")).toContainText("Offshore spread index (not a probability)");
+      // Named for what it is; "(not a probability)" is said once, in the value.
+      await expect(page.getByTestId("match-scoring").getByTestId("match-index-label")).toHaveText("Offshore spread index");
       await expect(page.getByTestId("match-scoring")).not.toContainText("Forecast confidence");
       await expectNoConfidencePercentage(page);
       await expectNoHorizontalScroll(page);

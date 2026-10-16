@@ -59,7 +59,9 @@ export default function LandingPage() {
         <header className="relative z-10 mx-auto flex h-20 max-w-7xl items-center justify-between px-4 sm:px-6">
           <Logo light />
           <nav className="flex items-center gap-2">
-            <Button asChild variant="ghost" className="text-white hover:bg-white/10 hover:text-white">
+            {/* Phones: the hero's "Explore the forecast map" button links the map, so the header
+                keeps only the account actions and fits the width. */}
+            <Button asChild variant="ghost" className="hidden text-white hover:bg-white/10 hover:text-white sm:inline-flex">
               <Link href="/map">Surf map</Link>
             </Button>
             <Button asChild variant="ghost" className="text-white hover:bg-white/10 hover:text-white">

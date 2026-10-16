@@ -118,11 +118,12 @@ function OfferCard({ offer, best }: { offer: Offer; best: boolean }) {
 }
 
 // The match score's "confidence" component is the legacy 0–100 index: an offshore spread
-// index, not the forecast-confidence class (that class is shown with the swell above).
+// index, not the forecast-confidence class (that class is shown with the swell above). Its
+// value says "(not a probability)", so the label does not repeat it.
 const SCORE_LABELS: Record<string, string> = {
   surf: "Surf quality",
   affordability: "Travel affordability",
-  confidence: `${LEGACY_INDEX_LABEL} (not a probability)`,
+  confidence: LEGACY_INDEX_LABEL,
   convenience: "Trip convenience",
 };
 
@@ -287,7 +288,7 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                   v == null ? null : (
                     <div key={k}>
                       <div className="mb-1 flex justify-between gap-3 text-xs">
-                        <span>{SCORE_LABELS[k] ?? k}</span>
+                        <span data-testid={k === "confidence" ? "match-index-label" : undefined}>{SCORE_LABELS[k] ?? k}</span>
                         <span className="text-right font-medium tabular-nums" data-testid={k === "confidence" ? "match-index-value" : undefined}>
                           {k === "confidence" ? legacyIndexText(Number(v)) : `${Math.round(Number(v))}/100`}
                         </span>

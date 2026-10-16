@@ -35,7 +35,7 @@ describe("confidence classes", () => {
   });
 
   it("formats the legacy index only as an index, never a percentage", () => {
-    // The value of the "Offshore spread index (not a probability)" row: no class word, no %.
+    // The value of the "Offshore spread index" row: no class word, no %.
     expect(legacyIndexText(72)).toBe("72 / 100 (not a probability)");
     expect(legacyIndexText(71.6)).toBe("72 / 100 (not a probability)");
     expect(legacyIndexText(null)).toBeNull();
