@@ -232,7 +232,7 @@ test.describe("spot forecast timeline", () => {
     const w = async (i: number) => Number(await rects.nth(i).getAttribute("width")) + 1;
     const last = tl.steps.length - 2;
     expect((await w(last)) / (await w(3))).toBeCloseTo(2, 3);
-    await expect(page.getByTestId("timeline-zone")).toContainText("3-hour steps, from");
+    await expect(page.getByTestId("timeline-zone")).toContainText("3-hour steps, then 6-hour steps from");
     await pickStep(page, last);
     await expect(page.getByTestId("summary-step-length")).toHaveText("6-hour step");
   });

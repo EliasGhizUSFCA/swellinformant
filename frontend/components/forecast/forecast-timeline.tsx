@@ -536,7 +536,7 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
           <Swatch className="bg-[var(--chart-wave)]" /> breaking height, central estimate
         </span>
         <span className="inline-flex items-center gap-1">
-          <Swatch className="bg-[var(--chart-wave-band)]" /> likely range (not yet verified)
+          <Swatch className="bg-[var(--chart-wave-band)]" /> likely range (p10–p90 of an assumed error model, not yet verified)
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="h-0.5 w-3 rounded bg-ink" aria-hidden="true" /> sets
