@@ -2,8 +2,6 @@
 
 import { createContext, useContext, useEffect, useState, useSyncExternalStore } from "react";
 
-import type { WindUnit } from "@/lib/units";
-
 /**
  * One selected time for every chart row of the spot timeline, plus the hover position.
  *
@@ -133,57 +131,3 @@ export function useTimelineActions(): SelectionActions {
 export function useTimelineStore(): SelectionStore {
   return useStore();
 }
-
-// --- wind unit preference -----------------------------------------------------------------
-
-/** One wind-unit preference for the map settings and the spot charts (browser only). */
-export const WIND_UNIT_KEY = "swell.windUnit";
-export const DEFAULT_WIND_UNIT: WindUnit = "km/h";
-const WIND_UNITS: readonly WindUnit[] = ["km/h", "kn", "mph", "m/s"];
-const WIND_EVENT = "swell:wind-unit";
-
-export function readWindUnit(): WindUnit {
-  try {
-    const v = window.localStorage.getItem(WIND_UNIT_KEY);
-    return WIND_UNITS.includes(v as WindUnit) ? (v as WindUnit) : DEFAULT_WIND_UNIT;
-  } catch {
-    return DEFAULT_WIND_UNIT;
-  }
-}
-
-export function writeWindUnit(unit: WindUnit): void {
-  try {
-    window.localStorage.setItem(WIND_UNIT_KEY, unit);
-    memoryUnit = null;
-  } catch {
-    // Private mode or blocked storage: the choice lasts for this page only.
-    memoryUnit = unit;
-  }
-  window.dispatchEvent(new Event(WIND_EVENT));
-}
-
-let memoryUnit: WindUnit | null = null;
-
-function subscribeWindUnit(cb: () => void): () => void {
-  const onStorage = (e: StorageEvent) => {
-    if (e.key === WIND_UNIT_KEY) cb();
-  };
-  window.addEventListener("storage", onStorage);
-  window.addEventListener(WIND_EVENT, cb);
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    window.removeEventListener(WIND_EVENT, cb);
-  };
-}
-
-/** [unit, setUnit]; other tabs and the map settings stay in step through the same key. */
-export function useWindUnit(): [WindUnit, (u: WindUnit) => void] {
-  const unit = useSyncExternalStore(
-    subscribeWindUnit,
-    () => memoryUnit ?? readWindUnit(),
-    () => DEFAULT_WIND_UNIT,
-  );
-  return [unit, writeWindUnit];
-}
-
-export { WIND_UNITS };

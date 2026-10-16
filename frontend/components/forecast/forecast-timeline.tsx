@@ -9,7 +9,7 @@ import { SelectedTimeSummary } from "@/components/forecast/selected-summary";
 import { SwellPartitions } from "@/components/forecast/swell-partitions";
 import { datumText, TideRow, TIDE_UNAVAILABLE } from "@/components/forecast/tide-row";
 import { HEADER_H, rowOffsets, TimelineHeader } from "@/components/forecast/timeline-header";
-import { useTimelineSelection, useTimelineStore, useWindUnit, WIND_UNITS } from "@/components/forecast/timeline-selection";
+import { useTimelineSelection, useTimelineStore } from "@/components/forecast/timeline-selection";
 import { WaveBars } from "@/components/forecast/wave-bars";
 import { FAVOURABILITY_LABEL, WindRow } from "@/components/forecast/wind-row";
 import { Disclosure } from "@/components/ui/disclosure";
@@ -39,7 +39,7 @@ import {
   zoneName,
   type TimelineModel,
 } from "@/lib/timeline";
-import { formatHeightRange, formatWind, type HeightUnit, type WindUnit } from "@/lib/units";
+import { formatHeightRange, formatWind, useWindUnit, WIND_UNITS, type HeightUnit, type WindUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { SpotTimeline } from "@/types/api";
 

@@ -2,7 +2,12 @@
  * Display units. The API sends wind in km/h, breaking heights in feet and offshore heights
  * in metres; the UI converts here, never on the server. Exact factors: 1 kn = 1.852 km/h,
  * 1 mph = 1.609344 km/h, 1 m/s = 3.6 km/h, 1 ft = 0.3048 m.
+ *
+ * Also the one site-wide wind-unit preference (the spot charts and the map settings), kept in
+ * the browser under WIND_UNIT_KEY.
  */
+import { useSyncExternalStore } from "react";
+
 
 export type WindUnit = "km/h" | "kn" | "mph" | "m/s";
 export type HeightUnit = "ft" | "m";
@@ -36,4 +41,70 @@ export function formatHeightRange(minFt: number, maxFt: number, unit: HeightUnit
   const lo = trim(round(minFt));
   const hi = trim(round(maxFt));
   return lo === hi ? `${lo} ${unit}` : `${lo}–${hi} ${unit}`;
+}
+
+// --- the site-wide wind-unit preference ---------------------------------------------------
+
+/** The wind units offered on the spot charts and in the map settings, in this order. */
+export const WIND_UNITS: readonly WindUnit[] = ["km/h", "mph", "kn", "m/s"];
+export const DEFAULT_WIND_UNIT: WindUnit = "km/h";
+/** localStorage key of the preference: a bare unit string, e.g. "mph". */
+export const WIND_UNIT_KEY = "swell.windUnit";
+/** Dispatched on window when the preference changes in this tab (a storage event reaches only
+ * the other tabs). */
+export const WIND_UNIT_EVENT = "swell:wind-unit";
+
+export function isWindUnit(v: unknown): v is WindUnit {
+  return typeof v === "string" && (WIND_UNITS as readonly string[]).includes(v);
+}
+
+// The choice for this page when storage refuses the write (private mode, blocked storage).
+let memoryUnit: WindUnit | null = null;
+
+/** The chosen wind unit, or null when none (or an unknown value) is stored. Never throws. */
+export function storedWindUnit(): WindUnit | null {
+  if (memoryUnit) return memoryUnit;
+  try {
+    const v = window.localStorage.getItem(WIND_UNIT_KEY);
+    return isWindUnit(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The wind unit to display (the default when nothing valid is stored). */
+export function readWindUnit(): WindUnit {
+  return storedWindUnit() ?? DEFAULT_WIND_UNIT;
+}
+
+/** Stores the preference and, when it changed, tells this page (WIND_UNIT_EVENT). With storage
+ * unavailable the choice lasts for this page only. */
+export function writeWindUnit(unit: WindUnit): void {
+  const before = readWindUnit();
+  try {
+    window.localStorage.setItem(WIND_UNIT_KEY, unit);
+    memoryUnit = null;
+  } catch {
+    memoryUnit = unit;
+  }
+  if (before !== unit) window.dispatchEvent(new Event(WIND_UNIT_EVENT));
+}
+
+/** Calls `cb` when the preference changes in this tab or another one. */
+export function subscribeWindUnit(cb: () => void): () => void {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === WIND_UNIT_KEY || e.key === null) cb();
+  };
+  window.addEventListener("storage", onStorage);
+  window.addEventListener(WIND_UNIT_EVENT, cb);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener(WIND_UNIT_EVENT, cb);
+  };
+}
+
+/** [unit, setUnit]: the shared preference (server render: the default). */
+export function useWindUnit(): [WindUnit, (u: WindUnit) => void] {
+  const unit = useSyncExternalStore(subscribeWindUnit, readWindUnit, () => DEFAULT_WIND_UNIT);
+  return [unit, writeWindUnit];
 }

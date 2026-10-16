@@ -11,11 +11,12 @@ import type { FieldIndex, FieldVariableName } from "@/lib/map-fields";
 import { FAMILY_STYLES, type WaveSystem } from "@/lib/map-waves";
 import { convertWind, type WindUnit } from "@/lib/units";
 
+/** The wind units offered on the map: the one list, shared with the spot charts (lib/units). */
+export { WIND_UNITS } from "@/lib/units";
+
 export type { LayerId } from "@/lib/map-colors";
 export type { WindUnit } from "@/lib/units";
 
-/** The wind units offered on the map (one preference shared with the spot charts). */
-export const WIND_UNITS: WindUnit[] = ["km/h", "mph", "kn", "m/s"];
 const KMH_PER_MPS = 3.6;
 const FT_PER_M = 3.28084;
 

@@ -1,15 +1,10 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  DEFAULT_WIND_UNIT,
-  readWindUnit,
-  SelectionStore,
-  TimelineSelectionProvider,
-  useTimelineSelection,
-  useWindUnit,
-  WIND_UNIT_KEY,
-} from "@/components/forecast/timeline-selection";
+import { SelectionStore, TimelineSelectionProvider, useTimelineSelection } from "@/components/forecast/timeline-selection";
+import { useMapSettings } from "@/hooks/map-settings";
+import { DEFAULT_SETTINGS, writeSettings } from "@/lib/map-settings";
+import { DEFAULT_WIND_UNIT, readWindUnit, useWindUnit, WIND_UNIT_EVENT, WIND_UNIT_KEY, WIND_UNITS, writeWindUnit } from "@/lib/units";
 
 describe("SelectionStore", () => {
   it("notifies only when the state changes", () => {
@@ -124,6 +119,48 @@ describe("the shared wind unit (swell.windUnit)", () => {
     act(() => screen.getByRole("button").click());
     expect(window.localStorage.getItem(WIND_UNIT_KEY)).toBe("kn");
     expect(screen.getByRole("button")).toHaveTextContent("kn");
+  });
+
+  it("is one preference for the charts and the map settings on the same page", () => {
+    function MapProbe() {
+      const [settings, update] = useMapSettings();
+      return (
+        <button type="button" data-testid="map-unit" onClick={() => update({ windUnits: "m/s" })}>
+          {settings.windUnits}
+        </button>
+      );
+    }
+    render(
+      <>
+        <Probe />
+        <MapProbe />
+      </>,
+    );
+    const charts = screen.getAllByRole("button").find((b) => !b.dataset.testid)!;
+    expect(charts).toHaveTextContent("km/h");
+    expect(screen.getByTestId("map-unit")).toHaveTextContent("km/h");
+    // The map settings change it: the charts follow without a reload (same-tab event).
+    act(() => screen.getByTestId("map-unit").click());
+    expect(window.localStorage.getItem(WIND_UNIT_KEY)).toBe("m/s");
+    expect(charts).toHaveTextContent("m/s");
+    // The charts change it: the map settings follow.
+    act(() => charts.click());
+    expect(screen.getByTestId("map-unit")).toHaveTextContent("kn");
+  });
+
+  it("tells the page once per change, and offers one list of units", () => {
+    const seen: string[] = [];
+    const listen = () => seen.push(readWindUnit());
+    window.addEventListener(WIND_UNIT_EVENT, listen);
+    try {
+      writeWindUnit("mph");
+      writeWindUnit("mph"); // unchanged: no event
+      writeSettings({ ...DEFAULT_SETTINGS, windUnits: "kn" });
+      expect(seen).toEqual(["mph", "kn"]);
+    } finally {
+      window.removeEventListener(WIND_UNIT_EVENT, listen);
+    }
+    expect(WIND_UNITS).toEqual(["km/h", "mph", "kn", "m/s"]);
   });
 
   it("ignores unknown values and survives blocked storage", () => {

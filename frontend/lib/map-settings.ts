@@ -4,12 +4,14 @@
  * and the map must still work with the defaults. Spot filters are deliberately not stored:
  * they are per visit, so a returning user never sees a silently filtered map.
  *
- * The wind unit is one preference for the whole site: it is stored under its own key,
- * `swell.windUnit` (the spot charts read and write the same key), and mirrored in the map's
- * settings object only for older pages that read it there.
+ * The wind unit is one preference for the whole site, read and written through lib/units
+ * (storedWindUnit / writeWindUnit: key `swell.windUnit`, same-tab event `swell:wind-unit`,
+ * shared with the spot charts), and mirrored in the map's settings object only for older
+ * pages that read it there.
  */
 import type { Units } from "@/lib/format";
-import { isLayerId, WIND_UNITS, type LayerId, type WindUnit } from "@/lib/map-layers";
+import { isLayerId, type LayerId } from "@/lib/map-layers";
+import { isWindUnit, storedWindUnit, writeWindUnit, type WindUnit } from "@/lib/units";
 import { isWaveSystem, type WaveSystem } from "@/lib/map-waves";
 
 export type { WaveSystem } from "@/lib/map-waves";
@@ -48,12 +50,8 @@ export const DEFAULT_SETTINGS: MapSettings = {
 };
 
 export const SETTINGS_KEY = "swell.map.settings.v1";
-/** The site-wide wind unit (a bare unit string, e.g. "mph"). */
-export const WIND_UNIT_KEY = "swell.windUnit";
-/** Event the spot charts dispatch on window after writing WIND_UNIT_KEY in this tab. */
-export const WIND_UNIT_EVENT = "swell:wind-unit";
-
-const isWindUnit = (v: unknown): v is WindUnit => WIND_UNITS.includes(v as WindUnit);
+/** The site-wide wind unit's key and same-tab event (defined once, in lib/units). */
+export { WIND_UNIT_EVENT, WIND_UNIT_KEY } from "@/lib/units";
 
 /** A stored wave-system list: known values only, no duplicates, "combined" alone; else the default. */
 export function parseWaveSystems(raw: unknown): WaveSystem[] {
@@ -92,18 +90,12 @@ export function parseSettings(raw: string | null | undefined, sharedWindUnit?: s
 
 export function readSettings(): MapSettings {
   let raw: string | null = null;
-  let unit: string | null = null;
   try {
     raw = window.localStorage.getItem(SETTINGS_KEY);
   } catch {
     raw = null;
   }
-  try {
-    unit = window.localStorage.getItem(WIND_UNIT_KEY);
-  } catch {
-    unit = null;
-  }
-  return parseSettings(raw, unit);
+  return parseSettings(raw, storedWindUnit());
 }
 
 export function writeSettings(s: MapSettings): void {
@@ -112,12 +104,6 @@ export function writeSettings(s: MapSettings): void {
   } catch {
     // Storage unavailable or full: the setting still applies for this visit.
   }
-  try {
-    if (window.localStorage.getItem(WIND_UNIT_KEY) !== s.windUnits) {
-      window.localStorage.setItem(WIND_UNIT_KEY, s.windUnits);
-      window.dispatchEvent(new Event(WIND_UNIT_EVENT));
-    }
-  } catch {
-    // As above: the unit applies to this page only.
-  }
+  // The shared preference (tells the spot charts on this page when it changed).
+  writeWindUnit(s.windUnits);
 }
