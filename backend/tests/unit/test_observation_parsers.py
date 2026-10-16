@@ -44,6 +44,13 @@ from app.services.observations.s3 import list_objects, object_url
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "observations"
 T0 = datetime(2026, 10, 1, 0, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_active_stations_cache() -> None:
+    ndbc.clear_active_stations_cache()
+
+
 WIDE = (datetime(1980, 1, 1, tzinfo=UTC), datetime(2030, 1, 1, tzinfo=UTC))
 
 # ----------------------------------------------------------------------------------- AODN
@@ -547,9 +554,11 @@ class TestNdbc:
 
     def test_provider_fetch_and_position_update(self) -> None:
         now = datetime(2026, 10, 11, 0, 0, tzinfo=UTC)
+        # A 48 h window lies inside NDBC's 5-day files, so those are read (NDBC_USE_5DAY,
+        # default on); they have the realtime2 layout.
         files = {
-            "/data/realtime2/51201.txt": REALTIME_TXT,
-            "/data/realtime2/51201.spec": REALTIME_SPEC,
+            "/data/5day2/51201_5day.txt": REALTIME_TXT,
+            "/data/5day2/51201_5day.spec": REALTIME_SPEC,
             "/activestations.xml": '<stations><station id="51201" lat="21.671" '
             'lon="-158.118" name="SYNTHETIC"/></stations>',
         }
@@ -573,6 +582,104 @@ class TestNdbc:
         assert out.files == 2 and len(out.records) == 3
         assert out.station_updates["latitude"] == 21.671
         assert out.station_updates["position_source"] == "ndbc_activestations"
+
+    def _plan_provider(self, now: datetime, **settings: Any) -> ndbc.NdbcProvider:
+        return ndbc.NdbcProvider(
+            Settings(ndbc_base_url="https://ndbc.example", **settings),
+            httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(404))),
+            backoff_seconds=0,
+            now=now,
+        )
+
+    def test_plan_uses_the_5day_files_for_a_48_hour_window(self) -> None:
+        now = datetime(2026, 10, 15, 3, 0, tzinfo=UTC)
+        p = self._plan_provider(now)
+        plan = p.plan("46026", now - timedelta(hours=48), now)
+        assert [(f.kind, f.paths) for f in plan] == [
+            ("txt", ["data/5day2/46026_5day.txt", "data/realtime2/46026.txt"]),
+            ("spec", ["data/5day2/46026_5day.spec"]),
+        ]
+        assert {f.dataset for f in plan} == {ndbc.REALTIME_DATASET}
+        # 30 days back: the 45-day realtime2 files.
+        month = p.plan("46026", now - timedelta(days=30), now)
+        assert [(f.kind, f.paths) for f in month] == [
+            ("txt", ["data/realtime2/46026.txt"]),
+            ("spec", ["data/realtime2/46026.spec"]),
+        ]
+        # Switched off: realtime2 even for 48 h.
+        off = self._plan_provider(now, ndbc_use_5day=False).plan(
+            "46026", now - timedelta(hours=48), now
+        )
+        assert [f.paths for f in off] == [
+            ["data/realtime2/46026.txt"],
+            ["data/realtime2/46026.spec"],
+        ]
+        # The 5-day files end 5 days back: a window starting 4.5 days back or earlier is not
+        # sure to be inside them.
+        edge = p.plan("46026", now - timedelta(days=4, hours=13), now)
+        assert edge[0].paths == ["data/realtime2/46026.txt"]
+
+    def test_a_missing_5day_file_falls_back_to_realtime2(self) -> None:
+        now = datetime(2026, 10, 11, 0, 0, tzinfo=UTC)
+        calls: list[str] = []
+        files = {"/data/realtime2/51201.txt": REALTIME_TXT}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            text = files.get(request.url.path)
+            return httpx.Response(200, text=text) if text else httpx.Response(404)
+
+        p = ndbc.NdbcProvider(
+            Settings(ndbc_base_url="https://ndbc.example"),
+            httpx.Client(transport=httpx.MockTransport(handler)),
+            backoff_seconds=0,
+            now=now,
+        )
+        result = p.fetch(
+            [StationRef("ndbc:51201", "51201", 21.67, -158.12)], now - timedelta(days=2), now
+        )
+        assert calls == [
+            "/activestations.xml",
+            "/data/5day2/51201_5day.txt",
+            "/data/realtime2/51201.txt",
+            "/data/5day2/51201_5day.spec",
+        ]
+        out = result.stations["ndbc:51201"]
+        assert out.files == 1 and out.records and out.errors == []
+
+    def test_active_stations_are_read_once_a_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[str] = []
+        clock = [1000.0]
+        monkeypatch.setattr(ndbc.time, "monotonic", lambda: clock[0])
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            if request.url.path == "/activestations.xml":
+                return httpx.Response(
+                    200,
+                    text='<stations><station id="51201" lat="21.671" lon="-158.118"/></stations>',
+                )
+            return httpx.Response(404)
+
+        def fetch() -> None:
+            ndbc.NdbcProvider(
+                Settings(ndbc_base_url="https://ndbc.example"),
+                httpx.Client(transport=httpx.MockTransport(handler)),
+                backoff_seconds=0,
+                now=datetime(2026, 10, 11, tzinfo=UTC),
+            ).fetch(
+                [StationRef("ndbc:51201", "51201", 21.67, -158.12)],
+                datetime(2026, 10, 9, tzinfo=UTC),
+                datetime(2026, 10, 11, tzinfo=UTC),
+            )
+
+        fetch()
+        clock[0] += 23 * 3600
+        fetch()
+        assert calls.count("/activestations.xml") == 1
+        clock[0] += 2 * 3600
+        fetch()
+        assert calls.count("/activestations.xml") == 2
 
     def test_one_bad_file_keeps_the_other_files(self) -> None:
         """A yearly file that cannot be parsed (here an HTML page answered with 200) or is

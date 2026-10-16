@@ -24,6 +24,19 @@ only cut, never edited; the .gz excerpts were re-compressed after cutting.
 * ndbc_activestations_20261012.trimmed.xml: the root element and four station elements of
   https://www.ndbc.noaa.gov/activestations.xml
 
+Downloaded on 2026-10-15 at 02:40 UTC (tides-obs package, NDBC 5-day files):
+
+* ndbc_46026_20261015.5day2.txt / .spec: https://www.ndbc.noaa.gov/data/5day2/46026_5day.txt
+  and .../46026_5day.spec, complete (2026-10-10 02:30 to 2026-10-15 02:00 UTC)
+* ndbc_46026_20261015.realtime2.trimmed.txt / .spec: the rows from 2026-10-09 00:00 UTC on of
+  https://www.ndbc.noaa.gov/data/realtime2/46026.txt and .../46026.spec, downloaded at the
+  same time (the 5-day rows are identical to the realtime2 rows of the same period)
+* ndbc_46053_20261015.5day2.txt: https://www.ndbc.noaa.gov/data/5day2/46053_5day.txt,
+  complete; its .spec answered 404 (no wave data in those 5 days)
+* ndbc_46053_20261015.realtime2.trimmed.txt / .spec: the rows from 2026-10-05 12:00 UTC on of
+  https://www.ndbc.noaa.gov/data/realtime2/46053.txt and .spec; the last wave report is at
+  2026-10-06 05:40 UTC, afterwards only wind and pressure (the buoy's waves stopped)
+
 Tests marked SYNTHETIC build small inputs in the same layouts.
 """
 
@@ -47,6 +60,11 @@ from app.services.observations.records import (
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "observations"
 WIDE = (datetime(1980, 1, 1, tzinfo=UTC), datetime(2030, 1, 1, tzinfo=UTC))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_active_stations_cache() -> None:
+    ndbc.clear_active_stations_cache()
 
 
 def _text(name: str) -> str:
@@ -390,3 +408,110 @@ def test_station_window_skips_realtime_for_old_periods() -> None:
     )
     assert "/data/realtime2/46026.txt" not in calls
     assert "/data/historical/stdmet/46026h2024.txt.gz" in calls
+
+
+# ------------------------------------------------------------------ 5day2 (2026-10-15)
+
+
+def _merged(txt: str, spec: str | None, start: datetime, end: datetime) -> list[ObservationRecord]:
+    stats = ParseStats()
+    records = ndbc.parse_stdmet(
+        _text(txt), dataset=ndbc.REALTIME_DATASET, start=start, end=end, stats=stats
+    )
+    specs = ndbc.parse_spec(_text(spec), start=start, end=end) if spec else {}
+    return ndbc.merge_spec(records, specs, stats)
+
+
+def test_5day2_files_parse_like_realtime2_with_the_same_columns() -> None:
+    five = _text("ndbc_46026_20261015.5day2.txt").splitlines()
+    full = _text("ndbc_46026_20261015.realtime2.trimmed.txt").splitlines()
+    assert five[:2] == full[:2]  # identical header lines (names and units)
+    five_spec = _text("ndbc_46026_20261015.5day2.spec").splitlines()
+    full_spec = _text("ndbc_46026_20261015.realtime2.trimmed.spec").splitlines()
+    assert five_spec[:2] == full_spec[:2]
+    records = _merged("ndbc_46026_20261015.5day2.txt", "ndbc_46026_20261015.5day2.spec", *WIDE)
+    times = [r.observed_at for r in records]
+    # 02:30 (the file's first row) has no wave values: the first wave report is at 02:40.
+    assert min(times) == datetime(2026, 10, 10, 2, 40, tzinfo=UTC)
+    assert max(times) == datetime(2026, 10, 15, 1, 40, tzinfo=UTC)  # the newest .spec time
+    assert all(r.qc_flag == "not_qc" and r.dataset == ndbc.REALTIME_DATASET for r in records)
+    assert sum(r.hs_m is not None for r in records) > 200
+
+
+def test_merge_spec_is_identical_for_overlapping_5day2_and_realtime2_files() -> None:
+    start = datetime(2026, 10, 10, 2, 30, tzinfo=UTC)
+    end = datetime(2026, 10, 15, 2, 0, tzinfo=UTC)
+    five = _merged("ndbc_46026_20261015.5day2.txt", "ndbc_46026_20261015.5day2.spec", start, end)
+    full = _merged(
+        "ndbc_46026_20261015.realtime2.trimmed.txt",
+        "ndbc_46026_20261015.realtime2.trimmed.spec",
+        start,
+        end,
+    )
+    assert five == full and len(five) > 200
+    # The realtime2 file reaches further back; the 5-day file ends there.
+    older = _merged(
+        "ndbc_46026_20261015.realtime2.trimmed.txt",
+        "ndbc_46026_20261015.realtime2.trimmed.spec",
+        *WIDE,
+    )
+    assert min(r.observed_at for r in older) < start
+
+
+def test_a_buoy_without_waves_in_5_days_has_no_5day_spec() -> None:
+    """46053 (Rincon's offshore buoy) sent its last wave report on 2026-10-06."""
+    stats = ParseStats()
+    five = ndbc.parse_stdmet(
+        _text("ndbc_46053_20261015.5day2.txt"),
+        dataset=ndbc.REALTIME_DATASET,
+        start=WIDE[0],
+        end=WIDE[1],
+        stats=stats,
+    )
+    # Every row has wind and pressure but no wave value, so none is a wave observation.
+    assert five == [] and stats.no_wave_data == 193
+    full = _merged(
+        "ndbc_46053_20261015.realtime2.trimmed.txt",
+        "ndbc_46053_20261015.realtime2.trimmed.spec",
+        *WIDE,
+    )
+    waves = [r.observed_at for r in full if r.hs_m is not None]
+    # The last wave report (.spec 05:40; .txt repeats it on its 05:40 and 05:50 rows).
+    assert max(waves) == datetime(2026, 10, 6, 5, 40, tzinfo=UTC)
+
+
+def test_fetch_reads_the_5day_files_and_measures_the_saving() -> None:
+    now = datetime(2026, 10, 15, 2, 40, tzinfo=UTC)
+    served = {
+        "/data/5day2/46026_5day.txt": (FIXTURES / "ndbc_46026_20261015.5day2.txt").read_bytes(),
+        "/data/5day2/46026_5day.spec": (FIXTURES / "ndbc_46026_20261015.5day2.spec").read_bytes(),
+        "/data/5day2/46053_5day.txt": (FIXTURES / "ndbc_46053_20261015.5day2.txt").read_bytes(),
+    }
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        body = served.get(request.url.path)
+        return httpx.Response(200, content=body) if body is not None else httpx.Response(404)
+
+    p = ndbc.NdbcProvider(
+        Settings(ndbc_base_url="https://ndbc.example"),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        backoff_seconds=0,
+        now=now,
+    )
+    result = p.fetch(
+        [
+            StationRef("ndbc:46026", "46026", 37.75, -122.84),
+            StationRef("ndbc:46053", "46053", 34.24, -119.84),
+        ],
+        now - timedelta(hours=48),
+        now,
+    )
+    assert not any("realtime2" in c for c in calls)
+    assert "/data/5day2/46053_5day.spec" in calls  # 404: no waves, not an error
+    assert result.stations["ndbc:46053"].errors == []
+    assert result.stations["ndbc:46026"].files == 2 and result.stations["ndbc:46053"].files == 1
+    # 46026's two 5-day files are 84,081 bytes; its realtime2 files were 749,151 bytes at
+    # the same time (600,190 + 148,961): 8.9 times more.
+    assert result.bytes_downloaded == 67210 + 16871 + 18330
