@@ -3,6 +3,11 @@
 Branch `claude/funny-hamilton-49k2m3`, 2026-10-11. Details live in the linked documents;
 everything stated as verified below was run, with the results shown.
 
+Contents: sections 1-8 (debugging, research, forecasting, 2026-10-11), Phase 2 (sections
+9-13: map redesign, simplified frontend, confidence), Phase 3 (sections 14-18:
+evidence-based spot profiles, validation, operations) and **Upgrade 3 (2026-10, sections
+19-37: forecasting, map, weather visualisation and UI)** at the end.
+
 ## 1. Bugs fixed
 
 | Bug | Root cause | Change | Tests | Status |
@@ -369,3 +374,428 @@ map markers open from the keyboard; the status page fits a phone; demo data is n
 called "live" on the landing page. Final run on the integrated tree: ruff, mypy and
 `alembic check` pass; **644 unit**, **233 integration**, **160 vitest** and **62 e2e**
 tests pass.
+
+---
+
+# Upgrade 3 (2026-10): forecasting, map, weather visualisation and UI
+
+The owner's request of 2026-10-13 asked for bounded map navigation, API-first weather data
+instead of gigabytes of GRIB, physically correct wind and wave animation, spot-specific
+offshore wind scoring, a unified forecast timeline, tides, separate confidences, shorter text,
+tests and documentation. Branch `wf3/integration`, from the audit base `2bd2b50` to
+`18739b4` before this report, 2026-10-13 to 2026-10-16. Work order: the audit, a foundation
+of shared contracts, eight packages built in parallel (point-data, map-fields, map-shell,
+map-flow, wind-scoring, tides-obs, spot-timeline, confidence-text), an adversarial review of
+each, the integration, a live run on real data, five cross-cutting reviews (physics, UX,
+security and licensing, docs, regression) and their fixes.
+
+Everything below is measured, ran or read as stated. "Computed" means arithmetic on measured
+values; "extrapolated" says what was assumed. Nothing here is marked working unless it was
+run.
+
+## 19. Audit
+
+[`forecast_upgrade_audit.md`](forecast_upgrade_audit.md): ten area audits on `2bd2b50`
+(map navigation, wind visualisation, wave visualisation, data acquisition, external APIs,
+observations and tides, offshore wind and scoring, charts and spot API, confidence and text,
+platform and tests), with root causes, affected files, planned changes and the test
+requirements of spec 27. 144 findings: 25 high, 63 medium, 56 low; the lead re-checked the
+most consequential ones by code reading or by running them. Baseline then: 644 backend unit
+tests, 233 integration tests (listed, not run), 160 vitest tests, 62 Playwright tests
+(listed, not run).
+
+## 20. Root causes
+
+| Area | Root cause (audit ID) | Fix |
+|---|---|---|
+| Map blank regions | No `maxBounds`; a fixed `minZoom` 2 showed 1.88 world copies at 1920 px; markers only in world copy 0 (MAPNAV-1, -2, -3) | Hard latitude band 84°N-78.5°S, a one-world minimum zoom per container, markers in the copy nearest the view centre, `worldCopyJump` off |
+| Map stutter | `closePath()` after each of 2,558 basemap rings: 214 ms of a 234 ms redraw (MAPNAV-5) | Removed; dark basemap redraw 6.2-7.8 ms |
+| Gigabytes downloaded | GRIB2 records are whole-globe: a byte range picks a record, not a region, so 50 spots cost about 2.9 GB per set of cycles (DA-1) | Spot forecasts from Open-Meteo point requests (two families); GRIB kept only for the gridded map layers and GEFS, trimmed |
+| Open-Meteo not equivalent to direct sampling | Land cells for wind, one interpolated wave model, no tertiary swell, interpolated hours stored as native, 0/0/0 stored for absent partitions (DA-5, API-03, -04, -05, -07) | `cell_selection=sea` with a masked-cell neighbour search, per-latitude wave models, tertiary swell, native steps only, absent partitions stay absent |
+| Waves looked like wind | Every wave tab used the wind particle engine (WAVEVIZ-1); no height or physical wavelength (WAVEVIZ-2); partitions never stored (WAVEVIZ-3) | A separate crest renderer from height, period and direction per system; partitions stored and served |
+| Wind trails veil | Trail fade relied on a `float16` canvas; 8-bit canvases kept a 6/255 veil (WINDVIZ-1) | Explicit trail renderer on 8-bit canvases |
+| Offshore always ideal | Offshore Q = 1.0 from 0 to 35 km/h with a 0.4 floor (80 km/h offshore scored 73); cross-shore and onshore stopped getting worse at 20 km/h (SW-1, -2) | Continuous Q_wind from V·n with no floor; strong offshore penalised |
+| Wrong swell scored | Direction and period scored from the primary swell even when another system made the breaking waves: 758 of 4,050 real hours (SW-3) | Every partition weighted by its share of the breaking energy flux |
+| Unreadable charts | Day ticks only at samples at local midnight: 42 of 50 spots had no axis labels (CH-1); no shared selection or x layout (CH-2, -3); "three hours later" moved 9 h (CH-4) | One timeline, one time axis, one selection store, ticks from the axis in the spot's zone |
+| No tides | No live tide source: 0 of 11,350 rows had a sea level (OBS-TIDE-1, -2) | NOAA CO-OPS and EOT20, with datum, station and high/low events |
+| Mixed confidences | One combined reasons list rendered under "Forecast confidence", research sentence included (CT-1); model output titled "Now" (CT-2) | Forecast-only reasons, separate badges, "Forecast" with valid and run times |
+| Windy terms | The adapter stored, blended and archived data the terms forbid storing (API-01) | Refused unless `WINDY_TERMS_ACKNOWLEDGED=true` |
+
+Found later, by the reviews and the live run: the blend averaged wind as a scalar speed plus
+unit-vector direction, inventing winds neither model forecast (physics review blocker,
+PHYS-1); "good hours" and event hours counted steps instead of hours of light (PHYS-3, -4);
+model credits were missing on the landing page, dashboard, opportunity pages and emails
+(security review blocker, SEC-1); the CO-OPS and NDBC byte counters counted decoded bodies,
+about 15× and 7× the bytes transferred; the map readout kept the previous place's values after
+the map moved under a still mouse.
+
+## 21. Files changed, by area
+
+`git diff --numstat 2bd2b50..18739b4`: 343 files, +63,796 / -3,899 lines.
+
+| Area | Files | Lines added / removed | Main new files |
+|---|---|---|---|
+| Backend forecasts (providers, blend, map fields) | 19 | +2,916 / -506 | `services/forecasts/open_meteo_ecmwf.py`, `quota.py`, `provider_cache.py` |
+| Backend scoring and confidence | 8 | +1,128 / -107 | `services/surf_quality/wind.py` |
+| Backend tides and observations | 11 | +2,311 / -10 | `services/tides/` (CO-OPS client, harmonic model, catalog, ingest, stage, API blocks) |
+| Backend API, schemas, models, workers, other services | 39 | +3,332 / -250 | `api/timeline.py`, `services/timeline.py`, `services/timesteps.py`, `api/tides.py`, `models/tides.py` |
+| Migration | 1 | +182 | `alembic/versions/0006_forecast_upgrade.py` (map-field partitions, tides, spot wind profiles) |
+| Backend tests (with fixtures) | 110 | +22,238 / -171 | |
+| Frontend spot timeline | 12 | +3,007 | `components/forecast/*`, `lib/timeline.ts` |
+| Frontend map | 22 | +3,281 / -570 | `components/map/wavefronts.ts`, `trails.ts`, `map-freshness.tsx`, `lib/map-waves.ts`, `lib/map-bounds.ts` |
+| Frontend other (pages, confidence, units, types) | 44 | +5,441 / -1,014 | `lib/units.ts`, `lib/directions.ts`, `components/stale-banner.tsx`, `forecast-provenance.tsx` |
+| Frontend tests (vitest, e2e) | 51 | +9,899 / -884 | |
+| Data | 3 | +4,906 | `data/tide_stations.json`, `data/tides/constants_eot20.json` (51 kB) |
+| Scripts | 3 | +733 / -15 | `scripts/extract_tide_constants.py` |
+| Docs | 14 | +4,217 / -356 | the audit, `forecast-charts.md`, `map-navigation.md`, `map-rendering.md`, `tides.md`, `API_SETUP_REQUIRED.md` |
+| Other (config, CI, compose) | 6 | +205 / -16 | |
+
+## 22. Map improvements
+
+Measured with Playwright on production builds ([`map-navigation.md`](map-navigation.md),
+[`map-rendering.md`](map-rendering.md)):
+
+| What | Before | After |
+|---|---|---|
+| Blank rows after drags (1440×900) | 805 of 807 after one 600 px drag north | worst 1 row outside the band over 14 drag/zoom checks per size; 0 rows past the Mercator edge |
+| Minimum zoom | fixed 2 (1.88 world copies at 1920 px) | one world: 2.49 at 1440×807, 2.91 at 1920×987, recomputed on resize |
+| Markers at the date line | 20 of 38 spots in view had a marker (centre 179°E) | every marker in its nearest copy; 0.00 px offset during a 25-frame drag |
+| Cloudbreak → Pipeline flight | 335.2° of longitude | 24.76° |
+| Marker Leaflet calls over 5 timeline steps | 1,000 each of `setLatLng`, `setStyle`, `on`, `off` | 0 |
+| Dark basemap redraw at zoom 2 | 234 ms | 6.2 ms (final run; 5.1-9.4 ms across runs) |
+| Colour-field redraw 1440×900 | median 13.5 ms (2026-10-12) | median 11.2-18.1 ms across runs (guard < 250 ms) |
+
+Also: a stale chip ("Forecast out of date — model run N h old"), the model run and lead time
+beside the timeline bubble, `?t=` links to the spot page, zone-named times, a side sheet for
+phones in landscape, the best-spots list naming its time, x/10 marker tooltips, and marker
+colours from a dark-surface ramp with at least 3:1 against the sea colour.
+
+## 23. Weather API integrations
+
+* **Open-Meteo, two independent families** (GFS + GFS-Wave and ECMWF IFS + WAM), with
+  weighted-call quotas charged before each request, a bounded Redis response cache keyed by
+  every domain's init time, run identity from `meta.json` with the documented 10-minute wait,
+  `cell_selection=sea` with a neighbour search for masked wave cells, tertiary swell, peak
+  periods, and native model steps only.
+* **Parity with direct sampling, same cycle, 50 spots** (2026-10-14, re-checked 2026-10-15):
+  GFS-family Hs within 0.05 m of NOAA NODD at all 50 spots (max 0.01 m); GFS wind within
+  0.21-0.24 km/h and 2.4-4.6° of NOAA's own 13 km grid; ECMWF family Hs within 0.05 m of ECMWF
+  open data (max 0.0098 m), wind max 0.24 km/h.
+* **GEFS-Wave** trimmed to `GEFS_STAT_FIELDS` (Hs, Tp): 201.6 MB → 69.4 MB per run (measured).
+  **ECMWF direct** trimmed to the variables used: about 0.85-0.9 GB → 0.48 GB per run
+  (computed from `.index` offsets).
+* **Map layers standalone** from GFS `pgrb2.0p50` (0.86 MB per hour instead of 2.93 MB for
+  `pgrb2.0p25`) and GFS-Wave `global.0p25` with nine partition records, cycles 00Z and 12Z,
+  a byte budget per run (verified live: a 20 MB budget stopped at 19.6 MB with a PARTIAL run).
+* **Tides**: NOAA CO-OPS for the 8 US spots (1.7-18.6 km away), EOT20 constants committed for
+  the other 42 (cells 1.1-13.3 km from the break), synthesised locally; matches pyTMD 3.0.9
+  within 0.012 mm over 30 days at all 50 points; against CO-OPS RMSE 2.7-4.4 cm, r 0.995-0.998,
+  timing 6-10 min ([`tides.md`](tides.md)).
+* **NDBC** `5day2` files instead of the 45-day `realtime2` files: 5.59 MB → 0.86 MB of files
+  per hourly run (both decoded), 0.12 MB on the wire (measured 2026-10-12 and 2026-10-16).
+* **Windy** refused without `WINDY_TERMS_ACKNOWLEDGED=true`; its wind-sea keys fixed
+  (`wwaves_*`).
+* **Retries**: transient failures now retry for real (a transient `forecasts.acquire` failure
+  retried after 120 s in the regression review); quota exhaustion fails the run with the
+  provider's message and keeps the previous run.
+
+## 24. Storage and caching
+
+| What | Before | After |
+|---|---|---|
+| Files on disk from acquisition | none (GRIB decoded in memory) | none: strace over all 9 jobs of the live run found only the driver's report |
+| Redis | no `maxmemory`, `noeviction`, no monitoring; 917 KB-1.04 MB used | `maxmemory` 256 MB, `noeviction`, data-health check on the fraction used; 1.90 MB → 2.43 MB over a full live pass |
+| Provider response cache | none | at most 200 entries of up to 2 MB, compressed, one model run |
+| Archive row | 1,506 B (81 % confidence inputs) | 555 B with the confidence digest (746 B with indexes) |
+| Member-run predictions | kept 10 days (about 119 MB a day) | pruned once superseded (`PRUNE_SUPERSEDED_MEMBER_PREDICTIONS`) |
+| Prediction row (2.1.0 stores wind detail, contributions, partitions, tide detail) | 2,596 B (2.0.0) | 3,403 B |
+| Database size at the 730-day archive retention | about 30 GB of archive alone (audit) | about 17 GB in all (computed from fresh-table row sizes; a lower bound) |
+| Size alarm | none (`DATA_HEALTH_DATABASE_MAX_GB` unset) | 5 GB default, alert only, reached after about 100 days (owner to size it, section 36) |
+| Map fields in the browser | LRU of 24 (evicted the step on screen) | LRU of 48, at most 64 MB; 56.7 MB of array buffers after 48 downloads |
+
+## 25. Offshore wind scoring
+
+[`SURF_SCORING.md`](SURF_SCORING.md) sections 3b-3e. Offshore means wind from land to sea:
+the offshore component is V·n, with u = -V sin θ, v = -V cos θ and n the seaward normal at
+the spot's researched `offshore_wind_direction` + 180°, never the nearshore shore normal
+(at Chicama that would be 120° off). Q_wind is continuous with no floor: calm and light
+offshore score 1, Q(10 km/h offshore) ≥ 0.95, Q(50 km/h offshore) = 0.32, Q(100) < Q(60);
+cross-shore and onshore wind lose more with speed. Strength classes follow Beaufort; six spots
+have researched wind profiles (tolerance, shelter sectors, extra offshore bearings).
+Algorithm 2.1.0 also scores swell direction and period over every partition by its share of
+the breaking energy flux, tapers the swell window, and scores the tide only where the research
+supports a preference.
+
+On the real 2026-10-11 run (4,050 steps), re-scored twice on independent clones:
+
+| Check | 2.0.0 | 2.1.0 |
+|---|---|---|
+| Offshore steps at 45 km/h or more rated Very Good or better | 0 of 3 | 0 of 3 |
+| Offshore steps at 30 km/h or more rated Very Good or better | 37 | 19 |
+| Cross-shore steps at 30 km/h or more rated Good or better | 37 of 127 | 0 of 151 |
+| Labels changed | | 1,313 (32.4 %); mean \|Δ score\| 7.73 |
+
+With real tides stored for that window, 1,354 steps at 18 spots are tide-scored, 126 more
+labels change and the acceptance numbers stay the same. Review mutation testing: 22 of 22
+code mutations break the tests.
+
+The blend fix (PHYS-1): wind direction from the speed-weighted mean wind vector. On a clone of
+the live 2026-10-16 run, blended directions more than 45° from both members fell from 555 to
+111 steps, and wind relations matching neither member from 394 to 72; 342 labels changed, and
+702 of 10,400 hours are flagged "Models disagree on the wind direction" (forecast confidence
+then at most Moderate). Example: Trestles 2026-10-17 18Z went from 92 Excellent,
+cross-offshore, High to 69 Good, onshore, Moderate.
+
+## 26. Wind visualisation
+
+* Particles move with the GFS 10 m wind at 12 CSS px per second per m/s, time-based: 120 px ±
+  1 in 1 s for 10 m/s at 60, 120 and 144 Hz (vitest with fake frame times).
+* The sign of v and the screen vector `(u, -v)` are unit-tested (WINDVIZ-7); Web Mercator is
+  conformal, so no `cos(lat)` factor (0.000° projection error measured in the audit).
+* 8-bit canvases (Firefox, Safari, iOS) draw explicit trails: alpha 5/6/7 counts after 5 s
+  4,071 / 6,423 / 4,012 (no spike at 6; the float16 fade renderer 11,290 / 8,922 / 8,647).
+  Tested in Chromium forced to an 8-bit canvas; Firefox and WebKit not run here.
+* A new forecast step keeps the particles (no reseed); the field index is re-read every
+  5 minutes and on focus; a field whose run or valid time differs from the request is never
+  drawn (WINDVIZ-3, -4).
+* mph, kn and m/s next to km/h, one preference shared with the spot charts; the readout says
+  "from"; on the dark basemap land is translucent on the Wind layer (in the audit 49 % of the
+  particles in the default view sat over land or ice, under opaque land).
+* Main-thread cost per frame (headless, software raster): 1.66 ms script, 28.4 ms task.
+
+## 27. Wave visualisation
+
+* A crest renderer separate from the particles: sets of curved crest lines across the travel
+  direction, with troughs, from each system's height, period and direction; primary solid
+  white, secondary dashed amber, wind sea dotted cyan, combined sea solid.
+* Deep-water physics: L = gT²/(2π), crests at the phase speed, sets at the group speed.
+  Stated scales in the legend: spacing 0.12 px per metre of wavelength (exaggeration E =
+  0.12 × metres per pixel, 4,696× at zoom 2 at the equator), time 4× faster than real.
+* E2E on synthetic fields (Chromium and Pixel 7): crest orientation for a swell from 225° at
+  12 s 45.0° (coherence 0.98); motion along the travel direction 5.0 px in 0.61 s; spacing
+  12 / 48 px at 8 / 16 s (ratio 4.00); ink 10,117 at 1 m against 35,411 at 4 m; two systems
+  give orientation peaks at 92.5° and 2.5°; crests stop at the coast (land probes at alpha 0
+  on both basemaps).
+* Real data: on the NOAA 2026-10-15 00Z run the review raised the world view from 23 to 79
+  sets on desktop (5 to 23 on a phone) and removed a 17 px crest seam at the antimeridian.
+* Crest frame p95 settled 3.8 ms with 9,531 vertices at 1440×900; main-thread cost 2.69 ms
+  script per frame.
+* Partitions are served only where the model run has them (an absent partition is no data,
+  byte 255); the chooser disables missing systems.
+
+## 28. Chart redesign
+
+[`forecast-charts.md`](forecast-charts.md): one 10-day timeline with a selected-time summary
+and "Why this forecast?", day buttons, a header with hour ticks in the spot's zone, night
+bands from first and last light, a "Now" marker, then rows for surf quality, breaking height
+(central bar, likely range, sets tick, optional offshore Hs and buoy readings), swell
+partitions, wind (speed bars, gust ticks, favourability colour and hatching, relation labels)
+and tide (curve, high and low waters, datum, station, preference). Each step is drawn as wide
+as it lasts. The quality ramp: every class at least 3:1 against the card and on the dark
+surface, labels 4.5:1, luminance strictly ordered (vitest; the old "fair" was 1.92:1). Spec
+27's 15 chart test items each map to a vitest and/or e2e test (forecast-charts.md §11).
+Payload: `/timeline` 132,905 B against 262,304 B for `/forecast` on the real 3-hourly J-Bay
+run.
+
+## 29. Timeline synchronisation
+
+* One selection store (`useSyncExternalStore` with selectors): rows are created once and
+  never re-render on hover, selection, keys or day buttons (React Profiler counter: 0
+  renders); only the cursor layer, tooltip, summary and day buttons re-render.
+* Day boundaries and the selected step line up within 1 px in every row (e2e bounding boxes
+  at 1280 px and on Pixel 7).
+* Selecting steps sends 0 additional requests (e2e request log); the API sends
+  `Cache-Control`, a weak ETag and 304s.
+* Interaction to next frame (production build, demo J-Bay, hourly, 10 days): hover / click /
+  ArrowRight median 25 / 29 / 32 ms at 1440 px, 20 / 25 / 24 ms in Pixel 7 emulation.
+* The map readout agrees with the spot charts at the same place and time (live, Jeffreys Bay
+  09Z: map SW 224° 13 s, chart SW 224° 13 s; secondary E 90° against E 92°).
+
+## 30. Usability
+
+* Visible-word budgets per block, enforced by vitest on the rendered DOM: spot summary,
+  forecast card and cards at most 45 words, the breakdown's prediction block at most 50 (81
+  before), research block with four gaps at most 25 plus its summary.
+* `GET /api/spots/{slug}`: median 925 ms and 56 SQL statements → 32 ms and 7 statements (it no
+  longer builds all 50 summaries).
+* UX review (screenshots at 1440×900, 1024×768 and Pixel 7, live and demo data): no blockers;
+  3 majors (night dimming broke the ramp, the wind relation label vanished in multi-day runs,
+  the summary scrolled away on phones) and 15 minors, all fixed except UX-14 (section 36).
+  Focus ring contrast 1.79:1 → about 5.4:1.
+* Keyboard: the chart is a labelled slider (arrows one step, Page Up / Down one day, Home /
+  End); a sticky compact readout on phones; reduced motion honoured on the map and the page.
+* Credits and licence links next to model values everywhere they appear (spot page, map panel
+  and best-spots list, swell cards, opportunity page, alert emails, tides, buoy readings).
+
+## 31. Prediction integration
+
+* The live pipeline on 2026-10-16 (00Z cycles, 50 spots): both Open-Meteo families (10,400 and
+  4,200 rows), the blend (10,400 rows), 25,000 predictions at algorithm 2.1.0 and 4,050
+  archived, then detection, matching, flights and alerts (69 events) in 3.9 s.
+* The timeline and `/forecast` agree on run, valid times, score and label (integration test,
+  and re-run on clones of the real runs).
+* Good hours are hours of light under Good-or-better steps (Nazare 2026-10-25: 10.6 h good of
+  11.49 h from first to last light; it read 12 h before), and event and match hours are real hours of light (104 counted
+  against 210 real before, PHYS-4).
+* Interpolation is named, never denied: steps that hold a member value the blend aligned in
+  time carry `interpolated_members` (5,750 of 10,400 rows of the 2026-10-16 blend).
+* Raw offshore data, our breaking prediction and our rating stay separate objects in the API
+  and the UI; research, forecast and local confidence stay separate fields and badges.
+
+## 32. Test commands and results
+
+Latest full run, 2026-10-16, on this tree (docs-only commits after `18739b4`):
+
+| Command (see README section J) | Result |
+|---|---|
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass: 297 files formatted, 180 files type-checked |
+| `alembic upgrade head` + `alembic check` on an empty database | pass, no new operations |
+| `pytest tests/unit` | 1,689 passed (45.6 s) |
+| `pytest tests/integration` | 318 passed (8 min 28 s) |
+| `npx tsc --noEmit`, `npx eslint .`, `npm run build` | pass |
+| `npx vitest run` | 409 passed in 36 files |
+| `./scripts/run-e2e.sh` (Chromium + Pixel 7) | 127 passed: 111 chromium, 16 mobile (18.4 min) |
+| `pytest tests/unit/test_api_setup_doc.py tests/unit/test_surf_scoring_doc.py` | 5 passed |
+
+From the baseline (644 / 233 / 160 / 62) the suites grew to 1,689 unit, 318 integration, 409
+vitest and 127 e2e tests. Mutation checks in the package reviews: point-data 21 of 21 caught,
+wind-scoring 22 of 22 after one added test, tides-obs 20 of 20 after three added tests,
+map-shell 10 of 10, spot-timeline every listed sign and constant change caught. Not run here:
+the `@cross-browser` tests in Firefox and WebKit (browsers not installed), real phones.
+
+## 33. Measured performance and storage
+
+| What | Value | How |
+|---|---|---|
+| Download per day, recommended setup | about 1.25 GB (before: about 10.2 GB) | per run measured live 2026-10-16; per day computed; map layers per cycle extrapolated from 9 map hours |
+| Spot forecasts per set of cycles | 0.5 MB (before: about 2.8 GB) | measured |
+| Open-Meteo use | 142.9 + 124.3 weighted calls per run, about 820 a day (8 % of the free tier) | measured; computed |
+| Map layers | 7.82-7.98 MB per map hour with partitions, 2.69-2.72 MB without | measured |
+| Database after one full live pass | 148.8 MB (12.4 MB after `init-db`) | `pg_database_size` |
+| Storage steady state | about 3.3 GB for 10 forecast days; about 17 GB at 730 days | computed from row sizes |
+| Peak memory per job | NDBC 98 MB to predictions 627 MB; GEFS 418 MB; map fields 568 MB | measured live |
+| Timeline build on the real run | 51-66 ms median, 8 SQL queries | review |
+| Crest frame p95 / basemap / colour field | 3.8 ms / 6.2 ms / median 16.8 ms | e2e, headless Chromium |
+| Docker Compose (demo, 2026-10-16) | `up --build -d` 3 min 11 s with base images pulled; every service healthy within a minute; first pipeline run done 57 s after beat started | run on this machine |
+
+## 34. External API setup required
+
+[`API_SETUP_REQUIRED.md`](API_SETUP_REQUIRED.md) section 1 lists what works with no account
+(Open-Meteo free tier, NOAA NODD, GEFS-Wave, CO-OPS, EOT20, NDBC and the other buoys, Natural
+Earth, OSM tiles for light use) and what the owner must set up: decide whether the app is
+commercial (then an Open-Meteo plan and `OPEN_METEO_API_KEY`), a real email provider with a
+verified domain, a flight provider (Duffel or Amadeus Enterprise), optionally Twilio, a CO-OPS
+application name, a tile provider only for heavy Streets traffic, and the database alert size.
+Each service has purpose, variables, docs, key, free tier, licence, cost, env vars, setup and
+test; a unit test checks every variable named there exists. The Open-Meteo terms, pricing and
+licence quotes were re-read on 2026-10-16.
+
+## 35. README
+
+README sections E (running: Docker, the bulk-worker profile, local processes with both
+queues, beat, frontend), F (weather data: providers, frequency, caching, storage limits,
+measured downloads before and after, real-data steps, tides, observations, source
+limitations), G (forecast charts), H (map visualisations, the stated wavefront exaggeration,
+navigation bounds), J (testing, with this run's counts) and K (debugging: map rendering, wind
+direction, stale forecasts, missing wave data, chart synchronisation, API authentication,
+memory). Commands run for it on 2026-10-16: `docker compose up --build -d` (sandbox build
+proxy only), `docker compose ps`, `exec … init-db`, `simulate-swell`, `pipeline`,
+`run --rm … check-config`, the `bulk-worker` profile, `down -v`; locally `init-db`,
+`alembic upgrade head` / `check`, uvicorn, a worker without `-Q`, beat, `npm run dev`,
+`tides seed/acquire/list/prune`, `obs seed-stations`, `ml list`, `research lint`,
+`check-config`, `scripts/check-health.sh`, and the real-data block pasted into zsh. Shell
+blocks carry no inline comments, so they paste into zsh. Not re-run: `pip install -e
+".[dev]"` into a fresh virtualenv (the Docker image's `pip install .` and the existing
+virtualenv were used), `npm ci` (dependencies already installed), `npx playwright install`,
+and the long `obs ingest` / `ml train` commands (run in earlier phases).
+
+## 36. Known limitations and next steps
+
+**Owner decisions (left unchanged on purpose):**
+
+* Review the 2.1.0 label changes on the real run (32 % of labels; SURF_SCORING.md 3e), and
+  decide `EXCLUDE_STRONG_OFFSHORE` / `LIGHT_ONSHORE_IS_NOT_ONSHORE`, Macaronis' "any wind",
+  and how wind sea raised by an offshore wind should count at points and reefs (44 of 4,050
+  steps at 6 spots).
+* `DATA_HEALTH_DATABASE_MAX_GB`: the 5 GB default is reached after about 100 days with
+  730-day archive retention; size it from the disk (about 17 GB at two years), together with
+  the 12 h alert repeat.
+* `MAP_FIELD_STALE_AFTER_HOURS` is 18: with cycles 00 and 12 the map chip still shows for up
+  to about 2 h of every 12 in normal operation; 21 h, or adding cycles 06 and 18 (about
+  +0.97 GB a day), would remove that.
+* MAPNAV-13: at the one-world desktop zoom the best-spots list covers the Philippines and
+  Japan, including Cloud 9.
+* UX-14: the second card "Our prediction and the model data" repeats the selected step below
+  the timeline; merging it is a layout decision (its test ids are asserted by e2e).
+* The spot page opens on the step covering now (or the next daylight step), not on the best
+  upcoming daylight step (a one-line change).
+* Commercial use of Open-Meteo (API_SETUP_REQUIRED.md 1.3).
+
+**Not verified here:** Firefox, WebKit and real phones; Open-Meteo's commercial hosts, Windy,
+Duffel, Amadeus, Resend, SendGrid and Twilio (no credentials; mock-tested); breaking heights,
+quality labels and confidence classes against surf observations (none exist); the map layers'
+61-hour cycle size (extrapolated from 9 measured hours); storage growth over real weeks
+(computed from fresh-table row sizes, a lower bound). On the afternoon of 2026-10-16
+Open-Meteo refused this sandbox's shared address for the day, so the second run of the README's
+real-data block stored no spot forecast (tides, GEFS and map fields succeeded).
+
+**Known minor issues:** "No tide prediction for this time." is stored where a tide stage
+exists but its range is under 0.15 m (104 of 4,050 rescore steps); the "Why" sentence is
+converted from metres already rounded, so it can differ from the summary by 0.1 ft; SMS
+alerts carry no data-credit line (derived values only); `SpotForecastOut.generated_at` stays
+empty on `/forecast`; the 2.0.0 runs show neutral wind bars (no favourability stored).
+
+**Next steps, by expected impact:**
+
+1. Nearshore observations (surf reports, cams with manual reads) to calibrate breaking
+   heights, the quality score and the confidence classes; the largest error source.
+2. Owner review of the 2.1.0 labels on a few spots they know, then the open wind decisions.
+3. Activate the approved ML correction (v6) where it passed, after the operator step.
+4. Cross-browser runs (Firefox, WebKit, iOS Safari) of the map and the timeline.
+5. Refactors noted in review: merge `land-50m` into `countries-50m` (MAPNAV-12, 174 kB gzip),
+   make the e2e `screenPoint` helper zoom-independent (MAPNAV-14), fold the synthetic map
+   field helper into the GFS one, let `tide_stages_for` report why a stage is absent.
+
+## 37. Definition of Done (spec 30)
+
+Each item: **verified** (with how), **partial** or **not done**.
+
+| # | Item | Status | How |
+|---|---|---|---|
+| 1 | Map bounds work | verified | e2e `map-navigation.spec.ts` at 1440×900, 1920×1080, 1280×720, 390×844, 844×390: worst 1 row outside the band, 0 past the Mercator edge; vitest `map-bounds.test.ts` |
+| 2 | Map responsive | verified | minimum zoom recomputed on resize and rotation (e2e); basemap redraw 6.2 ms, colour field median 16.8 ms, 0 marker calls over 5 steps; phone bottom sheet and landscape side sheet |
+| 3 | All spots accessible | verified, with a caveat | all 50 in one world copy at 1440×807 (vitest), every spot 25° inside the band; at the first desktop view the best-spots list covers Cloud 9 (MAPNAV-13, owner decision) |
+| 4 | Supported remote sources | verified | live 2026-10-14 and 2026-10-16: Open-Meteo GFS and ECMWF families, GEFS-Wave, NOAA NODD map layers, CO-OPS, EOT20, NDBC; parity with direct sampling within 0.05 m Hs |
+| 5 | Massive local downloads removed | verified | about 10.2 GB → about 1.25 GB a day (per run measured, per day computed); spot forecasts 2.8 GB → 0.5 MB per set of cycles; no file written (strace) |
+| 6 | Cache controlled | verified | Redis 256 MB `noeviction` with a health check, response cache 200 × 2 MB, 2.43 MB used after a full pass; browser field LRU 48 / 64 MB; database growth bounded by retention, alarm size an owner decision |
+| 7 | Wind animation from legitimate gridded data | verified | GFS 10 m u/v at 0.5° from NOAA NODD, decoded and checked against an independent ecCodes decode and NDBC directions; no field drawn without data |
+| 8 | Wind vectors physically correct | verified | u = -V sin θ, v = -V cos θ and screen `(u, -v)` unit-tested including the sign of v; physics review on real data |
+| 9 | Offshore identified | verified | V·n with n seaward from `offshore_wind_direction` + 180 (unit tests, physics review); blend direction from the mean wind vector (555 → 111 invented directions) |
+| 10 | Favourable offshore improves scoring | verified | Q(0) = 1, Q(10 km/h offshore) ≥ 0.95 (unit tests); rescore of the real run |
+| 11 | Strong offshore not universally ideal | verified | Q(50) = 0.32, Q(100) < Q(60); real run: offshore ≥ 45 km/h rated Very Good or better 0 of 3, offshore ≥ 30 km/h 37 → 19 |
+| 12 | Waves visually distinct from wind | verified | separate crest renderer (e2e structure-tensor orientation, ink and land probes); screenshots on real fields; Chromium only |
+| 13 | Wavefronts reflect direction and period | verified | e2e: 45.0° crests for a 225° swell, spacing ratio 4.00 for 8 / 16 s, motion along the travel direction |
+| 14 | Primary + secondary swells where available | verified | map partitions from GFS-Wave, chooser disables missing systems; spot lanes per stored partition; live J-Bay map and chart agree (SW 224° 13 s; E 90° / 92°) |
+| 15 | Readable charts | verified, one item deferred | UX review at three sizes and live data, 3 majors and 14 of 15 minors fixed; UX-14 (duplicate step card) left to the owner |
+| 16 | Multi-day timeline | verified | 10-day timeline with day buttons (vitest, e2e `timeline.spec.ts`) |
+| 17 | Selected-hour cursor | verified | cursor line through every row, selected pill; chart test 4 (vitest and e2e) |
+| 18 | Quality timeline | verified | quality strip from the scoring engine's class (chart test 9, `test_timeline_api.py`); palette contrast test |
+| 19 | Wave chart | verified | bars equal the backend's central values (chart test 5, e2e against `/timeline`) |
+| 20 | Accurate partitions | verified | stored partitions only, never 0 for absent ones; live map-chart agreement at J-Bay |
+| 21 | Wind bars | verified | speed and gust equal the backend's (chart test 6), favourability colour and hatching |
+| 22 | Correct arrows | verified | arrows TO = FROM + 180 on charts and map (`directions.test.ts`, e2e rotation), text FROM, convention in both legends |
+| 23 | Tide chart | verified | CO-OPS and EOT20 curves with datum, station and credit on the live run (screenshots); chart test 8 with synthetic tides in e2e |
+| 24 | Synchronised timestamps | verified | one time axis, day boundaries within 1 px (e2e), spot zone names with DST changes named, one zone-naming rule site-wide |
+| 25 | Mobile | verified, emulation only | 16 Pixel 7 e2e tests (touch swipe, tap select, bottom sheet), compact readout, screenshots; no real phone or iOS Safari |
+| 26 | Confidences separate | verified | forecast-only reasons, separate badges and API fields (vitest, e2e `confidence.spec.ts`, integration tests) |
+| 27 | Concise text | verified | word-budget vitest on the rendered DOM (45 / 50 / 25-word blocks) |
+| 28 | Prediction engine functional | verified | live 2026-10-16: 25,000 predictions at 2.1.0, blend, detection to alerts; rescore of the real 2026-10-11 run |
+| 29 | Flights, saved searches, email notifications still work | verified with demo and capture providers | regression review on a live stack (register, verify, reset, searches, demo flights, alert captured), `full-flow` and `scenario` e2e, integration suite; real providers not verified (no credentials) |
+| 30 | Tests pass | verified | section 32 (1,689 unit, 318 integration, 409 vitest, 127 e2e) |
+| 31 | README updated | verified | sections E-K rewritten, commands run as listed in section 35 |
+| 32 | External API requirements documented | verified | `API_SETUP_REQUIRED.md` section 1 and per-service tables; `test_api_setup_doc.py` |
+| 33 | Limitations disclosed | verified | section 36, README section M and the Limitations section of every package doc |
+
+Not done anywhere in the list: none. Partial: item 3 (MAPNAV-13), item 15 (UX-14), item 25
+(no real phone), item 29 (real flight, email and SMS providers), and every browser item
+outside Chromium.
