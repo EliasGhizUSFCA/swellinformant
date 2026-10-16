@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { apiGet } from "./helpers";
 import { mockFields, mockFieldsUnavailable, PARTITION_VARIABLES, syntheticValue, VARIABLES, type SyntheticFields } from "./map-fields.mock";
-import { field, mapSettled, openMap, openMapWithFields, painted, requested, screenPoint, shot, type Spot } from "./map-helpers";
+import { field, mapSettled, openMap, openMapWithFields, painted, requested, screenPoint, shot, type ProbeWindow, type Spot } from "./map-helpers";
 
 /**
  * The map's ocean layers against the production build: the colour field, the wave crests
@@ -548,6 +548,39 @@ test.describe("ocean layers (synthetic fields)", () => {
     await page.keyboard.press("Tab");
     await expect(readout).toHaveCount(0);
   });
+  test("a map moved under a still mouse reads the value at the place now under the cursor", async ({ page }) => {
+    // Live 2026-10-16: after a programmatic move (the spot list's fly-to, the recentre button,
+    // keys) the readout kept the old place's values at the cursor's screen position.
+    const { nowIndex } = await openMapWithFields(page);
+    const p = await screenPoint(page, -50, -120);
+    await page.mouse.move(p.x, p.y);
+    const readout = page.getByTestId("map-readout");
+    await expect(readout).toContainText("Offshore waves (Hs)");
+    const before = Number(await readout.getAttribute("data-lon"));
+    expect(before).toBeCloseTo(-120, 0);
+    await page.evaluate(() => {
+      const m = (window as unknown as ProbeWindow).__maps![0]!;
+      const c = m.getCenter();
+      m.setView([c.lat, c.lng + 25], m.getZoom(), { animate: false });
+    });
+    await expect.poll(async () => Number(await readout.getAttribute("data-lon"))).toBeGreaterThan(before + 20);
+    const lat = Number(await readout.getAttribute("data-lat"));
+    const lon = Number(await readout.getAttribute("data-lon"));
+    // The place the readout names is the one under the cursor ...
+    const at = await page.evaluate(([la, lo]) => {
+      const m = (window as unknown as ProbeWindow).__maps![0]!;
+      const pt = m.latLngToContainerPoint([la, lo]);
+      const r = m.getContainer().getBoundingClientRect();
+      return { x: r.left + pt.x, y: r.top + pt.y };
+    }, [lat, lon] as const);
+    expect(Math.abs(at.x - p.x)).toBeLessThan(2);
+    expect(Math.abs(at.y - p.y)).toBeLessThan(2);
+    // ... and the value is the synthetic field there (± interpolation and rounding).
+    const expected = syntheticValue("hs", lat, lon, nowIndex)! * 3.28084;
+    const shown = Number(/([\d.]+) ft/.exec(await readout.innerText())![1]);
+    expect(Math.abs(shown - expected)).toBeLessThan(1);
+  });
+
   test("without ocean layers the map shows a notice and everything else still works", async ({ page }) => {
     await mockFieldsUnavailable(page, "Ocean layers need live NOAA data");
     const fieldRequests: string[] = [];

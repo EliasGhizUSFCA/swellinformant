@@ -80,6 +80,10 @@ function Readout({ sample, layer, units }: { sample: ((lat: number, lon: number)
     const c = m.getCenter();
     return { x: size.x / 2, y: size.y / 2, lat: c.lat, lon: c.lng, kind: "keyboard" };
   };
+  const under = (m: LeafletMap, p: ReadoutPoint): ReadoutPoint => {
+    const ll = m.containerPointToLatLng([p.x, p.y]);
+    return { ...p, lat: ll.lat, lon: ll.lng };
+  };
   const map = useMapEvents({
     mousemove(e) {
       if (pointerType.current !== "mouse") return;
@@ -97,8 +101,14 @@ function Readout({ sample, layer, units }: { sample: ((lat: number, lon: number)
     movestart() {
       setPoint((p) => (p?.kind === "touch" ? null : p));
     },
+    // A map moved under a still mouse (the spot list's fly-to, the recentre button, keys)
+    // puts another place under the cursor: read the value there, never the old place's.
+    move() {
+      if (!focused.current) setPoint((p) => (p?.kind === "mouse" ? under(map, p) : p));
+    },
     moveend() {
       if (focused.current) setPoint(centre(map));
+      else setPoint((p) => (p?.kind === "mouse" ? under(map, p) : p));
     },
   });
 
@@ -147,6 +157,8 @@ function Readout({ sample, layer, units }: { sample: ((lat: number, lon: number)
       <div
         role="status"
         data-testid="map-readout"
+        data-lat={point.lat.toFixed(3)}
+        data-lon={point.lon.toFixed(3)}
         className="pointer-events-none absolute z-[1000] max-w-[220px] rounded-lg bg-[#14181c]/90 px-2.5 py-1.5 text-xs text-white shadow-lg ring-1 ring-white/10"
         style={{ left: Math.max(8, left), top }}
       >
