@@ -264,6 +264,34 @@ describe("8. tide", () => {
     expect(screen.getByTestId("summary-tide")).toHaveTextContent(/ft · (rising|falling)/);
   });
 
+  it("shows a real tide's source, distance, attribution and caveat visibly (synthetic block)", () => {
+    // SYNTHETIC: the synthetic curve labelled as an available EOT20 model tide, to check what
+    // an available block shows (the strings are the backend's own, from services/tides).
+    const tl = withSyntheticTide(jbay());
+    tl.tide = {
+      ...tl.tide,
+      status: "available",
+      source: "eot20",
+      station: { code: "eot20:test", name: "EOT20 model point near Synthetic Point", provider: "harmonic_model", kind: "model", distance_km: 8.7 },
+      attribution: "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE (CC BY 4.0)",
+      reason: "Model tide (EOT20), relative to model mean sea level, not a chart datum. SYNTHETIC caveat.",
+    };
+    renderTimeline(tl, { select: 4 });
+    const note = screen.getByTestId("tide-source");
+    expect(note).toHaveTextContent("EOT20 model point near Synthetic Point, 9 km away");
+    expect(screen.getByTestId("tide-attribution")).toHaveTextContent("EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE");
+    expect(screen.getByTestId("tide-caveat")).toHaveTextContent("relative to model mean sea level, not a chart datum");
+    // Not folded away: outside every disclosure (the chart legend folds on phones).
+    expect(note.closest("[hidden]")).toBeNull();
+    expect(note).toBeVisible();
+    expect(screen.getByTestId("summary-tide-basis")).toHaveTextContent("above model mean sea level · model point 9 km away");
+  });
+
+  it("shows no source note for a demo or unavailable tide", () => {
+    renderTimeline(withSyntheticTide(jbay()));
+    expect(screen.queryByTestId("tide-source")).toBeNull();
+  });
+
   it("says so, and draws nothing, without a tide source", () => {
     renderTimeline(jbay());
     expect(screen.getByTestId("tide-unavailable")).toHaveTextContent("Tide data unavailable · No tide source configured for this spot.");

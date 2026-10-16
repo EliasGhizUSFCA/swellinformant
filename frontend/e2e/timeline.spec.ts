@@ -193,6 +193,29 @@ test.describe("spot forecast timeline", () => {
     await expect(page.getByTestId("summary-tide")).toContainText(/(rising|falling)/);
   });
 
+  test("an available model tide shows its point, distance, attribution and caveat on screen (synthetic)", async ({ page }) => {
+    // SYNTHETIC curve, labelled as an available EOT20 block to check what such a block shows
+    // (CC BY 4.0 needs EOT20's credit wherever its tide is drawn, phones included).
+    const tl = withSyntheticTide(await realTimeline(page));
+    tl.tide = {
+      ...tl.tide,
+      status: "available",
+      source: "eot20",
+      station: { code: "eot20:test", name: "EOT20 model point near Synthetic Point", provider: "harmonic_model", kind: "model", distance_km: 8.7 },
+      attribution: "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE (CC BY 4.0)",
+      reason: "Model tide (EOT20), relative to model mean sea level, not a chart datum. SYNTHETIC caveat.",
+    };
+    await routeTimeline(page, tl);
+    await openSpot(page);
+    const note = page.getByTestId("tide-source");
+    await note.scrollIntoViewIfNeeded();
+    await expect(note).toBeVisible();
+    await expect(note).toContainText("EOT20 model point near Synthetic Point, 9 km away");
+    await expect(page.getByTestId("tide-attribution")).toBeVisible();
+    await expect(page.getByTestId("tide-attribution")).toContainText("EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE");
+    await expect(page.getByTestId("tide-caveat")).toContainText("not a chart datum");
+  });
+
   test("3-hourly then 6-hourly steps are drawn as wide as they are, never as hourly bars (synthetic)", async ({ page }) => {
     const tl = mixedCadence(await realTimeline(page));
     await routeTimeline(page, tl);

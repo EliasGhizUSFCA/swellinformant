@@ -12,6 +12,7 @@ import { ConditionsSummary } from "@/components/conditions";
 import { ForecastConfidence, LocalConfidence, ResearchConfidence } from "@/components/confidence";
 import { EventCard } from "@/components/event-card";
 import { ForecastBreakdown, methodLabel } from "@/components/forecast-breakdown";
+import { AttributionLinks, ForecastProvenance, useNowMs } from "@/components/forecast-provenance";
 import { SpotForecastTimeline } from "@/components/forecast/forecast-timeline";
 import { TimelineSelectionProvider, useTimelineActions, useTimelineSelection, useTimelineStore } from "@/components/forecast/timeline-selection";
 import { InfoPopover } from "@/components/info-popover";
@@ -20,15 +21,16 @@ import { OpportunityCard } from "@/components/opportunity-card";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { DemoBadge } from "@/components/quality";
 import { RatingHeadline, WhyThisRating } from "@/components/rating";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Disclosure } from "@/components/ui/disclosure";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StaleBanner } from "@/components/stale-banner";
 import { WindDisputeNote } from "@/components/wind-dispute";
 import { useForecast, useMe, useSpot, useSpotEvents, useSpotOpportunities, useSpotTimeline } from "@/hooks/queries";
+import { forecastReasonsOf, rangeWords, runAgeHours } from "@/lib/confidence";
 import { nearestPointIndex, pointToConditions } from "@/lib/forecast";
-import { compass, formatDateTime, heightRange, kmh, metres, relativeTime, seconds, titleCase, type Units } from "@/lib/format";
+import { compass, formatDateTime, formatSpotDateTime, heightRange, kmh, metres, relativeTime, seconds, titleCase, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors, ratingReason } from "@/lib/rating";
 import { openingStepIndex, parseTimeParam } from "@/lib/timeline";
@@ -84,7 +86,8 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
             <span className="font-semibold tracking-wide text-muted-foreground uppercase">Best surf, next 7 days</span>
             {c && (
               <span className="flex items-center gap-2 text-muted-foreground">
-                {formatDateTime(c.valid_time, s.timezone)} local{c.is_daylight ? "" : " · night"}
+                {formatSpotDateTime(c.valid_time, s.timezone, { zone: true })}
+                {c.is_daylight ? "" : " · night"}
                 <ShowInTimeline iso={c.valid_time} />
               </span>
             )}
@@ -99,8 +102,9 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
                 </span>
               </div>
               {c.breaking_p10_ft != null && c.breaking_p90_ft != null && (
-                <div className="text-xs text-muted-foreground">
-                  80% range {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)} <InfoPopover term="range80" />
+                <div className="text-xs text-muted-foreground" data-testid="best-likely-range">
+                  {rangeWords(c.uncertainty_kind).name} {heightRange(c.breaking_p10_ft, c.breaking_p90_ft, units)} ({rangeWords(c.uncertainty_kind).note}){" "}
+                  <InfoPopover term="likelyRange" />
                 </div>
               )}
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
@@ -123,7 +127,16 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
                 method={<>Method: {methodLabel(c.method)}{c.algorithm_version ? ` (v${c.algorithm_version})` : ""}</>}
               />
               <div className="mt-3 space-y-1.5 border-t pt-3">
-                <ForecastConfidence value={c.forecast_confidence_class} reasons={c.confidence_reasons} leadHours={c.lead_hours} legacyIndex={c.confidence} />
+                {/* Forecast reasons only: research and the not-yet-verified note are not about the forecast. */}
+                <ForecastConfidence
+                  value={c.forecast_confidence_class}
+                  reasons={forecastReasonsOf(c)}
+                  notes={c.confidence_reasons}
+                  validTime={c.valid_time}
+                  runIssuedAt={c.run_issued_at}
+                  blend={c.source_code === "blend"}
+                  legacyIndex={c.confidence}
+                />
                 <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} reason={c.local_confidence_reason} />
               </div>
             </>
@@ -136,7 +149,7 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
         {/* A separate assessment of the break itself: kept visibly apart from the forecast. */}
         <div id="research" className="min-w-0 scroll-mt-24 border-t pt-4 md:border-t-0 md:border-l md:pt-0 md:pl-8">
           <div className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">About this break</div>
-          <ResearchConfidence research={s.research} />
+          <ResearchConfidence research={s.research} compact />
         </div>
       </CardContent>
     </Card>
@@ -201,16 +214,21 @@ function ForecastSection({
         <div>
           <CardTitle className="font-display text-xl sm:text-2xl">Surf forecast</CardTitle>
           {p && (
-            <p className="mt-0.5 text-xs text-muted-foreground" data-testid="timeline-provenance">
-              {p.source.name}
-              {p.run.init_time ? ` · model run ${formatDateTime(p.run.init_time, "UTC")} UTC` : ""}
-              {p.run.age_hours != null ? ` (${Math.round(p.run.age_hours)} h ago)` : ""}
-            </p>
+            // Every model run behind the timeline with its init time, when it was fetched, and
+            // the sources' credit and licence links (Open-Meteo, ECMWF, NOAA) next to the data.
+            <div className="mt-0.5" data-testid="timeline-provenance">
+              <ForecastProvenance
+                source={p.source}
+                run={p.run.init_time ? { issued_at: p.run.init_time, completed_at: p.run.completed_at } : null}
+                members={p.members}
+                generatedAt={tl?.generated_at}
+                links={p.source.attribution_links}
+              />
+            </div>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {tl?.stale && <Badge variant="warn">Stale data</Badge>}
-          {p?.source.is_demo && <DemoBadge />}
         </div>
       </CardHeader>
       <CardContent className="px-3 pb-4 sm:px-5 sm:pb-5">
@@ -258,10 +276,19 @@ function SelectedStepDetails({ fc, s, units }: { fc: SpotForecast; s: SpotDetail
           components={point.components}
           point={point}
           spotRange={{ minFt: s.wave_height_min_ft, maxFt: s.wave_height_max_ft }}
+          source={fc.source}
+          run={fc.run}
         />
       </CardContent>
     </Card>
   );
+}
+
+/** Says only what is true of a stale forecast: confidence capped, alerts paused only once the
+ * alert job withholds them (`alerts_paused`), and the run's age (a blend's oldest member's). */
+function ForecastStaleBanner({ fc }: { fc: SpotForecast }) {
+  const now = useNowMs();
+  return <StaleBanner stale={fc.stale} alertsPaused={fc.alerts_paused} runAgeHours={runAgeHours(fc.run?.issued_at ?? null, now)} blend={fc.source?.code === "blend"} />;
 }
 
 function Fact({ k, v }: { k: React.ReactNode; v: React.ReactNode }) {
@@ -325,6 +352,7 @@ function ForecastSource({ fc }: { fc: SpotForecast }) {
           {uncertaintyLabel(fc.points[0]?.uncertainty_kind)}. {fc.source.attribution}
         </span>
       </div>
+      <AttributionLinks links={fc.source.attribution_links} />
     </Disclosure>
   );
 }
@@ -398,13 +426,7 @@ export default function SpotPage() {
         }
       />
 
-      {fc?.stale && (
-        <Alert variant="warn" className="mb-6">
-          <AlertTriangle />
-          <AlertTitle>Forecast data is stale</AlertTitle>
-          <AlertDescription>The latest model run is late, so confidence is reduced and alerts are paused for this data.</AlertDescription>
-        </Alert>
-      )}
+      {fc && <ForecastStaleBanner fc={fc} />}
 
       {/* One selection per spot: a new spot starts from its own default (or ?t=). */}
       <TimelineSelectionProvider key={slug} initialT={null}>
@@ -464,7 +486,7 @@ export default function SpotPage() {
 
           <aside className="min-w-0 space-y-6">
             {s.current && (
-              <ConditionsSummary c={s.current} tz={s.timezone} units={units} title="Now" spotRange={{ minFt: s.wave_height_min_ft, maxFt: s.wave_height_max_ft }} />
+              <ConditionsSummary c={s.current} tz={s.timezone} units={units} spotRange={{ minFt: s.wave_height_min_ft, maxFt: s.wave_height_max_ft }} />
             )}
             <div className="h-56 overflow-hidden rounded-2xl border">
               <SurfMap spots={[s]} selected={s.slug} zoom={8} center={[s.latitude, s.longitude]} />

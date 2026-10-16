@@ -133,7 +133,8 @@ export function ForecastBreakdown({
   const away = validInText(c.valid_time, now);
   const range = rangeWords(c.uncertainty_kind);
   const runs = runsLabel(c, run, now);
-  const wind = `${kmh(c.wind_speed_kmh)} ${compass(c.wind_direction_deg)} · ${WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}`;
+  // Directions are where the wind and swell come FROM (the map and chart arrows point where they go).
+  const wind = `${kmh(c.wind_speed_kmh)}${c.wind_direction_deg != null ? ` from ${compass(c.wind_direction_deg)}` : ""} · ${WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}`;
   return (
     <div className="space-y-3" data-testid="forecast-breakdown">
       <div className="text-xs text-muted-foreground" data-testid="breakdown-time">
@@ -164,7 +165,7 @@ export function ForecastBreakdown({
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground" data-testid="prediction-inputs">
           <span className="inline-flex items-center gap-1">
             <Waves className="size-3.5 shrink-0" aria-hidden="true" />
-            {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} {compass(dir)} swell
+            {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} swell{dir != null ? ` from ${compass(dir)}` : ""}
           </span>
           <span className="inline-flex items-center gap-1">
             <Wind className="size-3.5 shrink-0" aria-hidden="true" />
@@ -255,6 +256,7 @@ export function ForecastBreakdown({
           run={run ?? (c.run_issued_at && c.source_code !== "blend" ? { issued_at: c.run_issued_at } : null)}
           members={run?.members}
           generatedAt={generatedAt}
+          links={source?.attribution_links}
         />
       </Disclosure>
     </div>

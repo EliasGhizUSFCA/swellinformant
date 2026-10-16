@@ -5,6 +5,7 @@ import { memo, useMemo } from "react";
 import { RowBackground, TIDE_H, TimelineRow, type RowProps } from "@/components/forecast/timeline-header";
 import { clockTime, smoothPath } from "@/lib/timeline";
 import { convertHeightFt, type HeightUnit } from "@/lib/units";
+import { cn } from "@/lib/utils";
 import type { TideBlock } from "@/types/api";
 
 const TOP = 22;
@@ -17,6 +18,34 @@ export const TIDE_UNAVAILABLE = "Tide data unavailable";
 export function datumText(datum: TideBlock["datum"]): string {
   if (!datum) return "datum not stated";
   return datum === "model_msl" ? "model mean sea level" : datum;
+}
+
+/** "EOT20 model point near Cloudbreak, 9 km away": where the tide curve is computed. */
+export function tideStationText(tide: TideBlock): string | null {
+  const st = tide.station;
+  if (!st) return null;
+  return `${st.name}, ${Math.round(st.distance_km)} km away`;
+}
+
+/**
+ * Under the tide row, always visible while real predictions are shown: where they come from
+ * (station or model point and its distance), the source's attribution (EOT20's CC BY 4.0
+ * credit "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE", or NOAA CO-OPS) and the API's
+ * caveat (`reason` on an available block: model mean sea level is not a chart datum, the
+ * catalog's local caveat, or the CO-OPS datum and interpolation note).
+ */
+export function TideSourceNote({ tide, className }: { tide: TideBlock; className?: string }) {
+  if (tide.status !== "available") return null;
+  const where = tideStationText(tide);
+  return (
+    <div className={cn("space-y-0.5 text-[11px] text-muted-foreground", className)} data-testid="tide-source">
+      <p>
+        <span className="font-medium text-ink">Tide:</span> {where ? `${where} · ` : ""}
+        {tide.attribution ? <span data-testid="tide-attribution">{tide.attribution}</span> : "source not stated"}
+      </p>
+      {tide.reason && <p data-testid="tide-caveat">{tide.reason}</p>}
+    </div>
+  );
 }
 
 /** The y scale of the tide row (shared with the cursor layer's marker). */

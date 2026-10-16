@@ -54,7 +54,7 @@ export function DailyStrip({
               <div className="mx-auto mt-2 h-1.5 w-full rounded-full" style={{ backgroundColor: QUALITY_COLORS[label] }} />
               <div className="mt-2 text-sm font-semibold whitespace-nowrap">{heightRange(d.height_min_ft, d.height_max_ft, units)}</div>
               <div className="text-[11px] text-muted-foreground">
-                {QUALITY_LABELS[label]} · {d.good_hours}h good
+                {QUALITY_LABELS[label]} · {Math.round(d.good_hours * 10) / 10}h good
               </div>
               {hasField(d, "forecast_confidence_class") && (
                 <ConfidenceBadge value={d.forecast_confidence_class} compact className="mt-1.5 px-1.5 text-[10px]" />

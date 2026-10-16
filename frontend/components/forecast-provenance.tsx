@@ -4,9 +4,10 @@ import { Clock } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { DemoBadge } from "@/components/quality";
+import { safeExternalUrl } from "@/lib/confidence";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { RunMember } from "@/types/api";
+import type { AttributionLink, RunMember } from "@/types/api";
 
 /** The browser clock in epoch ms, refreshed every minute (for "in 2 h" and "model run 16 h ago"
  * labels): read once when the component mounts and then by the interval, so re-renders in
@@ -28,16 +29,47 @@ export function cycleLabel(iso: string): string {
 }
 
 /**
+ * The credit and licence links the data sources ask for, shown next to their data: Open-Meteo
+ * ("Weather data by Open-Meteo.com", CC BY 4.0), ECMWF ("Copyright ECMWF", CC BY 4.0), NOAA.
+ * The API's `source.attribution_links` (every member's for a blend). Only http(s) URLs
+ * become links. Nothing is shown without links (e.g. the demo source).
+ */
+export function AttributionLinks({ links, dark = false, className }: { links: readonly AttributionLink[] | null | undefined; dark?: boolean; className?: string }) {
+  if (!links?.length) return null;
+  return (
+    <p className={cn("text-[11px] text-muted-foreground", className)} data-testid="attribution-links">
+      <span className="font-medium">Data: </span>
+      {links.map((l, i) => {
+        const href = safeExternalUrl(l.href);
+        return (
+          <span key={`${l.label}-${l.href}`}>
+            {i > 0 ? " · " : ""}
+            {href ? (
+              <a href={href} target="_blank" rel="noopener noreferrer" className={cn("underline underline-offset-2", dark ? "hover:text-white" : "hover:text-ink")}>
+                {l.label}
+              </a>
+            ) : (
+              l.label
+            )}
+          </span>
+        );
+      })}
+    </p>
+  );
+}
+
+/**
  * Where a forecast comes from: the source, every model run behind it with its own init time
- * (a blend's issue time is only its oldest member's, so each member is named), and when the
- * data was fetched. `members` is the API's `run.members`; without it the run's issue time is
- * shown as the model run.
+ * (a blend's issue time is only its oldest member's, so each member is named), when the data
+ * was fetched and, with `links`, the sources' credit and licence links. `members` is the
+ * API's `run.members`; without it the run's issue time is shown as the model run.
  */
 export function ForecastProvenance({
   source,
   run,
   members,
   generatedAt,
+  links,
   className,
 }: {
   source: { name: string; is_demo: boolean } | null | undefined;
@@ -46,6 +78,8 @@ export function ForecastProvenance({
   /** The server's time for the response: a browser clock behind it never makes the fetch look
    * newer than the response. */
   generatedAt?: string | null;
+  /** The sources' credit and licence links (`source.attribution_links`). */
+  links?: readonly AttributionLink[] | null;
   className?: string;
 }) {
   const clock = useNowMs();
@@ -78,6 +112,7 @@ export function ForecastProvenance({
           <Clock className="size-3" aria-hidden="true" /> Fetched {relativeTime(run.completed_at, now)}
         </div>
       )}
+      <AttributionLinks links={links} />
     </div>
   );
 }

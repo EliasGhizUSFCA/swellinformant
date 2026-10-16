@@ -250,9 +250,10 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
               <>
                 <span className="font-semibold tabular-nums">{tideHeightText(step.tide.height_m, units)}</span>
                 {step.tide.rising != null && <span className="text-muted-foreground"> · {step.tide.rising ? "rising" : "falling"}</span>}
-                <span className="block text-xs text-muted-foreground">
+                <span className="block text-xs text-muted-foreground" data-testid="summary-tide-basis">
                   above {datumText(tide.datum)}
                   {tide.status === "demo" ? " · demo tide (synthetic)" : ""}
+                  {tide.status === "available" && tide.station ? ` · ${tide.station.kind === "model" ? "model point" : "station"} ${Math.round(tide.station.distance_km)} km away` : ""}
                 </span>
                 {nextTide && (
                   <span className="block text-xs text-muted-foreground tabular-nums" data-testid="summary-next-tide">

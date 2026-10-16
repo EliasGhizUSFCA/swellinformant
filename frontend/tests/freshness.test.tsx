@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConditionsSummary } from "@/components/conditions";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
-import { cycleLabel, ForecastProvenance } from "@/components/forecast-provenance";
+import { AttributionLinks, cycleLabel, ForecastProvenance } from "@/components/forecast-provenance";
 import { ageText, StaleBanner, StaleBadge } from "@/components/stale-banner";
 import type { Conditions, RunMember, SwellEvent, SystemStatus } from "@/types/api";
 
@@ -237,6 +237,18 @@ describe("ConditionsSummary (model output, never 'Now')", () => {
     expect(document.body.textContent).not.toMatch(/\blive\b/i);
   });
 
+  it("writes wind and swell directions as where they come FROM (WINDVIZ-12)", () => {
+    // 40 deg = NE, 220 deg = SW (synthetic fixture values).
+    const { unmount } = render(<ConditionsSummary c={conditions()} tz="UTC" units="ft" nowMs={NOW} />);
+    expect(screen.getByTestId("conditions-summary")).toHaveTextContent("9 km/h from NE");
+    expect(screen.getByTestId("conditions-summary")).toHaveTextContent("14 s SW swell"); // a swell is named by its origin
+    unmount();
+    render(<ForecastBreakdown c={conditions()} tz="UTC" units="ft" nowMs={NOW} />);
+    expect(screen.getByTestId("prediction-inputs")).toHaveTextContent("9 km/h from NE");
+    expect(screen.getByTestId("prediction-inputs")).toHaveTextContent("swell from SW");
+    expect(screen.getByTestId("prediction-inputs")).not.toHaveTextContent(/km\/h NE/);
+  });
+
   it("names night steps without calling them unsurfable data gaps", () => {
     render(<ConditionsSummary c={conditions({ is_daylight: false })} tz="UTC" units="ft" nowMs={NOW} />);
     expect(screen.getByTestId("conditions-time")).toHaveTextContent("· night");
@@ -293,6 +305,28 @@ describe("forecast provenance", () => {
     expect(items.map((i) => i.textContent?.replace(/^ · /, ""))).toEqual(["Synthetic GFS family (test fixture) 18Z Oct 11", "Synthetic ECMWF family (test fixture) 12Z Oct 11"]);
     expect(screen.getByTestId("provenance-members")).toHaveTextContent(/^Model runs: /);
     expect(screen.getByTestId("forecast-provenance")).toHaveTextContent("Fetched 3 hours ago");
+  });
+
+  it("shows the sources' credit and licence links next to the data, as links only for http(s)", () => {
+    const links = [
+      { label: "Weather data by Open-Meteo.com", href: "https://open-meteo.com/" },
+      { label: "Open-Meteo licence (CC BY 4.0)", href: "https://open-meteo.com/en/licence" },
+      { label: "Copyright ECMWF: IFS and ecWAM open data (modified)", href: "https://www.ecmwf.int/en/forecasts/datasets/open-data" },
+      { label: "Not a link", href: "javascript:alert(1)" },
+    ];
+    render(<ForecastProvenance source={{ name: "Synthetic blend (test fixture)", is_demo: false }} run={{ issued_at: "2026-10-11T12:00:00Z" }} members={members} links={links} />);
+    const box = screen.getByTestId("attribution-links");
+    expect(box).toHaveTextContent("Data: Weather data by Open-Meteo.com · Open-Meteo licence (CC BY 4.0) · Copyright ECMWF");
+    expect(within(box).getByRole("link", { name: "Open-Meteo licence (CC BY 4.0)" })).toHaveAttribute("href", "https://open-meteo.com/en/licence");
+    expect(within(box).getAllByRole("link")).toHaveLength(3);
+    expect(box).toHaveTextContent("· Not a link"); // shown as text: javascript: is never a link
+    expect(within(box).queryByRole("link", { name: "Not a link" })).toBeNull();
+    for (const a of within(box).getAllByRole("link")) expect(a).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("shows no attribution line without links (the demo source)", () => {
+    const { container } = render(<AttributionLinks links={[]} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("names a single run's cycle in UTC", () => {

@@ -7,7 +7,7 @@ import { CursorLayer, HoverTooltip, NowMarker } from "@/components/forecast/curs
 import { QualityStrip } from "@/components/forecast/quality-strip";
 import { SelectedTimeSummary } from "@/components/forecast/selected-summary";
 import { SwellPartitions } from "@/components/forecast/swell-partitions";
-import { datumText, TideRow, TIDE_UNAVAILABLE } from "@/components/forecast/tide-row";
+import { datumText, TideRow, TideSourceNote, TIDE_UNAVAILABLE } from "@/components/forecast/tide-row";
 import { HEADER_H, rowOffsets, TimelineHeader } from "@/components/forecast/timeline-header";
 import { useTimelineSelection, useTimelineStore } from "@/components/forecast/timeline-selection";
 import { WaveBars } from "@/components/forecast/wave-bars";
@@ -321,6 +321,7 @@ export function SpotForecastTimeline({
           Left and right arrow keys move one forecast step, Page Up and Page Down one day, Home and End to the first and last step of the day.
         </p>
       </div>
+      <TideSourceNote tide={timeline.tide} className="px-1" />
 
       {narrow ? (
         <Disclosure summary="How to read these charts" open={legendOpen ?? false} onOpenChange={setLegendOpen}>

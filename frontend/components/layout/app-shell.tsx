@@ -37,7 +37,7 @@ function DemoRibbon() {
   if (!demoForecast && !demoFlights) return null;
   return (
     <div className="bg-amber-100 px-4 py-1.5 text-center text-xs font-medium text-amber-900" role="status">
-      Demo mode — {demoForecast ? "forecasts are synthetic" : "forecasts are live"}
+      Demo mode — {demoForecast ? "forecasts are synthetic" : "forecasts are real model data"}
       {" · "}
       {demoFlights ? "flight fares are mock data" : "flight fares are live quotes"}. Nothing here is a real booking.
     </div>
@@ -181,7 +181,7 @@ export function SiteFooter({ dark = false }: { dark?: boolean }) {
     <footer className={cn("border-t", dark ? "border-white/10 bg-ink text-white/70" : "bg-card text-muted-foreground")}>
       <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-6 text-xs sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <p>
-          Forecasts are model estimates (NOAA GFS / GFS-Wave and ECMWF open data when live). Breaking heights and quality
+          Forecasts are model estimates (NOAA GFS / GFS-Wave and ECMWF models outside demo mode), not observations. Breaking heights and quality
           scores are approximate. Fares are quotes and can change.
         </p>
         <div className="flex gap-4">

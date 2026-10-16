@@ -83,14 +83,16 @@ export function ConditionsSummary({
         </div>
       )}
       <div className="mt-2 space-y-0.5 text-sm text-muted-foreground">
-        <div className="flex items-center gap-1.5">
+        {/* A swell is named by where it comes from ("SW swell"); the wind says "from" below. */}
+        <div className="flex items-center gap-1.5" title={`Offshore model swell${c.swell_direction_deg != null ? ` from ${compass(c.swell_direction_deg)}` : ""}, not the surf height`}>
           <Waves className="size-3.5 shrink-0" aria-hidden="true" />
-          {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} {compass(c.swell_direction_deg)} offshore swell
+          {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} {c.swell_direction_deg != null ? `${compass(c.swell_direction_deg)} ` : ""}swell
         </div>
         <div className="flex items-center gap-1.5">
           <Wind className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="sr-only">Wind: </span>
-          {kmh(c.wind_speed_kmh)} {compass(c.wind_direction_deg)} · {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
+          {kmh(c.wind_speed_kmh)}
+          {c.wind_direction_deg != null ? ` from ${compass(c.wind_direction_deg)}` : ""} · {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
         </div>
       </div>
       <WindDisputeNote note={c.wind_dispute_note} reasons={c.confidence_reasons} className="mt-1.5" />

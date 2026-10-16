@@ -30,10 +30,28 @@ test.describe("spot page forecast", () => {
     const hour = page.getByTestId("forecast-hour");
     await expect(hour.getByTestId("raw-model")).toContainText("Significant wave height (offshore)");
     await expect(hour.getByTestId("our-prediction")).toContainText("typical–sets");
-    await expect(hour.getByTestId("uncertainty-range")).toContainText("80% range");
-    await expect(hour.getByTestId("uncertainty-range")).toContainText("not yet verified");
+    // Final copy (confidence-text): an unverified range is a "Likely range … (unverified)" on
+    // screen; "80% range" is only its intent, kept for screen readers with the basis.
+    const range = hour.getByTestId("uncertainty-range");
+    await expect(range).toContainText(/Likely range .+ \(unverified\)/);
+    await expect(range).toContainText("meant as an 80% range");
+    await expect(range).toContainText("not yet verified");
+    // Directions are where wind and swell come FROM.
+    await expect(hour.getByTestId("prediction-inputs")).toContainText(/km\/h from [NESW]{1,3} · /);
+    await expect(hour.getByTestId("prediction-inputs")).toContainText(/swell from [NESW]{1,3}/);
     await expect(page.getByTestId("method-note")).toContainText("Linear wave theory");
     await expect(page.getByTestId("method-note")).not.toContainText("Komar–Gaughan approximation");
+
+    // The best-week summary: forecast reasons only (no research or not-verified sentence), the
+    // break's research kept apart, and the time named with its zone.
+    const outlook = page.getByTestId("surf-outlook");
+    await expect(outlook.getByTestId("forecast-confidence")).not.toContainText("How this break responds to swell");
+    await expect(outlook.getByTestId("research-confidence")).toBeVisible();
+    // Compact research block: its summary sits in "Research details", not on the first screen.
+    await expect(outlook.getByTestId("research-summary")).toHaveCount(0);
+    await expect(outlook.getByTestId("best-likely-range")).toContainText(/Likely range .+ \(unverified\)/);
+    // Provenance next to the timeline: the model run with its cycle (demo data has no links).
+    await expect(page.getByTestId("timeline-provenance").getByTestId("provenance-members")).toContainText(/Model runs?: /);
 
     // Choosing a day moves the breakdown to that day's best hour.
     const day = fc.daily[3]!;
