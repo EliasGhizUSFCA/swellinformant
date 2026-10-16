@@ -117,7 +117,7 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
                   <InfoPopover term="windRelation" />
                 </span>
               </div>
-              <WindDisputeNote reasons={c.confidence_reasons} className="mt-1.5" />
+              <WindDisputeNote note={c.wind_dispute_note} reasons={c.confidence_reasons} className="mt-1.5" />
               <WhyThisRating
                 className="mt-2"
                 score={c.score}
