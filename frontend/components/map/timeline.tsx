@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, Loader2, Pause, Play } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { bubbleLabel, longTimeLabel, stepHours, tickIndices, timelineDays, weekdaysRepeat } from "@/lib/map-time";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,8 @@ import { ACTIVE_PILL, FOCUS, GLASS } from "./map-ui";
 
 /**
  * Forecast timeline: day labels under hour ticks, a draggable thumb with a bubble showing
- * the selected local time ("8am Sun PDT"), play/pause and "Now". The track is a slider:
+ * the selected time in the viewer's zone, with the zone's name ("8am Sun PDT"), play/pause and
+ * "Now". `aside` sits beside the bubble (the model run and lead time). The track is a slider:
  * arrows move one step, Page Up/Down one day of steps, Home/End to the ends.
  */
 export function Timeline({
@@ -22,6 +23,7 @@ export function Timeline({
   onPlaying,
   tz,
   busy,
+  aside,
 }: {
   steps: string[];
   index: number;
@@ -31,6 +33,7 @@ export function Timeline({
   onPlaying: (on: boolean) => void;
   tz: string;
   busy?: boolean;
+  aside?: ReactNode;
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const observer = useRef<ResizeObserver | null>(null);
@@ -104,8 +107,10 @@ export function Timeline({
         >
           <span className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold shadow", ACTIVE_PILL)} data-testid="time-label">
             {bubbleLabel(current, tz, weekdaysRepeat(days))}
-            {busy && <Loader2 className="size-3 animate-spin" aria-hidden />}
+            {busy && <Loader2 className="size-3 motion-safe:animate-spin" aria-hidden />}
           </span>
+          {/* Beside the bubble on the side with more room, so the bubble stays over the thumb. */}
+          {aside && <span className={cn("absolute top-1/2 w-max -translate-y-1/2", pos < 0.5 ? "left-full ml-1.5" : "right-full mr-1.5")}>{aside}</span>}
         </div>
         <div
           ref={setTrack}

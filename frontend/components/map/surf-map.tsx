@@ -2,11 +2,15 @@
 
 import "leaflet/dist/leaflet.css";
 
+import type { LatLngExpression, Map as LeafletMap } from "leaflet";
 import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap } from "react-leaflet";
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
+import { MAP_MAX_BOUNDS, minZoomFor, nearestCopy, RECENTRE_LNG, wrapCentre, wrapKey } from "@/lib/map-bounds";
 import { tileConfig } from "@/lib/map-tiles";
 import { colorForScore } from "@/lib/quality";
+import { score10 } from "@/lib/rating";
 import type { SpotSummary } from "@/types/api";
 
 /** What a marker shows for the selected forecast time (null = no usable forecast). */
@@ -14,6 +18,156 @@ export interface MarkerState {
   score: number | null;
   tooltip: string;
   highlight?: boolean;
+}
+
+/**
+ * Navigation options shared by both world maps (lib/map-bounds.ts): the latitude band with a
+ * hard edge, no rubber band past the zoom limits, and no worldCopyJump (markers are placed in
+ * the world copy nearest the view instead; the two together put markers a world away).
+ */
+export const BOUNDED_MAP_OPTIONS = {
+  maxBounds: MAP_MAX_BOUNDS,
+  maxBoundsViscosity: 1,
+  bounceAtZoomLimits: false,
+  worldCopyJump: false,
+} as const;
+
+/**
+ * Keeps the minimum zoom at one world width for the container's current size (re-measured
+ * whenever it resizes: window, rotation, layout) and re-centres the view on the same meridian,
+ * without animation, once a long pan has taken its longitude past ±540°. `onRecentre` runs
+ * first with the new centre longitude, so markers can move to their new copy in the same task.
+ */
+export function MapBounds({ onRecentre }: { onRecentre?: (lng: number) => void }) {
+  const map = useMap();
+  const recentred = useEffectEvent((lng: number) => onRecentre?.(lng));
+  useEffect(() => {
+    const fit = () => {
+      const size = map.getSize();
+      map.setMinZoom(minZoomFor(size.x, size.y));
+    };
+    const recentre = () => {
+      const c = map.getCenter();
+      if (Math.abs(c.lng) <= RECENTRE_LNG) return;
+      const lng = wrapCentre(c.lng);
+      recentred(lng);
+      map.setView([c.lat, lng], map.getZoom(), { animate: false });
+    };
+    fit();
+    // Leaflet only re-measures on window resize; also follow the container's own size.
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize();
+      fit();
+    });
+    observer.observe(map.getContainer());
+    map.on("moveend", recentre);
+    return () => {
+      observer.disconnect();
+      map.off("moveend", recentre);
+    };
+  }, [map]);
+  return null;
+}
+
+/**
+ * Tracks the view centre's longitude for placing markers in their nearest world copy. It
+ * reports a new centre only when some longitude in `lons` changes copy (it crosses the
+ * centre ± 180°), so a pan re-renders the markers a few times per world, not every frame.
+ */
+export function useWrapCentre(
+  lons: readonly number[],
+  initial: number,
+): { centreLng: number; onMove: (lng: number) => void; onRecentre: (lng: number) => void } {
+  const [centreLng, setCentreLng] = useState(initial);
+  const key = useRef<string | null>(null);
+  const onMove = useCallback(
+    (lng: number) => {
+      const k = wrapKey(lons, lng);
+      if (k === key.current) return;
+      key.current = k;
+      setCentreLng(lng);
+    },
+    [lons],
+  );
+  // The re-centre moves the view by whole worlds: re-place the markers before it happens, in
+  // the same task, so no frame shows them a world away.
+  const onRecentre = useCallback(
+    (lng: number) => {
+      key.current = wrapKey(lons, lng);
+      flushSync(() => setCentreLng(lng));
+    },
+    [lons],
+  );
+  return { centreLng, onMove, onRecentre };
+}
+
+/** Calls `onCentre` with the centre longitude on every map move (cheap: see useWrapCentre). */
+export function CentreWatcher({ onCentre }: { onCentre: (lng: number) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    const report = () => onCentre(map.getCenter().lng);
+    report();
+    map.on("move moveend", report);
+    return () => {
+      map.off("move moveend", report);
+    };
+  }, [map, onCentre]);
+  return null;
+}
+
+/**
+ * Moves the map to `centre` the way a flight should: animated, or in one jump when the user
+ * prefers reduced motion (Leaflet's own animations do not check that preference).
+ */
+export function flyOrJump(map: LeafletMap, centre: LatLngExpression, zoom: number, duration: number) {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) map.setView(centre, zoom, { animate: false });
+  else map.flyTo(centre, zoom, { duration });
+}
+
+/** CSS pixels of the map hidden under floating controls and panels, by edge. */
+export interface MapCover {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/**
+ * Flies to a spot's nearest world copy when `slug` changes, and only then: a filter that hides
+ * and re-shows the selected spot, or a new forecast hour, never moves the map. With `cover`
+ * (what the controls and the open spot panel hide of a map of the given size: a bottom sheet on
+ * phones, a side sheet in landscape) the spot lands in the middle of the part left uncovered,
+ * not at the map centre.
+ */
+export function FlyToSpot({
+  slug,
+  lat,
+  lon,
+  minZoom = 5,
+  cover,
+}: {
+  slug: string | null;
+  lat?: number;
+  lon?: number;
+  minZoom?: number;
+  cover?: (size: { x: number; y: number }) => MapCover;
+}) {
+  const map = useMap();
+  const fly = useEffectEvent(() => {
+    if (lat == null || lon == null) return;
+    const zoom = Math.max(map.getZoom(), minZoom);
+    const target: [number, number] = [lat, nearestCopy(lon, map.getCenter().lng)];
+    const c = cover?.(map.getSize());
+    // The map centre goes this far right of and below the spot, which then sits in the middle
+    // of the uncovered part.
+    const dx = c ? (c.right - c.left) / 2 : 0;
+    const dy = c ? (c.bottom - c.top) / 2 : 0;
+    flyOrJump(map, dx || dy ? map.unproject(map.project(target, zoom).add([dx, dy]), zoom) : target, zoom, 0.8);
+  });
+  useEffect(() => {
+    if (slug) fly();
+  }, [slug]);
+  return null;
 }
 
 const TILES = tileConfig(
@@ -25,24 +179,48 @@ const TILES = tileConfig(
 // CARTO key cannot be detected here: CARTO returns HTTP 200 "API KEY REQUIRED" images.
 const FAILED_TILES_BEFORE_NOTICE = 4;
 
-function FlyTo({ spot }: { spot?: SpotSummary }) {
-  const map = useMap();
-  useEffect(() => {
-    if (spot) map.flyTo([spot.latitude, spot.longitude], Math.max(map.getZoom(), 5), { duration: 0.8 });
-  }, [spot, map]);
-  return null;
-}
-
-/** Leaflet only re-measures on window resize; also follow the container's own size. */
-function InvalidateOnResize() {
-  const map = useMap();
-  useEffect(() => {
-    const observer = new ResizeObserver(() => map.invalidateSize());
-    observer.observe(map.getContainer());
-    return () => observer.disconnect();
-  }, [map]);
-  return null;
-}
+const MiniMarker = memo(function MiniMarker({
+  spot,
+  lng,
+  score,
+  tooltip,
+  selected,
+  emphasised,
+  onSelect,
+}: {
+  spot: SpotSummary;
+  lng: number;
+  score: number | null;
+  tooltip: string;
+  selected: boolean;
+  emphasised: boolean;
+  onSelect?: (slug: string) => void;
+}) {
+  const center = useMemo<[number, number]>(() => [spot.latitude, lng], [spot.latitude, lng]);
+  const fill = colorForScore(score);
+  const pathOptions = useMemo(
+    () => ({ color: selected ? "#06263a" : "#ffffff", weight: selected ? 3 : 1.5, fillColor: fill, fillOpacity: 0.95 }),
+    [selected, fill],
+  );
+  const slug = spot.slug;
+  const eventHandlers = useMemo(() => ({ click: () => onSelect?.(slug) }), [onSelect, slug]);
+  return (
+    <CircleMarker
+      center={center}
+      radius={selected ? 11 : emphasised ? 8 : 6}
+      pathOptions={pathOptions}
+      // Set at creation (Leaflet ignores className changes in later setStyle calls).
+      className={`spot-marker spot-${slug}`}
+      eventHandlers={eventHandlers}
+    >
+      <Tooltip direction="top" offset={[0, -6]}>
+        <strong>{spot.name}</strong>
+        <br />
+        {tooltip}
+      </Tooltip>
+    </CircleMarker>
+  );
+});
 
 /**
  * World map of monitored spots. Marker colour = our predicted quality at the selected
@@ -68,6 +246,8 @@ export default function SurfMap({
   const selectedSpot = spots.find((s) => s.slug === selected);
   const tileCounts = useRef({ loaded: 0, failed: 0 });
   const [tilesFailed, setTilesFailed] = useState(false);
+  const lons = useMemo(() => spots.map((s) => s.longitude), [spots]);
+  const { centreLng, onMove, onRecentre } = useWrapCentre(lons, center[1]);
   return (
     // `isolation: isolate` keeps Leaflet's internal z-indexes (400–1000) from painting over
     // the sticky site header when the page scrolls.
@@ -79,8 +259,8 @@ export default function SurfMap({
       <MapContainer
         center={center}
         zoom={zoom}
-        minZoom={2}
-        worldCopyJump
+        minZoom={1}
+        {...BOUNDED_MAP_OPTIONS}
         scrollWheelZoom
         style={{ height: "100%", width: "100%", borderRadius: "1rem" }}
       >
@@ -106,37 +286,28 @@ export default function SurfMap({
         {spots.map((s) => {
           const m = markers?.[s.slug];
           const score = markers ? (m?.score ?? null) : (s.best_upcoming?.score ?? s.current?.score ?? null);
-          const isSel = s.slug === selected;
-          const emphasised = markers ? !!m?.highlight : !!s.next_event;
           return (
-            <CircleMarker
+            <MiniMarker
               key={s.slug}
-              center={[s.latitude, s.longitude]}
-              radius={isSel ? 11 : emphasised ? 8 : 6}
-              pathOptions={{
-                color: isSel ? "#06263a" : "#ffffff",
-                weight: isSel ? 3 : 1.5,
-                fillColor: colorForScore(score),
-                fillOpacity: 0.95,
-              }}
-              // Set at creation (Leaflet ignores className changes in later setStyle calls).
-              className={`spot-marker spot-${s.slug}`}
-              eventHandlers={{ click: () => onSelect?.(s.slug) }}
-            >
-              <Tooltip direction="top" offset={[0, -6]}>
-                <strong>{s.name}</strong>
-                <br />
-                {markers
+              spot={s}
+              lng={nearestCopy(s.longitude, centreLng)}
+              score={score}
+              tooltip={
+                markers
                   ? (m?.tooltip ?? "No usable forecast")
                   : score != null
-                    ? `Best next 7 days: ${score}/100`
-                    : "No usable forecast yet"}
-              </Tooltip>
-            </CircleMarker>
+                    ? `Best next 7 days: ${score10(score)}/10`
+                    : "No usable forecast yet"
+              }
+              selected={s.slug === selected}
+              emphasised={markers ? !!m?.highlight : !!s.next_event}
+              onSelect={onSelect}
+            />
           );
         })}
-        <FlyTo spot={selectedSpot} />
-        <InvalidateOnResize />
+        <FlyToSpot slug={selected ?? null} lat={selectedSpot?.latitude} lon={selectedSpot?.longitude} />
+        <MapBounds onRecentre={onRecentre} />
+        <CentreWatcher onCentre={onMove} />
       </MapContainer>
       {tilesFailed && (
         <div

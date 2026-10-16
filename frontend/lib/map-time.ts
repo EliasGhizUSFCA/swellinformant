@@ -132,3 +132,39 @@ export function tickIndices(steps: readonly string[]): number[] {
   const every = Math.max(1, Math.round(3 / Math.max(stepHours(steps), 0.25)));
   return steps.map((_, i) => i).filter((i) => i % every === 0);
 }
+
+/**
+ * A model cycle the way forecasters write it, in UTC: "18Z Oct 11" ("18:30Z Oct 11" off the
+ * hour).
+ */
+export function cycleLabel(iso: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(iso));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const minute = get("minute");
+  return `${get("hour")}${minute && minute !== "00" ? `:${minute}` : ""}Z ${get("month")} ${get("day")}`;
+}
+
+/**
+ * Lead time of a valid time after its model cycle: "+6 h", "analysis" at the cycle time
+ * itself (the model's initial state, still model output), "−3 h" before it. Null when either
+ * time is missing.
+ */
+export function leadLabel(validIso: string | null | undefined, cycleIso: string | null | undefined): string | null {
+  if (!validIso || !cycleIso) return null;
+  const h = Math.round((Date.parse(validIso) - Date.parse(cycleIso)) / HOUR);
+  if (!Number.isFinite(h)) return null;
+  if (h === 0) return "analysis";
+  return h > 0 ? `+${h} h` : `−${-h} h`;
+}
+
+/** Short model name for a field or forecast source: "GFS", "ECMWF", else its name without the
+ * parenthesised detail. */
+export function modelName(source: { code: string; name: string }): string {
+  const text = `${source.code} ${source.name}`;
+  if (/gfs/i.test(text)) return "GFS";
+  if (/ecmwf|\bifs\b/i.test(text)) return "ECMWF";
+  return source.name.replace(/\s*\(.*\)\s*$/, "");
+}
+
+/** The selected map time as a `?t=` value: ISO 8601 in UTC, without milliseconds. */
+export const timeParam = (iso: string): string => new Date(iso).toISOString().replace(".000Z", "Z");

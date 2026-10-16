@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { apiGet, apiPost, verifyEmailFromOutbox } from "./helpers";
 import { syntheticValidTimes } from "./map-fields.mock";
-import { field, openMap, openMapWithFields, REAL_TILES, requested, screenPoint, shot, type Snapshot, type Spot } from "./map-helpers";
+import { field, mapSettled, markerCalls, openMap, openMapWithFields, REAL_TILES, requested, resetProbe, screenPoint, shot, type Snapshot, type Spot } from "./map-helpers";
 
 /**
  * Interactive map against the production build: markers, the spot panel, filters, the
@@ -13,7 +13,15 @@ import { field, openMap, openMapWithFields, REAL_TILES, requested, screenPoint, 
  * patterns, not a forecast); the backend in this suite has no live NOAA data.
  */
 
-const visibleCount = async (page: Page) => Number(/Showing (\d+) of/.exec(await page.getByTestId("visible-count").innerText())![1]);
+// "Showing" is screen-reader text, so innerText puts it on a line of its own.
+const visibleCount = async (page: Page) => Number(/Showing\s+(\d+) of/.exec(await page.getByTestId("visible-count").innerText())![1]);
+
+/** "Thu, Oct 15, 7:00 AM GMT+1", the way the spot panel writes a time in the spot's zone. */
+function spotTime(iso: string, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: "h12", timeZoneName: "short" }).formatToParts(new Date(iso));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("weekday")}, ${get("month")} ${get("day")}, ${get("hour")}:${get("minute")} ${get("dayPeriod")} ${get("timeZoneName")}`;
+}
 
 /** "8am Sun PDT", the way the timeline bubble writes a time in `tz`. */
 function bubble(iso: string, tz: string): string {
@@ -75,6 +83,8 @@ test.describe("interactive map", () => {
     }
     await expect(panel.getByText("Upcoming swell events")).toBeVisible();
     await expect(panel.getByTestId("opps-signed-out")).toBeVisible(); // signed out: no private data
+    // At the map's current step the full forecast opens on its own default time (no ?t=).
+    await expect(panel.getByTestId("panel-full-forecast")).toHaveAttribute("href", "/spots/jeffreys-bay");
     await expect(panel.getByTestId("forecast-confidence-slot")).toBeVisible();
     // Research confidence is its own per-spot line; the demo backend has no evidence loaded
     // in e2e (reset database + seed), so it reads whatever the API says, never a default.
@@ -95,16 +105,44 @@ test.describe("interactive map", () => {
       const at = new URL(r.url()).searchParams.get("at");
       return r.url().includes("/api/map/conditions?at=") && at !== null && Date.parse(at) === final;
     });
+    await expect(page.getByTestId("best-spots-title")).toHaveText("Best spots now");
     for (let i = 0; i < 8; i++) await page.getByRole("button", { name: "Later" }).click();
     const url = new URL((await req).url());
     const at = new Date(url.searchParams.get("at")!);
     expect(at.getTime() - Date.now()).toBeGreaterThan(20 * 3600_000); // ≥ ~1 day ahead
     await expect(page.getByTestId("time-label")).not.toHaveText(before);
-    await page.locator("path.spot-nazare").click({ force: true });
+    // The list names the selected time in the viewer's zone, as the timeline bubble does.
+    const tz = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+    await expect(page.getByTestId("best-spots-title")).toHaveText(`Best spots · ${bubble(at.toISOString(), tz)}`);
+    // At the one-world zoom Supertubos' marker lies on top of Nazaré's: click Nazaré's own path.
+    await page.locator("path.spot-nazare").dispatchEvent("click");
+    await expect(page.getByTestId("panel-spot-name")).toHaveText(/Nazar/);
     const shown = await page.getByTestId("forecast-breakdown").innerText();
     expect(shown).toMatch(/local/);
+    // The panel gives the time in the spot's own zone, with the zone's name, and its link to the
+    // full forecast carries the map time (?t=, UTC).
+    const nazare = (await apiGet(request, "/api/spots/nazare")) as { timezone: string };
+    const shownAt = (await apiGet(request, `/api/map/conditions?at=${encodeURIComponent(at.toISOString())}`)) as Snapshot;
+    const validTime = shownAt.spots.find((s) => s.slug === "nazare")?.conditions?.valid_time ?? at.toISOString();
+    await expect(page.getByTestId("panel-local-time")).toHaveText(`${spotTime(validTime, nazare.timezone)} at the break`);
+    await expect(page.getByTestId("panel-full-forecast")).toHaveAttribute("href", `/spots/nazare?t=${encodeURIComponent(at.toISOString().replace(".000Z", "Z"))}`);
+    await page.getByRole("button", { name: "Close spot details" }).click();
     await page.getByRole("button", { name: "Now", exact: true }).click();
     await expect(page.getByTestId("time-label")).toHaveText(before);
+    await expect(page.getByTestId("best-spots-title")).toHaveText("Best spots now");
+  });
+
+  test("marker tooltips give our rating out of 10 and the surf height", async ({ page, request }) => {
+    await openMap(page);
+    const snap = (await apiGet(request, "/api/map/conditions")) as Snapshot;
+    const withForecast = snap.spots.find((s) => s.conditions);
+    test.skip(!withForecast, "no spot has a prediction at this time");
+    const c = withForecast!.conditions!;
+    await page.locator(`path.spot-${withForecast!.slug}`).focus();
+    const tip = page.locator(".leaflet-tooltip");
+    await expect(tip).toContainText(`${(Math.round(c.score) / 10).toFixed(1)}/10 · `);
+    await expect(tip).toContainText("surf (our prediction)");
+    await expect(tip).not.toContainText("/100");
   });
 
   test("filters narrow the visible spots consistently with the data", async ({ page, request }) => {
@@ -315,6 +353,19 @@ test.describe("ocean layers (synthetic fields)", () => {
         return Math.hypot(b.x + b.width / 2 - (map.x + map.width / 2), b.y + b.height / 2 - (map.y + map.height / 2));
       }, { message: "map centred on the user", timeout: 10_000 })
       .toBeLessThan(30);
+    // New forecast steps re-render the map: neither the user's marker nor any spot moves.
+    await mapSettled(page);
+    await resetProbe(page);
+    const slider = page.getByRole("slider", { name: "Forecast time" });
+    await slider.focus();
+    for (let i = 0; i < 2; i++) {
+      const before = await page.getByTestId("time-label").innerText();
+      await page.keyboard.press("ArrowRight");
+      await expect(page.getByTestId("time-label")).not.toHaveText(before);
+      await page.waitForTimeout(300);
+    }
+    expect((await markerCalls(page)).setLatLng, "markers re-placed by 2 timeline steps").toBe(0);
+    await expect(me).toHaveCount(1);
   });
 
   test("a denied location shows an error and leaves the map as it was", async ({ page }) => {
@@ -335,8 +386,10 @@ test.describe("map on a phone (390 × 844)", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
   test("tabs scroll, the spot panel is a bottom sheet and the timeline works", { tag: "@mobile" }, async ({ page }) => {
     const { mock, nowIndex } = await openMapWithFields(page);
-    // Best spots start collapsed on small screens.
-    const listButton = page.getByRole("button", { name: /Best spots now/ });
+    // Best spots start collapsed on small screens. Its title names the selected time once the
+    // timeline leaves "now" ("Best spots · 9pm Fri UTC").
+    const listButton = page.getByRole("button", { name: /^Best spots (now|·)/ });
+    await expect(listButton).toContainText("Best spots now");
     await expect(listButton).toHaveAttribute("aria-expanded", "false");
     await expect(page.getByTestId("top-spots")).toHaveCount(0);
     await shot(page, "mobile-390x844-synthetic-wave-height");
@@ -364,6 +417,8 @@ test.describe("map on a phone (390 × 844)", () => {
     await expect.poll(() => requested(mock, "tp", mock.validTimes[i]!)).toBe(true);
 
     // The list opens on demand.
+    const tz = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+    await expect(listButton).toContainText(`Best spots · ${bubble(mock.validTimes[i]!, tz)}`);
     await listButton.click();
     await expect(page.getByTestId("top-spots")).toBeVisible();
     await shot(page, "mobile-390x844-synthetic-best-spots");
