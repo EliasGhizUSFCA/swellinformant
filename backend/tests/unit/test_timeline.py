@@ -21,7 +21,11 @@ from app.schemas.tides import (
 )
 from app.services import timesteps
 from app.services.surf_quality.breaking import dominant_component
-from app.services.surf_quality.forecast_confidence import STALE_REASON
+from app.services.surf_quality.forecast_confidence import (
+    NOT_VERIFIED_REASON,
+    STALE_REASON,
+    forecast_reasons,
+)
 from app.services.surf_quality.sun import TWILIGHT_MARGIN, sun_times
 from app.services.tides.api import NO_OBSERVATIONS, NO_TIDE_SOURCE
 from app.services.tides.stage import TideStage
@@ -169,8 +173,13 @@ def test_forecast_reasons_exclude_the_research_sentence_and_stale_comes_first() 
     p = rows[0][0]
     local = p.confidence_inputs["local"]["reason"]  # type: ignore[index]
     tl = assemble(rows)
-    assert tl.steps[0].quality.forecast_confidence_reasons == p.confidence_inputs["reasons"]  # type: ignore[index]
-    assert local not in tl.steps[0].quality.forecast_confidence_reasons
+    # Forecast rules only: the stored list also holds the not-verified sentence, which is
+    # neither a forecast nor a research reason (confidence-text).
+    shown = tl.steps[0].quality.forecast_confidence_reasons
+    assert shown == forecast_reasons(p.confidence_inputs) and shown
+    assert NOT_VERIFIED_REASON in p.confidence_inputs["reasons"]  # type: ignore[index]
+    assert NOT_VERIFIED_REASON not in shown
+    assert local not in shown
     stale = assemble(rows, stale=True).steps[0].quality
     assert stale.forecast_confidence_reasons[0] == STALE_REASON
     assert stale.forecast_confidence_class in {"moderate", "low"}
