@@ -751,6 +751,13 @@ def test_map_snapshot_and_forecast_report_freshness(db: Session, scored: dict[st
     assert fresh.stale is False
     assert fresh.newest_run_issued_at == run.issued_at
     assert fresh.last_updated_at == run.completed_at and fresh.last_updated_at is not None
+    # The credit and licence links of the blend's members travel with the snapshot (ECMWF's
+    # CC BY 4.0 notice and NOAA's), so the map can show them next to the model data.
+    hrefs = [link.href for link in fresh.attribution_links]
+    assert fresh.attribution_links == queries.source_attribution_links(db, run)
+    assert "https://www.ecmwf.int/en/forecasts/datasets/open-data" in hrefs
+    assert "https://www.nco.ncep.noaa.gov/pmb/products/gfs/" in hrefs
+    assert len(hrefs) == len(set(hrefs))
     limit = queries.stale_after_hours(NOAA_GFS_CODE)
     late = map_snapshot(db, None, now=GFS_ISSUED + timedelta(hours=20))
     assert limit < 20 and late.stale is True

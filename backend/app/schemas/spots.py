@@ -111,6 +111,13 @@ class MapSpotOut(BaseModel):
     upcoming_event_count: int
 
 
+class AttributionLinkOut(BaseModel):
+    """A credit or licence link the data source asks for (shown next to the data)."""
+
+    label: str
+    href: str
+
+
 class MapSnapshotOut(BaseModel):
     """Every monitored spot at one forecast time, from cached predictions only."""
 
@@ -125,6 +132,9 @@ class MapSnapshotOut(BaseModel):
     stale: bool = False
     newest_run_issued_at: datetime | None = None
     last_updated_at: datetime | None = None
+    # Credit and licence links of the sources behind the snapshot's runs (e.g. Open-Meteo's
+    # CC BY 4.0 link, ECMWF's notice): shown next to the model data in the spot panel.
+    attribution_links: list[AttributionLinkOut] = []
 
 
 class SpotMini(BaseModel):
@@ -350,13 +360,6 @@ class DailySummary(BaseModel):
     # Forecast and local confidence at the day's best hour (``best_time``).
     forecast_confidence_class: str | None = None
     local_confidence_class: str | None = None
-
-
-class AttributionLinkOut(BaseModel):
-    """A credit or licence link the data source asks for (shown next to the data)."""
-
-    label: str
-    href: str
 
 
 class ForecastSourceOut(BaseModel):

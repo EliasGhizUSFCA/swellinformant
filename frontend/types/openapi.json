@@ -2431,10 +2431,10 @@
          "type": "null"
         }
        ],
-       "description": "Model run (the index's run_key). Not used yet: the current run is served.",
+       "description": "Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the current run.",
        "title": "Run"
       },
-      "description": "Model run (the index's run_key). Not used yet: the current run is served."
+      "description": "Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the current run."
      }
     ],
     "responses": {
@@ -2463,7 +2463,7 @@
      "tides"
     ],
     "summary": "Spot Tides",
-    "description": "Predicted tide heights and high/low waters at the spot's tide station.",
+    "description": "Predicted tide heights and high/low waters at the spot's tide station.\n\nAstronomical tide predictions (never observed water levels), relative to the stated\ndatum; ``status`` says whether they are real, synthetic (demo) or unavailable.",
     "operationId": "spot_tides_api_spots__slug__tides_get",
     "parameters": [
      {
@@ -2622,6 +2622,9 @@
         }
        }
       }
+     },
+     "304": {
+      "description": "Not modified (If-None-Match matched the ETag)"
      },
      "422": {
       "description": "Validation Error",
@@ -5521,6 +5524,14 @@
        }
       ],
       "title": "Last Updated At"
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",
@@ -8111,6 +8122,95 @@
     ],
     "title": "RankingPriority"
    },
+   "RedisHealthOut": {
+    "properties": {
+     "available": {
+      "type": "boolean",
+      "title": "Available"
+     },
+     "used_memory_bytes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Used Memory Bytes"
+     },
+     "maxmemory_bytes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Maxmemory Bytes"
+     },
+     "maxmemory_policy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Maxmemory Policy"
+     },
+     "cap_bytes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cap Bytes"
+     },
+     "cap_source": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "redis",
+         "setting"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cap Source"
+     },
+     "used_fraction": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Used Fraction"
+     },
+     "alert_fraction": {
+      "type": "number",
+      "title": "Alert Fraction"
+     }
+    },
+    "type": "object",
+    "required": [
+     "available",
+     "alert_fraction"
+    ],
+    "title": "RedisHealthOut",
+    "description": "Redis (Celery broker, locks, call budgets, provider response cache): memory used\nagainst its cap. With ``noeviction`` a full Redis refuses writes, so new jobs fail."
+   },
    "RegionOut": {
     "properties": {
      "region_group": {
@@ -10583,6 +10683,16 @@
        }
       ],
       "title": "Database Max Gb"
+     },
+     "redis": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/RedisHealthOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",

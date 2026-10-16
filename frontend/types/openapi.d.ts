@@ -974,6 +974,9 @@ export interface paths {
         /**
          * Spot Tides
          * @description Predicted tide heights and high/low waters at the spot's tide station.
+         *
+         *     Astronomical tide predictions (never observed water levels), relative to the stated
+         *     datum; ``status`` says whether they are real, synthetic (demo) or unavailable.
          */
         get: operations["spot_tides_api_spots__slug__tides_get"];
         put?: never;
@@ -1952,6 +1955,11 @@ export interface components {
             newest_run_issued_at?: string | null;
             /** Last Updated At */
             last_updated_at?: string | null;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
         };
         /** MapSpotOut */
         MapSpotOut: {
@@ -2768,6 +2776,29 @@ export interface components {
          * @enum {string}
          */
         RankingPriority: "balanced" | "best_waves" | "cheapest" | "shortest";
+        /**
+         * RedisHealthOut
+         * @description Redis (Celery broker, locks, call budgets, provider response cache): memory used
+         *     against its cap. With ``noeviction`` a full Redis refuses writes, so new jobs fail.
+         */
+        RedisHealthOut: {
+            /** Available */
+            available: boolean;
+            /** Used Memory Bytes */
+            used_memory_bytes?: number | null;
+            /** Maxmemory Bytes */
+            maxmemory_bytes?: number | null;
+            /** Maxmemory Policy */
+            maxmemory_policy?: string | null;
+            /** Cap Bytes */
+            cap_bytes?: number | null;
+            /** Cap Source */
+            cap_source?: ("redis" | "setting") | null;
+            /** Used Fraction */
+            used_fraction?: number | null;
+            /** Alert Fraction */
+            alert_fraction: number;
+        };
         /** RegionOut */
         RegionOut: {
             /** Region Group */
@@ -3593,6 +3624,7 @@ export interface components {
             database_bytes: number;
             /** Database Max Gb */
             database_max_gb?: number | null;
+            redis?: components["schemas"]["RedisHealthOut"] | null;
         };
         /** TideBlockOut */
         TideBlockOut: {
@@ -5671,7 +5703,7 @@ export interface operations {
             query?: {
                 /** @description Valid time (ISO 8601); default now */
                 at?: string | null;
-                /** @description Model run (the index's run_key). Not used yet: the current run is served. */
+                /** @description Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the current run. */
                 run?: string | null;
             };
             header?: never;
@@ -5790,6 +5822,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SpotTimelineOut"];
                 };
+            };
+            /** @description Not modified (If-None-Match matched the ETag) */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

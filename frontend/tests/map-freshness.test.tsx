@@ -30,6 +30,7 @@ const SNAPSHOT: MapSnapshot = {
   stale: false,
   newest_run_issued_at: "2026-10-11T18:00:00Z",
   last_updated_at: "2026-10-11T22:00:00Z",
+  attribution_links: [],
 };
 const NOW = Date.parse("2026-10-12T00:00:00Z");
 

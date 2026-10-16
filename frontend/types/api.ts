@@ -39,6 +39,7 @@ export type ResearchSource = S["ResearchSourceOut"];
 export type ForecastSourceInfo = S["ForecastSourceOut"];
 export type ForecastRunInfo = S["ForecastRunOut"];
 export type RunMember = S["RunMemberOut"];
+export type AttributionLink = S["AttributionLinkOut"];
 
 // The unified spot timeline (GET /api/spots/{slug}/timeline) and its tide / observation blocks.
 export type SpotTimeline = S["SpotTimelineOut"];

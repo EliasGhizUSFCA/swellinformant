@@ -25,6 +25,7 @@ from app.models import (
 from app.models.enums import QualityLabel, SwellEventStatus
 from app.schemas.spots import (
     AirportOut,
+    AttributionLinkOut,
     BlendInfo,
     Conditions,
     DailySummary,
@@ -815,7 +816,12 @@ def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) 
             covering[e.spot_id] += 1
     # Freshness of the newest authoritative run behind the snapshot.
     newest = max(runs.values(), key=lambda r: (r.issued_at, r.id), default=None)
+    links: dict[tuple[str, str], AttributionLinkOut] = {}
+    for run in sorted({r.id: r for r in runs.values()}.values(), key=lambda r: r.id):
+        for link in source_attribution_links(db, run):
+            links.setdefault((link.label, link.href), link)
     return MapSnapshotOut(
+        attribution_links=list(links.values()),
         stale=newest is not None and is_stale(newest, now),
         newest_run_issued_at=newest.issued_at if newest is not None else None,
         last_updated_at=newest.completed_at if newest is not None else None,
