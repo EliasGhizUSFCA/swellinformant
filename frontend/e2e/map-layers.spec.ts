@@ -370,7 +370,9 @@ test.describe("ocean layers (synthetic fields)", () => {
       const draws = await field(page).getAttribute("data-draws");
       await page.mouse.move(800, 300);
       await page.mouse.down();
-      await page.mouse.move(800 + (i % 2 ? -90 : 90), 320, { steps: 4 });
+      // Left-down, then right-up: the six pans end about where they started. (Six pans all
+      // 20 px down carried Jeffreys Bay ~130 px down, onto the top edge of the timeline.)
+      await page.mouse.move(800 + (i % 2 ? -90 : 90), 300 + (i % 2 ? -20 : 20), { steps: 4 });
       await page.mouse.up();
       await expect(field(page)).not.toHaveAttribute("data-draws", draws!);
       times.push(Number(await field(page).getAttribute("data-draw-ms")));
@@ -383,7 +385,14 @@ test.describe("ocean layers (synthetic fields)", () => {
     // Markers stay clickable above every layer. Wait for the last pan's inertia to end first:
     // a click while the map still glides can land beside the moving marker.
     await mapSettled(page);
-    await page.locator("path.spot-jeffreys-bay").click({ force: true });
+    const jbay = page.locator("path.spot-jeffreys-bay");
+    // Nothing is drawn over the marker's centre: no map layer, and none of the page's controls.
+    const onTop = await jbay.evaluate((el) => {
+      const b = el.getBoundingClientRect();
+      return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) === el;
+    });
+    expect(onTop, "Jeffreys Bay's marker is the topmost element at its centre").toBe(true);
+    await jbay.click({ force: true });
     await expect(page.getByTestId("panel-spot-name")).toHaveText("Jeffreys Bay (Supertubes)");
     await shot(page, "desktop-1440x900-synthetic-spot-panel", 1500);
     // The open panel leaves Leaflet's zoom buttons uncovered (Playwright refuses covered targets).
