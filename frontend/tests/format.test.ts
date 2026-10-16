@@ -110,7 +110,10 @@ describe("spot-local times", () => {
     expect(formatSpotTime("2026-10-15T00:00:00Z", "Asia/Makassar")).toBe(`Thu 8:00 AM ${zoneName(Date.parse("2026-10-15T00:00:00Z"), "Asia/Makassar")}`);
     expect(formatSpotTime("2026-10-15T00:00:00Z", "Asia/Makassar", { zone: false })).toBe("Thu 8:00 AM");
     expect(zoneAbbrev("2026-10-15T00:00:00Z", "Asia/Makassar")).toBe("GMT+8");
-    expect(zoneName(Date.parse("2026-10-15T00:00:00Z"), "Asia/Makassar")).not.toMatch(/^GMT/);
+    // ICU builds differ: some have "WITA" in one of the English locales tried, others in none
+    // (CI's Node 22 prints "GMT+8" in all of them), and then the documented offset fallback
+    // applies. Either way it is the zone's own name or exactly its offset, never another zone's.
+    expect(["WITA", "GMT+8"]).toContain(zoneName(Date.parse("2026-10-15T00:00:00Z"), "Asia/Makassar"));
   });
 
   it("names zones whose offset is not a whole hour", () => {
