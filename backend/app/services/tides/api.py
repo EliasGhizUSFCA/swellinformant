@@ -185,13 +185,16 @@ COOPS_URL = "https://tidesandcurrents.noaa.gov/"
 
 
 def _attribution(station: TideStation) -> str | None:
+    """The credit in words. EOT20's adds the statement of changes and leaves the licence to
+    its link (``_attribution_links``). CO-OPS's keeps the wording NOS asks for verbatim and
+    adds the licence after a comma, not in a second pair of parentheses."""
     meta = station.metadata_ or {}
     text = station.attribution or None
     if station.kind == "model":
         changes = str(meta.get("changes") or EOT20_CHANGES).rstrip(".")
-        text = f"{text}. {changes}" if text else changes
+        return f"{text}. {changes}." if text else f"{changes}."
     if text and station.licence:
-        return f"{text} ({station.licence})"
+        return f"{text}, {station.licence}"
     return text or station.licence
 
 
@@ -205,7 +208,7 @@ def _attribution_links(station: TideStation) -> list[AttributionLinkOut]:
             ("CC BY 4.0", meta.get("licence_url") or CC_BY_4),
         ]
     elif station.provider == "noaa_coops":
-        pairs = [("NOAA CO-OPS tide predictions", COOPS_URL)]
+        pairs = [("NOAA CO-OPS", COOPS_URL)]
     else:
         pairs = []
     return [

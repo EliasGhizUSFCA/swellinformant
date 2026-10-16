@@ -233,7 +233,9 @@ def test_acquire_stores_coops_and_model_tides_idempotently(
         2.0,
     )
     assert "0.91 m above MLLW" in (block.reason or "")
-    assert block.attribution and "CO-OPS" in block.attribution
+    assert block.attribution == (
+        "NOAA/NOS/CO-OPS tide predictions (tidesandcurrents.noaa.gov), Public domain (US Government)"
+    )  # NOS's requested wording verbatim, the licence after a comma (no nested parentheses)
     assert [link.href for link in block.attribution_links] == ["https://tidesandcurrents.noaa.gov/"]
     assert not any(p.interpolated for p in block.curve)
     gaps = {b.t - a.t for a, b in zip(block.curve, block.curve[1:], strict=False)}
@@ -265,8 +267,8 @@ def test_acquire_stores_coops_and_model_tides_idempotently(
     assert naz.attribution == (
         "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE. Modified: the harmonic constants of "
         "the EOT20 cell nearest each break were extracted, amplitudes converted from cm to m, "
-        "and tide heights are computed from them by this app (CC BY 4.0)"
-    )
+        "and tide heights are computed from them by this app."
+    )  # the licence is the CC BY 4.0 link below, not repeated in the text
     assert [(link.label, link.href) for link in naz.attribution_links] == [
         ("EOT20 dataset (SEANOE)", "https://doi.org/10.17882/79489"),
         ("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/"),
