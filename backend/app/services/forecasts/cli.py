@@ -82,7 +82,7 @@ def _run_map_fields(args: argparse.Namespace) -> int:
                 {
                     "status": "off",
                     "message": "map fields are off: set MAP_FIELDS_ENABLED=true, or leave it "
-                    "unset and add noaa_gfs to FORECAST_PROVIDERS",
+                    "unset with a live FORECAST_PROVIDERS setup",
                 }
             )
         )
@@ -100,11 +100,15 @@ def _add_map_fields(sub: SubParsers) -> None:
         "map-fields",
         help="fetch the global map fields (ocean layers) of the newest complete GFS cycle",
         description=(
-            "Reads HTSGW, PERPW and DIRPW (GFS-Wave global.0p25) and 10 m wind and MSL "
-            "pressure (GFS pgrb2.0p25) for every map hour, regrids them to "
-            "MAP_FIELD_RESOLUTION_DEG and stores them under the source noaa_gfs_fields. "
-            "Works in every map-fields mode except off; skips a cycle whose fields are "
-            "already stored. Prints counts, bytes and the duration as JSON."
+            "Reads HTSGW, PERPW and DIRPW (GFS-Wave global.0p25), plus the primary swell, "
+            "secondary swell and wind-sea partitions when MAP_FIELD_PARTITIONS=on, and 10 m "
+            "wind and MSL pressure (GFS pgrb2.0p50 by default, MAP_FIELD_ATMOS_GRID; falls "
+            "back to pgrb2.0p25 per hour) for every map hour (MAP_FIELD_STEPS) of the "
+            "newest MAP_FIELD_CYCLES cycle, regrids them to MAP_FIELD_RESOLUTION_DEG and "
+            "stores them under the source noaa_gfs_fields. Works in every map-fields mode "
+            "except off (with MAP_FIELDS_ENABLED unset: with_noaa when noaa_gfs is a "
+            "provider, otherwise standalone with any live provider); skips a cycle whose "
+            "fields are already stored. Prints counts, bytes and the duration as JSON."
         ),
     )
     p.add_argument("--cycle", type=_cycle, help="GFS cycle YYYYMMDDHH (default: newest complete)")

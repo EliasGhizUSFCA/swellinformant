@@ -11,7 +11,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.cli import main as cli_main
-from app.models import SpotPhysicalProfile, SpotResearchAssessment, SurfSpot
+from app.models import (
+    SpotPhysicalProfile,
+    SpotResearchAssessment,
+    SpotResearchSource,
+    SurfSpot,
+)
 from app.services.research.assess import seed_research
 from app.services.seed import DEFAULT_DATA_DIR
 from app.services.surf_quality.models import SpotParams
@@ -111,3 +116,45 @@ def test_research_lint_reports_missing_records_and_file_problems(
     assert cli_main(["research", "lint", "--decisions", str(path)]) == 2
     assert "is not the record's" in capsys.readouterr().err
     assert cli_main(["research", "lint", "--decisions", str(tmp_path / "nope.json")]) == 1
+
+
+def test_research_lint_checks_the_stored_wind_profiles(
+    db: Session, assessed: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`research lint` passes the stored wind profiles and the evidence retrievals to the
+    lint: a research wind profile citing an unknown key, or a source that was not read
+    directly, is reported."""
+    padang = _profile(db, "padang-padang")
+    original = dict(padang.wind_profile or {})
+    assert original["data_quality"] == "research" and original["sources"] == ["isg-padang"]
+    # The committed profiles cite only directly read evidence: no wind_profile issue.
+    assert cli_main(["research", "lint"]) == 1  # the one geometry issue (Restaurants)
+    assert "[wind_profile]" not in capsys.readouterr().out
+
+    try:  # the profiles are seeded once per session: always restore this one
+        padang.wind_profile = {**original, "sources": ["no-such-source"]}
+        db.commit()
+        assert cli_main(["research", "lint"]) == 1
+        out = capsys.readouterr().out
+    finally:
+        padang.wind_profile = original
+        db.commit()
+    assert "padang-padang: [wind_profile] cites unknown evidence key 'no-such-source'" in out
+    assert "2 issue(s); 50 spots" in out
+
+    spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == "padang-padang"))
+    assert spot is not None
+    source = db.scalar(
+        select(SpotResearchSource).where(
+            SpotResearchSource.spot_id == spot.id, SpotResearchSource.source_key == "isg-padang"
+        )
+    )
+    assert source is not None and source.retrieval == "fetched"
+    source.retrieval = "web_search"
+    db.commit()
+    assert cli_main(["research", "lint"]) == 1
+    out = capsys.readouterr().out
+    assert (
+        "padang-padang: [wind_profile] cites 'isg-padang', which was not read directly "
+        "(web_search)" in out
+    )

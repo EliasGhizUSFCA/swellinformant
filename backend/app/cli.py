@@ -1,8 +1,9 @@
 """Management commands.
 
-python -m app.cli init-db          # alembic upgrade head + seed reference data
+python -m app.cli init-db          # alembic upgrade head + seed reference data + tide catalog
 python -m app.cli migrate          # alembic upgrade head
-python -m app.cli seed             # (re)load airports and surf spots from data/surf_spots
+python -m app.cli seed             # (re)load airports and surf spots from data/surf_spots, then
+                                   # the tide station catalog (data/tide_stations.json)
 python -m app.cli pipeline         # run jobs A→G once, synchronously
 python -m app.cli simulate-swell SLUG [--days-ahead 7] [--hours 60]
 python -m app.cli check-config     # list missing credentials for configured live providers
@@ -12,7 +13,7 @@ Command groups provided by feature packages (``python -m app.cli GROUP --help``)
   verify  forecast verification and backtests     (app.services.verification.cli)
   ml      ML experiments and the model registry   (app.services.ml.cli)
   engine  ensemble, blending and spot profiles     (app.services.forecasts.cli)
-  tides   tide stations and predictions           (app.services.tides.cli, once it exists)
+  tides   tide stations and predictions           (app.services.tides.cli)
 """
 
 from __future__ import annotations
@@ -98,9 +99,16 @@ def main(argv: list[str] | None = None) -> int:
         print("database migrated")
     if args.cmd in ("seed", "init-db"):
         from app.services.seed import seed_reference_data
+        from app.services.tides.catalog import seed_tide_catalog
 
         with SessionLocal() as db:
             print(json.dumps(seed_reference_data(db, args.data_dir)))
+            # After the spots: the catalog links stations and model points to seeded spots.
+            # Here, not in seed_reference_data: the test session seeds reference data once and
+            # truncates the tide tables after each test (docs/tides.md).
+            tides = seed_tide_catalog(db)
+            db.commit()
+            print(json.dumps({"tide_catalog": tides}, default=str))
     if args.cmd == "pipeline":
         from app.services.pipeline import run_pipeline
 

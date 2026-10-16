@@ -475,6 +475,29 @@ def test_cli_seed_and_list(db: Session, capsys: pytest.CaptureFixture[str]) -> N
     assert json.loads(capsys.readouterr().out) == {"tide_predictions_deleted": 0}
 
 
+def test_cli_seed_and_init_db_load_the_tide_catalog(
+    db: Session, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`seed` (and `init-db`, which runs the same step after migrating) loads the tide
+    catalog after the spots, so a fresh database has tide links without `tides seed`."""
+    from app.cli import main
+
+    assert db.scalar(select(func.count()).select_from(SpotTideStation)) == 0
+    assert main(["seed"]) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    spots = json.loads(lines[0])
+    assert spots["spots_created"] + spots["spots_updated"] == 50
+    catalog = json.loads(lines[-1])["tide_catalog"]
+    assert catalog["spot_links"] == 58 and catalog["tide_stations"] == 56
+    db.expire_all()
+    assert db.scalar(select(func.count()).select_from(SpotTideStation)) == 58
+    assert main(["seed"]) == 0  # idempotent
+    again = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["tide_catalog"]
+    assert again["spot_links"] == 58
+    assert db.scalar(select(func.count()).select_from(TideStation)) == 56
+    assert db.scalar(select(func.count()).select_from(SpotTideStation)) == 58
+
+
 def test_a_tide_model_setting_without_its_constants_is_reported(
     db: Session, tide_spots: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

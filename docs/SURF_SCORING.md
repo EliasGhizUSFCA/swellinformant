@@ -383,9 +383,9 @@ form used here.
 `data/surf_spots/physical_profiles.json`). Optional per-spot knowledge, filled only from
 claims read directly from a source (evidence `retrieval` "fetched"), with the evidence key of
 every value; the seed rejects malformed profiles and research values whose evidence key does
-not exist or was not read directly. `decisions.lint` reports the same problems when it is
-given the stored profiles and the evidence retrievals (`decisions.wind_profile_issues`); the
-`research lint` command does not pass them yet. Fields: `offshore_tolerance_kmh` (with
+not exist or was not read directly. `python -m app.cli research lint` reports the same
+problems for the stored profiles (`decisions.wind_profile_issues`, given the stored wind
+profiles and each evidence key's retrieval). Fields: `offshore_tolerance_kmh` (with
 `sources`, and `tolerance_provenance`: `research` when the source states the number,
 `beaufort` when a word such as "strong offshore" is mapped to the Beaufort scale, `heuristic`
 otherwise; without it, `research` for a research profile), `shelter` sectors
