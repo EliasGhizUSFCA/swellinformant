@@ -260,6 +260,9 @@ describe("8. tide", () => {
       expect(g.textContent).toBe(`${e.kind === "high" ? "H" : "L"} ${clock}`);
     });
     expect(screen.getByTestId("tide-caption")).toHaveTextContent("model mean sea level");
+    // A demo tide is labelled as such in the row's gutter (it has no datum: "ft, ?" before).
+    expect(screen.getByTestId("tide-row")).toHaveTextContent("ft, demo");
+    expect(screen.getByTestId("tide-row")).not.toHaveTextContent("?");
     expect(screen.getByTestId("tide-preference")).toHaveTextContent("Mid tide (synthetic test preference).");
     expect(screen.getByTestId("summary-tide")).toHaveTextContent(/ft · (rising|falling)/);
   });
@@ -285,6 +288,7 @@ describe("8. tide", () => {
     expect(note.closest("[hidden]")).toBeNull();
     expect(note).toBeVisible();
     expect(screen.getByTestId("summary-tide-basis")).toHaveTextContent("above model mean sea level · model point 9 km away");
+    expect(screen.getByTestId("tide-row")).toHaveTextContent("ft, model MSL");
   });
 
   it("shows no source note for a demo or unavailable tide", () => {

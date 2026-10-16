@@ -91,8 +91,8 @@ export const TideRow = memo(function TideRow({ model, scale, width, tide, units 
         <div className="relative h-full w-full">
           <span className="absolute top-1.5 left-0 font-semibold text-ink">Tide</span>
           {!unavailable && (
-            <span className="absolute top-[19px] left-0 truncate" title={`${units} above ${datumText(tide.datum)}`}>
-              {units}, {tide.datum === "model_msl" ? "model MSL" : (tide.datum ?? "?")}
+            <span className="absolute top-[19px] left-0 truncate" title={tide.status === "demo" ? `${units}, demo tide (synthetic)` : `${units} above ${datumText(tide.datum)}`}>
+              {units}, {tide.status === "demo" ? "demo" : tide.datum === "model_msl" ? "model MSL" : (tide.datum ?? "datum ?")}
             </span>
           )}
         </div>

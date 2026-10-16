@@ -133,7 +133,11 @@ for (const [key, sc] of Object.entries(SCENARIOS) as Array<[keyof typeof SCENARI
 
       const rc = outlook.getByTestId("research-confidence");
       await expect(rc.getByTestId("research-confidence-badge")).toHaveText(`Spot research confidence: ${label(sc.research?.research_class ?? null)}`);
-      if (sc.research) await expect(rc.getByTestId("research-summary")).toHaveText(sc.research.summary);
+      // The spot page uses the compact block (integration): the summary is in "Research details".
+      if (sc.research) {
+        await expect(rc.getByTestId("research-summary")).toHaveCount(0);
+        await expect(rc.getByTestId("research-details")).toContainText(sc.research.summary);
+      }
       if (sc.research && sc.research.gaps.length) {
         // Low research confidence: the API's first gap and how many more there are stay
         // visible without expanding; every gap is listed in the details.
@@ -316,7 +320,8 @@ test.describe("keyboard and pointer access (synthetic)", () => {
     await expect(info).toBeFocused();
 
     // Popover with the mouse: click opens, a click elsewhere closes.
-    await outlook.getByRole("button", { name: "Learn more: 80% range" }).click();
+    // The range's final copy (confidence-text): "Likely range (unverified)", term likelyRange.
+    await outlook.getByRole("button", { name: "Learn more: Likely range (unverified)" }).click();
     await expect(page.getByRole("dialog")).toContainText("not been checked against surf observations");
     await outlook.getByText("Best surf, next 7 days").click();
     await expect(page.getByRole("dialog")).toHaveCount(0);

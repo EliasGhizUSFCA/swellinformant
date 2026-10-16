@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { apiGet } from "./helpers";
 import { mockFields, mockFieldsUnavailable, PARTITION_VARIABLES, syntheticValue, VARIABLES, type SyntheticFields } from "./map-fields.mock";
-import { field, openMap, openMapWithFields, painted, requested, screenPoint, shot, type Spot } from "./map-helpers";
+import { field, mapSettled, openMap, openMapWithFields, painted, requested, screenPoint, shot, type Spot } from "./map-helpers";
 
 /**
  * The map's ocean layers against the production build: the colour field, the wave crests
@@ -380,7 +380,9 @@ test.describe("ocean layers (synthetic fields)", () => {
     test.info().annotations.push({ type: "field redraw ms (1440x900)", description: `${times.join(", ")}; median ${mid}` });
     expect(mid).toBeLessThan(250); // regression guard; the target is < 60 ms (see the log)
 
-    // Markers stay clickable above every layer.
+    // Markers stay clickable above every layer. Wait for the last pan's inertia to end first:
+    // a click while the map still glides can land beside the moving marker.
+    await mapSettled(page);
     await page.locator("path.spot-jeffreys-bay").click({ force: true });
     await expect(page.getByTestId("panel-spot-name")).toHaveText("Jeffreys Bay (Supertubes)");
     await shot(page, "desktop-1440x900-synthetic-spot-panel", 1500);

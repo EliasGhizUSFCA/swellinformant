@@ -52,7 +52,14 @@ test.describe("spot forecast timeline", () => {
     await openSpot(page);
     for (const id of ROWS) await expect(page.getByTestId(id)).toBeVisible();
     await expect(page.locator('[data-testid="quality-strip"] rect[data-step]')).toHaveCount(api.steps.length);
-    await expect(page.getByTestId("tide-row")).toContainText("Tide data unavailable");
+    // The e2e backend runs the demo provider: since the tides package, its runs' synthetic sea
+    // level is drawn as a tide labelled "Demo tide (synthetic)", never as a real prediction (it
+    // was "Tide data unavailable" while the tide block was a stub).
+    expect(api.tide.status).toBe("demo");
+    await expect(page.getByTestId("tide-row")).toContainText("Demo tide (synthetic)");
+    await expect(page.locator('[data-testid="tide-row"] svg[data-tide-status="demo"] [data-tide-curve]')).toHaveCount(1);
+    await expect(page.getByTestId("tide-row")).not.toContainText("Tide data unavailable");
+    await expect(page.getByTestId("tide-source")).toHaveCount(0); // the real-source line is for available blocks only
 
     const i = await valueNow(page);
     const s = api.steps[i]!;

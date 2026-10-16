@@ -49,6 +49,7 @@ test.describe("spot page forecast", () => {
     await expect(outlook.getByTestId("research-confidence")).toBeVisible();
     // Compact research block: its summary sits in "Research details", not on the first screen.
     await expect(outlook.getByTestId("research-summary")).toHaveCount(0);
+    await expect(outlook.getByRole("button", { name: "Research details" })).toHaveAttribute("aria-expanded", "false");
     await expect(outlook.getByTestId("best-likely-range")).toContainText(/Likely range .+ \(unverified\)/);
     // Provenance next to the timeline: the model run with its cycle (demo data has no links).
     await expect(page.getByTestId("timeline-provenance").getByTestId("provenance-members")).toContainText(/Model runs?: /);
