@@ -30,10 +30,11 @@ import { WindDisputeNote } from "@/components/wind-dispute";
 import { useForecast, useMe, useSpot, useSpotEvents, useSpotOpportunities, useSpotTimeline } from "@/hooks/queries";
 import { forecastReasonsOf, rangeWords, runAgeHours } from "@/lib/confidence";
 import { nearestPointIndex, pointToConditions } from "@/lib/forecast";
-import { compass, formatDateTime, formatSpotDateTime, heightRange, kmh, metres, relativeTime, seconds, titleCase, type Units } from "@/lib/format";
+import { compass, formatDateTime, formatSpotDateTime, heightRange, relativeTime, seconds, titleCase, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors, ratingReason } from "@/lib/rating";
-import { openingStepIndex, parseTimeParam } from "@/lib/timeline";
+import { offshoreHeightText, openingStepIndex, parseTimeParam } from "@/lib/timeline";
+import { formatWind, useWindUnit } from "@/lib/units";
 import type { ForecastPoint, SpotDetail, SpotForecast, SpotTimeline } from "@/types/api";
 
 const SurfMap = dynamic(() => import("@/components/map/surf-map"), { ssr: false, loading: () => <Skeleton className="h-56" /> });
@@ -53,6 +54,7 @@ const FLAG_LABEL: Record<string, string> = {
   period_disagree: "peak period differs > 3 s",
   direction_disagree: "swell direction differs",
   wind_disagree: "wind speed differs > 15 km/h",
+  wind_direction_disagree: "wind direction differs > 60° (both at 10 km/h or more)",
   same_family_mismatch: "two copies of the same model disagree (possible data problem)",
 };
 
@@ -63,6 +65,7 @@ const FLAG_LABEL: Record<string, string> = {
  * which the summary itself does not carry, so "Why this rating?" can show the API's own fits.
  */
 function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points: readonly ForecastPoint[] }) {
+  const [windUnit] = useWindUnit();
   const c = s.best_upcoming;
   const at = c ? new Date(c.valid_time).getTime() : NaN;
   const components = points.find((p) => new Date(p.valid_time).getTime() === at)?.components ?? null;
@@ -83,7 +86,7 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
       <CardContent className="grid gap-5 p-5 md:grid-cols-[1.25fr_1fr] md:gap-8">
         <div className="min-w-0" data-testid="best-upcoming">
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs">
-            <span className="font-semibold tracking-wide text-muted-foreground uppercase">Best surf, next 7 days</span>
+            <h2 className="font-semibold tracking-wide text-muted-foreground uppercase">Best surf, next 7 days</h2>
             {c && (
               <span className="flex items-center gap-2 text-muted-foreground">
                 {formatSpotDateTime(c.valid_time, s.timezone, { zone: true })}
@@ -109,10 +112,10 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
               )}
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
                 <span className="flex items-center gap-1.5">
-                  <Waves className="size-3.5" /> Offshore swell {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} from {compass(c.swell_direction_deg)}
+                  <Waves className="size-3.5" /> Offshore swell {offshoreHeightText(c.swell_height_m, units)} @ {seconds(c.swell_period_s)} from {compass(c.swell_direction_deg)}
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <Wind className="size-3.5" /> {kmh(c.wind_speed_kmh)} from {compass(c.wind_direction_deg)} ·{" "}
+                  <Wind className="size-3.5" /> {formatWind(c.wind_speed_kmh, windUnit)} from {compass(c.wind_direction_deg)} ·{" "}
                   {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
                   <InfoPopover term="windRelation" />
                 </span>
@@ -124,6 +127,7 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
                 explanation={c.explanation}
                 components={components}
                 factors={ratingFactors(factorInput)}
+                units={units}
                 method={<>Method: {methodLabel(c.method)}{c.algorithm_version ? ` (v${c.algorithm_version})` : ""}</>}
               />
               <div className="mt-3 space-y-1.5 border-t pt-3">
@@ -165,7 +169,8 @@ function ShowInTimeline({ iso }: { iso: string }) {
       className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 font-medium text-ocean transition-colors hover:bg-secondary"
       onClick={() => {
         select(Date.parse(iso));
-        document.getElementById("surf-forecast")?.scrollIntoView({ block: "start", behavior: "smooth" });
+        const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        document.getElementById("surf-forecast")?.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
       }}
     >
       <CalendarRange className="size-3" aria-hidden="true" /> Show in timeline
@@ -212,7 +217,9 @@ function ForecastSection({
     <Card id="surf-forecast" className="mb-6 scroll-mt-20" data-testid="surf-forecast">
       <CardHeader className="flex-row flex-wrap items-end justify-between gap-x-4 gap-y-1 px-4 pb-3 sm:px-5">
         <div>
-          <CardTitle className="font-display text-xl sm:text-2xl">Surf forecast</CardTitle>
+          <CardTitle as="h2" className="font-display text-xl sm:text-2xl">
+            Surf forecast
+          </CardTitle>
           {p && (
             // Every model run behind the timeline with its init time, when it was fetched, and
             // the sources' credit and licence links (Open-Meteo, ECMWF, NOAA) next to the data.
@@ -265,7 +272,7 @@ function SelectedStepDetails({ fc, s, units }: { fc: SpotForecast; s: SpotDetail
   return (
     <Card data-testid="forecast-hour">
       <CardHeader>
-        <CardTitle>Our prediction and the model data</CardTitle>
+        <CardTitle as="h2">Our prediction and the model data</CardTitle>
         <p className="text-xs text-muted-foreground">For the step selected in the timeline. Offshore model values are not surf heights.</p>
       </CardHeader>
       <CardContent>
@@ -493,7 +500,7 @@ export default function SpotPage() {
             </div>
             <Card>
               <CardHeader>
-                <CardTitle>Spot characteristics</CardTitle>
+                <CardTitle as="h2">Spot characteristics</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <dl className="grid grid-cols-2 gap-4">
@@ -541,7 +548,7 @@ export default function SpotPage() {
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Getting there</CardTitle>
+                <CardTitle as="h2">Getting there</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
                 {s.airports.map((a) => (

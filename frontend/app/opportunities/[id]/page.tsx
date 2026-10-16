@@ -8,6 +8,7 @@ import { toast } from "sonner";
 
 import { DailyStrip } from "@/components/charts/forecast-charts";
 import { ForecastConfidence, LocalConfidence } from "@/components/confidence";
+import { AttributionLinks } from "@/components/forecast-provenance";
 import { InfoPopover } from "@/components/info-popover";
 import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader, SectionTitle } from "@/components/page-header";
@@ -34,13 +35,14 @@ import {
   formatRange,
   formatSpotDateTime,
   heightRange,
-  metres,
   relativeTime,
   seconds,
   type Units,
 } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingReason } from "@/lib/rating";
+import { offshoreHeightText, zoneLabel } from "@/lib/timeline";
+import { formatWind, useWindUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { FlightSlice, MatchDetail, Offer, User } from "@/types/api";
 
@@ -138,6 +140,7 @@ function Measure({ label, children }: { label: React.ReactNode; children: React.
 
 function Detail({ user, m }: { user: User; m: MatchDetail }) {
   const units = (user.profile.units as Units) ?? "ft";
+  const [windUnit] = useWindUnit();
   const tz = m.spot.timezone;
   const queryClient = useQueryClient();
   const refresh = useMutation({
@@ -249,21 +252,21 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                 </Measure>
                 <Measure label="Swell (offshore)">
                   <span className="inline-flex items-center gap-1.5">
-                    <Waves className="size-3.5 text-ocean" /> {metres(e.peak_swell_height_m)} @ {seconds(e.peak_swell_period_s)} from {compass(e.peak_swell_direction_deg)}
+                    <Waves className="size-3.5 text-ocean" /> {offshoreHeightText(e.peak_swell_height_m, units)} @ {seconds(e.peak_swell_period_s)} from {compass(e.peak_swell_direction_deg)}
                   </span>
                 </Measure>
                 <Measure label="Wind at peak">
                   <span className="inline-flex items-center gap-1.5">
                     <Wind className="size-3.5 text-ocean" />
-                    {e.peak_wind_speed_kmh != null ? `${Math.round(e.peak_wind_speed_kmh)} km/h` : "—"} from {compass(e.peak_wind_direction_deg)} ·{" "}
+                    {formatWind(e.peak_wind_speed_kmh, windUnit)} from {compass(e.peak_wind_direction_deg)} ·{" "}
                     {WIND_RELATION_LABEL[e.peak_wind_relation] ?? e.peak_wind_relation}
                   </span>
                   <WindDisputeNote note={e.wind_dispute_note} reasons={e.confidence_reasons} className="mt-1 font-normal" />
                 </Measure>
               </dl>
-              <p className="text-xs text-muted-foreground">
-                Swell event v{e.version}, updated {relativeTime(e.last_updated_at)}.
-              </p>
+              <p className="text-xs text-muted-foreground">Forecast updated {relativeTime(e.last_updated_at)}.</p>
+              {/* The swell and wind above are these sources' model data: credited next to them. */}
+              <AttributionLinks links={e.attribution_links} />
               {/* The swell's peak-hour classes from the API ("Not assessed yet" when it has none). */}
               <div className="space-y-1.5 border-t pt-3">
                 <ForecastConfidence value={e.forecast_confidence_class ?? m.forecast_confidence_class} reasons={forecastReasonsOf(e)} notes={e.confidence_reasons} validTime={e.peak_time} />
@@ -369,7 +372,7 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                     Fly home between {formatSpotDateTime(m.travel_window.depart_after, m.travel_window.destination_timezone)} and{" "}
                     {formatSpotDateTime(m.travel_window.depart_before, m.travel_window.destination_timezone, { zone: true })}
                   </div>
-                  <div>All times local to {m.travel_window.destination_timezone}.</div>
+                  <div>All times local to the destination ({zoneLabel(Date.parse(m.travel_window.arrive_by), m.travel_window.destination_timezone)}).</div>
                 </div>
               )}
             </CardContent>

@@ -240,6 +240,7 @@ export default function MapPage() {
       updating={snapshot.isFetching}
       note={predictionNote}
       timeLabel={at && stepIndex !== nowIndex ? timeText : null}
+      links={(snapshot.data ?? nowSnapshot.data)?.attribution_links}
       className={isDesktop ? "max-h-full" : "max-h-[45dvh]"}
     />
   );

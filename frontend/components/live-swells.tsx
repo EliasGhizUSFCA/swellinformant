@@ -3,7 +3,7 @@
 import Link from "next/link";
 
 import { EventCard } from "@/components/event-card";
-import { useNowMs } from "@/components/forecast-provenance";
+import { AttributionLinks, mergeAttributionLinks, useNowMs } from "@/components/forecast-provenance";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEvents, useMapConditions, useSystemStatus } from "@/hooks/queries";
 import { modelRunText } from "@/lib/confidence";
@@ -73,11 +73,15 @@ export function LiveSwells() {
         </p>
       )}
       {data && data.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {data.map((e) => (
-            <EventCard key={e.id} event={e} dark />
-          ))}
-        </div>
+        <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {data.map((e) => (
+              <EventCard key={e.id} event={e} dark />
+            ))}
+          </div>
+          {/* The cards show these sources' model swell and wind: credited next to them. */}
+          <AttributionLinks links={mergeAttributionLinks(data)} dark className="mt-3 text-white/65" />
+        </>
       )}
     </div>
   );

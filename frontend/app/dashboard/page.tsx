@@ -8,6 +8,7 @@ import { Suspense } from "react";
 import { toast } from "sonner";
 
 import { EventCard } from "@/components/event-card";
+import { AttributionLinks, mergeAttributionLinks } from "@/components/forecast-provenance";
 import { AppShell } from "@/components/layout/app-shell";
 import { OpportunityCard } from "@/components/opportunity-card";
 import { EmptyState, PageHeader, SectionTitle } from "@/components/page-header";
@@ -28,11 +29,12 @@ import type { User } from "@/types/api";
 function Stat({ icon, label, value, href }: { icon: React.ReactNode; label: string; value: React.ReactNode; href?: string }) {
   const body = (
     <Card className="h-full transition hover:shadow-md">
-      <CardContent className="flex items-center gap-4 p-5">
-        <div className="rounded-xl bg-secondary p-2.5 text-ocean [&_svg]:size-5">{icon}</div>
-        <div>
-          <div className="font-display text-2xl font-semibold text-ink tabular-nums">{value}</div>
-          <div className="text-sm text-muted-foreground">{label}</div>
+      {/* Two per row on phones: compact tiles so the trips start on the first screen. */}
+      <CardContent className="flex items-center gap-2.5 p-3 sm:gap-4 sm:p-5">
+        <div className="rounded-xl bg-secondary p-2 text-ocean sm:p-2.5 [&_svg]:size-4 sm:[&_svg]:size-5">{icon}</div>
+        <div className="min-w-0">
+          <div className="font-display text-xl font-semibold text-ink tabular-nums sm:text-2xl">{value}</div>
+          <div className="text-xs leading-tight text-muted-foreground sm:text-sm">{label}</div>
         </div>
       </CardContent>
     </Card>
@@ -154,7 +156,7 @@ function Dashboard({ user }: { user: User }) {
       {!user.email_verified && <VerifyBanner email={user.email} />}
       <StaleBanner stale={stale} />
 
-      <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-8 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <Stat icon={<SearchIcon />} label="Active searches" value={searches.isLoading ? "–" : activeSearches} href="/searches" />
         <Stat icon={<Plane />} label="Trips with flights" value={opportunities.isLoading ? "–" : withFlights.length} />
         <Stat icon={<Waves />} label="Surf-only watches" value={opportunities.isLoading ? "–" : surfOnly.length} />
@@ -210,6 +212,7 @@ function Dashboard({ user }: { user: User }) {
               ))}
             </div>
             {events.data?.length === 0 && <p className="text-sm text-muted-foreground">No Good-or-better swells in the current forecast.</p>}
+            <AttributionLinks links={mergeAttributionLinks(events.data)} className="mt-3" />
           </div>
         </section>
 

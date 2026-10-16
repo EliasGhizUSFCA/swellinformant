@@ -2,9 +2,10 @@
 
 import { ChevronDown, Loader2, MapPin } from "lucide-react";
 
+import { AttributionLinks } from "@/components/forecast-provenance";
 import { QualityBadge } from "@/components/quality";
 import { cn } from "@/lib/utils";
-import type { Conditions, SpotSummary } from "@/types/api";
+import type { AttributionLink, Conditions, SpotSummary } from "@/types/api";
 
 import { FOCUS, GLASS } from "./map-ui";
 
@@ -28,6 +29,7 @@ export function SpotList({
   updating,
   note,
   timeLabel,
+  links,
   className,
 }: {
   spots: SpotSummary[];
@@ -40,6 +42,8 @@ export function SpotList({
   note?: string | null;
   /** The selected time when it is not the current step (null = now). */
   timeLabel?: string | null;
+  /** Credit and licence links of the sources behind the ratings (the snapshot's). */
+  links?: readonly AttributionLink[] | null;
   className?: string;
 }) {
   const title = timeLabel ? `Best spots · ${timeLabel}` : "Best spots now";
@@ -108,6 +112,8 @@ export function SpotList({
             })}
             {spots.length === 0 && <li className="px-2 py-2 text-sm text-white/70">No spots match these filters at this time.</li>}
           </ul>
+          {/* The ratings come from these sources' model data: credited next to them. */}
+          <AttributionLinks links={links} dark className="px-2 pt-2 text-white/65" />
         </div>
       )}
     </section>

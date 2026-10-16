@@ -8,14 +8,16 @@ import { InfoPopover } from "@/components/info-popover";
 import { RatingHeadline } from "@/components/rating";
 import { WindDisputeNote } from "@/components/wind-dispute";
 import { forecastReasonsOf, rangeWords, validInText } from "@/lib/confidence";
-import { compass, formatSpotDateTime, formatSpotTime, heightRange, kmh, metres, seconds, type Units } from "@/lib/format";
+import { compass, formatSpotDateTime, formatSpotTime, heightRange, seconds, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingReason } from "@/lib/rating";
+import { offshoreHeightText } from "@/lib/timeline";
+import { formatWind, useWindUnit } from "@/lib/units";
 import type { Conditions } from "@/types/api";
 
 const WEEK_MS = 6.5 * 24 * 3_600_000;
 
-/** "Thu 6:00 PM GMT+2" within the coming week, the full date further out (spot's zone). */
+/** "Thu 6:00 PM SAST" within the coming week, the full date further out (spot's zone). */
 export function spotWhen(iso: string, tz: string, nowMs: number): string {
   return Math.abs(Date.parse(iso) - nowMs) < WEEK_MS ? formatSpotTime(iso, tz) : formatSpotDateTime(iso, tz, { zone: true });
 }
@@ -35,6 +37,7 @@ export function ConditionsSummary({
   title,
   spotRange,
   nowMs,
+  dark = false,
 }: {
   c: Conditions;
   tz: string;
@@ -43,8 +46,11 @@ export function ConditionsSummary({
   spotRange?: { minFt: number; maxFt: number } | null;
   /** The time "in 2 h" is counted from (defaults to the browser clock). */
   nowMs?: number;
+  /** On a dark surface (the map's spot panel): the quality marker uses the dark ramp. */
+  dark?: boolean;
 }) {
   const clock = useNowMs();
+  const [windUnit] = useWindUnit();
   const now = nowMs ?? clock;
   const reason = ratingReason({
     periodS: c.swell_period_s,
@@ -72,7 +78,7 @@ export function ConditionsSummary({
           {c.is_daylight ? "" : " · night"}
         </div>
       </div>
-      <RatingHeadline label={c.label} score={c.score} reason={reason} size="sm" className="mt-2" />
+      <RatingHeadline label={c.label} score={c.score} reason={reason} size="sm" dark={dark} className="mt-2" />
       <div className="mt-2 flex flex-wrap items-baseline gap-x-2">
         <span className="font-display text-2xl font-semibold">{heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, units)}</span>
         <span className="text-xs text-muted-foreground">breaking (est.)</span>
@@ -86,12 +92,12 @@ export function ConditionsSummary({
         {/* A swell is named by where it comes from ("SW swell"); the wind says "from" below. */}
         <div className="flex items-center gap-1.5" title={`Offshore model swell${c.swell_direction_deg != null ? ` from ${compass(c.swell_direction_deg)}` : ""}, not the surf height`}>
           <Waves className="size-3.5 shrink-0" aria-hidden="true" />
-          {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} {c.swell_direction_deg != null ? `${compass(c.swell_direction_deg)} ` : ""}swell
+          {offshoreHeightText(c.swell_height_m, units)} @ {seconds(c.swell_period_s)} {c.swell_direction_deg != null ? `${compass(c.swell_direction_deg)} ` : ""}swell
         </div>
         <div className="flex items-center gap-1.5">
           <Wind className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="sr-only">Wind: </span>
-          {kmh(c.wind_speed_kmh)}
+          {formatWind(c.wind_speed_kmh, windUnit)}
           {c.wind_direction_deg != null ? ` from ${compass(c.wind_direction_deg)}` : ""} · {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
         </div>
       </div>

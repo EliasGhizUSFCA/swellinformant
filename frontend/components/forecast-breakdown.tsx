@@ -11,9 +11,11 @@ import { RatingHeadline, WhyThisRating } from "@/components/rating";
 import { Disclosure } from "@/components/ui/disclosure";
 import { WindDisputeNote } from "@/components/wind-dispute";
 import { forecastReasonsOf, modelRunText, rangeWords, validInText } from "@/lib/confidence";
-import { compass, formatSpotDateTime, heightRange, kmh, metres, seconds, type Units } from "@/lib/format";
+import { compass, formatSpotDateTime, heightRange, seconds, type Units } from "@/lib/format";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors, ratingReason } from "@/lib/rating";
+import { offshoreHeightText } from "@/lib/timeline";
+import { formatWind, useWindUnit, type WindUnit } from "@/lib/units";
 import type { Conditions, ForecastPoint, ForecastRunInfo, ForecastSourceInfo } from "@/types/api";
 
 const METHOD_LABEL: Record<string, string> = {
@@ -36,18 +38,18 @@ function Row({ k, v }: { k: React.ReactNode; v: React.ReactNode }) {
   );
 }
 
-function swellText(h: number | null | undefined, t: number | null | undefined, d: number | null | undefined): string | null {
+function swellText(h: number | null | undefined, t: number | null | undefined, d: number | null | undefined, units: Units): string | null {
   if (h == null) return null;
-  return `${metres(h)} @ ${seconds(t)}${d != null ? ` from ${compass(d)}` : ""}`;
+  return `${offshoreHeightText(h, units)} @ ${seconds(t)}${d != null ? ` from ${compass(d)}` : ""}`;
 }
 
 /** Secondary offshore fields of one forecast hour (only those the model provides). */
-function MoreOffshoreData({ p }: { p: ForecastPoint }) {
+function MoreOffshoreData({ p, units, windUnit }: { p: ForecastPoint; units: Units; windUnit: WindUnit }) {
   const rows: Array<[string, string | null]> = [
-    ["Secondary swell", swellText(p.secondary_swell_height_m, p.secondary_swell_period_s, p.secondary_swell_direction_deg)],
-    ["Third swell", swellText(p.tertiary_swell_height_m, p.tertiary_swell_period_s, p.tertiary_swell_direction_deg)],
-    ["Wind waves (local chop)", swellText(p.wind_wave_height_m, p.wind_wave_period_s, p.wind_wave_direction_deg)],
-    ["Wind gusts", p.wind_gust_kmh != null ? kmh(p.wind_gust_kmh) : null],
+    ["Secondary swell", swellText(p.secondary_swell_height_m, p.secondary_swell_period_s, p.secondary_swell_direction_deg, units)],
+    ["Third swell", swellText(p.tertiary_swell_height_m, p.tertiary_swell_period_s, p.tertiary_swell_direction_deg, units)],
+    ["Wind waves (local chop)", swellText(p.wind_wave_height_m, p.wind_wave_period_s, p.wind_wave_direction_deg, units)],
+    ["Wind gusts", p.wind_gust_kmh != null ? formatWind(p.wind_gust_kmh, windUnit) : null],
     ["Sea level incl. tide", p.sea_level_m != null ? `${p.sea_level_m.toFixed(2)} m` : null],
     ["Wave power", p.wave_power_kw_m != null ? `${Math.round(p.wave_power_kw_m)} kW/m` : null],
     ["Air pressure", p.pressure_msl_hpa != null ? `${Math.round(p.pressure_msl_hpa)} hPa` : null],
@@ -113,6 +115,7 @@ export function ForecastBreakdown({
   nowMs?: number;
 }) {
   const clock = useNowMs();
+  const [windUnit] = useWindUnit();
   const now = nowMs ?? clock;
   const dir = c.swell_direction_deg;
   const factorInput = {
@@ -134,7 +137,7 @@ export function ForecastBreakdown({
   const range = rangeWords(c.uncertainty_kind);
   const runs = runsLabel(c, run, now);
   // Directions are where the wind and swell come FROM (the map and chart arrows point where they go).
-  const wind = `${kmh(c.wind_speed_kmh)}${c.wind_direction_deg != null ? ` from ${compass(c.wind_direction_deg)}` : ""} · ${WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}`;
+  const wind = `${formatWind(c.wind_speed_kmh, windUnit)}${c.wind_direction_deg != null ? ` from ${compass(c.wind_direction_deg)}` : ""} · ${WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}`;
   return (
     <div className="space-y-3" data-testid="forecast-breakdown">
       <div className="text-xs text-muted-foreground" data-testid="breakdown-time">
@@ -165,7 +168,7 @@ export function ForecastBreakdown({
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground" data-testid="prediction-inputs">
           <span className="inline-flex items-center gap-1">
             <Waves className="size-3.5 shrink-0" aria-hidden="true" />
-            {metres(c.swell_height_m)} @ {seconds(c.swell_period_s)} swell{dir != null ? ` from ${compass(dir)}` : ""}
+            {offshoreHeightText(c.swell_height_m, units)} @ {seconds(c.swell_period_s)} swell{dir != null ? ` from ${compass(dir)}` : ""}
           </span>
           <span className="inline-flex items-center gap-1">
             <Wind className="size-3.5 shrink-0" aria-hidden="true" />
@@ -194,6 +197,7 @@ export function ForecastBreakdown({
           explanation={c.explanation}
           components={components}
           factors={ratingFactors(factorInput)}
+          units={units}
           method={
             <>
               Method: {methodLabel(c.method)}
@@ -234,21 +238,21 @@ export function ForecastBreakdown({
                 Significant wave height (offshore) <InfoPopover term="offshoreHeight" />
               </span>
             }
-            v={metres(c.sig_wave_height_m)}
+            v={offshoreHeightText(c.sig_wave_height_m, units)}
           />
-          <Row k="Main component (drives the surf)" v={`${metres(c.swell_height_m)} @ ${seconds(c.swell_period_s)}`} />
+          <Row k="Main component (drives the surf)" v={`${offshoreHeightText(c.swell_height_m, units)} @ ${seconds(c.swell_period_s)}`} />
           <Row k="Main component direction" v={dir != null ? `${compass(dir)} (${Math.round(dir)}°)` : "—"} />
           <Row
             k="Wind"
             v={
               <span className="inline-flex items-center gap-1">
                 <Wind className="size-3.5" aria-hidden="true" />
-                {kmh(c.wind_speed_kmh)} from {compass(c.wind_direction_deg)} · {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
+                {formatWind(c.wind_speed_kmh, windUnit)} from {compass(c.wind_direction_deg)} · {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
               </span>
             }
           />
         </dl>
-        {point && <MoreOffshoreData p={point} />}
+        {point && <MoreOffshoreData p={point} units={units} windUnit={windUnit} />}
         <ForecastProvenance
           className="mt-2 border-t pt-2"
           source={source ?? (c.source_name ? { name: c.source_name, is_demo: c.is_demo ?? false } : null)}

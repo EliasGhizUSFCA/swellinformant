@@ -1,3 +1,5 @@
+"use client";
+
 import { CalendarDays, Waves, Wind } from "lucide-react";
 import Link from "next/link";
 
@@ -6,9 +8,11 @@ import { DemoBadge } from "@/components/quality";
 import { RatingHeadline } from "@/components/rating";
 import { StaleBadge } from "@/components/stale-banner";
 import { WindDisputeNote } from "@/components/wind-dispute";
-import { compass, formatRange, heightRange, kmh, leadLabel, metres, seconds, type Units } from "@/lib/format";
+import { compass, formatRange, heightRange, leadLabel, seconds, type Units } from "@/lib/format";
 import { colorForScore, WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingReason } from "@/lib/rating";
+import { offshoreHeightText } from "@/lib/timeline";
+import { formatWind, useWindUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { SwellEvent } from "@/types/api";
 
@@ -31,6 +35,7 @@ export function EventCard({
   featured?: boolean;
 }) {
   const tz = event.spot.timezone;
+  const [windUnit] = useWindUnit();
   const reason = ratingReason({
     periodS: event.peak_swell_period_s,
     windRelation: event.peak_wind_relation,
@@ -57,7 +62,7 @@ export function EventCard({
           </div>
           <div className={cn("truncate font-semibold", featured && "font-display text-xl")}>{event.spot.name}</div>
         </div>
-        <span className="h-10 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: colorForScore(event.peak_score) }} aria-hidden="true" />
+        <span className="h-10 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: colorForScore(event.peak_score, dark ? "dark" : "light") }} aria-hidden="true" />
       </div>
       <RatingHeadline label={event.peak_label} score={event.peak_score} reason={reason} size={featured ? "md" : "sm"} dark={dark} className="mt-2" />
       <div className="mt-2 flex flex-wrap items-baseline gap-x-2">
@@ -74,13 +79,13 @@ export function EventCard({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="inline-flex items-center gap-1.5">
             <Waves className="size-3.5 shrink-0" aria-hidden="true" />
-            {metres(event.peak_swell_height_m)} @ {seconds(event.peak_swell_period_s)} {compass(event.peak_swell_direction_deg)} swell
+            {offshoreHeightText(event.peak_swell_height_m, units)} @ {seconds(event.peak_swell_period_s)} {compass(event.peak_swell_direction_deg)} swell
           </span>
           <span className="inline-flex items-center gap-1.5">
             <Wind className="size-3.5 shrink-0" aria-hidden="true" />
             {WIND_RELATION_LABEL[event.peak_wind_relation] ?? event.peak_wind_relation}
             <span className="sr-only"> wind</span>
-            {event.peak_wind_speed_kmh != null ? ` ${kmh(event.peak_wind_speed_kmh)}` : ""}
+            {event.peak_wind_speed_kmh != null ? ` ${formatWind(event.peak_wind_speed_kmh, windUnit)}` : ""}
           </span>
         </div>
       </div>

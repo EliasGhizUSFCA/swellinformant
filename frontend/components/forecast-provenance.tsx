@@ -58,6 +58,14 @@ export function AttributionLinks({ links, dark = false, className }: { links: re
   );
 }
 
+/** The distinct credit links of several items (e.g. the events on a page), in first-seen
+ * order, so one credit line under a list covers every card's model values. */
+export function mergeAttributionLinks(items: ReadonlyArray<{ attribution_links?: readonly AttributionLink[] | null }> | null | undefined): AttributionLink[] {
+  const seen = new Map<string, AttributionLink>();
+  for (const item of items ?? []) for (const l of item.attribution_links ?? []) if (!seen.has(`${l.label}|${l.href}`)) seen.set(`${l.label}|${l.href}`, l);
+  return [...seen.values()];
+}
+
 /**
  * Where a forecast comes from: the source, every model run behind it with its own init time
  * (a blend's issue time is only its oldest member's, so each member is named), when the data

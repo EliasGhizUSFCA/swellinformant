@@ -109,7 +109,7 @@ export function SpotPanel({
           </Link>
         </div>
 
-        {spot.best_upcoming && <ConditionsSummary c={spot.best_upcoming} tz={spot.timezone} units={units} title="Best surf window, next 7 days" />}
+        {spot.best_upcoming && <ConditionsSummary c={spot.best_upcoming} tz={spot.timezone} units={units} title="Best surf window, next 7 days" dark />}
 
         <div>
           <div className="mb-2 text-sm font-semibold">Upcoming swell events</div>

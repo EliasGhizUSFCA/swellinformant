@@ -2,8 +2,9 @@
 
 import { InfoPopover } from "@/components/info-popover";
 import { Disclosure } from "@/components/ui/disclosure";
-import { asQuality, QUALITY_COLORS } from "@/lib/quality";
+import { asQuality, QUALITY_COLORS, QUALITY_COLORS_DARK } from "@/lib/quality";
 import { componentFits, limitingGates, ratingTitle, score10, TONE_WORD, type FactorTone, type RatingFactor } from "@/lib/rating";
+import { explanationText, useWindUnit, type HeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 
 /**
@@ -35,7 +36,7 @@ export function RatingHeadline({
           size === "lg" ? "font-display text-xl sm:text-2xl" : size === "md" ? "text-base sm:text-lg" : "text-sm",
         )}
       >
-        <span className={cn("shrink-0 rounded-full", size === "sm" ? "size-2" : "size-2.5")} style={{ backgroundColor: QUALITY_COLORS[q] }} aria-hidden="true" />
+        <span className={cn("shrink-0 rounded-full", size === "sm" ? "size-2" : "size-2.5")} style={{ backgroundColor: (dark ? QUALITY_COLORS_DARK : QUALITY_COLORS)[q] }} aria-hidden="true" />
         <span data-testid="rating-title">
           {ratingTitle(label)} — <span className="tabular-nums">{score10(score)}/10</span>
         </span>
@@ -72,6 +73,7 @@ export function WhyThisRating({
   components,
   factors,
   method,
+  units = "ft",
   className,
 }: {
   score: number;
@@ -79,14 +81,21 @@ export function WhyThisRating({
   components?: Record<string, unknown> | null;
   factors?: readonly RatingFactor[] | null;
   method?: React.ReactNode;
+  /** The viewer's height unit (the explanation is converted to it; wind follows useWindUnit). */
+  units?: HeightUnit;
   className?: string;
 }) {
+  const [windUnit] = useWindUnit();
   const fits = componentFits(components);
   const gates = limitingGates(components);
   const derived = fits.length === 0 ? (factors ?? []) : [];
   return (
     <Disclosure summary="Why this rating?" className={className} contentClassName="space-y-2 rounded-lg bg-card/70 p-2.5 text-xs text-muted-foreground" data-testid="why-rating">
-      {explanation && <p className="text-ink">{explanation}</p>}
+      {explanation && (
+        <p className="text-ink" data-testid="why-rating-explanation">
+          {explanationText(explanation, units, windUnit)}
+        </p>
+      )}
       {fits.length > 0 && (
         <ul className="space-y-1" aria-label="Rating factors" data-testid="rating-fits">
           {fits.map((f) => (
