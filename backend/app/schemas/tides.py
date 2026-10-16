@@ -18,6 +18,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.schemas.spots import AttributionLinkOut
+
 TideStatus = Literal["available", "unavailable", "demo"]
 TideDatum = Literal["MLLW", "MSL", "LAT", "model_msl"]
 TideStationKind = Literal["harmonic", "subordinate", "model"]
@@ -74,6 +76,9 @@ class TideBlockOut(BaseModel):
     events: list[TideEventOut] = []
     preference: TidePreferenceOut
     attribution: str | None = None
+    # Licence and source links the attribution needs (EOT20: CC BY 4.0 and the dataset DOI;
+    # CO-OPS: tidesandcurrents.noaa.gov), shown with the attribution.
+    attribution_links: list[AttributionLinkOut] = []
     fetched_at: datetime | None = None
 
 
@@ -95,6 +100,9 @@ class ObservationOut(BaseModel):
     stale: bool
     licence: str | None
     attribution: str | None
+    # The provider in words ("NOAA NDBC", "IMOS / AODN") and the licence link, when known.
+    provider_name: str | None = None
+    licence_url: str | None = None
 
 
 class ObservationsBlockOut(BaseModel):

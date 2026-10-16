@@ -144,6 +144,13 @@ def event_out(
         source_code=event.source_code,
         history=event.history if include_history else [],
         stale=stale,
+        # The credits its forecast run's sources ask for next to their data (Open-Meteo,
+        # ECMWF, NOAA); cards show the swell, wind and our estimate from that run.
+        attribution_links=(
+            source_attribution_links(db, event.latest_run)
+            if db is not None and event.latest_run is not None
+            else []
+        ),
         **peak_confidence(event, stale=stale),
         **peak_wind(event),
     )

@@ -296,6 +296,10 @@ def seed_tide_catalog(
                             "datum": "model_msl",
                             "caveat": link.get("caveat"),
                             "grid": meta.get("grid"),
+                            # CC BY 4.0 asks for the licence link and a note of changes.
+                            "licence_url": meta.get("licence_url"),
+                            "source_url": meta.get("source_url"),
+                            "changes": meta.get("changes"),
                         },
                     },
                 )

@@ -445,6 +445,12 @@ def test_events_get_the_read_time_staleness_cap(db: Session, scored: dict[str, A
     detect_events(db, NOW)
     fresh = {e.id: e for e in upcoming_events(db, NOW)}
     assert any(e.forecast_confidence_class == fc.HIGH for e in fresh.values())
+    # Each event carries its run's credit and licence links (every blend member's), so the
+    # cards that show its model values can credit them (review SEC-1).
+    for e in fresh.values():
+        labels = [link.label for link in e.attribution_links]
+        assert any(label.startswith("Copyright ECMWF") for label in labels), labels
+        assert any("NOAA NCEP GFS" in label for label in labels), labels
     later = NOW + timedelta(hours=30)  # the GFS member is stale by then (16 h rule)
     assert queries.is_stale(scored["run"], later)
     events = upcoming_events(db, later)

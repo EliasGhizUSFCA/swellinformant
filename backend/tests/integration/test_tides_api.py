@@ -185,6 +185,10 @@ def test_catalog_seed_is_idempotent(db: Session) -> None:
     assert model is not None and model.kind == "model"
     assert model.attribution == "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE"
     assert model.licence == "CC BY 4.0"
+    # CC BY 4.0 asks for the licence link and a statement of changes (review SEC-3).
+    assert model.metadata_["licence_url"] == "https://creativecommons.org/licenses/by/4.0/"
+    assert model.metadata_["source_url"] == "https://doi.org/10.17882/79489"
+    assert str(model.metadata_["changes"]).startswith("Modified:")
 
 
 def test_acquire_stores_coops_and_model_tides_idempotently(
@@ -230,6 +234,7 @@ def test_acquire_stores_coops_and_model_tides_idempotently(
     )
     assert "0.91 m above MLLW" in (block.reason or "")
     assert block.attribution and "CO-OPS" in block.attribution
+    assert [link.href for link in block.attribution_links] == ["https://tidesandcurrents.noaa.gov/"]
     assert not any(p.interpolated for p in block.curve)
     gaps = {b.t - a.t for a, b in zip(block.curve, block.curve[1:], strict=False)}
     assert gaps == {timedelta(minutes=30)}
@@ -255,7 +260,17 @@ def test_acquire_stores_coops_and_model_tides_idempotently(
     assert naz.station is not None and naz.station.kind == "model"
     assert naz.station.code == "eot20:nazare" and naz.station.distance_km == 3.8
     assert naz.reason == tide_api.MODEL_NOTE
-    assert naz.attribution == "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE (CC BY 4.0)"
+    # The model credit says the constants were adapted and links the licence and dataset
+    # (review SEC-3; the attribution text gained the change statement).
+    assert naz.attribution == (
+        "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE. Modified: the harmonic constants of "
+        "the EOT20 cell nearest each break were extracted, amplitudes converted from cm to m, "
+        "and tide heights are computed from them by this app (CC BY 4.0)"
+    )
+    assert [(link.label, link.href) for link in naz.attribution_links] == [
+        ("EOT20 dataset (SEANOE)", "https://doi.org/10.17882/79489"),
+        ("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/"),
+    ]
     assert 6 <= len(naz.events) <= 8
     reef = _block(app_client, "cloudbreak", "2026-10-15T00:00:00Z", "2026-10-16T00:00:00Z")
     assert reef.reason is not None and reef.reason.startswith(tide_api.MODEL_NOTE)

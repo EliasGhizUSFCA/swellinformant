@@ -1560,6 +1560,11 @@ export interface components {
              * @default false
              */
             stale: boolean;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
         };
         /** ExperimentSummary */
         ExperimentSummary: {
@@ -2523,6 +2528,10 @@ export interface components {
             licence: string | null;
             /** Attribution */
             attribution: string | null;
+            /** Provider Name */
+            provider_name?: string | null;
+            /** Licence Url */
+            licence_url?: string | null;
         };
         /** ObservationProviderHealthOut */
         ObservationProviderHealthOut: {
@@ -3666,6 +3675,11 @@ export interface components {
             preference: components["schemas"]["TidePreferenceOut"];
             /** Attribution */
             attribution?: string | null;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
             /** Fetched At */
             fetched_at?: string | null;
         };

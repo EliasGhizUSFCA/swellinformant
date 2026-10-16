@@ -101,7 +101,13 @@ DEFAULT_OUT = REPO / "data" / "tides" / "constants_eot20.json"
 CHUNK = 1 << 20
 
 LICENCE = "CC BY 4.0"
+LICENCE_URL = "https://creativecommons.org/licenses/by/4.0/"
 ATTRIBUTION = "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE"
+# CC BY 4.0 section 3(a)(1)(B): say that the material was modified, and how.
+CHANGES = (
+    "Modified: the harmonic constants of the EOT20 cell nearest each break were extracted, "
+    "amplitudes converted from cm to m, and tide heights are computed from them by this app."
+)
 CITATION = (
     "Hart-Davis, M. G., Piccioni, G., Dettmering, D., Schwatke, C., Passaro, M. and Seitz, F. "
     "(2021): EOT20: a global ocean tide model from multi-mission satellite altimetry. Earth "
@@ -472,7 +478,10 @@ def build_output(
         "datum": "model_msl",
         "datum_text": "model mean sea level (EOT20); not a chart datum",
         "licence": LICENCE,
+        "licence_url": LICENCE_URL,
         "attribution": ATTRIBUTION,
+        "source_url": DATASET_DOI,
+        "changes": CHANGES,
         "citation": CITATION,
         "extracted_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "extracted_by": "scripts/extract_tide_constants.py",

@@ -82,6 +82,10 @@ def test_a_buoy_without_recent_waves_is_shown_stale(db: Session) -> None:
     assert item.hs_m is not None and item.hs_kind == "spectral_hm0"
     assert item.provider == "ndbc" and item.licence == "Public domain (US Government)"
     assert item.attribution
+    # The provider in words for the page (review SEC-2); public domain has no licence link.
+    assert item.provider_name == "NOAA NDBC" and item.licence_url is None
+    assert tide_api.OBSERVATION_PROVIDER_NAMES["aodn"] == "IMOS / AODN"
+    assert tide_api.LICENCE_URLS["CC BY 4.0"] == "https://creativecommons.org/licenses/by/4.0/"
 
 
 def test_recent_readings_are_listed_by_relation_and_distance(db: Session) -> None:

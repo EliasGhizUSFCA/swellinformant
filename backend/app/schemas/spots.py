@@ -193,6 +193,9 @@ class EventOut(BaseModel):
     gust_kind: GustKind | None = None
     # The forecast run behind the event is older than its source's stale limit.
     stale: bool = False
+    # Credit and licence links of the sources behind the event's forecast run (every
+    # member's for a blend), shown next to the event's model values.
+    attribution_links: list[AttributionLinkOut] = []
 
 
 class SpotSummary(SpotMini):

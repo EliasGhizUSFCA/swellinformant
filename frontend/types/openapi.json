@@ -4156,6 +4156,14 @@
       "type": "boolean",
       "title": "Stale",
       "default": false
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",
@@ -7265,6 +7273,28 @@
        }
       ],
       "title": "Attribution"
+     },
+     "provider_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider Name"
+     },
+     "licence_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Licence Url"
      }
     },
     "type": "object",
@@ -10826,6 +10856,14 @@
        }
       ],
       "title": "Attribution"
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      },
      "fetched_at": {
       "anyOf": [

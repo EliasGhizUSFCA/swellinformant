@@ -136,6 +136,17 @@ def _provenance(s: dict[str, Any]) -> list[tuple[str, str]]:
     return rows
 
 
+def _credits(s: dict[str, Any]) -> list[tuple[str, str]]:
+    """(label, http(s) URL) credits the data sources ask for next to their data (e.g.
+    "Weather data by Open-Meteo.com", "Copyright ECMWF ... (modified)", CC BY 4.0)."""
+    out: list[tuple[str, str]] = []
+    for c in s.get("data_credits") or []:
+        label, href = str(c.get("label") or ""), str(c.get("href") or "")
+        if label and href.startswith(("https://", "http://")):
+            out.append((label, href))
+    return out
+
+
 CONFIDENCE_WORDS = {"high": "High", "moderate": "Moderate", "low": "Low"}
 
 
@@ -269,6 +280,12 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
         lines.append(f"Flight offers: {links['flights']}")
     if links.get("dashboard"):
         lines.append(f"Your dashboard: {links['dashboard']}")
+    credits = _credits(s)
+    if credits:
+        lines += [
+            "",
+            "Forecast data: " + " · ".join(f"{label} ({href})" for label, href in credits),
+        ]
     lines += [
         "",
         DISCLAIMER,
@@ -296,6 +313,16 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
         if links.get("flights")
         else ""
     )
+    credits_html = (
+        '<p style="font-size:12px;color:#6b7f8c;margin-top:16px">Forecast data: '
+        + " · ".join(
+            f'<a href="{escape(href)}" style="color:#6b7f8c">{escape(label)}</a>'
+            for label, href in credits
+        )
+        + "</p>"
+        if credits
+        else ""
+    )
     html = f"""<!doctype html><html><body style="margin:0;background:#eef6f8;font-family:Helvetica,Arial,sans-serif">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:14px;overflow:hidden">
@@ -308,6 +335,7 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
 <a href="{escape(links["opportunity"])}" style="display:inline-block;margin:4px 8px 4px 0;padding:10px 16px;border-radius:8px;background:#0e7490;color:#ffffff;text-decoration:none">View opportunity</a>
 <a href="{escape(links["forecast"])}" style="display:inline-block;margin:4px 8px 4px 0;padding:10px 16px;border-radius:8px;border:1px solid #0e7490;color:#0e7490;text-decoration:none">Full forecast</a>
 {flights_btn}
+{credits_html}
 <p style="font-size:12px;color:#6b7f8c;margin-top:20px">{escape(DISCLAIMER)}</p>
 <p style="font-size:12px;color:#6b7f8c"><a href="{escape(links.get("dashboard", links["opportunity"]))}" style="color:#6b7f8c">Dashboard</a> · <a href="{escape(links.get("manage", links["unsubscribe"]))}" style="color:#6b7f8c">Manage alerts</a> · <a href="{escape(links["unsubscribe"])}" style="color:#6b7f8c">Unsubscribe from email alerts</a></p>
 </td></tr></table></td></tr></table></body></html>"""

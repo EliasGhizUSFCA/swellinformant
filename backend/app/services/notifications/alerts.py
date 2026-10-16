@@ -136,10 +136,13 @@ def _peak_confidence(
 
 
 def _model_runs(db: Session | None, run: ForecastRun | None) -> dict[str, Any]:
-    """The model runs behind the alert (a blend lists each member with its own init time)
-    and when the data was fetched (the run's completed_at), for the email's provenance."""
+    """The model runs behind the alert (a blend lists each member with its own init time),
+    when the data was fetched (the run's completed_at) and the credit and licence links the
+    sources ask for next to their data (``data_credits``: Open-Meteo, ECMWF, NOAA), for
+    the email's provenance."""
     if db is None or run is None:
         return {}
+    from app.services.forecasts.queries import source_attribution_links
     from app.services.spot_views import run_members  # spot_views imports this module
 
     return {
@@ -152,6 +155,7 @@ def _model_runs(db: Session | None, run: ForecastRun | None) -> dict[str, Any]:
             for m in run_members(db, run)
         ],
         "forecast_fetched": run.completed_at.isoformat() if run.completed_at else None,
+        "data_credits": [link.model_dump() for link in source_attribution_links(db, run)],
     }
 
 

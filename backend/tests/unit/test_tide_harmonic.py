@@ -78,6 +78,9 @@ def test_constants_file_is_complete_and_attributed() -> None:
     assert meta["source"] == "eot20" and meta["datum"] == "model_msl"
     assert meta["licence"] == "CC BY 4.0"
     assert meta["attribution"] == "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE"
+    assert meta["licence_url"] == "https://creativecommons.org/licenses/by/4.0/"
+    assert meta["source_url"] == "https://doi.org/10.17882/79489"
+    assert meta["changes"].startswith("Modified:")
     assert len(constants) == 50 and not meta["unavailable"]
     assert CONSTANTS.stat().st_size < 100_000
     for slug, c in constants.items():

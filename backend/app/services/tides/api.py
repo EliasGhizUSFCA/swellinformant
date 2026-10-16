@@ -52,6 +52,7 @@ from app.models import (
     TideStation,
     WaveForecast,
 )
+from app.schemas.spots import AttributionLinkOut
 from app.schemas.tides import (
     TIDE_PREFERENCE_NOT_ESTABLISHED,
     ObservationOut,
@@ -110,6 +111,17 @@ EVENT_MARGIN = timedelta(hours=14)
 STALE_AFTER = {"ndbc": 3.0, "metoffice": 3.0, "aodn": 4.0}
 STALE_AFTER_DEFAULT = 6.0
 LISTED_RELATIONS = ("offshore_reference", "nearshore_reference")
+# Observation providers in words, and licence links by licence name (the station's full
+# attribution, e.g. IMOS's acknowledgement, is sent as ``attribution``).
+OBSERVATION_PROVIDER_NAMES = {
+    "ndbc": "NOAA NDBC",
+    "aodn": "IMOS / AODN",
+    "metoffice": "Met Office",
+}
+LICENCE_URLS = {
+    "CC BY 4.0": "https://creativecommons.org/licenses/by/4.0/",
+    "CC BY-SA 4.0": "https://creativecommons.org/licenses/by-sa/4.0/",
+}
 
 
 # --------------------------------------------------------------------------- preference
@@ -160,10 +172,47 @@ def _station_note(station: TideStation, caveat: str | None) -> str | None:
     return " ".join(parts) or None
 
 
+# Defaults for stations seeded before the catalog stored these links (re-seeding stores them
+# from data/tides/constants_eot20.json): EOT20 is CC BY 4.0, which asks for the licence link,
+# the source and a statement of changes; CO-OPS predictions are public domain.
+CC_BY_4 = "https://creativecommons.org/licenses/by/4.0/"
+EOT20_DATASET_URL = "https://doi.org/10.17882/79489"
+EOT20_CHANGES = (
+    "Modified: the harmonic constants of the EOT20 cell nearest each break were extracted, "
+    "amplitudes converted from cm to m, and tide heights are computed from them by this app."
+)
+COOPS_URL = "https://tidesandcurrents.noaa.gov/"
+
+
 def _attribution(station: TideStation) -> str | None:
-    if station.attribution and station.licence:
-        return f"{station.attribution} ({station.licence})"
-    return station.attribution or station.licence
+    meta = station.metadata_ or {}
+    text = station.attribution or None
+    if station.kind == "model":
+        changes = str(meta.get("changes") or EOT20_CHANGES).rstrip(".")
+        text = f"{text}. {changes}" if text else changes
+    if text and station.licence:
+        return f"{text} ({station.licence})"
+    return text or station.licence
+
+
+def _attribution_links(station: TideStation) -> list[AttributionLinkOut]:
+    """The links the station's attribution needs (dataset and licence for EOT20, the CO-OPS
+    site for NOAA predictions); only http(s) URLs."""
+    meta = station.metadata_ or {}
+    if station.kind == "model":
+        pairs = [
+            ("EOT20 dataset (SEANOE)", meta.get("source_url") or EOT20_DATASET_URL),
+            ("CC BY 4.0", meta.get("licence_url") or CC_BY_4),
+        ]
+    elif station.provider == "noaa_coops":
+        pairs = [("NOAA CO-OPS tide predictions", COOPS_URL)]
+    else:
+        pairs = []
+    return [
+        AttributionLinkOut(label=label, href=str(href))
+        for label, href in pairs
+        if str(href).startswith(("https://", "http://"))
+    ]
 
 
 def _stored_block(
@@ -233,6 +282,7 @@ def _stored_block(
         ],
         preference=preference,
         attribution=_attribution(station),
+        attribution_links=_attribution_links(station),
         fetched_at=max(r.fetched_at for r in used) if used else None,
     )
 
@@ -388,6 +438,8 @@ def spot_observations_block(
                 stale=stale,
                 licence=station.license or None,
                 attribution=station.attribution or None,
+                provider_name=OBSERVATION_PROVIDER_NAMES.get(station.provider),
+                licence_url=LICENCE_URLS.get(station.license or ""),
             )
         )
     if not items:

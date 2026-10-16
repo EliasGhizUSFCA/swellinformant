@@ -305,6 +305,29 @@ class TestTemplates:
         assert "Forecast confidence: Moderate" not in legacy
         assert "Confidence at this break" not in legacy
 
+    def test_data_credits_are_printed_next_to_the_model_values(self) -> None:
+        """Open-Meteo asks for a link wherever its data are shown and ECMWF for "Copyright
+        ECMWF" with the CC BY 4.0 licence (review SEC-1): the email carries the run's
+        credits in text and as links; non-http(s) links are dropped."""
+        snap = {
+            **SNAP,
+            "data_credits": [
+                {"label": "Weather data by Open-Meteo.com", "href": "https://open-meteo.com/"},
+                {"label": "CC BY 4.0", "href": "https://creativecommons.org/licenses/by/4.0/"},
+                {"label": "bad", "href": "javascript:alert(1)"},
+            ],
+        }
+        _, text, html = render_alert_email(snap, LINKS)
+        assert (
+            "Forecast data: Weather data by Open-Meteo.com (https://open-meteo.com/) · "
+            "CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)" in text
+        )
+        assert '<a href="https://open-meteo.com/"' in html and "javascript:" not in html
+        assert "bad" not in text
+        # A snapshot without credits (demo data, older snapshots) prints none.
+        _, plain, _ = render_alert_email(SNAP, LINKS)
+        assert "Forecast data:" not in plain
+
     def test_demo_and_mock_are_labelled(self) -> None:
         demo = {**SNAP, "is_demo_forecast": True, "is_mock_flight": True}
         subject, text, _ = render_alert_email(demo, LINKS)
