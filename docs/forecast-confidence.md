@@ -316,7 +316,8 @@ What the app says about a forecast's age and origin, and the rules behind each l
   since its issue time is its oldest member's). The old "about 18 hours ahead" counted from
   the run's issue time and contradicted the hour shown.
 * **Stale state.** `MapSnapshotOut.stale`, `newest_run_issued_at` and `last_updated_at`
-  (the newest authoritative run behind the snapshot); `EventOut.stale` and
+  (the newest authoritative run behind the snapshot; when that is a blend, its issue time is
+  its oldest member's, so an age computed from it is the oldest model run's); `EventOut.stale` and
   `MatchSummary.stale` (the event's run is past its stale limit, §5); cards then show an
   "Out of date" tag and the dashboard and opportunity page a banner. The banner says that
   confidence is capped at Moderate, and that new alerts are paused **only** when

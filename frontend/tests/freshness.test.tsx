@@ -248,10 +248,14 @@ describe("stale banner and badge", () => {
     const { rerender } = render(<StaleBanner stale alertsPaused={false} runAgeHours={20} />);
     const banner = screen.getByTestId("stale-banner");
     expect(banner).toHaveTextContent("Forecast out of date");
-    expect(banner).toHaveTextContent("The newest model run is 20 h old, so confidence is capped at Moderate.");
+    expect(banner).toHaveTextContent("The model run is 20 h old, so confidence is capped at Moderate.");
     expect(banner).not.toHaveTextContent(/paused/i);
     rerender(<StaleBanner stale alertsPaused runAgeHours={34} />);
     expect(screen.getByTestId("stale-banner")).toHaveTextContent("New alerts are paused until fresh data arrives.");
+    // A blend's issue time is its oldest member's: the age is never called the newest run's.
+    rerender(<StaleBanner stale blend runAgeHours={30} />);
+    expect(screen.getByTestId("stale-banner")).toHaveTextContent("Its oldest model run is 30 h old, so confidence is capped at Moderate.");
+    expect(screen.getByTestId("stale-banner")).not.toHaveTextContent(/newest/i);
   });
 
   it("renders nothing for fresh data, and an unknown age without a number", () => {

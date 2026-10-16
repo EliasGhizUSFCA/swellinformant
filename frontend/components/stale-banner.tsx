@@ -13,16 +13,20 @@ export function ageText(hours: number): string {
  * The forecast is older than its source's stale limit. It says only what is true: the
  * confidence classes are capped at Moderate while the data is stale, and alerts are paused
  * only when `alertsPaused` says so (the alert job's own rule, at twice the stale age).
+ * `runAgeHours` is the age of the run's issue time; a blend's issue time is its oldest
+ * member's, so with `blend` the age is named as the oldest model run's.
  */
 export function StaleBanner({
   stale,
   alertsPaused = false,
   runAgeHours,
+  blend = false,
   className,
 }: {
   stale: boolean | null | undefined;
   alertsPaused?: boolean | null;
   runAgeHours?: number | null;
+  blend?: boolean;
   className?: string;
 }) {
   if (!stale) return null;
@@ -32,7 +36,7 @@ export function StaleBanner({
       <AlertTriangle />
       <AlertTitle>Forecast out of date</AlertTitle>
       <AlertDescription>
-        {age ? `The newest model run is ${age} old` : "A newer model run is overdue"}, so confidence is capped at Moderate.
+        {age ? `${blend ? "Its oldest model run" : "The model run"} is ${age} old` : "A newer model run is overdue"}, so confidence is capped at Moderate.
         {alertsPaused ? " New alerts are paused until fresh data arrives." : ""}
       </AlertDescription>
     </Alert>

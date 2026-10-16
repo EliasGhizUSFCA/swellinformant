@@ -9,7 +9,8 @@ import { cn } from "@/lib/utils";
 import type { RunMember } from "@/types/api";
 
 /** The browser clock in epoch ms, refreshed every minute (for "in 2 h" and "model run 16 h ago"
- * labels; read once per mount, never during render). */
+ * labels): read once when the component mounts and then by the interval, so re-renders in
+ * between show the same time. */
 export function useNowMs(): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
