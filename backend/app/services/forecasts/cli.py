@@ -37,7 +37,8 @@ def _add_ensemble(sub: SubParsers) -> None:
         "ensemble",
         help="fetch GEFS-Wave ensemble mean/spread for the newest complete cycle",
         description=(
-            "Samples GEFS-Wave mean and spread (Hs, Tp, wind, swell partition 1) at every "
+            "Samples the GEFS-Wave mean and spread of GEFS_STAT_FIELDS (default HTSGW,PERPW: "
+            "Hs and Tp; WIND, SWELL and SWPER add wind and swell partition 1) at every "
             "active spot into forecast_ensemble_stats. Without --force it does nothing "
             "unless GEFS_ENABLED=true, and skips a cycle that is already stored."
         ),
