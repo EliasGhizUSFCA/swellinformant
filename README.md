@@ -47,14 +47,26 @@ variables.
 
 **Forecast pipeline**
 
-* Direct NOAA GFS-Wave + GFS and ECMWF IFS ingestion (GRIB2 by HTTP byte range, no keys),
-  GEFS-Wave ensemble mean/spread, plus Open-Meteo and Windy adapters and a demo generator.
+* Open-Meteo point forecasts for two independent model families, GFS and ECMWF (the
+  recommended live setup), and direct NOAA GFS-Wave + GFS and ECMWF IFS ingestion (GRIB2 by
+  HTTP byte range, no keys) as a key-free fallback; GEFS-Wave ensemble mean/spread, a Windy
+  adapter (refused unless its terms are acknowledged) and a demo generator.
 * Source dependency families and a multi-model blend (no equal averaging), with
   per-hour disagreement flags between independent models.
 * Model-run tracking, staleness detection, retention, and an immutable archive of every
   prediction issued (for verification at each lead time).
+* Tides: NOAA CO-OPS predictions at US spots and EOT20 model tides elsewhere (relative to
+  the model's mean sea level, not a chart datum), no keys
+  ([`docs/tides.md`](docs/tides.md)).
 
-**Surf prediction and scoring** (algorithm 2.0.0, [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md))
+**Spot forecast** ([`docs/forecast-charts.md`](docs/forecast-charts.md))
+
+* One 10-day timeline whose rows share one time axis: our surf quality, our estimated
+  breaking height with its likely range, the model's offshore wave systems, wind (FROM
+  direction, its relation to the break, gusts) and the tide. Each step is drawn as long as
+  it is (3-hourly, then 6-hourly), never as hourly values.
+
+**Surf prediction and scoring** (algorithm 2.1.0, [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md))
 
 * Breaking height from linear wave theory + Komar–Gaughan per swell partition, with
   directional spreading, shore normal, shadowing and a focusing prior; spot physical
@@ -94,10 +106,14 @@ variables.
 
 **Interactive map**
 
-* Full-screen dark map with NOAA ocean layers: wave height, wave energy, wave period and
-  wind speed as colour fields with animated particles, optional isobars, a timeline over
-  the model's valid times, a legend, settings (units, particles, dark or street basemap,
-  spot filters) and locate-me. Spot markers stay coloured by our surf prediction.
+* Full-screen dark map with NOAA ocean layers: wave height, wave energy and wave period as
+  colour fields with stylised wave crests that move the way each wave system travels
+  (primary swell, secondary swell, wind sea; drawn from the model fields, not individual
+  waves), wind speed with animated particles, optional isobars, a timeline over the model's
+  valid times, a legend, settings (units, animated flow, wind on wave layers, dark or street
+  basemap, wave systems, spot filters) and locate-me. Spot markers stay coloured by our surf
+  prediction. Rendering: [`docs/map-rendering.md`](docs/map-rendering.md); bounds, zoom and
+  the date line: [`docs/map-navigation.md`](docs/map-navigation.md).
 
 **Verification and ML post-processing**
 
@@ -337,13 +353,17 @@ scripts/check-health.sh              # data health from a shell: exit 0 ok, 1 de
 
 ## G. API configuration
 
+Every external service, with its terms, free tier, cost, attribution and setup steps:
+[`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md).
+
 | Service | Variables | Where credentials come from | Demo alternative |
 |---------|-----------|-----------------------------|------------------|
-| Forecasts: NOAA GFS-Wave + GFS, direct | `FORECAST_PROVIDERS=noaa_gfs` (recommended with `ecmwf_ifs`), `NOAA_*` tuning | None: NOAA open data on AWS | `FORECAST_PROVIDERS=demo` (default) |
-| Forecasts: ECMWF IFS open data | `FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs`, `ECMWF_*` tuning | None: CC BY 4.0 open data (attribution is shown automatically) | — |
+| Forecasts: Open-Meteo, GFS and ECMWF families (recommended) | `FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf`, optional `OPEN_METEO_API_KEY` | No key for non-commercial use; commercial use needs a paid plan (open-meteo.com/en/pricing). CC BY 4.0: the attribution links are shown automatically | `FORECAST_PROVIDERS=demo` (default) |
+| Forecasts: NOAA GFS-Wave + GFS, direct (key-free fallback) | `FORECAST_PROVIDERS=noaa_gfs` (with `ecmwf_ifs` for a second family), `NOAA_*` tuning | None: NOAA open data on AWS | `FORECAST_PROVIDERS=demo` (default) |
+| Forecasts: ECMWF IFS open data, direct (key-free fallback) | `FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs`, `ECMWF_*` tuning | None: CC BY 4.0 open data (attribution is shown automatically) | — |
 | Forecast uncertainty: GEFS-Wave ensemble | `GEFS_ENABLED=true` | None: NOAA open data | Heuristic ranges without it |
-| Forecasts: Open-Meteo (NOAA GFS / GFS-Wave) | `FORECAST_PROVIDERS=open_meteo`, optional `OPEN_METEO_API_KEY` | No key for non-commercial use; commercial keys at open-meteo.com/en/pricing | `FORECAST_PROVIDERS=demo` (default) |
-| Forecasts: Windy Point Forecast | `FORECAST_PROVIDERS=windy` (or `open_meteo,windy`), `WINDY_API_KEY` | api.windy.com/keys (paid Point Forecast plan) | — |
+| Forecasts: Windy Point Forecast (not recommended) | `FORECAST_PROVIDERS=windy` (or `open_meteo,windy`), `WINDY_API_KEY`, `WINDY_TERMS_ACKNOWLEDGED=true` (its terms forbid storing the data; refused without it) | api.windy.com/keys (paid Point Forecast plan) | — |
+| Tides | `TIDE_PROVIDERS=noaa_coops,harmonic_model` (default), `NOAA_COOPS_APPLICATION` (an identifier such as the app's name and URL; an e-mail address is refused and replaced by `APP_NAME`) | None: NOAA CO-OPS (US spots) and EOT20 constants (CC BY 4.0, "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE", shown with the tide) | — |
 | Flights: Duffel | `FLIGHT_PROVIDER=duffel`, `DUFFEL_ACCESS_TOKEN` | app.duffel.com → Developers → Access tokens (`duffel_test_…` = sandbox) | `FLIGHT_PROVIDER=demo` (default) |
 | Flights: Amadeus Enterprise | `FLIGHT_PROVIDER=amadeus`, `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET`, `AMADEUS_BASE_URL` | Your Amadeus Enterprise account manager | — |
 | Email: SMTP | `EMAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS`/`SMTP_USE_SSL`, `EMAIL_FROM` | Your mail provider; Mailpit locally needs none | `EMAIL_PROVIDER=console` (default) |
@@ -356,18 +376,44 @@ Inbound STOP/START: set your Twilio number's "A message comes in" webhook to
 `POST ${API_BASE_URL}/api/webhooks/twilio/sms`. Requests are verified with
 `X-Twilio-Signature`, so `API_BASE_URL` must be the exact public URL Twilio calls.
 
-### Live forecasts from NOAA and ECMWF
+### Live forecasts
+
+Recommended (API-first, two independent model families, blended):
+
+```env
+FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf
+GEFS_ENABLED=true                       # ensemble spread for the uncertainty ranges
+```
+
+* Small point requests: with the default `FORECAST_BATCH_SIZE=50`, one request per model for
+  all 50 spots. Measured live on 2026-10-14 12Z: 142.9 weighted calls (GFS family) and
+  124.3 (ECMWF family) per run, about 8 % of the free tier a day with the default schedule
+  ([`docs/FORECAST_SOURCES.md`](docs/FORECAST_SOURCES.md)).
+* Open-Meteo's free API is for non-commercial use only and counts calls per IP address. For
+  commercial use, or on shared hosting where other users share the address, buy a plan
+  and set `OPEN_METEO_API_KEY`.
+* Upgrading an older `.env`: delete `OPEN_METEO_WAVE_MODEL` and `OPEN_METEO_ATMOS_MODEL`
+  if present. They are deprecated single-model aliases and, when set, override the
+  per-latitude GFS wave models.
+* With the defaults the database passes the default 5 GB data-health alert
+  (`DATA_HEALTH_DATABASE_MAX_GB`, an alert only) after about four months; size it from the
+  disk ([`docs/operations.md`](docs/operations.md)). The worker consumes the `celery` and
+  `bulk` (data downloads) queues, also when started without `-Q` (`WORKER_QUEUES` narrows
+  it), and Redis runs with `maxmemory` 256 MB (`REDIS_MAXMEMORY`) and `noeviction` in
+  `docker-compose.yml`.
+
+Key-free fallback that reads NOAA and ECMWF open data directly (GRIB2 by byte range):
 
 ```env
 FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs   # two independent model families -> blended
-GEFS_ENABLED=true                       # ensemble spread for the uncertainty ranges
+GEFS_ENABLED=true
 ```
 
 * No keys are needed. Each GFS cycle downloads about 1.9 GB (81 steps × ~24 MB for the 50
   spots), each ECMWF cycle about 0.85 GB and each GEFS cycle about 0.2 GB; measured
   2026-10-11: ~4 min, ~2 min and ~30 s. Reduce with `NOAA_STEP_HOURS=6` or shorter
   `NOAA_MAX_LEAD_HOURS` / `ECMWF_MAX_LEAD_HOURS`.
-* Try it once synchronously (fresh database recommended):
+* Try either setup once synchronously (fresh database recommended):
 
   ```bash
   docker compose exec backend python -m app.cli engine ensemble --force
@@ -452,7 +498,7 @@ MAP_FIELD_MAX_LEAD_HOURS=240
   `FORECAST_REFRESH_MINUTES`, under the separate source `noaa_gfs_fields`, never used for
   spot forecasts): GFS-Wave `global.0p25` and the GFS `pgrb2.0p50` atmosphere
   (`pgrb2.0p25` as a per-hour fallback), 61 map hours per cycle. Measured per map hour
-  (2026-10-14 12Z): 7.85 to 8.10 MB downloaded with the partitions, 2.69 to 2.74 MB
+  (2026-10-14 12Z): 7.85 to 8.10 MB downloaded with the partitions, 2.69 to 2.72 MB
   without; extrapolated, about 0.97 GB a day (0.33 GB without partitions) and about
   142 MB stored for the 2 retained runs ([`docs/map-layers.md`](docs/map-layers.md)).
   With `noaa_gfs` as a provider the fields come from the files it reads anyway.
@@ -464,6 +510,25 @@ MAP_FIELD_MAX_LEAD_HOURS=240
 * Encoding, sources, licence, measurements and limitations:
   [`docs/map-layers.md`](docs/map-layers.md). Model output, not observations, and not
   for navigation.
+
+### Tides
+
+No key is needed. The 8 US spots use NOAA CO-OPS tide predictions; the other 42 use the
+EOT20 harmonic tide model at a model point, relative to the model's mean sea level (not a
+chart datum, so heights cannot be compared with local tide tables). These are predicted
+astronomical tides, not observed water levels. The spot page shows the station or model
+point with its distance, the datum, a caveat and the attribution (EOT20 is CC BY 4.0:
+"EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE"). `init-db` loads the station catalog;
+the scheduled `tides.acquire` job (also sent when the worker starts) fills the predictions.
+
+```bash
+python -m app.cli tides seed      # (re)load the tide station catalog
+python -m app.cli tides acquire   # fetch / compute tide predictions now
+python -m app.cli tides list
+python -m app.cli tides prune
+```
+
+Sources, validation against CO-OPS and limitations: [`docs/tides.md`](docs/tides.md).
 
 ### Observations, verification and ML post-processing
 
@@ -529,7 +594,7 @@ this: there are no nearshore surf observations yet.
 1. Put the credentials in `.env` (never commit it), for example:
 
    ```env
-   FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs
+   FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf
    GEFS_ENABLED=true
    FLIGHT_PROVIDER=duffel
    DUFFEL_ACCESS_TOKEN=duffel_test_xxx
