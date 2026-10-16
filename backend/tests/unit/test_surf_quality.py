@@ -328,6 +328,16 @@ class TestStoredComponents:
         lost = r.stored_components()["contributions"]
         assert max(lost, key=lambda k: lost[k]) in ("wind", "wind_gate")
 
+    def test_explanation_rounds_halves_up_like_the_charts(self) -> None:
+        # Live 2026-10-16, Pipeline 17Z: 34.5 km/h was "34 km/h" in the sentence and "35 km/h"
+        # in the summary above it (toFixed(0)). Both now say 35; a 10.5 s period says 11 s.
+        r = evaluate(sea(wind_speed_kmh=34.5, wind_direction_deg=290.0), JBAY)
+        assert "wind 35 km/h from WNW" in r.explanation
+        r = evaluate(sea(primary_swell_period_s=10.5, wave_period_s=10.5), JBAY)
+        assert " @ 11 s " in r.explanation
+        r = evaluate(sea(wind_speed_kmh=34.4, wind_direction_deg=290.0), JBAY)
+        assert "wind 34 km/h from WNW" in r.explanation
+
     def test_version(self) -> None:
         assert ALGORITHM_VERSION == "2.1.0"
 

@@ -475,6 +475,12 @@ def _describe(score: float | None, good: str, ok: str, bad: str) -> str:
     return bad
 
 
+def _whole(value: float) -> int:
+    """``value`` to a whole number with halves rounded up, as the charts' ``toFixed(0)`` does
+    (Python's format rounds 34.5 to 34), so the sentence and the summary never differ by 1."""
+    return math.floor(value + 0.5)
+
+
 def build_explanation(
     sea: SeaState,
     spot: SpotParams,
@@ -512,7 +518,7 @@ def build_explanation(
             "poorly aligned / partly blocked",
         )
         parts.append(
-            f"{h:.1f} m @ {t:.0f} s {compass_label(d)} {kind}"
+            f"{h:.1f} m @ {_whole(t)} s {compass_label(d)} {kind}"
             + (f", {dir_note}" if dir_note else "")
         )
     if sea.wind_speed_kmh is not None:
@@ -525,13 +531,13 @@ def build_explanation(
             "unknown",
         ):
             parts.append(
-                f"{prefix}wind {sea.wind_speed_kmh:.0f} km/h from "
+                f"{prefix}wind {_whole(sea.wind_speed_kmh)} km/h from "
                 f"{compass_label(sea.wind_direction_deg)}, {relation} or "
                 f"{alternative_relation}: sources disagree"
             )
         else:
             parts.append(
-                f"{prefix}{relation} wind {sea.wind_speed_kmh:.0f} km/h from "
+                f"{prefix}{relation} wind {_whole(sea.wind_speed_kmh)} km/h from "
                 f"{compass_label(sea.wind_direction_deg)}"
             )
     parts.append(
