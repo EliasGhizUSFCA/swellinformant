@@ -5,10 +5,15 @@ the quality strip, breaking-height bars, swell partitions, wind, tide and the
 selected-time summary. Rules of the contract:
 
 * ``steps`` are the stored forecast valid times of the authoritative run (the same run as
-  ``/forecast``), at the model's native spacing. Model values are never interpolated
-  (``steps_meta.interpolation`` is "none"); a step stands for the interval of
-  ``step_hours`` after ``t`` (``steps_meta.segments`` lists where the spacing changes,
-  e.g. hourly, then 3-hourly). A chart picks the nearest valid step for a selected time.
+  ``/forecast``), at the model's native spacing; the timeline adds no values between
+  them. ``step_hours`` is the gap to the next valid time (``steps_meta.segments`` lists
+  where the spacing changes, e.g. hourly, then 3-hourly). A chart picks the nearest valid
+  step for a selected time, so a step stands for the interval halfway back to the previous
+  valid time and halfway on to the next.
+* A blend step can hold a member's value interpolated linearly in time between that
+  member's own steps (ECMWF is 3-hourly where the GFS family is hourly), or a value its
+  source interpolated: such a step has ``interpolated`` true and names the members in
+  ``interpolated_members``, and ``steps_meta.interpolation`` is "some_steps".
 * Three kinds of numbers stay apart: raw offshore model output (``offshore`` and
   ``partitions``), our breaking-height prediction (``breaking``) and our quality rating
   (``quality``).
@@ -54,7 +59,9 @@ class StepSegmentOut(BaseModel):
 
 class StepsMetaOut(BaseModel):
     segments: list[StepSegmentOut]
-    interpolation: Literal["none"] = "none"
+    # "none": no step holds an interpolated value; "some_steps": the steps with
+    # ``interpolated`` true do (a blend member aligned in time, or the source's own).
+    interpolation: Literal["none", "some_steps"] = "none"
     policy: Literal["nearest-valid-step"] = "nearest-valid-step"
 
 
@@ -89,7 +96,8 @@ class TimelineDayOut(BaseModel):
     best_time: datetime | None
     best_score: int | None
     best_label: str | None
-    # Hours of Good or better daylight surf, weighted by step duration and clipped to the day.
+    # Hours between first and last light of this day covered by the intervals of Good or
+    # better steps (each step standing for its nearest-valid-step interval).
     good_hours: float
     forecast_confidence_class: str | None
 
@@ -136,12 +144,22 @@ class PartitionOut(BaseModel):
     drives_surf: bool
 
 
+GustCause = Literal["source", "blend"]
+WindDisagreement = Literal["direction", "speed"]
+
+
 class StepWindOut(BaseModel):
     speed_kmh: float | None
     gust_kmh: float | None
     gust_kind: str | None
-    # The source's gust is below its mean wind (a model artefact worth flagging).
+    # The gust shown is below the mean wind shown. Cause "source": the gust's own model put
+    # it below its own mean wind (a model artefact); "blend": the gust comes from fewer
+    # models than the blended mean and is not below their own mean.
     gust_below_mean: bool
+    gust_below_mean_cause: GustCause | None = None
+    # Independent models of a blend disagree on the wind direction (by more than 60 deg,
+    # both at 10 km/h or more) or speed (by more than 15 km/h) at this step.
+    models_disagree: list[WindDisagreement] = []
     dir_from_deg: float | None
     # One of the six stored wind_relation strings (offshore, cross-offshore, ...).
     relation: str
@@ -174,8 +192,10 @@ class TimelineStepOut(BaseModel):
     step_hours: float
     lead_hours: float | None
     is_daylight: bool
-    # True only when the source itself marked the value as interpolated.
+    # A value of this step was interpolated in time: a blend member aligned between its own
+    # steps (members in ``interpolated_members``) or a value the source interpolated.
     interpolated: bool
+    interpolated_members: list[str] = []
     quality: StepQualityOut
     breaking: StepBreakingOut
     offshore: StepOffshoreOut

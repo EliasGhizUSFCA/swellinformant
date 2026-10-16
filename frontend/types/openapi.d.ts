@@ -3586,6 +3586,13 @@ export interface components {
             gust_kind: string | null;
             /** Gust Below Mean */
             gust_below_mean: boolean;
+            /** Gust Below Mean Cause */
+            gust_below_mean_cause?: ("source" | "blend") | null;
+            /**
+             * Models Disagree
+             * @default []
+             */
+            models_disagree: ("direction" | "speed")[];
             /** Dir From Deg */
             dir_from_deg: number | null;
             /** Relation */
@@ -3608,9 +3615,9 @@ export interface components {
             /**
              * Interpolation
              * @default none
-             * @constant
+             * @enum {string}
              */
-            interpolation: "none";
+            interpolation: "none" | "some_steps";
             /**
              * Policy
              * @default nearest-valid-step
@@ -3790,6 +3797,11 @@ export interface components {
             is_daylight: boolean;
             /** Interpolated */
             interpolated: boolean;
+            /**
+             * Interpolated Members
+             * @default []
+             */
+            interpolated_members: string[];
             quality: components["schemas"]["StepQualityOut"];
             breaking: components["schemas"]["StepBreakingOut"];
             offshore: components["schemas"]["StepOffshoreOut"];

@@ -48,6 +48,7 @@ from app.services.surf_quality.predict import (
     compute_pending_predictions,
     compute_predictions_for_run,
 )
+from app.services.surf_quality.sun import TWILIGHT_MARGIN, sun_times
 from app.services.verification.metrics import LEAD_BUCKETS_H
 from tests.conftest import ApiClient
 from tests.integration.test_pipeline import make_search, make_user, simulate
@@ -286,7 +287,7 @@ def test_every_prediction_stores_both_classes_lead_and_issue_time(
         assert run is not None
         assert p.forecast_confidence_class in CLASSES and p.local_confidence_class in CLASSES
         assert fc.rank(p.local_confidence_class) <= fc.rank(p.forecast_confidence_class)
-        assert p.confidence_method == fc.METHOD == "forecast-v1.1"
+        assert p.confidence_method == fc.METHOD == "forecast-v1.2"
         assert p.issued_at == run.issued_at
         assert p.lead_hours == pytest.approx((p.valid_time - run.issued_at).total_seconds() / 3600)
         inputs = p.confidence_inputs or {}
@@ -804,16 +805,27 @@ def test_blend_members_are_listed_with_their_own_init_times(
     assert all(m.name.startswith("SYNTHETIC") for m in members.values())
 
 
-def test_good_hours_are_step_durations(db: Session, scored: dict[str, Any]) -> None:
-    out = spot_forecast(db, _spot(db, "pipeline"), now=NOW)
+def test_good_hours_are_hours_of_light_under_good_steps(
+    db: Session, scored: dict[str, Any]
+) -> None:
+    """Each 3-hourly step stands for t - 1.5 h to t + 1.5 h (nearest valid step): a day's
+    good_hours is the part of first-to-last light under Good or better steps, so it never
+    exceeds the day's light, and a good step well inside the light counts its full 3 h."""
+    spot = _spot(db, "pipeline")
+    out = spot_forecast(db, spot, now=NOW)
+    zone = ZoneInfo(spot.timezone)
+    half = timedelta(hours=1.5)
+    assert out.daily
     for day in out.daily:
-        zone = ZoneInfo(_spot(db, "pipeline").timezone)
+        rise, set_, state = sun_times(spot.latitude, spot.longitude, day.date)
+        assert state == "normal" and rise is not None and set_ is not None
+        first, last = rise - TWILIGHT_MARGIN, set_ + TWILIGHT_MARGIN
+        assert 0.0 <= day.good_hours <= (last - first).total_seconds() / 3600 + 0.01
         good = [
             p
             for p in out.points
-            if p.is_daylight and p.score >= 57 and p.valid_time.astimezone(zone).date() == day.date
+            if p.score >= 57 and p.valid_time.astimezone(zone).date() == day.date
         ]
-        # 3-hourly steps: each good daylight step is up to 3 hours (clipped to the day).
         assert day.good_hours <= 3.0 * len(good) + 1e-6
-        if good and all(p.valid_time.astimezone(zone).hour <= 20 for p in good):
+        if good and all(first <= p.valid_time - half and p.valid_time + half <= last for p in good):
             assert day.good_hours == pytest.approx(3.0 * len(good))

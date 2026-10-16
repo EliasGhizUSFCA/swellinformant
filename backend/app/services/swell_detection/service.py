@@ -30,6 +30,7 @@ from app.core.config import get_settings
 from app.core.database import utcnow
 from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, SwellEvent, WaveForecast
 from app.models.enums import QualityLabel, SwellEventStatus
+from app.services import timesteps
 from app.services.forecasts.queries import latest_runs_by_spot
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.confidence import confidence_label
@@ -40,6 +41,7 @@ from app.services.surf_quality.forecast_confidence import (
     forecast_only,
 )
 from app.services.surf_quality.scoring import label_for_score
+from app.services.surf_quality.sun import daylight_windows
 from app.services.swell_detection.clustering import Cluster, Step, cluster_steps, overlaps
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,10 @@ class DetectionStats:
 
 
 def load_steps(db: Session, spot_id: int, run_id: int, since: datetime) -> list[Step]:
+    """The run's steps for the spot from ``since``, each with its real length: ``duration``
+    is the gap to the next stored time (the last keeps the spacing before it) and
+    ``daylight`` the part of its nearest-valid-step interval between first and last light
+    at the spot (``sun.daylight_windows``), as the spot timeline counts good hours."""
     rows = db.execute(
         select(SurfQualityPrediction, WaveForecast)
         .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
@@ -72,9 +78,43 @@ def load_steps(db: Session, spot_id: int, run_id: int, since: datetime) -> list[
         )
         .order_by(SurfQualityPrediction.valid_time)
     ).all()
+    if not rows:
+        return []
+    times = [p.valid_time for p, _ in rows]
+    after = db.scalar(
+        select(SurfQualityPrediction.valid_time)
+        .where(
+            SurfQualityPrediction.run_id == run_id,
+            SurfQualityPrediction.spot_id == spot_id,
+            SurfQualityPrediction.valid_time > times[-1],
+        )
+        .order_by(SurfQualityPrediction.valid_time)
+        .limit(1)
+    )
+    durations = timesteps.forward_hours(times, after)
+    extents = timesteps.centred_extents(times, durations)
+    spot = db.get(SurfSpot, spot_id)
+    windows = (
+        daylight_windows(
+            spot.latitude, spot.longitude, extents[0][0] - timedelta(days=1), extents[-1][1]
+        )
+        if spot is not None
+        else None
+    )
     return [
-        Step(time=p.valid_time, is_daylight=p.is_daylight, score=p.score, payload=(p, f))
-        for p, f in rows
+        Step(
+            time=p.valid_time,
+            is_daylight=p.is_daylight,
+            score=p.score,
+            duration=timedelta(hours=hours),
+            payload=(p, f),
+            daylight=(
+                timedelta(hours=timesteps.overlap_hours(extent, windows))
+                if windows is not None
+                else None
+            ),
+        )
+        for (p, f), hours, extent in zip(rows, durations, extents, strict=True)
     ]
 
 

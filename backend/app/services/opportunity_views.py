@@ -268,6 +268,8 @@ def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
                 db, event.latest_run_id, m.spot_id, max(start, now - timedelta(hours=3)), end
             ),
             m.spot.timezone,
+            m.spot.latitude,
+            m.spot.longitude,
         )
     offers = [offer_out(o.offer, o.rank, o.price_converted) for o in m.offers]
     window_out = None

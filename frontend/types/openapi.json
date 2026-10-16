@@ -10552,6 +10552,33 @@
       "type": "boolean",
       "title": "Gust Below Mean"
      },
+     "gust_below_mean_cause": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "source",
+         "blend"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Below Mean Cause"
+     },
+     "models_disagree": {
+      "items": {
+       "type": "string",
+       "enum": [
+        "direction",
+        "speed"
+       ]
+      },
+      "type": "array",
+      "title": "Models Disagree",
+      "default": []
+     },
      "dir_from_deg": {
       "anyOf": [
        {
@@ -10650,7 +10677,10 @@
      },
      "interpolation": {
       "type": "string",
-      "const": "none",
+      "enum": [
+       "none",
+       "some_steps"
+      ],
       "title": "Interpolation",
       "default": "none"
      },
@@ -11196,6 +11226,14 @@
      "interpolated": {
       "type": "boolean",
       "title": "Interpolated"
+     },
+     "interpolated_members": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Interpolated Members",
+      "default": []
      },
      "quality": {
       "$ref": "#/components/schemas/StepQualityOut"

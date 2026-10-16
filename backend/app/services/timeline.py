@@ -5,12 +5,19 @@ Everything the spot page's synchronised chart rows draw, read from stored data o
 * the authoritative run is the one ``/forecast`` uses (``latest_runs_by_spot``), over the
   same window (from 3 hours ago to ``days`` ahead), so every step's score and label equal
   the forecast's for the same valid time;
-* steps are the stored valid times at the model's native spacing. A step stands for the
-  interval up to the next valid time (``timesteps.step_hours``); nothing is interpolated;
+* steps are the stored valid times at the model's native spacing; the timeline adds
+  nothing between them. ``step_hours`` is the gap to the next valid time, and under the
+  nearest-valid-step rule a step stands for the interval halfway back to the previous valid
+  time and halfway on to the next (``timesteps.centred_extents``, as the charts draw it). A
+  blend step may hold a member's value interpolated in time between that member's own
+  steps (or a value its source interpolated): ``interpolated`` and
+  ``interpolated_members`` say so, and ``steps_meta.interpolation`` is then "some_steps";
 * local days come from ``timesteps.local_day_bounds`` (23 or 25 h when the clocks change)
   and their sunrise and sunset from ``surf_quality.sun`` (the same approximation that
   decides each step's ``is_daylight``), widened by ``TWILIGHT_MARGIN`` for first and last
-  light;
+  light. A day's ``good_hours`` is the time between first and last light covered by the
+  intervals of Good-or-better steps, and its best time is chosen among daylight steps
+  whose interval lies mostly between sunrise and sunset;
 * partitions are listed only when the model stored them; the one that drives the surf is
   the partition with the largest predicted breaking height (``breaking.dominant_component``);
 * wind strength and favourability come from the stored ``wind_detail`` (algorithm 2.1.0);
@@ -38,6 +45,7 @@ from app.models.enums import QualityLabel
 from app.schemas.spots import ForecastSourceOut, RunMemberOut
 from app.schemas.tides import ObservationsBlockOut, TideBlockOut
 from app.schemas.timeline import (
+    GustCause,
     PartitionKind,
     PartitionOut,
     ProvenanceOut,
@@ -54,6 +62,7 @@ from app.schemas.timeline import (
     TimelineRunOut,
     TimelineStepOut,
     TimelineUnitsOut,
+    WindDisagreement,
 )
 from app.services import timesteps
 from app.services.forecasts.base import EXTRA_GUST_KIND, EXTRA_INTERPOLATED
@@ -67,7 +76,7 @@ from app.services.forecasts.queries import (
 from app.services.spot_views import source_attribution
 from app.services.surf_quality.forecast_confidence import STALE_REASON, api_fields
 from app.services.surf_quality.scoring import min_score_for_label
-from app.services.surf_quality.sun import TWILIGHT_MARGIN, sun_times
+from app.services.surf_quality.sun import TWILIGHT_MARGIN, daylight_windows, sun_times
 from app.services.tides.api import spot_observations_block, spot_tide_block
 from app.services.tides.stage import TideStage, tide_stages_for
 
@@ -142,6 +151,26 @@ def _partitions(pred: SurfQualityPrediction, fc: WaveForecast) -> list[Partition
     return out
 
 
+# The blend's wind flags (blend.compare_hour), as the step's ``models_disagree`` names them.
+_WIND_DISAGREEMENT: tuple[tuple[str, WindDisagreement], ...] = (
+    ("wind_direction_disagree", "direction"),
+    ("wind_disagree", "speed"),
+)
+
+
+def _gust_cause(fc: WaveForecast) -> GustCause | None:
+    """Why the gust shown is below the mean wind shown, or None when it is not: "source"
+    when the gust's own model(s) put it below their own mean wind, "blend" when the gust
+    comes from fewer models than the blended mean and is not below their own mean."""
+    speed, gust = fc.wind_speed_kmh, fc.wind_gust_kmh
+    if gust is None or speed is None or gust >= speed:
+        return None
+    member_mean = (fc.extra or {}).get("gust_member_mean_kmh")
+    if isinstance(member_mean, int | float) and gust >= member_mean:
+        return "blend"
+    return "source"
+
+
 def _wind(pred: SurfQualityPrediction, fc: WaveForecast) -> StepWindOut | None:
     if fc.wind_speed_kmh is None and fc.wind_direction_deg is None:
         return None
@@ -150,11 +179,15 @@ def _wind(pred: SurfQualityPrediction, fc: WaveForecast) -> StepWindOut | None:
     fit = detail.get("q", components.get("wind"))
     speed, gust = fc.wind_speed_kmh, fc.wind_gust_kmh
     gust_kind = (fc.extra or {}).get(EXTRA_GUST_KIND)
+    flags = ((pred.confidence_inputs or {}).get("disagreement") or {}).get("flags") or []
+    cause = _gust_cause(fc)
     return StepWindOut(
         speed_kmh=_r(speed, 2),
         gust_kmh=_r(gust, 2),
         gust_kind=str(gust_kind) if gust_kind else None,
-        gust_below_mean=gust is not None and speed is not None and gust < speed,
+        gust_below_mean=cause is not None,
+        gust_below_mean_cause=cause,
+        models_disagree=[name for flag, name in _WIND_DISAGREEMENT if flag in flags],
         dir_from_deg=_r(fc.wind_direction_deg, 1),
         relation=pred.wind_relation,
         strength=detail.get("strength"),
@@ -256,6 +289,12 @@ def _sun_events(
     return (rises[0] if rises else None), (sets[-1] if sets else None), state
 
 
+# A step can be a day's best time only when at least this share of its interval is between
+# sunrise and sunset (no twilight margin: a 3-hour step centred 20 minutes after sunset is
+# mostly dark and is never recommended).
+BEST_MIN_LIGHT_SHARE = 0.5
+
+
 def _days(
     spot: SurfSpot,
     times: Sequence[datetime],
@@ -266,13 +305,25 @@ def _days(
     first = times[0].astimezone(zone).date()
     last = (span_end - timedelta(microseconds=1)).astimezone(zone).date()
     good = min_score_for_label(QualityLabel.GOOD)
-    good_mask = [s.is_daylight and s.quality.score >= good for s in steps]
+    good_mask = [s.quality.score >= good for s in steps]
+    extents = timesteps.centred_extents(times, [s.step_hours for s in steps])
     out: list[TimelineDayOut] = []
     day = first
     while day <= last:
         start, end = timesteps.local_day_bounds(day, spot.timezone)
         sunrise, sunset, state = _sun_events(spot.latitude, spot.longitude, start, end, day)
-        daylight = [s for s in steps if start <= s.t < end and s.is_daylight]
+        # Light from the evening before and the morning after counts for steps whose
+        # interval crosses midnight; each step is clipped to this day below.
+        around = (start - timedelta(days=1), end + timedelta(days=1))
+        windows = daylight_windows(spot.latitude, spot.longitude, *around)
+        sunlit = daylight_windows(spot.latitude, spot.longitude, *around, margin=timedelta(0))
+        daylight = [
+            s
+            for s, extent in zip(steps, extents, strict=True)
+            if start <= s.t < end
+            and s.is_daylight
+            and timesteps.mostly_inside(extent, sunlit, BEST_MIN_LIGHT_SHARE)
+        ]
         top = max(daylight, key=lambda s: s.quality.score) if daylight else None
         out.append(
             TimelineDayOut(
@@ -288,7 +339,7 @@ def _days(
                 best_score=top.quality.score if top else None,
                 best_label=top.quality.label if top else None,
                 good_hours=round(
-                    timesteps.weighted_hours(times, good_mask, tz=spot.timezone, day=day), 2
+                    timesteps.covered_hours(extents, good_mask, windows, (start, end)), 2
                 ),
                 forecast_confidence_class=top.quality.forecast_confidence_class if top else None,
             )
@@ -481,12 +532,8 @@ def step_durations(
     """
     if not times:
         return []
-    if after is not None:
-        return timesteps.step_hours([*times, after])[: len(times)]
-    hours = timesteps.step_hours(times)
-    if len(hours) >= 2:
-        hours[-1] = hours[-2]
-    elif before is not None and before < times[0]:
+    hours = timesteps.forward_hours(times, after)
+    if after is None and len(times) == 1 and before is not None and before < times[0]:
         hours = [_hours(times[0] - before)]
     return hours
 
@@ -541,7 +588,8 @@ def assemble_timeline(
         steps_meta=StepsMetaOut(
             segments=[
                 StepSegmentOut(start=s.start, end=s.end, step_hours=s.step_hours) for s in segments
-            ]
+            ],
+            interpolation="some_steps" if any(s.interpolated for s in steps) else "none",
         ),
         provenance=provenance,
         days=_days(spot, times, segments[-1].end, steps) if steps else [],
@@ -565,6 +613,7 @@ def _step(
         lead_hours=_r(p.lead_hours, 1),
         is_daylight=p.is_daylight,
         interpolated=bool((f.extra or {}).get(EXTRA_INTERPOLATED, False)),
+        interpolated_members=[str(c) for c in (f.extra or {}).get("interpolated_members") or []],
         quality=_quality(p, stale),
         breaking=StepBreakingOut(
             # Rows scored before the central value was stored: their typical height is that

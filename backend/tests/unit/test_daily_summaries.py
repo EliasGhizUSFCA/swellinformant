@@ -11,6 +11,7 @@ import pytest
 
 from app.schemas.spots import ForecastPoint
 from app.services.spot_views import daily_summaries
+from app.services.surf_quality.sun import TWILIGHT_MARGIN, sun_times
 
 GOOD, POOR = 60, 20  # Good starts at 57 (scoring.LABEL_THRESHOLDS)
 
@@ -66,12 +67,14 @@ def test_hourly_steps_count_one_hour_each() -> None:
     assert day.good_hours == 2.0
 
 
-def test_mixed_spacing_uses_each_steps_own_duration() -> None:
-    # 3-hourly to 12:00, then 6-hourly (as ECMWF beyond 144 h): the 12:00 step lasts 6 h.
+def test_mixed_spacing_uses_each_steps_own_interval() -> None:
+    # 3-hourly to 12:00, then 6-hourly (as ECMWF beyond 144 h). Each step stands for its
+    # nearest-valid-step interval, as the charts draw it: 09:00 for 07:30-10:30 and 12:00
+    # for 10:30-15:00 (the 18:00 step is nearer after 15:00), so 7.5 h.
     times = [DAY, DAY + timedelta(hours=3), DAY + timedelta(hours=6), DAY + timedelta(hours=12)]
     pts = [point(t, s) for t, s in zip(times, [POOR, GOOD, GOOD, POOR], strict=True)]
     (day,) = daily_summaries(pts, "UTC")
-    assert day.good_hours == 9.0
+    assert day.good_hours == 7.5
 
 
 def test_night_steps_and_poor_steps_do_not_count() -> None:
@@ -86,3 +89,21 @@ def test_good_hours_never_exceed_the_local_day(tz: str) -> None:
     pts = series(3, [GOOD] * 16, datetime(2026, 10, 11, 0, tzinfo=UTC))
     for day in daily_summaries(pts, tz):
         assert 0.0 <= day.good_hours <= 24.0
+
+
+def test_with_coordinates_only_light_counts_and_the_best_time_is_sunlit() -> None:
+    """Nazare-like coordinates (synthetic scores): 3-hourly Good steps all day count the
+    hours from first to last light only, never more than the day's light, and a top-scoring
+    step centred after sunset (16:30-19:30 against sunset about 17:44 UTC) is not the best."""
+    lat, lon = 39.60, -9.07
+    start = datetime(2026, 10, 25, 0, tzinfo=UTC)
+    pts = [
+        point(start + timedelta(hours=3 * i), 90 if i == 6 else GOOD, daylight=7 <= 3 * i <= 18)
+        for i in range(8)
+    ]
+    (day,) = [d for d in daily_summaries(pts, "UTC", lat, lon) if d.date == date(2026, 10, 25)]
+    rise, set_, _ = sun_times(lat, lon, date(2026, 10, 25))
+    assert rise is not None and set_ is not None
+    light = (set_ - rise + 2 * TWILIGHT_MARGIN).total_seconds() / 3600
+    assert day.good_hours == pytest.approx(light, abs=0.02)
+    assert day.best_time == start + timedelta(hours=9) and day.best_score == GOOD

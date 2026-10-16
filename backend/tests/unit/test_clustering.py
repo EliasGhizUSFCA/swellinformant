@@ -74,3 +74,42 @@ def test_overlaps_with_tolerance() -> None:
     b0, b1 = T0 + timedelta(hours=15), T0 + timedelta(hours=20)
     assert not overlaps(a0, a1, b0, b1)
     assert overlaps(a0, a1, b0, b1, tolerance=timedelta(hours=6))
+
+
+def test_hours_not_steps_with_mixed_spacing() -> None:
+    """Hourly steps then 3-hourly steps (as the blend to f120, then beyond): qualifying and
+    failing hours sum the steps' daylight hours, so two 3-hour steps are 6 hours, not 2."""
+    hourly = [
+        Step(T0 + timedelta(hours=i), True, 80, duration=timedelta(hours=1)) for i in range(2)
+    ]
+    three = [
+        Step(
+            T0 + timedelta(hours=2 + 3 * i),
+            True,
+            80,
+            duration=timedelta(hours=3),
+            daylight=timedelta(hours=3),
+        )
+        for i in range(2)
+    ]
+    (cluster,) = cluster_steps([*hourly, *three], qualifies=q, min_hours=7)
+    assert cluster.qualifying_hours == 8
+    assert cluster.end == T0 + timedelta(hours=5 + 3)  # the last step at 05:00 lasts 3 h
+
+
+def test_a_step_counts_only_its_daylight_part() -> None:
+    dusk = Step(T0, True, 80, duration=timedelta(hours=3), daylight=timedelta(hours=1.25))
+    assert dusk.hours == 1.25
+    assert cluster_steps([dusk], qualifies=q, min_hours=1.5) == []
+    (cluster,) = cluster_steps([dusk], qualifies=q, min_hours=1)
+    assert cluster.qualifying_hours == 1.25
+
+
+def test_three_hour_poor_steps_break_an_event_after_nine_hours() -> None:
+    def three(i: int, score: int) -> Step:
+        return Step(T0 + timedelta(hours=3 * i), True, score, duration=timedelta(hours=3))
+
+    poor = [three(i, 20) for i in range(1, 4)]  # 9 failing daylight hours in 3 steps
+    steps = [three(0, 80), *poor, three(4, 80)]
+    assert len(cluster_steps(steps, qualifies=q, min_hours=1, break_daylight_hours=9)) == 2
+    assert len(cluster_steps(steps[:3] + steps[4:], qualifies=q, min_hours=1)) == 1

@@ -5,6 +5,10 @@ Rules (documented in docs/SURF_SCORING.md):
 * Only daylight steps count; night steps neither qualify nor break an event, so a swell
   that is good on consecutive mornings forms ONE multi-day event.
 * A daylight step qualifies when its predicate holds (default: score ≥ threshold).
+* Hours are real hours, not step counts: a step counts the part of its interval that is
+  daylight (``Step.daylight``, set by the detection service from the run's own step
+  spacing and the sun), or its whole ``duration`` when that is not given. A 3-hourly step
+  therefore counts up to 3 hours and an hourly one up to 1.
 * An event ends once ``break_daylight_hours`` consecutive daylight hours fail to qualify
   (e.g. a full day of onshore wind splits two swells into two events).
 * An event needs at least ``min_hours`` qualifying hours to be kept.
@@ -23,8 +27,17 @@ class Step:
     time: datetime
     is_daylight: bool
     score: int
+    # Gap to the next valid time (an event ends at its last step's time + duration).
     duration: timedelta = timedelta(hours=1)
     payload: Any = None
+    # The daylight part of the interval the step stands for, when known.
+    daylight: timedelta | None = None
+
+    @property
+    def hours(self) -> float:
+        """Hours the step counts towards qualifying and failing daylight hours."""
+        span = self.daylight if self.daylight is not None else self.duration
+        return span.total_seconds() / 3600.0
 
 
 @dataclass
@@ -42,7 +55,7 @@ class Cluster:
 
     @property
     def qualifying_hours(self) -> float:
-        return sum(s.duration.total_seconds() for s in self.steps) / 3600.0
+        return sum(s.hours for s in self.steps)
 
     @property
     def peak(self) -> Step:
@@ -77,7 +90,7 @@ def cluster_steps(
             current.steps.append(step)
             failing_daylight = 0.0
         elif current is not None:
-            failing_daylight += step.duration.total_seconds() / 3600.0
+            failing_daylight += step.hours
             if failing_daylight >= break_daylight_hours:
                 clusters.append(current)
                 current = None

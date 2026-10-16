@@ -26,7 +26,7 @@ from app.services.surf_quality.forecast_confidence import (
     STALE_REASON,
     forecast_reasons,
 )
-from app.services.surf_quality.sun import TWILIGHT_MARGIN, sun_times
+from app.services.surf_quality.sun import TWILIGHT_MARGIN, is_daylight, sun_times
 from app.services.tides.api import NO_OBSERVATIONS, NO_TIDE_SOURCE
 from app.services.tides.stage import TideStage
 from app.services.timeline import (
@@ -286,9 +286,55 @@ def test_wind_detail_and_gust_flags_are_carried() -> None:
     assert (w.fit, w.strength, w.favourability) == (0.9, "light", "favourable")
     assert (w.offshore_component_kmh, w.cross_component_kmh) == (5.5, 1.2)
     assert w.gust_kind == "gfs_instantaneous" and w.gust_below_mean is True
+    assert w.gust_below_mean_cause == "source" and w.models_disagree == []
     f.wind_gust_kmh = None
     w = assemble(rows).steps[0].wind
     assert w is not None and w.gust_kmh is None and w.gust_below_mean is False
+    assert w.gust_below_mean_cause is None
+
+
+def test_gust_below_a_blended_mean_is_attributed_to_the_blend() -> None:
+    """Nazare-like (synthetic): GFS alone gives the gust (10.8 over its own 10.5 mean) while
+    the blended mean of two models is 14.5: the blend, not the source, put the gust below."""
+    rows = build_rows()
+    _, f = rows[0]
+    f.wind_speed_kmh, f.wind_gust_kmh = 14.5, 10.8
+    f.extra = {
+        "gust_kind": "gfs_instantaneous",
+        "gust_members": ["open_meteo_noaa"],
+        "gust_member_mean_kmh": 10.5,
+    }
+    w = assemble(rows).steps[0].wind
+    assert w is not None and w.gust_below_mean and w.gust_below_mean_cause == "blend"
+    f.extra["gust_member_mean_kmh"] = 12.0  # below its own members' mean too: the source
+    w = assemble(rows).steps[0].wind
+    assert w is not None and w.gust_below_mean_cause == "source"
+
+
+def test_model_disagreement_on_the_wind_is_carried_per_step() -> None:
+    rows = build_rows()
+    p, _ = rows[0]
+    p.confidence_inputs = {
+        **(p.confidence_inputs or {}),
+        "disagreement": {"flags": ["wind_direction_disagree", "hs_disagree"]},
+    }
+    w = assemble(rows).steps[0].wind
+    assert w is not None and w.models_disagree == ["direction"]
+    p.confidence_inputs["disagreement"]["flags"].append("wind_disagree")
+    w = assemble(rows).steps[0].wind
+    assert w is not None and w.models_disagree == ["direction", "speed"]
+
+
+def test_blend_time_aligned_members_are_named_and_the_meta_says_so() -> None:
+    """A blend step holding ECMWF values interpolated between ECMWF's own 3-hourly steps
+    says so (review PHYS-2); the timeline itself still adds nothing between steps."""
+    rows = build_rows()
+    rows[1][1].extra = {"interpolated": True, "interpolated_members": ["open_meteo_ecmwf"]}
+    tl = assemble(rows)
+    assert tl.steps_meta.interpolation == "some_steps"
+    assert tl.steps[1].interpolated and tl.steps[1].interpolated_members == ["open_meteo_ecmwf"]
+    assert not tl.steps[0].interpolated and tl.steps[0].interpolated_members == []
+    assert [s.t for s in tl.steps] == [p.valid_time for p, _ in rows]
 
 
 def test_step_without_wind_data_has_no_wind() -> None:
@@ -322,31 +368,91 @@ def test_days_are_local_midnights_with_sun_times_from_sun_py() -> None:
     assert tl.days[0].start_utc <= tl.steps[0].t and tl.steps[-1].t < tl.days[-1].end_utc
 
 
-def test_day_best_and_good_hours_are_duration_weighted() -> None:
+def _light_overlap(a: datetime, b: datetime, light: tuple[datetime, datetime]) -> float:
+    start, end = max(a, light[0]), min(b, light[1])
+    return max((end - start).total_seconds(), 0.0) / 3600
+
+
+def test_day_best_and_good_hours_are_hours_of_light_under_good_steps() -> None:
+    """A 3-hour step stands for t - 1.5 h to t + 1.5 h (nearest valid step, as the charts
+    draw it). good_hours is the part of first-to-last light under Good or better steps, so
+    it never exceeds the day's light, and the best time is a daylight step whose interval
+    is mostly between sunrise and sunset (recomputed from the days' own sun times)."""
     rows = build_rows()
     site = jbay_spot()
     tl = assemble(rows, site)
+    half = timedelta(hours=1.5)
     for d in tl.days:
-        inside = [s for s in tl.steps if d.start_utc <= s.t < d.end_utc and s.is_daylight]
-        if not inside:
-            assert d.best_time is None and d.good_hours == 0
+        assert d.first_light is not None and d.last_light is not None
+        light = (d.first_light, d.last_light)
+        good = [s for s in tl.steps if s.quality.score >= 57]
+        hours = sum(
+            _light_overlap(max(s.t - half, d.start_utc), min(s.t + half, d.end_utc), light)
+            for s in good
+        )
+        assert d.good_hours == pytest.approx(hours, abs=0.01)
+        assert d.good_hours <= (d.last_light - d.first_light).total_seconds() / 3600 + 0.005
+        assert d.sunrise is not None and d.sunset is not None
+        candidates = [
+            s
+            for s in tl.steps
+            if d.start_utc <= s.t < d.end_utc
+            and s.is_daylight
+            and _light_overlap(s.t - half, s.t + half, (d.sunrise, d.sunset)) >= 1.5
+        ]
+        if not candidates:
+            assert d.best_time is None
             continue
-        top = max(inside, key=lambda s: s.quality.score)
+        top = max(candidates, key=lambda s: s.quality.score)
         assert (d.best_time, d.best_score, d.best_label) == (
             top.t,
             top.quality.score,
             top.quality.label,
         )
-        good = [s for s in tl.steps if s.is_daylight and s.quality.score >= 57]
-        hours = sum(
-            (min(s.t + timedelta(hours=3), d.end_utc) - max(s.t, d.start_utc)).total_seconds()
-            / 3600
-            for s in good
-            if s.t < d.end_utc and s.t + timedelta(hours=3) > d.start_utc
-        )
-        assert d.good_hours == pytest.approx(hours)
-        # Hours, not a count of 3-hour steps.
-        assert d.good_hours % 3 == 0
+
+
+def test_good_hours_at_sunset_count_only_the_light_part_of_a_step() -> None:
+    """Nazare-like (synthetic times and scores): 3-hourly Good steps through a whole day.
+    The 18:00 step stands for 16:30-19:30; only the part before last light counts, and the
+    last step of the series counts its own 3 h, not the median of the series' spacing."""
+    site = spot("nazare-test", "Europe/Lisbon", 39.60, -9.07)
+    times = regular_times(datetime(2026, 10, 25, 0, tzinfo=UTC), 3, 8)  # 00:00 to 21:00 UTC
+    rows = build_rows(times)
+    for p, _ in rows:
+        p.score = 90 if p.valid_time.hour == 18 else 70
+        p.is_daylight = is_daylight(site.latitude, site.longitude, p.valid_time)
+    tl = assemble(rows, site)
+    day = next(d for d in tl.days if d.date == date(2026, 10, 25))
+    assert day.first_light is not None and day.last_light is not None
+    assert day.sunset is not None and day.sunset.hour == 17  # about 17:44 UTC
+    light = (day.last_light - day.first_light).total_seconds() / 3600
+    assert day.good_hours == pytest.approx(light, abs=0.01)  # every hour of light, no more
+    assert day.good_hours < 12  # the reviewed bug counted 12 h on a 10.8 h day
+    # The 18:00 step (16:30-19:30) is mostly after sunset: never the day's best time, even
+    # with the day's top score; 09:00 is the first step that is mostly sunlit.
+    eighteen = next(s for s in tl.steps if s.t.hour == 18 and s.t.day == 25)
+    assert eighteen.is_daylight  # inside the 20-minute twilight margin
+    assert day.best_time == datetime(2026, 10, 25, 9, tzinfo=UTC) and day.best_score == 70
+
+
+def test_last_step_counts_its_own_duration() -> None:
+    """La Graviere-like (synthetic): the run's last step is a daylight 3-hour step; it
+    counts 3 h of light, not 1 h."""
+    site = spot("graviere-test", "Europe/Paris", 43.67, -1.44)
+    times = regular_times(datetime(2026, 10, 26, 0, tzinfo=UTC), 1, 6) + regular_times(
+        datetime(2026, 10, 26, 9, tzinfo=UTC), 3, 1
+    )  # hourly 00-05 UTC, then one 3-hour step at 09:00 UTC (12:00 local is daylight)
+    rows = build_rows(times)
+    for p, _ in rows:
+        p.score = 10
+        p.is_daylight = is_daylight(site.latitude, site.longitude, p.valid_time)
+    rows[-1][0].score = 90
+    tl = assemble(rows, site)
+    assert tl.steps[-1].step_hours == 4.0  # the gap 05:00 -> 09:00 is kept as its spacing
+    day = next(d for d in tl.days if d.date == date(2026, 10, 26))
+    # 09:00 stands for 07:00-11:00 (halfway back to 05:00, half its own 4 h ahead): light
+    # from first light (about 06:55 UTC) on, so about 4 h, never "1 h".
+    assert day.good_hours > 3.5
 
 
 def test_lisbon_autumn_change_day_lasts_25_hours() -> None:

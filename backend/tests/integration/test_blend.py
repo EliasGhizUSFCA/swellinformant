@@ -325,7 +325,43 @@ def test_absent_partitions_gusts_and_interpolated_members(
     assert first.wind_gust_kmh == pytest.approx(20.0)
     assert first.extra["gust_kind"] == "gfs_instantaneous"
     assert first.extra["gust_kinds"] == {"t_gfs": "gfs_instantaneous", "t_ecmwf": "ecmwf_max_3h"}
+    # The gust comes from GFS alone, so its own mean wind is kept for the gust-below-mean check.
+    assert first.extra["gust_members"] == ["t_gfs"]
+    assert first.extra["gust_member_mean_kmh"] == pytest.approx(10.0)
     # Hour 0 is a step of both members; hour 1 uses ECMWF interpolated between 0 and 3 h.
     assert "interpolated" not in first.extra
     assert second.extra["interpolated"] is True
     assert second.extra["interpolated_members"] == ["t_ecmwf"]
+
+
+def test_event_steps_count_real_daylight_hours(db: Session, two_families: list[str]) -> None:
+    """Swell events and matches count hours, not steps (review PHYS-4): on a 3-hourly run
+    each step lasts 3 h and counts the part of its interval between first and last light."""
+    from app.services.surf_quality.sun import daylight_windows
+    from app.services.swell_detection.service import load_steps
+
+    _ingest(
+        db, FakeProvider("t_gfs", "ncep_gfs", 2.0, issued=NOW - timedelta(hours=6), step_hours=3)
+    )
+    compute_pending_predictions(db)
+    run = queries.latest_runs_by_spot(db, NOW)[_spot_id(db, "nazare")]
+    spot = db.get(SurfSpot, _spot_id(db, "nazare"))
+    assert spot is not None
+    steps = load_steps(db, spot.id, run.id, since=NOW - timedelta(days=1))
+    assert len(steps) > 8
+    assert {s.duration for s in steps} == {timedelta(hours=3)}  # the last keeps the spacing
+    light = daylight_windows(
+        spot.latitude, spot.longitude, NOW - timedelta(days=2), NOW + timedelta(days=5)
+    )
+    for s in steps:
+        assert s.daylight is not None and timedelta(0) <= s.daylight <= s.duration
+        lit = sum(
+            (
+                min(b, s.time + timedelta(hours=1.5)) - max(a, s.time - timedelta(hours=1.5))
+            ).total_seconds()
+            for a, b in light
+            if a < s.time + timedelta(hours=1.5) and b > s.time - timedelta(hours=1.5)
+        )
+        assert s.hours == pytest.approx(lit / 3600, abs=1e-6)
+    # A midday step is wholly in daylight and counts 3 h, not 1.
+    assert max(s.hours for s in steps if s.is_daylight) == pytest.approx(3.0)

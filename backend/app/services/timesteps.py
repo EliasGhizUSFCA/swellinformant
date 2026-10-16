@@ -1,9 +1,12 @@
 """Forecast time steps: how long each step lasts, where the spacing changes, local days.
 
 Forecast series are not evenly spaced (e.g. hourly to f120, then 3-hourly; ECMWF 3-hourly,
-then 6-hourly). A step stands for the interval from its valid time to the next valid time,
-so counts of steps are not hours: :func:`weighted_hours` sums durations instead. Pure
-functions; times must be timezone-aware and sorted ascending.
+then 6-hourly). A step's *duration* is the gap to the next valid time (:func:`step_hours`,
+:func:`forward_hours`); under the nearest-valid-step rule that the charts, the map and the
+selected time use, a step stands for the interval halfway back to the previous valid time
+and halfway on to the next (:func:`centred_extents`). Counts of steps are not hours:
+:func:`weighted_hours` sums durations and :func:`overlap_hours` measures intervals instead.
+Pure functions; times must be timezone-aware and sorted ascending.
 """
 
 from __future__ import annotations
@@ -99,3 +102,80 @@ def weighted_hours(
         if end > start:
             total += (end - start).total_seconds() / 3600.0
     return total
+
+
+def forward_hours(times: Sequence[datetime], after: datetime | None = None) -> list[float]:
+    """Duration of each step (gap to the next time). The last step lasts until ``after``
+    (the series' next time beyond ``times``) when given; otherwise it keeps the spacing of
+    the step before it (the end of a 3-hourly-then-6-hourly series lasts 6 h, not the
+    median). A single time without ``after`` gives ``[0.0]``."""
+    if not times:
+        return []
+    if after is not None:
+        return step_hours([*times, after])[: len(times)]
+    hours = step_hours(times)
+    if len(hours) >= 2:
+        hours[-1] = hours[-2]
+    return hours
+
+
+Interval = tuple[datetime, datetime]
+
+
+def centred_extents(times: Sequence[datetime], durations: Sequence[float]) -> list[Interval]:
+    """The interval each step stands for under the nearest-valid-step rule: from halfway
+    back to the previous valid time to halfway on to the next (``durations[i]`` hours after
+    ``times[i]``). The first step reaches back by half its own duration; a step of 0 h has
+    an empty interval. This is how the spot charts draw a step (frontend
+    ``lib/timeline.stepExtents``)."""
+    if len(times) != len(durations):
+        raise ValueError("times and durations must have the same length")
+    out: list[Interval] = []
+    for i, (t, hours) in enumerate(zip(times, durations, strict=True)):
+        ahead = timedelta(hours=max(hours, 0.0))
+        back = (t - times[i - 1]) if i > 0 else ahead
+        out.append((t - back / 2, t + ahead / 2))
+    return out
+
+
+def overlap_hours(interval: Interval, windows: Sequence[Interval]) -> float:
+    """Hours of ``interval`` inside the (non-overlapping) ``windows``."""
+    total = 0.0
+    for a, b in windows:
+        start, end = max(interval[0], a), min(interval[1], b)
+        if end > start:
+            total += (end - start).total_seconds() / 3600.0
+    return total
+
+
+def clip(interval: Interval, bounds: Interval) -> Interval:
+    """``interval`` limited to ``bounds`` (empty, start == end, when they do not meet)."""
+    start, end = max(interval[0], bounds[0]), min(interval[1], bounds[1])
+    return (start, end) if end > start else (start, start)
+
+
+def covered_hours(
+    extents: Sequence[Interval],
+    mask: Sequence[bool],
+    windows: Sequence[Interval],
+    bounds: Interval,
+) -> float:
+    """Hours inside ``bounds`` (e.g. a local day) and ``windows`` (e.g. first to last light)
+    covered by the intervals (``centred_extents``) of the steps where ``mask`` is true. The
+    intervals do not overlap, so this never exceeds the windows' length inside ``bounds``."""
+    if not (len(extents) == len(mask)):
+        raise ValueError("extents and mask must have the same length")
+    return sum(
+        overlap_hours(clip(extent, bounds), windows)
+        for extent, on in zip(extents, mask, strict=True)
+        if on
+    )
+
+
+def mostly_inside(extent: Interval, windows: Sequence[Interval], share: float = 0.5) -> bool:
+    """At least ``share`` of ``extent`` is inside ``windows`` (an empty extent counts when
+    its instant is)."""
+    length = (extent[1] - extent[0]).total_seconds() / 3600.0
+    if length <= 0:
+        return any(a <= extent[0] <= b for a, b in windows)
+    return overlap_hours(extent, windows) >= share * length

@@ -64,6 +64,7 @@ from app.services.research.views import research_classes, research_out
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.forecast_confidence import api_fields
 from app.services.surf_quality.scoring import label_for_score, min_score_for_label
+from app.services.surf_quality.sun import daylight_windows
 from app.services.swell_detection.service import peak_confidence, peak_wind
 
 MODEL_SERIES_STEP_HOURS = 3
@@ -380,21 +381,42 @@ def _profile_out(spot: SurfSpot) -> PhysicalProfileOut | None:
     )
 
 
-def daily_summaries(points: list[ForecastPoint], tz: str) -> list[DailySummary]:
-    """One summary per spot-local day with daylight steps. ``good_hours`` sums the
-    durations of the Good-or-better daylight steps (``timesteps.weighted_hours``, each step
-    clipped to its local day), so a 3-hourly step counts 3 hours, not 1."""
+def daily_summaries(
+    points: list[ForecastPoint], tz: str, lat: float | None = None, lon: float | None = None
+) -> list[DailySummary]:
+    """One summary per spot-local day with daylight steps, as the spot timeline's days.
+
+    Each step stands for its nearest-valid-step interval (``timesteps.centred_extents``,
+    the last step keeping the spacing before it). With the spot's ``lat``/``lon``,
+    ``good_hours`` is the time between first and last light of the day under Good or
+    better steps (``sun.daylight_windows``), and the best time is a daylight step mostly
+    between sunrise and sunset; without them the daylight steps' intervals count whole.
+    So a 3-hourly step counts up to 3 hours, never 1, and never more than the day's light.
+    """
     zone = ZoneInfo(tz)
     by_day: dict[date, list[ForecastPoint]] = defaultdict(list)
     for p in points:
         if p.is_daylight:
             by_day[p.valid_time.astimezone(zone).date()].append(p)
     times = [p.valid_time for p in points]
+    extents = timesteps.centred_extents(times, timesteps.forward_hours(times))
+    extent_of = {p.valid_time: e for p, e in zip(points, extents, strict=True)}
     good = min_score_for_label(QualityLabel.GOOD)
-    good_mask = [p.is_daylight and p.score >= good for p in points]
+    located = lat is not None and lon is not None
+    good_mask = [p.score >= good and (located or p.is_daylight) for p in points]
     out: list[DailySummary] = []
     for day in sorted(by_day):
+        bounds = timesteps.local_day_bounds(day, tz)
         items = by_day[day]
+        if lat is not None and lon is not None:
+            around = (bounds[0] - timedelta(days=1), bounds[1] + timedelta(days=1))
+            windows = daylight_windows(lat, lon, *around)
+            sunlit = daylight_windows(lat, lon, *around, margin=timedelta(0))
+            items = [p for p in items if timesteps.mostly_inside(extent_of[p.valid_time], sunlit)]
+        else:
+            windows = [bounds]
+        if not items:
+            continue
         top = max(items, key=lambda p: p.score)
         winds = [p.wind_speed_kmh for p in items if p.wind_speed_kmh is not None]
         out.append(
@@ -406,7 +428,7 @@ def daily_summaries(points: list[ForecastPoint], tz: str) -> list[DailySummary]:
                 height_min_ft=min(p.breaking_height_min_ft for p in items),
                 height_max_ft=max(p.breaking_height_max_ft for p in items),
                 avg_wind_kmh=round(sum(winds) / len(winds), 1) if winds else None,
-                good_hours=round(timesteps.weighted_hours(times, good_mask, tz=tz, day=day), 2),
+                good_hours=round(timesteps.covered_hours(extents, good_mask, windows, bounds), 2),
                 confidence=round(sum(p.confidence for p in items) / len(items)),
                 forecast_confidence_class=top.forecast_confidence_class,
                 local_confidence_class=top.local_confidence_class,
@@ -725,7 +747,7 @@ def spot_forecast(
         algorithm_version=points[0].algorithm_version if points else None,
         calibrated=bool(spot.calibration),
         points=points,
-        daily=daily_summaries(points, spot.timezone),
+        daily=daily_summaries(points, spot.timezone, spot.latitude, spot.longitude),
         models=model_series(db, spot, run, start, end),
         ensemble=ensemble_series(db, spot, start, end),
         blend=blend_info(db, run, spot),
