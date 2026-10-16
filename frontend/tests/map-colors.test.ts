@@ -69,6 +69,9 @@ describe("units, ticks and readout", () => {
     expect(formatLayerValue("wind", 10, FT)).toBe("36 km/h");
     expect(formatLayerValue("energy", 45.4, M)).toBe("45 kW/m");
     expect(formatLayerValue("tp", NaN, M)).toBe("—");
+    // Periods are stored up to byte 254 = 25.4 s: that value is a lower bound, not 25 s.
+    expect(formatLayerValue("tp", 25.3, M)).toBe("25 s");
+    expect(formatLayerValue("tp", 25.4, M)).toBe("≥25.4 s");
   });
 
   it("puts legend ticks in the user's units at matching positions", () => {
