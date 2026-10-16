@@ -81,6 +81,9 @@ export function TimelineRow({
   );
 }
 
+/** Widths (px) a day label needs at 12 px: "Fri Oct 16" with its padding, or "Fri" alone. */
+const DAY_LABEL_PX = { full: 84, weekday: 40 } as const;
+
 /** Night bands (last light to the next first light) and local-midnight separators, drawn
  * the same way under every row so they line up vertically. */
 export const RowBackground = memo(function RowBackground({ model, scale, height }: { model: TimelineModel; scale: Scale; height: number }) {
@@ -144,12 +147,17 @@ export const TimelineHeader = memo(function TimelineHeader({ model, scale, width
           const left = Math.max(0, scale(d.start));
           const right = Math.min(width, scale(d.end));
           if (right - left < 1) return null;
+          // A day that starts or ends inside the window can be a sliver: write only what fits
+          // (weekday and date, the weekday alone, or nothing) instead of clipping "Th".
+          const room = right - left;
           return (
-            <div key={d.date} className="absolute top-0 h-full overflow-clip" style={{ left, width: right - left }} data-day={d.date}>
-              <span className="sticky left-[calc(var(--tl-gutter)+2px)] inline-flex items-baseline gap-1 px-2 pt-1.5 text-xs whitespace-nowrap">
-                <span className="font-semibold text-ink">{formatCalendarDate(d.date, { weekday: "short", month: undefined, day: undefined })}</span>
-                <span className="text-muted-foreground">{formatCalendarDate(d.date)}</span>
-              </span>
+            <div key={d.date} className="absolute top-0 h-full overflow-clip" style={{ left, width: room }} data-day={d.date}>
+              {room >= DAY_LABEL_PX.weekday && (
+                <span className="sticky left-[calc(var(--tl-gutter)+2px)] inline-flex items-baseline gap-1 px-2 pt-1.5 text-xs whitespace-nowrap">
+                  <span className="font-semibold text-ink">{formatCalendarDate(d.date, { weekday: "short", month: undefined, day: undefined })}</span>
+                  {room >= DAY_LABEL_PX.full && <span className="text-muted-foreground">{formatCalendarDate(d.date)}</span>}
+                </span>
+              )}
             </div>
           );
         })}

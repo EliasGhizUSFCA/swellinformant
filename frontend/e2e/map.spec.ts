@@ -16,11 +16,21 @@ import { field, mapSettled, markerCalls, openMap, openMapWithFields, REAL_TILES,
 // "Showing" is screen-reader text, so innerText puts it on a line of its own.
 const visibleCount = async (page: Page) => Number(/Showing\s+(\d+) of/.exec(await page.getByTestId("visible-count").innerText())![1]);
 
-/** "Thu, Oct 15, 7:00 AM GMT+1", the way the spot panel writes a time in the spot's zone. */
+/** "Thu, Oct 15, 7:00 AM WEST", the way the spot panel writes a time in the spot's zone: the
+ * zone's own abbreviation from the first English locale that has one (as lib/format zoneName
+ * does), else the offset ("GMT+5:45"). */
 function spotTime(iso: string, tz: string): string {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: "h12", timeZoneName: "short" }).formatToParts(new Date(iso));
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  return `${get("weekday")}, ${get("month")} ${get("day")}, ${get("hour")}:${get("minute")} ${get("dayPeriod")} ${get("timeZoneName")}`;
+  let zone = get("timeZoneName");
+  for (const locale of ["en-US", "en-GB", "en-AU", "en-ZA", "en-IE", "en-NZ", "en-IN", "en-CA"]) {
+    const v = new Intl.DateTimeFormat(locale, { timeZone: tz, timeZoneName: "short" }).formatToParts(new Date(iso)).find((p) => p.type === "timeZoneName")?.value;
+    if (v && !/^(GMT|UTC)/.test(v)) {
+      zone = v;
+      break;
+    }
+  }
+  return `${get("weekday")}, ${get("month")} ${get("day")}, ${get("hour")}:${get("minute")} ${get("dayPeriod")} ${zone}`;
 }
 
 /** "8am Sun PDT", the way the timeline bubble writes a time in `tz`. */

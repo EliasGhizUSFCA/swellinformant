@@ -155,7 +155,8 @@ describe("steps are drawn as wide as the time they stand for", () => {
     expect((steps[9]!.x1 - steps[9]!.x0) / H).toBe(4.5); // halfway back 1.5 h, forward 3 h
     expect((steps[12]!.x1 - steps[12]!.x0) / H).toBe(6);
     expect(steps.map((s) => s.t)).toEqual(tl.steps.map((s) => Date.parse(s.t)));
-    expect(segmentsText(tl.steps_meta.segments, tl.timezone)).toMatch(/^3-hour steps, from \w{3} \d+:\d{2} [AP]M 6-hour steps$/);
+    // "then" before the new spacing (the old wording "3-hour steps, from Tue 2:00 PM 6-hour steps" read garbled).
+    expect(segmentsText(tl.steps_meta.segments, tl.timezone)).toMatch(/^3-hour steps, then 6-hour steps from \w{3} \d+:\d{2} [AP]M$/);
   });
   it("names the step length", () => {
     expect(stepLengthText(3)).toBe("3-hour step");

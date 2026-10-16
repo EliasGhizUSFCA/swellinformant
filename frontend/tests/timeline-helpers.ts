@@ -45,6 +45,7 @@ export function withSyntheticTide(tl: SpotTimeline): SpotTimeline {
     events,
     preference: { value: "mid", research_class: "moderate", decision: null, text: "Mid tide (synthetic test preference)." },
     attribution: null,
+    attribution_links: [],
     fetched_at: null,
   };
   for (const s of out.steps) {

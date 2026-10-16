@@ -373,6 +373,7 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
     confidence_reasons: [],
     forecast_confidence_reasons: [],
     stale: false,
+    attribution_links: [],
     ...overrides,
   };
 }

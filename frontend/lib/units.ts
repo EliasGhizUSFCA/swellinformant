@@ -108,3 +108,19 @@ export function useWindUnit(): [WindUnit, (u: WindUnit) => void] {
   const unit = useSyncExternalStore(subscribeWindUnit, readWindUnit, () => DEFAULT_WIND_UNIT);
   return [unit, writeWindUnit];
 }
+
+/**
+ * The scoring engine's explanation sentence (the backend writes offshore heights in metres,
+ * faces in feet, wind in km/h and British spelling) in the viewer's units and the UI's
+ * spelling, so one screen never mixes "7.7 ft" with "2.4 m" or "11 mph" with "17 km/h":
+ * "2.4 m @ 13 s" -> "7.9 ft @ 13 s", "17 km/h" -> "11 mph", "4–6 ft faces" -> "1.2–1.8 m
+ * faces", "favourable" -> "favorable". Only these patterns of our own sentence change.
+ */
+export function explanationText(text: string, height: HeightUnit, wind: WindUnit): string {
+  let out = text;
+  if (height === "ft") out = out.replace(/(\d+(?:\.\d+)?) m(?= @)/g, (_, m: string) => `${(Number(m) / M_PER_FT).toFixed(1)} ft`);
+  else
+    out = out.replace(/(\d+(?:\.\d+)?)–(\d+(?:\.\d+)?) ft\b/g, (_, a: string, b: string) => `${(Number(a) * M_PER_FT).toFixed(1)}–${(Number(b) * M_PER_FT).toFixed(1)} m`);
+  if (wind !== "km/h") out = out.replace(/(\d+(?:\.\d+)?) km\/h/g, (_, v: string) => formatWind(Number(v), wind));
+  return out.replace(/\b([Uu]n)?([Ff])avourable\b/g, (_, un: string | undefined, f: string) => `${un ?? ""}${f}avorable`);
+}

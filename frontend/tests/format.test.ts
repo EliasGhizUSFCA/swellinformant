@@ -14,6 +14,7 @@ import {
   leadLabel,
   toUnits,
   zoneAbbrev,
+  zoneName,
 } from "@/lib/format";
 
 describe("units", () => {
@@ -75,7 +76,8 @@ describe("misc", () => {
 describe("spot-local times", () => {
   it("formats a forecast time in the spot's zone, optionally with the zone name", () => {
     expect(formatSpotDateTime("2026-10-15T05:00:00Z", "Africa/Johannesburg")).toBe("Thu, Oct 15, 7:00 AM");
-    expect(formatSpotDateTime("2026-10-15T05:00:00Z", "Africa/Johannesburg", { zone: true })).toBe("Thu, Oct 15, 7:00 AM GMT+2");
+    // The zone's own name, as the spot timeline writes it (one naming rule per page).
+    expect(formatSpotDateTime("2026-10-15T05:00:00Z", "Africa/Johannesburg", { zone: true })).toBe("Thu, Oct 15, 7:00 AM SAST");
     expect(formatSpotDateTime("2026-10-15T05:00:00Z", "Africa/Johannesburg", { hour12: false })).toBe("Thu, Oct 15, 07:00");
     expect(formatSpotDateTime("2026-10-15T05:00:00Z", "Africa/Johannesburg", { weekday: "long" })).toBe("Thursday, Oct 15, 7:00 AM");
     expect(formatSpotDateTime("2026-10-15T00:00:00Z", "Pacific/Honolulu")).toBe("Wed, Oct 14, 2:00 PM");
@@ -102,11 +104,13 @@ describe("spot-local times", () => {
     expect(formatSpotTime("2026-11-01T09:00:00Z", "America/Los_Angeles")).toBe("Sun 1:00 AM PST");
   });
 
-  it("names zones without a common abbreviation by their offset (Asia/Makassar: GMT+8)", () => {
-    expect(formatSpotDateTime("2026-10-15T00:00:00Z", "Asia/Makassar", { zone: true })).toBe("Thu, Oct 15, 8:00 AM GMT+8");
-    expect(formatSpotTime("2026-10-15T00:00:00Z", "Asia/Makassar")).toBe("Thu 8:00 AM GMT+8");
+  it("names a zone as the timeline does: its own abbreviation, else the offset (Makassar: WITA)", () => {
+    // en-US alone prints "GMT+8" for Asia/Makassar; the timeline's zoneName finds "WITA".
+    expect(formatSpotDateTime("2026-10-15T00:00:00Z", "Asia/Makassar", { zone: true })).toBe(`Thu, Oct 15, 8:00 AM ${zoneName(Date.parse("2026-10-15T00:00:00Z"), "Asia/Makassar")}`);
+    expect(formatSpotTime("2026-10-15T00:00:00Z", "Asia/Makassar")).toBe(`Thu 8:00 AM ${zoneName(Date.parse("2026-10-15T00:00:00Z"), "Asia/Makassar")}`);
     expect(formatSpotTime("2026-10-15T00:00:00Z", "Asia/Makassar", { zone: false })).toBe("Thu 8:00 AM");
     expect(zoneAbbrev("2026-10-15T00:00:00Z", "Asia/Makassar")).toBe("GMT+8");
+    expect(zoneName(Date.parse("2026-10-15T00:00:00Z"), "Asia/Makassar")).not.toMatch(/^GMT/);
   });
 
   it("names zones whose offset is not a whole hour", () => {

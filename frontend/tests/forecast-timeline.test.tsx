@@ -136,7 +136,8 @@ describe("4. selecting a time updates every row and the summary", () => {
     expect(scroller()).toHaveAttribute("aria-valuenow", "9");
     expect(summaryTime()).toBe(selectedTimeTitle(Date.parse(tl.steps[9]!.t), tl.timezone));
     fireEvent.keyDown(scroller(), { key: "ArrowLeft" });
-    fireEvent.keyDown(scroller(), { key: "PageDown" });
+    // Page Up raises the slider's value (a day later), as the ARIA slider pattern and the map do.
+    fireEvent.keyDown(scroller(), { key: "PageUp" });
     expect(scroller()).toHaveAttribute("aria-valuenow", "16"); // 24 h later on a 3-hourly run
     expect(tl.steps[16]!.t).toBe("2026-10-14T03:00:00Z"); // 5:00 AM SAST, Wednesday the 14th
     fireEvent.keyDown(scroller(), { key: "Home" });
@@ -144,7 +145,8 @@ describe("4. selecting a time updates every row and the summary", () => {
     expect(tl.steps[Number(scroller().getAttribute("aria-valuenow"))]!.t).toBe("2026-10-14T00:00:00Z");
     fireEvent.keyDown(scroller(), { key: "End" });
     expect(tl.steps[Number(scroller().getAttribute("aria-valuenow"))]!.t).toBe("2026-10-14T21:00:00Z");
-    expect(scroller().getAttribute("aria-valuetext")).toMatch(/^Wed 11:00 PM, \w[\w ]+, [\d.–]+ ft$/);
+    // With the date: a 10-day horizon has two Wednesdays (review UX-04).
+    expect(scroller().getAttribute("aria-valuetext")).toMatch(/^Wed Oct 14, 11:00 PM, \w[\w ]+, [\d.–]+ ft$/);
   });
 
   it("follows a step chosen elsewhere (another reader of the same selection)", () => {
@@ -435,7 +437,9 @@ describe("observations stay apart from the forecast", () => {
       ],
     };
     renderTimeline(tl);
-    expect(screen.getByTestId("observations-note")).toHaveTextContent("Synthetic test buoy (42 km away, test): Hs 2.3 m at Mon 11:00 AM");
+    // The provider in words (never its code) and the date of the reading; height in the viewer's unit.
+    expect(screen.getByTestId("observations-note")).toHaveTextContent("Synthetic test buoy (42 km away): Hs 7.5 ft at Mon Oct 12, 11:00 AM");
+    expect(screen.getByTestId("observations-note")).not.toHaveTextContent("test)");
     expect(document.querySelector("[data-observation]")).toBeNull();
     fireEvent.click(screen.getByTestId("toggle-offshore"));
     expect(document.querySelector("[data-observation='TEST1']")).not.toBeNull();
@@ -461,7 +465,8 @@ describe("15. no time is invented", () => {
     for (const el of marks) expect(times.has(el.getAttribute("data-t")!)).toBe(true);
     const w = (i: number) => Number(rects[i]!.getAttribute("width")) + 1;
     expect(w(14) / w(3)).toBeCloseTo(2, 6);
-    expect(screen.getByTestId("timeline-zone")).toHaveTextContent(/3-hour steps, from .* 6-hour steps · not interpolated/);
+    // The chart draws nothing between steps (a blend step may still hold a time-aligned member value).
+    expect(screen.getByTestId("timeline-zone")).toHaveTextContent(/3-hour steps, then 6-hour steps from .* · no values drawn between steps/);
   });
 });
 

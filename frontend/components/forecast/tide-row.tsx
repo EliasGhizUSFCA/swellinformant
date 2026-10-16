@@ -3,6 +3,7 @@
 import { memo, useMemo } from "react";
 
 import { RowBackground, TIDE_H, TimelineRow, type RowProps } from "@/components/forecast/timeline-header";
+import { safeExternalUrl } from "@/lib/confidence";
 import { clockTime, smoothPath } from "@/lib/timeline";
 import { convertHeightFt, type HeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
@@ -44,7 +45,8 @@ export function tideStationText(tide: TideBlock): string | null {
 /**
  * Under the tide row, always visible while real predictions are shown: where they come from
  * (station or model point and its distance), the source's attribution (EOT20's CC BY 4.0
- * credit "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE", or NOAA CO-OPS) and the API's
+ * credit "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE" with its change statement, or NOAA
+ * CO-OPS) with the licence and dataset links the API sends (`attribution_links`), and the API's
  * caveat (`reason` on an available block: model mean sea level is not a chart datum, the
  * catalog's local caveat, or the CO-OPS datum and interpolation note).
  */
@@ -56,6 +58,21 @@ export function TideSourceNote({ tide, className }: { tide: TideBlock; className
       <p>
         <span className="font-medium text-ink">Tide:</span> {where ? `${where} · ` : ""}
         {tide.attribution ? <span data-testid="tide-attribution">{tide.attribution}</span> : "source not stated"}
+        {tide.attribution_links?.map((l) => {
+          const href = safeExternalUrl(l.href);
+          return (
+            <span key={l.href} data-testid="tide-attribution-link">
+              {" · "}
+              {href ? (
+                <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-ink">
+                  {l.label}
+                </a>
+              ) : (
+                l.label
+              )}
+            </span>
+          );
+        })}
       </p>
       {tide.reason && <p data-testid="tide-caveat">{tide.reason}</p>}
     </div>

@@ -51,7 +51,9 @@ export const WindRow = memo(function WindRow({ model, scale, width, unit }: RowP
     const ticks = niceTicks(max * 1.02, 3);
     const top = ticks[ticks.length - 1] ?? 1;
     const y = (v: number) => BAR_TOP + BAR_PAD + (WIND_BAR_H - BAR_PAD) * (1 - Math.min(v, top) / top);
-    return { ticks, y, runs: relationRuns(model.steps) };
+    // One label per local day at least: a relation lasting days would otherwise get a single
+    // label in the middle of the run, often outside the view.
+    return { ticks, y, runs: relationRuns(model.steps, model.days.map((d) => d.start)) };
   }, [model, unit]);
   const { ticks, y, runs } = geo;
   const base = y(0);
@@ -148,7 +150,7 @@ export const WindRow = memo(function WindRow({ model, scale, width, unit }: RowP
           const short = RELATION_SHORT[r.relation] ?? r.relation;
           const text = w >= textWidth(full) ? full : w >= textWidth(short) ? short : null;
           return (
-            <g key={r.first} data-relation-run={r.relation}>
+            <g key={`${r.first}-${r.from}`} data-relation-run={r.relation}>
               <line x1={x0 + 1.5} x2={x0 + w - 1.5} y1={WIND_H - 15.5} y2={WIND_H - 15.5} stroke="var(--chart-tick)" />
               {text && (
                 <text x={x0 + w / 2} y={WIND_H - 4} textAnchor="middle" className="fill-muted-foreground text-[10px]">

@@ -5,7 +5,7 @@ import { SelectedTimeSummary } from "@/components/forecast/selected-summary";
 import { SelectionStore, TimelineSelectionProvider } from "@/components/forecast/timeline-selection";
 import { QUALITY_LABELS } from "@/lib/quality";
 import { clockTime, localDate, partitionText, selectedTimeTitle, shortTime, tideHeightText, timelineModel } from "@/lib/timeline";
-import { formatHeightRange, formatWind } from "@/lib/units";
+import { explanationText, formatHeightRange, formatWind } from "@/lib/units";
 import type { SpotTimeline } from "@/types/api";
 
 import { jbay, patchStep, withSyntheticTide } from "./timeline-helpers";
@@ -92,7 +92,9 @@ describe("selected-time summary", () => {
     renderSummary(tl, 3);
     fireEvent.click(screen.getByRole("button", { name: "Why this forecast?" }));
     const why = tl.steps[3]!.why;
-    expect(screen.getByTestId("why-explanation")).toHaveTextContent(why.explanation);
+    // The engine's sentence, with its numbers in the viewer's units (ft and km/h here).
+    expect(screen.getByTestId("why-explanation")).toHaveTextContent(explanationText(why.explanation, "ft", "km/h"));
+    expect(screen.getByTestId("why-explanation").textContent).not.toMatch(/\d m @/);
     const fits = screen.getByTestId("why-fits").querySelectorAll("li");
     expect([...fits].map((li) => [li.getAttribute("data-fit"), Number(li.getAttribute("data-value"))])).toEqual(
       ["swell_direction", "swell_period", "wave_size", "wind", "consistency"].map((k) => [k, why.fits[k]]),

@@ -8,6 +8,10 @@ import { qualityRuns } from "@/lib/timeline";
 
 const BAR_Y = 6;
 const BAR_H = 22;
+// Night steps keep their class colour (the ramp's lightness carries the order, so fading it
+// would make a night "Exceptional" read lighter than a daylight "Poor") and are drawn as an
+// inset, shorter bar over the night band instead.
+const NIGHT_INSET = 5;
 
 /** Rough text width at 11px Inter semibold (to decide whether a label fits). */
 const textWidth = (s: string) => s.length * 6.4 + 8;
@@ -16,8 +20,9 @@ const textWidth = (s: string) => s.length * 6.4 + 8;
  * Our surf-quality rating per forecast step: one segment per API step (as wide as the step),
  * coloured on the ordinal quality ramp and labelled with the class in text wherever it fits
  * (the full name, or its short form in narrow runs), so the meaning never rests on colour
- * alone. Night steps are dimmed, not removed. The rating is the API's spot-specific score,
- * never derived from wave height here.
+ * alone. Night steps keep their colour and are drawn as a shorter, inset bar (never faded,
+ * which would break the ramp's order). The rating is the API's spot-specific score, never
+ * derived from wave height here.
  */
 export const QualityStrip = memo(function QualityStrip({ model, scale, width }: RowProps) {
   const runs = useMemo(() => qualityRuns(model.steps), [model]);
@@ -35,17 +40,18 @@ export const QualityStrip = memo(function QualityStrip({ model, scale, width }: 
           const label = asQuality(s.step.quality.label);
           const x = scale(s.x0) + 0.5;
           const w = Math.max(1, scale(s.x1) - scale(s.x0) - 1);
+          const inset = s.step.is_daylight ? 0 : NIGHT_INSET;
           return (
             <rect
               key={s.i}
               className="tl-mark tl-quality"
               x={x}
-              y={BAR_Y}
+              y={BAR_Y + inset}
               width={w}
-              height={BAR_H}
+              height={BAR_H - 2 * inset}
               rx={1.5}
               fill={QUALITY_COLORS[label]}
-              fillOpacity={s.step.is_daylight ? 1 : 0.45}
+              data-night={s.step.is_daylight ? undefined : ""}
               data-step={s.i}
               data-t={s.t}
               data-label={label}
@@ -58,16 +64,16 @@ export const QualityStrip = memo(function QualityStrip({ model, scale, width }: 
           const full = QUALITY_LABELS[r.label];
           const text = w >= textWidth(full) ? full : w >= textWidth(QUALITY_SHORT[r.label]) ? QUALITY_SHORT[r.label] : null;
           if (!text) return null;
-          // Night steps are dimmed, so their label needs the dark text whatever the class.
+          // Night bars are shorter: their label is a size smaller, in the class's own text colour.
           const night = !r.daylight;
           return (
             <text
               key={r.first}
               x={scale(r.from) + 0.5 + w / 2}
-              y={BAR_Y + BAR_H / 2 + 4}
+              y={BAR_Y + BAR_H / 2 + (night ? 3.5 : 4)}
               textAnchor="middle"
-              className="pointer-events-none text-[11px] font-semibold"
-              fill={night ? "var(--ink)" : QUALITY_TEXT[r.label]}
+              className={night ? "pointer-events-none text-[10px] font-semibold" : "pointer-events-none text-[11px] font-semibold"}
+              fill={QUALITY_TEXT[r.label]}
               data-quality-label={r.label}
             >
               {text}

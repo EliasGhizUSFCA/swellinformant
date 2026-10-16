@@ -3,6 +3,7 @@
 import { InfoPopover } from "@/components/info-popover";
 import { Disclosure } from "@/components/ui/disclosure";
 import { componentFits, score10, TONE_WORD, type FactorTone } from "@/lib/rating";
+import { explanationText, type HeightUnit, type WindUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { TimelineStep } from "@/types/api";
 
@@ -30,9 +31,21 @@ const CONTRIBUTION_LABEL: Record<string, string> = {
  * nothing else: its explanation sentence, each factor's fit (0-1, with the app's usual
  * Favorable / Workable / Limiting words), the gates that held the score back, the points each
  * factor cost when the run stored them, and whether tide was part of the rating. No text is
- * composed here beyond labels.
+ * composed here beyond labels; the sentence's numbers are shown in the viewer's units.
  */
-export function WhyThisForecast({ step, method, className }: { step: TimelineStep; method?: React.ReactNode; className?: string }) {
+export function WhyThisForecast({
+  step,
+  method,
+  units = "ft",
+  windUnit = "km/h",
+  className,
+}: {
+  step: TimelineStep;
+  method?: React.ReactNode;
+  units?: HeightUnit;
+  windUnit?: WindUnit;
+  className?: string;
+}) {
   const why = step.why;
   const fits = componentFits(why.fits);
   const gates = Object.entries(why.gates)
@@ -50,7 +63,7 @@ export function WhyThisForecast({ step, method, className }: { step: TimelineSte
     >
       {why.explanation && (
         <p className="text-sm text-ink" data-testid="why-explanation">
-          {why.explanation}
+          {explanationText(why.explanation, units, windUnit)}
         </p>
       )}
       {fits.length > 0 && (

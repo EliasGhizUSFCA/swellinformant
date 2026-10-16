@@ -12,10 +12,12 @@
  */
 
 import { compass16 } from "@/lib/directions";
-import { formatHourTick, zoneAbbrev } from "@/lib/format";
+import { formatHourTick, zoneName } from "@/lib/format";
 import { asQuality, QUALITY_LABELS } from "@/lib/quality";
 import type { HeightUnit } from "@/lib/units";
 import type { PartitionOut, QualityLabel, SpotTimeline, TimelineDay, TimelineStep } from "@/types/api";
+
+export { zoneName };
 
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 24 * HOUR_MS;
@@ -297,8 +299,10 @@ export interface RelationRun {
   first: number;
 }
 
-/** Consecutive steps with the same wind relation (steps without wind break a run). */
-export function relationRuns(steps: readonly StepInfo[]): RelationRun[] {
+/** Consecutive steps with the same wind relation (steps without wind break a run). With
+ * `breaks` (e.g. the local midnights), a run is also cut at each break, so a relation that
+ * lasts for days gets a label in every day rather than one in the middle of the run. */
+export function relationRuns(steps: readonly StepInfo[], breaks: readonly number[] = []): RelationRun[] {
   const out: RelationRun[] = [];
   let prev = -2;
   for (const s of steps) {
@@ -309,20 +313,65 @@ export function relationRuns(steps: readonly StepInfo[]): RelationRun[] {
     else out.push({ relation: rel, from: s.x0, to: s.x1, first: s.i });
     prev = s.i;
   }
-  return out;
+  if (!breaks.length) return out;
+  const cuts = [...breaks].sort((a, b) => a - b);
+  return out.flatMap((run) => {
+    const pieces: RelationRun[] = [];
+    let from = run.from;
+    for (const c of cuts) {
+      if (c <= from || c >= run.to) continue;
+      pieces.push({ ...run, from, to: c });
+      from = c;
+    }
+    pieces.push({ ...run, from, to: run.to });
+    return pieces;
+  });
 }
 
-/** "1-hour steps" or "3-hour steps to Sat, then 6-hour steps" from steps_meta.segments. */
+/** "1-hour steps" or "1-hour steps, then 3-hour steps from Tue 2:00 PM" from
+ * steps_meta.segments. */
 export function segmentsText(segments: SpotTimeline["steps_meta"]["segments"], tz: string): string {
   if (!segments.length) return "";
   const len = (h: number) => `${Number.isInteger(h) ? h : h.toFixed(1)}-hour steps`;
   if (segments.length === 1) return len(segments[0]!.step_hours);
   return segments
-    .map((seg, i) => (i === 0 ? len(seg.step_hours) : `from ${shortTime(Date.parse(seg.start), tz)} ${len(seg.step_hours)}`))
+    .map((seg, i) => (i === 0 ? len(seg.step_hours) : `then ${len(seg.step_hours)} from ${shortTime(Date.parse(seg.start), tz)}`))
     .join(", ");
 }
 
+/** Where the zone's name changes inside the timeline (a daylight-saving change): the first
+ * step of each new name, e.g. [{ t, label: "WET (GMT+0)" }]. Empty when one name covers the
+ * whole window. */
+export function zoneChanges(times: readonly number[], tz: string): Array<{ t: number; label: string }> {
+  const out: Array<{ t: number; label: string }> = [];
+  let last = times.length ? zoneLabel(times[0]!, tz) : "";
+  for (const t of times) {
+    const label = zoneLabel(t, tz);
+    if (label !== last) out.push({ t, label });
+    last = label;
+  }
+  return out;
+}
+
 // --- display text ---------------------------------------------------------------------
+
+const FAMILY_SHORT: Record<string, string> = { ncep_gfs: "GFS", ecmwf_ifs: "ECMWF", ecmwf_aifs: "ECMWF AIFS", ncep_gefs: "GEFS" };
+
+/** "ECMWF" for a blend member's source code, from the run's members (family names as
+ * forecasters say them); the code itself when the member is unknown. */
+export function memberShortName(code: string, members: ReadonlyArray<{ code: string; family: string }> | null | undefined): string {
+  const m = members?.find((x) => x.code === code);
+  return (m && FAMILY_SHORT[m.family]) ?? code;
+}
+
+/** The step's interpolation note: "ECMWF value aligned in time" when the blend interpolated
+ * a member between that member's own steps, "Value interpolated by the source" otherwise;
+ * null for a step of native model values. */
+export function interpolationText(step: TimelineStep, members: ReadonlyArray<{ code: string; family: string }> | null | undefined): string | null {
+  if (!step.interpolated) return null;
+  const names = [...new Set((step.interpolated_members ?? []).map((c) => memberShortName(c, members)))];
+  return names.length ? `${names.join(" and ")} ${names.length > 1 ? "values" : "value"} aligned in time` : "Value interpolated by the source";
+}
 
 /** An offshore (model) height given in metres, in the viewer's unit: "1.6 m" / "5.2 ft". */
 export function offshoreHeightText(m: number | null | undefined, unit: HeightUnit): string {
@@ -418,38 +467,6 @@ export function smoothPath(points: ReadonlyArray<readonly [number, number]>): st
 
 const LONG_DAY = new Map<string, Intl.DateTimeFormat>();
 
-// English locales tried, in order, for a zone's own abbreviation: en-US alone prints "GMT+2"
-// for Johannesburg, en-ZA prints "SAST". Only the zone name comes from these locales; dates
-// and times are always formatted in en-US.
-const ZONE_LOCALES = ["en-US", "en-GB", "en-AU", "en-ZA", "en-IE", "en-NZ", "en-IN", "en-CA"];
-const ZONE_NAME = new Map<string, string>();
-
-/**
- * The zone's name at instant `t` as people there write it ("SAST", "PDT", "WITA", "AEDT"),
- * or the offset ("GMT-5", "GMT+5:45") where no locale has an abbreviation. Abbreviations
- * are ambiguous worldwide ("IST"), so the offset is shown next to them (zoneLabel).
- */
-export function zoneName(t: number, tz: string): string {
-  const offset = zoneAbbrev(new Date(t).toISOString(), tz);
-  const key = `${tz}|${offset}`;
-  const cached = ZONE_NAME.get(key);
-  if (cached) return cached;
-  let name = offset;
-  for (const locale of ZONE_LOCALES) {
-    try {
-      const v = new Intl.DateTimeFormat(locale, { timeZone: tz, timeZoneName: "short" }).formatToParts(new Date(t)).find((x) => x.type === "timeZoneName")?.value;
-      if (v && !/^(GMT|UTC)/.test(v)) {
-        name = v;
-        break;
-      }
-    } catch {
-      // A runtime without this locale: try the next one.
-    }
-  }
-  ZONE_NAME.set(key, name);
-  return name;
-}
-
 /** "SAST (GMT+2)", "PDT (GMT-7)", or just "GMT-5" where the zone has no abbreviation. */
 export function zoneLabel(t: number, tz: string): string {
   const name = zoneName(t, tz);
@@ -506,9 +523,24 @@ export function shortTime(t: number, tz: string): string {
   return `${p.weekday} ${p.hour}:${p.minute} ${p.dayPeriod}`;
 }
 
-/** The slider's spoken value: "Thu 7:00 AM, Very Good, 5–7 ft". */
+const DATED = new Map<string, Intl.DateTimeFormat>();
+
+/** "Fri Oct 23, 11:00 AM" in the spot's zone: a step time that stays unambiguous over a
+ * horizon longer than a week. */
+export function datedTime(t: number, tz: string): string {
+  let f = DATED.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hourCycle: "h12" });
+    DATED.set(tz, f);
+  }
+  const p = Object.fromEntries(f.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+  return `${p.weekday} ${p.month} ${p.day}, ${p.hour}:${p.minute} ${p.dayPeriod}`;
+}
+
+/** The slider's spoken value: "Thu Oct 15, 7:00 AM, Very Good, 5–7 ft" (with the date: the
+ * horizon spans more than one Thursday). */
 export function stepValueText(step: TimelineStep, tz: string, heightText: string): string {
-  return `${shortTime(Date.parse(step.t), tz)}, ${QUALITY_LABELS[asQuality(step.quality.label)]}, ${heightText}`;
+  return `${datedTime(Date.parse(step.t), tz)}, ${QUALITY_LABELS[asQuality(step.quality.label)]}, ${heightText}`;
 }
 
 /** The step to show first: the one covering `now` (or the first step after it). */

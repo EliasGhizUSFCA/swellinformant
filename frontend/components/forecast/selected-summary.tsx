@@ -16,6 +16,7 @@ import {
   clockTime,
   directionText,
   drivingPartition,
+  interpolationText,
   localDate,
   nearestStepIndex,
   nextStep,
@@ -33,6 +34,13 @@ import { cn } from "@/lib/utils";
 import type { SpotTimeline, TimelineStep } from "@/types/api";
 
 const STRENGTH_LABEL: Record<string, string> = { glassy: "Glassy", light: "Light", moderate: "Moderate", strong: "Strong" };
+
+// Why the gust shown is below the mean wind shown (the API's gust_below_mean_cause).
+const GUST_BELOW_TEXT: Record<string, string> = {
+  source: "below the mean wind in the source",
+  blend: "from fewer models than the mean wind",
+  "": "below the mean wind",
+};
 
 /** A small arrow pointing where something travels (FROM + 180), with the FROM text beside. */
 export function ToArrow({ fromDeg, className }: { fromDeg: number; className?: string }) {
@@ -149,6 +157,7 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
   const go = (j: number) => select(model.times[j] ?? null);
   // The next high or low water after the selected time (the tide block's own event).
   const nextTide = model.tide?.events.find((e) => e.t > info.t);
+  const interpolated = interpolationText(step, timeline.provenance?.members);
   return (
     <section className="rounded-2xl border bg-gradient-to-br from-secondary/60 via-card to-card p-3.5 sm:p-5" data-testid="selected-summary">
       <div className="flex items-start justify-between gap-3">
@@ -165,7 +174,15 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
                 <Moon className="size-3" aria-hidden="true" /> Night
               </span>
             )}
-            {step.interpolated && <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-amber-900">Interpolated by the source</span>}
+            {interpolated && (
+              <span
+                className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-amber-900"
+                title="This model publishes fewer steps than the blend: its values at this hour are interpolated linearly between its own steps before blending. The chart draws nothing between steps."
+                data-testid="summary-interpolated"
+              >
+                {interpolated}
+              </span>
+            )}
             {step.lead_hours != null && step.lead_hours >= 0 && <span>{Math.round(step.lead_hours)} h after the model run</span>}
           </div>
         </div>
@@ -238,8 +255,13 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
                 </span>
                 <span className="block text-xs text-muted-foreground" data-testid="summary-gust">
                   {w.gust_kmh != null ? `gust ${formatWind(w.gust_kmh, windUnit)}` : "no gust data"}
-                  {w.gust_below_mean ? " (below the mean wind in the source)" : ""}
+                  {w.gust_below_mean ? ` (${GUST_BELOW_TEXT[w.gust_below_mean_cause ?? ""] ?? GUST_BELOW_TEXT[""]})` : ""}
                 </span>
+                {w.models_disagree && w.models_disagree.length > 0 && (
+                  <span className="block text-xs font-medium text-amber-800" data-testid="summary-wind-disagree">
+                    Models disagree on the wind {w.models_disagree.includes("direction") ? "direction" : "speed"}
+                  </span>
+                )}
               </>
             ) : (
               <span className="text-muted-foreground">No wind data for this step</span>
@@ -278,7 +300,7 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
           </Item>
         </dl>
       </div>
-      <WhyThisForecast className="mt-3" step={step} method={method} />
+      <WhyThisForecast className="mt-3" step={step} method={method} units={units} windUnit={windUnit} />
     </section>
   );
 });

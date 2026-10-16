@@ -113,6 +113,7 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
     confidence_reasons: [],
     forecast_confidence_reasons: [],
     stale: false,
+    attribution_links: [],
     ...overrides,
   };
 }
@@ -217,7 +218,8 @@ describe("ConditionsSummary (model output, never 'Now')", () => {
     expect(title).toHaveTextContent("Forecast");
     expect(title).not.toHaveTextContent(/^Now/);
     // 06:00Z is 8:00 AM in Johannesburg (UTC+2): the zone is named, and the step is 2 h away.
-    expect(screen.getByTestId("conditions-time")).toHaveTextContent("Mon 8:00 AM GMT+2 · in 2 h");
+    // The zone's own name, as the spot timeline writes it (one naming rule on the page).
+    expect(screen.getByTestId("conditions-time")).toHaveTextContent("Mon 8:00 AM SAST · in 2 h");
     expect(screen.queryByText("Now", { exact: true })).toBeNull();
     expect(screen.getByTestId("likely-range")).toHaveTextContent("Likely range 3–6.5 ft (unverified)");
     expect(screen.getByTestId("conditions-summary")).not.toHaveTextContent("80% range");
@@ -231,7 +233,7 @@ describe("ConditionsSummary (model output, never 'Now')", () => {
 
   it("the step breakdown names the forecast time in the spot's zone and how far away it is", () => {
     render(<ForecastBreakdown c={conditions()} tz="Africa/Johannesburg" units="ft" nowMs={NOW} />);
-    expect(screen.getByTestId("breakdown-time")).toHaveTextContent("Forecast for Mon, Oct 12, 8:00 AM GMT+2 (local time) · in 2 h");
+    expect(screen.getByTestId("breakdown-time")).toHaveTextContent("Forecast for Mon, Oct 12, 8:00 AM SAST (local time) · in 2 h");
     // The raw model data names its run's age, never "now" or "live".
     expect(screen.getByTestId("raw-model-runs")).toHaveTextContent("Synthetic test source (not real data) · model run 16 h ago");
     expect(document.body.textContent).not.toMatch(/\blive\b/i);

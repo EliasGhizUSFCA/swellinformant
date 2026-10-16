@@ -140,6 +140,7 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
     wind_strength: "light",
     wind_favourability: "favourable",
     stale: false,
+    attribution_links: [],
     ...overrides,
   };
 }

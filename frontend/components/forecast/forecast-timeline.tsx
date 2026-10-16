@@ -5,7 +5,7 @@ import { memo, Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 
 import { CursorLayer, HoverTooltip, NowMarker } from "@/components/forecast/cursor-layer";
 import { QualityStrip } from "@/components/forecast/quality-strip";
-import { SelectedTimeSummary } from "@/components/forecast/selected-summary";
+import { QualityMarker, SelectedTimeSummary } from "@/components/forecast/selected-summary";
 import { SwellPartitions } from "@/components/forecast/swell-partitions";
 import { datumText, TideRow, TideSourceNote, tideSourceText, TIDE_UNAVAILABLE } from "@/components/forecast/tide-row";
 import { HEADER_H, rowOffsets, TimelineHeader } from "@/components/forecast/timeline-header";
@@ -18,6 +18,7 @@ import { formatCalendarDate } from "@/lib/format";
 import { asQuality, QUALITY_COLORS, QUALITY_LABELS, QUALITY_SHORT, QUALITY_TEXT, WIND_RELATION_LABEL } from "@/lib/quality";
 import { score10 } from "@/lib/rating";
 import {
+  datedTime,
   directionText,
   drivingPartition,
   localDate,
@@ -25,23 +26,30 @@ import {
   nearestStepIndex,
   nextDay,
   nextStep,
+  offshoreHeightText,
   PARTITION_LABEL,
   partitionText,
   prevStep,
   pxPerHourFor,
+  RELATION_SHORT,
   segmentsText,
   shortTime,
   stepLengthText,
   stepValueText,
   tideHeightText,
   timelineModel,
+  zoneChanges,
   zoneLabel,
   zoneName,
   type TimelineModel,
 } from "@/lib/timeline";
+import { safeExternalUrl } from "@/lib/confidence";
 import { formatHeightRange, formatWind, useWindUnit, WIND_UNITS, type HeightUnit, type WindUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { SpotTimeline } from "@/types/api";
+
+/** The wind relations named in the legend's key for the chart's short labels. */
+const RELATION_KEY = ["offshore", "cross-offshore", "cross-shore", "cross-onshore", "onshore"] as const;
 
 /** Days in view: about three on wide screens, about one on a phone. */
 const HOURS_IN_VIEW_WIDE = 72;
@@ -59,7 +67,8 @@ const reducedMotion = () => typeof window !== "undefined" && typeof window.match
  * day buttons follow the selection).
  *
  * Steps are the API's stored valid times, drawn as wide as the time they stand for (1, 3 or 6
- * hours); a selected time snaps to the nearest step. Nothing is interpolated.
+ * hours); a selected time snaps to the nearest step. The chart draws no values between steps
+ * (a blend step may hold a member value the blend aligned in time; the summary says so).
  *
  * Must be rendered inside a TimelineSelectionProvider. ``onRowRender`` (tests) is called
  * whenever a row renders.
@@ -104,7 +113,14 @@ export function SpotForecastTimeline({
     return makeScale(model.start, pxPerHourFor(view, narrow ? HOURS_IN_VIEW_NARROW : HOURS_IN_VIEW_WIDE));
   }, [model.start, viewWidth, gutter, narrow]);
   const width = Math.ceil(scale(model.end));
-  const zone = zoneLabel(model.steps[0]?.t ?? model.start, model.tz);
+  const firstT = model.steps[0]?.t ?? model.start;
+  const zone = zoneLabel(firstT, model.tz);
+  // A daylight-saving change inside the window: name both zones (the ticks, the summary and
+  // the table follow each step's own zone).
+  const changes = useMemo(() => zoneChanges(model.times, model.tz), [model]);
+  const lastChange = changes[changes.length - 1];
+  const zoneText = changes.length ? `${zone}, ${changes.map((c) => `${c.label} from ${shortTime(c.t, model.tz)}`).join(", ")}` : zone;
+  const gutterZone = lastChange ? `${zoneName(firstT, model.tz)} / ${zoneName(lastChange.t, model.tz)}` : narrow ? zoneName(firstT, model.tz) : zone;
 
   // --- scrolling -------------------------------------------------------------------------
   const scrollPlotTo = useCallback((x: number) => {
@@ -204,8 +220,10 @@ export function SpotForecastTimeline({
     let j: number | null = null;
     if (e.key === "ArrowRight" || e.key === "ArrowUp") j = nextStep(n, i);
     else if (e.key === "ArrowLeft" || e.key === "ArrowDown") j = prevStep(i);
-    else if (e.key === "PageDown") j = nextDay(model.times, i, 1);
-    else if (e.key === "PageUp") j = nextDay(model.times, i, -1);
+    // Page Up raises the slider's value (a day later), Page Down lowers it, as the ARIA slider
+    // pattern and the map's timeline do.
+    else if (e.key === "PageUp") j = nextDay(model.times, i, 1);
+    else if (e.key === "PageDown") j = nextDay(model.times, i, -1);
     else if (e.key === "Home" || e.key === "End") {
       // Home / End: first / last step of the selected local day.
       const day = localDate(model.times[i]!, model.tz);
@@ -246,7 +264,7 @@ export function SpotForecastTimeline({
   const rows = useMemo(
     () => (
       <>
-        {row("timeline-header", <TimelineHeader model={model} scale={scale} width={width} zoneLabel={narrow ? zoneName(model.steps[0]?.t ?? model.start, model.tz) : zone} />)}
+        {row("timeline-header", <TimelineHeader model={model} scale={scale} width={width} zoneLabel={gutterZone} />)}
         {row("quality-strip", <QualityStrip model={model} scale={scale} width={width} />)}
         {row("wave-bars", <WaveBars model={model} scale={scale} width={width} units={units} showOffshore={showOffshore} observations={timeline.observations} />)}
         {row("swell-partitions", <SwellPartitions model={model} scale={scale} width={width} />)}
@@ -257,7 +275,7 @@ export function SpotForecastTimeline({
       </>
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `row` only reads onRowRender
-    [model, scale, width, zone, narrow, units, showOffshore, windUnit, timeline, onRowRender],
+    [model, scale, width, gutterZone, units, showOffshore, windUnit, timeline, onRowRender],
   );
 
   return (
@@ -267,7 +285,7 @@ export function SpotForecastTimeline({
 
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted-foreground">
         <span data-testid="timeline-zone">
-          Times in {zone} · {segmentsText(timeline.steps_meta.segments, model.tz)} · not interpolated
+          Times in {zoneText} · {segmentsText(timeline.steps_meta.segments, model.tz)} · no values drawn between steps
         </span>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -298,6 +316,7 @@ export function SpotForecastTimeline({
         </div>
       </div>
 
+      <CompactReadout model={model} units={units} windUnit={windUnit} />
       <div className="relative" data-testid="timeline-frame">
         <TimelineSlider model={model} units={units} scrollerRef={scrollerRef} onKeyDown={onKeyDown} onLeave={() => hover(null)}>
           {/* hour-slider: the test id of the hour slider this pointer surface replaced. */}
@@ -318,22 +337,58 @@ export function SpotForecastTimeline({
         </TimelineSlider>
         <HoverTooltip model={model} units={units} windUnit={windUnit} frameWidth={viewWidth} top={HEADER_H + 6} />
         <p id="timeline-keys" className="sr-only">
-          Left and right arrow keys move one forecast step, Page Up and Page Down one day, Home and End to the first and last step of the day.
+          Left and right arrow keys move one forecast step, Page Up one day later and Page Down one day earlier, Home and End to the first and last step of the day.
         </p>
       </div>
       <TideSourceNote tide={timeline.tide} className="px-1" />
 
       {narrow ? (
         <Disclosure summary="How to read these charts" open={legendOpen ?? false} onOpenChange={setLegendOpen}>
-          <TimelineLegend timeline={timeline} model={model} showOffshore={showOffshore} />
+          <TimelineLegend timeline={timeline} model={model} showOffshore={showOffshore} units={units} />
         </Disclosure>
       ) : (
-        <TimelineLegend timeline={timeline} model={model} showOffshore={showOffshore} />
+        <TimelineLegend timeline={timeline} model={model} showOffshore={showOffshore} units={units} />
       )}
       <TimelineTable model={model} units={units} windUnit={windUnit} tide={timeline.tide} />
     </div>
   );
 }
+
+/**
+ * Below the lg breakpoint the selected-time summary sits far above the chart rows, so while
+ * the user taps or arrows through the chart this one-line readout of the selected step
+ * (time · quality and score · breaking range · wind · tide) stays pinned under the site
+ * header. It follows the selection; the rows do not re-render. Hidden from assistive
+ * technology: the slider's value text and the summary say the same.
+ */
+const CompactReadout = memo(function CompactReadout({ model, units, windUnit }: { model: TimelineModel; units: HeightUnit; windUnit: WindUnit }) {
+  const index = useTimelineSelection((s) => (s.selectedT == null ? -1 : nearestStepIndex(model.times, s.selectedT)));
+  const info = model.steps[index];
+  if (!info) return null;
+  const st = info.step;
+  const q = asQuality(st.quality.label);
+  const w = st.wind;
+  return (
+    <div
+      className="sticky top-16 z-30 -mx-1 flex items-center gap-x-2 overflow-hidden rounded-lg border bg-card/95 px-2.5 py-1.5 text-xs whitespace-nowrap text-ink shadow-sm backdrop-blur lg:hidden"
+      aria-hidden="true"
+      data-testid="compact-readout"
+    >
+      <span className="font-semibold">{shortTime(info.t, model.tz)}</span>
+      <span className="inline-flex items-center gap-1">
+        <QualityMarker label={q} />
+        {QUALITY_LABELS[q]} {score10(st.quality.score)}
+      </span>
+      <span className="tabular-nums">{formatHeightRange(st.breaking.typical_ft, st.breaking.sets_ft, units)}</span>
+      {w?.speed_kmh != null && (
+        <span className="truncate text-muted-foreground">
+          {formatWind(w.speed_kmh, windUnit)} {directionText(w.dir_from_deg).split(" ")[0]} · {RELATION_SHORT[w.relation] ?? w.relation}
+        </span>
+      )}
+      {st.tide && <span className="hidden text-muted-foreground tabular-nums min-[420px]:inline">tide {tideHeightText(st.tide.height_m, units)}</span>}
+    </div>
+  );
+});
 
 /**
  * The scrolling frame, exposed to assistive technology as a slider over the forecast steps
@@ -360,7 +415,7 @@ function TimelineSlider({
   return (
     <div
       ref={scrollerRef}
-      className="tl-scroller scrollbar-thin relative overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-xl border bg-card outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+      className="tl-scroller scrollbar-thin relative overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-xl border bg-card outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       role="slider"
       tabIndex={0}
       aria-label="Forecast time"
@@ -460,7 +515,7 @@ function Swatch({ className, style }: { className?: string; style?: React.CSSPro
 
 /** What each mark means, the arrow convention, the tide's source and datum, and the spot's
  * tide preference. */
-const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffshore }: { timeline: SpotTimeline; model: TimelineModel; showOffshore: boolean }) {
+const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffshore, units }: { timeline: SpotTimeline; model: TimelineModel; showOffshore: boolean; units: HeightUnit }) {
   const tide = timeline.tide;
   const rated = model.steps.some((s) => s.step.wind?.favourability);
   return (
@@ -470,11 +525,10 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
         {(Object.keys(QUALITY_LABELS) as Array<keyof typeof QUALITY_LABELS>).map((k) => (
           <span key={k} className="inline-flex items-center gap-1">
             <Swatch style={{ backgroundColor: QUALITY_COLORS[k] }} />
-            {QUALITY_LABELS[k]}
-            <span className="sr-only"> ({QUALITY_SHORT[k]})</span>
+            {QUALITY_LABELS[k]} <span className="text-muted-foreground/80">({QUALITY_SHORT[k]})</span>
           </span>
         ))}
-        <span>deeper blue = better · faded = night</span>
+        <span>deeper blue = better · thin bar = night</span>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <span className="font-semibold text-ink">Surf</span>
@@ -482,7 +536,7 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
           <Swatch className="bg-[var(--chart-wave)]" /> breaking height, central estimate
         </span>
         <span className="inline-flex items-center gap-1">
-          <Swatch className="bg-[var(--chart-wave-band)]" /> likely range (p10–p90 of an assumed error model, not yet verified)
+          <Swatch className="bg-[var(--chart-wave-band)]" /> likely range (not yet verified)
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="h-0.5 w-3 rounded bg-ink" aria-hidden="true" /> sets
@@ -519,7 +573,15 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
         <span className="inline-flex items-center gap-1">
           <span className="h-0.5 w-3 rounded bg-ink" aria-hidden="true" /> gust
         </span>
-        <span>Labels: relation to this break ({WIND_RELATION_LABEL.offshore}, {WIND_RELATION_LABEL["cross-shore"]}, …)</span>
+        <span data-testid="wind-relation-key">
+          Labels: relation to this break,{" "}
+          {RELATION_KEY.map((k, i) => (
+            <span key={k}>
+              {i > 0 ? ", " : ""}
+              {RELATION_SHORT[k]} = {(WIND_RELATION_LABEL[k] ?? k).toLowerCase()}
+            </span>
+          ))}
+        </span>
         <span className="inline-flex items-center gap-1" data-testid="compass-legend">
           <CompassGlyph /> e.g. an arrow pointing east is a wind from the west
         </span>
@@ -533,20 +595,19 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
           </span>
         ) : (
           <span>
+            {/* For real predictions the station, distance and credit are in the note under the
+                tide row, which is always visible: they are not repeated here. */}
             {tide.status === "demo" ? "Demo tide (synthetic) · " : ""}
-            {tide.station ? `${tide.station.name} (${Math.round(tide.station.distance_km)} km away) · ` : ""}
+            {tide.station && tide.status !== "available" ? `${tide.station.name} (${Math.round(tide.station.distance_km)} km away) · ` : ""}
             {tide.source && tide.status !== "demo" ? `${tideSourceText(tide.source)} · ` : ""}heights above {datumText(tide.datum)}
-            {tide.attribution ? ` · ${tide.attribution}` : ""}
           </span>
         )}
         <span data-testid="tide-preference">
           Preferred tide here: {tide.preference.text}
         </span>
       </div>
-      <ObservationsNote timeline={timeline} />
-      <div className="lg:col-span-2">
-        Shaded: night (last light to first light). Marks are centred on each forecast step&apos;s valid time and as wide as the time the step stands for (1, 3 or 6 hours).
-      </div>
+      <ObservationsNote timeline={timeline} units={units} />
+      <div className="lg:col-span-2">Shaded: night (last light to first light). Each mark spans the time its forecast step stands for (1, 3 or 6 hours).</div>
     </div>
   );
 });
@@ -554,7 +615,7 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
 /** The latest instrument measurement near the spot, kept apart from the forecast: station,
  * distance, local time and value, marked stale when the provider's data is old. Nothing is
  * shown while the observations block is unavailable. */
-function ObservationsNote({ timeline }: { timeline: SpotTimeline }) {
+function ObservationsNote({ timeline, units }: { timeline: SpotTimeline; units: HeightUnit }) {
   const obs = timeline.observations;
   const latest = obs.items
     .filter((o) => o.kind === "instrument" && o.hs_m != null)
@@ -567,10 +628,30 @@ function ObservationsNote({ timeline }: { timeline: SpotTimeline }) {
         <svg viewBox="-6 -6 12 12" className="size-3" aria-hidden="true">
           <path d="M0,-5L5,0L0,5L-5,0Z" fill="var(--card)" stroke="var(--chart-offshore)" strokeWidth={1.5} />
         </svg>
-        {latest.station_name} ({Math.round(latest.distance_km)} km away, {latest.provider}): Hs {latest.hs_m!.toFixed(1)} m at {shortTime(Date.parse(latest.t), timeline.timezone)}
+        {latest.station_name} ({Math.round(latest.distance_km)} km away): Hs {offshoreHeightText(latest.hs_m, units)} at {datedTime(Date.parse(latest.t), timeline.timezone)}
         {latest.stale || obs.status === "stale" ? " (stale)" : ""} · an instrument measurement offshore, shown with “Offshore Hs (model)”
       </span>
+      <ObservationCredit item={latest} />
     </div>
+  );
+}
+
+/** Who measured it, in words, with the licence link where the licence needs one (IMOS / AODN
+ * data are CC BY 4.0) and the station's full acknowledgement as a tooltip. */
+function ObservationCredit({ item }: { item: SpotTimeline["observations"]["items"][number] }) {
+  const href = item.licence_url ? safeExternalUrl(item.licence_url) : null;
+  return (
+    <span data-testid="observation-credit" title={item.attribution ?? undefined}>
+      Data: {item.provider_name ?? "measuring station"}
+      {item.licence ? " · " : ""}
+      {item.licence && href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-ink">
+          {item.licence}
+        </a>
+      ) : (
+        item.licence
+      )}
+    </span>
   );
 }
 
@@ -621,7 +702,7 @@ const TimelineTable = memo(function TimelineTable({ model, units, windUnit, tide
               return (
                 <tr key={s.i} className="border-t">
                   <th scope="row" className="px-2 py-1 font-medium whitespace-nowrap text-ink">
-                    {shortTime(s.t, model.tz)}
+                    {datedTime(s.t, model.tz)}
                   </th>
                   <td className="px-2 py-1">{stepLengthText(st.step_hours)}</td>
                   <td className="px-2 py-1">
