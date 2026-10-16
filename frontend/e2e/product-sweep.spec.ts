@@ -44,9 +44,17 @@ async function expectNoHorizontalScroll(page: Page) {
 }
 
 /** Model output is a forecast: no visible line is a bare "Now" or "Live" label, and none calls
- * the forecast, data, conditions, swells or map "live". */
+ * the forecast, data, conditions, swells or map "live". Chart text (SVG) is left out: a time
+ * axis may mark the current time with "Now", which labels the clock, not a model value. */
 async function expectNoLiveOrNowLabels(page: Page) {
-  const lines = (await page.locator("body").innerText()).split("\n").map((l) => l.trim());
+  const text = await page.locator("body").evaluate((body) => {
+    const charts = [...body.querySelectorAll<SVGSVGElement>("svg")].map((svg) => [svg, svg.style.display] as const);
+    for (const [svg] of charts) svg.style.display = "none";
+    const out = (body as HTMLElement).innerText;
+    for (const [svg, display] of charts) svg.style.display = display;
+    return out;
+  });
+  const lines = text.split("\n").map((l) => l.trim());
   expect(lines.length).toBeGreaterThan(3);
   for (const line of lines) {
     expect(line, `"${line}"`).not.toMatch(/^(now|live)$/i);
