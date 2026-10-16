@@ -238,7 +238,8 @@ docker compose up --build
 On first start, the `backend` container:
 
 * applies the Alembic migrations;
-* seeds the 50 spots and 153 airports (`python -m app.cli init-db`, idempotent);
+* seeds the 50 spots, 153 airports and the tide station catalog (`python -m app.cli init-db`,
+  idempotent);
 * reports healthy.
 
 Then `worker`, `beat` and `frontend` start, and beat immediately queues a full pipeline
@@ -261,7 +262,7 @@ cd backend
 python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-python -m app.cli init-db          # create schema (Alembic) and seed spots/airports
+python -m app.cli init-db          # create schema (Alembic), seed spots/airports and tide stations
 python -m app.cli pipeline         # optional: fill forecasts/events right away
 uvicorn app.main:app --reload --port 8000
 ```

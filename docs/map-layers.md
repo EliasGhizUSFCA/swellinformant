@@ -172,6 +172,13 @@ Contract: `backend/app/schemas/map_fields.py`.
   * An unknown variable (e.g. `swell3_hs`) is 422.
   * The index and a field request read only metadata columns, plus the bytes of the one
     row that is served.
+* The map client (`frontend/lib/map-fields.ts`, `hooks/map-fields.ts`) asks for a
+  partition only when the index lists it with `group` "partition" and a `system`
+  (`primary`, `secondary`, `windsea`); a 404 for a listed partition is treated as an
+  out-of-date index, which is re-read (at most every 30 s). Partitions the user has not
+  chosen to draw are not downloaded. The wave systems are drawn as stylised travelling
+  crests and the wind as particles (rendering, scaling and limitations:
+  [map-rendering.md](map-rendering.md)).
 
 **Bytes.** zlib (RFC 1950, `DecompressionStream("deflate")` in the browser) compressed
 uint8, `nx × ny` cells, row-major. Row 0 is the northernmost latitude `lat0` = 90, and row
@@ -757,7 +764,8 @@ mean of the raw `global.0p25` cells around that node (1.82 MB download).
   90 secondary-swell nodes had box means above 25.4 s (up to 27.6 and 28.5 s) and are
   served as 25.4 s. They are small swells (0.0 to 0.5 m): the primary-swell ones all
   between 72N and 77N near the sea ice, the secondary-swell ones there and in the
-  Southern Ocean. Byte 254 of a period therefore means "25.4 s or more".
+  Southern Ocean. Byte 254 of a period therefore means "25.4 s or more", and the map's
+  readout shows it as "≥25.4 s" (`formatLayerValue`, `PERIOD_CEILING_S`).
 * Pressure over high terrain (Antarctica, Greenland, Tibet) is reduced to sea level and
   is not a real surface pressure.
 * **Freshness with two cycles a day.** `age_hours` counts from the model cycle. The job

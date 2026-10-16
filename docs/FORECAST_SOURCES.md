@@ -260,8 +260,11 @@ confidence use.
 **Bytes per cycle, before and after.** Direct GRIB (measured 2026-10-11): NOAA 1.91 GB
 per GFS cycle, ECMWF 847 MB per run, GEFS-Wave 201.6 MB. API-first (measured above): the
 GFS family 345.6 kB, the ECMWF family 175.1 kB for 50 spots. GEFS-Wave trimmed to
-HTSGW/PERPW: about 65 MB per run (computed from record sizes). Map layers, standalone:
-about 0.16 GB per cycle, 0.48 GB with the partition layers (computed in the audit).
+HTSGW/PERPW: about 65 MB per run (computed from record sizes). Map layers, standalone
+(`pgrb2.0p50` atmosphere, 61 map hours, cycles 00Z and 12Z): measured 7.85-8.10 MB per map
+hour with the partition layers and 2.69-2.72 MB without (2026-10-14 12Z, map-layers.md),
+so about 484 MB per cycle (0.97 GB a day) with them and 165 MB (0.33 GB a day) without
+(extrapolated from the measured hours).
 
 ## Flights
 

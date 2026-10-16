@@ -61,8 +61,9 @@ another request (for selection, asserted in `e2e/timeline.spec.ts`).
 * `tide` and `observations` blocks come from `services/tides/api.py`; a step's `tide` is read
   from the block's curve (never from model sea level), linearly between the curve's two
   neighbouring points (30-60 minutes apart; none when they are more than 3 hours apart), with
-  rising or falling from the next high or low water. Today both blocks are stubs that say
-  "unavailable"; the tides package fills them.
+  rising or falling from the next high or low water. The blocks are filled by the tides
+  package (NOAA CO-OPS stations and EOT20 model points, docs/tides.md); a spot without a tide
+  source or stored predictions says "unavailable" with the reason.
 * Caching: `Cache-Control: public, max-age=300` and a weak `ETag` over the run key, algorithm
   version, tide fetch time and preference text, calibration, first and last step, staleness,
   window, newest observation and every step's rating, central and sets height, confidence
@@ -71,8 +72,10 @@ another request (for selection, asserted in `e2e/timeline.spec.ts`).
 
 Units are fixed in the response (`units`): breaking heights in feet, offshore heights and
 tide in metres, wind in km/h. The client converts: heights follow the account's ft/m setting,
-wind follows the shared `swell.windUnit` preference (km/h, mph, kn, m/s; the same
-`localStorage` key the map settings use, read and written in try/catch).
+wind follows the shared `swell.windUnit` preference (km/h, mph, kn, m/s): one implementation
+in `frontend/lib/units.ts` (`readWindUnit` / `writeWindUnit` / `useWindUnit`, same-tab event
+`swell:wind-unit`, every storage access in try/catch), used by the charts and the map
+settings alike.
 
 ## 3. Time axis
 
@@ -127,8 +130,8 @@ earlier blue / yellow / green / teal / orange / purple legend, whose "fair" had 
 white and whose top classes were nearly the same lightness (CH-13). Colour never carries the
 class alone: the strip is labelled, the summary adds a rank glyph (one to six rising bars),
 and the tooltip and table spell the class out. A matching dark-surface ramp
-(`QUALITY_COLORS_DARK`, brighter = better) exists for dark panels such as the map's;
-`colorForScore(score, "dark")` returns it.
+(`QUALITY_COLORS_DARK`, brighter = better) is used on dark surfaces: the forecast map's
+markers on the dark basemap (`colorForScore(score, "dark")`).
 
 **Surf (breaking waves).** Our estimate of breaking face height at the break, not a model
 output:
@@ -171,7 +174,12 @@ legend. Status `demo` is labelled "Demo tide (synthetic)". The spot's researched
 is the block's `preference.text`, which is "Tide preference not well established." when the
 research is weak, disputed or missing; the client never invents a tide rule. Without a
 source the row reads "Tide data unavailable · <reason>" and draws no curve, and the summary
-says "Tide data unavailable".
+says "Tide data unavailable". With real predictions (`status` "available") a line under the
+charts, outside every fold, shows the station or model point with its distance, the
+source's attribution (EOT20's CC BY 4.0 credit or NOAA CO-OPS) and the block's caveat
+(`reason`: model mean sea level is not a chart datum, or the CO-OPS datum and interpolation
+note). The header line under "Surf forecast" lists every model run with its cycle, when it
+was fetched, and the sources' credit and licence links (`provenance.source.attribution_links`).
 
 ## 6. Selected-time summary and "Why this forecast?"
 
@@ -269,8 +277,9 @@ observations, which are not configured in this package.
 
 ## 12. Limitations
 
-* Tide and observation blocks are stubs until the tides package lands: every spot shows
-  "Tide data unavailable" and no buoy markers.
+* Real tide and observation blocks are covered by the backend's tests and by synthetic
+  frontend payloads only; the e2e backend runs the demo provider, so the e2e suite draws the
+  demo tide and no buoy markers.
 * Runs scored before the wind model (algorithm 2.0.0) have no wind strength or
   favourability, so wind bars are neutral for them.
 * Zone abbreviations come from the browser's Intl data (several English locales are tried);

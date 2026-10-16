@@ -109,7 +109,7 @@ rebuild after a code-only change took 1.6 s (the dependency layer is cached).
 | GEFS-Wave (`GEFS_ENABLED`) | older than 18.5 h or missing (uncertainty only) | degraded |
 | Every scheduled job | last real run failed (with the number in a row); no run started for 2 × its longest interval + 30 min (overdue; a run in progress counts, also when a duplicate was logged "skipped" after it); still "running" 15 min past the 30-min hard time limit (stuck: worker killed, e.g. out of memory) | degraded |
 | Heartbeat | no job of any kind finished for `DATA_HEALTH_HEARTBEAT_MINUTES` (30; `notifications.deliver` alone runs every 2 min): worker or beat down | **failing** |
-| Map ocean layers (unless off) | served GFS cycle older than the NOAA limit (16 h), or no complete field set | degraded |
+| Map ocean layers (unless off) | served GFS cycle older than `MAP_FIELD_STALE_AFTER_HOURS` (18 h, the map index's own "out of date" limit), or no complete field set | degraded |
 | Buoy observations (`OBSERVATIONS_ENABLED`) | newest observation of a provider older than `DATA_HEALTH_OBSERVATION_STALE_HOURS` (default: the 48 h ingestion look-back, beyond which the hourly job cannot fill the gap) | degraded |
 | Storage | database larger than `DATA_HEALTH_DATABASE_MAX_GB` (default 5 GB; an alert only, nothing is deleted) | degraded |
 | Redis | used memory above `DATA_HEALTH_REDIS_MAX_FRACTION` (0.8) of its cap (Redis's `maxmemory`, or `REDIS_MAXMEMORY` when Redis runs without one); an evicting `maxmemory-policy`; Redis not answering | degraded |
@@ -388,7 +388,7 @@ Measured live on a fresh scratch database (50 spots, GFS and ECMWF 12Z runs of
 | Blend and predictions | blend 9.9 s (10,200 rows + 10,200 comparisons); `quality.predict` 19.7 s for the 3 runs (24,500 predictions, 4,050 archive rows) | | measured |
 | Both families | 267 weighted calls | about 820 weighted calls a day, about 24,600 a month: 8 % of the free tier's 10,000 a day and 300,000 a month | per run measured; per day computed |
 | GEFS-Wave, HTSGW and PERPW only (41 steps) | about 65 MB | 4 cycles: about 0.26 GB | computed from record sizes |
-| Map fields, standalone (61 map hours) | about 0.16 GB; 0.48 GB with the partition layers | 2 cycles: 0.33-0.96 GB | computed in the audit |
+| Map fields, standalone (61 map hours, `pgrb2.0p50` atmosphere) | 7.85-8.10 MB per map hour with the partition layers (about 484 MB per cycle), 2.69-2.72 MB without (about 165 MB) | 2 cycles (00Z, 12Z): about 0.97 GB with the partitions, 0.33 GB without | per hour measured (2026-10-14 12Z, map-layers.md); per cycle and day extrapolated |
 
 The whole acquisition took 47.6 s of wall time; the two providers' own runs took 6.3 s and
 4.7 s, the rest went to the metadata reads before each run (`current_run`,
@@ -494,8 +494,9 @@ is deleted).
 **Bandwidth:** the direct GRIB setup downloaded about **10 GB per day** (NOAA 4 × 1.91 GB,
 ECMWF 2 × 0.85-0.9 GB, GEFS 4 × 0.20 GB), about 300 GB a month. The API-first setup
 needs about 1.7 MB a day for the spot forecasts (4 GFS-family runs of 345.6 kB and 2
-ECMWF-family runs of 175.1 kB, measured) plus about 0.26 GB for GEFS-Wave and 0.33-0.96 GB
-for the map layers (computed, see "API-first setup" above). Uploads are
+ECMWF-family runs of 175.1 kB, measured) plus about 0.26 GB for GEFS-Wave and 0.33-0.97 GB
+for the map layers (without / with the partition layers; per map hour measured, per day
+extrapolated, see "API-first setup" above). Uploads are
 negligible (requests only).
 
 **Backups:** the measured dump was 52 % of the database size, dominated by the

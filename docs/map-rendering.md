@@ -324,8 +324,10 @@ reads the p95 once more than 160 frames are drawn.
 ## 6. Units
 
 Wind speed in km/h (default), mph, kn or m/s: one preference for the site, stored under the
-`localStorage` key `swell.windUnit` (the spot charts read and write the same key; the map
-listens for the `storage` event and the `swell:wind-unit` event of the same tab). Heights
+`localStorage` key `swell.windUnit` through the one implementation in `frontend/lib/units.ts`
+(`storedWindUnit` / `writeWindUnit` / `useWindUnit`), which the spot charts and the map
+settings share; the map listens for the `storage` event and the `swell:wind-unit` event of
+the same tab. Heights
 follow the account's ft/m preference. The legend title states the unit of the colour layer.
 
 ## 7. Measured (e2e, synthetic fields, headless Chromium, 1440 x 900, shared 4-CPU machine)

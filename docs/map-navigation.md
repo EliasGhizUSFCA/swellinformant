@@ -46,6 +46,14 @@ longitude, not 335°.
   The page re-renders on zoom only when it crosses the city-label zoom (4).
 * Leaflet's SVG renderer keeps a 50 % margin around the view (default 10 %), so markers do not
   pop in late during long inertial pans.
+* Marker colours: on the dark basemap the dark-surface quality ramp (`colorForScore(score,
+  "dark")`, brighter = better; every class and "no forecast" at least 3:1 against the map's
+  sea `#151a21`, `tests/map-markers.test.tsx`), on the Streets tiles the default ramp. The
+  legend's marker key uses the same ramp.
+* The spot panel names the selected time once: in the breakdown's "Forecast for …" line
+  (`breakdown-time`), or, for a spot without a prediction at that time, in its own line
+  (`panel-local-time`). Under the model data it shows the sources' credit and licence links
+  (`MapSnapshotOut.attribution_links`: Open-Meteo, ECMWF, NOAA). Wind directions read "from".
 * The map flies to a spot only when the selected slug changes. A filter that hides and re-shows
   the selected spot, or a new forecast step, never moves the map. With `prefers-reduced-motion`
   the flights (to a spot, to the user's position) jump without animation.

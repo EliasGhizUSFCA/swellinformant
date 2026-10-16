@@ -69,8 +69,11 @@ Strait), Pavones (Golfo Dulce), and The Box, Margaret River Main Break and North
 Gracetown (small, mostly diurnal tide: form factor 3.5 from the constants).
 
 `python -m app.cli tides seed` loads the catalog into `tide_stations` and
-`spot_tide_stations` (idempotent: 56 stations, 58 links); every `tides.acquire` run does it
-first, so a new deployment needs no extra step. A spot entry that no longer matches the
+`spot_tide_stations` (idempotent: 56 stations, 58 links). `python -m app.cli init-db` and
+`python -m app.cli seed` do the same after seeding the spots, and every `tides.acquire` run
+does it first, so a new deployment needs no extra step. (It is not part of
+`seed_reference_data`: the test session seeds reference data once and empties the tide
+tables after each test.) A spot entry that no longer matches the
 database (for example a spot moved by more than 0.5 km) costs only that spot its links: it
 is listed under `rejected_spots` in the result and logged, and its block says "unavailable";
 an unreadable station list stops the seed. Without the constants file no model point is
@@ -189,6 +192,12 @@ public, max-age=300`) returns `TideBlockOut`, also embedded in the timeline:
   otherwise "Tide preference not well established." On the committed research this shows
   18 of 50 preferences (10 of them other than "all"). No tide rule is invented here.
 
+On the spot page an available block is drawn in the timeline's tide row, and a line under
+the charts (outside every fold, phones included; `TideSourceNote` in
+`frontend/components/forecast/tide-row.tsx`) shows the station or model point with its
+distance, the `attribution` (EOT20's CC BY 4.0 credit, or NOAA CO-OPS) and the `reason`
+caveat. The selected-time summary adds "model point / station N km away" to the datum.
+
 16 days of tide for one spot are about 56 kB of JSON.
 
 `GET /api/spots/{slug}/observations` is described in docs/observations.md.
@@ -280,6 +289,7 @@ refused and replaced), `TIDE_MODEL` (`eot20`), `TIDE_CONSTANTS_PATH`
 `TIDE_RETENTION_PAST_DAYS` (2).
 
     python -m app.cli tides seed          # catalog -> tide_stations, spot_tide_stations
+                                          # (init-db and seed also do this)
     python -m app.cli tides acquire       # the daily job, now
     python -m app.cli tides list          # stations, spots, stored predictions, last error
     python -m app.cli tides prune         # retention
