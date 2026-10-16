@@ -284,6 +284,20 @@ test.describe("spot forecast timeline on a phone", () => {
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await expect.poll(() => sc.evaluate((el) => el.scrollLeft)).toBeGreaterThan(dims.left + 120);
     expect(await valueNow(page)).toBe(selectedBefore);
+    // Let the native fling end first: a tap during a fling only stops it (seen once on a loaded
+    // machine: the tap selected nothing).
+    let lastLeft = -1;
+    await expect
+      .poll(
+        async () => {
+          const left = await sc.evaluate((el) => el.scrollLeft);
+          const still = left === lastLeft;
+          lastLeft = left;
+          return still;
+        },
+        { intervals: [200] },
+      )
+      .toBe(true);
     // Tap selects the step under the finger.
     const before = await valueNow(page);
     await pickStep(page, before + 5, "tap");
