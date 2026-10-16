@@ -7,7 +7,7 @@ import { CursorLayer, HoverTooltip, NowMarker } from "@/components/forecast/curs
 import { QualityStrip } from "@/components/forecast/quality-strip";
 import { SelectedTimeSummary } from "@/components/forecast/selected-summary";
 import { SwellPartitions } from "@/components/forecast/swell-partitions";
-import { datumText, TideRow, TideSourceNote, TIDE_UNAVAILABLE } from "@/components/forecast/tide-row";
+import { datumText, TideRow, TideSourceNote, tideSourceText, TIDE_UNAVAILABLE } from "@/components/forecast/tide-row";
 import { HEADER_H, rowOffsets, TimelineHeader } from "@/components/forecast/timeline-header";
 import { useTimelineSelection, useTimelineStore } from "@/components/forecast/timeline-selection";
 import { WaveBars } from "@/components/forecast/wave-bars";
@@ -535,7 +535,7 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
           <span>
             {tide.status === "demo" ? "Demo tide (synthetic) · " : ""}
             {tide.station ? `${tide.station.name} (${Math.round(tide.station.distance_km)} km away) · ` : ""}
-            {tide.source ? `${tide.source} · ` : ""}heights above {datumText(tide.datum)}
+            {tide.source && tide.status !== "demo" ? `${tideSourceText(tide.source)} · ` : ""}heights above {datumText(tide.datum)}
             {tide.attribution ? ` · ${tide.attribution}` : ""}
           </span>
         )}

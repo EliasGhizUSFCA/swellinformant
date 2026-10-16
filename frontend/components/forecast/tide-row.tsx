@@ -20,6 +20,20 @@ export function datumText(datum: TideBlock["datum"]): string {
   return datum === "model_msl" ? "model mean sea level" : datum;
 }
 
+// The block's `source` (the backend's source code) as words for the chart legend.
+const TIDE_SOURCE_LABEL: Record<string, string> = {
+  noaa_coops: "NOAA CO-OPS predictions",
+  eot20: "EOT20 tide model",
+  fes2022: "FES2022 tide model",
+  demo: "synthetic",
+};
+
+/** "NOAA CO-OPS predictions" for "noaa_coops", "EOT20 tide model" for "eot20"; an unknown
+ * code is shown as it is. */
+export function tideSourceText(source: string): string {
+  return TIDE_SOURCE_LABEL[source] ?? source;
+}
+
 /** "EOT20 model point near Cloudbreak, 9 km away": where the tide curve is computed. */
 export function tideStationText(tide: TideBlock): string | null {
   const st = tide.station;

@@ -289,6 +289,9 @@ describe("8. tide", () => {
     expect(note).toBeVisible();
     expect(screen.getByTestId("summary-tide-basis")).toHaveTextContent("above model mean sea level · model point 9 km away");
     expect(screen.getByTestId("tide-row")).toHaveTextContent("ft, model MSL");
+    // The legend names the source in words, not by its code ("eot20 ·" on the live page).
+    expect(screen.getByTestId("tide-caption")).toHaveTextContent("EOT20 tide model · heights above model mean sea level");
+    expect(screen.getByTestId("tide-caption")).not.toHaveTextContent("eot20 ·");
   });
 
   it("shows no source note for a demo or unavailable tide", () => {
