@@ -221,7 +221,12 @@ test.describe("map navigation · date line (1440x900)", () => {
       expect(c.onScreen).toBe(50);
     }
     const v = await liveView(page);
-    expect(Math.abs(v.centre.lng - 10), "the drags moved the map").toBeGreaterThan(90);
+    // How far the view travelled, from the recorded (unwrapped) centres: two 900 px flicks at
+    // the one-world zoom are about 450 degrees plus inertia, so the view can pass the +-540
+    // re-centre and land anywhere once wrapped; the end position alone cannot tell.
+    const travelled = Math.max(...(await mapMoves(page)).map((m) => Math.abs(m.lng - 10)));
+    expect(travelled, "the drags moved the map").toBeGreaterThan(90);
+    expect(Math.abs(v.centre.lng), "re-centred within +-540 degrees").toBeLessThanOrEqual(540);
     expectBounded(v, "after the inertial drags");
     await shot(page, "nav-1440x900-after-inertial-drags");
   });
