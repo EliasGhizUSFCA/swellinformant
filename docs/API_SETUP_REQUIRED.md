@@ -9,66 +9,106 @@ No secret belongs in the repository: put keys in `.env` (not committed) or the d
 secret store.
 
 Pages were read on **2026-10-14**; every sentence in quotation marks below was found
-verbatim on the cited page that day (fetched fresh, not from a cache). Prices shown only
-by JavaScript widgets could not be read and are marked "confirm at checkout".
+verbatim on the cited page that day (fetched fresh, not from a cache). The Open-Meteo terms,
+pricing and licence quotes and the Natural Earth terms were read again on **2026-10-16** and
+were still on those pages. Prices shown only by JavaScript widgets could not be read and are
+marked "confirm at checkout".
 
 ## 1. Summary for the owner
 
-### Works with no account at all
+### 1.1 Works with no account and no key
 
-| Area | Service | Notes |
-|---|---|---|
-| Spot forecasts | Open-Meteo free tier (GFS and ECMWF families) | **Non-commercial use only** (see 2.1). Default recommended setup |
-| Spot forecasts, fallback | NOAA GFS / GFS-Wave and ECMWF open data, direct GRIB | Key-free, commercial use allowed with attribution; off by default (large downloads) |
-| Uncertainty | NOAA GEFS-Wave ensemble statistics | Key-free |
-| Map layers | NOAA NODD byte ranges (GFS 0.5° atmosphere, GFS-Wave 0.25°) | Key-free |
-| Tides | NOAA CO-OPS (US spots), EOT20 harmonic constants (other spots) | Key-free; set an application name (2.7) |
-| Observations | NDBC (incl. CDIP buoys), AODN, Met Office | Key-free |
-| Map tiles | OpenStreetMap standard tiles | Light use only (`docs/FORECAST_SOURCES.md`, "Map tiles") |
-| Email, SMS, flights | Console / Mailpit email, console SMS, demo flights | Development only: no real email, SMS or fares |
+Nothing to sign up for. The recommended live setup (section "Recommended live
+configuration" below) uses only these.
 
-### What the owner must decide or set up
+| Area | Service | Cost | Licence, and what the app shows | Limits and notes |
+|---|---|---|---|---|
+| Spot forecasts | Open-Meteo free tier: GFS family (`open_meteo`) and ECMWF family (`open_meteo_ecmwf`) | Free | Data CC BY 4.0; a credit and licence link is printed next to every value derived from it (2.1) | **Non-commercial use only** (1.3). Per IP address: 600 calls a minute, 5,000 an hour, 10,000 a day, 300,000 a month; the app uses about 820 weighted calls a day (8 %) |
+| Forecast uncertainty | NOAA GEFS-Wave ensemble statistics | Free | NOAA open data, "can be used as desired"; credited "(modified)" (2.3) | 69.4 MB per run, 4 runs a day |
+| Map layers | NOAA NODD byte ranges (GFS 0.5° atmosphere, GFS-Wave 0.25°) | Free | as GEFS-Wave (2.2) | About 0.96 GB a day with the partition layers |
+| Spot forecasts, fallback | NOAA GFS / GFS-Wave and ECMWF open data, direct GRIB | Free | NOAA as above; ECMWF CC BY 4.0, commercial use allowed with attribution (2.4) | Off by default (about 1.9 GB per NOAA cycle) |
+| Tides | NOAA CO-OPS (8 US spots), EOT20 harmonic constants (42 spots) | Free | CO-OPS public domain, NOS requests attribution; EOT20 CC BY 4.0, credited with its changes and DOI (2.7, 2.8) | No account; set an application name (`NOAA_COOPS_APPLICATION`) |
+| Observations | NDBC (incl. CDIP buoys), AODN, Met Office | Free | Public domain; CDIP unrestricted; AODN CC BY 4.0; Met Office CC BY-SA 4.0 (2.6) | Off by default (`OBSERVATIONS_ENABLED`) |
+| Basemap | Natural Earth, bundled with the app | Free | "All versions of Natural Earth raster + vector map data found on this website are in the public domain." ([terms](https://www.naturalearthdata.com/about/terms-of-use/)) | The default map; no tile server |
+| Streets basemap | OpenStreetMap standard tiles | Free for light use | ODbL, "© OpenStreetMap contributors" shown (2.13) | Light use only; heavy traffic needs a tile provider |
+| Email, SMS, flights in development | Console / Mailpit email, console SMS, demo flights | Free | — | No real email, SMS or fares: demo fares are labelled "Mock fares" |
 
-1. **Is the app commercial?** Open-Meteo's free API is for non-commercial use only; ads,
-   subscriptions or paid tiers count as commercial. If it is, buy an Open-Meteo API plan
-   (Standard covers the Forecast and Marine APIs) and set `OPEN_METEO_API_KEY`
-   (2.1). Nothing else changes.
-2. **Real email** for verification, password reset and alerts: Resend, SendGrid or any
-   SMTP service (2.11). Without it, emails go to the console or the local Mailpit inbox.
-3. **Real flight prices**: a Duffel account (`DUFFEL_ACCESS_TOKEN`) or an Amadeus
-   Enterprise agreement (2.10). Without it, fares are demo offers labelled "Mock fares".
-4. **SMS alerts** (optional): Twilio (2.12).
-5. **CO-OPS application name** (no account): `NOAA_COOPS_APPLICATION`, e.g. the app's name
-   and a project URL; it defaults to the app name setting (2.7).
-6. **Windy**: not recommended. Its terms forbid storing the data and building derived
-   databases, which is what this app does; the provider is refused unless
-   `WINDY_TERMS_ACKNOWLEDGED=true` (2.9).
-7. **A high-traffic deployment** should use a tile provider with a key
-   (`NEXT_PUBLIC_CARTO_API_KEY` or `NEXT_PUBLIC_MAP_TILE_URL`), as explained in
-   `docs/FORECAST_SOURCES.md`.
+### 1.2 What the owner must set up
+
+| # | What | Needed for | Account and key | Expected cost | Variables |
+|---|---|---|---|---|---|
+| 1 | **Decide whether the app is commercial** (1.3); if it is, an Open-Meteo API plan | Lawful use of the spot forecasts | open-meteo.com account, API key | Standard plan: 1M calls a month, covers the Forecast and Marine APIs; monthly price not readable on the page, **confirm at checkout** (a 2023 announcement said $29 a month, not confirmed for 2026). Nothing else changes | `OPEN_METEO_API_KEY`, then raise `OPEN_METEO_CALLS_PER_DAY` / `OPEN_METEO_CALLS_PER_MONTH` to the plan's budget |
+| 2 | **Real email**: verification, password reset, swell alerts, admin alerts | Accounts and alerts outside development | Resend or SendGrid account, or any SMTP service; a sending domain you control with SPF, DKIM and DMARC records | Resend: "$0 / mo 3,000 emails / mo 100 emails a day", Pro "$20 / mo 50,000 emails / mo"; SendGrid: confirm at signup (2.11) | `EMAIL_PROVIDER`, `EMAIL_FROM`, `RESEND_API_KEY` or `SENDGRID_API_KEY` or `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`; optional `RESEND_WEBHOOK_SECRET` / `SENDGRID_WEBHOOK_PUBLIC_KEY` |
+| 3 | **Real flight prices** | Opportunities with bookable fares | Duffel (self-serve) or an Amadeus Enterprise agreement | Duffel: "$3.00 per order" plus "1% total order value" for managed content, searches beyond a 1500:1 search-to-book ratio "$0.005" each; Amadeus: contract (2.10) | `FLIGHT_PROVIDER`, `DUFFEL_ACCESS_TOKEN` or `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET` |
+| 4 | SMS alerts (optional) | Text-message alerts and STOP handling | Twilio account and a sending number (US numbers need A2P 10DLC registration) | US SMS "$0.0083" per segment plus carrier fees (2.12) | `SMS_PROVIDER`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` or `TWILIO_MESSAGING_SERVICE_SID` |
+| 5 | CO-OPS application name (no account) | Identifies the app in NOAA's logs | None | Free | `NOAA_COOPS_APPLICATION`, e.g. the app's name and a project URL; never a personal email address |
+| 6 | A tile provider, only for a high-traffic Streets basemap | Heavy use of the optional Streets basemap | CARTO (free key) or any XYZ provider | Free CARTO keys (about 5M tiles a month, non-commercial); providers' plans otherwise (2.13) | `NEXT_PUBLIC_CARTO_API_KEY` or `NEXT_PUBLIC_MAP_TILE_URL` + `NEXT_PUBLIC_MAP_ATTRIBUTION` |
+| 7 | Size the database alert from the disk (no account) | The data-health database-size alert | None | — | `DATA_HEALTH_DATABASE_MAX_GB` (default 5: reached after about 100 days with the default retention; about 17 GB at 730 days, docs/operations.md) |
+
+Not needed and not recommended: **Windy** (2.9). Its terms forbid storing the data and
+building derived databases, which is what this app does; the provider is refused unless
+`WINDY_TERMS_ACKNOWLEDGED=true`, and it costs 990 EUR a year. Copernicus Marine (2.5) is not
+implemented.
+
+### 1.3 The commercial-use question for Open-Meteo
+
+The recommended setup is free only while the app is non-commercial. Open-Meteo's terms
+(read 2026-10-16, [terms](https://open-meteo.com/en/terms)):
+
+* "You may only use the free API services for non-commercial purposes."
+* Non-commercial examples include "Using our service for private or non-profit websites or
+  apps that do not have subscriptions or advertising." and "Using our service for public
+  research conducted at public institutions."
+* Commercial examples include "Operating websites or apps that have subscriptions or display
+  advertisements." and "Integrating our service into commercial products or promotional
+  activities."
+* The free tier is limited per IP address ("Less than 10'000 API calls per day, 5'000 per
+  hour and 600 per minute."), so on shared hosting other users of the same address count
+  against it. This sandbox's shared address was refused with "Daily API request limit
+  exceeded. Please try again tomorrow." on 2026-10-14 and again on 2026-10-16 while the app
+  itself had used 143 and 55 weighted calls.
+
+So: a private, free app without ads or subscriptions fits the free tier. Ads,
+subscriptions, a paid tier or earning from the flight offers point to a paid plan, and so
+does a deployment on shared hosting (for the per-IP limit) ("Standard: 1M calls/month. Professional: 5M calls/month. Enterprise:
+50M+ calls/month." [pricing](https://open-meteo.com/en/pricing); the app's about 24,600
+weighted calls a month fit the Standard plan). The data licence (CC BY 4.0 with a link next to
+the data) applies on every plan and the app already meets it. The only change is
+`OPEN_METEO_API_KEY` (the adapter then uses the `customer-api` and `customer-marine-api`
+hosts; mock-tested, not tried with a real key). Whether a given business model is commercial
+is the owner's call, not a technical one.
 
 Check what is missing for the configured providers:
 
 ```bash
-cd backend && python -m app.cli check-config   # prints {"missing": [...]}; exit 1 if any
+cd backend && python -m app.cli check-config
 ```
+
+It prints `{"missing": [...]}` and exits with 1 if anything is missing.
 
 ### Recommended live configuration
 
 ```env
-FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf   # two independent model families -> blend
+FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf
 FORECAST_BLEND_ENABLED=true
-GEFS_ENABLED=true                                # ensemble spread (HTSGW, PERPW only)
+GEFS_ENABLED=true
 GEFS_STAT_FIELDS=HTSGW,PERPW
 GEFS_CYCLES=00,06,12,18
-MAP_FIELDS_ENABLED=                              # empty = automatic: standalone map fields
+MAP_FIELDS_ENABLED=
 MAP_FIELD_STEPS=0-120:3,120-240:6
 MAP_FIELD_CYCLES=00,12
 MAP_FIELD_PARTITIONS=on
 TIDE_PROVIDERS=noaa_coops,harmonic_model
-NOAA_COOPS_APPLICATION=                          # e.g. "SwellTravelAgent (+https://your.site)"
-OPEN_METEO_API_KEY=                              # only for commercial use (customer-* hosts)
+NOAA_COOPS_APPLICATION=SwellTravelAgent
+OPEN_METEO_API_KEY=
 ```
+
+Two independent model families are blended; GEFS-Wave adds the ensemble spread (Hs and Tp
+only); an empty `MAP_FIELDS_ENABLED` means automatic (standalone map layers with a live
+provider); `NOAA_COOPS_APPLICATION` takes an application name, for example
+"SwellTravelAgent (+https://your.site)"; `OPEN_METEO_API_KEY` stays empty unless the app is
+commercial (1.3). Apart from the application name, only `FORECAST_PROVIDERS` and
+`GEFS_ENABLED` differ from the defaults.
 
 **Upgrading an existing `.env`:** deployments whose `.env` was copied from an older
 `.env.example` set `OPEN_METEO_WAVE_MODEL` and `OPEN_METEO_ATMOS_MODEL` explicitly. These
@@ -309,6 +349,15 @@ contract pricing respectively; `docs/forecast_upgrade_audit.md`, section 4.3).
   Marine API for all 50 spots (GFS family); NOAA NODD byte ranges for the same-cycle
   comparison; every page quoted above. The full two-family acquisition is reported in
   `docs/FORECAST_SOURCES.md`.
+* **Live, no account (2026-10-16):** every acquisition job of the recommended setup on a
+  fresh database: both Open-Meteo families (329 kB and 172 kB), GEFS-Wave (69.4 MB), the map
+  layers with partitions (7.82-7.98 MB per map hour), CO-OPS and EOT20 tides (140 kB) and
+  NDBC (121 kB); `docs/FORECAST_SOURCES.md`, "Measured on 2026-10-16". Later that day the
+  README's step-by-step commands were run again: tides (140,624 B), GEFS-Wave (69.4 MB) and
+  the map fields (71.3 MB for 9 map hours) succeeded, and Open-Meteo refused the sandbox's
+  shared address with its daily-limit message (the run failed with that message, as
+  designed). The Open-Meteo terms, pricing and licence pages and the Natural Earth terms were
+  re-read the same day.
 * **Mock only (no credentials here):** the Open-Meteo commercial hosts, Windy, Duffel,
   Amadeus, Resend, SendGrid and Twilio. They are not claimed to work against the live
   services until the owner supplies keys.
