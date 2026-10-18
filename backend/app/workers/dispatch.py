@@ -2,7 +2,9 @@
 
 Account emails (verification, password reset) and phone codes are sent by Celery tasks
 with automatic retries. If the broker is unreachable the message is sent inline so a
-user is never left without their verification link.
+user is never left without their verification link. The inline senders
+(app.services.notifications.transactional: deliver_account_email, deliver_email,
+deliver_sms) import neither Celery nor kombu.
 
 :func:`kick` asks the job runner to run a job soon ("match my search", "refresh flights").
 
@@ -49,7 +51,9 @@ def dispatch_email(to: str, subject: str, text: str, html: str | None, tag: str)
         tasks.send_email.delay(to, subject, text, html, tag)
     except OperationalError:
         logger.warning("Broker unavailable; sending %s email inline", tag)
-        tasks.deliver_email(to, subject, text, html, tag)
+        from app.services.notifications.transactional import deliver_email
+
+        deliver_email(to, subject, text, html, tag)
 
 
 def dispatch_sms(to: str, body: str) -> None:
@@ -61,7 +65,9 @@ def dispatch_sms(to: str, body: str) -> None:
         tasks.send_sms.delay(to, body)
     except OperationalError:
         logger.warning("Broker unavailable; sending SMS inline")
-        tasks.deliver_sms(to, body)
+        from app.services.notifications.transactional import deliver_sms
+
+        deliver_sms(to, body)
 
 
 def kick(job: KickJob, *, match_ids: Sequence[str] = ()) -> None:

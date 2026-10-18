@@ -29,6 +29,7 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 from sqlalchemy import select
 
@@ -60,6 +61,18 @@ PLUGIN_GROUPS = {
 }
 # Exit code of a command whose implementation has not landed yet.
 EXIT_NOT_IMPLEMENTED = 4
+# Top-level packages of the optional extras (worker: Celery; sync: the data libraries). A
+# command group that needs one of them is left out of an install without that extra (the
+# lean API install of a hosted deployment), so migrate, init-db and check-config still run
+# there; with every extra installed (classic docker compose, development) nothing changes.
+OPTIONAL_DEPENDENCIES = frozenset(
+    {"celery", "kombu", "pandas", "eccodes", "gribapi", "pyarrow", "sklearn", "scipy", "joblib"}
+)
+
+
+def _missing_optional(exc: ModuleNotFoundError) -> bool:
+    """True when ``exc`` is an optional dependency (an extra) that is not installed."""
+    return (exc.name or "").split(".")[0] in OPTIONAL_DEPENDENCIES
 
 
 def _plugins() -> dict[str, ModuleType]:
@@ -71,9 +84,31 @@ def _plugins() -> dict[str, ModuleType]:
             if exc.name and module.startswith(exc.name):
                 continue  # the feature package is not installed
             raise
-        if spec is not None:
+        if spec is None:
+            continue
+        try:
             found[group] = importlib.import_module(module)
+        except ModuleNotFoundError as exc:
+            if not _missing_optional(exc):
+                raise
+            print(f"note: '{group}' commands need the {exc.name!r} package", file=sys.stderr)
     return found
+
+
+def _register(plugins: dict[str, ModuleType], sub: Any) -> dict[str, str]:
+    """Add every group's parser. A group whose ``register`` needs a missing optional
+    dependency is dropped from ``plugins``; returns {group: missing package}."""
+    dropped: dict[str, str] = {}
+    for group, plugin in list(plugins.items()):
+        try:
+            plugin.register(sub)
+        except ModuleNotFoundError as exc:
+            if not _missing_optional(exc):
+                raise
+            del plugins[group]
+            dropped[group] = exc.name or "?"
+            print(f"note: '{group}' commands need the {exc.name!r} package", file=sys.stderr)
+    return dropped
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -81,8 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
     sub = parser.add_subparsers(dest="cmd", required=True)
     plugins = _plugins()
-    for plugin in plugins.values():
-        plugin.register(sub)
+    dropped = _register(plugins, sub)
     migrate_p = sub.add_parser("migrate")
     migrate_p.add_argument(
         "--on-build",
@@ -105,6 +139,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd in plugins:
         return int(plugins[args.cmd].run(args))
+    if args.cmd in dropped:
+        print(f"'{args.cmd}' needs the {dropped[args.cmd]!r} package", file=sys.stderr)
+        return 1
     if args.cmd == "migrate" and args.on_build:
         print(
             json.dumps(

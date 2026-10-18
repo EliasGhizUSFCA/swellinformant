@@ -127,6 +127,31 @@ def deliver_account_email(
         return row.status
 
 
+def deliver_email(to: str, subject: str, text: str, html: str | None, tag: str) -> str | None:
+    """Send one email now, without a delivery record; returns the provider's message id.
+
+    The body of the legacy ``notifications.send_email`` task and of its inline fallback.
+    No Celery import: the API and the sync daemon can send without the worker extra.
+    """
+    from app.services.notifications import providers
+
+    result = providers.build_email_provider().send(
+        providers.EmailMessageData(to=to, subject=subject, text=text, html=html, tag=tag)
+    )
+    return result.message_id
+
+
+def deliver_sms(to: str, body: str) -> str | None:
+    """Send one SMS now (phone verification codes); returns the provider's message id.
+
+    The body of the ``notifications.send_sms`` task and of its inline fallback (no Celery
+    import, like :func:`deliver_email`).
+    """
+    from app.services.notifications import providers
+
+    return providers.build_sms_provider().send(to, body).message_id
+
+
 def latest_account_email(db: Session, user: User, purpose: EmailPurpose) -> EmailMessage | None:
     from sqlalchemy import select
 

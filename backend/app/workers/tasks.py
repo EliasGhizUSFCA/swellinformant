@@ -37,6 +37,7 @@ from app.jobs.runner import (
 )
 from app.jobs.schedule import DATA_HEALTH_TASK, NEXT_STAGE
 from app.services.http import TransientProviderError
+from app.services.notifications.transactional import deliver_email, deliver_sms
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ __all__ = [
     "RETRY_BASE_SECONDS",
     "RETRY_HINT_MAX_SECONDS",
     "RETRY_MAX_SECONDS",
+    "deliver_email",
+    "deliver_sms",
     "judge_acquisition",
     "judge_single",
     "retry_countdown",
@@ -227,21 +230,9 @@ def data_health_task(self: Task) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- transactional messages
-def deliver_email(to: str, subject: str, text: str, html: str | None, tag: str) -> str | None:
-    from app.services.notifications.providers import EmailMessageData, build_email_provider
-
-    result = build_email_provider().send(
-        EmailMessageData(to=to, subject=subject, text=text, html=html, tag=tag)
-    )
-    return result.message_id
-
-
-def deliver_sms(to: str, body: str) -> str | None:
-    from app.services.notifications.providers import build_sms_provider
-
-    return build_sms_provider().send(to, body).message_id
-
-
+# deliver_email / deliver_sms live in app.services.notifications.transactional (no Celery
+# import there, so the inline paths of app.workers.dispatch need no worker extra); the
+# names stay importable from this module.
 ACCOUNT_EMAIL_MAX_RETRIES = 5
 
 
