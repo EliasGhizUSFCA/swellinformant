@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.sync import SyncHealthOut
+
 OverallStatus = Literal["ok", "degraded", "failing"]
 Severity = Literal["degraded", "failing"]
 SourceRole = Literal["forecast", "blend", "ensemble"]
@@ -124,3 +126,5 @@ class DataHealthOut(BaseModel):
     observations: ObservationsHealthOut
     heartbeat: HeartbeatOut
     storage: StorageOut
+    # The synced pipeline: runner, last check, last and last published sync, components.
+    sync: SyncHealthOut | None = None

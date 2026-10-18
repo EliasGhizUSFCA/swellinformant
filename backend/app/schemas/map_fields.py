@@ -78,3 +78,7 @@ class FieldIndexOut(BaseModel):
     age_hours: float | None = None
     stale_after_hours: float = 12.0
     stale: bool = False
+    # The sync publication the served run belongs to (SYNC_PUBLISH_GATE): when it was
+    # published and its sync_runs id. None when no sync has been published.
+    published_at: datetime | None = None
+    sync_run_id: int | None = None

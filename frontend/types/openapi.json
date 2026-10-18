@@ -3682,6 +3682,16 @@
      },
      "storage": {
       "$ref": "#/components/schemas/StorageOut"
+     },
+     "sync": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SyncHealthOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -4348,6 +4358,29 @@
       "type": "boolean",
       "title": "Stale",
       "default": false
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "sync_run_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sync Run Id"
      }
     },
     "type": "object",
@@ -10760,6 +10793,309 @@
      "database_bytes"
     ],
     "title": "StorageOut"
+   },
+   "SyncComponentOut": {
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "spots",
+       "ensemble",
+       "map"
+      ],
+      "title": "Kind"
+     },
+     "source": {
+      "type": "string",
+      "title": "Source",
+      "description": "Forecast source code, e.g. open_meteo_gfs"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "state": {
+      "type": "string",
+      "enum": [
+       "current",
+       "new",
+       "waiting",
+       "in_progress",
+       "failed",
+       "unknown",
+       "disabled"
+      ],
+      "title": "State"
+     },
+     "stored_run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stored Run Key"
+     },
+     "available_run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available Run Key"
+     },
+     "available_cycle": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available Cycle"
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "required": [
+     "kind",
+     "source",
+     "provider",
+     "state"
+    ],
+    "title": "SyncComponentOut"
+   },
+   "SyncHealthOut": {
+    "properties": {
+     "runner": {
+      "type": "string",
+      "enum": [
+       "celery",
+       "daemon"
+      ],
+      "title": "Runner"
+     },
+     "check_minutes": {
+      "type": "integer",
+      "title": "Check Minutes"
+     },
+     "last_check_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Check At"
+     },
+     "heartbeat_stale": {
+      "type": "boolean",
+      "title": "Heartbeat Stale",
+      "default": false
+     },
+     "last_run": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SyncRunOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "last_published": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SyncRunOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "components": {
+      "items": {
+       "$ref": "#/components/schemas/SyncComponentOut"
+      },
+      "type": "array",
+      "title": "Components"
+     },
+     "cpu_hours_month": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cpu Hours Month"
+     },
+     "cpu_budget_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cpu Budget Hours"
+     }
+    },
+    "type": "object",
+    "required": [
+     "runner",
+     "check_minutes"
+    ],
+    "title": "SyncHealthOut"
+   },
+   "SyncRunOut": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "trigger": {
+      "type": "string",
+      "enum": [
+       "daemon",
+       "celery",
+       "cli",
+       "pipeline",
+       "github",
+       "http"
+      ],
+      "title": "Trigger"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "running",
+       "success",
+       "partial",
+       "failed",
+       "skipped",
+       "abandoned"
+      ],
+      "title": "Status"
+     },
+     "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Started At"
+     },
+     "finished_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Finished At"
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "anchor_cycle": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Anchor Cycle"
+     },
+     "stages": {
+      "items": {
+       "$ref": "#/components/schemas/SyncStageOut"
+      },
+      "type": "array",
+      "title": "Stages"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "trigger",
+     "status",
+     "started_at"
+    ],
+    "title": "SyncRunOut"
+   },
+   "SyncStageOut": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "success",
+       "skipped",
+       "failed"
+      ],
+      "title": "Status"
+     },
+     "duration_ms": {
+      "type": "integer",
+      "title": "Duration Ms"
+     },
+     "cpu_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cpu S"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "status",
+     "duration_ms"
+    ],
+    "title": "SyncStageOut"
    },
    "TideBlockOut": {
     "properties": {

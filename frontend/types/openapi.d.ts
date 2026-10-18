@@ -1387,6 +1387,7 @@ export interface components {
             observations: components["schemas"]["ObservationsHealthOut"];
             heartbeat: components["schemas"]["HeartbeatOut"];
             storage: components["schemas"]["StorageOut"];
+            sync?: components["schemas"]["SyncHealthOut"] | null;
         };
         /**
          * DateMode
@@ -1621,6 +1622,10 @@ export interface components {
              * @default false
              */
             stale: boolean;
+            /** Published At */
+            published_at?: string | null;
+            /** Sync Run Id */
+            sync_run_id?: number | null;
         };
         /** FieldSourceOut */
         FieldSourceOut: {
@@ -3641,6 +3646,101 @@ export interface components {
             /** Database Max Gb */
             database_max_gb?: number | null;
             redis?: components["schemas"]["RedisHealthOut"] | null;
+        };
+        /** SyncComponentOut */
+        SyncComponentOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "spots" | "ensemble" | "map";
+            /**
+             * Source
+             * @description Forecast source code, e.g. open_meteo_gfs
+             */
+            source: string;
+            /** Provider */
+            provider: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "current" | "new" | "waiting" | "in_progress" | "failed" | "unknown" | "disabled";
+            /** Stored Run Key */
+            stored_run_key?: string | null;
+            /** Available Run Key */
+            available_run_key?: string | null;
+            /** Available Cycle */
+            available_cycle?: string | null;
+            /** Detail */
+            detail?: string | null;
+        };
+        /** SyncHealthOut */
+        SyncHealthOut: {
+            /**
+             * Runner
+             * @enum {string}
+             */
+            runner: "celery" | "daemon";
+            /** Check Minutes */
+            check_minutes: number;
+            /** Last Check At */
+            last_check_at?: string | null;
+            /**
+             * Heartbeat Stale
+             * @default false
+             */
+            heartbeat_stale: boolean;
+            last_run?: components["schemas"]["SyncRunOut"] | null;
+            last_published?: components["schemas"]["SyncRunOut"] | null;
+            /** Components */
+            components?: components["schemas"]["SyncComponentOut"][];
+            /** Cpu Hours Month */
+            cpu_hours_month?: number | null;
+            /** Cpu Budget Hours */
+            cpu_budget_hours?: number | null;
+        };
+        /** SyncRunOut */
+        SyncRunOut: {
+            /** Id */
+            id: number;
+            /**
+             * Trigger
+             * @enum {string}
+             */
+            trigger: "daemon" | "celery" | "cli" | "pipeline" | "github" | "http";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "success" | "partial" | "failed" | "skipped" | "abandoned";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Published At */
+            published_at?: string | null;
+            /** Anchor Cycle */
+            anchor_cycle?: string | null;
+            /** Stages */
+            stages?: components["schemas"]["SyncStageOut"][];
+        };
+        /** SyncStageOut */
+        SyncStageOut: {
+            /** Name */
+            name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "skipped" | "failed";
+            /** Duration Ms */
+            duration_ms: number;
+            /** Cpu S */
+            cpu_s?: number | null;
         };
         /** TideBlockOut */
         TideBlockOut: {
