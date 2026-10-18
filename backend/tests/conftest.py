@@ -52,6 +52,7 @@ from app.core.database import SessionLocal, get_engine  # noqa: E402
 from app.core.redis import get_redis  # noqa: E402
 
 MUTABLE_TABLES = [
+    "sync_runs",
     "tide_predictions",
     "spot_tide_stations",
     "tide_stations",

@@ -41,6 +41,7 @@ from app.models.research import (
 )
 from app.models.search import SavedSearch, SearchDestination, SearchOrigin, TravelPreference
 from app.models.spot import Airport, SpotAirport, SurfSpot
+from app.models.sync import SyncRun
 from app.models.tides import SpotTideStation, TidePrediction, TideStation
 from app.models.user import (
     NotificationPreference,
@@ -87,6 +88,7 @@ __all__ = [
     "SurfQualityPrediction",
     "SurfSpot",
     "SwellEvent",
+    "SyncRun",
     "TidePrediction",
     "TideStation",
     "TravelPreference",
