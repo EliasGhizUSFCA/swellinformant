@@ -1,6 +1,9 @@
 """Developer tools for demo mode (only mounted when ENABLE_DEV_ENDPOINTS=true).
 
 Production refuses to start with dev endpoints enabled (see Settings validation).
+
+The pipeline is imported inside the endpoints: it loads the blend's data libraries
+(pandas, scikit-learn), which a lean API install does not have.
 """
 
 from __future__ import annotations
@@ -24,7 +27,6 @@ from app.services.forecasts.ingestion import simulate_swell
 from app.services.notifications.providers import read_outbox
 from app.services.notifications.templates import render_test_email
 from app.services.notifications.transactional import queue_account_email
-from app.services.pipeline import run_pipeline
 
 router = APIRouter(prefix="/api/dev", tags=["developer tools"])
 
@@ -60,6 +62,8 @@ def simulate(
     )
     result: dict[str, Any] = {"simulation": outcome.as_dict(), "swell_start": start.isoformat()}
     if body.run_pipeline:
+        from app.services.pipeline import run_pipeline
+
         result["pipeline"] = run_pipeline(db, acquire=False, deliver=body.deliver)
     return result
 
@@ -71,6 +75,8 @@ def pipeline(
     _: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    from app.services.pipeline import run_pipeline
+
     return run_pipeline(db, acquire=acquire, deliver=deliver)
 
 

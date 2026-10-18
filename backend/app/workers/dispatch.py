@@ -3,20 +3,31 @@
 Account emails (verification, password reset) and phone codes are sent by Celery tasks
 with automatic retries. If the broker is unreachable the message is sent inline so a
 user is never left without their verification link.
+
+:func:`kick` asks the job runner to run a job soon ("match my search", "refresh flights").
+
+Celery and kombu are imported inside the functions, so importing this module (the API
+does, through app.services.accounts) never loads them.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
+from typing import Literal
 
-from kombu.exceptions import OperationalError
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+KickJob = Literal["matching.match", "flights.discover"]
 
 
 def dispatch_account_email(message_id: uuid.UUID | str, text: str, html: str | None) -> None:
     """Queue delivery of a recorded account email (see services/notifications/transactional)."""
+    from kombu.exceptions import OperationalError
+
     from app.workers import tasks
 
     try:
@@ -29,6 +40,8 @@ def dispatch_account_email(message_id: uuid.UUID | str, text: str, html: str | N
 
 
 def dispatch_email(to: str, subject: str, text: str, html: str | None, tag: str) -> None:
+    from kombu.exceptions import OperationalError
+
     from app.workers import tasks
 
     try:
@@ -39,6 +52,8 @@ def dispatch_email(to: str, subject: str, text: str, html: str | None, tag: str)
 
 
 def dispatch_sms(to: str, body: str) -> None:
+    from kombu.exceptions import OperationalError
+
     from app.workers import tasks
 
     try:
@@ -46,3 +61,26 @@ def dispatch_sms(to: str, body: str) -> None:
     except OperationalError:
         logger.warning("Broker unavailable; sending SMS inline")
         tasks.deliver_sms(to, body)
+
+
+def kick(job: KickJob, *, match_ids: Sequence[str] = ()) -> None:
+    """Ask the job runner to run ``job`` soon; the periodic schedule runs it anyway.
+
+    Never raises. JOB_RUNNER=celery: the task is queued (flights.discover with
+    ``match_ids``); a broker error is logged. JOB_RUNNER=daemon: a Redis kick flag
+    (app.services.sync.state.request_kick) that the daemon picks up within
+    SYNC_DAEMON_POLL_SECONDS.
+    """
+    try:
+        if get_settings().job_runner == "daemon":
+            from app.services.sync.state import request_kick
+
+            if not request_kick(job, match_ids):
+                logger.warning("Could not record the %s request; it will run on schedule", job)
+            return
+        from app.workers.celery_app import celery_app
+
+        kwargs = {"match_ids": list(match_ids)} if job == "flights.discover" and match_ids else {}
+        celery_app.signature(job, kwargs=kwargs).delay()
+    except Exception:  # broker or Redis down: the schedule picks the job up
+        logger.warning("Could not enqueue %s; it will run on schedule", job)

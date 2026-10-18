@@ -39,11 +39,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
+from app.jobs.schedule import DATA_HEALTH_TASK
 from app.models import BackgroundJobLog, User
 from app.models.enums import JobStatus
 from app.services.health import HealthReport, Problem, data_health, stamp
 from app.services.notifications.providers import EmailMessageData, build_email_provider
-from app.workers.schedule import DATA_HEALTH_TASK
 
 logger = logging.getLogger(__name__)
 

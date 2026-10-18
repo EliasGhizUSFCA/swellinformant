@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
+from app.jobs import runner
 from app.models import (
     BackgroundJobLog,
     BuoyObservation,
@@ -534,7 +535,7 @@ def check(db: Session, clock: pytest.MonkeyPatch, now: datetime) -> dict[str, ob
     for job in expected_jobs(get_settings()):
         if job.name != DATA_HEALTH_TASK:
             job_log(db, job.name, JobStatus.SUCCESS, 1, now=now)
-    clock.setattr(tasks, "utcnow", lambda: now)
+    clock.setattr(runner, "utcnow", lambda: now)
     return tasks.run_job(DATA_HEALTH_TASK, lambda s: run_data_health_check(s, now=now), chain=False)
 
 
@@ -606,7 +607,7 @@ def test_flapping_problem_sends_one_alert_and_one_recovery_per_interval(
         result = check(db, clock, now)  # every job logged successful at ``now`` ...
         if failed:  # ... then flights.discover fails right after (synthetic)
             job_log(db, "flights.discover", JobStatus.FAILED, 1, now=now + timedelta(seconds=1))
-            clock.setattr(tasks, "utcnow", lambda: now + timedelta(seconds=2))
+            clock.setattr(runner, "utcnow", lambda: now + timedelta(seconds=2))
             result = tasks.run_job(
                 DATA_HEALTH_TASK,
                 lambda s: run_data_health_check(s, now=now + timedelta(seconds=2)),

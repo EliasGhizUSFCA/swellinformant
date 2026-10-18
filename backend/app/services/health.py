@@ -9,7 +9,7 @@ It checks, with plain reasons:
   its age and the source's own stale limit (``queries.stale_after_hours``, ADR-015). A
   stale blend is only a problem of its own when every member is fresh and no acquisition
   or blend run is in progress (the chain rebuilds it right after the acquisition).
-* **Scheduled jobs** (the beat schedule of the current settings, plus the chained blend
+* **Scheduled jobs** (the job schedule of the current settings, plus the chained blend
   stage): the last result from ``background_job_logs``, consecutive failures, overdue
   runs (no run started for ``2 x longest interval + 30 min``; a run in progress counts)
   and stuck runs (still "running" 15 min after the hard task time limit: the worker
@@ -49,6 +49,14 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.core.redis import parse_memory_size, redis_memory
+from app.jobs.schedule import (
+    DATA_HEALTH_TASK,
+    NEXT_STAGE,
+    TASK_TIME_LIMIT_SECONDS,
+    build_schedule,
+    describe_schedule,
+    max_interval,
+)
 from app.models import BackgroundJobLog, BuoyObservation, BuoyStation, ForecastRun, ForecastSource
 from app.models.enums import JobStatus
 from app.schemas.health import (
@@ -75,14 +83,6 @@ from app.services.forecasts.registry import (
 )
 from app.services.map_fields import map_fields_mode, servable_runs
 from app.services.tides.health import tide_freshness
-from app.workers.schedule import (
-    DATA_HEALTH_TASK,
-    NEXT_STAGE,
-    TASK_TIME_LIMIT_SECONDS,
-    build_beat_schedule,
-    describe_schedule,
-    max_interval,
-)
 
 BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: ecCodes)
 # Jobs that (re)build the blend: forecasts.acquire, then the chained forecasts.blend stage.
@@ -307,10 +307,10 @@ class ExpectedJob:
 
 
 def expected_jobs(settings: Settings) -> list[ExpectedJob]:
-    """The beat schedule's jobs for these settings plus the chained-only stages."""
+    """The scheduled jobs (app.jobs.schedule) for these settings plus the chained-only stages."""
     jobs: dict[str, ExpectedJob] = {}
-    for entry in build_beat_schedule(settings).values():
-        name, sched = str(entry["task"]), entry["schedule"]
+    for entry in build_schedule(settings).values():
+        name, sched = entry.task, entry.schedule
         gap = max_interval(sched)
         known = jobs.get(name)
         if known is None or (known.max_gap is not None and gap < known.max_gap):

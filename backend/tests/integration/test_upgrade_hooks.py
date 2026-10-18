@@ -45,12 +45,15 @@ def test_tides_acquire_task_runs_the_ingest_and_logs_it(
 
     monkeypatch.setattr("app.services.tides.ingest.acquire_tides", fake)
     result = tasks.acquire_tides_task.delay().get()
-    assert result == {"status": "success", "stations": 0} and calls == [None]
+    # Every job also records the CPU time it used (app.jobs.runner, "cpu_s").
+    cpu_s = result["cpu_s"]
+    assert isinstance(cpu_s, float) and cpu_s >= 0
+    assert result == {"status": "success", "stations": 0, "cpu_s": cpu_s} and calls == [None]
     db.expire_all()
     row = db.scalars(
         select(BackgroundJobLog).where(BackgroundJobLog.job_name == "tides.acquire")
     ).one()
-    assert row.status == JobStatus.SUCCESS and row.details == {"stations": 0}
+    assert row.status == JobStatus.SUCCESS and row.details == {"stations": 0, "cpu_s": cpu_s}
 
 
 def test_cleanup_prunes_tide_predictions(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -129,6 +129,18 @@ def prune_map_fields(db: Session, keep: int = MAP_FIELD_RUNS_KEPT) -> int:
     return db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
 
 
+def prune_pass(db: Session, now: datetime | None = None) -> dict[str, int]:
+    """The light prune a sync runs after publishing (SYNC_PRUNE_EACH_PASS): superseded
+    member predictions (when PRUNE_SUPERSEDED_MEMBER_PREDICTIONS) and the map fields of
+    runs that are no longer among the best servable ones. Commits; returns rows deleted."""
+    out = {"superseded_predictions": 0, "map_fields": prune_map_fields(db)}
+    if get_settings().prune_superseded_member_predictions:
+        out["superseded_predictions"] = prune_superseded_predictions(db, now)
+    db.commit()
+    logger.info("Prune pass: %s", out)
+    return out
+
+
 def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
     s = get_settings()
     now = now or utcnow()
