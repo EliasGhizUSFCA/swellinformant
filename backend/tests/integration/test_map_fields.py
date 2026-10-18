@@ -46,6 +46,7 @@ from app.services.maintenance import cleanup, prune_map_fields
 from app.services.pipeline import run_pipeline
 from app.services.surf_quality.predict import compute_pending_predictions
 from tests.conftest import ApiClient
+from tests.integration.test_public_cache_headers import SPOT_LIST_CACHE_CONTROL
 from tests.synthetic_gfs import PATHS, SyntheticGfs
 from tests.synthetic_map_fields import add_map_hours, field_settings
 
@@ -350,7 +351,9 @@ def test_index_without_fields_says_what_to_set(app_client: ApiClient) -> None:
     # The endpoint's own header wins: the security middleware adds "no-store" only to API
     # responses that set no Cache-Control themselves (otherwise browsers never cache fields).
     assert resp.headers.get_list("cache-control") == ["public, max-age=300"]
-    assert app_client.get("/api/spots").headers.get_list("cache-control") == ["no-store"]
+    assert app_client.get("/api/spots").headers.get_list("cache-control") == [
+        SPOT_LIST_CACHE_CONTROL
+    ]
     body = resp.json()
     assert body["available"] is False and body["valid_times"] == [] and body["source"] is None
     assert "FORECAST_PROVIDERS" in body["message"] and "MAP_FIELDS_ENABLED" in body["message"]
@@ -895,25 +898,6 @@ def test_map_fields_task_is_a_no_op_unless_standalone(
     monkeypatch.setattr("app.services.forecasts.ingestion.acquire_map_fields", fake)
     result = tasks.acquire_map_fields_task.delay().get()
     assert len(calls) == 1 and result["message"] == "stub"
-
-
-def test_beat_runs_the_map_field_job_in_standalone_mode_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.workers import celery_app as module
-
-    assert "forecasts.map_fields" in module.celery_app.tasks
-    assert "map-fields" not in module._optional_schedule()
-    base = module.settings
-    monkeypatch.setattr(module, "settings", base.model_copy(update={"map_fields_enabled": True}))
-    job = module._optional_schedule()["map-fields"]
-    assert job["task"] == "forecasts.map_fields"
-    assert job["schedule"] == timedelta(minutes=base.forecast_refresh_minutes)
-    with_noaa = base.model_copy(
-        update={"map_fields_enabled": True, "forecast_providers": "noaa_gfs"}
-    )
-    monkeypatch.setattr(module, "settings", with_noaa)
-    assert "map-fields" not in module._optional_schedule()  # the NOAA acquisition does it
 
 
 def test_cli_map_fields(

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FIELD_INDEX_REFETCH_MS, layerVariables, useFieldIndex, useMapLayerFields } from "@/hooks/map-fields";
 import * as api from "@/lib/api";
 import type { FieldIndex } from "@/lib/map-fields";
-import { DEFAULT_SETTINGS } from "@/lib/map-settings";
+import { DEFAULT_SETTINGS, type MapSettings } from "@/lib/map-settings";
 
 // The index and fields below are SYNTHETIC test data.
 const AT = "2026-10-14T12:00:00Z";
@@ -95,7 +95,9 @@ describe("which variables the map asks for", () => {
       variables: [...INDEX.variables, ...(["swell1_hs", "swell1_tp", "swell1_dir"] as const).map((n) => partition(n, "primary"))],
     };
     // Primary and secondary are chosen; the run has no secondary swell: never requested.
-    expect(layerVariables(DEFAULT_SETTINGS, withParts).optional).toEqual(["swell1_hs", "swell1_tp", "swell1_dir"]);
+    // (Chosen explicitly, not through the default systems, which the wave look may change.)
+    const primaryAndSecondary = { ...DEFAULT_SETTINGS, waveSystems: ["primary", "secondary"] } satisfies MapSettings;
+    expect(layerVariables(primaryAndSecondary, withParts).optional).toEqual(["swell1_hs", "swell1_tp", "swell1_dir"]);
     expect(layerVariables({ ...DEFAULT_SETTINGS, layer: "wind" }, withParts)).toEqual({ required: ["wind_u", "wind_v"], optional: [] });
     // The wind overlay on a wave layer adds the wind components.
     expect(layerVariables({ ...DEFAULT_SETTINGS, windOverlay: true }, INDEX).optional).toEqual(["wind_u", "wind_v"]);

@@ -18,6 +18,7 @@ from app.services.pipeline import run_pipeline
 from app.services.tides.api import NO_TIDE_SOURCE
 from app.services.timeline import NO_FORECAST
 from tests.conftest import ApiClient
+from tests.integration.test_public_cache_headers import PUBLIC_GET_CACHE_CONTROL
 from tests.timeline_fixtures import build_rows, ecmwf_shaped_times, jbay_doc
 
 pytestmark = pytest.mark.integration
@@ -76,7 +77,7 @@ def _days_shift(first: datetime) -> timedelta:
 def test_timeline_without_a_forecast_says_so(app_client: ApiClient) -> None:
     resp = app_client.get("/api/spots/jeffreys-bay/timeline", params={"days": 3})
     assert resp.status_code == 200, resp.text
-    assert resp.headers["cache-control"] == "public, max-age=300"
+    assert resp.headers["cache-control"] == PUBLIC_GET_CACHE_CONTROL
     assert resp.headers["etag"].startswith('W/"')
     body = SpotTimelineOut.model_validate(resp.json())
     assert body.spot_slug == "jeffreys-bay" and body.timezone == "Africa/Johannesburg"
@@ -154,7 +155,7 @@ def test_timeline_cache_headers_and_conditional_requests(
     run_pipeline(db)
     first = app_client.get("/api/spots/pipeline/timeline")
     assert first.status_code == 200
-    assert first.headers["cache-control"] == "public, max-age=300"
+    assert first.headers["cache-control"] == PUBLIC_GET_CACHE_CONTROL
     etag = first.headers["etag"]
     assert etag.startswith('W/"') and etag.endswith('"')
     again = app_client.get("/api/spots/pipeline/timeline")
@@ -164,7 +165,7 @@ def test_timeline_cache_headers_and_conditional_requests(
         assert cached.status_code == 304, header
         assert cached.content == b""
         assert cached.headers["etag"] == etag
-        assert cached.headers["cache-control"] == "public, max-age=300"
+        assert cached.headers["cache-control"] == PUBLIC_GET_CACHE_CONTROL
     changed = app_client.get("/api/spots/pipeline/timeline", headers={"If-None-Match": '"old"'})
     assert changed.status_code == 200 and changed.json()["available"] is True
     # Another window is another representation.

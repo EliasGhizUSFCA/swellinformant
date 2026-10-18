@@ -32,6 +32,7 @@ from app.services.tides.ingest import acquire_tides
 from app.services.tides.maintenance import prune_tide_predictions
 from app.services.tides.stage import tide_stages_for
 from tests.conftest import ApiClient
+from tests.integration.test_public_cache_headers import PUBLIC_GET_CACHE_CONTROL
 
 pytestmark = pytest.mark.integration
 
@@ -111,7 +112,7 @@ def _rows(db: Session) -> int:
 def _block(client: ApiClient, slug: str, start: str, end: str) -> TideBlockOut:
     resp = client.get(f"/api/spots/{slug}/tides", params={"start": start, "end": end})
     assert resp.status_code == 200, resp.text
-    assert resp.headers["cache-control"] == "public, max-age=300"
+    assert resp.headers["cache-control"] == PUBLIC_GET_CACHE_CONTROL
     return TideBlockOut.model_validate(resp.json())
 
 
@@ -119,7 +120,7 @@ def test_tides_are_unavailable_rather_than_invented(app_client: ApiClient, db: S
     """No catalog seeded, no forecast run: nothing is made up."""
     resp = app_client.get("/api/spots/mavericks/tides")
     assert resp.status_code == 200, resp.text
-    assert resp.headers["cache-control"] == "public, max-age=300"
+    assert resp.headers["cache-control"] == PUBLIC_GET_CACHE_CONTROL
     block = TideBlockOut.model_validate(resp.json())
     assert block.status == "unavailable"
     assert block.reason == "No tide source configured for this spot."

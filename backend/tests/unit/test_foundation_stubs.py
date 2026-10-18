@@ -1,23 +1,28 @@
 """Cross-package interfaces and contracts declared by the foundation (F7, F8).
 
-The signatures are frozen: the packages replace the stub bodies, never the parameters. The
-stubs say plainly that they are not implemented; the interfaces that keep today's
-behaviour (acquire_all without ``only``, dispatch.kick under Celery) do exactly that.
+The signatures and the CLI options are frozen: the packages replace the stub bodies, never
+the parameters, so every assertion here holds before and after they land. Assertions about
+a stub's current behaviour (NotImplementedError, the "not implemented" CLI output, the
+watchdog's 503) live in the test files of the package that replaces it, so that package
+updates them in a file it owns:
+
+* sync-core: tests/unit/test_sync_detect.py, tests/unit/test_cli_migrate_on_build.py,
+  tests/integration/test_sync_orchestrator.py, tests/integration/test_sync_daemon.py,
+  tests/integration/test_sync_spot_scope.py;
+* api-serverless: tests/unit/test_dispatch_runner.py, tests/integration/test_internal_cron.py;
+* egress-map-serving: tests/integration/test_prune_pass.py.
 """
 
 from __future__ import annotations
 
+import argparse
 import inspect
-import json
-import threading
 from collections.abc import Callable
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app import cli
-from app.core.config import get_settings
 from app.services.sync import cli as sync_cli
 from app.services.sync import daemon, detect, orchestrator, publish
 from app.services.sync.types import SyncBusy
@@ -70,6 +75,11 @@ def test_other_package_signatures() -> None:
     from app.services.health import data_health
     from app.services.maintenance import prune_pass
     from app.services.notifications.ops_alerts import run_data_health_check
+    from app.services.notifications.transactional import (
+        deliver_account_email,
+        deliver_email,
+        deliver_sms,
+    )
 
     assert params(acquire_all) == [
         ("db", POS, EMPTY),
@@ -81,188 +91,103 @@ def test_other_package_signatures() -> None:
     assert params(run_data_health_check) == [("db", POS, EMPTY), ("now", POS, None)]
     assert callable(data_health)
     assert params(dispatch.kick) == [("job", POS, EMPTY), ("match_ids", KW, ())]
-
-
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda: detect.load_known(None),  # type: ignore[arg-type]
-        lambda: detect.plan_sync(None),
-        lambda: orchestrator.run_sync(trigger="cli", stop=threading.Event()),
-        lambda: orchestrator.tick(trigger="celery"),
-        lambda: publish.publish(None),  # type: ignore[arg-type]
-        lambda: daemon.run_daemon(once=True),
-    ],
-)
-def test_sync_core_stubs_say_they_are_not_implemented(call: Callable[[], object]) -> None:
-    with pytest.raises(NotImplementedError, match="not implemented yet"):
-        call()
-
-
-# --------------------------------------------------------------------------- acquire_all
-def test_acquire_all_only_limits_the_providers_and_keeps_priorities(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.services.forecasts import ingestion
-
-    settings = get_settings()
-    monkeypatch.setattr(settings, "forecast_providers", "open_meteo,open_meteo_ecmwf,noaa_gfs")
-    built: list[str] = []
-    acquired: list[tuple[str, int]] = []
-
-    def build(name: str, _settings: object, overrides: object = None) -> str:
-        built.append(name)
-        return name
-
-    def acquire(_db: object, provider: str, **kw: Any) -> str:
-        acquired.append((provider, kw["priority"]))
-        return provider
-
-    monkeypatch.setattr(ingestion, "build_provider", build)
-    monkeypatch.setattr(ingestion, "acquire_from_provider", acquire)
-    every = ingestion.acquire_all(None)  # type: ignore[arg-type]
-    assert every == ["open_meteo", "open_meteo_ecmwf", "noaa_gfs"]  # type: ignore[comparison-overlap]
-    assert acquired == [("open_meteo", 0), ("open_meteo_ecmwf", 1), ("noaa_gfs", 2)]
-    built.clear()
-    acquired.clear()
-    some = ingestion.acquire_all(None, only={"noaa_gfs", "open_meteo"})  # type: ignore[arg-type]
-    assert some == ["open_meteo", "noaa_gfs"]  # type: ignore[comparison-overlap]
-    assert built == ["open_meteo", "noaa_gfs"]
-    assert acquired == [("open_meteo", 0), ("noaa_gfs", 2)]
-    assert ingestion.acquire_all(None, only=()) == []  # type: ignore[arg-type]
-
-
-# --------------------------------------------------------------------------- dispatch.kick
-class FakeSignature:
-    def __init__(self, calls: list[tuple[str, dict[str, Any]]], name: str, kwargs: Any) -> None:
-        self.calls, self.name, self.kwargs = calls, name, kwargs
-
-    def delay(self) -> None:
-        self.calls.append((self.name, self.kwargs))
-
-
-def test_kick_under_celery_queues_the_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.workers.celery_app import celery_app
-
-    calls: list[tuple[str, dict[str, Any]]] = []
-    monkeypatch.setattr(
-        celery_app, "signature", lambda name, kwargs=None: FakeSignature(calls, name, kwargs)
-    )
-    assert get_settings().job_runner == "celery"
-    dispatch.kick("matching.match")
-    dispatch.kick("flights.discover", match_ids=["m1"])
-    dispatch.kick("flights.discover")
-    assert calls == [
-        ("matching.match", {}),
-        ("flights.discover", {"match_ids": ["m1"]}),
-        ("flights.discover", {}),
+    # The inline senders the JOB_RUNNER=daemon dispatch uses (no Celery import).
+    assert [n for n, _, _ in params(deliver_account_email)] == [
+        "message_id",
+        "text",
+        "html",
+        "final_attempt",
+        "now",
     ]
-
-
-def test_kick_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.workers.celery_app import celery_app
-
-    def broken(*_: object, **__: object) -> None:
-        raise RuntimeError("broker down")
-
-    monkeypatch.setattr(celery_app, "signature", broken)
-    dispatch.kick("matching.match")  # logged, not raised
-
-
-def test_kick_under_the_daemon_writes_a_redis_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.sync import state
-
-    calls: list[tuple[str, list[str]]] = []
-
-    def request(job: str, match_ids: Any = ()) -> bool:
-        calls.append((job, list(match_ids)))
-        return False  # Redis down: logged, not raised
-
-    monkeypatch.setattr(get_settings(), "job_runner", "daemon")
-    monkeypatch.setattr(state, "request_kick", request)
-    dispatch.kick("flights.discover", match_ids=("m1", "m2"))
-    dispatch.kick("matching.match")
-    assert calls == [("flights.discover", ["m1", "m2"]), ("matching.match", [])]
+    assert [n for n, _, _ in params(deliver_email)] == ["to", "subject", "text", "html", "tag"]
+    assert [n for n, _, _ in params(deliver_sms)] == ["to", "body"]
 
 
 # --------------------------------------------------------------------------- F8 CLI
+@pytest.fixture
+def parsed(monkeypatch: pytest.MonkeyPatch) -> list[argparse.Namespace]:
+    """The namespaces ``python -m app.cli sync ...`` hands to app.services.sync.cli.run."""
+    seen: list[argparse.Namespace] = []
+
+    def run(args: argparse.Namespace) -> int:
+        seen.append(args)
+        return sync_cli.EXIT_OK
+
+    monkeypatch.setattr(sync_cli, "run", run)
+    return seen
+
+
+def test_sync_group_is_registered() -> None:
+    assert cli.PLUGIN_GROUPS["sync"] == "app.services.sync.cli"
+    assert (sync_cli.EXIT_OK, sync_cli.EXIT_FAILED, sync_cli.EXIT_BUSY) == (0, 1, 3)
+
+
 @pytest.mark.parametrize(
-    ("argv", "command"),
+    ("argv", "expected"),
     [
-        (["sync", "check", "--json"], "sync check"),
+        (["sync", "check"], {"sync_cmd": "check", "json": False}),
+        (["sync", "check", "--json"], {"sync_cmd": "check", "json": True}),
+        (
+            ["sync", "run"],
+            {"sync_cmd": "run", "force": False, "only": None, "if_due": False, "trigger": "cli"},
+        ),
         (
             ["sync", "run", "--force", "--only", "map,spots", "--if-due", "--trigger", "github"],
-            "sync run",
+            {
+                "sync_cmd": "run",
+                "force": True,
+                "only": ["spots", "map"],
+                "if_due": True,
+                "trigger": "github",
+            },
         ),
-        (["sync", "daemon", "--once", "--no-init-db"], "sync daemon"),
-        (["sync", "publish"], "sync publish"),
-        (["sync", "status", "--limit", "5"], "sync status"),
+        (["sync", "run", "--only", "ensemble"], {"only": ["ensemble"]}),
+        (["sync", "daemon"], {"sync_cmd": "daemon", "once": False, "no_init_db": False}),
+        (
+            ["sync", "daemon", "--once", "--no-init-db"],
+            {"sync_cmd": "daemon", "once": True, "no_init_db": True},
+        ),
+        (["sync", "publish"], {"sync_cmd": "publish"}),
+        (["sync", "status"], {"sync_cmd": "status", "limit": 10}),
+        (["sync", "status", "--limit", "5"], {"sync_cmd": "status", "limit": 5}),
     ],
 )
-def test_sync_commands_are_registered_stubs(
-    argv: list[str], command: str, capsys: pytest.CaptureFixture[str]
+def test_sync_command_options(
+    argv: list[str], expected: dict[str, object], parsed: list[argparse.Namespace]
 ) -> None:
-    assert cli.main(argv) == sync_cli.EXIT_NOT_IMPLEMENTED == 4
-    out = json.loads(capsys.readouterr().out)
-    assert out["status"] == "not_implemented" and out["command"] == command
-    assert "not implemented yet" in out["detail"]
+    assert cli.main(argv) == sync_cli.EXIT_OK
+    (args,) = parsed
+    assert args.cmd == "sync"
+    assert {key: getattr(args, key) for key in expected} == expected
 
 
-def test_sync_options_are_validated() -> None:
-    assert sync_cli.component_kinds("map, spots") == ["spots", "map"]
-    with pytest.raises(SystemExit):
-        cli.main(["sync", "run", "--only", "spots,gefs"])
-    with pytest.raises(SystemExit):
-        cli.main(["sync", "run", "--trigger", "daemon"])
-    with pytest.raises(SystemExit):
-        cli.main(["sync"])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["sync"],
+        ["sync", "run", "--only", "spots,gefs"],
+        ["sync", "run", "--only", ""],
+        ["sync", "run", "--trigger", "daemon"],
+        ["sync", "status", "--limit", "many"],
+        ["sync", "nope"],
+    ],
+)
+def test_sync_options_are_validated(argv: list[str], parsed: list[argparse.Namespace]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    assert exc.value.code == 2 and parsed == []
 
 
-def test_migrate_on_build_is_a_stub_and_migrates_nothing(
+def test_plain_migrate_is_unchanged_and_on_build_is_off_by_default(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def must_not_run() -> None:
-        raise AssertionError("migrate --on-build must not migrate yet")
+    from app.core.config import get_settings
 
-    monkeypatch.setattr(cli, "migrate", must_not_run)
-    assert cli.main(["migrate", "--on-build"]) == cli.EXIT_NOT_IMPLEMENTED
-    out = json.loads(capsys.readouterr().out)
-    assert out == {
-        "status": "not_implemented",
-        "command": "migrate --on-build",
-        "detail": "not implemented yet: nothing was migrated",
-    }
-
-
-# --------------------------------------------------------------------------- F8 HTTP
-@pytest.fixture
-def client() -> TestClient:
-    from app.main import app
-
-    return TestClient(app)
-
-
-def test_cron_route_is_absent_without_a_secret(client: TestClient) -> None:
-    assert get_settings().cron_secret is None
-    unknown = client.get("/api/internal/no-such-route")
-    for headers in ({}, {"Authorization": "Bearer anything-at-all-123"}):
-        r = client.get("/api/internal/cron/daily", headers=headers)
-        assert r.status_code == 404 and r.json() == unknown.json()
-    assert "/api/internal/cron/daily" not in client.get("/openapi.json").json()["paths"]
-
-
-def test_cron_route_checks_the_bearer_token(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    secret = "s3cret-token-for-the-watchdog"
-    monkeypatch.setattr(get_settings(), "cron_secret", secret)
-    for value in (None, secret, f"Basic {secret}", "Bearer wrong-token-1234567", "Bearer "):
-        headers = {"Authorization": value} if value is not None else {}
-        assert client.get("/api/internal/cron/daily", headers=headers).status_code == 401, value
-    ok = client.get("/api/internal/cron/daily", headers={"Authorization": f"Bearer {secret}"})
-    # Authorised, but the watchdog is not built yet: an explicit unavailable state.
-    assert ok.status_code == 503
-    assert ok.headers["cache-control"] == "private, no-store"
-    body = ok.json()
-    assert body["status"] == "unavailable" and body["problems"] == []
-    assert body["alerts_sent"] == [] and body["heartbeat_age_minutes"] is None
+    migrated: list[bool] = []
+    monkeypatch.setattr(cli, "migrate", lambda: migrated.append(True))
+    assert cli.main(["migrate"]) == 0
+    assert migrated == [True] and capsys.readouterr().out == "database migrated\n"
+    # MIGRATE_ON_BUILD=off (the default): a build step never migrates.
+    assert get_settings().migrate_on_build == "off"
+    cli.main(["migrate", "--on-build"])
+    assert migrated == [True]

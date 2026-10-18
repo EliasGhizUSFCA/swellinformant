@@ -23,6 +23,7 @@ from app.services.observations.records import ParseStats
 from app.services.observations.stations import seed_stations
 from app.services.tides import api as tide_api
 from tests.conftest import ApiClient
+from tests.integration.test_public_cache_headers import PUBLIC_GET_CACHE_CONTROL
 
 pytestmark = pytest.mark.integration
 
@@ -151,5 +152,5 @@ def test_spots_without_reference_stations_say_so(app_client: ApiClient, db: Sess
     rincon = _block(db, "rincon")
     assert rincon.status == "unavailable" and rincon.reason == tide_api.NO_RECENT_READINGS
     resp = app_client.get("/api/spots/rincon/observations")
-    assert resp.status_code == 200 and resp.headers["cache-control"] == "public, max-age=300"
+    assert resp.status_code == 200 and resp.headers["cache-control"] == PUBLIC_GET_CACHE_CONTROL
     assert ObservationsBlockOut.model_validate(resp.json()).status == "unavailable"

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from celery.exceptions import Retry
 
 from app.core.config import Settings
+from app.jobs.registry import JOB_SPECS
+from app.jobs.runner import judge_acquisition, judge_single
+from app.jobs.schedule import DATA_HEALTH_TASK, DailyAt, Every, JobEntry, build_schedule
 from app.models.enums import JobStatus
 from app.workers import tasks
 from app.workers.celery_app import celery_app
@@ -150,3 +154,81 @@ def test_transient_failures_retry_with_a_countdown_and_permanent_ones_do_not() -
     with pytest.raises(Retry):
         tasks.retry_transient(single, {"status": "failed", "retryable": True, "retry_after_s": 400})  # type: ignore[arg-type]
     assert single.retried[0]["countdown"] == 400
+
+
+# ------------------------------------------------------------------ the plain job schedule
+# app.jobs.schedule is what beat (through app.workers.schedule) and the data-health report
+# read. These pin today's entries and job options; the synced model (D14) changes them.
+def every_job_settings_and_tides() -> Settings:
+    return Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        gefs_enabled=True,
+        observations_enabled=True,
+        verification_enabled=True,
+        map_fields_enabled=True,
+        tide_providers="noaa_coops",
+    )
+
+
+def test_the_schedule_has_today_s_entries() -> None:
+    plain = build_schedule(every_job_settings_and_tides())
+    assert all(isinstance(e, JobEntry) and e.name == name for name, e in plain.items())
+    assert {name: e.task for name, e in plain.items()} == {
+        "forecast-acquisition": "forecasts.acquire",
+        "quality-prediction-safety-net": "quality.predict",
+        "swell-detection": "detection.detect",
+        "user-matching": "matching.match",
+        "flight-discovery": "flights.discover",
+        "alert-generation": "alerts.generate",
+        "notification-delivery": "notifications.deliver",
+        "forecast-staleness-check": "forecasts.check_staleness",
+        "data-health": DATA_HEALTH_TASK,
+        "maintenance-cleanup": "maintenance.cleanup",
+        "map-fields": "forecasts.map_fields",
+        "ensemble-acquisition": "forecasts.acquire_ensemble",
+        "tide-acquisition": "tides.acquire",
+        "observation-ingest": "observations.ingest",
+        "point-forecast-archive": "verification.collect_point_forecasts",
+        "verification": "verification.run",
+    }
+    assert plain["maintenance-cleanup"].schedule == DailyAt((3,), 30)
+    assert plain["ensemble-acquisition"].schedule == DailyAt((1, 7, 13, 19), 40)
+    assert plain["notification-delivery"].schedule == Every(2)
+    assert plain["forecast-acquisition"].schedule == Every(180)
+
+
+def test_job_specs_keep_the_task_options() -> None:
+    specs = JOB_SPECS
+    assert specs["forecasts.acquire"].lock_ttl == 3600
+    assert specs["forecasts.acquire"].judge is judge_acquisition
+    assert specs["forecasts.map_fields"].judge is judge_single
+    assert specs["forecasts.map_fields"].chain is False
+    assert specs["forecasts.acquire_ensemble"].judge is judge_single
+    assert specs["notifications.deliver"].lock_ttl == 600
+    assert specs[DATA_HEALTH_TASK].lock_ttl == 600 and specs[DATA_HEALTH_TASK].chain is False
+    assert specs["flights.discover"].lock_ttl == 3600
+    assert specs["sync.tick"].lock_ttl == 3600 and specs["sync.tick"].chain is False
+    for name in ("maintenance.cleanup", "forecasts.check_staleness", "sync.publish"):
+        assert specs[name].chain is False, name
+    for name in ("forecasts.blend", "quality.predict", "detection.detect", "matching.match"):
+        assert specs[name].chain is True and specs[name].lock_ttl == 1800, name
+
+
+# Moved from tests/integration/test_map_fields.py: the beat entry belongs to the schedule.
+def test_beat_runs_the_map_field_job_in_standalone_mode_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import celery_app as module
+
+    assert "forecasts.map_fields" in module.celery_app.tasks
+    assert "map-fields" not in module._optional_schedule()
+    base = module.settings
+    monkeypatch.setattr(module, "settings", base.model_copy(update={"map_fields_enabled": True}))
+    job = module._optional_schedule()["map-fields"]
+    assert job["task"] == "forecasts.map_fields"
+    assert job["schedule"] == timedelta(minutes=base.forecast_refresh_minutes)
+    with_noaa = base.model_copy(
+        update={"map_fields_enabled": True, "forecast_providers": "noaa_gfs"}
+    )
+    monkeypatch.setattr(module, "settings", with_noaa)
+    assert "map-fields" not in module._optional_schedule()  # the NOAA acquisition does it

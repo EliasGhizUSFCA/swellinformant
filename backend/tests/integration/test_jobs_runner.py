@@ -1,7 +1,8 @@
-"""app.jobs.runner.run_job without Celery (foundation F5) and maintenance.prune_pass (F7)."""
+"""app.jobs.runner.run_job without Celery (foundation F5)."""
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pytest
@@ -12,7 +13,6 @@ from app.core.redis import redis_lock
 from app.jobs.runner import judge_single, run_job
 from app.models import BackgroundJobLog
 from app.models.enums import JobStatus
-from app.services.maintenance import prune_pass
 
 pytestmark = pytest.mark.integration
 
@@ -29,9 +29,11 @@ def logs(db: Session, name: str) -> list[BackgroundJobLog]:
 
 
 def busy(db: Session) -> dict[str, Any]:
+    """At least 0.1 s of CPU (time.process_time), so cpu_s is measurably above zero."""
+    deadline = time.process_time() + 0.1
     total = 0
-    for i in range(200_000):  # some CPU, so cpu_s is measurable
-        total += i * i
+    while time.process_time() < deadline:
+        total += sum(i * i for i in range(10_000))
     return {"spots": 3, "total": total}
 
 
@@ -39,7 +41,8 @@ def test_success_logs_cpu_and_hands_over_the_next_stage(db: Session) -> None:
     nexts: list[str] = []
     result = run_job("detection.detect", busy, on_success=nexts.append)
     assert result["status"] == "success" and result["spots"] == 3
-    assert isinstance(result["cpu_s"], float) and result["cpu_s"] >= 0
+    # The process CPU time the job used (resource.getrusage), not wall time and not zero.
+    assert isinstance(result["cpu_s"], float) and 0.1 <= result["cpu_s"] < 30
     assert nexts == ["matching.match"]  # NEXT_STAGE["detection.detect"]
     (row,) = logs(db, "detection.detect")
     assert row.status == JobStatus.SUCCESS and row.details["cpu_s"] == result["cpu_s"]
@@ -84,7 +87,3 @@ def test_a_held_lock_skips_and_an_exception_is_logged(db: Session) -> None:
     assert [r.status for r in rows] == [JobStatus.SKIPPED, JobStatus.FAILED]
     assert rows[1].error_message == "ValueError: bad data" and "cpu_s" in rows[1].details
     assert nexts == []
-
-
-def test_prune_pass_on_an_empty_database(db: Session) -> None:
-    assert prune_pass(db) == {"superseded_predictions": 0, "map_fields": 0}

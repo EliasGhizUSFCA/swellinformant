@@ -13,6 +13,7 @@ from app.services.pipeline import run_pipeline
 from app.services.surf_quality.scoring import ALGORITHM_VERSION
 from app.workers.schedule import build_beat_schedule
 from tests.conftest import ApiClient, search_payload
+from tests.integration.test_public_cache_headers import PUBLIC_GET_CACHE_CONTROL
 
 pytestmark = pytest.mark.integration
 
@@ -159,7 +160,7 @@ def test_map_conditions_snapshot(app_client: ApiClient, db: Session, few_spots: 
     assert empty["valid_time"] is None and all(s["conditions"] is None for s in empty["spots"])
     run_pipeline(db)
     r = app_client.get("/api/map/conditions")
-    assert r.status_code == 200 and "max-age=300" in r.headers["cache-control"]
+    assert r.status_code == 200 and r.headers["cache-control"] == PUBLIC_GET_CACHE_CONTROL
     snap = r.json()
     assert {s["slug"] for s in snap["spots"]} == set(few_spots)
     assert snap["step_hours"] == 3 and snap["range_start"] < snap["range_end"]

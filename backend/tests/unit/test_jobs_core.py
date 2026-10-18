@@ -15,14 +15,13 @@ from celery.schedules import crontab
 from app.core.config import Settings
 from app.jobs import registry
 from app.jobs.schedule import (
-    DATA_HEALTH_TASK,
     DailyAt,
     Every,
-    JobEntry,
     build_schedule,
     describe_schedule,
     max_interval,
 )
+from app.services.sync.types import STAGE_JOB_NAMES
 from app.workers import schedule as beat
 from app.workers import tasks as _tasks  # noqa: F401  (registers the Celery tasks)
 from app.workers.celery_app import celery_app
@@ -106,34 +105,39 @@ def test_the_job_core_and_sync_contracts_import_without_celery() -> None:
     assert done.returncode == 0 and done.stdout.strip() == "ok", done.stderr[-3000:]
 
 
+def test_the_cli_runs_without_the_optional_extras() -> None:
+    """A lean install (the hosted API: no worker or sync extra) still runs migrate,
+    init-db, seed and check-config: groups that need a missing extra are left out."""
+    code = textwrap.dedent(
+        f"""
+        import sys
+
+        BLOCKED = {CELERY + HEAVY!r}
+
+        class Blocker:
+            def find_spec(self, name, path=None, target=None):
+                if name.split(".")[0] in BLOCKED:
+                    raise ModuleNotFoundError(f"No module named {{name!r}}", name=name)
+                return None
+
+        sys.meta_path.insert(0, Blocker())
+        from app import cli
+
+        try:
+            cli.main(["--help"])
+        except SystemExit as exc:
+            assert exc.code == 0, exc.code
+        """
+    )
+    done = subprocess.run(  # noqa: S603 - fixed interpreter and code
+        [sys.executable, "-c", code], cwd=BACKEND, capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 0, done.stderr[-3000:]
+    for command in ("migrate", "init-db", "seed", "check-config"):
+        assert command in done.stdout, command
+
+
 # --------------------------------------------------------------------------- schedule
-def test_the_schedule_has_today_s_entries() -> None:
-    plain = build_schedule(every_job_settings())
-    assert all(isinstance(e, JobEntry) and e.name == name for name, e in plain.items())
-    assert {name: e.task for name, e in plain.items()} == {
-        "forecast-acquisition": "forecasts.acquire",
-        "quality-prediction-safety-net": "quality.predict",
-        "swell-detection": "detection.detect",
-        "user-matching": "matching.match",
-        "flight-discovery": "flights.discover",
-        "alert-generation": "alerts.generate",
-        "notification-delivery": "notifications.deliver",
-        "forecast-staleness-check": "forecasts.check_staleness",
-        "data-health": DATA_HEALTH_TASK,
-        "maintenance-cleanup": "maintenance.cleanup",
-        "map-fields": "forecasts.map_fields",
-        "ensemble-acquisition": "forecasts.acquire_ensemble",
-        "tide-acquisition": "tides.acquire",
-        "observation-ingest": "observations.ingest",
-        "point-forecast-archive": "verification.collect_point_forecasts",
-        "verification": "verification.run",
-    }
-    assert plain["maintenance-cleanup"].schedule == DailyAt((3,), 30)
-    assert plain["ensemble-acquisition"].schedule == DailyAt((1, 7, 13, 19), 40)
-    assert plain["notification-delivery"].schedule == Every(2)
-    assert plain["forecast-acquisition"].schedule == Every(180)
-
-
 @pytest.mark.parametrize(
     "settings",
     [Settings(_env_file=None), every_job_settings()],  # type: ignore[call-arg]
@@ -183,28 +187,21 @@ def test_every_celery_job_has_a_registry_spec() -> None:
     jobs = {name for name in celery_app.tasks if not name.startswith("celery.")}
     jobs -= MESSAGING_TASKS
     assert jobs <= set(registry.JOB_SPECS), jobs - set(registry.JOB_SPECS)
-    assert set(registry.JOB_SPECS) - jobs == {"sync.tick", "sync.publish", "maintenance.prune_pass"}
+    # The synced pipeline's jobs (F5c), whether or not Celery has a task for them yet.
+    assert {"sync.tick", "sync.publish", "maintenance.prune_pass"} <= set(registry.JOB_SPECS)
     for name, spec in registry.JOB_SPECS.items():
         assert spec.name == name and registry.job_spec(name) is spec
     with pytest.raises(KeyError, match="unknown job"):
         registry.job_spec("forecasts.nope")
 
 
-def test_job_specs_keep_the_task_options() -> None:
-    specs = registry.JOB_SPECS
-    assert specs["forecasts.acquire"].lock_ttl == 3600
-    assert specs["forecasts.acquire"].judge is registry.judge_acquisition
-    assert specs["forecasts.map_fields"].judge is registry.judge_single
-    assert specs["forecasts.map_fields"].chain is False
-    assert specs["forecasts.acquire_ensemble"].judge is registry.judge_single
-    assert specs["notifications.deliver"].lock_ttl == 600
-    assert specs[DATA_HEALTH_TASK].lock_ttl == 600 and specs[DATA_HEALTH_TASK].chain is False
-    assert specs["flights.discover"].lock_ttl == 3600
-    assert specs["sync.tick"].lock_ttl == 3600 and specs["sync.tick"].chain is False
-    for name in ("maintenance.cleanup", "forecasts.check_staleness", "sync.publish"):
-        assert specs[name].chain is False, name
-    for name in ("forecasts.blend", "quality.predict", "detection.detect", "matching.match"):
-        assert specs[name].chain is True and specs[name].lock_ttl == 1800, name
+def test_every_sync_stage_and_scheduled_job_has_a_registry_spec() -> None:
+    """The orchestrator runs JOB_SPECS[STAGE_JOB_NAMES[stage]] and the daemon runs
+    JOB_SPECS[entry.task] for every schedule entry (contracts F3, F5, F7)."""
+    assert set(STAGE_JOB_NAMES.values()) <= set(registry.JOB_SPECS)
+    for settings in (Settings(_env_file=None), every_job_settings()):  # type: ignore[call-arg]
+        tasks = {entry.task for entry in build_schedule(settings).values()}
+        assert tasks <= set(registry.JOB_SPECS), tasks - set(registry.JOB_SPECS)
 
 
 def test_registry_bodies_import_their_service_lazily(monkeypatch: pytest.MonkeyPatch) -> None:
