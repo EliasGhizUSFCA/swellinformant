@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     accuracy,
     auth,
+    internal,
     map_fields,
     notifications,
     opportunities,
@@ -86,6 +87,7 @@ def create_app() -> FastAPI:
         map_fields,
         tides,
         timeline,
+        internal,
     ):
         app.include_router(module.router)
     if settings.enable_dev_endpoints:

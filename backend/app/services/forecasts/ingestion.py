@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Collection
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -479,12 +480,23 @@ def acquire_from_provider(
 
 
 def acquire_all(
-    db: Session, *, now: datetime | None = None, force: bool = False
+    db: Session,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+    only: Collection[str] | None = None,
 ) -> list[AcquisitionOutcome]:
+    """Acquire from every configured provider, in FORECAST_PROVIDERS priority order.
+
+    ``only``: FORECAST_PROVIDERS tokens to acquire (the others are not contacted; their
+    priority stays their place in FORECAST_PROVIDERS); None = every provider.
+    """
     settings = get_settings()
     now = now or utcnow()
     outcomes: list[AcquisitionOutcome] = []
     for priority, name in enumerate(settings.forecast_provider_list):
+        if only is not None and name not in only:
+            continue
         try:
             overrides = active_demo_overrides(db, now) if name == "demo" else None
             provider = build_provider(name, settings, overrides=overrides)

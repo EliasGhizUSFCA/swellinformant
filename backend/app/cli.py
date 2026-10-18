@@ -2,6 +2,8 @@
 
 python -m app.cli init-db          # alembic upgrade head + seed reference data + tide catalog
 python -m app.cli migrate          # alembic upgrade head
+python -m app.cli migrate --on-build   # the same, only where MIGRATE_ON_BUILD and VERCEL_ENV
+                                       # allow it (a build step; not implemented yet)
 python -m app.cli seed             # (re)load airports and surf spots from data/surf_spots, then
                                    # the tide station catalog (data/tide_stations.json)
 python -m app.cli pipeline         # run jobs A→G once, synchronously
@@ -14,6 +16,7 @@ Command groups provided by feature packages (``python -m app.cli GROUP --help``)
   ml      ML experiments and the model registry   (app.services.ml.cli)
   engine  ensemble, blending and spot profiles     (app.services.forecasts.cli)
   tides   tide stations and predictions           (app.services.tides.cli)
+  sync    synced data pipeline: check, run, daemon (app.services.sync.cli)
 """
 
 from __future__ import annotations
@@ -52,7 +55,11 @@ PLUGIN_GROUPS = {
     "research": "app.services.research.cli",
     # Tide stations and predictions (the module is added with the tide providers).
     "tides": "app.services.tides.cli",
+    # The synced data pipeline: sync check / run / daemon / publish / status.
+    "sync": "app.services.sync.cli",
 }
+# Exit code of a command whose implementation has not landed yet.
+EXIT_NOT_IMPLEMENTED = 4
 
 
 def _plugins() -> dict[str, ModuleType]:
@@ -76,7 +83,12 @@ def main(argv: list[str] | None = None) -> int:
     plugins = _plugins()
     for plugin in plugins.values():
         plugin.register(sub)
-    sub.add_parser("migrate")
+    migrate_p = sub.add_parser("migrate")
+    migrate_p.add_argument(
+        "--on-build",
+        action="store_true",
+        help="migrate only where MIGRATE_ON_BUILD and VERCEL_ENV allow it (build step)",
+    )
     seed_p = sub.add_parser("seed")
     seed_p.add_argument("--data-dir", default=None)
     init_p = sub.add_parser("init-db")
@@ -93,6 +105,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd in plugins:
         return int(plugins[args.cmd].run(args))
+    if args.cmd == "migrate" and args.on_build:
+        print(
+            json.dumps(
+                {
+                    "status": "not_implemented",
+                    "command": "migrate --on-build",
+                    "detail": "not implemented yet: nothing was migrated",
+                }
+            )
+        )
+        return EXIT_NOT_IMPLEMENTED
 
     if args.cmd in ("migrate", "init-db"):
         migrate()
