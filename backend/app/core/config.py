@@ -7,13 +7,22 @@ else. Nothing in this module is ever sent to the frontend.
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 FlightProviderName = Literal["duffel", "amadeus", "demo"]
+# Who runs the background jobs: "celery" (worker + beat, classic docker compose) or "daemon"
+# (one long-lived `python -m app.cli sync daemon` process, e.g. a Vercel Daemon).
+JobRunnerName = Literal["celery", "daemon"]
+# Components whose new model run makes a sync due (SYNC_TRIGGER_SOURCES).
+SYNC_TRIGGER_TOKENS = frozenset({"spots", "map", "ensemble"})
+# Open-Meteo providers: their free API is for non-commercial use only (COMMERCIAL_USE).
+OPEN_METEO_PROVIDER_TOKENS = frozenset({"open_meteo", "open_meteo_ecmwf"})
+_HEADER_NAME = re.compile(r"^[a-z0-9-]+$")
 EmailProviderName = Literal["console", "mailpit", "smtp", "resend", "sendgrid"]
 # FORECAST_PROVIDERS tokens. "open_meteo" is the Open-Meteo GFS family, "open_meteo_ecmwf"
 # the Open-Meteo ECMWF family; "windy" also needs WINDY_TERMS_ACKNOWLEDGED.
@@ -32,6 +41,9 @@ class Settings(BaseSettings):
         extra="ignore",
         # `KEY=` (blank, as in .env.example or `${KEY:-}` in compose) means "use the default".
         env_ignore_empty=True,
+        # Fields with an env alias (REDIS_URL / KV_URL, DATABASE_URL_UNPOOLED /
+        # POSTGRES_URL_NON_POOLING) still accept their field name in code: Settings(redis_url=).
+        validate_by_name=True,
     )
 
     # ------------------------------------------------------------------ general
@@ -46,8 +58,31 @@ class Settings(BaseSettings):
     enable_dev_endpoints: bool = False
 
     # ------------------------------------------------------------------ infrastructure
+    # postgres:// and postgresql:// URLs (as Neon and other hosts hand them out) are rewritten
+    # to the psycopg driver, keeping the query string (normalize_database_url).
     database_url: str = "postgresql+psycopg://swell:swell@localhost:5432/swell"
-    redis_url: str = "redis://localhost:6379/0"
+    # A direct (not pooled) connection to the same database, for the sync daemon, the CLI and
+    # migrations. Vercel's Neon integration sets DATABASE_URL_UNPOOLED (older:
+    # POSTGRES_URL_NON_POOLING). None = DATABASE_URL is used for everything.
+    database_url_unpooled: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DATABASE_URL_UNPOOLED", "POSTGRES_URL_NON_POOLING"),
+    )
+    # true = this process connects through DATABASE_URL_UNPOOLED (engine_database_url); the
+    # daemon image sets it. Migrations always prefer the unpooled URL (migration_database_url).
+    db_use_unpooled: bool = False
+    # Connections older than this are replaced (a pooler or a scaled-to-zero database closes
+    # idle connections on its side).
+    db_pool_recycle_seconds: int = Field(default=1800, ge=30)
+    # false = psycopg never prepares statements (prepare_threshold=None), for a PgBouncer in
+    # transaction mode that does not support them.
+    db_prepared_statements: bool = True
+    # REDIS_URL wins over KV_URL (the name Vercel's Upstash integration sets, rediss://).
+    redis_url: str = Field(
+        default="redis://localhost:6379/0", validation_alias=AliasChoices("REDIS_URL", "KV_URL")
+    )
+    redis_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    redis_socket_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
     celery_task_always_eager: bool = False
@@ -55,6 +90,54 @@ class Settings(BaseSettings):
     beat_run_on_start: bool = True
     db_pool_size: int = 5
     db_max_overflow: int = 10
+
+    # ------------------------------------------------------------------ runner and deployment
+    # celery: Celery worker + beat run the jobs (classic docker compose). daemon: one
+    # `python -m app.cli sync daemon` process runs them, and the API never imports Celery.
+    job_runner: JobRunnerName = "celery"
+    # Bearer token of the daily watchdog (GET /api/internal/cron/daily; Vercel Cron sends
+    # "Authorization: Bearer $CRON_SECRET"). None = the route answers 404.
+    cron_secret: str | None = Field(default=None, min_length=16)
+    # Request header that carries the client IP, set by the platform in front of the API and
+    # not overwritable by clients (e.g. x-vercel-forwarded-for). None = X-Forwarded-For with
+    # TRUSTED_PROXY_COUNT. Lower case.
+    client_ip_header: str | None = None
+    # `python -m app.cli migrate --on-build`: off = never; production = only when
+    # VERCEL_ENV=production; all = every build (also Neon preview branches).
+    migrate_on_build: Literal["off", "production", "all"] = "off"
+    # true once the site is used commercially (a paywall, ads): the free Open-Meteo API is
+    # non-commercial, so an Open-Meteo provider then needs OPEN_METEO_API_KEY.
+    commercial_use: bool = False
+
+    # ------------------------------------------------------------------ sync
+    # Model-run checks of the sync daemon (provider metadata only, no database access).
+    sync_check_minutes: int = Field(default=10, ge=5, le=180)
+    # A new GFS spot run and the map layers of the same cycle wait for each other this long
+    # after the first sighting, then whatever is available is synced.
+    sync_coalesce_minutes: int = Field(default=90, ge=0, le=360)
+    # The sync lease (a sync_runs row with status running), renewed at every stage.
+    sync_lease_minutes: int = Field(default=45, ge=10, le=240)
+    # Failed attempts per model run before the sync waits for the next run.
+    sync_max_attempts: int = Field(default=6, ge=1, le=50)
+    sync_retry_minutes: int = Field(default=15, ge=5, le=360)
+    # Components whose new model run makes a sync due: a non-empty subset of spots, map,
+    # ensemble (sync_trigger_list).
+    sync_trigger_sources: str = "spots,map"
+    # Prune superseded predictions and map fields after every sync, not only daily.
+    sync_prune_each_pass: bool = False
+    # The map index serves the run of the newest published sync (falls back to the newest
+    # servable run when nothing was published).
+    sync_publish_gate: bool = True
+    # How often the daemon picks up kicks ("match my search", "refresh flights").
+    sync_daemon_poll_seconds: int = Field(default=60, ge=10, le=600)
+    # The daemon migrates, seeds and loads the tide catalog when it starts (idempotent).
+    sync_daemon_init_db: bool = True
+    # Monthly CPU budget of the sync runner in hours (e.g. 10 = Vercel Hobby's daemon
+    # quota); health warns near it. None = no budget.
+    sync_cpu_budget_hours: float | None = Field(default=None, gt=0)
+    # Every periodic job runs at most this often (minutes; 0 = the schedule as written), so
+    # a scale-to-zero database is woken at most this often between syncs.
+    job_interval_floor_minutes: int = Field(default=0, ge=0, le=1440)
 
     # ------------------------------------------------------------------ http/security
     cors_origins: str = "http://localhost:3000"
@@ -355,6 +438,38 @@ class Settings(BaseSettings):
     def _strip_slash(cls, v: str) -> str:
         return v.rstrip("/")
 
+    @field_validator("database_url", "database_url_unpooled")
+    @classmethod
+    def _normalize_database_url(cls, v: str | None) -> str | None:
+        return None if v is None else normalize_database_url(v)
+
+    @field_validator("client_ip_header")
+    @classmethod
+    def _check_client_ip_header(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        name = v.strip().lower()
+        if not name:
+            return None
+        if not _HEADER_NAME.fullmatch(name):
+            raise ValueError(
+                f"CLIENT_IP_HEADER must be a header name (letters, digits, '-'), got {v!r}"
+            )
+        return name
+
+    @field_validator("sync_trigger_sources")
+    @classmethod
+    def _check_sync_trigger_sources(cls, v: str) -> str:
+        tokens = set(_split(v))
+        if not tokens:
+            raise ValueError("SYNC_TRIGGER_SOURCES must name at least one of spots, map, ensemble")
+        unknown = tokens - SYNC_TRIGGER_TOKENS
+        if unknown:
+            raise ValueError(
+                f"Unknown SYNC_TRIGGER_SOURCES entries {sorted(unknown)}: use spots, map, ensemble"
+            )
+        return v
+
     @field_validator("map_field_steps")
     @classmethod
     def _check_steps(cls, v: str) -> str:
@@ -412,6 +527,29 @@ class Settings(BaseSettings):
     @property
     def result_backend(self) -> str:
         return self.celery_result_backend or self.redis_url
+
+    @property
+    def engine_database_url(self) -> str:
+        """The URL this process's engine connects to: DATABASE_URL_UNPOOLED when
+        DB_USE_UNPOOLED is true and it is set, else DATABASE_URL."""
+        if self.db_use_unpooled and self.database_url_unpooled:
+            return self.database_url_unpooled
+        return self.database_url
+
+    @property
+    def migration_database_url(self) -> str:
+        """Migrations need a direct connection: DATABASE_URL_UNPOOLED, else DATABASE_URL."""
+        return self.database_url_unpooled or self.database_url
+
+    @property
+    def sync_trigger_list(self) -> frozenset[str]:
+        """SYNC_TRIGGER_SOURCES as a set of component kinds (spots, map, ensemble)."""
+        return frozenset(_split(self.sync_trigger_sources))
+
+    @property
+    def runs_celery(self) -> bool:
+        """True when Celery worker and beat run the jobs (JOB_RUNNER=celery)."""
+        return self.job_runner == "celery"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -531,7 +669,31 @@ class Settings(BaseSettings):
                 missing.append("TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID")
         if "windy" in self.forecast_provider_list and not self.windy_api_key:
             missing.append("WINDY_API_KEY")
+        if self.job_runner == "daemon" and self.app_env == "production" and not self.cron_secret:
+            missing.append("CRON_SECRET (daily watchdog)")
+        if (
+            self.commercial_use
+            and OPEN_METEO_PROVIDER_TOKENS & set(self.forecast_provider_list)
+            and not self.open_meteo_api_key
+        ):
+            missing.append(
+                "OPEN_METEO_API_KEY (COMMERCIAL_USE=true: the free Open-Meteo API is "
+                "non-commercial)"
+            )
         return missing
+
+
+def normalize_database_url(url: str) -> str:
+    """Use the psycopg driver for plain PostgreSQL URLs.
+
+    'postgres://' and 'postgresql://' (the forms Neon and most hosts hand out) become
+    'postgresql+psycopg://'; the rest of the URL, query string included (sslmode,
+    channel_binding), is kept. Other schemes are returned unchanged.
+    """
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix) :]
+    return url
 
 
 def _split(value: str) -> list[str]:
