@@ -15,13 +15,14 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Sequence
-from typing import Literal
+from typing import TYPE_CHECKING
 
 from app.core.config import get_settings
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from app.services.sync.state import KickJob
 
-KickJob = Literal["matching.match", "flights.discover"]
+logger = logging.getLogger(__name__)
 
 
 def dispatch_account_email(message_id: uuid.UUID | str, text: str, html: str | None) -> None:
