@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  crestAlpha,
   crestSpacingPx,
   crestSpeedPxPerS,
   crestTangent,
+  DASH_CELL_PX,
+  dashAlpha,
+  dashFade,
+  dashLength,
+  dashLifeSeconds,
+  dashWidth,
   drawnHeight,
   effectiveSystems,
   envelopeSpeedPxPerS,
@@ -12,9 +17,11 @@ import {
   FAMILY_STYLES,
   formatFactor,
   groupSpeed,
-  lineWidth,
+  MAX_DASHES,
   MAX_SPACING_PX,
+  maxDashes,
   MIN_SPACING_PX,
+  PHONE_MAX_DASHES,
   phaseSpeed,
   propagation,
   scaleStatement,
@@ -120,32 +127,59 @@ describe("deep-water physics and the stated scales", () => {
 });
 
 describe("height and drawing styles", () => {
-  it("draws higher systems thicker and brighter, and very low ones not at all", () => {
+  it("draws higher systems as longer, wider and brighter dashes, and very low ones not at all", () => {
+    let l = 0;
     let w = 0;
     let a = 0;
     for (let hs = 0; hs <= 12; hs += 0.25) {
-      expect(lineWidth(hs)).toBeGreaterThanOrEqual(w);
-      expect(crestAlpha(hs)).toBeGreaterThanOrEqual(a);
-      w = lineWidth(hs);
-      a = crestAlpha(hs);
+      expect(dashLength(hs, "combined")).toBeGreaterThanOrEqual(l);
+      expect(dashWidth(hs)).toBeGreaterThanOrEqual(w);
+      expect(dashAlpha(hs)).toBeGreaterThanOrEqual(a);
+      l = dashLength(hs, "combined");
+      w = dashWidth(hs);
+      a = dashAlpha(hs);
     }
-    expect(lineWidth(4)).toBeGreaterThan(lineWidth(1));
-    expect(crestAlpha(4)).toBeGreaterThan(crestAlpha(1));
-    expect([lineWidth(0), lineWidth(10)]).toEqual([0.75, 3]);
-    expect([crestAlpha(0), crestAlpha(10)]).toEqual([0.3, 0.9]);
+    for (const f of [dashWidth, dashAlpha]) expect(f(4)).toBeGreaterThan(f(1));
+    expect(dashLength(4, "primary")).toBeGreaterThan(dashLength(1, "primary"));
+    // The stated formulas and their limits (docs/map-rendering.md section 4.6).
+    expect([dashLength(0, "primary"), dashLength(2, "primary"), dashLength(4, "primary"), dashLength(10, "primary")]).toEqual([6, 8, 11, 14]);
+    expect([dashWidth(0), dashWidth(2), dashWidth(10)]).toEqual([1.8, 2.4, 3.4]);
+    expect([dashAlpha(0), dashAlpha(2), dashAlpha(10)]).toEqual([0.55, 0.65, 0.85]);
+    // Shorter dashes for the secondary swell and the wind sea (shape, not colour alone).
+    expect(dashLength(4, "secondary")).toBeCloseTo(0.85 * dashLength(4, "primary"), 10);
+    expect(dashLength(4, "windsea")).toBeCloseTo(0.55 * dashLength(4, "primary"), 10);
     expect(drawnHeight(0.1)).toBe(false);
     expect(drawnHeight(0.19)).toBe(false);
     expect(drawnHeight(0.2)).toBe(true);
     expect(drawnHeight(NaN)).toBe(false);
   });
 
-  it("tells the systems apart by dash pattern and colour, never colour alone", () => {
+  it("lives three crest passages and fades in and out (a display choice)", () => {
+    expect(dashLifeSeconds(10)).toBeCloseTo((3 * 10) / TIME_SCALE, 12); // 7.5 s
+    expect(dashLifeSeconds(0)).toBeNaN();
+    expect(dashFade(0)).toBe(0);
+    expect(dashFade(0.1)).toBeCloseTo(0.5, 10); // half way through the fade-in (0-20 %)
+    for (const age of [0.2, 0.45, 0.7]) expect(dashFade(age)).toBe(1);
+    expect(dashFade(0.85)).toBeCloseTo(0.5, 10); // half way through the fade-out (70-100 %)
+    expect(dashFade(1)).toBe(0);
+  });
+
+  it("keeps the same density at every zoom, with a budget per frame", () => {
+    expect(DASH_CELL_PX).toEqual({ primary: 18, combined: 18, secondary: 24, windsea: 21 });
+    expect(maxDashes(1440)).toBe(MAX_DASHES);
+    expect(maxDashes(412)).toBe(PHONE_MAX_DASHES);
+    expect([MAX_DASHES, PHONE_MAX_DASHES]).toEqual([4000, 1500]);
+  });
+
+  it("tells the systems apart by dash shape and colour, never colour alone", () => {
     const styles = WAVE_SYSTEMS.map((s) => FAMILY_STYLES[s]);
     const partitions = (["primary", "secondary", "windsea"] as const).map((s) => FAMILY_STYLES[s]);
-    expect(new Set(partitions.map((s) => s.dash.join(","))).size).toBe(3);
+    // Shape: solid, split (a gap of 0.3 of the length) and short dashes.
+    expect(new Set(partitions.map((s) => `${s.lengthFactor}/${s.gap}`)).size).toBe(3);
     expect(new Set(partitions.map((s) => s.color)).size).toBe(3);
-    expect(FAMILY_STYLES.primary.dash).toEqual([]);
-    expect(FAMILY_STYLES.secondary.dash.length).toBeGreaterThan(0);
+    expect(FAMILY_STYLES.primary).toMatchObject({ gap: 0, lengthFactor: 1, color: "#ffffff" });
+    expect(FAMILY_STYLES.secondary).toMatchObject({ gap: 0.3, lengthFactor: 0.85, color: "#ffd59a" });
+    expect(FAMILY_STYLES.windsea).toMatchObject({ gap: 0, lengthFactor: 0.55, color: "#b8f0ff" });
     expect(new Set(styles.map((s) => s.label)).size).toBe(4);
     expect(FAMILY_STYLES.combined.label).not.toMatch(/primary/i);
   });

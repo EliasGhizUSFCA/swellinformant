@@ -1,34 +1,48 @@
 /**
- * Wavefronts for the map's wave layers: stylised crest lines drawn from the wave model's
- * height, period and direction of each wave system (primary swell, secondary swell, wind
- * sea, or the combined sea when the run has no partitions). Nothing here is shared with the
- * wind particles: crests are lines across the direction of travel, grouped in sets, and
- * move slowly; the physics and scales are in lib/map-waves.ts and docs/map-rendering.md.
+ * Crest dashes for the map's wave layers: short, soft white dashes drawn from the wave
+ * model's height, period and direction of each wave system (the combined sea by default, or
+ * the primary swell, secondary swell and wind sea partitions). Each dash is a short piece of
+ * a wave crest: it lies across the direction of travel, sits on a crest line of the stated
+ * spacing and moves with the crests at the phase speed (time scale TIME_SCALE). The physics,
+ * the scales and every dash constant are in lib/map-waves.ts and docs/map-rendering.md.
  *
  * Per view (after a pan or zoom, or new fields) a screen LATTICE is built every LATTICE_PX
  * on a grid fixed in world pixels: for each system the propagation vector (TOWARD), crest
  * spacing, crest speed, height and a validity flag. A node is invalid without data, below
  * MIN_DRAW_HS_M, where the four grid corners of the direction disagree by more than
  * MAX_CORNER_SPREAD_DEG (a partition swap between cells: no averaged direction is invented),
- * or over land. Sets (packets) sit on a jittered grid in WORLD pixels, so they stay put
- * while the map pans and the timeline steps. Each frame, every set places its crests along
- * its ray on the crest lattice u = n s + v t (phase speed), under a flat-topped envelope that
- * moves at v / 2 (group speed) and fades in and out over its travel, and traces each crest
- * along the local crest-tangent field (curved where the field turns, straight where it is
- * uniform, stopped where the lattice is invalid or the crest turns more than MAX_TURN_DEG
- * per step). Solid systems get a soft glow and a faint dark trough line behind each crest.
- * Strokes are batched per system, kind, width and opacity; the canvas is cleared every frame
- * (no trails), then masked to the ocean: data validity AND NOT Natural Earth land, on both
- * basemaps. Reduced motion draws the same crests once, still, with arrowheads.
+ * or over land.
+ *
+ * DASHES: one per cell of a grid fixed in WORLD pixels (cell DASH_CELL_PX on screen at every
+ * zoom: the same density at every zoom), so dashes stay put geographically while the map pans
+ * and the timeline steps. A cell's dash lives DASH_LIFE_PASSAGES crest passages (3 T / tau s)
+ * and is then born again at a hashed place in its cell. At birth its centre is moved along
+ * the travel vector p onto the nearest crest line of the lattice p . W = n s + v t (W in world
+ * px), and it then moves along p at the crest speed v = s tau / T, so every dash of a uniform
+ * sea stays on those crest lines. It fades in over the first 20 % of its life and out over the
+ * last 30 % (a display choice, not a wave group). A dash is drawn only where its centre and
+ * both ends sample valid lattice nodes. Strokes (a soft halo under a core line, round caps)
+ * are batched per system, opacity level, width level and pass; the canvas is cleared every
+ * frame, then masked to the ocean on the street basemap. Reduced motion draws one still
+ * frame at full opacity with arrowheads.
  */
 import { sampleDirection, sampleGrid, type Grid } from "@/lib/map-fields";
 import { mercLat, mercLon, type MercPath, type PixelView } from "@/lib/map-geo";
 import {
-  crestAlpha,
+  ARROW_EVERY,
+  ARROW_PX,
   crestSpacingPx,
   crestSpeedPxPerS,
+  DASH_LIFE_PASSAGES,
+  DASH_MAX_PX,
+  DASH_PASSES,
+  dashAlpha,
+  dashFade,
+  dashLength,
+  dashLifeSeconds,
+  dashWidth,
   FAMILY_STYLES,
-  lineWidth,
+  maxDashes,
   metresPerPixel,
   MIN_DRAW_HS_M,
   type FamilyStyle,
@@ -49,62 +63,29 @@ export interface WaveFamilyGrids {
 export const LATTICE_PX = 8;
 /** Largest disagreement of the four grid corners of a direction before the node is invalid. */
 export const MAX_CORNER_SPREAD_DEG = 60;
-/** Crest tracing step, px. */
-export const TRACE_STEP_PX = 8;
-/** A crest stops where it would turn more than this in one step. */
-export const MAX_TURN_DEG = 25;
-/** A traced vertex is kept once the line has turned this much since the last kept one. */
-export const SIMPLIFY_DEG = 1.5;
-/** Animation frame interval (30 fps cap: crests move a few px per second). */
+/** Animation frame interval (30 fps cap: dashes move a few px per second). */
 export const FRAME_INTERVAL_MS = 1000 / 30;
-/** Share of the remaining vertex budget each system may use, top system first. */
-const BUDGET_SHARE = 0.6;
-/** Vertices per frame (a 1440 x 900 desktop view / a phone). */
-export const VERTEX_BUDGET = 20_000;
-export const PHONE_VERTEX_BUDGET = 6_000;
-/** Soft glow along the middle of each crest of the solid systems: width x line width, opacity. */
-const GLOW_WIDTH = 3.2;
-const GLOW_ALPHA = 0.22;
-const GLOW_LEVELS = [2.5, 4, 6, 8.5, 11];
-/** Trough lines: dark, a little wider than the crest, faint. */
-const TROUGH_STYLE: FamilyStyle = { ...FAMILY_STYLES.primary, label: "trough", color: "#000814", dash: [], glow: false };
-const TROUGH_WIDTH = 1.6;
-const TROUGH_ALPHA = 0.14;
-const TROUGH_LENGTH = 0.8;
-/** Halo under dashed and dotted crests: extra width (px) and opacity relative to the crest. */
-const HALO_PX = 1.6;
-const HALO_ALPHA = 0.55;
-/** The halo of a dashed or dotted system: the same dash and caps, in the dark trough colour. */
-const TROUGH_STYLE_OF: Record<string, FamilyStyle> = {
-  dashed: { ...FAMILY_STYLES.secondary, color: "#000814" },
-  dotted: { ...FAMILY_STYLES.windsea, color: "#000814" },
-};
-/** Opacity along each half crest: [end of the part (share of the half), relative opacity]. */
-const TAPER: ReadonlyArray<readonly [number, number]> = [
-  [0.5, 1],
-  [0.78, 0.6],
-  [1, 0.28],
-];
-/** Envelope weight below which a crest is not drawn. */
-const MIN_WEIGHT = 0.04;
-/** Share of the envelope's half-width at full weight (the rest tapers to 0). */
-export const ENVELOPE_FLAT = 0.5;
-/** A packet fades in over the first and out over the last CYCLE_FADE of its travel cycle. */
-export const CYCLE_FADE = 0.15;
-/** Opacity levels and line widths the strokes are batched into. */
-const ALPHA_LEVELS = [0.05, 0.12, 0.2, 0.3, 0.42, 0.56, 0.72, 0.88];
-const WIDTH_LEVELS = [0.75, 1.25, 1.75, 2.25, 2.75];
+/** Share of the remaining dash budget each system may use, top system first. */
+export const BUDGET_SHARE = 0.6;
+/** Opacity levels and core widths the strokes are batched into (the halo uses the same levels x its factors). */
+export const DASH_ALPHA_LEVELS = [0.08, 0.19, 0.3, 0.41, 0.52, 0.63, 0.74, 0.85];
+export const DASH_WIDTH_LEVELS = [1.8, 2.2, 2.6, 3, 3.4];
+/** Dashes fainter than this (early or late in their life) are not drawn. */
+const MIN_ALPHA = 0.04;
+/** A dash whose clock is this many lives behind is placed afresh (after a long pause elsewhere). */
+const MAX_CATCH_UP_LIVES = 64;
+/** Hashed places tried in a cell for a new dash before the cell stays empty for a life. */
+export const BIRTH_TRIES = 4;
+/** Reference period for the first epoch of a cell without data at its centre, s. */
+const REFERENCE_PERIOD_S = 10;
 
 const RAD = Math.PI / 180;
-const COS_MAX_TURN = Math.cos(MAX_TURN_DEG * RAD);
-const COS_SIMPLIFY = Math.cos(SIMPLIFY_DEG * RAD);
-/** A trace step that turned less than this lets the next step double (straight field). */
-const COS_STRAIGHT = Math.cos(0.25 * RAD);
 
 /** Per-system lattice: values at nodes (x = (gx0 + i) * LATTICE_PX - originX, likewise y). */
 export interface FamilyLattice {
   system: WaveSystem;
   style: FamilyStyle;
+  grids: WaveFamilyGrids;
   /** Propagation unit vector (screen, x east, y down). */
   px: Float32Array;
   py: Float32Array;
@@ -113,8 +94,9 @@ export interface FamilyLattice {
   hs: Float32Array;
   valid: Uint8Array;
   validCount: number;
-  medianSpacing: number;
-  /** Packets drawn at most (in their fixed random order), for a steady budget cut. */
+  /** Largest crest spacing at a valid node, px: a dash travels at most 3 of them in its life. */
+  maxSpacing: number;
+  /** Cells visited at most (in their fixed hashed order), for a steady budget cut. */
   limit: number;
 }
 
@@ -124,6 +106,8 @@ export interface Lattice {
   /** View px of node (0, 0). */
   x0: number;
   y0: number;
+  /** Map zoom of the view (from its world width). */
+  zoom: number;
   families: FamilyLattice[];
   /** Union of all systems' valid nodes (for the ocean mask). */
   anyValid: Uint8Array;
@@ -145,11 +129,11 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
   const n = nx * ny;
   const zoom = Math.log2(view.worldPx / 256);
   const lons = new Float64Array(nx);
-  for (let i = 0; i < nx; i++) lons[i] = mercLon((gx0 + i) * LATTICE_PX / view.worldPx);
+  for (let i = 0; i < nx; i++) lons[i] = mercLon(((gx0 + i) * LATTICE_PX) / view.worldPx);
   const lats = new Float64Array(ny);
   const mpp = new Float64Array(ny);
   for (let j = 0; j < ny; j++) {
-    lats[j] = mercLat((gy0 + j) * LATTICE_PX / view.worldPx);
+    lats[j] = mercLat(((gy0 + j) * LATTICE_PX) / view.worldPx);
     mpp[j] = metresPerPixel(zoom, lats[j]!);
   }
   const anyValid = new Uint8Array(n);
@@ -158,6 +142,7 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
     const fl: FamilyLattice = {
       system: f.system,
       style: FAMILY_STYLES[f.system],
+      grids: f,
       px: new Float32Array(n),
       py: new Float32Array(n),
       spacing: new Float32Array(n),
@@ -165,10 +150,9 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
       hs: new Float32Array(n),
       valid: new Uint8Array(n),
       validCount: 0,
-      medianSpacing: NaN,
+      maxSpacing: 0,
       limit: Infinity,
     };
-    const spacings: number[] = [];
     for (let j = 0; j < ny; j++) {
       const lat = lats[j]!;
       if (!(lat > -85 && lat < 85)) continue;
@@ -190,287 +174,19 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
         fl.hs[k] = hs;
         fl.valid[k] = 1;
         fl.validCount++;
+        if (s > fl.maxSpacing) fl.maxSpacing = s;
         anyValid[k] = 1;
-        if ((i & 3) === 0 && (j & 3) === 0) spacings.push(s);
       }
     }
-    spacings.sort((a, b) => a - b);
-    fl.medianSpacing = spacings.length ? spacings[spacings.length >> 1]! : NaN;
     out.push(fl);
   }
-  return { nx, ny, x0, y0, families: out, anyValid, buildMs: performance.now() - t0 };
+  return { nx, ny, x0, y0, zoom, families: out, anyValid, buildMs: performance.now() - t0 };
 }
 
-/** Bilinear lattice sample at a view point; false outside the lattice or next to an invalid node. */
-interface Sample {
-  px: number;
-  py: number;
-  spacing: number;
-  speed: number;
-  hs: number;
-}
-const sample: Sample = { px: 0, py: 0, spacing: 0, speed: 0, hs: 0 };
+/** Lattice sample at a view point (travel vector and height); false outside the lattice or next to an invalid node. */
+const sample = { px: 0, py: 0, hs: 0 };
 
 function sampleLattice(l: Lattice, f: FamilyLattice, x: number, y: number): boolean {
-  const fx = (x - l.x0) / LATTICE_PX;
-  const fy = (y - l.y0) / LATTICE_PX;
-  if (!(fx >= 0 && fy >= 0 && fx < l.nx - 1 && fy < l.ny - 1)) return false;
-  const i = fx | 0;
-  const j = fy | 0;
-  const a = j * l.nx + i;
-  const b = a + 1;
-  const c = a + l.nx;
-  const d = c + 1;
-  const v = f.valid;
-  if (!(v[a] && v[b] && v[c] && v[d])) return false;
-  const tx = fx - i;
-  const ty = fy - j;
-  const wa = (1 - tx) * (1 - ty);
-  const wb = tx * (1 - ty);
-  const wc = (1 - tx) * ty;
-  const wd = tx * ty;
-  let px = f.px[a]! * wa + f.px[b]! * wb + f.px[c]! * wc + f.px[d]! * wd;
-  let py = f.py[a]! * wa + f.py[b]! * wb + f.py[c]! * wc + f.py[d]! * wd;
-  const m = Math.hypot(px, py);
-  if (!(m > 0.5)) return false; // the nodes disagree too much to give a direction
-  px /= m;
-  py /= m;
-  sample.px = px;
-  sample.py = py;
-  sample.spacing = f.spacing[a]! * wa + f.spacing[b]! * wb + f.spacing[c]! * wc + f.spacing[d]! * wd;
-  sample.speed = f.speed[a]! * wa + f.speed[b]! * wb + f.speed[c]! * wc + f.speed[d]! * wd;
-  sample.hs = f.hs[a]! * wa + f.hs[b]! * wb + f.hs[c]! * wc + f.hs[d]! * wd;
-  return true;
-}
-
-/** Whether a view point lies inside the lattice (whatever the data there). */
-function insideLattice(l: Lattice, x: number, y: number): boolean {
-  const fx = (x - l.x0) / LATTICE_PX;
-  const fy = (y - l.y0) / LATTICE_PX;
-  return fx >= 0 && fy >= 0 && fx < l.nx - 1 && fy < l.ny - 1;
-}
-
-/** Deterministic hash of integers to [0, 1). */
-function hash01(a: number, b: number, c: number): number {
-  let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x9e3779b1);
-  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-
-/** A packet of one system: anchored in world pixels, with the values at its anchor. */
-export interface Packet {
-  /** Anchor, view px. */
-  ax: number;
-  ay: number;
-  /** World px of the anchor in the view's continuous pixel plane (the phase reference; not
-   * wrapped to one world copy, so the crest lattice has no seam at the antimeridian). */
-  wx: number;
-  wy: number;
-  px: number;
-  py: number;
-  spacing: number;
-  speed: number;
-  /** Envelope travel per cycle, px, and the cycle phase offset (0..1). */
-  travel: number;
-  phase: number;
-  /** Uniform in [0, 1): which packets are left out first when a frame is over budget. */
-  keep: number;
-}
-
-/**
- * Crest offsets u (px along the packet ray from its anchor), envelope weights and lattice
- * crest numbers n (a crest keeps its n while it crosses the set) at time t
- * (seconds of animation). Crests lie on the lattice u = n s + v t - p . W (W the anchor in
- * world px), the same lattice for every packet with the same direction, period and zoom, so
- * crests of neighbouring packets line up in a uniform sea. The envelope (width crests x s)
- * moves at v / 2 over `travel` px and fades in and out over that cycle. `still` = centred,
- * full envelope (reduced motion).
- */
-export function packetCrests(p: Packet, crests: number, t: number, still = false): Array<{ u: number; w: number; n: number }> {
-  const count = crestsInto(p, crests, t, still);
-  return Array.from({ length: count }, (_, i) => ({ u: crestU[i]!, w: crestW[i]!, n: crestN[i]! }));
-}
-
-/** packetCrests into reused buffers (no allocation per frame); returns the crest count. */
-const CREST_BUFFER = 64;
-const crestU = new Float64Array(CREST_BUFFER);
-const crestW = new Float64Array(CREST_BUFFER);
-const crestN = new Float64Array(CREST_BUFFER);
-function crestsInto(p: Packet, crests: number, t: number, still: boolean): number {
-  const s = p.spacing;
-  const half = (crests * s) / 2;
-  const flat = half * ENVELOPE_FLAT;
-  let centre = 0;
-  let fade = 1;
-  if (!still) {
-    const e = ((((p.speed / 2) * t + p.phase * p.travel) % p.travel) + p.travel) % p.travel;
-    centre = e - p.travel / 2;
-    const x = e / p.travel;
-    fade = smoothstep(x / CYCLE_FADE) * smoothstep((1 - x) / CYCLE_FADE);
-  }
-  const ref = p.px * p.wx + p.py * p.wy;
-  const shift = still ? 0 : p.speed * t;
-  // First lattice crest at or after the envelope's back edge.
-  const n0 = Math.ceil((centre - half + ref - shift) / s);
-  let count = 0;
-  for (let n = n0; count < CREST_BUFFER; n++) {
-    const u = n * s + shift - ref;
-    const d = Math.abs(u - centre);
-    if (u > centre + half) break;
-    // Flat-top envelope: full weight in the middle, a cosine taper over the outer part.
-    const taper = d <= flat ? 1 : Math.cos((Math.PI / 2) * ((d - flat) / (half - flat))) ** 2;
-    const w = taper * fade;
-    if (w >= MIN_WEIGHT) {
-      crestU[count] = u;
-      crestW[count] = w;
-      crestN[count] = n;
-      count++;
-    }
-  }
-  return count;
-}
-
-/** 0 -> 0, 1 -> 1, smooth in between (clamped). */
-const smoothstep = (x: number) => {
-  const c = Math.min(1, Math.max(0, x));
-  return c * c * (3 - 2 * c);
-};
-
-/** Stroke batches: one per (system, width, opacity, trough) key. */
-type StrokeKind = "crest" | "glow" | "trough" | "halo";
-const KIND_INDEX: Record<StrokeKind, number> = { crest: 0, glow: 1, trough: 2, halo: 3 };
-
-interface Batch {
-  /** Crest line, soft glow under it (solid systems), the dark trough line behind it (solid
-   * systems), or a dark halo under the dashes and dots (the other systems). */
-  kind: StrokeKind;
-  style: FamilyStyle;
-  /** Index of the system in the lattice (drawing order). */
-  sys: number;
-  width: number;
-  alpha: number;
-  /** Polylines: start offsets into `pts` (pairs), each ended by the next start; `ns` and `np`
-   * are the used lengths (the arrays are reused from frame to frame and only grow). */
-  starts: number[];
-  ns: number;
-  pts: number[];
-  np: number;
-  /** Frame in which the batch was last used. */
-  frame: number;
-}
-
-/** Vertices per drawn crest of each system, averaged over frames (for the budget estimate). */
-const perCrestBySystem = new Map<WaveSystem, number>();
-
-/** Stroke batches reused across frames (fewer allocations per frame, less garbage collection). */
-const batchPool = new Map<number, Batch>();
-let poolFrame = 0;
-
-export interface FrameStats {
-  crests: number;
-  vertices: number;
-  strokes: number;
-  packets: number;
-  arrows: number;
-  families: WaveSystem[];
-}
-
-function hexRgb(hex: string): string {
-  const v = parseInt(hex.slice(1), 16);
-  return `${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}`;
-}
-
-/** Opacity levels of one crest's taper parts (crest line and halo), reused per crest. */
-const crestLevel = new Int32Array(TAPER.length);
-const haloLevel = new Int32Array(TAPER.length);
-
-const nearestLevel = (levels: number[], x: number) => {
-  let best = 0;
-  for (let i = 1; i < levels.length; i++) if (Math.abs(levels[i]! - x) < Math.abs(levels[best]! - x)) best = i;
-  return best;
-};
-
-/** Packet cell size for a system and view (world px; divides the world width exactly). */
-function cellSize(f: FamilyLattice, view: PixelView): number {
-  const s = Number.isFinite(f.medianSpacing) ? f.medianSpacing : 20;
-  // A few crest spacings more than one packet, in 0.25 log2 steps so that a small change of
-  // period between forecast steps keeps the same packets.
-  const raw = Math.min(MAX_CELL_PX, Math.max(MIN_CELL_PX, f.style.cellSpacings * s));
-  const q = 2 ** (Math.round(Math.log2(raw) * 4) / 4);
-  const nWorld = Math.max(1, Math.round(view.worldPx / q));
-  return view.worldPx / nWorld;
-}
-
-/** Packet cell size limits, px. */
-const MIN_CELL_PX = 40;
-const MAX_CELL_PX = 320;
-/** Jittered anchor positions tried per cell before the cell is left without a set. */
-const ANCHOR_TRIES = 6;
-
-const packetCache = new WeakMap<FamilyLattice, Packet[]>();
-
-/** Packets of a system in view (anchors on valid lattice points only); cached per lattice. */
-export function packetsFor(l: Lattice, f: FamilyLattice, view: PixelView): Packet[] {
-  const hit = packetCache.get(f);
-  if (hit) return hit;
-  const packets = computePackets(l, f, view);
-  packetCache.set(f, packets);
-  return packets;
-}
-
-function computePackets(l: Lattice, f: FamilyLattice, view: PixelView): Packet[] {
-  const cell = cellSize(f, view);
-  const nWorld = Math.round(view.worldPx / cell);
-  const zoomKey = Math.round(Math.log2(view.worldPx / 256) * 100);
-  const sys = ["primary", "secondary", "windsea", "combined"].indexOf(f.system) + 1;
-  const margin = cell;
-  const ci0 = Math.floor((view.originX - margin) / cell);
-  const ci1 = Math.floor((view.originX + view.width + margin) / cell);
-  const cj0 = Math.max(0, Math.floor((view.originY - margin) / cell));
-  const cj1 = Math.floor((view.originY + view.height + margin) / cell);
-  const out: Packet[] = [];
-  for (let cj = cj0; cj <= cj1; cj++) {
-    for (let ci = ci0; ci <= ci1; ci++) {
-      const wrapped = ((ci % nWorld) + nWorld) % nWorld;
-      // A few jittered places per cell: a cell that is partly land, ice or a partition swap
-      // still gets its set at its first place with data. The choice depends on the data only,
-      // never on the view: a place outside this view's lattice ends the search (no set), so a
-      // pan never moves a set to another place.
-      let wx = 0;
-      let wy = 0;
-      let found = false;
-      for (let k = 0; k < ANCHOR_TRIES && !found; k++) {
-        wx = (ci + 0.15 + 0.7 * hash01(wrapped + 7919 * k, cj, zoomKey * 8 + sys)) * cell;
-        wy = (cj + 0.15 + 0.7 * hash01(cj, wrapped + 7919 * k, zoomKey * 8 + sys + 4)) * cell;
-        if (!insideLattice(l, wx - view.originX, wy - view.originY)) break;
-        found = sampleLattice(l, f, wx - view.originX, wy - view.originY);
-      }
-      if (!found) continue;
-      const ax = wx - view.originX;
-      const ay = wy - view.originY;
-      out.push({
-        ax,
-        ay,
-        wx,
-        wy,
-        px: sample.px,
-        py: sample.py,
-        spacing: sample.spacing,
-        speed: sample.speed,
-        travel: cell,
-        phase: hash01(wrapped * 7 + 3, cj * 13 + 5, sys),
-        keep: hash01(wrapped * 11 + 1, cj * 5 + 9, sys + 17),
-      });
-    }
-  }
-  // In their fixed random order (the `keep` hash), the order a frame over budget visits them.
-  return out.sort((a, b) => a.keep - b.keep);
-}
-
-/** Direction-only lattice sample (the tracer needs nothing else): the unit travel vector. */
-function sampleDir(l: Lattice, f: FamilyLattice, x: number, y: number): boolean {
   const fx = (x - l.x0) / LATTICE_PX;
   const fy = (y - l.y0) / LATTICE_PX;
   if (!(fx >= 0 && fy >= 0 && fx < l.nx - 1 && fy < l.ny - 1)) return false;
@@ -491,130 +207,267 @@ function sampleDir(l: Lattice, f: FamilyLattice, x: number, y: number): boolean 
   const px = f.px[a]! * wa + f.px[b]! * wb + f.px[c]! * wc + f.px[d]! * wd;
   const py = f.py[a]! * wa + f.py[b]! * wb + f.py[c]! * wc + f.py[d]! * wd;
   const m = Math.hypot(px, py);
-  if (!(m > 0.5)) return false;
+  if (!(m > 0.5)) return false; // the nodes disagree too much to give a direction
   sample.px = px / m;
   sample.py = py / m;
+  sample.hs = f.hs[a]! * wa + f.hs[b]! * wb + f.hs[c]! * wc + f.hs[d]! * wd;
   return true;
 }
 
-/** One traced half crest: vertex coordinates and, per vertex after the first, the taper part
- * (index into TAPER) of the segment that ends there. Reused between calls. */
-const half = { x: [] as number[], y: [] as number[], part: [] as number[], n: 0 };
-
-/**
- * Traces half a crest from (cx, cy) along the local crest tangent (sign = which way) for `len`
- * px into `half`, in TRACE_STEP_PX midpoint steps. A vertex is kept only where the line has
- * turned by more than SIMPLIFY_DEG since the last kept one, where the taper part changes
- * (`tapered`) and at the end, so straight crests cost two vertices. Returns the vertex count
- * (0 or at least 2).
- */
-function traceHalf(l: Lattice, f: FamilyLattice, cx: number, cy: number, sign: number, len: number, tapered: boolean): number {
-  half.n = 0;
-  if (!sampleDir(l, f, cx, cy)) return 0;
-  let tx = -sample.py * sign;
-  let ty = sample.px * sign;
-  const keep = (x: number, y: number, part: number) => {
-    half.x[half.n] = x;
-    half.y[half.n] = y;
-    half.part[half.n] = part;
-    half.n++;
-  };
-  keep(cx, cy, 0);
-  let x = cx;
-  let y = cy;
-  let kx = tx;
-  let ky = ty;
-  let travelled = 0;
-  let part = 0;
-  let pending = false;
-  let step = TRACE_STEP_PX;
-  while (travelled < len - 1e-6) {
-    // Never step over the end of a taper part, so its vertex lands on the boundary.
-    const boundary = tapered && part < TAPER.length - 1 ? TAPER[part]![0] * len : len;
-    const h = Math.min(step, boundary - travelled, len - travelled);
-    // Midpoint (RK2) step along the tangent field, keeping the orientation continuous.
-    if (!sampleDir(l, f, x + (tx * h) / 2, y + (ty * h) / 2)) break;
-    let mx = -sample.py;
-    let my = sample.px;
-    if (mx * tx + my * ty < 0) {
-      mx = -mx;
-      my = -my;
-    }
-    const nx = x + mx * h;
-    const ny = y + my * h;
-    if (!sampleDir(l, f, nx, ny)) break;
-    let ex = -sample.py;
-    let ey = sample.px;
-    if (ex * tx + ey * ty < 0) {
-      ex = -ex;
-      ey = -ey;
-    }
-    const turn = ex * tx + ey * ty;
-    if (turn < COS_MAX_TURN) break;
-    // Where the field is straight, longer steps (up to 4 x) trace the same line for less.
-    step = turn > COS_STRAIGHT ? Math.min(step * 2, 4 * TRACE_STEP_PX) : TRACE_STEP_PX;
-    x = nx;
-    y = ny;
-    tx = ex;
-    ty = ey;
-    travelled += h;
-    const next = tapered ? taperPart(travelled / len) : 0;
-    if (next !== part || tx * kx + ty * ky < COS_SIMPLIFY || travelled >= len - 1e-6) {
-      keep(x, y, part);
-      kx = tx;
-      ky = ty;
-      part = next;
-      pending = false;
-    } else {
-      pending = true;
-    }
-  }
-  if (pending) keep(x, y, part); // stopped early: end where the trace ended
-  return half.n >= 2 ? half.n : 0;
+/** Whether the four lattice nodes around a view point are all valid (false outside the lattice). */
+function nodesValid(l: Lattice, f: FamilyLattice, x: number, y: number): boolean {
+  const fx = (x - l.x0) / LATTICE_PX;
+  const fy = (y - l.y0) / LATTICE_PX;
+  if (!(fx >= 0 && fy >= 0 && fx < l.nx - 1 && fy < l.ny - 1)) return false;
+  const a = (fy | 0) * l.nx + (fx | 0);
+  const v = f.valid;
+  return !!(v[a] && v[a + 1] && v[a + l.nx] && v[a + l.nx + 1]);
 }
 
-/** A traced polyline kept between frames: vertices and, per vertex, its taper part. */
-interface TracedLine {
-  x: Float32Array;
-  y: Float32Array;
-  part: Uint8Array;
+/** Deterministic hash of integers to [0, 1). */
+function hash01(a: number, b: number, c: number): number {
+  let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+const SYSTEM_SEED: Record<WaveSystem, number> = { primary: 1, secondary: 2, windsea: 3, combined: 4 };
+
+/** One dash cell of a system in a view: indices in the view's continuous pixel plane. */
+export interface DashCell {
+  /** Cell column (not wrapped: the view's continuous pixel plane) and row. */
+  ci: number;
+  cj: number;
+  /** Column wrapped to one world copy (the hash seed: the same place in every copy). */
+  wrapped: number;
+  /** State key (column and row). */
+  key: number;
+  /** Phase offset of the cell's life cycle, 0..1. */
+  phase: number;
+  /** Life (s) used to place the cell's first dash: 3 T / tau with T at the cell centre (else 10 s). */
+  lifeRef: number;
+  /** The cell's dash in `owner` (a DashState store), held here so a frame needs no lookups. */
+  dash?: CellDash;
+  owner?: Map<number, CellDash>;
+}
+
+export interface DashGrid {
+  /** Cell size, px (divides the world width exactly). */
+  cell: number;
+  /** Cells covering the view and a margin, in their fixed hashed order (the order a frame over budget visits them). */
+  cells: DashCell[];
+}
+
+/** Cell size for a system and view: DASH_CELL_PX, adjusted so that a whole number of cells spans the world. */
+export function dashCellSize(style: FamilyStyle, view: PixelView): number {
+  return view.worldPx / Math.max(1, Math.round(view.worldPx / style.cellPx));
+}
+
+const gridCache = new WeakMap<FamilyLattice, DashGrid>();
+
+/**
+ * The dash cells of a system in view, plus a margin of DASH_LIFE_PASSAGES crest spacings
+ * (how far a dash travels in its life), so dashes born just outside the view drift into it.
+ * Cached per lattice.
+ */
+export function dashGrid(l: Lattice, f: FamilyLattice, view: PixelView): DashGrid {
+  const hit = gridCache.get(f);
+  if (hit) return hit;
+  const cell = dashCellSize(f.style, view);
+  const nWorld = Math.round(view.worldPx / cell);
+  const seed = SYSTEM_SEED[f.system];
+  const margin = DASH_LIFE_PASSAGES * Math.max(f.maxSpacing, 8) + DASH_MAX_PX;
+  const ci0 = Math.floor((view.originX - margin) / cell);
+  const ci1 = Math.floor((view.originX + view.width + margin) / cell);
+  const cj0 = Math.max(0, Math.floor((view.originY - margin) / cell));
+  const cj1 = Math.min(nWorld - 1, Math.floor((view.originY + view.height + margin) / cell));
+  const cells: Array<DashCell & { keep: number }> = [];
+  for (let cj = cj0; cj <= cj1; cj++) {
+    const lat = mercLat(((cj + 0.5) * cell) / view.worldPx);
+    for (let ci = ci0; ci <= ci1; ci++) {
+      const wrapped = ((ci % nWorld) + nWorld) % nWorld;
+      const tp = Math.abs(lat) < 85 ? sampleGrid(f.grids.tp, lat, mercLon(((wrapped + 0.5) * cell) / view.worldPx), 0.5) : NaN;
+      cells.push({
+        ci,
+        cj,
+        wrapped,
+        key: (ci + 1048576) * 2097152 + cj,
+        phase: hash01(wrapped * 8 + seed, cj, 7),
+        lifeRef: dashLifeSeconds(tp > 0 ? tp : REFERENCE_PERIOD_S),
+        keep: hash01(wrapped * 8 + seed, cj, 11),
+      });
+    }
+  }
+  // In a fixed hashed order: a frame over budget leaves out an even, random share of the
+  // cells, never a region, and the same one from frame to frame.
+  cells.sort((a, b) => a.keep - b.keep);
+  const grid = { cell, cells };
+  gridCache.set(f, grid);
+  return grid;
+}
+
+/** The dash of one cell during one life: born at `tb` (s) on the crest lattice, moving along p at v. */
+interface CellDash {
+  /** Life number (epoch) and its start, s of animation, and length, s. */
+  k: number;
+  tb: number;
+  life: number;
+  /** Whether the birth place had data (else the cell is empty for this life). */
+  ok: boolean;
+  /** Centre at birth, world px (continuous plane), on the crest lattice. */
+  wx: number;
+  wy: number;
+  /** Travel unit vector and crest speed (px/s) at birth. */
+  px: number;
+  py: number;
+  v: number;
+  /** Frame in which the cell was last visited. */
+  seen: number;
+}
+
+/**
+ * The dashes of every cell, kept between frames: a new forecast step (new fields) keeps every
+ * live dash, which ends its life with the values it was born with, and the next dash of the
+ * cell is born from the new fields. Without earlier frames a cell's dash is placed from the
+ * clock alone: life number floor(t / life + phase) of the cell, so the result does not depend
+ * on the frame rate or on when the map was opened.
+ */
+export class DashState {
+  private stores = new Map<string, { map: Map<number, CellDash>; used: number }>();
+  frame = 0;
+
+  store(system: WaveSystem, zoom: number, cell: number): Map<number, CellDash> {
+    const key = `${system}|${Math.round(zoom * 100)}|${Math.round(cell * 1000)}`;
+    let s = this.stores.get(key);
+    if (!s) this.stores.set(key, (s = { map: new Map(), used: this.frame }));
+    s.used = this.frame;
+    return s.map;
+  }
+
+  /** Forgets cells not visited for a while and stores of other zooms. */
+  prune(): void {
+    for (const [key, s] of this.stores) {
+      if (this.frame - s.used > 120) {
+        this.stores.delete(key);
+        continue;
+      }
+      if (s.map.size > 20_000) s.map.forEach((d, k, m) => this.frame - d.seen > 300 && m.delete(k));
+    }
+  }
+}
+
+/** World px to (lat, lon) of one world copy. */
+function placeOf(wx: number, wy: number, worldPx: number): [number, number] {
+  const u = ((wx / worldPx) % 1 + 1) % 1;
+  return [mercLat(wy / worldPx), mercLon(u)];
+}
+
+/**
+ * Gives the cell's dash of life `d.k` (starting at `d.tb`) its place and values: the first of
+ * BIRTH_TRIES hashed places in the cell where the system has data (a cell that is partly
+ * land, sea ice or a partition swap still gets its dash), moved along the travel vector there
+ * onto the nearest crest line of p . W = n s + v tb. Its life is 3 T / tau with the period
+ * there. Without data at any of the places the cell stays empty for one reference life.
+ */
+function bear(d: CellDash, f: FamilyLattice, c: DashCell, cell: number, view: PixelView, zoom: number): void {
+  d.ok = false;
+  d.life = c.lifeRef;
+  const seed = SYSTEM_SEED[f.system];
+  const g = f.grids;
+  for (let k = 0; k < BIRTH_TRIES; k++) {
+    const bx = (c.ci + hash01(c.wrapped * 8 + seed, c.cj, d.k * 8 + k * 2 + 1)) * cell;
+    const by = (c.cj + hash01(c.cj * 8 + seed, c.wrapped, d.k * 8 + k * 2 + 2)) * cell;
+    const [lat, lon] = placeOf(bx, by, view.worldPx);
+    if (!(Math.abs(lat) < 85)) continue;
+    const hs = sampleGrid(g.hs, lat, lon, 0.5);
+    if (!(hs >= MIN_DRAW_HS_M)) continue;
+    const tp = sampleGrid(g.tp, lat, lon, 0.5);
+    if (!(tp > 0)) continue;
+    const from = sampleDirection(g.dir, lat, lon, 0.5, MAX_CORNER_SPREAD_DEG);
+    if (!Number.isFinite(from)) continue;
+    const s = crestSpacingPx(tp, metresPerPixel(zoom, lat));
+    const v = crestSpeedPxPerS(tp, s);
+    const px = -Math.sin(from * RAD);
+    const py = Math.cos(from * RAD);
+    // Onto the crest lattice: the phase p . B - v tb, taken to the nearest multiple of s.
+    const phase = px * bx + py * by - v * d.tb;
+    const off = phase - s * Math.round(phase / s);
+    d.wx = bx - px * off;
+    d.wy = by - py * off;
+    d.px = px;
+    d.py = py;
+    d.v = v;
+    d.life = dashLifeSeconds(tp);
+    d.ok = true;
+    return;
+  }
+}
+
+/** Places a cell's dash from the clock alone (no earlier frames): its life number at time t. */
+function freshDash(f: FamilyLattice, c: DashCell, cell: number, view: PixelView, zoom: number, t: number, frame: number): CellDash {
+  const k = Math.floor(t / c.lifeRef + c.phase);
+  const d: CellDash = { k, tb: (k - c.phase) * c.lifeRef, life: c.lifeRef, ok: false, wx: 0, wy: 0, px: 0, py: 0, v: 0, seen: frame };
+  bear(d, f, c, cell, view, zoom);
+  return d;
+}
+
+/** The cell's dash at time t: the stored one, moved on through its lives as the clock passed them. */
+function dashAt(store: Map<number, CellDash>, f: FamilyLattice, c: DashCell, cell: number, view: PixelView, zoom: number, t: number, frame: number): CellDash {
+  let d = c.owner === store ? c.dash : store.get(c.key);
+  if (!d || t < d.tb || t - d.tb > MAX_CATCH_UP_LIVES * d.life) {
+    d = freshDash(f, c, cell, view, zoom, t, frame);
+    store.set(c.key, d);
+  }
+  c.dash = d;
+  c.owner = store;
+  while (t >= d.tb + d.life) {
+    d.tb += d.life;
+    d.k++;
+    bear(d, f, c, cell, view, zoom);
+  }
+  d.seen = frame;
+  return d;
+}
+
+/**
+ * Stroke batches: per system index, width level and opacity level. Each batch's path is built
+ * once and stroked once per pass of DASH_PASSES (the halos, then the core).
+ */
+interface Batch {
+  /** Segments (x0, y0, x1, y1), `n` numbers used (the array is reused and only grows). */
+  segs: Float64Array;
   n: number;
-}
-
-/** One crest as traced at offset `u` of its set, with the height there. */
-interface TracedCrest {
-  u: number;
-  hs: number;
-  lines: TracedLine[];
-  troughs: TracedLine[];
   frame: number;
+  style: FamilyStyle;
+}
+const NW = DASH_WIDTH_LEVELS.length;
+const NA = DASH_ALPHA_LEVELS.length;
+const batchPool: Array<Batch | undefined> = [];
+let poolFrame = 0;
+
+/** The nearest of evenly spaced levels (index). */
+const nearestLevel = (levels: readonly number[], x: number) => {
+  const n = levels.length - 1;
+  const i = Math.round(((x - levels[0]!) / (levels[n]! - levels[0]!)) * n);
+  return i < 0 ? 0 : i > n ? n : i;
+};
+
+function hexRgb(hex: string): string {
+  const v = parseInt(hex.slice(1), 16);
+  return `${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}`;
 }
 
-/**
- * Crests move by a fraction of a pixel per frame, so each crest's traced shape is kept (per
- * set and lattice crest number) and drawn shifted along the travel vector; it is traced again
- * once it has moved RETRACE_PX from where it was traced. A new lattice (pan, zoom, new fields)
- * has new sets and so traces afresh.
- */
-const crestCache = new WeakMap<Packet, Map<number, TracedCrest>>();
-export const RETRACE_PX = 2;
-
-/** Copies the traced half (n vertices) into `into` when it has room, else into a new line. */
-function copyHalf(n: number, into?: TracedLine): TracedLine {
-  const line = into && into.x.length >= n ? into : { x: new Float32Array(n), y: new Float32Array(n), part: new Uint8Array(n), n };
-  for (let i = 0; i < n; i++) {
-    line.x[i] = half.x[i]!;
-    line.y[i] = half.y[i]!;
-    line.part[i] = half.part[i]!;
-  }
-  line.n = n;
-  return line;
-}
-
-/** Taper part (index into TAPER) at a share of the half crest's length. */
-function taperPart(share: number): number {
-  for (let i = 0; i < TAPER.length - 1; i++) if (share < TAPER[i]![0] - 1e-9) return i;
-  return TAPER.length - 1;
+export interface FrameStats {
+  /** Dashes drawn (data-crests). */
+  crests: number;
+  vertices: number;
+  strokes: number;
+  /** Dash cells visited. */
+  cells: number;
+  arrows: number;
+  families: WaveSystem[];
 }
 
 export type WaveMode = "animated" | "static" | "off";
@@ -623,219 +476,167 @@ export interface DrawOptions {
   /** Animation time, s. */
   t: number;
   still: boolean;
-  /** Vertex budget for this frame. */
+  /** Most dashes this frame (maxDashes). */
   budget: number;
+  /** The dashes kept between frames (a fresh state places every dash from the clock alone). */
+  state?: DashState;
 }
 
 /**
- * Draws one frame of crests for the lattice into `ctx` (already cleared) and returns what it
- * drew. Pure apart from the canvas calls, so tests can record them.
+ * Draws one frame of crest dashes for the lattice into `ctx` (already cleared) and returns
+ * what it drew. Pure apart from the canvas calls and `o.state`, so tests can record them.
  */
-export function drawCrests(ctx: CanvasRenderingContext2D, view: PixelView, l: Lattice, o: DrawOptions): FrameStats {
+export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: Lattice, o: DrawOptions): FrameStats {
   const frame = ++poolFrame;
-  const used: Batch[] = [];
-  const stats: FrameStats = { crests: 0, vertices: 0, strokes: 0, packets: 0, arrows: 0, families: [] };
-  /** The stroke batch for a kind, system, width level and opacity level (see `level`). */
-  const batch = (kind: StrokeKind, style: FamilyStyle, sys: number, wl: number, al: number): Batch => {
-    const key = ((KIND_INDEX[kind] * 16 + sys) * 16 + wl) * 16 + al;
-    let b = batchPool.get(key);
-    if (!b) {
-      b = { kind, style, sys, width: (kind === "glow" ? GLOW_LEVELS : WIDTH_LEVELS)[wl]!, alpha: ALPHA_LEVELS[al]!, starts: [], ns: 0, pts: [], np: 0, frame: 0 };
-      batchPool.set(key, b);
-    }
+  const state = o.still || !o.state ? new DashState() : o.state;
+  state.frame++;
+  const t = o.still ? 0 : o.t;
+  const stats: FrameStats = { crests: 0, vertices: 0, strokes: 0, cells: 0, arrows: 0, families: [] };
+  let maxKey = -1;
+  const push = (sys: number, wl: number, al: number, style: FamilyStyle, x0: number, y0: number, x1: number, y1: number) => {
+    const key = (sys * NW + wl) * NA + al;
+    let b = batchPool[key];
+    if (!b) batchPool[key] = b = { segs: new Float64Array(256), n: 0, frame: 0, style };
     if (b.frame !== frame) {
       b.frame = frame;
+      b.n = 0;
       b.style = style; // the system at this index can differ from the last frame's
-      b.ns = 0;
-      b.np = 0;
-      used.push(b);
     }
-    return b;
-  };
-  /** Appends vertices first..last of a traced line, shifted by (dx, dy), to a batch as one polyline. */
-  const push = (b: Batch, line: TracedLine, first: number, last: number, dx: number, dy: number) => {
-    b.starts[b.ns++] = b.np;
-    for (let i = first; i <= last; i++) {
-      b.pts[b.np++] = line.x[i]! + dx;
-      b.pts[b.np++] = line.y[i]! + dy;
+    if (b.n + 4 > b.segs.length) {
+      const grown = new Float64Array(b.segs.length * 2);
+      grown.set(b.segs);
+      b.segs = grown;
     }
-    stats.vertices += last - first + 1;
+    b.segs[b.n++] = x0;
+    b.segs[b.n++] = y0;
+    b.segs[b.n++] = x1;
+    b.segs[b.n++] = y1;
+    if (key > maxKey) maxKey = key;
+    stats.vertices += 2;
   };
   const arrows: number[] = [];
   // The budget goes to the top system first (the primary swell is drawn last, on top, but is
   // never the one left out): each system may use BUDGET_SHARE of what is left, the last one
-  // all. A packet is only started when its estimated vertices still fit.
+  // all of it.
   const order = l.families.map((f, sys) => ({ f, sys })).filter(({ f }) => f.validCount > 0);
   stats.families = order.map(({ f }) => f.system);
+  const ox = view.originX;
+  const oy = view.originY;
   order.reverse().forEach(({ f, sys }, rank) => {
     const style = f.style;
-    const left = o.budget - stats.vertices;
-    const cap = stats.vertices + (rank === order.length - 1 ? left : left * BUDGET_SHARE);
-    // Packets in a fixed random order (their `keep` hash): when the budget runs out, the ones
-    // left out are an even, random share of the view, never a region, and the same each frame.
-    // `f.limit` (packets in that order) only shrinks when the budget is hit and grows back one
-    // packet a frame while well under it, so a packet at the margin does not flicker.
-    const packets = packetsFor(l, f, view);
-    // Vertices per crest: measured on earlier frames of this system (straight crests need
-    // few), at first an upper bound (every trace step kept, glow, halo and trough included).
-    const steps = (p: Packet) => Math.ceil((style.halfLength * p.spacing) / TRACE_STEP_PX);
-    const bound = (p: Packet) => 2 * (steps(p) + 3) * (style.dash.length ? 2 : 1) + (style.glow ? 2 * (Math.ceil(steps(p) / 2) + 1) + 2 * (Math.ceil(steps(p) * TROUGH_LENGTH) + 1) : 0);
-    const perCrest = perCrestBySystem.get(f.system) ?? 0;
-    const halo = TROUGH_STYLE_OF[style.look] ?? style;
-    const before = stats.vertices;
-    const crestsBefore = stats.crests;
+    const { cell, cells } = dashGrid(l, f, view);
+    const store = state.store(f.system, l.zoom, cell);
+    const left = o.budget - stats.crests;
+    const cap = stats.crests + (rank === order.length - 1 ? left : Math.floor(left * BUDGET_SHARE));
+    const before = stats.crests;
+    const arrowsOn = o.still && (f.system === "primary" || f.system === "combined");
+    const reach = DASH_MAX_PX;
     let visited = 0;
     let hit = false;
-    for (const p of packets) {
+    let drawnHere = 0;
+    for (const c of cells) {
       if (visited >= f.limit) break;
-      const count = crestsInto(p, style.crests, o.t, o.still);
-      const upper = count * bound(p);
-      if (stats.vertices + (perCrest > 0 ? count * perCrest : upper) > cap) {
+      if (stats.crests >= cap) {
         hit = true;
         break;
       }
       visited++;
-      // The frame's total never exceeds the budget: skip a packet that could overrun it.
-      if (stats.vertices + upper > o.budget) continue;
-      stats.packets++;
-      let leadX = 0;
-      let leadY = 0;
-      let leadU = -Infinity;
-      let cache = crestCache.get(p);
-      if (!cache) crestCache.set(p, (cache = new Map()));
-      for (let k = 0; k < count; k++) {
-        const u = crestU[k]!;
-        const w = crestW[k]!;
-        const crestNo = crestN[k]!;
-        let c = cache.get(crestNo);
-        if (!c || Math.abs(u - c.u) > RETRACE_PX) {
-          const cx = p.ax + p.px * u;
-          const cy = p.ay + p.py * u;
-          if (!sampleLattice(l, f, cx, cy)) {
-            cache.delete(crestNo);
-            continue;
-          }
-          // Traced again: the line buffers of the earlier shape are reused.
-          const old = c;
-          c = { u, hs: sample.hs, lines: [], troughs: [], frame };
-          for (const sign of [1, -1]) {
-            // Each half starts at the crest centre, so dash patterns stay anchored on the crest.
-            const n = traceHalf(l, f, cx, cy, sign, style.halfLength * p.spacing, true);
-            if (n) c.lines.push(copyHalf(n, old?.lines[c.lines.length]));
-          }
-          if (style.glow) {
-            // The trough behind the crest: a faint dark line half a spacing back.
-            for (const sign of [1, -1]) {
-              const n = traceHalf(l, f, cx - (p.px * p.spacing) / 2, cy - (p.py * p.spacing) / 2, sign, style.halfLength * p.spacing * TROUGH_LENGTH, false);
-              if (n) c.troughs.push(copyHalf(n, old?.troughs[c.troughs.length]));
-            }
-          }
-          cache.set(crestNo, c);
-        }
-        c.frame = frame;
-        if (!c.lines.length) continue;
-        const dx = p.px * (u - c.u);
-        const dy = p.py * (u - c.u);
-        const alpha = crestAlpha(c.hs) * w;
-        const width = lineWidth(c.hs);
-        // Width and opacity levels, once per crest: crest and halo per taper part, glow, trough.
-        const wl = nearestLevel(WIDTH_LEVELS, width);
-        const hl = nearestLevel(WIDTH_LEVELS, width + HALO_PX);
-        for (let t = 0; t < TAPER.length; t++) {
-          crestLevel[t] = nearestLevel(ALPHA_LEVELS, alpha * TAPER[t]![1]);
-          haloLevel[t] = nearestLevel(ALPHA_LEVELS, alpha * TAPER[t]![1] * HALO_ALPHA);
-        }
-        for (const line of c.lines) {
-          // Full opacity near the packet's ray, fading toward the crest ends (no hard tips).
-          let from = 0;
-          for (let i = 1; i <= line.n; i++) {
-            const part = line.part[from + 1]!;
-            if (i < line.n && line.part[i] === part) continue;
-            const last = i === line.n ? line.n - 1 : i - 1;
-            push(batch("crest", style, sys, wl, crestLevel[part]!), line, from, last, dx, dy);
-            // Dashes and dots get a dark halo, so they read on bright colours too.
-            if (style.dash.length) push(batch("halo", halo, sys, hl, haloLevel[part]!), line, from, last, dx, dy);
-            // The glow follows the bright inner part only.
-            if (style.glow && part === 0) {
-              push(batch("glow", style, sys, nearestLevel(GLOW_LEVELS, width * GLOW_WIDTH), nearestLevel(ALPHA_LEVELS, alpha * GLOW_ALPHA)), line, from, last, dx, dy);
-            }
-            from = last;
-          }
-        }
-        stats.crests++;
-        if (c.troughs.length) {
-          const tb = batch("trough", TROUGH_STYLE, sys, nearestLevel(WIDTH_LEVELS, width * TROUGH_WIDTH), nearestLevel(ALPHA_LEVELS, alpha * TROUGH_ALPHA));
-          for (const line of c.troughs) push(tb, line, 0, line.n - 1, dx, dy);
-        }
-        if (u > leadU) {
-          leadU = u;
-          leadX = p.ax + p.px * u;
-          leadY = p.ay + p.py * u;
-        }
+      const d = dashAt(store, f, c, cell, view, l.zoom, t, state.frame);
+      if (!d.ok) continue;
+      const age = (t - d.tb) / d.life;
+      const fade = o.still ? 1 : dashFade(age);
+      const travel = d.v * (t - d.tb);
+      const cx = d.wx + d.px * travel - ox;
+      const cy = d.wy + d.py * travel - oy;
+      if (cx < -reach || cy < -reach || cx > view.width + reach || cy > view.height + reach) continue;
+      // Orientation and height where the dash is now; centre and both ends on valid nodes.
+      if (!sampleLattice(l, f, cx, cy)) continue;
+      const hs = sample.hs;
+      const alpha = dashAlpha(hs) * fade;
+      if (alpha < MIN_ALPHA) continue;
+      const px = sample.px;
+      const py = sample.py;
+      const tx = -py; // crest tangent: a quarter turn clockwise of the travel vector on screen
+      const ty = px;
+      const half = dashLength(hs, f.system) / 2;
+      if (!nodesValid(l, f, cx - tx * half, cy - ty * half) || !nodesValid(l, f, cx + tx * half, cy + ty * half)) continue;
+      const width = dashWidth(hs);
+      const wl = nearestLevel(DASH_WIDTH_LEVELS, width);
+      const al = nearestLevel(DASH_ALPHA_LEVELS, alpha);
+      if (style.gap > 0) {
+        // Split dash: the core shows a gap of `gap` x the length between its round caps.
+        const g = (style.gap * half * 2) / 2 + DASH_WIDTH_LEVELS[wl]! / 2;
+        push(sys, wl, al, style, cx - tx * half, cy - ty * half, cx - tx * g, cy - ty * g);
+        push(sys, wl, al, style, cx + tx * g, cy + ty * g, cx + tx * half, cy + ty * half);
+      } else {
+        push(sys, wl, al, style, cx - tx * half, cy - ty * half, cx + tx * half, cy + ty * half);
       }
-      // Crests that left the set are forgotten.
-      cache.forEach((c, n, m) => {
-        if (c.frame !== frame) m.delete(n);
-      });
-      // Reduced motion: an arrowhead on the leading crest shows which way the packet travels.
-      if (o.still && leadU > -Infinity && (f.system === "primary" || f.system === "combined")) {
-        arrows.push(leadX, leadY, p.px, p.py);
+      stats.crests++;
+      drawnHere++;
+      // Reduced motion: an arrowhead ahead of every ARROW_EVERY-th dash shows which way the waves travel.
+      if (arrowsOn && drawnHere % ARROW_EVERY === 1) {
+        const lead = DASH_WIDTH_LEVELS[wl]! * DASH_PASSES[0]!.width * 0.5 + 1;
+        arrows.push(cx + px * (lead + ARROW_PX), cy + py * (lead + ARROW_PX), px, py);
         stats.arrows++;
       }
     }
-    const n = stats.crests - crestsBefore;
-    if (n >= 20) perCrestBySystem.set(f.system, perCrest > 0 ? 0.8 * perCrest + (0.2 * (stats.vertices - before)) / n : (stats.vertices - before) / n);
+    stats.cells += visited;
+    // The cut only shrinks when the budget is hit and grows back one cell a frame while well
+    // under it, so a cell at the margin does not flicker.
     if (hit) f.limit = visited;
-    else if (f.limit < packets.length && stats.vertices - before < 0.75 * (cap - before)) f.limit++;
+    else if (f.limit < cells.length && stats.crests - before < 0.75 * (cap - before)) f.limit++;
   });
 
+  ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  // Per system in drawing order (primary last, on top): glow, trough, then the crest lines.
-  const rankOf = (b: Batch) => (b.kind === "glow" ? 0 : b.kind === "trough" ? 1 : b.kind === "halo" ? 2 : 3);
-  const ordered = used.sort((a, b) => a.sys - b.sys || rankOf(a) - rankOf(b));
-  for (const b of ordered) {
-    if (!b.ns) continue;
-    ctx.beginPath();
-    for (let s = 0; s < b.ns; s++) {
-      const from = b.starts[s]!;
-      const to = s + 1 < b.ns ? b.starts[s + 1]! : b.np;
-      ctx.moveTo(b.pts[from]!, b.pts[from + 1]!);
-      for (let k = from + 2; k < to; k += 2) ctx.lineTo(b.pts[k]!, b.pts[k + 1]!);
+  ctx.setLineDash([]);
+  // Per system in drawing order (primary last, on top): every batch's outer halo, then its
+  // inner halo, then the cores. Each batch's path is built once and stroked once per pass.
+  const perSystem = NW * NA;
+  for (let sys = 0; sys * perSystem <= maxKey; sys++) {
+    const paths: Array<{ path: Path2D; wl: number; al: number; rgb: string }> = [];
+    for (let key = sys * perSystem; key < (sys + 1) * perSystem && key <= maxKey; key++) {
+      const b = batchPool[key];
+      if (!b || b.frame !== frame || !b.n) continue;
+      const path = new Path2D();
+      for (let i = 0; i < b.n; i += 4) {
+        path.moveTo(b.segs[i]!, b.segs[i + 1]!);
+        path.lineTo(b.segs[i + 2]!, b.segs[i + 3]!);
+      }
+      paths.push({ path, wl: Math.floor(key / NA) % NW, al: key % NA, rgb: hexRgb(b.style.color) });
     }
-    ctx.setLineDash(b.kind === "crest" || b.kind === "halo" ? b.style.dash : []);
-    ctx.lineCap = b.kind === "glow" || b.style.look === "dotted" ? "round" : "butt";
-    ctx.lineWidth = b.width;
-    ctx.strokeStyle = `rgba(${hexRgb(b.style.color)}, ${b.alpha})`;
-    ctx.stroke();
-    stats.strokes++;
+    for (const pass of DASH_PASSES) {
+      for (const { path, wl, al, rgb } of paths) {
+        ctx.lineWidth = DASH_WIDTH_LEVELS[wl]! * pass.width;
+        ctx.strokeStyle = `rgba(${rgb}, ${Math.round(DASH_ALPHA_LEVELS[al]! * pass.alpha * 1000) / 1000})`;
+        ctx.stroke(path);
+        stats.strokes++;
+      }
+    }
   }
-  // Batches unused for a while give their memory back.
-  for (const [key, b] of batchPool) if (frame - b.frame > 300) batchPool.delete(key);
   if (arrows.length) {
-    ctx.setLineDash([]);
-    ctx.lineCap = "round";
     ctx.beginPath();
     for (let i = 0; i < arrows.length; i += 4) {
-      const [x, y, px, py] = [arrows[i]!, arrows[i + 1]!, arrows[i + 2]!, arrows[i + 3]!];
-      const tipX = x + px * 7;
-      const tipY = y + py * 7;
-      ctx.moveTo(tipX - px * 5 - py * 4, tipY - py * 5 + px * 4);
+      const [tipX, tipY, px, py] = [arrows[i]!, arrows[i + 1]!, arrows[i + 2]!, arrows[i + 3]!];
+      const bx = tipX - px * ARROW_PX;
+      const by = tipY - py * ARROW_PX;
+      const w = ARROW_PX * 0.7;
+      ctx.moveTo(bx - py * w, by + px * w);
       ctx.lineTo(tipX, tipY);
-      ctx.lineTo(tipX - px * 5 + py * 4, tipY - py * 5 - px * 4);
+      ctx.lineTo(bx + py * w, by - px * w);
     }
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 1.4;
     ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
     ctx.stroke();
     stats.strokes++;
   }
-  ctx.setLineDash([]);
+  if (state === o.state) state.prune();
   return stats;
 }
 
-/** Vertex budget for a view (desktop budget for a 1440 x 900 view, scaled by area, phones lower). */
-export function vertexBudget(width: number, height: number): number {
-  if (width < 640) return PHONE_VERTEX_BUDGET;
-  return Math.round(Math.min(1.6, Math.max(0.5, (width * height) / (1440 * 900))) * VERTEX_BUDGET);
+/** Most dashes per frame for a view (MAX_DASHES on desktops, PHONE_MAX_DASHES under 640 px wide). */
+export function dashBudget(width: number): number {
+  return maxDashes(width);
 }
 
 function canvas2d(width: number, height: number): CanvasRenderingContext2D | null {
@@ -848,8 +649,9 @@ function canvas2d(width: number, height: number): CanvasRenderingContext2D | nul
 
 /**
  * Lattice nodes over land (1 = mostly land), rasterised from the Natural Earth rings at
- * lattice resolution. Coastal nodes stay ocean, so crests reach the coast, where the ocean
- * mask clips them exactly. Null without a 2D canvas (tests).
+ * lattice resolution. Coastal nodes stay ocean, so dashes reach the coast, where the opaque
+ * land (dark basemap) or the ocean mask (streets) clips them exactly. Null without a 2D
+ * canvas (tests).
  */
 export function landAtNodes(view: PixelView, grid: Pick<Lattice, "nx" | "ny" | "x0" | "y0">, land: MercPath[]): Uint8Array | null {
   const ctx = canvas2d(grid.nx, grid.ny);
@@ -900,9 +702,9 @@ export interface WaveStats extends FrameStats {
 }
 
 /**
- * Runs the crest animation on one canvas: lattice and mask per view, a 30 fps time-based
- * loop (the clock only runs while animating, so crests resume where they stopped after a
- * pan), or one still frame for reduced motion.
+ * Runs the dash animation on one canvas: lattice and mask per view, a 30 fps time-based loop
+ * (the clock only runs while animating, so dashes resume where they stopped after a pan), or
+ * one still frame for reduced motion.
  */
 export class WaveAnimator {
   private families: WaveFamilyGrids[] = [];
@@ -921,6 +723,7 @@ export class WaveAnimator {
   private clock = 0;
   private times: number[] = [];
   private framesDrawn = 0;
+  private readonly dashes = new DashState();
   stats: WaveStats | null = null;
   private listener: ((stats: WaveStats) => void) | null = null;
 
@@ -929,7 +732,7 @@ export class WaveAnimator {
     this.listener = listener;
   }
 
-  /** New fields (another forecast step or other systems): same packets, same clock. */
+  /** New fields (another forecast step or other systems): the same dashes live on, the same clock. */
   setFamilies(families: WaveFamilyGrids[]): void {
     this.families = families;
     this.rebuild();
@@ -942,7 +745,7 @@ export class WaveAnimator {
 
   /**
    * Whether every frame is composited with the ocean mask. Needed over street tiles; on the
-   * dark basemap the opaque land drawn above the crests already clips them at the coast (and
+   * dark basemap the opaque land drawn above the dashes already clips them at the coast (and
    * land lattice nodes keep them off land in the canvas), so the full-canvas composite, about
    * 4 ms a frame with software rendering, is skipped there.
    */
@@ -1019,7 +822,7 @@ export class WaveAnimator {
     if (!ctx || !view || !l) return;
     const t0 = performance.now();
     ctx.clearRect(0, 0, view.width, view.height);
-    const frame = drawCrests(ctx, view, l, { t: still ? 0 : this.time, still, budget: vertexBudget(view.width, view.height) });
+    const frame = drawDashes(ctx, view, l, { t: still ? 0 : this.time, still, budget: dashBudget(view.width), state: this.dashes });
     if (this.mask) {
       ctx.globalCompositeOperation = "destination-in";
       ctx.drawImage(this.mask, 0, 0, view.width, view.height);
@@ -1035,5 +838,5 @@ export class WaveAnimator {
   }
 }
 
-/** Longest clock step of one frame (after a stall the crests do not jump). */
+/** Longest clock step of one frame (after a stall the dashes do not jump). */
 const MAX_STEP_MS = 100;

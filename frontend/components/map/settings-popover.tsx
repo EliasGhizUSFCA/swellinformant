@@ -30,8 +30,9 @@ export function toggleSystem(chosen: readonly WaveSystem[], system: WaveSystem):
 }
 
 /**
- * Which wave systems are drawn as crests. Shown only when the model run has partitions;
- * a system the run does not have is disabled ("not available for this model run").
+ * Which wave systems are drawn as crest dashes (the combined sea by default). Shown only when
+ * the model run has partitions; a system the run does not have is disabled ("not available
+ * for this model run"). Each button shows the system's dash shape.
  */
 function WaveSystemChooser({ settings, onChange }: { settings: MapSettings; onChange: (patch: Partial<MapSettings>) => void }) {
   const { data: index } = useFieldIndex();
@@ -39,7 +40,10 @@ function WaveSystemChooser({ settings, onChange }: { settings: MapSettings; onCh
   const available = availableSystems(index);
   return (
     <fieldset className="space-y-1.5" data-testid="wave-systems">
-      <legend className="mb-1.5 text-sm text-white/85">Wave crests</legend>
+      <legend className="mb-1.5 text-sm text-white/85">
+        Wave crests
+        <span className="block text-xs text-white/60">Short dashes are wave crests moving with the waves; each system has its own dash shape.</span>
+      </legend>
       <div className="flex flex-wrap gap-1.5">
         {CHOOSER.map((system) => {
           const ok = available.has(system);
@@ -172,8 +176,8 @@ export function SettingsPopover({
               Animated flow
               <span className="block text-xs text-white/60">
                 {reducedMotion && settings.particles
-                  ? "Your device asks for reduced motion, so wind is drawn as still arrows and waves as still crests."
-                  : "Wind particles and wave crests."}
+                  ? "Your device asks for reduced motion, so wind is drawn as still arrows and waves as still crest dashes."
+                  : "Wind particles and wave crest dashes."}
               </span>
             </label>
             <Switch id="map-particles" checked={settings.particles} onCheckedChange={(on) => onChange({ particles: on })} />
@@ -181,7 +185,7 @@ export function SettingsPopover({
           <div className="flex items-start justify-between gap-3">
             <label htmlFor="map-wind-overlay" className="text-sm text-white/85">
               Wind on wave layers
-              <span className="block text-xs text-white/60">Wind particles over the wave crests.</span>
+              <span className="block text-xs text-white/60">Wind particles over the wave crest dashes.</span>
             </label>
             <Switch id="map-wind-overlay" checked={settings.windOverlay} onCheckedChange={(on) => onChange({ windOverlay: on })} />
           </div>

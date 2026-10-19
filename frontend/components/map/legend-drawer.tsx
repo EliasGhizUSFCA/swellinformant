@@ -25,21 +25,38 @@ export function markerLegend(basemap: MapSettings["basemap"]): Array<{ label: st
   return [{ label: "No usable forecast", color: NO_FORECAST_COLOR }, ...(Object.keys(ramp) as QualityLabel[]).map((q) => ({ label: QUALITY_LABELS[q], color: ramp[q] }))];
 }
 
-/** A short line in a wave system's colour and dash pattern (the key of the crest styles). */
+/**
+ * A few crest dashes in a wave system's colour and shape, as the map draws them (a soft halo
+ * under a round-capped core): two solid dashes for the primary swell and the combined sea,
+ * two split dashes for the secondary swell, three short dashes for the wind sea.
+ */
 export function CrestSwatch({ system, className }: { system: WaveSystem; className?: string }) {
   const s = FAMILY_STYLES[system];
+  const count = s.lengthFactor < 0.7 ? 3 : 2;
+  const length = 10 * s.lengthFactor;
+  const step = 26 / count;
+  const pieces: Array<[number, number]> = [];
+  for (let i = 0; i < count; i++) {
+    const a = 1 + i * step + (step - length) / 2;
+    const b = a + length;
+    if (s.gap > 0) {
+      const mid = (a + b) / 2;
+      const g = (s.gap * length) / 2 + 1; // the core's gap between its round caps (core width 2)
+      pieces.push([a, mid - g], [mid + g, b]);
+    } else {
+      pieces.push([a, b]);
+    }
+  }
   return (
-    <svg viewBox="0 0 28 8" className={cn("h-2 w-7 shrink-0", className)} aria-hidden>
-      <line
-        x1="1"
-        y1="4"
-        x2="27"
-        y2="4"
-        stroke={s.color}
-        strokeWidth={2}
-        strokeDasharray={s.dash.length ? s.dash.join(" ") : undefined}
-        strokeLinecap={s.look === "dotted" ? "round" : "butt"}
-      />
+    <svg viewBox="0 0 28 8" className={cn("h-2 w-7 shrink-0", className)} aria-hidden data-swatch={system}>
+      {[
+        { width: 4.8, opacity: 0.3 },
+        { width: 2, opacity: 0.95 },
+      ].map((pass) =>
+        pieces.map(([a, b], i) => (
+          <line key={`${pass.width}-${i}`} x1={a} y1="4" x2={b} y2="4" stroke={s.color} strokeOpacity={pass.opacity} strokeWidth={pass.width} strokeLinecap="round" />
+        )),
+      )}
     </svg>
   );
 }
@@ -121,7 +138,7 @@ export function LegendDrawer({
             <span
               key={t.label}
               className="absolute"
-              style={{ left: `${t.pos * 100}%`, transform: `translateX(${i === 0 ? 0 : i === ticks.length - 1 ? -100 : -50}%)` }}
+              style={{ left: `${t.pos * 100}%`, transform: `translateX(${i === 0 && t.pos < 0.03 ? 0 : i === ticks.length - 1 && t.pos > 0.97 ? -100 : -50}%)` }}
             >
               {t.label}
             </span>
@@ -151,14 +168,16 @@ export function LegendDrawer({
                 ))}
               </ul>
               <p>
-                Crests travel the way the waves go (a swell from the SW travels NE); thicker, brighter lines are higher waves.{" "}
-                <span data-testid="legend-scales">{scaleStatement(status.zoom, status.centreLat)}</span> Stylised crests from the forecast model, not
-                individual waves.
+                Short dashes are wave crests moving with the waves (a swell from the SW travels NE); longer, brighter dashes are higher waves. Rows of
+                dashes are one crest spacing apart. <span data-testid="legend-scales">{scaleStatement(status.zoom, status.centreLat)}</span> Each dash
+                fades in and out over three crest passages (a display choice). Stylised crests from the forecast model, not individual waves.
               </p>
               {crests.includes("combined") && (
-                <p className="mt-1 text-white/60">One combined sea: the model&apos;s peak period and direction of all waves together.</p>
+                <p className="mt-1 text-white/60">
+                  One combined sea: the model&apos;s peak period and direction of all waves together. Swell partitions can be chosen in Settings when the run has them.
+                </p>
               )}
-              {particles === "static" && <p className="mt-1">Shown as still crests with arrowheads because your device asks for reduced motion.</p>}
+              {particles === "static" && <p className="mt-1">Shown as still dashes with arrowheads because your device asks for reduced motion.</p>}
             </div>
           )}
           {windShown && (

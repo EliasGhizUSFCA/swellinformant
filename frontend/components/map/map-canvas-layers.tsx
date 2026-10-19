@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The map's data layers inside Leaflet: the ocean colour field, the wave crests (wave
+ * The map's data layers inside Leaflet: the ocean colour field, the wave crest dashes (wave
  * layers), the wind particles (Wind layer, or the wind overlay on a wave layer), the basemap
  * (Natural Earth land, isobars, city labels) and the field credit in the attribution strip.
  * Each canvas lives in its own pane (order in `Z`). The map shell (forecast-map.tsx) renders
@@ -25,7 +25,10 @@ import { CanvasLayer } from "./canvas-layer";
 import { ParticleAnimator, type Flow, type TrailMode } from "./particles";
 import { MAX_CORNER_SPREAD_DEG, WaveAnimator, type WaveFamilyGrids, type WaveMode } from "./wavefronts";
 
-/** CSS pixels per colour-field pixel: half resolution at 1x, smoothed by the browser. */
+/**
+ * CSS pixels per pixel of the colour-field buffer: the field is painted at half resolution,
+ * then scaled onto the canvas (one pixel per CSS pixel) with imageSmoothingQuality "high".
+ */
 const FIELD_PX = 2;
 
 /** Pane order, bottom to top (Leaflet's tiles are 200, vector overlays/markers 400). The
@@ -157,12 +160,13 @@ function FieldCanvas({ paint, scale, basemap, label, at, layer, clipLand }: Fiel
 
   useEffect(() => {
     let img: ImageData | null = null;
+    let buffer: HTMLCanvasElement | null = null;
     let draws = 0;
     const l = new CanvasLayer({
       pane: "fieldPane",
       zIndex: Z.field,
       padding: 0.15,
-      cssPxPerPixel: () => FIELD_PX,
+      cssPxPerPixel: () => 1,
       className: "map-field-canvas",
       draw: (ctx, view, canvas) => {
         const m = metaRef.current;
@@ -178,9 +182,22 @@ function FieldCanvas({ paint, scale, basemap, label, at, layer, clipLand }: Fiel
           return;
         }
         const t0 = performance.now();
-        if (!img || img.width !== canvas.width || img.height !== canvas.height) img = ctx.createImageData(canvas.width, canvas.height);
+        const bw = Math.max(1, Math.ceil(view.width / FIELD_PX));
+        const bh = Math.max(1, Math.ceil(view.height / FIELD_PX));
+        buffer ??= document.createElement("canvas");
+        if (buffer.width !== bw || buffer.height !== bh) {
+          buffer.width = bw;
+          buffer.height = bh;
+        }
+        const bctx = buffer.getContext("2d");
+        if (!bctx) return;
+        if (!img || img.width !== bw || img.height !== bh) img = bctx.createImageData(bw, bh);
         const painted = renderField(img, view, FIELD_PX, p);
-        ctx.putImageData(img, 0, 0);
+        bctx.putImageData(img, 0, 0);
+        // Half-resolution buffer → canvas, smoothed (the 0.5° field is smooth; this keeps it so).
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(buffer, 0, 0, bw * FIELD_PX, bh * FIELD_PX);
         if (m.clipLand) {
           // Wave values are 0.5° box means that reach a little inland: cut them at the coast.
           ctx.save();
@@ -221,7 +238,7 @@ function colorTypeOf(ctx: CanvasRenderingContext2D): string {
 }
 
 /** Particles of the wind overlay on a wave layer, relative to the Wind layer: fewer, so the
- * crests stay readable underneath. */
+ * crest dashes stay readable underneath. */
 const OVERLAY_DENSITY = 0.45;
 
 function ParticleCanvas({ flow, mode, overlay }: { flow: Flow | null; mode: ParticleMode; overlay: boolean }) {
@@ -309,6 +326,7 @@ function WaveCanvas({ families, mode, land, oceanMask }: { families: WaveFamilyG
       className: "map-wave-canvas",
       draw: (ctx, view, canvas) => {
         canvas.setAttribute("aria-hidden", "true");
+        canvas.dataset.style = "dashes";
         canvas.dataset.mode = modeRef.current;
         canvas.dataset.families = familiesRef.current.map((f) => f.system).join(",");
         canvas.dataset.view = [view.originX, view.originY, view.width, view.height, view.worldPx].join(",");
@@ -361,7 +379,7 @@ function WaveCanvas({ families, mode, land, oceanMask }: { families: WaveFamilyG
     layerRef.current?.canvas?.setAttribute("data-ocean-mask", oceanMask ? "1" : "0");
   }, [animator, oceanMask]);
 
-  // New fields keep the packets and the clock: the lattice is rebuilt for the same view.
+  // New fields keep the live dashes and the clock: the lattice is rebuilt for the same view.
   useEffect(() => {
     familiesRef.current = families;
     animator.setFamilies(families);
@@ -475,8 +493,8 @@ export interface MapDataLayersProps {
 
 /**
  * Every data canvas of the map, in pane order, plus the field credit. Wave layers draw
- * crests (never particles); the Wind layer draws particles, and so does a wave layer with
- * the wind overlay on. `particles` (animated / static / off) applies to both.
+ * crest dashes (never particles); the Wind layer draws particles, and so does a wave layer
+ * with the wind overlay on. `particles` (animated / static / off) applies to both.
  */
 export function MapDataLayers(props: MapDataLayersProps) {
   const { layer, fields, particles, basemap, scale, settings } = props;
