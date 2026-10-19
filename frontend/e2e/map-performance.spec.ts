@@ -8,9 +8,10 @@ import { field, openMapWithFields, requested } from "./map-helpers";
  * ./map-fields.mock.ts (made-up patterns, not a forecast). Moved here from map-layers.spec.ts
  * so that it can run without the Playwright trace recorder: its DOM snapshots and screenshots
  * run on the page's main thread and add to every frame (measured on the same view and
- * synthetic fields: crest draw time p95 4.5 ms without a recorder, 6.7 ms with one). `trace`
- * can only be set per file. The crest frame cost is measured once the layer has settled (see
- * below). Every threshold is unchanged.
+ * synthetic fields with the earlier traced-crest renderer: draw time p95 4.5 ms without a
+ * recorder, 6.7 ms with one). `trace` can only be set per file. The crest-dash frame cost is
+ * measured once the layer has settled (see below). The dash thresholds are D11's: draw p95
+ * at most 5 ms (the traced crests had 8 ms) and 12,000 vertices (they had 20,000).
  */
 test.use({ viewport: { width: 1440, height: 900 }, trace: "off" });
 
@@ -45,17 +46,18 @@ test.describe("map frame cost (synthetic fields)", () => {
       const m1 = await metrics();
       return { frames, scriptMs: ((m1.ScriptDuration! - m0.ScriptDuration!) * 1000) / frames, taskMs: ((m1.TaskDuration! - m0.TaskDuration!) * 1000) / frames };
     };
-    // Wave crests (the default Wave Height layer), then the wind particles, then nothing.
+    // Wave crest dashes (the default Wave Height layer, combined sea), then the wind
+    // particles, then nothing.
     await expect(wave(page)).toHaveAttribute("data-mode", "animated");
+    await expect(wave(page)).toHaveAttribute("data-families", "combined");
     // Steady state: the p95 is over the last 120 frames, and the first frames after the layer
-    // opens trace every crest afresh (one-off: on the production build here the window's p95
-    // read 17.9 ms one second after opening and about 4 ms from five seconds on), so wait
-    // until they have left that window before measuring.
+    // opens place every dash afresh (one-off), so wait until they have left that window.
     await expect.poll(async () => Number(await wave(page).getAttribute("data-frames")), { timeout: 30_000 }).toBeGreaterThan(160);
     const size = await wave(page).evaluate((c: HTMLCanvasElement) => `${c.width}x${c.height}`);
     const crests = await perFrame(3000);
     const drawP95 = Number(await wave(page).getAttribute("data-draw-ms-p95"));
     const vertices = Number(await wave(page).getAttribute("data-vertices"));
+    const dashes = Number(await wave(page).getAttribute("data-crests"));
     await page.getByRole("radio", { name: "Wind Speed" }).click();
     const particles = page.locator("canvas.map-particle-canvas");
     await expect(particles).toHaveAttribute("data-mode", "animated");
@@ -66,14 +68,15 @@ test.describe("map frame cost (synthetic fields)", () => {
     await expect(particles).toHaveAttribute("data-mode", "off");
     const still = await perFrame(3000);
     const note =
-      `wave crests: ${crests.scriptMs.toFixed(2)} ms script / ${crests.taskMs.toFixed(2)} ms task per frame, draw p95 ${drawP95} ms, ${vertices} vertices (canvas ${size}); ` +
+      `wave crest dashes: ${crests.scriptMs.toFixed(2)} ms script / ${crests.taskMs.toFixed(2)} ms task per frame, draw p95 ${drawP95} ms, ${dashes} dashes, ${vertices} vertices (canvas ${size}); ` +
       `wind particles: ${animated.scriptMs.toFixed(2)} / ${animated.taskMs.toFixed(2)} ms (${animated.frames} frames); off: ${still.scriptMs.toFixed(2)} / ${still.taskMs.toFixed(2)} ms`;
     console.log(note);
     test.info().annotations.push({ type: "flow frame cost (1440x900)", description: note });
     expect(animated.scriptMs).toBeLessThan(12); // regression guard; one frame at 60 Hz is 16.7 ms
     expect(crests.scriptMs).toBeLessThan(12);
-    expect(drawP95, "crest frame draw time p95 (ms)").toBeLessThanOrEqual(8);
-    expect(vertices).toBeLessThanOrEqual(20_000);
+    expect(drawP95, "crest-dash frame draw time p95 (ms)").toBeLessThanOrEqual(5);
+    expect(vertices).toBeLessThanOrEqual(12_000);
+    expect(dashes, "dashes drawn").toBeGreaterThan(500);
     // The dark basemap redraw at zoom 2 (no closePath per ring).
     const basemapMs = Number(await page.locator("canvas.map-basemap-canvas").getAttribute("data-draw-ms"));
     console.log(`basemap redraw at zoom 2: ${basemapMs} ms`);

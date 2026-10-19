@@ -79,6 +79,21 @@ export const nearestIndex = (times: string[], iso: string) => {
   return best;
 };
 
+/**
+ * Chooses the wave systems drawn as crest dashes before the page loads (the map's stored
+ * setting, swell.map.settings.v2), unless this browser context already stored settings.
+ * Without it the map draws its default, the combined sea.
+ */
+export async function chooseWaveSystems(page: Page, systems: string[]) {
+  await page.addInitScript((list) => {
+    const key = "swell.map.settings.v2";
+    if (window.localStorage.getItem(key) === null) window.localStorage.setItem(key, JSON.stringify({ waveSystems: list }));
+  }, systems);
+}
+
+/** The dark basemap's land colour (components/map/basemap-draw.ts LAND_COLOR #3a3a3c), RGB. */
+export const LAND_RGB = [0x3a, 0x3a, 0x3c] as const;
+
 export const field = (page: Page) => page.locator("canvas.map-field-canvas");
 export const painted = async (page: Page) => Number((await field(page).getAttribute("data-painted")) ?? 0);
 export const requested = (mock: FieldMock, variable: string, at: string) => mock.requests.includes(`${variable}@${at}`);

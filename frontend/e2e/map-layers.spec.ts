@@ -2,11 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { apiGet } from "./helpers";
 import { mockFields, mockFieldsUnavailable, PARTITION_VARIABLES, syntheticValue, VARIABLES, type SyntheticFields } from "./map-fields.mock";
-import { field, mapSettled, openMap, openMapWithFields, painted, requested, screenPoint, shot, type ProbeWindow, type Spot } from "./map-helpers";
+import { chooseWaveSystems, field, LAND_RGB, mapSettled, openMap, openMapWithFields, painted, requested, screenPoint, shot, type ProbeWindow, type Spot } from "./map-helpers";
 
 /**
- * The map's ocean layers against the production build: the colour field, the wave crests
- * (wave layers), the wind particles (Wind layer and the wind overlay), isobars, the hover
+ * The map's ocean layers against the production build: the colour field, the wave crest
+ * dashes (wave layers), the wind particles (Wind layer and the wind overlay), isobars, the hover
  * readout, the legend and the display settings. They are tested with route-mocked SYNTHETIC
  * fields from ./map-fields.mock.ts (made-up patterns, not a forecast); the backend in this
  * suite has no live NOAA data, so its own index reports "unavailable". Navigation, markers,
@@ -165,8 +165,8 @@ async function arrowLean(page: Page) {
 const wave = (page: Page) => page.locator("canvas.map-wave-canvas");
 
 /**
- * What the wave canvas shows: "ink" = alpha x brightness (the crest lines; the dark trough
- * lines count almost nothing), the dominant line orientation from the structure tensor of
+ * What the wave canvas shows: "ink" = alpha x brightness (the crest dashes), the dominant
+ * line orientation from the structure tensor of
  * the ink (degrees in screen coordinates, x east, y down: 0 = horizontal crests, 90 =
  * vertical, 45 = running from top left to bottom right), its coherence (0..1), an
  * orientation histogram (36 bins of 5 degrees, gradient energy), and a hash of the pixels.
@@ -222,9 +222,20 @@ function orientationPeaks(hist: number[], share = 0.15): number[] {
   return peaks;
 }
 
+/** The smoothed energy share of each local maximum of a waveImage histogram, for the log ("2.5°: 0.21"). */
+function peakShares(hist: number[]): string {
+  const total = hist.reduce((a, v) => a + v, 0);
+  const smooth = hist.map((_, i) => hist[(i + 35) % 36]! + hist[i]! + hist[(i + 1) % 36]!);
+  return smooth
+    .map((v, i) => ({ v, i }))
+    .filter(({ v, i }) => v >= smooth[(i + 35) % 36]! && v >= smooth[(i + 1) % 36]! && v > 0.05 * total)
+    .map(({ v, i }) => `${i * 5 + 2.5}°: ${(v / total).toFixed(2)}`)
+    .join(", ");
+}
+
 /**
  * Bright ink of the wave canvas projected on a direction (dx, dy): a 1 px binned profile.
- * Crest lines across that direction show as peaks spaced by the crest spacing.
+ * Rows of crest dashes across that direction show as peaks spaced by the crest spacing.
  */
 async function inkProfile(page: Page, dx: number, dy: number) {
   return wave(page).evaluate(
@@ -352,15 +363,16 @@ test.describe("ocean layers (synthetic fields)", () => {
     });
     expect(stats.opaque).toBeGreaterThan(0.5);
     expect(stats.colours).toBeGreaterThan(40);
-    // The South Pacific shows the field; inland Western Australia shows the dark land (#2b2b2b)
+    // The South Pacific shows the field; inland Western Australia shows the grey land (#3a3a3c)
     // drawn over it (the synthetic field has values everywhere, the land masks them).
     const lp = await screenPoint(page, -27, 121);
     const land = await pixels(page, lp.x, lp.y);
-    for (const ch of [0, 1, 2] as const) expect(Math.abs(median(land.map((p) => p[ch])) - 0x2b)).toBeLessThan(10);
+    for (const ch of [0, 1, 2] as const) expect(Math.abs(median(land.map((p) => p[ch])) - LAND_RGB[ch])).toBeLessThan(10);
     const sp = await screenPoint(page, -50, -120);
     expect(median((await pixels(page, sp.x, sp.y)).map(saturation))).toBeGreaterThan(40); // a saturated colour, not grey
-    // Wave crests run over the ocean; wave layers never use the wind particle canvas.
+    // Wave crest dashes run over the ocean; wave layers never use the wind particle canvas.
     await expect(wave(page)).toHaveAttribute("data-mode", "animated");
+    await expect(wave(page)).toHaveAttribute("data-style", "dashes");
     await expect(page.locator("canvas.map-particle-canvas")).toHaveCount(0);
     await shot(page, "desktop-1440x900-synthetic-wave-height");
 
@@ -839,8 +851,12 @@ async function pagePoint(page: Page, lat: number, lon: number) {
   );
 }
 
-/** Opens the map with SYNTHETIC uniform wave systems and waits for drawn crests of `families`. */
+/**
+ * Opens the map with SYNTHETIC uniform wave systems, the systems in `families` chosen (the
+ * combined sea, the default, needs no choice), and waits for drawn dashes of `families`.
+ */
 async function openWithSwells(page: Page, spec: Parameters<typeof swells>[0], families: string) {
+  if (families !== "combined") await chooseWaveSystems(page, families.split(","));
   const s = swells(spec);
   const opened = await openMapWithFields(page, { fields: s.fields, variables: s.variables });
   await expect(page.locator("canvas.map-basemap-canvas")).toHaveAttribute("data-land", "1"); // the coastline mask is ready
@@ -849,16 +865,16 @@ async function openWithSwells(page: Page, spec: Parameters<typeof swells>[0], fa
   return opened;
 }
 
-test.describe("wave crests (synthetic partitions)", () => {
+test.describe("wave crest dashes (synthetic partitions)", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test("crest spacing follows the period: 16 s crests are 4 times as far apart as 8 s crests", async ({ browser, baseURL }) => {
+  test("crest spacing follows the period: rows of 16 s dashes are 4 times as far apart as 8 s rows", async ({ browser, baseURL }) => {
     const spacing = async (tp: number) => {
       const ctx = await browser.newContext({ baseURL, viewport: { width: 1440, height: 900 } });
       try {
         const page = await ctx.newPage();
         await openWithSwells(page, { primary: [2.5, tp, 270] }, "primary");
-        const { prof, scale } = await inkProfile(page, 1, 0); // waves from the west: vertical crests
+        const { prof, scale } = await inkProfile(page, 1, 0); // waves from the west: vertical crest dashes in vertical rows
         return period(prof, Math.round(6 * scale), Math.round(90 * scale)) / scale;
       } finally {
         await ctx.close();
@@ -869,10 +885,10 @@ test.describe("wave crests (synthetic partitions)", () => {
     console.log(`crest spacing: 8 s ${s8} px, 16 s ${s16} px (ratio ${(s16 / s8).toFixed(2)})`);
     test.info().annotations.push({ type: "crest spacing 8 s / 16 s", description: `${s8} / ${s16} px` });
     expect(Math.abs(s8 - 12)).toBeLessThanOrEqual(1); // 0.12 px/m x 99.9 m
-    expect(Math.abs(s16 / s8 - 4)).toBeLessThanOrEqual(0.4);
+    expect(Math.abs(s16 / s8 - 4)).toBeLessThanOrEqual(0.2); // D11: 4.0 ± 0.2
   });
 
-  test("higher waves draw more ink", async ({ browser, baseURL }) => {
+  test("higher waves draw more ink: 4 m more than twice 1 m", async ({ browser, baseURL }) => {
     const ink = async (hs: number) => {
       const ctx = await browser.newContext({ baseURL, viewport: { width: 1440, height: 900 } });
       try {
@@ -890,13 +906,14 @@ test.describe("wave crests (synthetic partitions)", () => {
     };
     const [low, high] = [await ink(1), await ink(4)];
     console.log(`crest ink: 1 m ${low.toFixed(0)}, 4 m ${high.toFixed(0)}`);
-    expect(high).toBeGreaterThan(1.5 * low);
+    expect(high).toBeGreaterThan(2 * low); // D11 (the traced crests were tested at 1.5 x)
   });
 
   test("a primary swell from the W and a secondary from the S give two crest orientations; without the secondary, one", async ({ page, browser, baseURL }) => {
     const { mock } = await openWithSwells(page, { primary: [2.5, 13, 270], secondary: [1.8, 10, 180] }, "secondary,primary");
-    const both = orientationPeaks((await waveImage(page)).hist);
-    console.log(`orientation peaks (W + S): ${both.join(", ")}`);
+    const hist = (await waveImage(page)).hist;
+    const both = orientationPeaks(hist);
+    console.log(`orientation peaks (W + S): ${both.join(", ")} (smoothed shares: ${peakShares(hist)})`);
     expect(both.some((o) => Math.abs(o - 90) <= 10), both.join(",")).toBe(true); // vertical: from the west
     expect(both.some((o) => o <= 10 || o >= 170), both.join(",")).toBe(true); // horizontal: from the south
     expect(mock.requests.some((r) => r.startsWith("swell2_dir@"))).toBe(true);
@@ -915,11 +932,19 @@ test.describe("wave crests (synthetic partitions)", () => {
     }
   });
 
-  test("the wave-system chooser: wind sea alone, systems the run lacks disabled, combined sea", async ({ page }) => {
-    const { mock } = await openWithSwells(page, { primary: [2.5, 13, 250], windsea: [1.4, 6, 300] }, "primary");
+  test("the wave-system chooser: the combined sea by default, partitions, systems the run lacks disabled", async ({ page }) => {
+    // The default (D11, lead decision 3): the combined sea, even when the run has partitions,
+    // whose fields are then not downloaded.
+    const { mock } = await openWithSwells(page, { primary: [2.5, 13, 250], windsea: [1.4, 6, 300] }, "combined");
+    await expect(wave(page)).toHaveAttribute("data-families", "combined");
+    expect(mock.requests.some((r) => r.startsWith("swell1") || r.startsWith("windsea"))).toBe(false);
     await page.getByRole("button", { name: "Settings" }).click();
     const chooser = page.getByTestId("wave-systems");
     await expect(chooser).toBeVisible();
+    await expect(chooser.getByRole("button", { name: /^Combined sea/ })).toHaveAttribute("aria-pressed", "true");
+    await chooser.getByRole("button", { name: /^Primary swell/ }).click();
+    await expect(wave(page)).toHaveAttribute("data-families", "primary");
+    await expect(chooser.getByRole("button", { name: /^Combined sea/ })).toHaveAttribute("aria-pressed", "false");
     const secondary = chooser.getByRole("button", { name: /Secondary swell/ });
     await expect(secondary).toBeDisabled();
     await expect(secondary).toHaveAttribute("title", "Not available for this model run");
@@ -982,7 +1007,7 @@ test.describe("wave crests (synthetic partitions)", () => {
   test("the wind shows over land on the Wind layer; wave layers keep opaque land", async ({ page }) => {
     await openMapWithFields(page, { fields: UNIFORM_FLOW });
     const p = await pagePoint(page, 23, 10); // the Sahara
-    const grey = (px: Array<[number, number, number]>) => Math.max(...[0, 1, 2].map((ch) => Math.abs(median(px.map((q) => q[ch as 0 | 1 | 2])) - 0x2b)));
+    const grey = (px: Array<[number, number, number]>) => Math.max(...([0, 1, 2] as const).map((ch) => Math.abs(median(px.map((q) => q[ch])) - LAND_RGB[ch])));
     expect(grey(await pixels(page, p.x, p.y)), "opaque land on Wave Height").toBeLessThan(10);
     await page.getByRole("radio", { name: "Wind Speed" }).click();
     await expect(page.locator("canvas.map-basemap-canvas")).toHaveAttribute("data-land-alpha", "translucent");
@@ -1012,8 +1037,9 @@ test.describe("wave crests (synthetic partitions)", () => {
     await page.getByRole("button", { name: "Legend", exact: true }).click();
     const legend = page.getByTestId("legend-drawer");
     await expect(legend.getByTestId("legend-title")).toHaveText("Offshore wave height, Hs (ft)");
-    await expect(legend.getByTestId("legend-crests")).toContainText("Primary swell (solid)");
-    await expect(legend.getByTestId("legend-crests")).toContainText("Secondary swell (dashed)");
+    await expect(legend.getByTestId("legend-crests")).toContainText("Primary swell (white dashes)");
+    await expect(legend.getByTestId("legend-crests")).toContainText("Secondary swell (split amber dashes)");
+    await expect(legend.getByTestId("legend-crests")).toContainText("Short dashes are wave crests moving with the waves");
     await expect(legend.getByTestId("legend-scales")).toHaveText(/^Crest spacing ×[\d,]+ at the map centre; time runs 4× faster than real\.$/);
     await expect(legend.getByTestId("legend-crests")).toContainText("Stylised crests from the forecast model, not individual waves.");
     await expect(legend.getByTestId("legend-convention")).toContainText("Arrows point where the wind or waves are going.");
@@ -1068,9 +1094,9 @@ test.describe("wave crests (synthetic partitions)", () => {
   });
 });
 
-/** Wave crest checks that also run on the Pixel 7 project (no fixed viewport). */
-test.describe("wave crests on any screen (synthetic partitions)", () => {
-  test("crests of a swell from the SW run NW-SE and travel up-right (to the NE)", { tag: "@mobile" }, async ({ page }) => {
+/** Wave crest dash checks that also run on the Pixel 7 project (no fixed viewport). */
+test.describe("wave crest dashes on any screen (synthetic partitions)", () => {
+  test("dashes of a swell from the SW run NW-SE and travel up-right (to the NE)", { tag: "@mobile" }, async ({ page }) => {
     await openWithSwells(page, { primary: [2.5, 12, 225] }, "primary");
     const img = await waveImage(page);
     console.log(`orientation for a swell from 225°: ${img.orientation.toFixed(1)}° (coherence ${img.coherence.toFixed(2)})`);
@@ -1091,7 +1117,7 @@ test.describe("wave crests on any screen (synthetic partitions)", () => {
     await shot(page, "desktop-1440x900-crests-from-sw");
   });
 
-  test("crests stay off land on the dark and the street basemap (land probes)", { tag: "@mobile" }, async ({ page }) => {
+  test("dashes stay off land on the dark and the street basemap (land probes)", { tag: "@mobile" }, async ({ page }) => {
     // Uniform SYNTHETIC swell everywhere, land included: only the coastline clip keeps it off land.
     await openWithSwells(page, { primary: [3, 12, 250] }, "primary");
     const LAND = [
@@ -1134,11 +1160,11 @@ test.describe("wave crests on any screen (synthetic partitions)", () => {
     await probe("streets");
   });
 
-  test("reduced motion: still crests with arrowheads, unchanged over a second", { tag: "@mobile" }, async ({ page }) => {
+  test("reduced motion: still dashes with arrowheads, unchanged over a second", { tag: "@mobile" }, async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await openWithSwells(page, { primary: [2.5, 12, 225] }, "primary");
     await expect(wave(page)).toHaveAttribute("data-mode", "static");
-    expect(Number(await wave(page).getAttribute("data-arrows"))).toBeGreaterThan(0);
+    expect(Number(await wave(page).getAttribute("data-arrows"))).toBeGreaterThan(3); // D11 (was > 0)
     const a = await waveImage(page);
     expect(a.ink).toBeGreaterThan(0);
     expect(Math.abs(a.orientation - 45), JSON.stringify({ o: a.orientation })).toBeLessThan(8);
