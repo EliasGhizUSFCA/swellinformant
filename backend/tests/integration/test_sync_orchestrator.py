@@ -241,6 +241,37 @@ def test_a_crashed_sync_is_abandoned_and_the_next_one_completes_it(
     assert published_map_run_id(db) is not None
 
 
+def test_a_sync_that_lost_its_lease_stops(
+    db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sync stalled past SYNC_LEASE_MINUTES whose lease another runner took over stops at
+    the next stage boundary and leaves the row to the new holder."""
+    from app.services.forecasts import blend
+
+    real = blend.build_blend
+
+    def taken_over(db: Session, now: Any = None) -> Any:
+        db.execute(update(SyncRun).values(status="abandoned", holder="other:1:x"))
+        db.commit()
+        return real(db, now)
+
+    monkeypatch.setattr(blend, "build_blend", taken_over)
+    result = orchestrator.run_sync(trigger="daemon", now=NOW)
+    assert result.status == "abandoned" and result.published_at is None
+    assert [s.name for s in result.stages if s.detail.get("reason") != "lease lost"] == [
+        "spots",
+        "ensemble",
+        "map",
+        "blend",
+    ]
+    db.expire_all()
+    row = db.get(SyncRun, result.sync_run_id)
+    assert row is not None and row.status == "abandoned" and row.holder == "other:1:x"
+    log = db.scalar(select(BackgroundJobLog).where(BackgroundJobLog.job_name == "sync.run"))
+    assert log is not None and log.status.value == "failed"
+    assert "lease was lost" in (log.error_message or "")
+
+
 def test_stop_ends_the_sync_after_the_current_stage(
     db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
