@@ -522,6 +522,10 @@ def test_build_probes_follows_the_settings() -> None:
             ("map", MAP, "map_fields", None),
         ]
         assert all(p.current_run is not None and p.error is None for p in live)
+        # The checks use a short HTTP timeout (a hanging host must not hold the daemon).
+        clients = [p.close.__self__ for p in live if p.close is not None]  # type: ignore[attr-defined]
+        assert len(clients) == 4
+        assert {c.timeout.connect for c in clients} == {detect.PROBE_TIMEOUT_SECONDS}
     finally:
         for p in live:
             if p.close:

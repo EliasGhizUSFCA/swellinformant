@@ -66,6 +66,10 @@ ENSEMBLE_PROVIDER = "gefs"
 ANCHOR_FAMILY = "ncep_gfs"
 USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
 DETAIL_MAX_CHARS = 300
+# HTTP timeout of the metadata requests of a check (seconds; FORECAST_HTTP_TIMEOUT_SECONDS
+# when lower): a hanging host must not hold the daemon's loop, and its kick polls, for
+# minutes. A timed-out component is "unknown" and is checked again at the next check.
+PROBE_TIMEOUT_SECONDS = 10.0
 # A model cycle inside a run key: every run key format has ":YYYYMMDDHH" stamps
 # (open_meteo "gfswave016:2026101912|gfs013:...", "noaa-gfs-fields:2026101912", ...).
 _CYCLE_STAMP = re.compile(r"(?<!\d)(\d{10})(?!\d)")
@@ -132,6 +136,8 @@ def build_probes(settings: Settings) -> list[Probe]:
     from app.services.forecasts.registry import SOURCE_CODES, build_provider
     from app.services.map_fields import map_fields_mode
 
+    timeout = min(settings.forecast_http_timeout_seconds, PROBE_TIMEOUT_SECONDS)
+    settings = settings.model_copy(update={"forecast_http_timeout_seconds": timeout})
     probes: list[Probe] = []
     for token in settings.forecast_provider_list:
         code = SOURCE_CODES.get(token, token)
