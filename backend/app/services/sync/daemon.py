@@ -17,8 +17,9 @@ sightings and attempts cached in Redis), and loops until ``stop`` is set (SIGTER
   database wake); ``DailyAt`` jobs are due by the wall clock (UTC).
 
 An idle iteration (nothing due, no kick, no periodic job) reads Redis and the providers'
-metadata only. ``stop`` ends the loop after the current stage (the sync releases its
-lease). Never imports Celery or kombu.
+metadata only, and no database connection stays open between database wakes (the pool is
+emptied after each one), so a scale-to-zero database can suspend. ``stop`` ends the loop
+after the current stage (the sync releases its lease). Never imports Celery or kombu.
 
 CPU accounting: every job logs its own ``cpu_s`` (background_job_logs); the heartbeat's
 ``cpu_s_month`` is this month's daemon CPU outside those jobs (checks, kick polls, start-up),
@@ -40,7 +41,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.database import SessionLocal, utcnow
+from app.core.database import SessionLocal, get_engine, utcnow
 from app.jobs.registry import JOB_SPECS, discover_flights_run, job_spec
 from app.jobs.runner import cpu_seconds, run_job
 from app.jobs.schedule import DailyAt, Every, JobEntry, build_schedule
@@ -197,7 +198,9 @@ class SyncDaemon:
         if init_db:
             from app.cli import init_database
 
-            logger.info("Sync daemon: init-db %s", init_database())
+            done = init_database()
+            restore_logging()
+            logger.info("Sync daemon: init-db %s", done)
         cached = state.read_known()
         with SessionLocal() as db:
             self.known = refresh_known(db, cached)  # first sightings, attempts kept
@@ -219,6 +222,7 @@ class SyncDaemon:
         if previous is not None and same_month and previous.cpu_s_month is not None:
             carry = previous.cpu_s_month
         self.cpu = CpuMeter((now_wall.year, now_wall.month), carry=carry)
+        release_connections()
 
     # ---------------------------------------------------------------- one iteration
     def step(self) -> float:
@@ -258,11 +262,13 @@ class SyncDaemon:
         try:
             result = run_sync(trigger="daemon", plan=plan, stop=self.stop)
         except SyncBusy as exc:
+            release_connections()
             self._heartbeat(plan, f"busy: {exc}")
             return plan
         finally:
             self.cpu.jobs += cpu_seconds() - cpu0
         remember(self.known, result)
+        release_connections()
         self._heartbeat(plan, f"sync {result.sync_run_id} {result.status}")
         return plan
 
@@ -327,6 +333,7 @@ class SyncDaemon:
             match_ids = None if state.ALL_MATCHES in ids else ids
             if match_ids is not None or "flights.discover" not in ran:
                 self._chain("flights.discover", discover_flights_run(match_ids))
+        release_connections()
         return kicks
 
     def run_periodic(self) -> list[str]:
@@ -340,8 +347,32 @@ class SyncDaemon:
             self._run(entry.task, job_spec(entry.task).run, chain=False)
             names.append(entry.task)
         if names:
+            release_connections()
             logger.info("Periodic jobs: %s", ", ".join(names))
         return names
+
+
+def restore_logging() -> None:
+    """Back to the application's logging after a migration: Alembic's ``fileConfig``
+    (alembic/env.py) replaces the root handlers, and with them the redaction filter, and
+    sets the root level to WARNING."""
+    from app.core.logging import configure_logging
+
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        if not getattr(handler, "_swell", False):
+            root.removeHandler(handler)
+    configure_logging()
+
+
+def release_connections() -> None:
+    """Close the pool's idle connections: between two database wakes the daemon holds no
+    connection open (a pooled connection kept open could keep a scale-to-zero database
+    awake)."""
+    try:
+        get_engine().dispose()
+    except Exception:  # never fails the daemon
+        logger.debug("closing idle database connections failed", exc_info=True)
 
 
 def _install_signals(stop: threading.Event) -> Callable[[], None]:
@@ -387,6 +418,7 @@ def run_daemon(
                 break
             except Exception:
                 logger.exception("Sync daemon start failed")
+                release_connections()
                 if once:
                     return 1
                 if stop.wait(START_RETRY_SECONDS):
@@ -403,6 +435,7 @@ def run_daemon(
                 wait = daemon.step()
             except Exception:
                 logger.exception("Sync daemon iteration failed")
+                release_connections()
                 code, wait = 1, ERROR_WAIT_SECONDS
             if once:
                 return code

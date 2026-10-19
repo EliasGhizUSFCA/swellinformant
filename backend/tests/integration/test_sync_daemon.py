@@ -69,6 +69,14 @@ def test_once_initialises_consumes_kicks_writes_the_heartbeat_and_syncs(
     assert state.request_kick("flights.discover", ids)
 
     assert run_daemon(once=True, init_db=True) == 0
+    # Alembic's logging setup did not replace the application's (redaction filter, level).
+    import logging
+
+    from app.core.logging import RedactingFilter
+
+    root = logging.getLogger()
+    assert root.handlers and all(getattr(h, "_swell", False) for h in root.handlers)
+    assert any(isinstance(f, RedactingFilter) for h in root.handlers for f in h.filters)
 
     db.expire_all()
     # init-db: migrated (already at head), seeded, tide catalog loaded.
@@ -123,6 +131,7 @@ def test_an_idle_check_makes_no_database_query(
     assert calls == ["check"]  # the check ran (provider metadata only)
     assert daemon.last_plan is not None and not daemon.last_plan.due
     assert counter.statements == [] and counter.checkouts == 0
+    assert get_engine().pool.checkedin() == 0  # start() left no idle connection open
     beat = state.read_heartbeat()
     assert beat is not None and not beat.due and beat.note is None
     # Next: the kick poll (SYNC_DAEMON_POLL_SECONDS), well before the next check.
@@ -147,6 +156,8 @@ def test_kicks_wake_the_database_and_idle_polls_do_not(db: Session, published: N
         remove()
     assert counter.total > 0
     assert job_names(db)[:1] == ["matching.match"]
+    # After the wake no pooled connection stays open (a scale-to-zero database can sleep).
+    assert get_engine().pool.checkedin() == 0
 
 
 def test_periodic_jobs_run_in_one_batch_from_in_memory_timers(

@@ -9,6 +9,7 @@ by design). ``NOW`` is the time the syncs of these tests run at.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -82,11 +83,13 @@ def count_queries(engine: Engine) -> tuple[QueryCounter, Callable[[], None]]:
     def on_checkout(*_args: Any) -> None:
         counter.checkouts += 1
 
+    pool = engine.pool  # the daemon's engine.dispose() swaps the pool; events carry over
     event.listen(engine, "before_cursor_execute", on_execute)
-    event.listen(engine.pool, "checkout", on_checkout)
+    event.listen(pool, "checkout", on_checkout)
 
     def remove() -> None:
         event.remove(engine, "before_cursor_execute", on_execute)
-        event.remove(engine.pool, "checkout", on_checkout)
+        with contextlib.suppress(Exception):
+            event.remove(pool, "checkout", on_checkout)
 
     return counter, remove
