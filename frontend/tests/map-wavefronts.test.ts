@@ -146,12 +146,15 @@ describe("systems", () => {
       byColour.set(rgbOf(l), [...(byColour.get(rgbOf(l)) ?? []), len]);
     }
     const max = (c: string) => Math.max(...byColour.get(c)!);
-    // primary: one solid white segment per dash; secondary: amber, split into two pieces with
-    // a gap; wind sea: short cyan dashes.
+    // primary: one solid white segment per dash; secondary: amber, a long dash split into two
+    // pieces with a gap; wind sea: short cyan dashes.
     expect(max("255, 255, 255")).toBeCloseTo(9.5, 6); // 5 + 1.5 x 3 m
-    expect(max("255, 213, 154")).toBeLessThan(0.5 * 0.85 * 7.25); // each half is less than half a dash
+    expect(max("255, 213, 154")).toBeLessThan(0.5 * 1.4 * 7.25); // each piece is less than half the dash
     expect(max("184, 240, 255")).toBeCloseTo(0.55 * 7.25, 6);
     expect(byColour.size).toBe(3);
+    // Twice as many secondary core segments as dashes drawn of it (each split in two).
+    const sec = cores(lines).filter((l) => rgbOf(l) === "255, 213, 154");
+    expect(sec.length % 2).toBe(0);
   });
 
   it("gives more ink to a higher sea", () => {

@@ -144,10 +144,15 @@ describe("height and drawing styles", () => {
     // The stated formulas and their limits (docs/map-rendering.md section 4.6).
     expect([dashLength(0, "primary"), dashLength(2, "primary"), dashLength(4, "primary"), dashLength(10, "primary")]).toEqual([6, 8, 11, 14]);
     expect([dashWidth(0), dashWidth(2), dashWidth(10)]).toEqual([1.8, 2.4, 3.4]);
-    expect([dashAlpha(0), dashAlpha(2), dashAlpha(10)]).toEqual([0.55, 0.65, 0.85]);
-    // Shorter dashes for the secondary swell and the wind sea (shape, not colour alone).
-    expect(dashLength(4, "secondary")).toBeCloseTo(0.85 * dashLength(4, "primary"), 10);
+    expect(dashAlpha(0)).toBe(0.5);
+    expect(dashAlpha(2)).toBeCloseTo(0.62, 12);
+    expect(dashAlpha(10)).toBe(0.85);
+    // A long split dash for the secondary swell, a short thin one for the wind sea (shape, not colour alone).
+    expect(dashLength(4, "secondary")).toBeCloseTo(1.4 * dashLength(4, "primary"), 10);
     expect(dashLength(4, "windsea")).toBeCloseTo(0.55 * dashLength(4, "primary"), 10);
+    expect(dashWidth(4, "secondary")).toBeCloseTo(0.8 * dashWidth(4), 10);
+    expect(dashWidth(4, "windsea")).toBeCloseTo(0.7 * dashWidth(4), 10);
+    expect(dashWidth(4, "combined")).toBe(dashWidth(4));
     expect(drawnHeight(0.1)).toBe(false);
     expect(drawnHeight(0.19)).toBe(false);
     expect(drawnHeight(0.2)).toBe(true);
@@ -165,7 +170,7 @@ describe("height and drawing styles", () => {
   });
 
   it("keeps the same density at every zoom, with a budget per frame", () => {
-    expect(DASH_CELL_PX).toEqual({ primary: 18, combined: 18, secondary: 24, windsea: 21 });
+    expect(DASH_CELL_PX).toEqual({ primary: 18, combined: 18, secondary: 18, windsea: 20 });
     expect(maxDashes(1440)).toBe(MAX_DASHES);
     expect(maxDashes(412)).toBe(PHONE_MAX_DASHES);
     expect([MAX_DASHES, PHONE_MAX_DASHES]).toEqual([4000, 1500]);
@@ -174,12 +179,13 @@ describe("height and drawing styles", () => {
   it("tells the systems apart by dash shape and colour, never colour alone", () => {
     const styles = WAVE_SYSTEMS.map((s) => FAMILY_STYLES[s]);
     const partitions = (["primary", "secondary", "windsea"] as const).map((s) => FAMILY_STYLES[s]);
-    // Shape: solid, split (a gap of 0.3 of the length) and short dashes.
+    // Shape: solid, long split (a gap of 0.2 of the length) and short dashes.
     expect(new Set(partitions.map((s) => `${s.lengthFactor}/${s.gap}`)).size).toBe(3);
     expect(new Set(partitions.map((s) => s.color)).size).toBe(3);
-    expect(FAMILY_STYLES.primary).toMatchObject({ gap: 0, lengthFactor: 1, color: "#ffffff" });
-    expect(FAMILY_STYLES.secondary).toMatchObject({ gap: 0.3, lengthFactor: 0.85, color: "#ffd59a" });
-    expect(FAMILY_STYLES.windsea).toMatchObject({ gap: 0, lengthFactor: 0.55, color: "#b8f0ff" });
+    expect(FAMILY_STYLES.primary).toMatchObject({ gap: 0, lengthFactor: 1, widthFactor: 1, color: "#ffffff" });
+    expect(FAMILY_STYLES.secondary).toMatchObject({ gap: 0.2, lengthFactor: 1.4, widthFactor: 0.8, color: "#ffd59a" });
+    expect(FAMILY_STYLES.windsea).toMatchObject({ gap: 0, lengthFactor: 0.55, widthFactor: 0.7, color: "#b8f0ff" });
+    expect(FAMILY_STYLES.combined).toMatchObject({ gap: 0, lengthFactor: 1, widthFactor: 1, color: "#ffffff" });
     expect(new Set(styles.map((s) => s.label)).size).toBe(4);
     expect(FAMILY_STYLES.combined.label).not.toMatch(/primary/i);
   });

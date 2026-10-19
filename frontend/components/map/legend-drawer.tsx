@@ -32,8 +32,9 @@ export function markerLegend(basemap: MapSettings["basemap"]): Array<{ label: st
  */
 export function CrestSwatch({ system, className }: { system: WaveSystem; className?: string }) {
   const s = FAMILY_STYLES[system];
+  const core = 2 * s.widthFactor;
   const count = s.lengthFactor < 0.7 ? 3 : 2;
-  const length = 10 * s.lengthFactor;
+  const length = Math.min(11, 8 * s.lengthFactor);
   const step = 26 / count;
   const pieces: Array<[number, number]> = [];
   for (let i = 0; i < count; i++) {
@@ -41,7 +42,7 @@ export function CrestSwatch({ system, className }: { system: WaveSystem; classNa
     const b = a + length;
     if (s.gap > 0) {
       const mid = (a + b) / 2;
-      const g = (s.gap * length) / 2 + 1; // the core's gap between its round caps (core width 2)
+      const g = (s.gap * length) / 2 + core / 2; // the core's gap between its round caps
       pieces.push([a, mid - g], [mid + g, b]);
     } else {
       pieces.push([a, b]);
@@ -50,8 +51,8 @@ export function CrestSwatch({ system, className }: { system: WaveSystem; classNa
   return (
     <svg viewBox="0 0 28 8" className={cn("h-2 w-7 shrink-0", className)} aria-hidden data-swatch={system}>
       {[
-        { width: 4.8, opacity: 0.3 },
-        { width: 2, opacity: 0.95 },
+        { width: 2.4 * core, opacity: 0.3 },
+        { width: core, opacity: 0.95 },
       ].map((pass) =>
         pieces.map(([a, b], i) => (
           <line key={`${pass.width}-${i}`} x1={a} y1="4" x2={b} y2="4" stroke={s.color} strokeOpacity={pass.opacity} strokeWidth={pass.width} strokeLinecap="round" />

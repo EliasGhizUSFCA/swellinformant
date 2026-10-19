@@ -150,9 +150,9 @@ export const DASH_MAX_PX = 14;
 export const DASH_WIDTH_BASE_PX = 1.8;
 export const DASH_WIDTH_PX_PER_M = 0.3;
 export const DASH_WIDTH_MAX_PX = 3.4;
-/** Dash opacity: 0.55 + 0.05 per metre, 0.55..0.85. */
-export const DASH_ALPHA_BASE = 0.55;
-export const DASH_ALPHA_PER_M = 0.05;
+/** Dash opacity: 0.50 + 0.06 per metre, 0.50..0.85. */
+export const DASH_ALPHA_BASE = 0.5;
+export const DASH_ALPHA_PER_M = 0.06;
 export const DASH_ALPHA_MAX = 0.85;
 /**
  * The strokes of one dash, bottom to top, relative to its core width and opacity: two soft
@@ -170,7 +170,7 @@ export const DASH_LIFE_PASSAGES = 3;
 export const DASH_FADE_IN = 0.2;
 export const DASH_FADE_OUT_FROM = 0.7;
 /** Dash cells, px (one dash per cell of a grid fixed in world pixels: the same density at every zoom). */
-export const DASH_CELL_PX = { primary: 18, combined: 18, secondary: 24, windsea: 21 } as const satisfies Record<string, number>;
+export const DASH_CELL_PX = { primary: 18, combined: 18, secondary: 18, windsea: 20 } as const satisfies Record<string, number>;
 /** Most dashes per frame: desktop, and phones (views narrower than PHONE_WIDTH_PX). */
 export const MAX_DASHES = 4000;
 export const PHONE_MAX_DASHES = 1500;
@@ -181,17 +181,17 @@ export const ARROW_PX = 5;
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 
-/** Dash length, px: clamp(5 + 1.5 Hs, 6, 14) x the system's length factor (1, 0.85 secondary, 0.55 wind sea). */
+/** Dash length, px: clamp(5 + 1.5 Hs, 6, 14) x the system's length factor (1, 1.4 secondary, 0.55 wind sea). */
 export function dashLength(hsM: number, system: WaveSystem): number {
   return clamp(DASH_BASE_PX + DASH_PX_PER_M * hsM, DASH_MIN_PX, DASH_MAX_PX) * FAMILY_STYLES[system].lengthFactor;
 }
 
-/** Dash core width, px: clamp(1.8 + 0.3 Hs, 1.8, 3.4). */
-export function dashWidth(hsM: number): number {
-  return clamp(DASH_WIDTH_BASE_PX + DASH_WIDTH_PX_PER_M * hsM, DASH_WIDTH_BASE_PX, DASH_WIDTH_MAX_PX);
+/** Dash core width, px: clamp(1.8 + 0.3 Hs, 1.8, 3.4) x the system's width factor (0.8 secondary, 0.7 wind sea). */
+export function dashWidth(hsM: number, system: WaveSystem = "primary"): number {
+  return clamp(DASH_WIDTH_BASE_PX + DASH_WIDTH_PX_PER_M * hsM, DASH_WIDTH_BASE_PX, DASH_WIDTH_MAX_PX) * FAMILY_STYLES[system].widthFactor;
 }
 
-/** Dash opacity at full life: clamp(0.55 + 0.05 Hs, 0.55, 0.85). */
+/** Dash opacity at full life: clamp(0.50 + 0.06 Hs, 0.50, 0.85). */
 export function dashAlpha(hsM: number): number {
   return clamp(DASH_ALPHA_BASE + DASH_ALPHA_PER_M * hsM, DASH_ALPHA_BASE, DASH_ALPHA_MAX);
 }
@@ -226,6 +226,8 @@ export interface FamilyStyle {
   color: string;
   /** Dash length relative to dashLength's base (the short wind-sea dashes: 0.55). */
   lengthFactor: number;
+  /** Core width relative to dashWidth's base (thinner dashes for the secondary swell and the wind sea). */
+  widthFactor: number;
   /** Gap in the middle of each dash, share of its length (0: one solid dash). */
   gap: number;
   /** Dash cell size, px (DASH_CELL_PX). */
@@ -236,16 +238,19 @@ export interface FamilyStyle {
 
 /**
  * Per-system dash styles, told apart by SHAPE and colour (never colour alone): the primary
- * swell is a solid white dash, the secondary swell a split dash (a gap of 0.3 of its length)
- * in warm amber, the wind sea a short dash in pale cyan. The combined sea (the default, and
- * what is drawn when the run has no partitions) is a solid white dash too and is never called
- * "primary swell"; it is never drawn together with the partitions.
+ * swell is a solid white dash, the secondary swell a long split dash (1.4 x the length, a gap
+ * of 0.2 of it in the middle, 0.8 x the width) in warm amber, the wind sea a short thin dash
+ * (0.55 x the length, 0.7 x the width) in pale cyan. The split and short dashes stay at least
+ * twice as long as wide, so their orientation still reads (D11 proposed 0.85 x and a 0.3 gap
+ * for the secondary, whose halves came out as round dots at 1-2 m). The combined sea (the
+ * default, and what is drawn when the run has no partitions) is a solid white dash too and is
+ * never called "primary swell"; it is never drawn together with the partitions.
  */
 export const FAMILY_STYLES: Record<WaveSystem, FamilyStyle> = {
-  primary: { label: "Primary swell", short: "Primary", color: "#ffffff", lengthFactor: 1, gap: 0, cellPx: DASH_CELL_PX.primary, look: "white dashes" },
-  secondary: { label: "Secondary swell", short: "Secondary", color: "#ffd59a", lengthFactor: 0.85, gap: 0.3, cellPx: DASH_CELL_PX.secondary, look: "split amber dashes" },
-  windsea: { label: "Wind sea", short: "Wind sea", color: "#b8f0ff", lengthFactor: 0.55, gap: 0, cellPx: DASH_CELL_PX.windsea, look: "short cyan dashes" },
-  combined: { label: "Combined sea (peak)", short: "Combined", color: "#ffffff", lengthFactor: 1, gap: 0, cellPx: DASH_CELL_PX.combined, look: "white dashes" },
+  primary: { label: "Primary swell", short: "Primary", color: "#ffffff", lengthFactor: 1, widthFactor: 1, gap: 0, cellPx: DASH_CELL_PX.primary, look: "white dashes" },
+  secondary: { label: "Secondary swell", short: "Secondary", color: "#ffd59a", lengthFactor: 1.4, widthFactor: 0.8, gap: 0.2, cellPx: DASH_CELL_PX.secondary, look: "split amber dashes" },
+  windsea: { label: "Wind sea", short: "Wind sea", color: "#b8f0ff", lengthFactor: 0.55, widthFactor: 0.7, gap: 0, cellPx: DASH_CELL_PX.windsea, look: "short cyan dashes" },
+  combined: { label: "Combined sea (peak)", short: "Combined", color: "#ffffff", lengthFactor: 1, widthFactor: 1, gap: 0, cellPx: DASH_CELL_PX.combined, look: "white dashes" },
 };
 
 /** Model variables of each system: significant height (m), period (s), direction FROM (deg). */

@@ -69,7 +69,7 @@ export const FRAME_INTERVAL_MS = 1000 / 30;
 export const BUDGET_SHARE = 0.6;
 /** Opacity levels and core widths the strokes are batched into (the halo uses the same levels x its factors). */
 export const DASH_ALPHA_LEVELS = [0.08, 0.19, 0.3, 0.41, 0.52, 0.63, 0.74, 0.85];
-export const DASH_WIDTH_LEVELS = [1.8, 2.2, 2.6, 3, 3.4];
+export const DASH_WIDTH_LEVELS = [1.2, 1.75, 2.3, 2.85, 3.4];
 /** Dashes fainter than this (early or late in their life) are not drawn. */
 const MIN_ALPHA = 0.04;
 /** A dash whose clock is this many lives behind is placed afresh (after a long pause elsewhere). */
@@ -560,7 +560,7 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       const ty = px;
       const half = dashLength(hs, f.system) / 2;
       if (!nodesValid(l, f, cx - tx * half, cy - ty * half) || !nodesValid(l, f, cx + tx * half, cy + ty * half)) continue;
-      const width = dashWidth(hs);
+      const width = dashWidth(hs, f.system);
       const wl = nearestLevel(DASH_WIDTH_LEVELS, width);
       const al = nearestLevel(DASH_ALPHA_LEVELS, alpha);
       if (style.gap > 0) {

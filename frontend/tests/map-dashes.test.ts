@@ -139,6 +139,21 @@ describe("size and opacity follow the height", () => {
     }
   });
 
+  it("keeps every dash shape at least twice as long as wide, so its orientation reads", () => {
+    // Visible length of a round-capped stroke: its segment plus the core width.
+    for (const hs of [0.5, 1, 2, 4, 8]) {
+      for (const system of ["primary", "secondary", "windsea", "combined"] as const) {
+        const { lines } = draw(VIEW, [family(system, hs, 12, 270)], 3);
+        const segs = lines.filter((l) => l.pts.length === 2 && DASH_WIDTH_LEVELS.includes(l.width));
+        expect(segs.length, `${system} at ${hs} m`).toBeGreaterThan(50);
+        for (const l of segs) {
+          const len = Math.hypot(l.pts[1]![0] - l.pts[0]![0], l.pts[1]![1] - l.pts[0]![1]);
+          expect((len + l.width) / l.width, `${system} at ${hs} m`).toBeGreaterThanOrEqual(2);
+        }
+      }
+    }
+  });
+
   it("fades each dash in and out over its life (no dash pops in at full opacity)", () => {
     // One cell followed over its whole life: the opacity of its dash rises, holds and falls.
     const state = new DashState();
@@ -273,22 +288,47 @@ describe("world-anchored, time-based and frame-rate independent", () => {
 
 describe("budget", () => {
   it("never draws more dashes than the budget, cuts steadily, and gives the top system its share", () => {
-    const fam = [family("windsea", 1.5, 5, 300), family("secondary", 2, 9, 200), family("primary", 4, 12, 250)];
+    const spec = [
+      ["windsea", 1.5, 5, 300],
+      ["secondary", 2, 9, 200],
+      ["primary", 4, 12, 250],
+    ] as const;
+    const fam = spec.map(([system, hs, tp, dir]) => family(system, hs, tp, dir));
     const view = viewAt(4, -30, -30);
     const l = buildLattice(view, fam);
     const state = new DashState();
+    // Where each dash of a frame should be one frame (1/30 s) later: moved along its system's
+    // travel vector at its crest speed (uniform SYNTHETIC seas). Systems by dash colour.
+    const motion = new Map<string, [number, number]>();
+    const rgb = { windsea: "184, 240, 255", secondary: "255, 213, 154", primary: "255, 255, 255" } as const;
+    for (const [system, , tp, dir] of spec) {
+      const v = crestSpeedPxPerS(tp, crestSpacingPx(tp)) / 30;
+      const [px, py] = propagation(dir)!;
+      motion.set(rgb[system], [px * v, py * v]);
+    }
+    const key = (x: number, y: number) => `${Math.round(x * 100)},${Math.round(y * 100)}`;
+    let prev: Dash[] = [];
     const counts: number[] = [];
     for (let k = 0; k < 90; k++) {
       const r = recorder();
       const st = drawDashes(r.ctx, view, l, { t: k / 30, still: false, budget: 1000, state });
       expect(st.crests).toBeLessThanOrEqual(1000);
-      if (k >= 45) counts.push(st.crests);
+      const now = dashesOf(r.lines);
+      if (k >= 45) {
+        counts.push(st.crests);
+        // Steady: nearly every dash of this frame is a dash of the last frame moved on (the
+        // rest were born or reached the end of their life meanwhile), so no cell flickers in
+        // and out at the margin of the cut.
+        const moved = new Set(prev.map((d) => key(d.x + motion.get(d.rgb)![0], d.y + motion.get(d.rgb)![1])));
+        const near = (d: Dash) => [-1, 0, 1].some((ox) => [-1, 0, 1].some((oy) => moved.has(`${Math.round(d.x * 100) + ox},${Math.round(d.y * 100) + oy}`)));
+        expect(now.filter(near).length / now.length).toBeGreaterThan(0.95);
+      }
+      prev = now;
       if (k === 89) {
-        const white = dashesOf(r.lines).filter((d) => d.rgb === "255, 255, 255").length; // primary
+        const white = now.filter((d) => d.rgb === rgb.primary).length; // primary
         expect(white).toBeGreaterThanOrEqual(0.55 * 1000);
       }
     }
-    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(25);
     expect(Math.min(...counts)).toBeGreaterThan(900);
   });
 
