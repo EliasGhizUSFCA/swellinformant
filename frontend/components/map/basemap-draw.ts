@@ -1,10 +1,11 @@
 /**
- * Draws the dark vector basemap layers on one canvas, bottom to top: land (opaque, so it
- * also masks the colour field and the wave crests at coastlines; translucent on the Wind
- * layer, where the wind over land matters), country borders, isobars with value labels, then
- * country and city labels with greedy collision avoidance. Geometry is pre-projected to
- * Mercator units, so a redraw is a scale-and-offset per vertex per visible world copy (the
- * Pacific view needs the copies either side of the antimeridian).
+ * Draws the dark vector basemap layers on one canvas, bottom to top: grey land (opaque, so
+ * it also masks the colour field and the wave dashes at coastlines; translucent on the Wind
+ * layer, where the wind over land matters) with the coastline drawn along its edge, country
+ * borders, isobars with value labels, then country and city labels with greedy collision
+ * avoidance. Geometry is pre-projected to Mercator units, so a redraw is a scale-and-offset
+ * per vertex per visible world copy (the Pacific view needs the copies either side of the
+ * antimeridian).
  *
  * Rings are not closed with closePath(): fill() closes every subpath itself, and the Natural
  * Earth rings repeat their first point, so the coastline stroke is unchanged. closePath()
@@ -39,10 +40,14 @@ export interface BasemapDrawOptions {
   translucentLand?: boolean;
 }
 
-export const LAND_COLOR = "#2b2b2b";
+/** Land on the dark basemap: a neutral grey, lighter than the deepest ocean colour (#0c1846). */
+export const LAND_COLOR = "#3a3a3c";
 /** Land opacity with `translucentLand`: the wind colour and particles show through, dimmed. */
 export const LAND_ALPHA = 0.55;
-const TRANSLUCENT_LAND = `rgba(43, 43, 43, ${LAND_ALPHA})`;
+const TRANSLUCENT_LAND = `rgba(58, 58, 60, ${LAND_ALPHA})`;
+/** The coastline drawn along the land's edge on the dark basemap. */
+export const COASTLINE_COLOR = "rgba(255, 255, 255, 0.35)";
+export const COASTLINE_WIDTH_PX = 0.8;
 const LABEL_FONT = '500 12px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
 const CITY_FONT = '400 11px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
 const ISOBAR_FONT = '600 10px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
@@ -109,8 +114,8 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
     tracePaths(ctx, g.land, v);
     ctx.fillStyle = o.translucentLand ? TRANSLUCENT_LAND : LAND_COLOR;
     ctx.fill("evenodd");
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.07)";
-    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = COASTLINE_COLOR;
+    ctx.lineWidth = COASTLINE_WIDTH_PX;
     ctx.stroke();
     ctx.beginPath();
     tracePaths(ctx, g.borders, v);
