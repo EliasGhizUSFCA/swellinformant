@@ -3,7 +3,7 @@
 python -m app.cli init-db          # alembic upgrade head + seed reference data + tide catalog
 python -m app.cli migrate          # alembic upgrade head
 python -m app.cli migrate --on-build   # the same, only where MIGRATE_ON_BUILD and VERCEL_ENV
-                                       # allow it (a build step; not implemented yet)
+                                       # allow it (a build step); prints "skipped" otherwise
 python -m app.cli seed             # (re)load airports and surf spots from data/surf_spots, then
                                    # the tide station catalog (data/tide_stations.json)
 python -m app.cli pipeline         # run jobs A→G once, synchronously
@@ -46,6 +46,62 @@ def migrate() -> None:
     command.upgrade(cfg, "head")
 
 
+def seed_database(data_dir: str | None = None) -> dict[str, Any]:
+    """Reference data (airports, surf spots) and then the tide station catalog."""
+    from app.services.seed import seed_reference_data
+    from app.services.tides.catalog import seed_tide_catalog
+
+    with SessionLocal() as db:
+        seeded = seed_reference_data(db, data_dir)
+        # After the spots: the catalog links stations and model points to seeded spots.
+        # Here, not in seed_reference_data: the test session seeds reference data once and
+        # truncates the tide tables after each test (docs/tides.md).
+        tides = seed_tide_catalog(db)
+        db.commit()
+    return {"seed": seeded, "tide_catalog": tides}
+
+
+def init_database(data_dir: str | None = None) -> dict[str, Any]:
+    """``init-db``: migrate, seed and load the tide catalog (idempotent; the sync daemon
+    runs it at start with SYNC_DAEMON_INIT_DB)."""
+    migrate()
+    return {"migrated": True, **seed_database(data_dir)}
+
+
+def migrate_on_build() -> tuple[int, dict[str, Any]]:
+    """``migrate --on-build``: migrate when MIGRATE_ON_BUILD allows it for this build.
+
+    off: never. production: only when VERCEL_ENV=production (preview builds and Neon
+    preview branches are left alone). all: every build. Migrations use the direct
+    connection (migration_database_url, set by alembic/env.py). Returns (exit code, report).
+    """
+    import os
+
+    from app.core.logging import redact
+
+    setting = get_settings().migrate_on_build
+    vercel_env = os.environ.get("VERCEL_ENV") or None
+    report: dict[str, Any] = {
+        "command": "migrate --on-build",
+        "migrate_on_build": setting,
+        "vercel_env": vercel_env,
+    }
+    if setting == "off":
+        return 0, {**report, "status": "skipped", "reason": "MIGRATE_ON_BUILD=off"}
+    if setting == "production" and vercel_env != "production":
+        reason = (
+            f"VERCEL_ENV={vercel_env or 'unset'}: MIGRATE_ON_BUILD=production migrates "
+            "production builds only"
+        )
+        return 0, {**report, "status": "skipped", "reason": reason}
+    try:
+        migrate()
+    except Exception as exc:  # the build fails rather than deploying against an old schema
+        error = redact(f"{type(exc).__name__}: {exc}")[:2000]
+        return 1, {**report, "status": "failed", "error": error}
+    return 0, {**report, "status": "migrated"}
+
+
 # Each module exposes ``register(subparsers) -> None`` (adding one parser named after the
 # group) and ``run(args) -> int``.
 PLUGIN_GROUPS = {
@@ -59,7 +115,7 @@ PLUGIN_GROUPS = {
     # The synced data pipeline: sync check / run / daemon / publish / status.
     "sync": "app.services.sync.cli",
 }
-# Exit code of a command whose implementation has not landed yet.
+# Exit code of a command whose implementation has not landed yet (no command uses it now).
 EXIT_NOT_IMPLEMENTED = 4
 # Top-level packages of the optional extras (worker: Celery; sync: the data libraries). A
 # command group that needs one of them is left out of an install without that extra (the
@@ -143,32 +199,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"'{args.cmd}' needs the {dropped[args.cmd]!r} package", file=sys.stderr)
         return 1
     if args.cmd == "migrate" and args.on_build:
-        print(
-            json.dumps(
-                {
-                    "status": "not_implemented",
-                    "command": "migrate --on-build",
-                    "detail": "not implemented yet: nothing was migrated",
-                }
-            )
-        )
-        return EXIT_NOT_IMPLEMENTED
+        code, report = migrate_on_build()
+        print(json.dumps(report))
+        return code
 
     if args.cmd in ("migrate", "init-db"):
         migrate()
         print("database migrated")
     if args.cmd in ("seed", "init-db"):
-        from app.services.seed import seed_reference_data
-        from app.services.tides.catalog import seed_tide_catalog
-
-        with SessionLocal() as db:
-            print(json.dumps(seed_reference_data(db, args.data_dir)))
-            # After the spots: the catalog links stations and model points to seeded spots.
-            # Here, not in seed_reference_data: the test session seeds reference data once and
-            # truncates the tide tables after each test (docs/tides.md).
-            tides = seed_tide_catalog(db)
-            db.commit()
-            print(json.dumps({"tide_catalog": tides}, default=str))
+        seeded = seed_database(args.data_dir)
+        print(json.dumps(seeded["seed"]))
+        print(json.dumps({"tide_catalog": seeded["tide_catalog"]}, default=str))
     if args.cmd == "pipeline":
         from app.services.pipeline import run_pipeline
 
