@@ -48,6 +48,10 @@ describe("map legend", () => {
     const swatch = (system: string) => screen.getByTestId("legend-crests").querySelector(`svg[data-swatch="${system}"]`)!;
     expect(swatch("primary").querySelectorAll("line").length).toBe(2 * 2); // halo + core per dash
     expect(swatch("secondary").querySelectorAll("line").length).toBe(4 * 2); // each dash split in two
+    // Behind each primary dash its fading trail in the map's two steps; the secondary's split dashes have none.
+    expect(swatch("primary").querySelectorAll("rect[data-trail]").length).toBe(2 * 2);
+    expect(swatch("secondary").querySelectorAll("rect[data-trail]").length).toBe(0);
+    expect(screen.getByTestId("legend-crests").textContent).toContain("the faint trail behind a white or cyan dash is where it just was");
     expect(screen.getByTestId("legend-crests").textContent).toContain("Short dashes are wave crests moving with the waves");
     expect(screen.getByTestId("legend-scales").textContent).toBe("Crest spacing ×4,700 at the map centre; time runs 4× faster than real.");
     expect(screen.getByTestId("legend-crests").textContent).toContain("Stylised crests from the forecast model, not individual waves.");

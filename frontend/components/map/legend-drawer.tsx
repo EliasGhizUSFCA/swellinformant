@@ -11,7 +11,7 @@ import { cssGradient, type LayerScale } from "@/lib/map-colors";
 import type { FieldIndex } from "@/lib/map-fields";
 import { layerDef, layerUnit, legendTicks, type DisplayUnits } from "@/lib/map-layers";
 import type { MapSettings } from "@/lib/map-settings";
-import { FAMILY_STYLES, scaleStatement, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
+import { DASH_PASSES, FAMILY_STYLES, scaleStatement, TRAIL_STEPS, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
 import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_COLORS_DARK, QUALITY_LABELS } from "@/lib/quality";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
@@ -26,9 +26,12 @@ export function markerLegend(basemap: MapSettings["basemap"]): Array<{ label: st
 }
 
 /**
- * A few crest dashes in a wave system's colour and shape, as the map draws them (a soft halo
- * under a round-capped core): two solid dashes for the primary swell and the combined sea,
- * two split dashes for the secondary swell, three short dashes for the wind sea.
+ * A few crest dashes in a wave system's colour and shape, as the map draws them (section 4.6
+ * of docs/map-rendering.md): a soft halo under a round-capped core and, for the systems that
+ * have one, the trail of where the dash just was behind it (the whole band, then its front
+ * half). Two solid dashes for the primary swell and the combined sea, two split dashes for the
+ * secondary swell (no trail), three short dashes for the wind sea. The swatch's dashes lie
+ * along it and move up (their trails hang below them).
  */
 export function CrestSwatch({ system, className }: { system: WaveSystem; className?: string }) {
   const s = FAMILY_STYLES[system];
@@ -36,10 +39,12 @@ export function CrestSwatch({ system, className }: { system: WaveSystem; classNa
   const count = s.lengthFactor < 0.7 ? 3 : 2;
   const length = Math.min(11, 8 * s.lengthFactor);
   const step = 26 / count;
+  const dashes: Array<[number, number]> = [];
   const pieces: Array<[number, number]> = [];
   for (let i = 0; i < count; i++) {
     const a = 1 + i * step + (step - length) / 2;
     const b = a + length;
+    dashes.push([a, b]);
     if (s.gap > 0) {
       const mid = (a + b) / 2;
       const g = (s.gap * length) / 2 + core / 2; // the core's gap between its round caps
@@ -48,14 +53,29 @@ export function CrestSwatch({ system, className }: { system: WaveSystem; classNa
       pieces.push([a, b]);
     }
   }
+  const front = 2.4;
+  const trail = 8 - front;
   return (
     <svg viewBox="0 0 28 8" className={cn("h-2 w-7 shrink-0", className)} aria-hidden data-swatch={system}>
-      {[
-        { width: 2.4 * core, opacity: 0.3 },
-        { width: core, opacity: 0.95 },
-      ].map((pass) =>
+      {s.trail &&
+        TRAIL_STEPS.map((t, k) =>
+          dashes.map(([a, b], i) => (
+            <rect key={`trail-${k}-${i}`} data-trail={k} x={a - core / 2} y={front} width={b - a + core} height={trail * t.length} fill={s.color} fillOpacity={0.95 * t.alpha} />
+          )),
+        )}
+      {DASH_PASSES.map((pass) =>
         pieces.map(([a, b], i) => (
-          <line key={`${pass.width}-${i}`} x1={a} y1="4" x2={b} y2="4" stroke={s.color} strokeOpacity={pass.opacity} strokeWidth={pass.width} strokeLinecap="round" />
+          <line
+            key={`${pass.width}-${i}`}
+            x1={a}
+            y1={front}
+            x2={b}
+            y2={front}
+            stroke={s.color}
+            strokeOpacity={0.95 * pass.alpha}
+            strokeWidth={pass.width * core}
+            strokeLinecap="round"
+          />
         )),
       )}
     </svg>
@@ -169,9 +189,9 @@ export function LegendDrawer({
                 ))}
               </ul>
               <p>
-                Short dashes are wave crests moving with the waves (a swell from the SW travels NE); longer, brighter dashes are higher waves. Rows of
-                dashes are one crest spacing apart. <span data-testid="legend-scales">{scaleStatement(status.zoom, status.centreLat)}</span> Each dash
-                fades in and out over three crest passages (a display choice). Stylised crests from the forecast model, not individual waves.
+                Short dashes are wave crests moving with the waves (a swell from the SW travels NE); the faint trail behind a white or cyan dash is
+                where it just was. Longer, brighter dashes are higher waves. Rows of dashes are one crest spacing apart. <span data-testid="legend-scales">{scaleStatement(status.zoom, status.centreLat)}</span> Each dash
+                fades in and out over three crest passages; the fades and the trails are display choices. Stylised crests from the forecast model, not individual waves.
               </p>
               {crests.includes("combined") && (
                 <p className="mt-1 text-white/60">
