@@ -1,16 +1,25 @@
-"""Database engine, session factory and declarative base."""
+"""Database engine, session factory and declarative base.
+
+The engine connects to ``settings.engine_database_url``: DATABASE_URL (the pooled URL on
+Neon) unless DB_USE_UNPOOLED is set, as in the sync daemon image. Connections are checked
+before use (pre-ping) and replaced after DB_POOL_RECYCLE_SECONDS, because a pooler or a
+scaled-to-zero database closes idle connections on its side. With
+DB_PREPARED_STATEMENTS=false psycopg never prepares statements (``prepare_threshold=None``),
+which a PgBouncer in transaction mode without prepared-statement support needs.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -33,17 +42,28 @@ _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
 
 
+def connect_args(settings: Settings) -> dict[str, Any]:
+    """psycopg connection arguments: ``prepare_threshold=None`` (never prepare) when
+    DB_PREPARED_STATEMENTS is false. Alembic's env.py uses them too."""
+    return {} if settings.db_prepared_statements else {"prepare_threshold": None}
+
+
+def engine_options(settings: Settings) -> dict[str, Any]:
+    """Keyword arguments of :func:`create_engine` for the application engine."""
+    return {
+        "pool_pre_ping": True,
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_recycle": settings.db_pool_recycle_seconds,
+        "connect_args": connect_args(settings),
+    }
+
+
 def get_engine() -> Engine:
     global _engine, _SessionLocal
     if _engine is None:
         settings = get_settings()
-        _engine = create_engine(
-            settings.database_url,
-            pool_pre_ping=True,
-            pool_size=settings.db_pool_size,
-            max_overflow=settings.db_max_overflow,
-            future=True,
-        )
+        _engine = create_engine(settings.engine_database_url, **engine_options(settings))
         _SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
     return _engine
 
