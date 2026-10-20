@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query
@@ -21,8 +20,8 @@ from app.services.opportunity_views import (
     match_detail,
     match_summary,
 )
+from app.workers.dispatch import kick
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/opportunities", tags=["opportunities"])
 
 
@@ -59,12 +58,8 @@ def refresh_flights(
         raise AppError("This opportunity is no longer active.", code="inactive")
     match.flights_requested_at = utcnow()
     db.commit()
-    try:
-        from app.workers.celery_app import celery_app
-
-        celery_app.signature("flights.discover", kwargs={"match_ids": [str(match.id)]}).delay()
-    except Exception:
-        logger.warning("Could not enqueue flight refresh; the scheduled run will handle it")
+    # Never raises: if the request cannot be recorded, the scheduled run handles it.
+    kick("flights.discover", match_ids=[str(match.id)])
     return match_detail(db, match)
 
 

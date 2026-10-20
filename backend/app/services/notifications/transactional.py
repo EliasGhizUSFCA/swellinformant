@@ -1,10 +1,14 @@
 """Account emails (verification, password reset, developer test) with delivery records.
 
 ``queue_account_email`` writes an ``email_messages`` row (status QUEUED) and hands the
-message to the Celery worker; ``deliver_account_email`` (run by the worker) records what
-the provider actually did. Webhooks later move a row to DELIVERED / BOUNCED / COMPLAINED.
-The message body is passed to the worker but never stored, because it contains a
-single-use token.
+message to the job runner (app.workers.dispatch): the Celery worker under
+JOB_RUNNER=celery, an inline send with bounded retries under JOB_RUNNER=daemon.
+``deliver_account_email`` records what the provider actually did. Webhooks later move a row
+to DELIVERED / BOUNCED / COMPLAINED. The message body is passed along but never stored,
+because it contains a single-use token.
+
+Nothing here imports Celery or kombu: the API and the sync daemon send without the worker
+extra.
 """
 
 from __future__ import annotations
@@ -81,7 +85,8 @@ def deliver_account_email(
     """Send one queued account email and record the outcome.
 
     Raises TransientProviderError when a retry is still possible (``final_attempt`` False)
-    so the Celery task can reschedule; otherwise records FAILED and returns.
+    so the caller (the Celery task, or the inline retries of app.workers.dispatch) can try
+    again; otherwise records FAILED and returns.
     """
     with SessionLocal() as db:
         row = db.get(EmailMessage, uuid.UUID(str(message_id)))
