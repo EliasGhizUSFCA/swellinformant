@@ -650,8 +650,9 @@ def apply_result(known: KnownRuns, result: SyncResult, now: datetime | None = No
     """Record a sync's acquisition outcomes in ``known``.
 
     Each acquisition stage lists ``detail["components"]``: ``{source_code, run_key,
-    outcome: stored | current | failed, retry_after_s}``. A stored or current run clears
-    the source's first sighting and attempts; a failure adds an attempt. The retry waits
+    outcome: stored | current | deferred | failed, retry_after_s}``. A stored or current
+    run clears the source's first sighting and attempts; a failure adds an attempt; a
+    deferred run (not served unmixed at acquisition time) changes nothing. The retry waits
     SYNC_RETRY_MINUTES after the attempt, or longer when the provider asked for it (the
     attempt time is then moved forward by the extra wait).
     """

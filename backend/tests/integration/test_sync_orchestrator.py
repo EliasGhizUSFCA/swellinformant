@@ -329,6 +329,42 @@ def test_a_failed_component_makes_a_partial_sync_and_counts_an_attempt(
     assert plan_sync(None, now=NOW + timedelta(minutes=16), known=known).due
 
 
+def test_a_run_no_longer_served_at_acquisition_is_deferred_not_failed(
+    db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Between the check and the acquisition the provider stopped serving the run unmixed
+    (Open-Meteo switching to its next run): the component is deferred, which is no
+    failure and counts no attempt; the rest of the sync publishes."""
+    from app.services.forecasts.demo import DemoForecastProvider
+    from app.services.http import RunNotServedError
+
+    known = empty_known()
+    plan = plan_sync(db, now=NOW, known=known)
+    assert plan.due and "spots" in plan.due_kinds()
+    assert not hasattr(DemoForecastProvider, "ensure_servable")
+
+    def not_served(self: Any, run: Any, now: Any = None) -> None:
+        raise RunNotServedError("demo: the next run is being published")
+
+    monkeypatch.setattr(DemoForecastProvider, "ensure_servable", not_served, raising=False)
+    result = orchestrator.run_sync(trigger="daemon", now=NOW, plan=plan)
+    assert result.status == "success", result.as_dict()
+    spots = next(s for s in result.stages if s.name == "spots")
+    (component,) = spots.detail["components"]
+    assert component["outcome"] == "deferred"
+    assert "being published" in component["message"]
+    assert stages(result)["map"] == "success" and stages(result)["publish"] == "success"
+    assert counts(db)[0] == 0  # no spot forecast stored
+    orchestrator.remember(known, result, now=NOW)
+    assert not [k for k in known.attempts if k.startswith("demo|")]
+    db.expire_all()
+    row = db.get(SyncRun, result.sync_run_id)
+    assert row is not None and row.status == "success" and row.error_message is None
+    # "in progress" (another runner stores the same run) still counts as a failed attempt.
+    assert orchestrator._outcome("skipped", "run in progress") == "failed"
+    assert orchestrator._outcome("skipped", "fields of this cycle already stored") == "current"
+
+
 def test_tick_syncs_when_due_and_then_not(db: Session, synthetic_map: MapWorld) -> None:
     out = orchestrator.tick(trigger="celery")
     # tick plans at the real time: the synthetic map's 18Z cycle of 2026-10-10 is not the

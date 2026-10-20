@@ -93,6 +93,11 @@ DETAIL_TEXT_MAX = 300
 ALREADY_STORED = frozenset(
     {"run already ingested", "already stored", "fields of this cycle already stored"}
 )
+# ... and "another runner is storing this run": a failed attempt (retried after
+# SYNC_RETRY_MINUTES; ingestion re-acquires a run left running for STUCK_RUN_AFTER, 1 h, which
+# is longer than the lease). Any other skipped acquisition is a run the provider does not
+# serve unmixed (RunNotServedError): "deferred".
+IN_PROGRESS = frozenset({"run in progress", "in progress"})
 _STAGE_KIND: dict[StageName, ComponentKind] = {
     "spots": "spots",
     "ensemble": "ensemble",
@@ -259,10 +264,21 @@ class _Sync:
 
 
 def _outcome(status: str | None, message: str | None) -> str:
+    """stored, current, deferred or failed (see ALREADY_STORED and IN_PROGRESS).
+
+    ``deferred``: the provider stopped serving the run unmixed between the check and the
+    acquisition (Open-Meteo publishing its next run, or serving a run this source does not
+    read). That is no failure: no attempt is counted, and the next check sees the
+    component waiting ("not served yet") or offers the next run.
+    """
     if status in ("success", "partial"):
         return "stored"
-    if status == "skipped" and (message or "") in ALREADY_STORED:
-        return "current"
+    if status == "skipped":
+        text = message or ""
+        if text in ALREADY_STORED:
+            return "current"
+        if text not in IN_PROGRESS:
+            return "deferred"
     return "failed"
 
 
