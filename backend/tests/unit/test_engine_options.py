@@ -157,6 +157,58 @@ def test_alembic_uses_the_unpooled_url_with_nullpool(monkeypatch: pytest.MonkeyP
     assert seen["url"] == POOLED and seen["connect_args"] == {}
 
 
+def test_an_unpooled_url_of_another_database_is_ignored(
+    captured: list[tuple[str, dict[str, Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A process that points DATABASE_URL at a scratch database (the migration tests do,
+    by environment) while DATABASE_URL_UNPOOLED still names another database (a stale
+    variable, a pulled .env) uses DATABASE_URL for the engine and for migrations."""
+    scratch = "postgresql+psycopg://u:p@localhost:5432/swell_test_scratch_1"
+    other = "postgresql+psycopg://u:p@ep-x.us-east-1.aws.neon.tech/neondb"
+    settings = make(database_url=scratch, database_url_unpooled=other, db_use_unpooled=True)
+    assert database.unpooled_url(settings) is None
+    assert database.engine_url(settings) == scratch
+    assert database.migration_url(settings) == scratch
+    assert "'neondb' but DATABASE_URL names 'swell_test_scratch_1'" in caplog.text
+    assert "u:p" not in caplog.text  # no credentials in the log
+
+    same = make(database_url=POOLED, database_url_unpooled=DIRECT)  # Neon: same name "db"
+    assert database.unpooled_url(same) == DIRECT
+    assert database.migration_url(same) == DIRECT and database.engine_url(same) == POOLED
+    assert database.migration_url(make(database_url=POOLED)) == POOLED
+
+    monkeypatch.setattr(get_settings(), "database_url", scratch)
+    monkeypatch.setattr(get_settings(), "database_url_unpooled", other)
+    monkeypatch.setattr(get_settings(), "db_use_unpooled", True)
+    database.get_engine()
+    assert captured[-1][0] == scratch
+
+
+def test_alembic_ignores_an_unpooled_url_of_another_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sqlalchemy
+    from alembic import command
+    from alembic.config import Config
+
+    seen: dict[str, Any] = {}
+
+    def fake_engine_from_config(section: dict[str, str], **kwargs: Any) -> object:
+        seen.update(url=section["sqlalchemy.url"])
+        raise Stop
+
+    scratch = "postgresql+psycopg://u:p@localhost:5432/swell_test_scratch_2"
+    settings = get_settings()
+    monkeypatch.setattr(settings, "database_url", scratch)
+    monkeypatch.setattr(settings, "database_url_unpooled", DIRECT)  # database "db"
+    monkeypatch.setattr(sqlalchemy, "engine_from_config", fake_engine_from_config)
+    with pytest.raises(Stop):
+        command.downgrade(Config(str(BACKEND / "alembic.ini")), "base")
+    assert seen["url"] == scratch
+
+
 # --------------------------------------------------------------------------- Redis
 def test_redis_clients_use_the_timeout_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = get_settings()
