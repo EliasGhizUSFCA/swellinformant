@@ -78,6 +78,31 @@ class CSRFMiddleware:
 
 
 DOC_PATHS = ("/docs", "/redoc", "/openapi.json")
+# Headers only a shared cache (Vercel's CDN) reads, in its order of precedence.
+SHARED_CACHE_HEADERS = (b"vercel-cdn-cache-control", b"cdn-cache-control")
+PRIVATE_NO_STORE = b"private, no-store"
+
+
+def _shared_cacheable(headers: list[tuple[bytes, bytes]]) -> bool:
+    """True when a shared cache may store the response: a CDN header, or a public
+    Cache-Control (with or without s-maxage)."""
+    for key, value in headers:
+        name = key.lower()
+        if name in SHARED_CACHE_HEADERS:
+            return True
+        if name == b"cache-control" and (b"public" in value.lower() or b"s-maxage" in value):
+            return True
+    return False
+
+
+def _never_share_cookies(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+    """A response that sets a cookie belongs to one visitor: if it was marked cacheable
+    by a shared cache, it becomes ``private, no-store`` and loses its CDN headers."""
+    if not any(k.lower() == b"set-cookie" for k, _ in headers) or not _shared_cacheable(headers):
+        return headers
+    dropped = (b"cache-control", *SHARED_CACHE_HEADERS)
+    kept = [(k, v) for k, v in headers if k.lower() not in dropped]
+    return [*kept, (b"cache-control", PRIVATE_NO_STORE)]
 
 
 class SecurityHeadersMiddleware:
@@ -93,7 +118,7 @@ class SecurityHeadersMiddleware:
 
         async def wrapped(message: Message) -> None:
             if message["type"] == "http.response.start":
-                headers = list(message.get("headers", []))
+                headers = _never_share_cookies(list(message.get("headers", [])))
                 extra = [
                     (b"x-content-type-options", b"nosniff"),
                     (b"x-frame-options", b"DENY"),
@@ -105,7 +130,8 @@ class SecurityHeadersMiddleware:
                         (b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'")
                     )
                 # API responses are private by default; an endpoint that sets its own
-                # Cache-Control (the public map fields) keeps it.
+                # Cache-Control (app.core.http_cache: the public GETs, the map fields)
+                # keeps it, unless the response sets a cookie (_never_share_cookies).
                 if path.startswith("/api/") and not any(
                     k.lower() == b"cache-control" for k, _ in headers
                 ):
