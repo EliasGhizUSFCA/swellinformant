@@ -21,9 +21,25 @@ from app.core.redis import get_redis
 logger = logging.getLogger(__name__)
 
 
+# Longest value used as a rate-limit key (an IPv6 address with a zone index is shorter).
+MAX_CLIENT_IP_LENGTH = 64
+
+
 def client_ip(request: Request) -> str:
-    """Client IP, honouring X-Forwarded-For from TRUSTED_PROXY_COUNT reverse proxies."""
-    trusted = get_settings().trusted_proxy_count
+    """The client's IP address, the key of the per-client rate limits.
+
+    CLIENT_IP_HEADER set (e.g. ``x-vercel-forwarded-for``, which the platform sets and a
+    client cannot overwrite) and present: its first comma-separated entry, and every
+    X-Forwarded-For value is ignored. Otherwise X-Forwarded-For from TRUSTED_PROXY_COUNT
+    reverse proxies, else the peer address.
+    """
+    settings = get_settings()
+    header = settings.client_ip_header
+    if header:
+        first = (request.headers.get(header) or "").split(",", 1)[0].strip()
+        if first:
+            return first[:MAX_CLIENT_IP_LENGTH]
+    trusted = settings.trusted_proxy_count
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded and trusted > 0:
         parts = [p.strip() for p in forwarded.split(",") if p.strip()]
