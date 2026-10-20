@@ -2,7 +2,10 @@
 
 Fails open (with a warning) if Redis is unreachable, so an infrastructure hiccup does not
 lock every user out; login brute force is additionally limited by the per-account
-lockout stored in PostgreSQL.
+lockout stored in PostgreSQL. After a Redis error the limiter stays open for
+:data:`FAIL_OPEN_SECONDS` without asking Redis, so an unreachable Redis (each command
+waits up to REDIS_CONNECT_TIMEOUT_SECONDS) slows about one request per process every
+FAIL_OPEN_SECONDS instead of every request (twice for a request with two limits).
 """
 
 from __future__ import annotations
@@ -19,6 +22,15 @@ from app.core.errors import RateLimited
 from app.core.redis import get_redis
 
 logger = logging.getLogger(__name__)
+
+FAIL_OPEN_SECONDS = 30.0
+# (the Redis client that failed, monotonic time until which the limiter skips it). A new
+# client (app.core.redis.reset_redis) is asked again at once.
+_fail_open: tuple[redis.Redis, float] | None = None
+
+
+def _skip_redis(client: redis.Redis) -> bool:
+    return _fail_open is not None and _fail_open[0] is client and time.monotonic() < _fail_open[1]
 
 
 # Longest value used as a rate-limit key (an IPv6 address with a zone index is shorter).
@@ -49,17 +61,25 @@ def client_ip(request: Request) -> str:
 
 
 def hit(bucket: str, key: str, limit: int, window_seconds: int) -> None:
+    global _fail_open
     if not get_settings().rate_limit_enabled:
         return
     window = int(time.time() // window_seconds)
     redis_key = f"rl:{bucket}:{key}:{window}"
+    client = get_redis()
+    if _skip_redis(client):
+        return
     try:
-        client = get_redis()
         count = int(client.incr(redis_key))
         if count == 1:
             client.expire(redis_key, window_seconds + 5)
-    except redis.RedisError:
-        logger.warning("Rate limiter unavailable (Redis); allowing request")
+    except redis.RedisError as exc:
+        _fail_open = (client, time.monotonic() + FAIL_OPEN_SECONDS)
+        logger.warning(
+            "Rate limiter unavailable (Redis: %s); allowing requests for %.0f s",
+            type(exc).__name__,
+            FAIL_OPEN_SECONDS,
+        )
         return
     if count > limit:
         retry = window_seconds - int(time.time()) % window_seconds
