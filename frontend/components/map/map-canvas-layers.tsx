@@ -351,6 +351,7 @@ function WaveCanvas({ families, mode, land, oceanMask }: { families: WaveFamilyG
       c.dataset.crests = String(s.crests);
       c.dataset.vertices = String(s.vertices);
       c.dataset.strokes = String(s.strokes);
+      c.dataset.dashTrails = String(s.trails);
       c.dataset.drawn = s.families.join(",");
       if (s.arrows) c.dataset.arrows = String(s.arrows);
       if (frames % 10 === 1 || modeRef.current === "static") {

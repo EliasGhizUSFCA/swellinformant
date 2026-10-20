@@ -21,10 +21,13 @@
  * px), and it then moves along p at the crest speed v = s tau / T, so every dash of a uniform
  * sea stays on those crest lines. It fades in over the first 20 % of its life and out over the
  * last 30 % (a display choice, not a wave group). A dash is drawn only where its centre and
- * both ends sample valid lattice nodes. Strokes (a soft halo under a core line, round caps)
- * are batched per system, opacity level, width level and pass; the canvas is cleared every
- * frame, then masked to the ocean on the street basemap. Reduced motion draws one still
- * frame at full opacity with arrowheads.
+ * both ends sample valid lattice nodes. Behind it (for the systems whose style has one), a
+ * short TRAIL (also a display choice) shows the band its crest swept over in the last
+ * TRAIL_SECONDS, fading backwards in TRAIL_STEPS.
+ * Strokes (trail bands with butt caps under soft halos and a core line with round caps) are
+ * batched per system, opacity level, width or trail-length level and pass, within a dash and
+ * a vertex budget per frame; the canvas is cleared every frame, then masked to the ocean on
+ * the street basemap. Reduced motion draws one still frame at full opacity with arrowheads.
  */
 import { sampleDirection, sampleGrid, type Grid } from "@/lib/map-fields";
 import { mercLat, mercLon, type MercPath, type PixelView } from "@/lib/map-geo";
@@ -44,7 +47,10 @@ import {
   FAMILY_STYLES,
   maxDashes,
   metresPerPixel,
+  MAX_FRAME_VERTICES,
   MIN_DRAW_HS_M,
+  TRAIL_STEPS,
+  trailLength,
   type FamilyStyle,
   type WaveSystem,
 } from "@/lib/map-waves";
@@ -68,8 +74,14 @@ export const FRAME_INTERVAL_MS = 1000 / 30;
 /** Share of the remaining dash budget each system may use, top system first. */
 export const BUDGET_SHARE = 0.6;
 /** Opacity levels and core widths the strokes are batched into (the halo uses the same levels x its factors). */
-export const DASH_ALPHA_LEVELS = [0.08, 0.19, 0.3, 0.41, 0.52, 0.63, 0.74, 0.85];
+export const DASH_ALPHA_LEVELS = [0.06, 0.18, 0.3, 0.42, 0.54, 0.66, 0.78, 0.9];
 export const DASH_WIDTH_LEVELS = [1.2, 1.75, 2.3, 2.85, 3.4];
+/** Trail lengths the trail strokes are batched into, px (a trail's length is rounded to the nearest). */
+export const TRAIL_LEVELS = [4, 6, 8, 10, 12, 14, 16];
+/** Trails shorter than this are not drawn, px. */
+const MIN_TRAIL_PX = 3.5;
+/** Most vertices one dash can take (an upper bound: two pieces and one trail). */
+const MAX_DASH_VERTICES = 4 + 2 * TRAIL_STEPS.length;
 /** Dashes fainter than this (early or late in their life) are not drawn. */
 const MIN_ALPHA = 0.04;
 /** A dash whose clock is this many lives behind is placed afresh (after a long pause elsewhere). */
@@ -224,6 +236,23 @@ function nodesValid(l: Lattice, f: FamilyLattice, x: number, y: number): boolean
   return !!(v[a] && v[a + 1] && v[a + l.nx] && v[a + l.nx + 1]);
 }
 
+/**
+ * Whether a trail of length `tr` behind a dash (centre cx, cy; travel px, py; half its width
+ * along the crest `w`) lies on valid nodes: its back corners, and the ends and middle of the
+ * centre line of every trail step.
+ */
+function trailValid(l: Lattice, f: FamilyLattice, cx: number, cy: number, px: number, py: number, w: number, tr: number): boolean {
+  const tx = -py;
+  const ty = px;
+  const at = (along: number, back: number) => nodesValid(l, f, cx + tx * along - px * back, cy + ty * along - py * back);
+  if (!at(-w, tr) || !at(w, tr)) return false;
+  for (const step of TRAIL_STEPS) {
+    const back = (tr * step.length) / 2;
+    if (!at(-w, back) || !at(0, back) || !at(w, back)) return false;
+  }
+  return true;
+}
+
 /** Deterministic hash of integers to [0, 1). */
 function hash01(a: number, b: number, c: number): number {
   let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x9e3779b1);
@@ -319,10 +348,11 @@ interface CellDash {
   /** Centre at birth, world px (continuous plane), on the crest lattice. */
   wx: number;
   wy: number;
-  /** Travel unit vector and crest speed (px/s) at birth. */
+  /** Travel unit vector, crest speed (px/s) and crest spacing (px) at birth. */
   px: number;
   py: number;
   v: number;
+  s: number;
   /** Frame in which the cell was last visited. */
   seen: number;
 }
@@ -399,6 +429,7 @@ function bear(d: CellDash, f: FamilyLattice, c: DashCell, cell: number, view: Pi
     d.px = px;
     d.py = py;
     d.v = v;
+    d.s = s;
     d.life = dashLifeSeconds(tp);
     d.ok = true;
     return;
@@ -408,7 +439,7 @@ function bear(d: CellDash, f: FamilyLattice, c: DashCell, cell: number, view: Pi
 /** Places a cell's dash from the clock alone (no earlier frames): its life number at time t. */
 function freshDash(f: FamilyLattice, c: DashCell, cell: number, view: PixelView, zoom: number, t: number, frame: number): CellDash {
   const k = Math.floor(t / c.lifeRef + c.phase);
-  const d: CellDash = { k, tb: (k - c.phase) * c.lifeRef, life: c.lifeRef, ok: false, wx: 0, wy: 0, px: 0, py: 0, v: 0, seen: frame };
+  const d: CellDash = { k, tb: (k - c.phase) * c.lifeRef, life: c.lifeRef, ok: false, wx: 0, wy: 0, px: 0, py: 0, v: 0, s: 0, seen: frame };
   bear(d, f, c, cell, view, zoom);
   return d;
 }
@@ -444,8 +475,39 @@ interface Batch {
 }
 const NW = DASH_WIDTH_LEVELS.length;
 const NA = DASH_ALPHA_LEVELS.length;
+const NT = TRAIL_LEVELS.length;
+const NS = TRAIL_STEPS.length;
 const batchPool: Array<Batch | undefined> = [];
+/** Trail batches: per system index, trail length level and opacity level; `segs` holds NS segments per piece. */
+const trailPool: Array<Batch | undefined> = [];
 let poolFrame = 0;
+
+/** Appends numbers to a batch of this frame (reset on first use in a frame, grown as needed). */
+function batchOf(pool: Array<Batch | undefined>, key: number, frame: number, style: FamilyStyle, need: number): Batch {
+  let b = pool[key];
+  if (!b) pool[key] = b = { segs: new Float64Array(256), n: 0, frame: 0, style };
+  if (b.frame !== frame) {
+    b.frame = frame;
+    b.n = 0;
+    b.style = style; // the system at this index can differ from the last frame's
+  }
+  if (b.n + need > b.segs.length) {
+    const grown = new Float64Array(Math.max(b.segs.length * 2, b.n + need));
+    grown.set(b.segs);
+    b.segs = grown;
+  }
+  return b;
+}
+
+/** A path of the segments (x0, y0, x1, y1) of `b` at indices i, i + stride, ... (from `first`). */
+function pathOf(b: Batch, first: number, stride: number): Path2D {
+  const path = new Path2D();
+  for (let i = first; i < b.n; i += stride) {
+    path.moveTo(b.segs[i]!, b.segs[i + 1]!);
+    path.lineTo(b.segs[i + 2]!, b.segs[i + 3]!);
+  }
+  return path;
+}
 
 /** The nearest of evenly spaced levels (index). */
 const nearestLevel = (levels: readonly number[], x: number) => {
@@ -467,6 +529,8 @@ export interface FrameStats {
   /** Dash cells visited. */
   cells: number;
   arrows: number;
+  /** Dashes drawn with a motion trail (data-dash-trails). */
+  trails: number;
   families: WaveSystem[];
 }
 
@@ -478,6 +542,8 @@ export interface DrawOptions {
   still: boolean;
   /** Most dashes this frame (maxDashes). */
   budget: number;
+  /** Most vertices this frame (default MAX_FRAME_VERTICES). */
+  maxVertices?: number;
   /** The dashes kept between frames (a fresh state places every dash from the clock alone). */
   state?: DashState;
 }
@@ -491,28 +557,41 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   const state = o.still || !o.state ? new DashState() : o.state;
   state.frame++;
   const t = o.still ? 0 : o.t;
-  const stats: FrameStats = { crests: 0, vertices: 0, strokes: 0, cells: 0, arrows: 0, families: [] };
+  const maxVertices = o.maxVertices ?? MAX_FRAME_VERTICES;
+  const stats: FrameStats = { crests: 0, vertices: 0, strokes: 0, cells: 0, arrows: 0, trails: 0, families: [] };
   let maxKey = -1;
+  let maxTrailKey = -1;
   const push = (sys: number, wl: number, al: number, style: FamilyStyle, x0: number, y0: number, x1: number, y1: number) => {
     const key = (sys * NW + wl) * NA + al;
-    let b = batchPool[key];
-    if (!b) batchPool[key] = b = { segs: new Float64Array(256), n: 0, frame: 0, style };
-    if (b.frame !== frame) {
-      b.frame = frame;
-      b.n = 0;
-      b.style = style; // the system at this index can differ from the last frame's
-    }
-    if (b.n + 4 > b.segs.length) {
-      const grown = new Float64Array(b.segs.length * 2);
-      grown.set(b.segs);
-      b.segs = grown;
-    }
+    const b = batchOf(batchPool, key, frame, style, 4);
     b.segs[b.n++] = x0;
     b.segs[b.n++] = y0;
     b.segs[b.n++] = x1;
     b.segs[b.n++] = y1;
     if (key > maxKey) maxKey = key;
     stats.vertices += 2;
+  };
+  // The trail of one dash piece from (x0, y0) to (x1, y1) (along the crest): for each step a
+  // segment parallel to the piece, set back against the travel (bx, by) by half the step's
+  // length and stroked that long with butt caps, so the step covers the band from the crest
+  // line back to `length` x the trail.
+  const pushTrail = (sys: number, tl: number, al: number, style: FamilyStyle, x0: number, y0: number, x1: number, y1: number, bx: number, by: number, cap: number) => {
+    const key = (sys * NT + tl) * NA + al;
+    const b = batchOf(trailPool, key, frame, style, 4 * NS);
+    const tr = TRAIL_LEVELS[tl]!;
+    // As wide as the piece and its round caps: `cap` px beyond each end along the crest
+    // tangent (-by, bx), the direction the pieces run in.
+    const ex = -by * cap;
+    const ey = bx * cap;
+    for (const step of TRAIL_STEPS) {
+      const back = (tr * step.length) / 2;
+      b.segs[b.n++] = x0 - ex - bx * back;
+      b.segs[b.n++] = y0 - ey - by * back;
+      b.segs[b.n++] = x1 + ex - bx * back;
+      b.segs[b.n++] = y1 + ey - by * back;
+    }
+    if (key > maxTrailKey) maxTrailKey = key;
+    stats.vertices += 2 * NS;
   };
   const arrows: number[] = [];
   // The budget goes to the top system first (the primary swell is drawn last, on top, but is
@@ -526,9 +605,14 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     const style = f.style;
     const { cell, cells } = dashGrid(l, f, view);
     const store = state.store(f.system, l.zoom, cell);
+    const last = rank === order.length - 1;
     const left = o.budget - stats.crests;
-    const cap = stats.crests + (rank === order.length - 1 ? left : Math.floor(left * BUDGET_SHARE));
+    const cap = stats.crests + (last ? left : Math.floor(left * BUDGET_SHARE));
     const before = stats.crests;
+    // The vertex budget is shared the same way.
+    const vLeft = maxVertices - stats.vertices;
+    const vCap = stats.vertices + (last ? vLeft : Math.floor(vLeft * BUDGET_SHARE));
+    const vBefore = stats.vertices;
     const arrowsOn = o.still && (f.system === "primary" || f.system === "combined");
     const reach = DASH_MAX_PX;
     let visited = 0;
@@ -536,7 +620,7 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     let drawnHere = 0;
     for (const c of cells) {
       if (visited >= f.limit) break;
-      if (stats.crests >= cap) {
+      if (stats.crests >= cap || stats.vertices + MAX_DASH_VERTICES > vCap) {
         hit = true;
         break;
       }
@@ -563,6 +647,16 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       const width = dashWidth(hs, f.system);
       const wl = nearestLevel(DASH_WIDTH_LEVELS, width);
       const al = nearestLevel(DASH_ALPHA_LEVELS, alpha);
+      // The trail: where the dash was over the last TRAIL_SECONDS (no further back than its
+      // birth while animating), from MIN_TRAIL_PX, and only where all of it is on valid nodes
+      // (trailValid; else the dash is drawn without one).
+      const trail = !style.trail ? 0 : o.still ? trailLength(d.v, d.s) : Math.min(trailLength(d.v, d.s), d.v * (t - d.tb));
+      const capPx = DASH_WIDTH_LEVELS[wl]! / 2;
+      let tl = -1;
+      if (trail >= MIN_TRAIL_PX) {
+        const level = nearestLevel(TRAIL_LEVELS, trail);
+        if (trailValid(l, f, cx, cy, px, py, half + capPx, TRAIL_LEVELS[level]!)) tl = level;
+      }
       if (style.gap > 0) {
         // Split dash: the core shows a gap of `gap` x the length between its round caps.
         const g = (style.gap * half * 2) / 2 + DASH_WIDTH_LEVELS[wl]! / 2;
@@ -570,6 +664,11 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
         push(sys, wl, al, style, cx + tx * g, cy + ty * g, cx + tx * half, cy + ty * half);
       } else {
         push(sys, wl, al, style, cx - tx * half, cy - ty * half, cx + tx * half, cy + ty * half);
+      }
+      // One trail behind the whole dash (a split dash shows its gap in the bright pieces in front).
+      if (tl >= 0) {
+        pushTrail(sys, tl, al, style, cx - tx * half, cy - ty * half, cx + tx * half, cy + ty * half, px, py, capPx);
+        stats.trails++;
       }
       stats.crests++;
       drawnHere++;
@@ -581,29 +680,40 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       }
     }
     stats.cells += visited;
-    // The cut only shrinks when the budget is hit and grows back one cell a frame while well
-    // under it, so a cell at the margin does not flicker.
+    // The cut only shrinks when a budget (dashes or vertices) is hit and grows back one cell a
+    // frame while well under both, so a cell at the margin does not flicker.
     if (hit) f.limit = visited;
-    else if (f.limit < cells.length && stats.crests - before < 0.75 * (cap - before)) f.limit++;
+    else if (f.limit < cells.length && stats.crests - before < 0.75 * (cap - before) && stats.vertices - vBefore < 0.75 * (vCap - vBefore)) f.limit++;
   });
 
-  ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.setLineDash([]);
-  // Per system in drawing order (primary last, on top): every batch's outer halo, then its
-  // inner halo, then the cores. Each batch's path is built once and stroked once per pass.
+  // Per system in drawing order (primary last, on top): its trails (each step of every trail
+  // batch, butt caps), then every dash batch's outer halo, its inner halo and the cores
+  // (round caps). Each batch's path is built once and stroked once per pass.
   const perSystem = NW * NA;
+  const perSystemTrail = NT * NA;
   for (let sys = 0; sys * perSystem <= maxKey; sys++) {
+    ctx.lineCap = "butt";
+    for (let key = sys * perSystemTrail; key < (sys + 1) * perSystemTrail && key <= maxTrailKey; key++) {
+      const b = trailPool[key];
+      if (!b || b.frame !== frame || !b.n) continue;
+      const tr = TRAIL_LEVELS[Math.floor(key / NA) % NT]!;
+      const a = DASH_ALPHA_LEVELS[key % NA]!;
+      const rgb = hexRgb(b.style.color);
+      TRAIL_STEPS.forEach((step, k) => {
+        ctx.lineWidth = tr * step.length;
+        ctx.strokeStyle = `rgba(${rgb}, ${Math.round(a * step.alpha * 1000) / 1000})`;
+        ctx.stroke(pathOf(b, 4 * k, 4 * NS));
+        stats.strokes++;
+      });
+    }
+    ctx.lineCap = "round";
     const paths: Array<{ path: Path2D; wl: number; al: number; rgb: string }> = [];
     for (let key = sys * perSystem; key < (sys + 1) * perSystem && key <= maxKey; key++) {
       const b = batchPool[key];
       if (!b || b.frame !== frame || !b.n) continue;
-      const path = new Path2D();
-      for (let i = 0; i < b.n; i += 4) {
-        path.moveTo(b.segs[i]!, b.segs[i + 1]!);
-        path.lineTo(b.segs[i + 2]!, b.segs[i + 3]!);
-      }
-      paths.push({ path, wl: Math.floor(key / NA) % NW, al: key % NA, rgb: hexRgb(b.style.color) });
+      paths.push({ path: pathOf(b, 0, 4), wl: Math.floor(key / NA) % NW, al: key % NA, rgb: hexRgb(b.style.color) });
     }
     for (const pass of DASH_PASSES) {
       for (const { path, wl, al, rgb } of paths) {
@@ -615,6 +725,7 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     }
   }
   if (arrows.length) {
+    ctx.lineCap = "round";
     ctx.beginPath();
     for (let i = 0; i < arrows.length; i += 4) {
       const [tipX, tipY, px, py] = [arrows[i]!, arrows[i + 1]!, arrows[i + 2]!, arrows[i + 3]!];

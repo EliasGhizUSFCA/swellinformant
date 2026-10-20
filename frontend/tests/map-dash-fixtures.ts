@@ -85,8 +85,14 @@ export const alphaOf = (l: Polyline) => Number(l.style.slice(l.style.lastIndexOf
 /** Colour (r, g, b) of an rgba() stroke style. */
 export const rgbOf = (l: Polyline) => l.style.slice(5, l.style.lastIndexOf(","));
 
-/** The core strokes (pass width 1: the core widths themselves), one polyline per dash or dash half. */
-export const cores = (lines: Polyline[]) => lines.filter((l) => l.pts.length === 2 && DASH_WIDTH_LEVELS.includes(l.width));
+/** The core strokes (pass width 1: the core widths themselves, round caps), one polyline per dash or dash half. */
+export const cores = (lines: Polyline[]) => lines.filter((l) => l.pts.length === 2 && l.cap === "round" && DASH_WIDTH_LEVELS.includes(l.width));
+
+/** The trail strokes (butt caps), one polyline per dash and trail step. */
+export const trailsOf = (lines: Polyline[]) => lines.filter((l) => l.pts.length === 2 && l.cap === "butt");
+
+/** A dash budget that never cuts (with `draw`, the vertex budget is lifted too). */
+export const UNBOUNDED = 1e6;
 
 export interface Dash {
   x: number;
@@ -112,9 +118,10 @@ export function dashesOf(lines: Polyline[]): Dash[] {
 /** Line orientation of a dash in screen degrees, 0..180 (x east, y down). */
 export const orientation = (d: Pick<Dash, "ux" | "uy">) => (((Math.atan2(d.uy, d.ux) * 180) / Math.PI) % 180 + 180) % 180;
 
+/** Draws one frame. A `budget` of UNBOUNDED lifts both budgets (dashes and vertices), so no dash is cut. */
 export function draw(view: PixelView, families: WaveFamilyGrids[], t = 0, still = false, budget = maxDashes(view.width), state?: DashState, land?: Uint8Array) {
   const { ctx, lines } = recorder();
   const lattice = buildLattice(view, families, land);
-  const stats = drawDashes(ctx, view, lattice, { t, still, budget, state });
+  const stats = drawDashes(ctx, view, lattice, { t, still, budget, maxVertices: budget >= UNBOUNDED ? Infinity : undefined, state });
   return { lines, stats, lattice };
 }

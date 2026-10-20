@@ -6,7 +6,7 @@ import { sampleDirection, type FieldGrid, type Grid } from "@/lib/map-fields";
 import { mercLon } from "@/lib/map-geo";
 import { crestSpacingPx, crestSpeedPxPerS, FAMILY_STYLES } from "@/lib/map-waves";
 
-import { constant, cores, dashesOf, draw, family, globalGrid, installPath2D, orientation, rgbOf, viewAt } from "./map-dash-fixtures";
+import { constant, cores, dashesOf, draw, family, globalGrid, installPath2D, orientation, rgbOf, UNBOUNDED, viewAt } from "./map-dash-fixtures";
 
 // Every grid below is SYNTHETIC test data, not model output. The dash geometry, motion,
 // spacing, masking, budget and reduced-motion checks of D11 are in map-dashes.test.ts.
@@ -83,7 +83,7 @@ describe("one crest lattice everywhere", () => {
     const v = crestSpeedPxPerS(tp, s);
     const t = 1.3;
     const view = viewAt(2, -45, 180);
-    const dashes = dashesOf(draw(view, [family("primary", 3, tp, 270)], t, false, 1e6).lines);
+    const dashes = dashesOf(draw(view, [family("primary", 3, tp, 270)], t, false, UNBOUNDED).lines);
     expect(dashes.some((d) => d.x < 300)).toBe(true);
     expect(dashes.some((d) => d.x > 1140)).toBe(true);
     for (const d of dashes) {
@@ -158,10 +158,12 @@ describe("systems", () => {
   });
 
   it("gives more ink to a higher sea", () => {
+    // Stroke area x opacity: a round-capped stroke covers its segment plus its width, a
+    // butt-capped trail band its segment only.
     const ink = (hs: number) =>
       draw(viewAt(3, -40, -30), [family("primary", hs, 12, 250)], 3).lines.reduce((a, l) => {
         const len = Math.hypot(l.pts[1]![0] - l.pts[0]![0], l.pts[1]![1] - l.pts[0]![1]);
-        return a + (len + l.width) * l.width * Number(l.style.slice(l.style.lastIndexOf(",") + 1, -1));
+        return a + (len + (l.cap === "round" ? l.width : 0)) * l.width * Number(l.style.slice(l.style.lastIndexOf(",") + 1, -1));
       }, 0);
     expect(ink(4)).toBeGreaterThan(2 * ink(1));
   });

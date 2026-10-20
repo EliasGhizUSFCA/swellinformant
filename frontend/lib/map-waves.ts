@@ -150,20 +150,43 @@ export const DASH_MAX_PX = 14;
 export const DASH_WIDTH_BASE_PX = 1.8;
 export const DASH_WIDTH_PX_PER_M = 0.3;
 export const DASH_WIDTH_MAX_PX = 3.4;
-/** Dash opacity: 0.50 + 0.06 per metre, 0.50..0.85. */
-export const DASH_ALPHA_BASE = 0.5;
-export const DASH_ALPHA_PER_M = 0.06;
-export const DASH_ALPHA_MAX = 0.85;
+/** Dash opacity: 0.40 + 0.09 per metre, 0.40..0.90 (D11's formula). */
+export const DASH_ALPHA_BASE = 0.4;
+export const DASH_ALPHA_PER_M = 0.09;
+export const DASH_ALPHA_MAX = 0.9;
 /**
- * The strokes of one dash, bottom to top, relative to its core width and opacity: two soft
- * halo strokes (2.6 x the width at 0.22 x the opacity, 1.7 x at 0.45 x) under the core give
- * it a soft edge, a stepped falloff from the core outwards. All with round caps.
+ * The strokes of one dash, bottom to top, relative to its core width and opacity: a soft halo
+ * (1.7 x the width at 0.45 x the opacity) under the core gives it a soft edge. Both with round
+ * caps. (The trail behind the dash softens it further; an outer halo, 2.6 x at 0.22 x, was
+ * dropped with the trails: the largest stroke of a dash, it cost most of the raster time.)
  */
 export const DASH_PASSES: ReadonlyArray<{ readonly width: number; readonly alpha: number }> = [
-  { width: 2.6, alpha: 0.22 },
   { width: 1.7, alpha: 0.45 },
   { width: 1, alpha: 1 },
 ];
+/**
+ * Motion trail of a dash: behind it (against its travel) the band its crest swept over in the
+ * last TRAIL_SECONDS of animation, as wide along the crest as the dash with its round caps and
+ * fading backwards in TRAIL_STEPS (the whole band, then its front half, each at 0.25 x the
+ * dash's opacity: the front half shows at 1 - (1 - 0.25)^2 = 0.44 x, the back half at 0.25 x).
+ * It is how the dash moved, a display choice that carries no wave data of its own. Length v x
+ * TRAIL_SECONDS (7.5 px for a 10 s swell at the default spacing), at most TRAIL_MAX_SHARE of
+ * the crest spacing (rows of dashes stay apart) and TRAIL_MAX_PX (zoomed in, crests move fast).
+ */
+export const TRAIL_SECONDS = 1;
+export const TRAIL_MAX_SHARE = 0.5;
+export const TRAIL_MAX_PX = 16;
+export const TRAIL_STEPS: ReadonlyArray<{ readonly length: number; readonly alpha: number }> = [
+  { length: 1, alpha: 0.25 },
+  { length: 0.5, alpha: 0.25 },
+];
+
+/** Trail length, px: min(v x TRAIL_SECONDS, TRAIL_MAX_SHARE x s, TRAIL_MAX_PX); 0 without a speed. */
+export function trailLength(speedPxPerS: number, spacingPx: number): number {
+  if (!(speedPxPerS > 0) || !(spacingPx > 0)) return 0;
+  return Math.min(speedPxPerS * TRAIL_SECONDS, TRAIL_MAX_SHARE * spacingPx, TRAIL_MAX_PX);
+}
+
 /** A dash lives this many crest passages (3 T / tau seconds: 7.5 s for a 10 s swell). */
 export const DASH_LIFE_PASSAGES = 3;
 /** Fade-in over the first 20 % of the life, fade-out over the last 30 % (smoothstep): a display choice. */
@@ -175,6 +198,14 @@ export const DASH_CELL_PX = { primary: 18, combined: 18, secondary: 18, windsea:
 export const MAX_DASHES = 4000;
 export const PHONE_MAX_DASHES = 1500;
 export const PHONE_WIDTH_PX = 640;
+/**
+ * Most vertices per frame: 2 for each dash piece and 2 for each trail step, so 6 for a solid
+ * dash with its trail and 4 for a split one (no trail). A frame stops placing dashes when the
+ * next one could pass it (the same even, hashed cut as the dash budget). 9,000, under D11's
+ * 12,000: about 1,500 trailed dashes, which keeps a busy desktop frame (the whole world at
+ * 1440 x 900) as cheap as the dashes without trails were (docs/map-rendering.md section 7).
+ */
+export const MAX_FRAME_VERTICES = 9_000;
 /** Reduced motion: an arrowhead of ARROW_PX on every ARROW_EVERY-th primary or combined dash. */
 export const ARROW_EVERY = 6;
 export const ARROW_PX = 5;
@@ -230,6 +261,8 @@ export interface FamilyStyle {
   widthFactor: number;
   /** Gap in the middle of each dash, share of its length (0: one solid dash). */
   gap: number;
+  /** Whether the dashes draw their motion trail (the secondary swell's split dashes do not, so that their shape stays distinct under the primary's). */
+  trail: boolean;
   /** Dash cell size, px (DASH_CELL_PX). */
   cellPx: number;
   /** Short "how it looks" text for the legend key. */
@@ -238,19 +271,20 @@ export interface FamilyStyle {
 
 /**
  * Per-system dash styles, told apart by SHAPE and colour (never colour alone): the primary
- * swell is a solid white dash, the secondary swell a long split dash (1.4 x the length, a gap
- * of 0.2 of it in the middle, 0.8 x the width) in warm amber, the wind sea a short thin dash
- * (0.55 x the length, 0.7 x the width) in pale cyan. The split and short dashes stay at least
+ * swell is a solid white dash with its trail, the secondary swell a long split dash (1.4 x the
+ * length, a gap of 0.2 of it in the middle, 0.8 x the width) in warm amber without a trail, the
+ * wind sea a short thin dash (0.55 x the length, 0.7 x the width) in pale cyan with its trail.
+ * The split and short dashes stay at least
  * twice as long as wide, so their orientation still reads (D11 proposed 0.85 x and a 0.3 gap
  * for the secondary, whose halves came out as round dots at 1-2 m). The combined sea (the
  * default, and what is drawn when the run has no partitions) is a solid white dash too and is
  * never called "primary swell"; it is never drawn together with the partitions.
  */
 export const FAMILY_STYLES: Record<WaveSystem, FamilyStyle> = {
-  primary: { label: "Primary swell", short: "Primary", color: "#ffffff", lengthFactor: 1, widthFactor: 1, gap: 0, cellPx: DASH_CELL_PX.primary, look: "white dashes" },
-  secondary: { label: "Secondary swell", short: "Secondary", color: "#ffd59a", lengthFactor: 1.4, widthFactor: 0.8, gap: 0.2, cellPx: DASH_CELL_PX.secondary, look: "split amber dashes" },
-  windsea: { label: "Wind sea", short: "Wind sea", color: "#b8f0ff", lengthFactor: 0.55, widthFactor: 0.7, gap: 0, cellPx: DASH_CELL_PX.windsea, look: "short cyan dashes" },
-  combined: { label: "Combined sea (peak)", short: "Combined", color: "#ffffff", lengthFactor: 1, widthFactor: 1, gap: 0, cellPx: DASH_CELL_PX.combined, look: "white dashes" },
+  primary: { label: "Primary swell", short: "Primary", color: "#ffffff", lengthFactor: 1, widthFactor: 1, gap: 0, trail: true, cellPx: DASH_CELL_PX.primary, look: "white dashes" },
+  secondary: { label: "Secondary swell", short: "Secondary", color: "#ffd59a", lengthFactor: 1.4, widthFactor: 0.8, gap: 0.2, trail: false, cellPx: DASH_CELL_PX.secondary, look: "split amber dashes" },
+  windsea: { label: "Wind sea", short: "Wind sea", color: "#b8f0ff", lengthFactor: 0.55, widthFactor: 0.7, gap: 0, trail: true, cellPx: DASH_CELL_PX.windsea, look: "short cyan dashes" },
+  combined: { label: "Combined sea (peak)", short: "Combined", color: "#ffffff", lengthFactor: 1, widthFactor: 1, gap: 0, trail: true, cellPx: DASH_CELL_PX.combined, look: "white dashes" },
 };
 
 /** Model variables of each system: significant height (m), period (s), direction FROM (deg). */

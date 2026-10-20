@@ -18,6 +18,7 @@ import {
   formatFactor,
   groupSpeed,
   MAX_DASHES,
+  MAX_FRAME_VERTICES,
   MAX_SPACING_PX,
   maxDashes,
   MIN_SPACING_PX,
@@ -27,6 +28,11 @@ import {
   scaleStatement,
   TIME_SCALE,
   toward,
+  TRAIL_MAX_PX,
+  TRAIL_MAX_SHARE,
+  TRAIL_SECONDS,
+  TRAIL_STEPS,
+  trailLength,
   wavelengthM,
   WAVE_SYSTEMS,
   type WaveSystem,
@@ -144,9 +150,10 @@ describe("height and drawing styles", () => {
     // The stated formulas and their limits (docs/map-rendering.md section 4.6).
     expect([dashLength(0, "primary"), dashLength(2, "primary"), dashLength(4, "primary"), dashLength(10, "primary")]).toEqual([6, 8, 11, 14]);
     expect([dashWidth(0), dashWidth(2), dashWidth(10)]).toEqual([1.8, 2.4, 3.4]);
-    expect(dashAlpha(0)).toBe(0.5);
-    expect(dashAlpha(2)).toBeCloseTo(0.62, 12);
-    expect(dashAlpha(10)).toBe(0.85);
+    // D11's opacity: clamp(0.40 + 0.09 Hs, 0.40, 0.90) (the dashes without trails had 0.50 + 0.06 Hs).
+    expect(dashAlpha(0)).toBe(0.4);
+    expect(dashAlpha(2)).toBeCloseTo(0.58, 12);
+    expect(dashAlpha(10)).toBe(0.9);
     // A long split dash for the secondary swell, a short thin one for the wind sea (shape, not colour alone).
     expect(dashLength(4, "secondary")).toBeCloseTo(1.4 * dashLength(4, "primary"), 10);
     expect(dashLength(4, "windsea")).toBeCloseTo(0.55 * dashLength(4, "primary"), 10);
@@ -174,6 +181,27 @@ describe("height and drawing styles", () => {
     expect(maxDashes(1440)).toBe(MAX_DASHES);
     expect(maxDashes(412)).toBe(PHONE_MAX_DASHES);
     expect([MAX_DASHES, PHONE_MAX_DASHES]).toEqual([4000, 1500]);
+    expect(MAX_FRAME_VERTICES).toBe(9_000); // under D11's 12,000 (docs/map-rendering.md 4.8)
+  });
+
+  it("trails each dash by the way it moved over the last second of animation (a display choice)", () => {
+    expect([TRAIL_SECONDS, TRAIL_MAX_SHARE, TRAIL_MAX_PX]).toEqual([1, 0.5, 16]);
+    expect(TRAIL_STEPS).toEqual([
+      { length: 1, alpha: 0.25 },
+      { length: 0.5, alpha: 0.25 },
+    ]);
+    // v x 1 s: 7.5 px for a 10 s swell at the default spacing (18.7 px, 7.5 px/s) ...
+    const s10 = crestSpacingPx(10);
+    expect(trailLength(crestSpeedPxPerS(10, s10), s10)).toBeCloseTo(7.49, 2);
+    const s16 = crestSpacingPx(16);
+    expect(trailLength(crestSpeedPxPerS(16, s16), s16)).toBeCloseTo(11.99, 2);
+    // ... at most half the crest spacing (a 4 s wind sea: 8 px spacing, 8 px/s) ...
+    expect(trailLength(crestSpeedPxPerS(4, 8), 8)).toBe(4);
+    // ... and 16 px (zoomed in to true scale, crests move fast) ...
+    expect(trailLength(crestSpeedPxPerS(16, 256), 256)).toBe(16);
+    // ... and none without a speed.
+    expect(trailLength(0, 18)).toBe(0);
+    expect(trailLength(NaN, 18)).toBe(0);
   });
 
   it("tells the systems apart by dash shape and colour, never colour alone", () => {
@@ -182,10 +210,10 @@ describe("height and drawing styles", () => {
     // Shape: solid, long split (a gap of 0.2 of the length) and short dashes.
     expect(new Set(partitions.map((s) => `${s.lengthFactor}/${s.gap}`)).size).toBe(3);
     expect(new Set(partitions.map((s) => s.color)).size).toBe(3);
-    expect(FAMILY_STYLES.primary).toMatchObject({ gap: 0, lengthFactor: 1, widthFactor: 1, color: "#ffffff" });
-    expect(FAMILY_STYLES.secondary).toMatchObject({ gap: 0.2, lengthFactor: 1.4, widthFactor: 0.8, color: "#ffd59a" });
-    expect(FAMILY_STYLES.windsea).toMatchObject({ gap: 0, lengthFactor: 0.55, widthFactor: 0.7, color: "#b8f0ff" });
-    expect(FAMILY_STYLES.combined).toMatchObject({ gap: 0, lengthFactor: 1, widthFactor: 1, color: "#ffffff" });
+    expect(FAMILY_STYLES.primary).toMatchObject({ gap: 0, lengthFactor: 1, widthFactor: 1, color: "#ffffff", trail: true });
+    expect(FAMILY_STYLES.secondary).toMatchObject({ gap: 0.2, lengthFactor: 1.4, widthFactor: 0.8, color: "#ffd59a", trail: false });
+    expect(FAMILY_STYLES.windsea).toMatchObject({ gap: 0, lengthFactor: 0.55, widthFactor: 0.7, color: "#b8f0ff", trail: true });
+    expect(FAMILY_STYLES.combined).toMatchObject({ gap: 0, lengthFactor: 1, widthFactor: 1, color: "#ffffff", trail: true });
     expect(new Set(styles.map((s) => s.label)).size).toBe(4);
     expect(FAMILY_STYLES.combined.label).not.toMatch(/primary/i);
   });

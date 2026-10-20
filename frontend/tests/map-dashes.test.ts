@@ -1,10 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildLattice, DASH_ALPHA_LEVELS, DASH_WIDTH_LEVELS, DashState, drawDashes, LATTICE_PX, WaveAnimator } from "@/components/map/wavefronts";
+import { buildLattice, DASH_ALPHA_LEVELS, DASH_WIDTH_LEVELS, DashState, drawDashes, LATTICE_PX, TRAIL_LEVELS, WaveAnimator } from "@/components/map/wavefronts";
 import { mercLat, mercLon, type PixelView } from "@/lib/map-geo";
-import { ARROW_EVERY, crestSpacingPx, crestSpeedPxPerS, DASH_PASSES, dashAlpha, dashLength, dashWidth, MAX_DASHES, PHONE_MAX_DASHES, propagation } from "@/lib/map-waves";
+import {
+  ARROW_EVERY,
+  crestSpacingPx,
+  crestSpeedPxPerS,
+  DASH_PASSES,
+  dashAlpha,
+  dashLength,
+  dashWidth,
+  MAX_DASHES,
+  MAX_FRAME_VERTICES,
+  PHONE_MAX_DASHES,
+  propagation,
+  TRAIL_STEPS,
+  trailLength,
+} from "@/lib/map-waves";
 
-import { constant, dashesOf, draw, family, globalGrid, installPath2D, orientation, recorder, viewAt, type Dash } from "./map-dash-fixtures";
+import { alphaOf, constant, dashesOf, draw, family, globalGrid, installPath2D, orientation, recorder, trailsOf, UNBOUNDED, viewAt, type Dash } from "./map-dash-fixtures";
 
 // Every grid below is SYNTHETIC test data (made-up uniform or patterned seas), not model output.
 
@@ -48,7 +62,7 @@ describe("motion and spacing: the crest lattice p . W = n s + v t", () => {
     const lattice = buildLattice(VIEW, fam);
     const at = (t: number) => {
       const r = recorder();
-      drawDashes(r.ctx, VIEW, lattice, { t, still: false, budget: 1e6, state });
+      drawDashes(r.ctx, VIEW, lattice, { t, still: false, budget: UNBOUNDED, maxVertices: Infinity, state });
       return dashesOf(r.lines);
     };
     at(3.0);
@@ -88,7 +102,7 @@ describe("motion and spacing: the crest lattice p . W = n s + v t", () => {
     const v = crestSpeedPxPerS(tp, s);
     const t = 4.2;
     const [px, py] = propagation(270)!;
-    const dashes = dashesOf(draw(VIEW, [family("combined", 2.5, tp, 270)], t, false, 1e6).lines);
+    const dashes = dashesOf(draw(VIEW, [family("combined", 2.5, tp, 270)], t, false, UNBOUNDED).lines);
     expect(dashes.length).toBeGreaterThan(300);
     // Every centre's phase p . W - v t is a multiple of s (W in world px) ...
     const u = dashes.map((d) => px * (d.x + VIEW.originX) + py * (d.y + VIEW.originY) - v * t);
@@ -104,7 +118,7 @@ describe("motion and spacing: the crest lattice p . W = n s + v t", () => {
 
   it("gives the 16 s rows four times the spacing of the 8 s rows", () => {
     const rowGap = (tp: number) => {
-      const dashes = dashesOf(draw(VIEW, [family("combined", 2.5, tp, 270)], 1, false, 1e6).lines);
+      const dashes = dashesOf(draw(VIEW, [family("combined", 2.5, tp, 270)], 1, false, UNBOUNDED).lines);
       const xs = [...new Set(dashes.map((d) => Math.round((d.x + VIEW.originX) * 100) / 100))].sort((p, q) => p - q);
       return Math.min(...xs.slice(1).map((x, i) => x - xs[i]!).filter((g) => g > 0.5));
     };
@@ -125,11 +139,15 @@ describe("size and opacity follow the height", () => {
       }
       // Dashes in mid-life are at the full opacity for their height.
       expect(Math.max(...dashes.map((d) => d.alpha))).toBe(nearestLevel(DASH_ALPHA_LEVELS, dashAlpha(hs)));
-      // Under every core: the two soft halo strokes, wider and fainter, round caps throughout.
+      // Under every core: its soft halo stroke(s), wider and fainter, with round caps; the
+      // trail strokes under them have butt caps (bands that end at the crest line).
       for (const pass of DASH_PASSES.slice(0, -1)) {
-        expect(lines.some((l) => Math.abs(l.width - dashes[0]!.width * pass.width) < 1e-9)).toBe(true);
+        expect(lines.some((l) => l.cap === "round" && Math.abs(l.width - dashes[0]!.width * pass.width) < 1e-9)).toBe(true);
       }
-      expect(lines.every((l) => l.cap === "round")).toBe(true);
+      const halo = new Set(DASH_WIDTH_LEVELS.flatMap((w) => DASH_PASSES.map((p) => w * p.width)));
+      const band = new Set(TRAIL_LEVELS.flatMap((w) => TRAIL_STEPS.map((p) => w * p.length)));
+      for (const l of lines) expect(l.cap === "round" ? halo.has(l.width) : l.cap === "butt" && band.has(l.width)).toBe(true);
+      expect(trailsOf(lines).length).toBeGreaterThan(0);
       return { length: dashes[0]!.length, width: dashes[0]!.width, alpha: Math.max(...dashes.map((d) => d.alpha)) };
     });
     for (let i = 1; i < stats.length; i++) {
@@ -162,11 +180,76 @@ describe("size and opacity follow the height", () => {
     const alphas: number[] = [];
     for (let k = 0; k <= 75; k++) {
       const r = recorder();
-      drawDashes(r.ctx, VIEW, lattice, { t: 20 + k / 10, still: false, budget: 1e6, state });
+      drawDashes(r.ctx, VIEW, lattice, { t: 20 + k / 10, still: false, budget: UNBOUNDED, maxVertices: Infinity, state });
       alphas.push(dashesOf(r.lines).filter((d) => d.alpha <= DASH_ALPHA_LEVELS[1]!).length);
     }
     // At any moment some dashes are faint (being born or fading out), not all at once.
     for (const n of alphas) expect(n).toBeGreaterThan(0);
+  });
+});
+
+describe("motion trails: behind each dash, the band it swept over the last TRAIL_SECONDS", () => {
+  const nearestTrail = (x: number) => TRAIL_LEVELS.reduce((best, v) => (Math.abs(v - x) < Math.abs(best - x) ? v : best), TRAIL_LEVELS[0]!);
+
+  it.each([
+    [8, 6],
+    [10, 8],
+    [16, 12],
+  ])("draws each trail behind its dash, as wide as the dash, v x 1 s long (T = %i s: %i px)", (tp, expected) => {
+    const s = crestSpacingPx(tp);
+    const v = crestSpeedPxPerS(tp, s);
+    const full = nearestTrail(trailLength(v, s));
+    expect(full).toBe(expected); // 8 s: min(6.0, 6.0, 16); 10 s: 7.5 -> 8; 16 s: 12.0
+    const hs = 3;
+    const { lines, stats } = draw(VIEW, [family("combined", hs, tp, 270)], 9, false, UNBOUNDED);
+    const dashes = dashesOf(lines);
+    const trails = trailsOf(lines);
+    expect(stats.trails).toBeGreaterThan(0.8 * stats.crests);
+    expect(trails.length).toBe(TRAIL_STEPS.length * stats.trails);
+    // (keys at 1e-6 px: two dashes of neighbouring cells can sit within 0.01 px of each other)
+    const at = new Map(dashes.map((d) => [`${Math.round(d.x * 1e6)},${Math.round(d.y * 1e6)}`, d]));
+    let atFull = 0;
+    for (const l of trails) {
+      const [[x0, y0], [x1, y1]] = l.pts as [[number, number], [number, number]];
+      // Waves from the W travel east (+x): each trail step is a segment along the crest
+      // (vertical), set back to the WEST of its dash by half its width, so the band runs from
+      // the crest line back.
+      expect(Math.abs(x1 - x0)).toBeLessThan(1e-9);
+      const d = at.get(`${Math.round(((x0 + x1) / 2 + l.width / 2) * 1e6)},${Math.round(((y0 + y1) / 2) * 1e6)}`);
+      expect(d, "a dash just east of the trail").toBeDefined();
+      // As wide (along the crest) as the dash and its round caps, at a share of its opacity.
+      expect(Math.abs(y1 - y0)).toBeCloseTo(dashLength(hs, "combined") + d!.width, 9);
+      expect(TRAIL_STEPS.some((st) => Math.abs(alphaOf(l) - Math.round(d!.alpha * st.alpha * 1000) / 1000) < 1e-9)).toBe(true);
+      // Never longer than v x TRAIL_SECONDS (a young dash's trail reaches back to its birth only).
+      expect(l.width).toBeLessThanOrEqual(full + 1e-9);
+      if (l.width === full) atFull++;
+    }
+    expect(atFull).toBeGreaterThan(0.5 * stats.trails);
+    // Some dashes were born less than a second ago: their trails are shorter.
+    expect(trails.some((l) => l.width < full * TRAIL_STEPS[TRAIL_STEPS.length - 1]!.length)).toBe(true);
+  });
+
+  it("fades backwards in its steps: the front half of the band is brighter than the back half", () => {
+    // Opacity of the band at a distance behind the crest line, from the stacked steps.
+    const at = (back: number) => 1 - TRAIL_STEPS.filter((st) => back < st.length).reduce((a, st) => a * (1 - st.alpha), 1);
+    expect(at(0.25)).toBeCloseTo(0.4375, 9);
+    expect(at(0.75)).toBeCloseTo(0.25, 9);
+    expect(TRAIL_STEPS.map((st) => st.length)).toEqual([1, 0.5]);
+  });
+
+  it("draws full trails in the still frame (reduced motion) too", () => {
+    const tp = 12;
+    const s = crestSpacingPx(tp);
+    const full = nearestTrail(trailLength(crestSpeedPxPerS(tp, s), s));
+    const { lines, stats } = draw(VIEW, [family("combined", 3, tp, 180)], 0, true);
+    // A swell from the S travels N (up the screen): its trails hang below (south of) its dashes.
+    const dashes = dashesOf(lines);
+    const trails = trailsOf(lines);
+    const ys = new Set(trails.map((l) => Math.round((l.pts[0]![1] - l.width / 2) * 100)));
+    for (const l of trails) expect([full, full * TRAIL_STEPS[1]!.length]).toContain(l.width);
+    // Every dash has its trail, but where the trail would leave the lattice (at the bottom of the view).
+    expect(stats.trails).toBeGreaterThan(0.95 * stats.crests);
+    for (const d of dashes) if (!ys.has(Math.round(d.y * 100))) expect(d.y, `dash at ${d.x.toFixed(1)}, ${d.y.toFixed(1)} without a trail`).toBeGreaterThan(VIEW.height - full - 2 * LATTICE_PX);
   });
 });
 
@@ -180,7 +263,7 @@ describe("masking: no dash on land or where the model has no data", () => {
     const probe = buildLattice(view, []);
     const land = new Uint8Array(probe.nx * probe.ny);
     for (let j = 10; j < 40; j++) for (let i = 10; i < 50; i++) land[j * probe.nx + i] = 1;
-    const { lines, stats, lattice } = draw(view, [family("combined", hs, 11, 250)], 5, false, 1e6, undefined, land);
+    const { lines, stats, lattice } = draw(view, [family("combined", hs, 11, 250)], 5, false, UNBOUNDED, undefined, land);
     expect(stats.crests).toBeGreaterThan(100);
     const f = lattice.families[0]!;
     const nodeOk = (x: number, y: number) => {
@@ -223,8 +306,8 @@ describe("world-anchored, time-based and frame-rate independent", () => {
     // Fresh state for each view, and one state carried across the pan: the same dashes.
     for (const shared of [false, true]) {
       const state = shared ? new DashState() : undefined;
-      const pa = worldCentres(a, draw(a, fam, 5, false, 1e6, state).lines);
-      const pb = worldCentres(b, draw(b, fam, 5, false, 1e6, state).lines);
+      const pa = worldCentres(a, draw(a, fam, 5, false, UNBOUNDED, state).lines);
+      const pb = worldCentres(b, draw(b, fam, 5, false, UNBOUNDED, state).lines);
       const both = [...pa].filter((k) => {
         const [x, y] = k.split(",").map(Number) as [number, number];
         return x - b.originX > 200 && x - b.originX < b.width - 200 && y - b.originY > 200 && y - b.originY < b.height - 200;
@@ -245,13 +328,13 @@ describe("world-anchored, time-based and frame-rate independent", () => {
       let last: ReturnType<typeof recorder>["lines"] = [];
       for (let k = 0; k <= 6 * hz; k++) {
         const r = recorder();
-        drawDashes(r.ctx, view, lattice, { t: k / hz, still: false, budget: 1e6, state });
+        drawDashes(r.ctx, view, lattice, { t: k / hz, still: false, budget: UNBOUNDED, maxVertices: Infinity, state });
         last = r.lines;
       }
       return key(last);
     };
     const fresh = recorder();
-    drawDashes(fresh.ctx, view, lattice, { t: 6, still: false, budget: 1e6 });
+    drawDashes(fresh.ctx, view, lattice, { t: 6, still: false, budget: UNBOUNDED, maxVertices: Infinity });
     const at60 = run(60);
     expect(JSON.parse(at60).length).toBeGreaterThan(100);
     expect(run(120)).toBe(at60);
@@ -275,10 +358,10 @@ describe("world-anchored, time-based and frame-rate independent", () => {
 
   it("keeps the live dashes when the fields change (the next forecast step)", () => {
     const state = new DashState();
-    const before = dashesOf(draw(VIEW, [family("combined", 3, 12, 250)], 7, false, 1e6, state).lines);
+    const before = dashesOf(draw(VIEW, [family("combined", 3, 12, 250)], 7, false, UNBOUNDED, state).lines);
     // Another step: higher and from another direction. Live dashes stay where they were (and
     // turn with the new field); only the cells whose dash ends meanwhile get a new one.
-    const after = dashesOf(draw(VIEW, [family("combined", 4, 12, 240)], 7, false, 1e6, state).lines);
+    const after = dashesOf(draw(VIEW, [family("combined", 4, 12, 240)], 7, false, UNBOUNDED, state).lines);
     const keys = (ds: Dash[]) => new Set(ds.map((d) => `${d.x.toFixed(3)},${d.y.toFixed(3)}`));
     const kb = keys(before);
     const kept = [...keys(after)].filter((k) => kb.has(k)).length;
@@ -345,13 +428,33 @@ describe("budget", () => {
       const phone = draw(viewAt(z, -30, -30, 412, 915), fam, 4);
       expect(phone.stats.crests).toBeLessThanOrEqual(PHONE_MAX_DASHES);
     }
-    // Two vertices a dash (a split dash four): the strokes share one path per batch.
-    const one = draw(VIEW, [family("combined", 3, 12, 250)], 4);
-    expect(one.stats.vertices).toBe(2 * one.stats.crests);
+    // Two vertices a dash (a split dash four) and two for each step of its trail: the strokes
+    // of a batch share one path.
+    const one = draw(VIEW, [family("combined", 3, 12, 250)], 4, false, UNBOUNDED);
+    expect(one.stats.trails).toBeGreaterThan(0.8 * one.stats.crests);
+    expect(one.stats.vertices).toBe(2 * one.stats.crests + 2 * TRAIL_STEPS.length * one.stats.trails);
+  });
+
+  it("never passes the vertex budget (MAX_FRAME_VERTICES a frame), shared between the systems like the dash budget", () => {
+    const fam = [family("windsea", 1.8, 5, 300), family("secondary", 2, 9, 200), family("primary", 4, 12, 250)];
+    for (const z of [2, 3, 4]) {
+      for (const width of [1440, 2560]) {
+        const { stats } = draw(viewAt(z, -30, -30, width, 1300), fam, 4);
+        expect(stats.vertices, `zoom ${z}, ${width} px`).toBeLessThanOrEqual(MAX_FRAME_VERTICES);
+        // Every system still gets its share (the top one is not the only one drawn).
+        expect(stats.families).toEqual(["windsea", "secondary", "primary"]);
+      }
+    }
+    // The cut is real: without it this view draws more.
+    const busy = viewAt(2, -30, -30, 2560, 1300);
+    expect(draw(busy, fam, 4, false, UNBOUNDED).stats.vertices).toBeGreaterThan(MAX_FRAME_VERTICES);
+    // Each system in view leaves a share of the vertices to the next.
+    const { lines } = draw(busy, fam, 4);
+    for (const rgb of ["184, 240, 255", "255, 213, 154", "255, 255, 255"]) expect(lines.filter((l) => l.style.includes(rgb)).length, rgb).toBeGreaterThan(100);
   });
 
   it("keeps the same dash density at every zoom (one dash per cell fixed on screen)", () => {
-    const density = (z: number) => draw(viewAt(z, -40, -30), [family("combined", 3, 12, 250)], 3, false, 1e6).stats.crests;
+    const density = (z: number) => draw(viewAt(z, -40, -30), [family("combined", 3, 12, 250)], 3, false, UNBOUNDED).stats.crests;
     const d3 = density(3);
     for (const z of [4, 5, 7]) expect(Math.abs(density(z) - d3) / d3).toBeLessThan(0.12);
   });
