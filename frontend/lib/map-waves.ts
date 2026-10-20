@@ -203,7 +203,7 @@ export const PHONE_WIDTH_PX = 640;
  * dash with its trail and 4 for a split one (no trail). A frame stops placing dashes when the
  * next one could pass it (the same even, hashed cut as the dash budget). 9,000, under D11's
  * 12,000: about 1,500 trailed dashes, which keeps a busy desktop frame (the whole world at
- * 1440 x 900) as cheap as the dashes without trails were (docs/map-rendering.md section 7).
+ * 1440 x 900) within D11's 5 ms draw p95 (docs/map-rendering.md sections 4.8 and 7).
  */
 export const MAX_FRAME_VERTICES = 9_000;
 /** Reduced motion: an arrowhead of ARROW_PX on every ARROW_EVERY-th primary or combined dash. */
