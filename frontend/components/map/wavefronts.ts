@@ -36,6 +36,7 @@ import {
   ARROW_PX,
   crestSpacingPx,
   crestSpeedPxPerS,
+  DASH_ALPHA_MAX,
   DASH_LIFE_PASSAGES,
   DASH_MAX_PX,
   DASH_PASSES,
@@ -67,6 +68,8 @@ export interface WaveFamilyGrids {
 
 /** Lattice node spacing, px. */
 export const LATTICE_PX = 8;
+/** 1 / LATTICE_PX (exact: a power of two), for view px to lattice units. */
+const INV_LATTICE_PX = 1 / LATTICE_PX;
 /** Largest disagreement of the four grid corners of a direction before the node is invalid. */
 export const MAX_CORNER_SPREAD_DEG = 60;
 /** Animation frame interval (30 fps cap: dashes move a few px per second). */
@@ -105,6 +108,8 @@ export interface FamilyLattice {
   speed: Float32Array;
   hs: Float32Array;
   valid: Uint8Array;
+  /** 1 where all four nodes of the lattice cell (i, j)..(i + 1, j + 1) are valid (index of node (i, j)). */
+  cellValid: Uint8Array;
   validCount: number;
   /** Largest crest spacing at a valid node, px: a dash travels at most 3 of them in its life. */
   maxSpacing: number;
@@ -161,6 +166,7 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
       speed: new Float32Array(n),
       hs: new Float32Array(n),
       valid: new Uint8Array(n),
+      cellValid: new Uint8Array(n),
       validCount: 0,
       maxSpacing: 0,
       limit: Infinity,
@@ -190,6 +196,13 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
         anyValid[k] = 1;
       }
     }
+    const v = fl.valid;
+    for (let j = 0; j < ny - 1; j++) {
+      for (let i = 0; i < nx - 1; i++) {
+        const k = j * nx + i;
+        if (v[k] && v[k + 1] && v[k + nx] && v[k + nx + 1]) fl.cellValid[k] = 1;
+      }
+    }
     out.push(fl);
   }
   return { nx, ny, x0, y0, zoom, families: out, anyValid, buildMs: performance.now() - t0 };
@@ -199,17 +212,16 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
 const sample = { px: 0, py: 0, hs: 0 };
 
 function sampleLattice(l: Lattice, f: FamilyLattice, x: number, y: number): boolean {
-  const fx = (x - l.x0) / LATTICE_PX;
-  const fy = (y - l.y0) / LATTICE_PX;
+  const fx = (x - l.x0) * INV_LATTICE_PX;
+  const fy = (y - l.y0) * INV_LATTICE_PX;
   if (!(fx >= 0 && fy >= 0 && fx < l.nx - 1 && fy < l.ny - 1)) return false;
   const i = fx | 0;
   const j = fy | 0;
   const a = j * l.nx + i;
+  if (!f.cellValid[a]) return false;
   const b = a + 1;
   const c = a + l.nx;
   const d = c + 1;
-  const v = f.valid;
-  if (!(v[a] && v[b] && v[c] && v[d])) return false;
   const tx = fx - i;
   const ty = fy - j;
   const wa = (1 - tx) * (1 - ty);
@@ -228,12 +240,10 @@ function sampleLattice(l: Lattice, f: FamilyLattice, x: number, y: number): bool
 
 /** Whether the four lattice nodes around a view point are all valid (false outside the lattice). */
 function nodesValid(l: Lattice, f: FamilyLattice, x: number, y: number): boolean {
-  const fx = (x - l.x0) / LATTICE_PX;
-  const fy = (y - l.y0) / LATTICE_PX;
+  const fx = (x - l.x0) * INV_LATTICE_PX;
+  const fy = (y - l.y0) * INV_LATTICE_PX;
   if (!(fx >= 0 && fy >= 0 && fx < l.nx - 1 && fy < l.ny - 1)) return false;
-  const a = (fy | 0) * l.nx + (fx | 0);
-  const v = f.valid;
-  return !!(v[a] && v[a + 1] && v[a + l.nx] && v[a + l.nx + 1]);
+  return f.cellValid[(fy | 0) * l.nx + (fx | 0)] === 1;
 }
 
 /**
@@ -242,13 +252,17 @@ function nodesValid(l: Lattice, f: FamilyLattice, x: number, y: number): boolean
  * centre line of every trail step.
  */
 function trailValid(l: Lattice, f: FamilyLattice, cx: number, cy: number, px: number, py: number, w: number, tr: number): boolean {
-  const tx = -py;
-  const ty = px;
-  const at = (along: number, back: number) => nodesValid(l, f, cx + tx * along - px * back, cy + ty * along - py * back);
-  if (!at(-w, tr) || !at(w, tr)) return false;
-  for (const step of TRAIL_STEPS) {
-    const back = (tr * step.length) / 2;
-    if (!at(-w, back) || !at(0, back) || !at(w, back)) return false;
+  // Along the crest tangent (-py, px) by +-w, back against the travel (px, py) by `back`.
+  const ax = -py * w;
+  const ay = px * w;
+  let bx = cx - px * tr;
+  let by = cy - py * tr;
+  if (!nodesValid(l, f, bx - ax, by - ay) || !nodesValid(l, f, bx + ax, by + ay)) return false;
+  for (let k = 0; k < TRAIL_STEPS.length; k++) {
+    const back = (tr * TRAIL_STEPS[k]!.length) / 2;
+    bx = cx - px * back;
+    by = cy - py * back;
+    if (!nodesValid(l, f, bx - ax, by - ay) || !nodesValid(l, f, bx, by) || !nodesValid(l, f, bx + ax, by + ay)) return false;
   }
   return true;
 }
@@ -280,6 +294,18 @@ export interface DashCell {
   /** The cell's dash in `owner` (a DashState store), held here so a frame needs no lookups. */
   dash?: CellDash;
   owner?: Map<number, CellDash>;
+  /**
+   * The store (`testedBy`) and life number (`testedLife`) of the dash last tested against the
+   * view, and the animation time [idleFrom, idleUntil) (s) of that life in which the cell draws
+   * nothing in this view: its birth place had no data, or its whole path from birth to the end
+   * of its life stays outside the view (else an empty interval). A frame of that store skips
+   * the cell then; the cell's next life is placed exactly as if it had been visited (dashAt
+   * replays the lives in order).
+   */
+  testedBy?: Map<number, CellDash>;
+  testedLife: number;
+  idleFrom: number;
+  idleUntil: number;
 }
 
 export interface DashGrid {
@@ -312,7 +338,7 @@ export function dashGrid(l: Lattice, f: FamilyLattice, view: PixelView): DashGri
   const ci1 = Math.floor((view.originX + view.width + margin) / cell);
   const cj0 = Math.max(0, Math.floor((view.originY - margin) / cell));
   const cj1 = Math.min(nWorld - 1, Math.floor((view.originY + view.height + margin) / cell));
-  const cells: Array<DashCell & { keep: number }> = [];
+  const cells: Array<Pick<DashCell, "ci" | "cj" | "wrapped" | "key" | "phase" | "lifeRef"> & { keep: number }> = [];
   for (let cj = cj0; cj <= cj1; cj++) {
     const lat = mercLat(((cj + 0.5) * cell) / view.worldPx);
     for (let ci = ci0; ci <= ci1; ci++) {
@@ -330,9 +356,11 @@ export function dashGrid(l: Lattice, f: FamilyLattice, view: PixelView): DashGri
     }
   }
   // In a fixed hashed order: a frame over budget leaves out an even, random share of the
-  // cells, never a region, and the same one from frame to frame.
+  // cells, never a region, and the same one from frame to frame. The cells are made again in
+  // that order (with every field set), so a frame walks them in memory order with one shape.
   cells.sort((a, b) => a.keep - b.keep);
-  const grid = { cell, cells };
+  const ordered: DashCell[] = cells.map(({ ci, cj, wrapped, key, phase, lifeRef }) => ({ ci, cj, wrapped, key, phase, lifeRef, dash: undefined, owner: undefined, testedBy: undefined, testedLife: NaN, idleFrom: 0, idleUntil: 0 }));
+  const grid = { cell, cells: ordered };
   gridCache.set(f, grid);
   return grid;
 }
@@ -546,6 +574,11 @@ export interface DrawOptions {
   maxVertices?: number;
   /** The dashes kept between frames (a fresh state places every dash from the clock alone). */
   state?: DashState;
+  /**
+   * Skip, for the rest of its dash's life, a cell that cannot draw in this view (default true;
+   * false only so tests can check that skipping changes nothing).
+   */
+  skipIdle?: boolean;
 }
 
 /**
@@ -558,6 +591,7 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   state.frame++;
   const t = o.still ? 0 : o.t;
   const maxVertices = o.maxVertices ?? MAX_FRAME_VERTICES;
+  const skipIdle = o.skipIdle ?? true;
   const stats: FrameStats = { crests: 0, vertices: 0, strokes: 0, cells: 0, arrows: 0, trails: 0, families: [] };
   let maxKey = -1;
   let maxTrailKey = -1;
@@ -615,6 +649,8 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     const vBefore = stats.vertices;
     const arrowsOn = o.still && (f.system === "primary" || f.system === "combined");
     const reach = DASH_MAX_PX;
+    const right = view.width + reach;
+    const bottom = view.height + reach;
     let visited = 0;
     let hit = false;
     let drawnHere = 0;
@@ -625,16 +661,35 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
         break;
       }
       visited++;
-      const d = dashAt(store, f, c, cell, view, l.zoom, t, state.frame);
+      if (skipIdle && c.testedBy === store && t >= c.idleFrom && t < c.idleUntil) continue;
+      // The hot helpers below are called with #__NOINLINE__: the production minifier would
+      // otherwise inline each single-use function as a function expression created and called
+      // anew for every cell (a closure allocated per call and more young-generation GC pauses).
+      const d = /*#__NOINLINE__*/ dashAt(store, f, c, cell, view, l.zoom, t, state.frame);
+      if (skipIdle && (c.testedBy !== store || c.testedLife !== d.k)) {
+        // Once a life: a dash without data, or whose path never comes near the view, leaves
+        // its cell idle for the rest of that life.
+        c.testedBy = store;
+        c.testedLife = d.k;
+        const x0 = d.wx - ox;
+        const y0 = d.wy - oy;
+        const x1 = x0 + d.px * d.v * d.life;
+        const y1 = y0 + d.py * d.v * d.life;
+        const idle = !d.ok || Math.max(x0, x1) < -reach || Math.max(y0, y1) < -reach || Math.min(x0, x1) > right || Math.min(y0, y1) > bottom;
+        c.idleFrom = idle ? d.tb : 0;
+        c.idleUntil = idle ? d.tb + d.life : 0;
+        if (idle) continue;
+      }
       if (!d.ok) continue;
-      const age = (t - d.tb) / d.life;
-      const fade = o.still ? 1 : dashFade(age);
       const travel = d.v * (t - d.tb);
       const cx = d.wx + d.px * travel - ox;
       const cy = d.wy + d.py * travel - oy;
-      if (cx < -reach || cy < -reach || cx > view.width + reach || cy > view.height + reach) continue;
+      if (cx < -reach || cy < -reach || cx > right || cy > bottom) continue;
+      const fade = o.still ? 1 : dashFade((t - d.tb) / d.life);
+      // dashAlpha is at most DASH_ALPHA_MAX: a dash this faint is left out before any sampling.
+      if (fade * DASH_ALPHA_MAX < MIN_ALPHA) continue;
       // Orientation and height where the dash is now; centre and both ends on valid nodes.
-      if (!sampleLattice(l, f, cx, cy)) continue;
+      if (!(/*#__NOINLINE__*/ sampleLattice(l, f, cx, cy))) continue;
       const hs = sample.hs;
       const alpha = dashAlpha(hs) * fade;
       if (alpha < MIN_ALPHA) continue;
@@ -650,12 +705,13 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       // The trail: where the dash was over the last TRAIL_SECONDS (no further back than its
       // birth while animating), from MIN_TRAIL_PX, and only where all of it is on valid nodes
       // (trailValid; else the dash is drawn without one).
-      const trail = !style.trail ? 0 : o.still ? trailLength(d.v, d.s) : Math.min(trailLength(d.v, d.s), d.v * (t - d.tb));
+      const full = style.trail ? trailLength(d.v, d.s) : 0;
+      const trail = o.still ? full : Math.min(full, d.v * (t - d.tb));
       const capPx = DASH_WIDTH_LEVELS[wl]! / 2;
       let tl = -1;
       if (trail >= MIN_TRAIL_PX) {
         const level = nearestLevel(TRAIL_LEVELS, trail);
-        if (trailValid(l, f, cx, cy, px, py, half + capPx, TRAIL_LEVELS[level]!)) tl = level;
+        if (/*#__NOINLINE__*/ trailValid(l, f, cx, cy, px, py, half + capPx, TRAIL_LEVELS[level]!)) tl = level;
       }
       if (style.gap > 0) {
         // Split dash: the core shows a gap of `gap` x the length between its round caps.
@@ -704,7 +760,13 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       TRAIL_STEPS.forEach((step, k) => {
         ctx.lineWidth = tr * step.length;
         ctx.strokeStyle = `rgba(${rgb}, ${Math.round(a * step.alpha * 1000) / 1000})`;
-        ctx.stroke(pathOf(b, 4 * k, 4 * NS));
+        // Stroked once, so on the context's own path (no Path2D object to allocate).
+        ctx.beginPath();
+        for (let i = 4 * k; i < b.n; i += 4 * NS) {
+          ctx.moveTo(b.segs[i]!, b.segs[i + 1]!);
+          ctx.lineTo(b.segs[i + 2]!, b.segs[i + 3]!);
+        }
+        ctx.stroke();
         stats.strokes++;
       });
     }

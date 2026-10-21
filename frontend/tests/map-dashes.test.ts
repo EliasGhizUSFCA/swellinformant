@@ -341,6 +341,42 @@ describe("world-anchored, time-based and frame-rate independent", () => {
     expect(key(fresh.lines)).toBe(at60); // and the same as placing them from the clock alone
   });
 
+  describe("cells that cannot draw in the view are skipped for the rest of their dash's life", () => {
+    // SYNTHETIC seas whose period varies across the view (lives of different lengths), on a
+    // view with land-like gaps, at a zoom where dashes born in the margin drift into view.
+    const view = viewAt(3, -40, -30, 480, 320);
+    const tp = globalGrid((_lat, lon) => 9 + 4 * Math.sin(lon / 4));
+    const hs = globalGrid((lat, lon) => (Math.abs(lon + 30) < 3 && lat > -42 ? NaN : 2.5));
+    const fam = [family("combined", hs, tp, 240)];
+    const key = (lines: ReturnType<typeof recorder>["lines"]) => JSON.stringify(dashesOf(lines).map((d) => [d.x.toFixed(6), d.y.toFixed(6), d.alpha]));
+    const animate = (skipIdle: boolean, still: (k: number) => boolean) => {
+      const lattice = buildLattice(view, fam);
+      const frame = (t: number, isStill: boolean, state?: DashState) => {
+        const r = recorder();
+        drawDashes(r.ctx, view, lattice, { t, still: isStill, budget: UNBOUNDED, maxVertices: Infinity, state, skipIdle });
+        return r.lines;
+      };
+      const state = new DashState();
+      const out: string[] = [];
+      for (let k = 0; k <= 360; k++) {
+        if (still(k)) expect(dashesOf(frame(0, true)).length).toBeGreaterThan(50);
+        const lines = frame(k / 30, false, state);
+        if (k % 15 === 0) out.push(key(lines));
+      }
+      return out;
+    };
+
+    it("draws exactly what visiting every cell every frame draws", { timeout: 60_000 }, () => {
+      const every = animate(false, () => false);
+      expect(JSON.parse(every[every.length - 1]!).length).toBeGreaterThan(50);
+      expect(animate(true, () => false)).toEqual(every);
+    });
+
+    it("draws the same animation whether or not still frames (their own state) came in between", { timeout: 60_000 }, () => {
+      expect(animate(true, (k) => k % 45 === 0)).toEqual(animate(true, () => false));
+    });
+  });
+
   it("advances the animation clock by time, not frames (60, 120 and 144 Hz)", () => {
     const rafs: Array<() => void> = [];
     vi.stubGlobal("requestAnimationFrame", (cb: () => void) => rafs.push(cb));
