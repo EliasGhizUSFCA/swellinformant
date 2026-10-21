@@ -10,6 +10,7 @@
 FROM python:3.13.15-slim-trixie AS build
 
 ENV PIP_NO_CACHE_DIR=1 \
+    PIP_ROOT_USER_ACTION=ignore \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     UV_PYTHON_DOWNLOADS=never \
     UV_LINK_MODE=copy \
