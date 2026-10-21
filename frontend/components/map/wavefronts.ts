@@ -464,7 +464,7 @@ function dashAt(store: Map<number, CellDash>, f: FamilyLattice, c: DashCell, cel
 
 /**
  * Stroke batches: per system index, width level and opacity level. Each batch's path is built
- * once and stroked once per pass of DASH_PASSES (the halos, then the core).
+ * once and stroked once per pass of DASH_PASSES (the halo, then the core).
  */
 interface Batch {
   /** Segments (x0, y0, x1, y1), `n` numbers used (the array is reused and only grows). */
@@ -689,8 +689,8 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   ctx.lineJoin = "round";
   ctx.setLineDash([]);
   // Per system in drawing order (primary last, on top): its trails (each step of every trail
-  // batch, butt caps), then every dash batch's outer halo, its inner halo and the cores
-  // (round caps). Each batch's path is built once and stroked once per pass.
+  // batch, butt caps), then every dash batch's halo and its core (round caps, DASH_PASSES).
+  // Each batch's path is built once and stroked once per pass.
   const perSystem = NW * NA;
   const perSystemTrail = NT * NA;
   for (let sys = 0; sys * perSystem <= maxKey; sys++) {

@@ -222,7 +222,7 @@ export function dashWidth(hsM: number, system: WaveSystem = "primary"): number {
   return clamp(DASH_WIDTH_BASE_PX + DASH_WIDTH_PX_PER_M * hsM, DASH_WIDTH_BASE_PX, DASH_WIDTH_MAX_PX) * FAMILY_STYLES[system].widthFactor;
 }
 
-/** Dash opacity at full life: clamp(0.50 + 0.06 Hs, 0.50, 0.85). */
+/** Dash opacity at full life: clamp(0.40 + 0.09 Hs, 0.40, 0.90) (D11). */
 export function dashAlpha(hsM: number): number {
   return clamp(DASH_ALPHA_BASE + DASH_ALPHA_PER_M * hsM, DASH_ALPHA_BASE, DASH_ALPHA_MAX);
 }
