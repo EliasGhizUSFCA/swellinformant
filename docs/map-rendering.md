@@ -311,7 +311,21 @@ canvas with `imageSmoothingQuality = "high"` (section 2).
   system, 7 trail-length levels (4, 6, ..., 16 px: the length is rounded to the nearest) and the
   dash's opacity level, with one path per step: two vertices per step, so a solid dash with its
   trail costs 6 vertices. Per system, the trails are stroked first (butt caps), then the halos
-  and the cores (round caps).
+  and the cores (round caps). A core batch's path is a `Path2D` (stroked twice: halo, then
+  core); a trail step is stroked once, on the context's own path.
+* **Frame cost** (none of this changes what is drawn): the cells are made in their hashed
+  visiting order, so a frame walks them in memory order; a cell whose dash cannot be drawn in
+  the view during its life (no data at its birth place, or a path from birth to the end of
+  its life that stays outside the view and the 14 px drawing margin) is skipped until that
+  life ends, and its next life is placed exactly as if it had been visited (unit test: an
+  animation with skipping equals one that visits every cell every frame, and still frames in
+  between change nothing); each lattice cell carries an "all four nodes valid" flag, so every
+  validity probe is one read; a dash too faint by its life fade alone (fade x 0.90 < 0.04) is
+  left out before any sampling; and the hot single-use helpers (`dashAt`, `sampleLattice`,
+  `trailValid`) are called with `/*#__NOINLINE__*/`, because the production minifier
+  otherwise inlines each as a function expression created anew for every cell or dash
+  (thousands of closures a frame and more garbage-collection pauses). Section 7 has the
+  measurements.
 
 **Departures from D11's first numbers.** D11 proposed dashes `clamp(6 + 3 Hs, 6, 22)` px long,
 `clamp(1.0 + 0.3 Hs, 1.0, 2.6)` px wide at opacity `clamp(0.40 + 0.09 Hs, 0.40, 0.90)` with one
@@ -336,9 +350,10 @@ at 0.45) the e2e frame draw p95 rose from 2.4-3.6 ms to 4.7-6.7 ms on this share
 and the ink ratio 4 m / 1 m to 2.03. So the outer halo, the largest stroke of a dash and most
 of its raster time, was dropped (D11 itself had one halo); the opacity went back to D11's
 `0.40 + 0.09 Hs` (ink 2.17); the secondary's split dashes have no trail (peak 0.20); the
-frame keeps to 9,000 vertices (section 4.8); and the bands went from 0.30 to 0.25 x the dash's
-opacity, which lifts the orientation coherence of a uniform swell from 0.60 / 0.56 (desktop /
-Pixel 7) to 0.64 / 0.60 against the test's 0.5 (a trail's sides run across the crest). An
+frame kept to 9,000 vertices (6,000 since 2026-10-21, section 4.8); and the bands went from
+0.30 to 0.25 x the dash's opacity, which lifts the orientation coherence of a uniform swell
+from 0.60 / 0.56 (desktop / Pixel 7) to 0.64 / 0.60 against the test's 0.5 (a trail's sides
+run across the crest). An
 attempt to draw a dash and its trail as one dash-patterned stroke (two vertices a dash) cost
 more, not less: Chrome dashes the path to record it (6.8-7.9 ms). Screenshots: section 7.
 
@@ -372,14 +387,18 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
   whole. Nothing animates (e2e: the canvas hash is unchanged over 1 s, with more than 3
   arrowheads).
 * Budget: at most `MAX_DASHES = 4,000` dashes per frame, `PHONE_MAX_DASHES = 1,500` below
-  640 px wide (`maxDashes`), and at most `MAX_FRAME_VERTICES = 9,000` vertices (under D11's
+  640 px wide (`maxDashes`), and at most `MAX_FRAME_VERTICES = 6,000` vertices (under D11's
   12,000; enforced in the renderer since the trails: a frame stops placing dashes when the next
-  one, at most 8 vertices, could pass it; about 1,500 trailed dashes, which keeps the busiest
-  desktop view, the whole world at 1440 x 900, within D11's 5 ms, section 7; phone views stay
-  well under it). The top system (primary, else combined) is planned first and may use 60 %
-  (`BUDGET_SHARE`) of the dashes and of the vertices left, the next 60 % of the rest, the last
-  one all of it. Cells are visited in a fixed hashed order, so a frame over budget leaves out an even, random share of
-  the cells, never a region. The number of cells visited only shrinks when a budget is hit and
+  one, at most 8 vertices, could pass it; about 1,030 trailed dashes, which keeps the busiest
+  desktop view, the whole world at 1440 x 900, within D11's 5 ms on the shared,
+  software-rendered test machine under load, section 7; phone views stay well under it). It
+  was 9,000 (about 1,550 dashes) until 2026-10-21, when that machine measured a draw p95 of
+  4.7 to 6.8 ms at 9,000 even with the cheaper frame of section 4.6, and up to 5.2 ms at
+  7,000 while another agent's tests ran. The top system (primary, else combined) is planned
+  first and may use 60 % (`BUDGET_SHARE`) of the dashes and of the vertices left, the next
+  60 % of the rest, the last one all of it. Cells are visited in a fixed hashed order, so a
+  frame over budget leaves out an even, random share of the cells, never a region. The
+  number of cells visited only shrinks when a budget is hit and
   grows back by one cell a frame while under 75 % of both, so the cut is steady. Targets (D11,
   e2e at 1440 x 900): draw p95 ≤ 5 ms and ≤ 12,000 vertices.
 
@@ -388,8 +407,9 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
 `canvas.map-wave-canvas`: `data-style` (`dashes`), `data-mode` (animated, static, off),
 `data-families` (systems drawn, in drawing order), `data-crests` (dashes drawn),
 `data-dash-trails` (dashes drawn with a trail), `data-vertices`, `data-strokes`, `data-drawn`,
-`data-arrows` (still mode), `data-exaggeration` (E rounded), `data-view` (origin, size, world px), `data-ocean-mask`, `data-draw-ms`,
-`data-draw-ms-p95` (last 120 frames), `data-frames` (frames drawn) and `data-lattice-ms`. The
+`data-arrows` (still mode), `data-exaggeration` (E rounded), `data-view` (origin, size, world
+px), `data-ocean-mask`, `data-draw-ms`, `data-draw-ms-p95` (last 120 frames), `data-frames`
+(frames drawn) and `data-lattice-ms`. The
 e2e frame-cost test (`e2e/map-performance.spec.ts`, run without the Playwright trace recorder)
 reads the p95 once more than 160 frames are drawn.
 `canvas.map-particle-canvas`: `data-mode`, `data-color-type`, `data-trails`, `data-arrows`.
@@ -423,69 +443,83 @@ follow the account's ft/m preference. The legend title states the unit of the co
 
 ## 7. Measured (e2e, synthetic fields, headless Chromium, 1440 x 900, shared 4-CPU machine)
 
-Full e2e run with the trailed crest dashes (2026-10-20, chromium and Pixel 7 projects, 127
-tests passed; the machine is shared with another agent's test runs, so times vary from run to
-run). The dashes without trails (2026-10-19 run) and the traced-crest renderer (2026-10-15) are
-given for comparison.
+Full e2e run with the 6,000-vertex frame budget (2026-10-21, chromium and Pixel 7 projects,
+127 tests passed; the machine is shared with another agent's builds and test runs, load
+average 2 to 9, so times vary from run to run). The trailed dashes under the 9,000-vertex
+budget (2026-10-20), the dashes without trails (2026-10-19) and the traced-crest renderer
+(2026-10-15) are given for comparison.
 
-| Check | Trailed dashes (2026-10-20) | Dashes, no trail (2026-10-19) | Traced crests (2026-10-15) |
-|---|---|---|---|
-| Orientation, uniform swell from 225° at 12 s (structure tensor) | 44.9°, coherence 0.64 (Pixel 7: 45.0°, 0.60) | 45.0°, 0.80 (0.78) | 45.0°, 0.98 |
-| Motion along the travel direction | 7.0 px in 0.81 s (expected about 7.3); Pixel 7: 6.0 px in 0.60 s (about 5.4) | 5.0 px in 0.61 s | 5.0 px in 0.61 s |
-| Crest spacing 8 s / 16 s (ink autocorrelation) | 12 px / 48 px (ratio 4.00; D11 allows 4.0 ± 0.2) | 12 / 48 px | 12 / 48 px |
-| Ink, Hs 1 m / 4 m | 30,266 / 67,118 (2.22 x; D11 asks > 2 x) | 32,237 / 70,395 (2.18 x) | 10,117 / 35,411 |
-| Orientation peaks, swell1 from 270° + swell2 from 180° | 92.5° (0.38 of the energy) and 177.5° (0.20; threshold 0.15); 87.5° alone without swell2 | 92.5° (0.41) and 2.5° (0.19) | 92.5° and 2.5° |
-| Frame draw time p95 once settled (combined sea, whole world, no trace recorder) | 4.7 ms, 1,549 dashes, 8,676 vertices (D11: ≤ 5 ms, ≤ 12,000; the 9,000-vertex budget cuts this view) | 2.6 ms, 2,111 dashes, 4,208 vertices | 3.8 ms, 9,531 vertices |
-| Main-thread cost per animation frame | 2.87 ms script (32.0 ms task) | 2.06 ms script (37.6 ms task) | 2.7 ms script (33.6 ms task) |
-| Basemap redraw at zoom 2 | 4.4 ms | 4.1 ms | 6.2 ms |
-| Colour-field redraw at 1440 x 900 (median of 6 pans) | 14.9 ms (10.7 to 24.8) | 18.0 ms | 16.8 ms |
-| Particle canvas after 5 s: alpha 5 / 6 / 7 counts, fade renderer (float16) | 11,431 / 9,652 / 7,903 (no spike at 6) | 11,546 / 9,305 / 8,376 | 11,290 / 8,922 / 8,647 |
-| Same, explicit renderer (8-bit canvas) | 3,721 / 5,534 / 3,577 | 3,284 / 5,323 / 3,697 | 4,071 / 6,423 / 4,012 |
-| Field cache after 48 downloads | array buffers 23.0 -> 56.3 MB (cache at most 49.9 MB decoded) | 22.9 -> 56.2 MB | 23.5 -> 56.7 MB |
+| Check | 6,000-vertex budget (2026-10-21) | Trailed, 9,000 vertices (2026-10-20) | Dashes, no trail (2026-10-19) | Traced crests (2026-10-15) |
+|---|---|---|---|---|
+| Orientation, uniform swell from 225° at 12 s (structure tensor) | 44.9°, coherence 0.60 (Pixel 7: 45.1°, 0.60) | 44.9°, 0.64 (45.0°, 0.60) | 45.0°, 0.80 (0.78) | 45.0°, 0.98 |
+| Motion along the travel direction | 8.0 px in 0.88 s (expected about 8.0); Pixel 7: 8.5 px in 0.99 s (about 9.0) | 7.0 px in 0.81 s (about 7.3) | 5.0 px in 0.61 s | 5.0 px in 0.61 s |
+| Crest spacing 8 s / 16 s (ink autocorrelation) | 12 px / 48 px (ratio 4.00; D11 allows 4.0 ± 0.2) | 12 / 48 px | 12 / 48 px | 12 / 48 px |
+| Ink, Hs 1 m / 4 m | 20,862 / 48,019 (2.30 x; D11 asks > 2 x) | 30,266 / 67,118 (2.22 x) | 32,237 / 70,395 (2.18 x) | 10,117 / 35,411 |
+| Orientation peaks, swell1 from 270° + swell2 from 180° | 87.5° (0.37 of the energy) and 177.5° (0.20; threshold 0.15); 87.5° alone without swell2 | 92.5° (0.38) and 177.5° (0.20) | 92.5° (0.41) and 2.5° (0.19) | 92.5° and 2.5° |
+| Frame draw time p95 once settled (combined sea, whole world, no trace recorder) | 3.3 ms, 1,040 dashes, 5,804 vertices (D11: ≤ 5 ms, ≤ 12,000; the budget cuts this view) | 4.7 ms, 1,549 dashes, 8,676 vertices | 2.6 ms, 2,111 dashes, 4,208 vertices | 3.8 ms, 9,531 vertices |
+| Main-thread cost per animation frame | 2.51 ms script (36.5 ms task) | 2.87 ms script (32.0 ms task) | 2.06 ms script (37.6 ms task) | 2.7 ms script (33.6 ms task) |
+| Basemap redraw at zoom 2 | 8.7 ms | 4.4 ms | 4.1 ms | 6.2 ms |
+| Colour-field redraw at 1440 x 900 (median of 6 pans) | 23.3 ms (16.4 to 24.2) | 14.9 ms (10.7 to 24.8) | 18.0 ms | 16.8 ms |
+| Particle canvas after 5 s: alpha 5 / 6 / 7 counts, fade renderer (float16) | 11,738 / 9,748 / 7,765 (no spike at 6) | 11,431 / 9,652 / 7,903 | 11,546 / 9,305 / 8,376 | 11,290 / 8,922 / 8,647 |
+| Same, explicit renderer (8-bit canvas) | 3,898 / 5,132 / 4,150 | 3,721 / 5,534 / 3,577 | 3,284 / 5,323 / 3,697 | 4,071 / 6,423 / 4,012 |
+| Field cache after 48 downloads | array buffers 23.0 -> 56.2 MB (cache at most 49.9 MB decoded) | 23.0 -> 56.3 MB | 22.9 -> 56.2 MB | 23.5 -> 56.7 MB |
 
-Wind particles in the same run: 1.25 ms script (20.8 ms task) per frame; idle map 0.06 ms
-(0.31 ms task). "Task" includes the software rasterisation of headless Chromium, which a
-GPU-backed canvas does off the main thread; no browser with a GPU was available here.
+Wind particles in the same run: 2.28 ms script (39.1 ms task) per frame; idle map 0.15 ms
+(0.49 ms task). "Task" includes the software rasterisation of headless Chromium, which a
+GPU-backed canvas does off the main thread; no browser with a GPU was available here. The
+redraw times of the colour field and the basemap (one draw per pan) rose although neither
+code changed between the 2026-10-20 and 2026-10-21 runs: most likely the machine's load.
 
-The frame draw p95 is the measure closest to its limit, and the noisiest: the same build gave
-3.8 ms in a map-only e2e run an hour earlier, and the dashes without trails measured 2.4 to
-3.6 ms in interleaved runs on the development server when the trails were being fitted (with
-trails, both halos and no vertex budget: 4.7 to 6.7 ms). `MAX_FRAME_VERTICES` is the knob: a
-lower budget thins busy desktop views evenly and lowers the cost in proportion.
+The frame draw p95 is the measure closest to its limit, and the noisiest. The same e2e check
+(the whole world at 1440 x 900, about 1,560 dashes under 9,000 vertices) measured 4.7 to 6.8
+ms in 16 runs on 2026-10-21 while the cheaper frame of section 4.6 was being made (6.1 to 9.0
+ms in 4 runs before it); 3.8 to 5.2 ms at 7,000 vertices (about 1,220 dashes, 5 runs); and
+3.2 to 5.0 ms at 6,000 (about 1,040 dashes, 7 runs, this one 3.3 ms). `MAX_FRAME_VERTICES`
+is the knob: a lower budget thins busy desktop views evenly and lowers the cost in
+proportion.
 
 Coherence is lower than for long traced crests because a short dash has round ends and its
 trail has sides, whose edges run across the crest as well as along it. The 0.5 threshold of
 the e2e check is unchanged.
 
 **Visual QA on real fields.** NOAA GFS-Wave + GFS fields of the 2026-10-16 00Z run (the 9
-stored hours of a clone of the `swell_u3i_live_run` database), served by this branch's backend
-to a production build, screenshots at 1440 x 900 and in Pixel 7 emulation, compared with the
-owner's reference screenshot. Dashes drawn (with a trail), and the 120-frame draw p95 with the
-median frame in brackets, once settled (SwiftShader GL, machine shared):
+stored hours of a clone of the `swell_u3i_live_run` database, with the real Open-Meteo spot
+runs of that day), served by this branch's backend to its production build, screenshots at
+1440 x 900 and in Pixel 7 emulation, compared with the owner's reference screenshot
+(2026-10-21, 6,000-vertex budget). Dashes drawn (with a trail), and the 120-frame draw p95
+with the median frame in brackets, once settled (headless Chromium, software rendering,
+machine shared):
 
 | View | Desktop 1440 x 900 | Pixel 7 |
 |---|---|---|
-| California, zoom 6, centre 36.5°N 123°W (Hs about 2 m: blue) | 1,507 (1,463), 8,866 vertices: 5.0 ms (2.7) | 545 (522): 1.3 ms (0.9) |
-| California, zoom 5 (violet to magenta offshore) | 1,516 (1,450): 3.2 ms (2.0) | |
-| Gulf of Alaska storm, zoom 5 (Hs 4 to 7 m: violet, magenta, pink) | 1,552 (1,462): 4.2 ms (2.9) | 777 (719): 2.1 ms (1.6) |
-| Pacific, zoom 2 (Pixel 7: its whole-world view) | 1,460 (1,341): 5.9 ms (3.5) | 323 (279): 1.4 ms (1.1) |
-| California, zoom 6, primary + secondary + wind sea | 1,689 (1,093; the secondary has no trail), 8,820 vertices: 4.7 ms (3.4) | |
-| California, zoom 6, reduced motion | still: 1,522 dashes with full trails, 254 arrowheads | |
+| California, zoom 6, centre 36.5°N 123°W (Hs about 2 m: blue) | 1,026 (972), 5,940 vertices: 3.1 ms (1.9) | 538 (513): 1.9 ms (1.3) |
+| California, zoom 5 (violet to magenta offshore) | 1,018 (954): 3.4 ms (2.0) | |
+| Gulf of Alaska storm, zoom 5 (Hs 4 to 7 m: violet, magenta, pink) | 1,020 (966): 3.6 ms (1.9) | 739 (702): 2.1 ms (1.2) |
+| Pacific, zoom 2 (Pixel 7: its whole-world view) | 1,019 (929): 5.1 ms (3.5; 4.6 ms in a first pass) | 306 (271): 1.7 ms (1.0) |
+| California, zoom 6, primary + secondary + wind sea | 1,079 (713; the secondary has no trail), 5,650 vertices: 3.9 ms (2.1) | |
+| California, zoom 6, reduced motion | still: 1,021 dashes, 988 with full trails, 171 arrowheads | |
 
-Without trails the same views drew 1,735 (California, zoom 6), 2,192 (Alaska) and 3,914
-(partitions) dashes at 2.1, 8.3 and 10.2 ms: the vertex budget now cuts the busy desktop views
-by about 12 % (California) to 30 % (Alaska), evenly, and keeps their cost down; phone views are
-not cut.
+Under the 9,000-vertex budget (2026-10-20) the same desktop views drew 1,507 (California,
+zoom 6), 1,552 (Alaska), 1,460 (Pacific) and 1,689 (partitions) dashes at 5.0, 4.2, 5.9 and
+4.7 ms; without trails, 1,735, 2,192 and 3,914 (partitions) at 2.1, 8.3 and 10.2 ms. The
+6,000 budget leaves out about a third of the cells of those busy desktop views, evenly; the
+phone views are barely cut (538 dashes against 545 off California, 739 against 777 off
+Alaska).
 
 The field reads as a smooth navy-blue-violet-magenta-pink surface, the land is grey with a
 light coastline, and many short, soft white dashes lie across the swell with a bright leading
 edge and a fading smear behind, drifting with it: the character of the reference, drawn with
 our own ramp, shapes and code. The California coast that day had about 2 m of sea, so it is
 blue on our ramp where the reference (a bigger day) is magenta; the colours follow the metre
-anchors, not the reference. The reference, a phone screenshot, is denser (about 3.8 blobs per
-1,000 CSS px squared, each about 30 CSS px squared above the local background, against our
-1.8 and about 40 on a desktop at zoom 6, counted the same way on the screenshots): ours are
-fewer and larger, within the frame budget. The screenshots are attached to the Upgrade 4 package report, not committed.
+anchors, not the reference. Counted the same way on the screenshots (open-ocean regions clear
+of labels and controls; blobs at least 25 grey levels above a 31 CSS px local mean), the
+reference, a phone screenshot, has 3.75 blobs per 1,000 CSS px squared with a median of 28
+CSS px squared, and covers 11.6 % of the region; ours off California at zoom 6 has 2.3 blobs
+(35 CSS px squared, 10.1 % covered) on the Pixel 7 and 1.3 blobs (44 CSS px squared, 6.3 %
+covered; 1.8 blobs under the 9,000 budget) on the desktop. The phone view is close to the
+reference; a desktop view is about half as dense, with fewer and larger dashes, because of
+the frame budget. The screenshots are attached to the Upgrade 4 package report, not
+committed.
 
 ## 8. Limitations
 
@@ -504,10 +538,11 @@ fewer and larger, within the frame budget. The screenshots are attached to the U
   is drawn rather than one along a direction no wave has, so such areas show gaps.
 * The dash sizes and density were tuned by eye on one real run (GFS-Wave 2026-10-16 00Z) and
   synthetic fields against one reference screenshot. A busy desktop view (the whole world, a
-  storm at zoom 5, California at zoom 6 at 1440 x 900) reaches the 9,000-vertex budget, about
-  1,500 trailed dashes, and leaves out an even share of the cells, so it is somewhat sparser
+  storm at zoom 5, California at zoom 6 at 1440 x 900) reaches the 6,000-vertex budget, about
+  1,030 trailed dashes, and leaves out an even share of the cells, so it is somewhat sparser
   than the cell grid (section 7); phone views stay under it.
 * Without a GPU (headless Chromium here) the dash layer keeps the main thread busy with
-  software rasterisation of its soft strokes (about 38 ms of task time per frame).
+  software rasterisation of its soft strokes (35 to 39 ms of task time per frame in the last
+  three full e2e runs).
 * With the combined sea drawn (the default), the partition fields are not downloaded, so the
   hover readout lists partitions only when they are chosen in Settings.
