@@ -230,7 +230,8 @@ function sampleLattice(l: Lattice, f: FamilyLattice, x: number, y: number): bool
   const wd = tx * ty;
   const px = f.px[a]! * wa + f.px[b]! * wb + f.px[c]! * wc + f.px[d]! * wd;
   const py = f.py[a]! * wa + f.py[b]! * wb + f.py[c]! * wc + f.py[d]! * wd;
-  const m = Math.hypot(px, py);
+  // (|px|, |py| <= 1, a blend of unit vectors: no overflow, so no need for Math.hypot, which is slower.)
+  const m = Math.sqrt(px * px + py * py);
   if (!(m > 0.5)) return false; // the nodes disagree too much to give a direction
   sample.px = px / m;
   sample.py = py / m;
