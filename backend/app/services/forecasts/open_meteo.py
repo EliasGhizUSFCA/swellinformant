@@ -4,7 +4,9 @@ Open-Meteo republishes NOAA and ECMWF model output as JSON for many coordinates 
 request, so 50 spot forecasts cost kilobytes instead of the gigabytes of whole-globe GRIB
 records the direct ingesters read (docs/FORECAST_SOURCES.md has the measured numbers).
 The free tier is for non-commercial use; OPEN_METEO_API_KEY switches to the commercial
-``customer-*`` hosts (docs/API_SETUP_REQUIRED.md).
+``customer-*`` hosts (docs/API_SETUP_REQUIRED.md). With COMMERCIAL_USE=true and no key the
+providers refuse to be built or to send any request (:func:`require_commercial_licence`),
+so a commercial deployment never calls the free hosts by mistake.
 
 Families (``families.py``; the blend keeps one member per family):
 
@@ -107,6 +109,8 @@ from app.services.http import (
 logger = logging.getLogger(__name__)
 
 HTTP_PROVIDER = "open_meteo"
+# Raised (PermanentProviderError) with COMMERCIAL_USE=true and no OPEN_METEO_API_KEY.
+FREE_API_NON_COMMERCIAL = "free Open-Meteo API is non-commercial; set OPEN_METEO_API_KEY"
 USER_AGENT = (
     "SwellTravelAgent/1.0 (forecast ingestion; +https://github.com/eliasghizusfca/swellinformant)"
 )
@@ -380,6 +384,19 @@ class _Fetch:
     warnings: list[str] = field(default_factory=list)
 
 
+def free_api_refused(settings: Settings) -> bool:
+    """True when the site is in commercial use (COMMERCIAL_USE) without OPEN_METEO_API_KEY:
+    Open-Meteo's free API "may only" be used "for non-commercial purposes", so its free
+    hosts must not be called."""
+    return bool(settings.commercial_use and not settings.open_meteo_api_key)
+
+
+def require_commercial_licence(settings: Settings) -> None:
+    """Raise PermanentProviderError when :func:`free_api_refused` (nothing is retried)."""
+    if free_api_refused(settings):
+        raise PermanentProviderError(FREE_API_NON_COMMERCIAL)
+
+
 # --------------------------------------------------------------------------- provider
 class OpenMeteoFamilyProvider(ForecastProvider):
     """Shared Open-Meteo logic; subclasses choose the models, variables and labels."""
@@ -400,6 +417,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.settings = settings or get_settings()
+        require_commercial_licence(self.settings)
         self.client = client or httpx.Client(
             timeout=self.settings.forecast_http_timeout_seconds,
             headers={"User-Agent": USER_AGENT},
@@ -483,6 +501,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
 
     def read_metas(self) -> dict[str, ModelMeta]:
         """``meta.json`` of every domain (free calls: not charged to the budget)."""
+        require_commercial_licence(self.settings)
         metas: dict[str, ModelMeta] = {}
         for _, host, domain in self.domains():
             if domain in metas:
@@ -617,6 +636,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         variables: list[str],
         extra: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        require_commercial_licence(self.settings)
         cell_selection = self.settings.open_meteo_cell_selection
         params = {
             "latitude": ",".join(f"{x:.4f}" for x in lats),
@@ -878,6 +898,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
     # ---------------------------------------------------------------- fetch
     def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
         """Waves and wind for every spot, for exactly the run ``run`` names."""
+        require_commercial_licence(self.settings)
         result = FetchResult()
         self.request_count = 0
         before = self.tally.snapshot()
