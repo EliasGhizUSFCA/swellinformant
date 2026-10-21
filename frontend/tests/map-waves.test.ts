@@ -181,7 +181,7 @@ describe("height and drawing styles", () => {
     expect(maxDashes(1440)).toBe(MAX_DASHES);
     expect(maxDashes(412)).toBe(PHONE_MAX_DASHES);
     expect([MAX_DASHES, PHONE_MAX_DASHES]).toEqual([4000, 1500]);
-    expect(MAX_FRAME_VERTICES).toBe(7_000); // under D11's 12,000, for its 5 ms draw p95 (docs/map-rendering.md 4.8)
+    expect(MAX_FRAME_VERTICES).toBe(6_000); // under D11's 12,000, for its 5 ms draw p95 (docs/map-rendering.md 4.8)
   });
 
   it("trails each dash by the way it moved over the last second of animation (a display choice)", () => {
