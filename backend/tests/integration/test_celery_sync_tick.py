@@ -144,22 +144,28 @@ def test_one_tick_syncs_and_publishes_and_the_next_is_not_due(
 # --------------------------------------------------------------------------- broker down
 @pytest.fixture
 def refused_broker(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Celery in real (not eager) mode with a broker that refuses connections."""
+    """Celery in real (not eager) mode with Redis refusing connections: the broker and the
+    result backend (one Redis in the classic stack, REDIS_URL)."""
     conf = celery_app.conf
-    saved = (conf.broker_url, conf.task_always_eager, celery_app._pool)
+    saved = (conf.broker_url, conf.result_backend, conf.task_always_eager, celery_app._pool)
     saved_producers = celery_app.amqp._producer_pool
-    conf.broker_url = REFUSED_BROKER
+    saved_backend = (celery_app._backend_cache, getattr(celery_app._local, "backend", None))
+    conf.broker_url = conf.result_backend = REFUSED_BROKER
     conf.task_always_eager = False
     celery_app._pool = None
     celery_app.amqp._producer_pool = None
+    celery_app._backend_cache = None
+    celery_app._local.backend = None
     monkeypatch.setattr(get_settings(), "celery_task_always_eager", False)
     monkeypatch.setattr(get_settings(), "job_runner", "celery")
     try:
+        assert "127.0.0.1:1" in str(celery_app.backend.url)  # the refused result backend
         yield
     finally:
         # The refused broker's pool stays in kombu's registry (it holds no connection).
-        conf.broker_url, conf.task_always_eager, celery_app._pool = saved
+        conf.broker_url, conf.result_backend, conf.task_always_eager, celery_app._pool = saved
         celery_app.amqp._producer_pool = saved_producers
+        celery_app._backend_cache, celery_app._local.backend = saved_backend
 
 
 @pytest.mark.parametrize(
