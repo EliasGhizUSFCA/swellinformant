@@ -201,11 +201,13 @@ export const PHONE_WIDTH_PX = 640;
 /**
  * Most vertices per frame: 2 for each dash piece and 2 for each trail step, so 6 for a solid
  * dash with its trail and 4 for a split one (no trail). A frame stops placing dashes when the
- * next one could pass it (the same even, hashed cut as the dash budget). 9,000, under D11's
- * 12,000: about 1,500 trailed dashes, which keeps a busy desktop frame (the whole world at
- * 1440 x 900) within D11's 5 ms draw p95 (docs/map-rendering.md sections 4.8 and 7).
+ * next one could pass it (the same even, hashed cut as the dash budget). 7,000, under D11's
+ * 12,000: about 1,200 trailed dashes, which keeps a busy desktop frame (the whole world at
+ * 1440 x 900) within D11's 5 ms draw p95 on the shared, software-rendered test machine (9,000,
+ * about 1,550 dashes, measured 4.7 to 6.8 ms there; docs/map-rendering.md sections 4.8 and 7).
+ * Phone views stay under it.
  */
-export const MAX_FRAME_VERTICES = 9_000;
+export const MAX_FRAME_VERTICES = 7_000;
 /** Reduced motion: an arrowhead of ARROW_PX on every ARROW_EVERY-th primary or combined dash. */
 export const ARROW_EVERY = 6;
 export const ARROW_PX = 5;
