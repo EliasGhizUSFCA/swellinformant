@@ -190,12 +190,35 @@ def test_the_watchdog_alerts_with_redis_down(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] != "ok" and body["alerts_sent"]
+    assert "redis_unavailable" in body["problems"]
+    # Redis being down is not reported as a failed watchdog run (no such run was logged).
+    assert f"job_failed:{DATA_HEALTH_TASK}" not in body["problems"]
     assert body["heartbeat_age_minutes"] is None
+    assert len(ops_emails()) == 1
+    (ran,) = watchdog_logs(db)  # Redis did not answer: only the unlocked run, logged
+    assert ran.status == JobStatus.SUCCESS and ran.details["lock"].startswith("not taken")
+    assert ran.details["alert_state"]  # the next run reads it
+
+
+def test_redis_failing_after_the_ping_still_gets_the_check_run(
+    db: Session,
+    redis_refused: None,
+    client: TestClient,
+    secret: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redis answered the PING, then refused the job lock: the locked attempt is logged
+    FAILED and the check runs without the lock."""
+    import app.api.internal as internal
+
+    monkeypatch.setattr(internal, "_redis_reachable", lambda: True)
+    make_admin(db)
+    body = client.get(CRON_DAILY_PATH, headers=AUTH).json()
+    assert body["status"] != "ok" and body["alerts_sent"]
     assert len(ops_emails()) == 1
     failed, ran = watchdog_logs(db)  # the locked attempt failed, the unlocked one ran
     assert failed.status == JobStatus.FAILED and "ConnectionError" in (failed.error_message or "")
     assert ran.status == JobStatus.SUCCESS and ran.details["lock"].startswith("not taken")
-    assert ran.details["alert_state"]  # the next run reads it
 
 
 def test_an_unexpected_failure_answers_503(

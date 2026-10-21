@@ -13,7 +13,8 @@ the data-health report, and an email to the admins when a problem appears, rises
 or clears) through the job runner, so its log row carries the alert state the next run
 reads and a problem is not reported twice. It is independent of the sync daemon: it still
 alerts when the daemon has stopped (its heartbeat goes stale) or when Redis refuses
-commands (the job then runs without its Redis lock). ``status`` is the report's overall
+commands (the job then runs without its Redis lock, and the report names
+``redis_unavailable``). ``status`` is the report's overall
 status (ok, degraded, failing), or ``skipped`` when another run of the job held its lock;
 ``alerts_sent`` lists the alerts (``<reason>:<problem key>``) the admins were emailed;
 ``heartbeat_age_minutes`` is the age of the daemon's last check (None when there is no
@@ -89,18 +90,43 @@ def _run_unlocked() -> dict[str, Any]:
     return {"status": status.value, **details}
 
 
+def _redis_reachable() -> bool:
+    """One PING: whether the job lock can be taken at all."""
+    from app.core.redis import get_redis
+
+    try:
+        get_redis().ping()
+    except redis.RedisError as exc:
+        logger.warning(
+            "Watchdog: Redis unavailable (%s); checking without the job lock",
+            type(exc).__name__,
+        )
+        return False
+    return True
+
+
 def run_watchdog_job() -> dict[str, Any]:
-    """Run ``ops.data_health`` once; returns run_job's ``{"status": ..., **details}``."""
+    """Run ``ops.data_health`` once; returns run_job's ``{"status": ..., **details}``.
+
+    Redis is asked first: when it does not answer, the check runs without the job lock
+    straight away. Letting run_job fail on the lock instead would log a FAILED
+    ``ops.data_health`` row that the check itself then reports (and emails) as
+    ``job_failed:ops.data_health``, a problem that does not exist; the real one,
+    ``redis_unavailable``, is reported by the check. Only when Redis goes away between
+    the PING and the lock does that FAILED row appear before the unlocked run.
+    """
     from app.jobs.registry import job_spec
     from app.jobs.runner import run_job
     from app.jobs.schedule import DATA_HEALTH_TASK
 
     spec = job_spec(DATA_HEALTH_TASK)
+    if not _redis_reachable():
+        return _run_unlocked()
     try:
         return run_job(spec.name, spec.run, lock_ttl=spec.lock_ttl, chain=False)
     except redis.RedisError as exc:  # the job lock needs Redis; the check itself does not
         logger.warning(
-            "Watchdog: Redis unavailable (%s); checking without the job lock",
+            "Watchdog: Redis failed during the job (%s); checking without the job lock",
             type(exc).__name__,
         )
         return _run_unlocked()
