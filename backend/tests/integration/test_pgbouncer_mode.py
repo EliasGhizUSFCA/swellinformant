@@ -4,12 +4,17 @@ by the api-serverless package.
 Skipped unless TEST_PGBOUNCER_URL is set: a PgBouncer with ``pool_mode = transaction`` in
 front of the test database (the database TEST_DATABASE_URL names, already migrated by the
 session fixture). The application engine is pointed at it with the hosted profile's pool
-settings and DB_PREPARED_STATEMENTS=false, then the auth and spots flows run from several
-threads, each query far more often than psycopg's default prepare threshold (5). Behind a
-transaction pooler without prepared-statement support, a prepared statement lands on one
-server connection and the next transaction may run on another, which fails with
-'prepared statement "_pg3_0" does not exist'; with ``prepare_threshold=None`` nothing is
-prepared.
+settings, DB_PREPARED_STATEMENTS=false and JOB_RUNNER=daemon, then the auth and spots flows
+run from several threads, each query far more often than psycopg's default prepare
+threshold (5). Behind a transaction pooler without prepared-statement support, a prepared
+statement lands on one server connection and the next transaction may run on another,
+which fails with 'prepared statement "_pg3_0" does not exist'; with
+``prepare_threshold=None`` nothing is prepared.
+
+The suite's scratch-database tests (migrations, backups) cannot run with TEST_DATABASE_URL
+on the pooler: PgBouncer keeps idle server connections to each database it served (for
+server_idle_timeout, 600 s by default), so their DROP DATABASE fails with "is being
+accessed by other users". Run them on a direct URL.
 
 Example (PgBouncer 1.22 on port 6439)::
 
@@ -57,13 +62,23 @@ SPOT_PATHS = (
 
 @pytest.fixture
 def pooled(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """The application engine on TEST_PGBOUNCER_URL with the hosted profile's pool."""
+    """The application engine on TEST_PGBOUNCER_URL with the hosted profile's pool and job
+    runner (JOB_RUNNER=daemon: account emails are sent inline, as on Vercel).
+
+    The daemon runner also keeps Celery out of the threaded flows below: Celery's eager
+    mode marks "inside a task" in a process-wide flag that it saves and restores around
+    each eager task, so eager tasks in concurrent threads can leave it set, after which
+    every later ``AsyncResult.get()`` in the session raises "Never call result.get()
+    within a task!" (observed: 5 Celery tests failed after this module under eager
+    Celery).
+    """
     direct = get_engine().url
     url = normalize_database_url(PGBOUNCER_URL)
     if make_url(url).database != direct.database:
         pytest.fail("TEST_PGBOUNCER_URL must point at the TEST_DATABASE_URL database")
     settings = get_settings()
     with monkeypatch.context() as patch:
+        patch.setattr(settings, "job_runner", HOSTED_PROFILE["JOB_RUNNER"])
         patch.setattr(settings, "database_url", url)
         patch.setattr(settings, "db_use_unpooled", False)
         patch.setattr(settings, "db_prepared_statements", False)
