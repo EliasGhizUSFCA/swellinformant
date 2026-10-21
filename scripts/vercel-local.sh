@@ -105,7 +105,9 @@ else:
 }
 
 cmd_cron() {
-  # From the cron container through the edge, as Vercel Cron calls the deployment.
+  # From the cron container through the edge, as Vercel Cron calls the deployment. The
+  # variables expand inside the container.
+  # shellcheck disable=SC2016
   compose exec -T cron sh -c 'wget -S -q -O - -T 90 --header "Authorization: Bearer $CRON_SECRET" "http://edge:8080$CRON_PATH"'
   echo
 }
@@ -186,6 +188,7 @@ cmd_smoke() {
   # reach the API. Its rate-limit key (GET /api/health/data: rl:health-data:<ip>:<window>) is
   # the TCP peer the edge saw, the Docker network's gateway for a request from this host.
   local network gateway keys
+  # shellcheck disable=SC2016  # a Go template, not a shell expansion
   network="$(compose ps -q edge | xargs docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' | awk '{ print $1 }' || true)"
   gateway="$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}' "$network" 2>/dev/null | awk '{ print $1 }' || true)"
   compose exec -T redis sh -c 'redis-cli --scan --pattern "rl:health-data:*" | xargs -r redis-cli del' >/dev/null || true
