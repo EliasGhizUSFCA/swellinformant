@@ -26,8 +26,8 @@ CADDYFILE = ROOT / "docker" / "edge" / "Caddyfile"
 FRONTEND_DOCKERFILE = ROOT / "frontend" / "Dockerfile"
 
 HOSTED_FREE = profile_env("hosted", "free-database")
-# The stack's documented departures from the hosted profile: nothing calls a weather
-# provider until .env.vercel.local chooses live sources.
+# The stack's documented departures from the hosted profile: no forecast or map provider
+# is called until .env.vercel.local chooses live sources.
 LOCAL_DEFAULTS = {"FORECAST_PROVIDERS": "demo", "MAP_FIELDS_ENABLED": "false"}
 # Read by docker-compose.vercel.yml or the Next.js build, not by Settings.
 STACK_ONLY = {

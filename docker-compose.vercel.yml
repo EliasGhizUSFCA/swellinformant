@@ -23,8 +23,9 @@
 #   email provider (Resend, SMTP)                mailpit  every email lands in its inbox
 #
 # Defaults: demo forecasts (FORECAST_PROVIDERS=demo, synthetic data) and no map layers
-# (MAP_FIELDS_ENABLED=false), so nothing calls a weather provider until you choose live
-# sources in .env.vercel.local (copy .env.vercel.example). The other ${...} defaults are the
+# (MAP_FIELDS_ENABLED=false), so no forecast or map provider is called until you choose
+# live sources in .env.vercel.local (copy .env.vercel.example); the daily tide job still asks
+# NOAA CO-OPS. The other ${...} defaults are the
 # hosted free profile (app.core.profiles: profile_env("hosted", "free-database")).
 # Host ports listen on 127.0.0.1 only.
 
