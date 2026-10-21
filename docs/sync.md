@@ -257,11 +257,11 @@ UTC) and 2026-10-21 (14:49-14:55 UTC).
 
 CPU is the process's user plus system time (`getrusage`, all threads). Stage figures are
 the `cpu_s` each job log records. The counters were SQLAlchemy `before_cursor_execute` and
-pool `checkout` events and every httpx response (requests and bytes by kind). Celery and
-kombu imports were blocked, and none was attempted. Open-Meteo TLS handshakes through the
-sandbox's proxy sometimes timed out and were retried, so wall times are long and vary. CPU
-varied by up to 2x between the two days with the machine's load. Where a cell has two
-values, they are the two days.
+pool `checkout` events and every httpx response (requests and bytes by kind). On 10-21,
+Celery and kombu imports were blocked, and none was attempted. Open-Meteo TLS handshakes
+through the sandbox's proxy sometimes timed out and were retried, so wall times are long
+and vary. CPU varied by up to 2x between the two days with the machine's load. Where a
+cell has two values, they are the two days.
 
 ### Checks
 
@@ -334,8 +334,9 @@ was 21.3 s: spots 2.77, predict 14.50 for 19,200 predictions, detect 3.92, the r
 ### The daemon, live
 
 `python -m app.cli sync daemon` ran with the settings above on 2026-10-20 from 03:43 to
-06:29 UTC, against the database of the first sync. A sampler read `/proc/<pid>/stat` (process CPU) and `pg_stat_database.sessions`
-(client sessions started) once a minute. Results:
+06:29 UTC, against the database of the first sync. A sampler read `/proc/<pid>/stat`
+(process CPU) and `pg_stat_database.sessions` (client sessions started) once a minute.
+Results:
 
 * **Start-up.** `init-db` and the first check took 3.75 CPU s, with an RSS of 263 MB.
 * **Idle.** No sync was due in that window. The map layers of 00Z were first seen at
@@ -345,6 +346,30 @@ was 21.3 s: spots 2.77, predict 14.50 for 19,200 predictions, detect 3.92, the r
   3.62 CPU s, or 1.35 CPU s an hour: 16 checks and 2 hourly batches.
 * **Database.** It opened exactly one database session per hourly batch (04:43 and 05:43
   UTC) and none between them. No connection stayed open between wakes.
+
+On 2026-10-21 from 14:56 to 16:43 UTC, the daemon ran again with the same settings and
+real providers, against the database of the 10-21 syncs, with Celery and kombu imports
+blocked:
+
+* **Start-up.** `init-db`, the imports and the first check took 6.19 CPU s.
+* **Idle.** No sync was due. GFS 06Z and the map of 00Z were current. ECMWF was waiting,
+  because Open-Meteo served its 06Z run. GFS 12Z was not published yet: GFS 0.25 06Z had
+  become available on Open-Meteo only at 14:42, 8.7 h after its cycle. Over 1 h 45 min
+  the daemon used 3.77 CPU s, or 2.1 CPU s an hour: 10 checks and 1 hourly batch.
+* **Database.** It opened one database session, for the hourly batch at 15:56, and none
+  otherwise.
+* **SIGTERM.** It stopped at once.
+
+With the demo provider (synthetic data) on a fresh database, on 2026-10-21 from 15:35 to
+15:45 UTC, with SYNC_CHECK_MINUTES=5 and Celery and kombu imports blocked:
+
+* **The sync at start.** `init-db` ran, and the first check found the demo run new. The
+  daemon ran one sync (`trigger` daemon) of 52.4 s and 41.1 CPU s. All 12 stages were
+  recorded, and the data was published.
+* **Idle.** The daemon then idled: 0.02 CPU s in 7 minutes. No database session was
+  started after the sync (3 in all, from `init-db` and the sync).
+* **SIGTERM.** The daemon stopped within a second ("stopping after the current stage"),
+  and no lease was left behind.
 
 ### Monthly CPU estimate
 
