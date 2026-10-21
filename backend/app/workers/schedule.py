@@ -1,9 +1,11 @@
 """Celery adapter of the job schedule (the schedule itself is app.jobs.schedule).
 
 :func:`build_beat_schedule` hands :func:`app.jobs.schedule.build_schedule` to Celery beat
-in its own shapes (``timedelta`` for :class:`Every`, ``crontab`` for :class:`DailyAt`). The
-data-health report and the API read app.jobs.schedule directly and never import Celery;
-this module is for the worker and beat only.
+in its own shapes (``timedelta`` for :class:`Every`, ``crontab`` for :class:`DailyAt`),
+including the ``sync-tick`` entry (task ``sync.tick``: the sync check, which runs a sync
+when a provider has published a new model run). The data-health report and the API read
+app.jobs.schedule directly and never import Celery; this module is for the worker and beat
+only.
 """
 
 from __future__ import annotations
@@ -23,6 +25,9 @@ from app.jobs.schedule import (
     GEFS_JOB_DELAY,
     NEXT_STAGE,
     QUEUES,
+    SYNC_TICK_ENTRY,
+    SYNC_TICK_SOFT_TIME_LIMIT_SECONDS,
+    SYNC_TICK_TIME_LIMIT_SECONDS,
     TASK_SOFT_TIME_LIMIT_SECONDS,
     TASK_TIME_LIMIT_SECONDS,
     DailyAt,
@@ -42,6 +47,9 @@ __all__ = [
     "GEFS_JOB_DELAY",
     "NEXT_STAGE",
     "QUEUES",
+    "SYNC_TICK_ENTRY",
+    "SYNC_TICK_SOFT_TIME_LIMIT_SECONDS",
+    "SYNC_TICK_TIME_LIMIT_SECONDS",
     "TASK_SOFT_TIME_LIMIT_SECONDS",
     "TASK_TIME_LIMIT_SECONDS",
     "build_beat_schedule",

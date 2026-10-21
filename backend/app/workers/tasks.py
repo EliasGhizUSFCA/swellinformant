@@ -2,15 +2,27 @@
 
 Each job runs through :func:`app.jobs.runner.run_job` (the job lock, the
 ``background_job_logs`` row, the judge); a success queues the next pipeline stage here, as
-a Celery signature, so new forecast data flows through to alerts within minutes while the
-beat schedule re-runs every stage periodically as a safety net.
+a Celery signature (NEXT_STAGE).
+
+Forecast data is synced (design D14): beat runs ``sync.tick`` every SYNC_CHECK_MINUTES,
+which reads the providers' run metadata and, when a new model run is out, runs one sync
+(app.services.sync.orchestrator: spots, ensemble, map layers, blend, predictions, publish,
+detection, matching, flights, alerts, delivery) inside this one task, with its own time
+limit. The acquisition tasks below are no longer scheduled; they stay callable by hand
+(``forecasts.acquire`` still chains through every stage).
 
 Data acquisition jobs (forecasts, ensemble, map fields) record provider failures instead of
 raising them, so one provider's outage never stops another's. Their task then decides:
 the job is FAILED (and does not chain) when nothing was acquired, and a transient failure
 (timeout, 5xx, a full call-budget window, a model run still being published) makes the
 task retry itself after a countdown (:func:`retry_transient`), up to ACQUIRE_MAX_RETRIES
-times, instead of waiting hours for the next scheduled run.
+times.
+
+Messaging tasks (account emails, plain emails, SMS) ignore their result: the caller never
+reads it, and without a result the API's ``.delay()`` does not subscribe to the result
+backend: with Redis refusing connections it raised a RuntimeError after 19 s before, and
+raises kombu's OperationalError (which app.workers.dispatch handles) in 0.7 s now
+(measured 2026-10-21).
 """
 
 from __future__ import annotations
@@ -35,7 +47,12 @@ from app.jobs.runner import (
     judge_single,
     retry_countdown,
 )
-from app.jobs.schedule import DATA_HEALTH_TASK, NEXT_STAGE
+from app.jobs.schedule import (
+    DATA_HEALTH_TASK,
+    NEXT_STAGE,
+    SYNC_TICK_SOFT_TIME_LIMIT_SECONDS,
+    SYNC_TICK_TIME_LIMIT_SECONDS,
+)
 from app.services.http import TransientProviderError
 from app.services.notifications.transactional import deliver_email, deliver_sms
 from app.workers.celery_app import celery_app
@@ -229,6 +246,21 @@ def data_health_task(self: Task) -> dict[str, Any]:
     return run_spec(job_spec(DATA_HEALTH_TASK), self)
 
 
+# ---------------------------------------------------------------- the synced pipeline
+@celery_app.task(
+    name="sync.tick",
+    bind=True,
+    time_limit=SYNC_TICK_TIME_LIMIT_SECONDS,
+    soft_time_limit=SYNC_TICK_SOFT_TIME_LIMIT_SECONDS,
+)
+def sync_tick(self: Task) -> dict[str, Any]:
+    """Beat's sync check: plan from the providers' run metadata and the database, and run
+    one sync when a new model run is out (app.services.sync.orchestrator.tick, trigger
+    "celery"). The job lock (1 h) keeps a second check from starting while a sync runs;
+    the sync's own lease (sync_runs) keeps it from overlapping any other runner."""
+    return run_spec(job_spec("sync.tick"), self)
+
+
 # ---------------------------------------------------------------- transactional messages
 # deliver_email / deliver_sms live in app.services.notifications.transactional (no Celery
 # import there, so the inline paths of app.workers.dispatch need no worker extra); the
@@ -237,7 +269,10 @@ ACCOUNT_EMAIL_MAX_RETRIES = 5
 
 
 @celery_app.task(
-    name="notifications.send_account_email", bind=True, max_retries=ACCOUNT_EMAIL_MAX_RETRIES
+    name="notifications.send_account_email",
+    bind=True,
+    max_retries=ACCOUNT_EMAIL_MAX_RETRIES,
+    ignore_result=True,
 )
 def send_account_email(self: Task, message_id: str, text: str, html: str | None) -> str | None:
     """Deliver a recorded account email; transient failures retry with backoff, and the
@@ -267,6 +302,7 @@ def send_account_email(self: Task, message_id: str, text: str, html: str | None)
 # Legacy task kept so messages queued by older versions are still delivered.
 @celery_app.task(
     name="notifications.send_email",
+    ignore_result=True,
     autoretry_for=(TransientProviderError,),
     retry_backoff=30,
     retry_backoff_max=600,
@@ -278,6 +314,7 @@ def send_email(to: str, subject: str, text: str, html: str | None, tag: str) -> 
 
 @celery_app.task(
     name="notifications.send_sms",
+    ignore_result=True,
     autoretry_for=(TransientProviderError,),
     retry_backoff=30,
     retry_backoff_max=600,
