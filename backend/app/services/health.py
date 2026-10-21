@@ -9,26 +9,40 @@ It checks, with plain reasons:
   its age and the source's own stale limit (``queries.stale_after_hours``, ADR-015). A
   stale blend is only a problem of its own when every member is fresh and no acquisition
   or blend run is in progress (the chain rebuilds it right after the acquisition).
-* **Scheduled jobs** (the job schedule of the current settings, plus the chained blend
-  stage): the last result from ``background_job_logs``, consecutive failures, overdue
-  runs (no run started for ``2 x longest interval + 30 min``; a run in progress counts)
-  and stuck runs (still "running" 15 min after the hard task time limit: the worker
-  process was killed).
+* **Scheduled jobs** (the job schedule of the current settings, app.jobs.schedule, plus the
+  jobs a sync runs as its stages): the last result from ``background_job_logs``,
+  consecutive failures, overdue runs (no run started for ``2 x longest interval + 30
+  min``; a run in progress counts) and stuck runs (still "running" 15 min after the hard
+  task time limit: the process running it was killed). The sync's stages (forecast
+  acquisition, map layers, ensemble, blend, predictions, publish, detection) have no
+  interval of their own, so they are never overdue: a sync runs them when a provider
+  publishes a new model run, and the source freshness below covers them.
 * **Map fields** (unless the mode is "off"): the served run's model cycle against
   MAP_FIELD_STALE_AFTER_HOURS, the limit the map index uses for its "out of date" badge.
 * **Observations** (when OBSERVATIONS_ENABLED): the newest buoy observation per provider
   against DATA_HEALTH_OBSERVATION_STALE_HOURS (default: the ingestion look-back window).
-* **Heartbeat**: the newest finished job of any kind (this check's own job excluded).
+* **Heartbeat**: under JOB_RUNNER=celery, the newest finished job of any kind (this
+  check's own job excluded). Under JOB_RUNNER=daemon, the sync daemon's heartbeat in Redis
+  (written at every check), stale after ``max(3 x SYNC_CHECK_MINUTES,
+  DATA_HEALTH_HEARTBEAT_MINUTES)`` unless a sync with a valid lease is running.
+* **Sync** (``DataHealthOut.sync``): the runner, the last check, the newest and the newest
+  published sync with their stages, the components of the last check (daemon), and the
+  CPU used this month against SYNC_CPU_BUDGET_HOURS (degraded above 80 %). The two newest
+  finished syncs both failed: degraded.
+* **Licence**: COMMERCIAL_USE=true with an Open-Meteo source and no OPEN_METEO_API_KEY is
+  failing (the free API is for non-commercial use only; the provider refuses to run).
 * **Storage**: the database size, against DATA_HEALTH_DATABASE_MAX_GB when that is set
   (default 20 GB: an alert only, nothing is deleted); Redis memory against its cap
   (Redis's maxmemory, or REDIS_MAXMEMORY when Redis runs without one), degraded above
   DATA_HEALTH_REDIS_MAX_FRACTION or with an evicting maxmemory-policy (the Celery broker
-  must never lose messages), or when Redis does not answer.
+  must never lose messages; not checked under JOB_RUNNER=daemon, which has no broker and
+  whose hosted Redis sets its own policy), or when Redis does not answer.
 * **Tides**: the problems app.services.tides.health.tide_freshness reports.
 
 Overall status: ``failing`` when the product cannot serve fresh forecasts (no forecast
-source is fresh) or no background job has finished for DATA_HEALTH_HEARTBEAT_MINUTES
-(worker or scheduler down); ``degraded`` for any other problem; ``ok`` otherwise.
+source is fresh), the job runner is down (Celery: no background job has finished for
+DATA_HEALTH_HEARTBEAT_MINUTES; daemon: its heartbeat is stale) or the licence check fails;
+``degraded`` for any other problem; ``ok`` otherwise.
 
 Assumptions: the limits above are operational heuristics (how late a run may be before
 someone should look), not statements about forecast accuracy. A worker that is down
@@ -38,27 +52,33 @@ cannot send its own alert: poll this endpoint from an external monitor as well
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import redis
-from sqlalchemy import func, select, true
+from pydantic import ValidationError
+from sqlalchemy import Float, and_, func, select, true
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings, get_settings
+from app.core.config import OPEN_METEO_PROVIDER_TOKENS, Settings, get_settings
 from app.core.database import utcnow
+from app.core.logging import redact
 from app.core.redis import parse_memory_size, redis_memory
+from app.jobs.runner import cpu_seconds_this_month
 from app.jobs.schedule import (
     DATA_HEALTH_TASK,
-    NEXT_STAGE,
     TASK_TIME_LIMIT_SECONDS,
+    Every,
     build_schedule,
     describe_schedule,
     max_interval,
+    time_limit_seconds,
 )
 from app.models import BackgroundJobLog, BuoyObservation, BuoyStation, ForecastRun, ForecastSource
 from app.models.enums import JobStatus
+from app.models.sync import SyncRun
 from app.schemas.health import (
     DataHealthOut,
     Freshness,
@@ -76,12 +96,17 @@ from app.schemas.health import (
     SourceRole,
     StorageOut,
 )
+from app.schemas.sync import SyncComponentOut, SyncHealthOut, SyncRunOut, SyncStageOut
+from app.services.forecasts.open_meteo import free_api_refused
 from app.services.forecasts.queries import USABLE, is_stale, stale_after_hours
 from app.services.forecasts.registry import (
     GEFS_WAVE_CODE,
     configured_source_codes,
 )
 from app.services.map_fields import map_fields_mode, servable_runs
+from app.services.sync import state
+from app.services.sync.published import latest_publication
+from app.services.sync.types import STAGE_JOB_NAMES, SYNC_TICK_JOB
 from app.services.tides.health import tide_freshness
 
 BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: ecCodes)
@@ -93,6 +118,23 @@ STUCK_GRACE = timedelta(minutes=15)
 RECENT_LOGS = 25  # job log rows read per job (newest first)
 # Runs that finished with a result; "skipped" (the job lock was held) and "running" are not.
 REAL_RESULTS = (JobStatus.SUCCESS, JobStatus.FAILED)
+# The schedule shown for the jobs a sync runs as its stages (no interval of their own).
+SYNC_STAGE_SCHEDULE = "in each sync"
+# The daemon's heartbeat is stale after this many check intervals (or
+# DATA_HEALTH_HEARTBEAT_MINUTES, whichever is longer).
+HEARTBEAT_CHECKS = 3
+# A Celery runner is down when no job finished for this many of its shortest intervals (or
+# DATA_HEALTH_HEARTBEAT_MINUTES, whichever is longer).
+JOB_HEARTBEAT_INTERVALS = 2
+# Sync statuses that count as a failed sync; the newest SYNC_FAILURES_IN_A_ROW finished
+# syncs all failing is a problem.
+FAILED_SYNC_STATUSES = frozenset({"failed", "abandoned"})
+SYNC_FAILURES_IN_A_ROW = 2
+# SYNC_CPU_BUDGET_HOURS: degraded above this share of the budget.
+CPU_BUDGET_ALERT_FRACTION = 0.8
+# Component states whose detail is shown as written; "unknown" carries a provider error.
+UNKNOWN_COMPONENT_DETAIL = "the provider's run metadata could not be read"
+DETAIL_MAX_CHARS = 300
 
 
 @dataclass(frozen=True)
@@ -306,19 +348,40 @@ class ExpectedJob:
     max_gap: timedelta | None  # None: chained stage without a schedule of its own
 
 
+def sync_stage_jobs(settings: Settings) -> list[str]:
+    """The jobs a sync runs as its stages under these settings (STAGE_JOB_NAMES, without
+    the stages switched off: ensemble without GEFS_ENABLED, map layers outside the
+    standalone map-field mode, the blend without FORECAST_BLEND_ENABLED, prune without
+    SYNC_PRUNE_EACH_PASS)."""
+    off = set()
+    if not settings.gefs_enabled:
+        off.add("ensemble")
+    if map_fields_mode(settings) != "standalone":
+        off.add("map")
+    if not settings.forecast_blend_enabled:
+        off.add("blend")
+    if not settings.sync_prune_each_pass:
+        off.add("prune")
+    return [job for stage, job in STAGE_JOB_NAMES.items() if stage not in off]
+
+
 def expected_jobs(settings: Settings) -> list[ExpectedJob]:
-    """The scheduled jobs (app.jobs.schedule) for these settings plus the chained-only stages."""
+    """The scheduled jobs (app.jobs.schedule) for these settings plus the sync's stages.
+
+    Under JOB_RUNNER=daemon the sync.tick entry is left out: the daemon checks on its own
+    and its Redis heartbeat is checked instead.
+    """
     jobs: dict[str, ExpectedJob] = {}
     for entry in build_schedule(settings).values():
         name, sched = entry.task, entry.schedule
+        if name == SYNC_TICK_JOB and not settings.runs_celery:
+            continue
         gap = max_interval(sched)
         known = jobs.get(name)
         if known is None or (known.max_gap is not None and gap < known.max_gap):
             jobs[name] = ExpectedJob(name, describe_schedule(sched), gap)
-    for parent, stage in NEXT_STAGE.items():
-        if stage in jobs or (stage == "forecasts.blend" and not settings.forecast_blend_enabled):
-            continue
-        jobs[stage] = ExpectedJob(stage, f"after {parent}", None)
+    for stage_job in sync_stage_jobs(settings):
+        jobs.setdefault(stage_job, ExpectedJob(stage_job, SYNC_STAGE_SCHEDULE, None))
     return sorted(jobs.values(), key=lambda j: j.name)
 
 
@@ -382,7 +445,8 @@ def _job_health(
         None,
     )
     last = next((r for r in rows if r.status != JobStatus.RUNNING), None)
-    stuck_after = timedelta(seconds=TASK_TIME_LIMIT_SECONDS) + STUCK_GRACE
+    time_limit = time_limit_seconds(job.name)
+    stuck_after = timedelta(seconds=time_limit) + STUCK_GRACE
 
     status: str = "ok"
     problem: Problem | None = None
@@ -392,8 +456,8 @@ def _job_health(
             f"job_stuck:{job.name}",
             "degraded",
             f"Job {job.name} has been 'running' since {stamp(active.started_at)} "
-            f"({ago(now - active.started_at)}), past the {TASK_TIME_LIMIT_SECONDS // 60}-minute "
-            "task time limit: the worker process was probably killed (e.g. out of memory).",
+            f"({ago(now - active.started_at)}), past the {time_limit // 60}-minute "
+            "task time limit: the process running it was probably killed (e.g. out of memory).",
         )
     elif latest is not None and latest.status == JobStatus.FAILED:
         status = "failed"
@@ -475,12 +539,20 @@ def _check_jobs(
             BackgroundJobLog.job_name != DATA_HEALTH_TASK
         )
     )
+    shortest = _shortest_interval(settings)
     limit = settings.data_health_heartbeat_minutes
+    if shortest is not None:
+        # JOB_INTERVAL_FLOOR_MINUTES can space every job further apart than the limit.
+        limit = max(limit, int(JOB_HEARTBEAT_INTERVALS * shortest[1]))
     heartbeat = HeartbeatOut(
         last_job_finished_at=last_finished,
         age_minutes=round((now - last_finished).total_seconds() / 60, 1) if last_finished else None,
         limit_minutes=limit,
     )
+    if not settings.runs_celery:
+        # The daemon runs jobs at most every JOB_INTERVAL_FLOOR_MINUTES and only syncs when
+        # a model run is new: its Redis heartbeat says whether it is alive (_check_sync).
+        return out, heartbeat, problems
     if last_finished is None:
         problems.append(
             Problem(
@@ -496,11 +568,26 @@ def _check_jobs(
                 "jobs_not_running",
                 "failing",
                 f"No background job has finished for {ago(now - last_finished)} (limit {limit} "
-                "min; notifications.deliver alone runs every 2 min): the worker or the "
-                "scheduler (beat) is down.",
+                f"min{_shortest_text(shortest)}): the worker or the scheduler (beat) is down.",
             )
         )
     return out, heartbeat, problems
+
+
+def _shortest_interval(settings: Settings) -> tuple[str, float] | None:
+    """(task, minutes) of the most frequent interval job of the schedule."""
+    every = [
+        (e.task, float(e.schedule.minutes))
+        for e in build_schedule(settings).values()
+        if isinstance(e.schedule, Every)
+    ]
+    return min(every, key=lambda t: t[1]) if every else None
+
+
+def _shortest_text(shortest: tuple[str, float] | None) -> str:
+    if shortest is None:
+        return ""
+    return f"; {shortest[0]} alone runs every {shortest[1]:g} min"
 
 
 # --------------------------------------------------------------------------- map fields
@@ -692,7 +779,9 @@ def _check_redis(settings: Settings) -> tuple[RedisHealthOut, list[Problem]]:
                 "new jobs: check the queue lengths and the provider response cache.",
             )
         )
-    if policy is not None and policy != "noeviction":
+    if policy is not None and policy != "noeviction" and settings.runs_celery:
+        # Only a Celery broker loses queued jobs to eviction; the daemon keeps no queue in
+        # Redis (hosted Redis such as Upstash sets its own policy).
         problems.append(
             Problem(
                 "redis_eviction_policy",
@@ -702,6 +791,299 @@ def _check_redis(settings: Settings) -> tuple[RedisHealthOut, list[Problem]]:
             )
         )
     return out, problems
+
+
+# --------------------------------------------------------------------------- sync
+def _sync_run_out(row: SyncRun) -> SyncRunOut:
+    """A sync_runs row for the public report: no error text, no stage details."""
+    stages: list[SyncStageOut] = []
+    for entry in row.stages or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            cpu = entry.get("cpu_s")
+            stages.append(
+                SyncStageOut(
+                    name=str(entry["name"]),
+                    status=entry["status"],
+                    duration_ms=int(entry.get("duration_ms") or 0),
+                    cpu_s=float(cpu) if cpu is not None else None,
+                )
+            )
+        except (KeyError, TypeError, ValueError, ValidationError):
+            continue
+    return SyncRunOut(
+        id=row.id,
+        trigger=row.trigger,  # type: ignore[arg-type]  # ck_sync_runs_trigger
+        status=row.status,  # type: ignore[arg-type]  # ck_sync_runs_status
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        published_at=row.published_at,
+        anchor_cycle=row.anchor_cycle,
+        stages=stages,
+    )
+
+
+def _component_out(raw: dict[str, Any]) -> SyncComponentOut | None:
+    """One component of the daemon's last check (ComponentStatus.as_dict()). The detail of
+    an "unknown" component is a provider's error text: replaced by a plain statement."""
+    try:
+        component_state = raw["state"]
+        detail = raw.get("detail")
+        if detail and component_state == "unknown":
+            detail = UNKNOWN_COMPONENT_DETAIL
+        return SyncComponentOut(
+            kind=raw["kind"],
+            source=str(raw["source_code"]),
+            provider=str(raw["provider"]),
+            state=component_state,
+            stored_run_key=raw.get("stored_run_key"),
+            available_run_key=raw.get("available_run_key"),
+            available_cycle=raw.get("available_cycle"),
+            detail=redact(str(detail))[:DETAIL_MAX_CHARS] if detail else None,
+        )
+    except (KeyError, TypeError, ValueError, ValidationError):
+        return None
+
+
+def month_start(now: datetime) -> datetime:
+    """00:00 UTC on the first day of ``now``'s UTC month."""
+    return now.astimezone(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def logged_cpu_seconds(db: Session, now: datetime) -> float:
+    """CPU seconds in the job logs started this UTC month (``details.cpu_s``).
+
+    Every sync stage is a job log of its own, so the stage CPU in ``sync_runs.stages`` is
+    not added again. A Celery ``sync.tick`` that ran a sync is left out: its stages and its
+    ``sync.run`` row count that CPU (the check's own planning seconds are not counted).
+    Only the rows RETENTION_JOB_LOG_DAYS keeps are seen.
+    """
+    cpu = BackgroundJobLog.details["cpu_s"]
+    ran_a_sync = and_(
+        BackgroundJobLog.job_name == SYNC_TICK_JOB,
+        BackgroundJobLog.details["sync_run_id"].astext.is_not(None),
+    )
+    total = db.scalar(
+        select(func.coalesce(func.sum(cpu.astext.cast(Float)), 0.0)).where(
+            BackgroundJobLog.started_at >= month_start(now),
+            func.jsonb_typeof(cpu) == "number",
+            ~ran_a_sync,
+        )
+    )
+    return float(total or 0.0)
+
+
+def combine_cpu_hours(
+    settings: Settings,
+    now: datetime,
+    *,
+    counted_s: float | None,
+    logged_s: float,
+    heartbeat: state.Heartbeat | None,
+) -> float:
+    """CPU-hours the job runner used this UTC month: a lower bound, never an estimate.
+
+    Jobs: the larger of the job runner's Redis counter (``counted_s``, app.jobs.runner:
+    every job that is not nested in another; lost if Redis loses its data; None when Redis
+    did not answer) and the job logs (``logged_s``, :func:`logged_cpu_seconds`: only the
+    retained rows). Both undercount, so the larger is the better bound. Under
+    JOB_RUNNER=daemon the heartbeat of the same month adds the daemon's CPU outside jobs
+    (checks, kick polls, start-up). Jobs of every runner count (the daemon, the CLI, the
+    daily watchdog), so on a hosted deployment it can exceed the daemon's own use.
+    """
+    jobs = max(counted_s or 0.0, logged_s)
+    outside = 0.0
+    if (
+        not settings.runs_celery
+        and heartbeat is not None
+        and heartbeat.cpu_s_month is not None
+        and month_start(heartbeat.at) == month_start(now)
+    ):
+        outside = max(0.0, heartbeat.cpu_s_month)
+    return round((jobs + outside) / 3600.0, 3)
+
+
+def cpu_budget_problem(used_hours: float, budget_hours: float | None) -> Problem | None:
+    """Degraded above CPU_BUDGET_ALERT_FRACTION of SYNC_CPU_BUDGET_HOURS (None: no budget)."""
+    if budget_hours is None or used_hours <= CPU_BUDGET_ALERT_FRACTION * budget_hours:
+        return None
+    return Problem(
+        "sync_cpu_budget",
+        "degraded",
+        f"Background jobs used at least {used_hours:.1f} CPU-hours this month (UTC), "
+        f"{used_hours / budget_hours:.0%} of SYNC_CPU_BUDGET_HOURS ({budget_hours:g} h; alert "
+        f"above {CPU_BUDGET_ALERT_FRACTION:.0%}). Once the runner's CPU quota is used up (a "
+        "Vercel Daemon's monthly Active CPU), it stops until the next month.",
+    )
+
+
+def heartbeat_limit_minutes(settings: Settings) -> int:
+    """How old the daemon's heartbeat may be: HEARTBEAT_CHECKS check intervals, or
+    DATA_HEALTH_HEARTBEAT_MINUTES when that is longer."""
+    return max(
+        HEARTBEAT_CHECKS * settings.sync_check_minutes, settings.data_health_heartbeat_minutes
+    )
+
+
+def heartbeat_problem(
+    settings: Settings,
+    heartbeat: state.Heartbeat | None,
+    now: datetime,
+    *,
+    sync_running: bool,
+) -> Problem | None:
+    """JOB_RUNNER=daemon: failing when the heartbeat is missing or older than
+    :func:`heartbeat_limit_minutes`, unless a sync with a valid lease is running (a long
+    sync holds up the checks; its lease, renewed after every stage, shows the daemon is
+    alive). Only call it when Redis answered: otherwise the heartbeat cannot be read."""
+    limit = heartbeat_limit_minutes(settings)
+    if sync_running or (heartbeat is not None and now - heartbeat.at <= timedelta(minutes=limit)):
+        return None
+    if heartbeat is None:
+        text = (
+            "The sync daemon has written no heartbeat (none in Redis, or older than 6 h): it "
+            "is not running"
+        )
+    else:
+        text = (
+            f"The sync daemon's last check was at {stamp(heartbeat.at)}, "
+            f"{ago(now - heartbeat.at)} ago (limit {limit} min): it has stopped"
+        )
+    return Problem(
+        "sync_heartbeat_stale",
+        "failing",
+        text + ", so new model runs are not synced and no periodic job runs. Check the daemon "
+        "(on Vercel: the project's Daemons, and its CPU quota).",
+    )
+
+
+def failed_syncs_problem(finished: Sequence[SyncRun]) -> Problem | None:
+    """Degraded when the newest SYNC_FAILURES_IN_A_ROW finished syncs (newest first) all
+    failed or were abandoned. The error text goes to the admin email only."""
+    newest = list(finished[:SYNC_FAILURES_IN_A_ROW])
+    if len(newest) < SYNC_FAILURES_IN_A_ROW or any(
+        r.status not in FAILED_SYNC_STATUSES for r in newest
+    ):
+        return None
+    latest = newest[0]
+    return Problem(
+        "sync_failed",
+        "degraded",
+        f"The last {SYNC_FAILURES_IN_A_ROW} syncs failed (the newest, sync {latest.id}, started "
+        f"at {stamp(latest.started_at)} and ended {latest.status}): new model runs are not "
+        "being published.",
+        detail=latest.error_message,
+    )
+
+
+def _sync_running(db: Session, now: datetime) -> bool:
+    """A sync is in progress with a valid lease (renewed after every stage)."""
+    row = db.scalar(
+        select(SyncRun.id)
+        .where(SyncRun.status == "running", SyncRun.lease_expires_at > now)
+        .limit(1)
+    )
+    return row is not None
+
+
+def _check_sync(
+    db: Session,
+    settings: Settings,
+    now: datetime,
+    jobs: list[JobHealthOut],
+    redis_available: bool,
+) -> tuple[SyncHealthOut, list[Problem]]:
+    """The sync block: runner liveness, the newest syncs, components and the CPU budget."""
+    problems: list[Problem] = []
+    heartbeat = state.read_heartbeat() if redis_available else None
+    last_check_at: datetime | None = None
+    stale = False
+    components: list[SyncComponentOut] = []
+    if settings.runs_celery:
+        last_check_at = db.scalar(
+            select(BackgroundJobLog.started_at)
+            .where(
+                BackgroundJobLog.job_name == SYNC_TICK_JOB,
+                BackgroundJobLog.status.in_((*REAL_RESULTS, JobStatus.RUNNING)),
+            )
+            .order_by(BackgroundJobLog.started_at.desc())
+            .limit(1)
+        )
+        # Its overdue and stuck problems come from the job check (job_overdue:sync.tick).
+        tick = next((j for j in jobs if j.job == SYNC_TICK_JOB), None)
+        stale = tick is not None and tick.status in ("overdue", "stuck")
+    else:
+        if heartbeat is not None:
+            last_check_at = heartbeat.at
+            components = [
+                c for c in (_component_out(raw) for raw in heartbeat.components) if c is not None
+            ]
+        if redis_available:  # otherwise redis_unavailable explains it
+            problem = heartbeat_problem(
+                settings, heartbeat, now, sync_running=_sync_running(db, now)
+            )
+            if problem is not None:
+                stale = True
+                problems.append(problem)
+
+    newest = db.scalar(
+        select(SyncRun).order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).limit(1)
+    )
+    published = latest_publication(db)
+    finished = db.scalars(
+        select(SyncRun)
+        .where(SyncRun.status != "running")
+        .order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+        .limit(SYNC_FAILURES_IN_A_ROW)
+    ).all()
+    failed = failed_syncs_problem(finished)
+    if failed is not None:
+        problems.append(failed)
+
+    budget = settings.sync_cpu_budget_hours
+    used = combine_cpu_hours(
+        settings,
+        now,
+        counted_s=cpu_seconds_this_month(now) if redis_available else None,
+        logged_s=logged_cpu_seconds(db, now),
+        heartbeat=heartbeat,
+    )
+    over = cpu_budget_problem(used, budget)
+    if over is not None:
+        problems.append(over)
+    out = SyncHealthOut(
+        runner=settings.job_runner,
+        check_minutes=settings.sync_check_minutes,
+        last_check_at=last_check_at,
+        heartbeat_stale=stale,
+        last_run=_sync_run_out(newest) if newest is not None else None,
+        last_published=_sync_run_out(published) if published is not None else None,
+        components=components,
+        cpu_hours_month=used,
+        cpu_budget_hours=budget,
+    )
+    return out, problems
+
+
+# --------------------------------------------------------------------------- licence
+def check_licence(settings: Settings) -> list[Problem]:
+    """COMMERCIAL_USE with the free Open-Meteo API (an Open-Meteo source configured and no
+    OPEN_METEO_API_KEY): failing, as the provider refuses to run."""
+    configured = [t for t in settings.forecast_provider_list if t in OPEN_METEO_PROVIDER_TOKENS]
+    if not configured or not free_api_refused(settings):
+        return []
+    return [
+        Problem(
+            "licence",
+            "failing",
+            "COMMERCIAL_USE=true, but the Open-Meteo sources ("
+            + ", ".join(configured)
+            + ") have no OPEN_METEO_API_KEY: the free Open-Meteo API is for non-commercial "
+            "use only, so these sources are not fetched. Set OPEN_METEO_API_KEY (an "
+            "Open-Meteo API subscription) or remove them from FORECAST_PROVIDERS.",
+        )
+    ]
 
 
 # --------------------------------------------------------------------------- report
@@ -723,6 +1105,9 @@ def data_health(
     map_fields, map_problems = _check_map_fields(db, settings, now)
     observations, obs_problems = _check_observations(db, settings, now)
     storage, storage_problems = _check_storage(db, settings)
+    redis_available = storage.redis is not None and storage.redis.available
+    sync, sync_problems = _check_sync(db, settings, now, jobs, redis_available)
+    licence_problems = check_licence(settings)
     tide_problems = [
         Problem(str(p["key"]), p["severity"], str(p["message"]), p.get("detail"))
         for p in tide_freshness(db, now)
@@ -733,6 +1118,8 @@ def data_health(
         *map_problems,
         *obs_problems,
         *storage_problems,
+        *sync_problems,
+        *licence_problems,
         *tide_problems,
     ]
     problems.sort(key=lambda p: (p.severity != "failing", p.key))
@@ -749,6 +1136,7 @@ def data_health(
         observations=observations,
         heartbeat=heartbeat,
         storage=storage,
+        sync=sync,
     )
     return HealthReport(out=out, problems=problems)
 

@@ -1,6 +1,8 @@
 """Admin data-health alerts (job ``ops.data_health``).
 
-Every DATA_HEALTH_CHECK_MINUTES the job builds the data-health report
+Every DATA_HEALTH_CHECK_MINUTES (at least JOB_INTERVAL_FLOOR_MINUTES apart; run by Celery
+beat or the sync daemon, and once a day by the hosted watchdog, GET
+/api/internal/cron/daily) the job builds the data-health report
 (:func:`app.services.health.data_health`) and emails every active admin account with a
 verified address, through the configured email provider, when:
 
@@ -15,6 +17,12 @@ verified address, through the configured email provider, when:
   notice. So each problem key gets at most one problem alert per repeat interval (plus
   one recovery notice after it), even when it flaps between runs; only a rise in
   severity is sent at once.
+
+The synced pipeline's problems (``sync_heartbeat_stale``: the daemon stopped;
+``sync_failed``: the last two syncs failed; ``sync_cpu_budget``: above 80 % of
+SYNC_CPU_BUDGET_HOURS; ``licence``: COMMERCIAL_USE with the free Open-Meteo API) are report
+problems like any other and follow the same rules; a failed sync's error text goes into
+the email (``detail``), never into the public report.
 
 All due items of one run go into one email per recipient. The alert state lives in the
 job's own log rows (``background_job_logs.details["alert_state"]`` of the newest
