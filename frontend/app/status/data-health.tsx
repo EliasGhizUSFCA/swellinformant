@@ -5,17 +5,20 @@
  *
  * Everything shown is what the backend reports: forecast-source ages against each
  * source's own stale limit, the last result of every scheduled job, map-layer and buoy
- * freshness, and an overall ok / degraded / failing status with plain reasons. The
- * limits are operational heuristics (how late data may be), not forecast accuracy.
+ * freshness, the model-run sync (components/status/sync-status.tsx), and an overall
+ * ok / degraded / failing status with plain reasons. The limits are operational heuristics
+ * (how late data may be), not forecast accuracy.
  */
 import { useQuery } from "@tanstack/react-query";
 import { Activity, AlertTriangle, CheckCircle2, Database, HeartPulse, Map as MapIcon, Radio, XCircle } from "lucide-react";
 
+import { SyncStatus } from "@/components/status/sync-status";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { get } from "@/lib/api";
 import { relativeTime, titleCase } from "@/lib/format";
+import type { SyncHealth } from "@/lib/sync";
 
 export type OverallStatus = "ok" | "degraded" | "failing";
 type Freshness = "ok" | "stale" | "missing";
@@ -76,6 +79,8 @@ export interface DataHealth {
   };
   heartbeat: { last_job_finished_at: string | null; age_minutes: number | null; limit_minutes: number };
   storage: { database_bytes: number; database_max_gb: number | null; redis?: RedisHealth | null };
+  /** The synced pipeline (runner, last check, syncs, components, CPU); absent from older backends. */
+  sync?: SyncHealth | null;
 }
 
 /** Redis (job queue, locks, call budgets, provider cache) memory against its cap. */
@@ -319,4 +324,11 @@ export function JobsCard({ jobs }: { jobs: JobHealth[] }) {
       </CardContent>
     </Card>
   );
+}
+
+/** The sync section; nothing when the backend sends no sync block (older backends). */
+export function SyncCard({ data, className }: { data: DataHealth; className?: string }) {
+  if (!data.sync) return null;
+  const names = new Map(data.forecast_sources.map((s) => [s.code, s.name] as const));
+  return <SyncStatus sync={data.sync} sourceNames={names} className={className} />;
 }

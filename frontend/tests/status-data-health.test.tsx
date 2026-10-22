@@ -14,7 +14,9 @@ import {
   redisLine,
   SourceFreshness,
   type SourceHealth,
+  SyncCard,
 } from "@/app/status/data-health";
+import type { SyncHealth } from "@/lib/sync";
 
 // SYNTHETIC test data: an invented data-health report that exists only to exercise the
 // status-page components. It does not describe a real run, job or buoy.
@@ -210,5 +212,48 @@ describe("data health components", () => {
     expect(redisLine(uncapped)).toBe("Redis 1 MB of 256 MB (REDIS_MAXMEMORY; Redis itself runs uncapped) (0.4 %, alarm above 80 %)");
     expect(redisLine({ available: false, alert_fraction: 0.8 })).toBe("Redis is not answering");
     expect(redisLine({ available: true, used_memory_bytes: 1024 ** 2, alert_fraction: 0.8 })).toBe("Redis 1 MB (no memory cap known, alarm above 80 %)");
+  });
+});
+
+describe("sync section on the status page", () => {
+  // SYNTHETIC sync block (backend app/schemas/sync.py shape); invented run keys and times.
+  const sync: SyncHealth = {
+    runner: "daemon",
+    check_minutes: 10,
+    last_check_at: now,
+    heartbeat_stale: false,
+    last_run: null,
+    last_published: null,
+    components: [
+      {
+        kind: "spots",
+        source: "synthetic",
+        provider: "open_meteo",
+        state: "new",
+        stored_run_key: "synthetic:1",
+        available_run_key: "synthetic:2",
+        available_cycle: "2026-10-18T12:00:00Z",
+        detail: null,
+      },
+    ],
+    cpu_hours_month: 0.5,
+    cpu_budget_hours: null,
+  };
+
+  it("is absent when the backend sends no sync block (older backends)", () => {
+    const { container, rerender } = render(<SyncCard data={report()} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(<SyncCard data={report({ sync: null })} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("sync-status")).toBeNull();
+  });
+
+  it("renders the sync block with the report's source names", () => {
+    render(<SyncCard data={report({ sync })} />);
+    expect(screen.getByTestId("sync-status")).toHaveTextContent("Forecast sync");
+    const row = screen.getByTestId("sync-component-spots-synthetic");
+    expect(row).toHaveTextContent("Synthetic source · 12Z Oct 18 run");
+    expect(row).toHaveTextContent("New run");
+    expect(screen.getByTestId("sync-published")).toHaveTextContent("Nothing published yet.");
   });
 });
