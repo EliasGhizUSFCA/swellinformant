@@ -1,7 +1,7 @@
 /**
- * Draws the dark vector basemap layers on one canvas, bottom to top: grey land (opaque, so
+ * Draws the dark vector basemap layers on one canvas, bottom to top: mid-grey land (opaque, so
  * it also masks the colour field and the wave dashes at coastlines; translucent on the Wind
- * layer, where the wind over land matters) with the coastline drawn along its edge, country
+ * layer, where the wind over land matters) with a dark coastline drawn along its edge, country
  * borders, isobars with value labels, then country and city labels with greedy collision
  * avoidance. Geometry is pre-projected to Mercator units, so a redraw is a scale-and-offset
  * per vertex per visible world copy (the Pacific view needs the copies either side of the
@@ -40,14 +40,24 @@ export interface BasemapDrawOptions {
   translucentLand?: boolean;
 }
 
-/** Land on the dark basemap: a neutral grey, lighter than the deepest ocean colour (#0c1846). */
-export const LAND_COLOR = "#3a3a3c";
+/**
+ * Land on the dark basemap: a neutral mid grey (L* 48), lighter than the ocean colours of
+ * small and typical seas (L* 12 to 45 up to 3 m) and without their hue, so land never reads
+ * as sea. (Upgrade 4 first drew #3a3a3c; the owner's reference has mid-grey land.)
+ */
+export const LAND_COLOR = "#737376";
 /** Land opacity with `translucentLand`: the wind colour and particles show through, dimmed. */
 export const LAND_ALPHA = 0.55;
-const TRANSLUCENT_LAND = `rgba(58, 58, 60, ${LAND_ALPHA})`;
-/** The coastline drawn along the land's edge on the dark basemap. */
-export const COASTLINE_COLOR = "rgba(255, 255, 255, 0.35)";
-export const COASTLINE_WIDTH_PX = 0.8;
+const TRANSLUCENT_LAND = `rgba(115, 115, 118, ${LAND_ALPHA})`;
+/** The coastline drawn along the land's edge on the dark basemap: a dark line, as in the reference. */
+export const COASTLINE_COLOR = "rgba(24, 24, 28, 0.8)";
+export const COASTLINE_WIDTH_PX = 1;
+/** Country borders on the land, a faint dark line. */
+export const BORDER_COLOR = "rgba(30, 30, 34, 0.35)";
+/** Country and city labels: near-white text on a dark halo, legible on the grey land and on the sea. */
+const COUNTRY_LABEL_COLOR = "#e8e8e8";
+const CITY_LABEL_COLOR = "#f4f4f4";
+const CITY_DOT_COLOR = "#ededed";
 const LABEL_FONT = '500 12px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
 const CITY_FONT = '400 11px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
 const ISOBAR_FONT = '600 10px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
@@ -119,7 +129,7 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
     ctx.stroke();
     ctx.beginPath();
     tracePaths(ctx, g.borders, v);
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+    ctx.strokeStyle = BORDER_COLOR;
     ctx.lineWidth = 0.7;
     ctx.stroke();
   }
@@ -188,13 +198,13 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
     for (const k of worldCopies(v)) {
       for (const c of g.countries) {
         if (c.minZoom > z) continue;
-        candidates.push({ text: c.name, x: mercX(c.lon) * w + k * w - v.originX, y: mercY(c.lat) * w - v.originY, font: LABEL_FONT, color: "#cfcfcf", dot: false });
+        candidates.push({ text: c.name, x: mercX(c.lon) * w + k * w - v.originX, y: mercY(c.lat) * w - v.originY, font: LABEL_FONT, color: COUNTRY_LABEL_COLOR, dot: false });
       }
     }
     if (o.cities && z >= 4) {
       for (const k of worldCopies(v)) {
         for (const c of o.cities) {
-          candidates.push({ text: c.name, x: mercX(c.lon) * w + k * w - v.originX, y: mercY(c.lat) * w - v.originY, font: CITY_FONT, color: "#b3b3b3", dot: true });
+          candidates.push({ text: c.name, x: mercX(c.lon) * w + k * w - v.originX, y: mercY(c.lat) * w - v.originY, font: CITY_FONT, color: CITY_LABEL_COLOR, dot: true });
         }
       }
     }
@@ -206,10 +216,14 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
       const c = candidates[i]!;
       ctx.font = c.font;
       if (c.dot) {
-        ctx.fillStyle = "#9a9a9a";
+        ctx.fillStyle = CITY_DOT_COLOR;
         ctx.beginPath();
         ctx.arc(c.x, c.y, 2.2, 0, Math.PI * 2);
         ctx.fill();
+        // A thin dark ring (the label halo's colour), so the light dot shows on the grey land.
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.lineWidth = 3;
         ctx.textAlign = "left";
         haloText(ctx, c.text, c.x + 6, c.y, c.color);
         ctx.textAlign = "center";
