@@ -954,7 +954,10 @@ new-instance view moves 9.2 (home), 39.8 (map) or 100.9 kB (spot page) and a war
 under 0.5 kB; at most about 1.5 GB a month at 1,000 views a day of 50 kB, plus about
 0.2 GB of stored payloads: under 10 GB. Data: the payloads of one hour are about 250 kB
 for "steady" and about 10 MB if every spot page were asked every hour (2-hour TTL),
-against 250 MB.
+against 250 MB. Every request that reaches the API costs at least one command (a 404 for
+an unknown spot about four: MGET, GET, SET NX and the lock's EVAL), so a flood of URLs the
+CDN has not cached costs commands as it costs function invocations; these routes have no
+rate limit.
 
 **How to reproduce** (from the repository root, Postgres and a scratch Redis database
 running; `--json FILE` saves each result, `--backend-dir DIR` measures another checkout
