@@ -151,6 +151,9 @@ describe("sync helpers", () => {
     expect(formatCpuHours(12.5)).toBe("12.5 h");
     expect(formatCpuHours(10)).toBe("10 h");
     expect(formatCpuHours(0)).toBe("0 h");
+    // The backend rounds to 0.001 h: a small use early in the month is not shown as 0 h.
+    expect(formatCpuHours(0.004)).toBe("0.004 h");
+    expect(formatCpuHours(0.001)).toBe("0.001 h");
   });
 });
 
@@ -305,6 +308,11 @@ describe("CPU meter", () => {
     render(<CpuMeter sync={sync({ cpu_hours_month: 0.028, cpu_budget_hours: 10 })} />);
     expect(screen.getByTestId("sync-cpu")).toHaveTextContent("at least 0.03 h of 10 h (<1 %)");
     expect(screen.getByRole("meter")).toHaveAttribute("aria-valuetext", "0.03 h of 10 h, <1 %");
+  });
+
+  it("shows a tiny use to the backend's 0.001 h, never as 0 h", () => {
+    render(<CpuMeter sync={sync({ cpu_hours_month: 0.004, cpu_budget_hours: 10 })} />);
+    expect(screen.getByTestId("sync-cpu")).toHaveTextContent("at least 0.004 h of 10 h (<1 %)");
   });
 
   it("turns amber above the alert threshold and red at the budget, the bar capped at full", () => {

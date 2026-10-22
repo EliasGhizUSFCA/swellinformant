@@ -183,9 +183,11 @@ export function cpuBudget(sync: Pick<SyncHealth, "cpu_hours_month" | "cpu_budget
   return { used, budget, fraction, tone: fraction >= 1 ? "danger" : fraction > CPU_BUDGET_ALERT_FRACTION ? "warn" : "good" };
 }
 
-/** "2.4 h", "12.5 h", "10 h", "0.04 h". */
+/** "2.4 h", "12.5 h", "10 h", "0.04 h", "0.004 h" (the backend rounds to 0.001 h, so a small
+ * but non-zero use early in the month never reads "0 h"). */
 export function formatCpuHours(hours: number): string {
-  return `${Number(hours.toFixed(Math.abs(hours) >= 0.1 ? 1 : 2))} h`;
+  const abs = Math.abs(hours);
+  return `${Number(hours.toFixed(abs >= 0.1 ? 1 : abs >= 0.01 ? 2 : 3))} h`;
 }
 
 /** Both are the same sync (the newest sync is the one last published). */

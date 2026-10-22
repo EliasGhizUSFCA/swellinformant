@@ -88,7 +88,7 @@ export function MapFreshness({
         // A flex item drops a leading plain space, so the space before "·" is a no-break space
         // and the negative margin cancels the flex gap: one space on each side of the dot.
         <span className="sr-only font-medium sm:not-sr-only sm:-ml-1.5" data-testid="map-published">
-          {" "}· published {utcDateTime(pub.at)}
+          {"\u00a0"}· published {utcDateTime(pub.at)}
         </span>
       )}
     </p>
