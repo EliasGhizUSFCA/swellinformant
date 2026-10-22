@@ -3,11 +3,32 @@ import type { NextConfig } from "next";
 import { cartoKeyMissing, tileConfig, tileCspSources } from "./lib/map-tiles";
 
 /**
- * The browser only ever talks to this Next.js server. `/api/*` is proxied server-side to
- * the FastAPI backend, so session cookies stay same-origin and no backend URL or secret is
- * ever shipped to the client. BACKEND_URL is read when the server is built/started.
+ * The browser only ever talks to one origin, so session cookies stay same-origin and no
+ * backend URL or secret is ever shipped to the client. How `/api/*` reaches the FastAPI
+ * backend is API_ROUTING, read when the server is built/started:
+ * - "proxy" (the default, except on Vercel): this Next.js server proxies `/api/*` to
+ *   BACKEND_URL (default http://localhost:8000). Classic docker compose, `next dev`, e2e.
+ * - "platform" (the default when VERCEL is set, i.e. in Vercel builds): the platform's router
+ *   sends `/api/*` to the API before a request reaches Next.js (vercel.json rewrites to the
+ *   "api" service; the edge of docker-compose.vercel.yml locally), so no rewrite is added.
+ * Any other value fails the build instead of silently picking a mode.
  */
+const API_ROUTING_MODES = ["proxy", "platform"] as const;
+type ApiRouting = (typeof API_ROUTING_MODES)[number];
+
+const onVercel = Boolean(process.env.VERCEL);
+const apiRoutingSetting = process.env.API_ROUTING?.trim().toLowerCase() || (onVercel ? "platform" : "proxy");
+if (!(API_ROUTING_MODES as readonly string[]).includes(apiRoutingSetting)) {
+  throw new Error(`API_ROUTING must be "proxy" or "platform", not "${process.env.API_ROUTING}".`);
+}
+const apiRouting = apiRoutingSetting as ApiRouting;
 const backendUrl = (process.env.BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
+if (apiRouting === "proxy" && onVercel && !process.env.BACKEND_URL) {
+  console.warn(
+    "⚠ API_ROUTING=proxy on Vercel without BACKEND_URL: /api/* would be proxied to http://localhost:8000. " +
+      "Set BACKEND_URL to the API's URL, or leave API_ROUTING unset (platform) when vercel.json routes /api.",
+  );
+}
 // How long the /api proxy waits for the backend (ms); unset = Next.js's 30 s. The e2e runner
 // raises it: its developer endpoints run the whole forecast pipeline inside one request.
 const proxyTimeout = Number(process.env.API_PROXY_TIMEOUT_MS) || undefined;
@@ -41,7 +62,9 @@ const csp = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // The standalone server bundle is for the Docker image (frontend/Dockerfile) and the e2e
+  // runner; Vercel's Next.js builder packages the app into its own functions instead.
+  ...(onVercel ? {} : { output: "standalone" as const }),
   // Separate build directories let the e2e build (pointed at a test backend) coexist with dev.
   distDir: process.env.NEXT_DIST_DIR ?? ".next",
   poweredByHeader: false,
@@ -53,6 +76,7 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   ...(proxyTimeout ? { experimental: { proxyTimeout } } : {}),
   async rewrites() {
+    if (apiRouting === "platform") return [];
     return [{ source: "/api/:path*", destination: `${backendUrl}/api/:path*` }];
   },
   async headers() {
