@@ -18,7 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { get } from "@/lib/api";
 import { relativeTime, titleCase } from "@/lib/format";
-import type { SyncHealth } from "@/lib/sync";
+import { componentsNow, type SyncHealth } from "@/lib/sync";
 
 export type OverallStatus = "ok" | "degraded" | "failing";
 type Freshness = "ok" | "stale" | "missing";
@@ -328,9 +328,20 @@ export function JobsCard({ jobs }: { jobs: JobHealth[] }) {
   );
 }
 
-/** The sync section; nothing when the backend sends no sync block (older backends). */
+/**
+ * The sync section; nothing when the backend sends no sync block (older backends). Component
+ * states found before a sync that has stored their run since are brought up to date from the
+ * same report's stored runs (lib/sync.ts componentsNow).
+ */
 export function SyncCard({ data, className }: { data: DataHealth; className?: string }) {
-  if (!data.sync) return null;
+  const { sync } = data;
+  if (!sync) return null;
   const names = new Map(data.forecast_sources.map((s) => [s.code, s.name] as const));
-  return <SyncStatus sync={data.sync} sourceNames={names} className={className} />;
+  const stored = new Map(data.forecast_sources.map((s) => [s.code, s.newest_run_key] as const));
+  const components = componentsNow(
+    sync.components ?? [],
+    (c) => (c.kind === "map" ? data.map_fields?.run_key : stored.get(c.source)),
+    sync.last_run?.status === "running",
+  );
+  return <SyncStatus sync={{ ...sync, components }} sourceNames={names} className={className} />;
 }

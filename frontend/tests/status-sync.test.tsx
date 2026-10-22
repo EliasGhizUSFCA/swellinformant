@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { CpuMeter, SyncStatus } from "@/components/status/sync-status";
 import {
+  componentsNow,
   componentState,
   cpuBudget,
   formatCpuHours,
@@ -150,6 +151,31 @@ describe("sync helpers", () => {
     expect(formatCpuHours(12.5)).toBe("12.5 h");
     expect(formatCpuHours(10)).toBe("10 h");
     expect(formatCpuHours(0)).toBe("0 h");
+  });
+});
+
+describe("components now", () => {
+  const stored = new Map([
+    ["synthetic_gfs", "synthetic:2026101812"],
+    ["synthetic_ecmwf", "synthetic-ec:2026101812"], // stored after the check found it waiting
+    ["synthetic_map", "synthetic-map:2026101812"],
+  ]);
+  const key = (c: SyncComponent) => stored.get(c.source);
+  const found = COMPONENTS.map((c) => (c.source === "synthetic_map" ? { ...c, state: "new" as const, detail: null } : c));
+
+  it("brings a component found new up to date once the report lists its run as stored", () => {
+    const now = componentsNow(found, key, false);
+    expect(now.map((c) => c.state)).toEqual(["current", "waiting", "current", "disabled"]);
+    expect(now[2]).toEqual({ ...found[2], state: "current", stored_run_key: "synthetic-map:2026101812", detail: "stored since this check" });
+    expect(now[0]).toBe(found[0]); // already current: unchanged
+  });
+
+  it("leaves everything as reported while a sync runs, or when the stored run differs", () => {
+    expect(componentsNow(found, key, true)).toEqual(found);
+    const syncing = found.map((c) => (c.kind === "map" ? { ...c, state: "in_progress" as const } : c));
+    expect(componentsNow(syncing, key, false)[2]!.state).toBe("current");
+    expect(componentsNow(syncing, () => "synthetic-map:2026101800", false)[2]!.state).toBe("in_progress");
+    expect(componentsNow([{ ...found[2]!, available_run_key: null }], () => null, false)[0]!.state).toBe("new");
   });
 });
 

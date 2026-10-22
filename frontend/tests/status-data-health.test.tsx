@@ -16,7 +16,7 @@ import {
   type SourceHealth,
   SyncCard,
 } from "@/app/status/data-health";
-import type { SyncHealth } from "@/lib/sync";
+import type { SyncComponent, SyncHealth, SyncRun } from "@/lib/sync";
 
 // SYNTHETIC test data: an invented data-health report that exists only to exercise the
 // status-page components. It does not describe a real run, job or buoy.
@@ -267,5 +267,45 @@ describe("sync section on the status page", () => {
     expect(row).toHaveTextContent("Synthetic source · newest run 12Z Oct 18");
     expect(row).toHaveTextContent("New run");
     expect(screen.getByTestId("sync-published")).toHaveTextContent("Nothing published yet.");
+  });
+
+  it("shows a run that a sync stored after the check as current, from the same report's stored runs", () => {
+    // The daemon rewrites its heartbeat when its sync ends, with the components as the check
+    // before that sync found them (seen live: "new" for both runs sync 5 had just stored).
+    const map: SyncComponent = {
+      kind: "map",
+      source: "synthetic_fields",
+      provider: "map_fields",
+      state: "new",
+      stored_run_key: "synthetic-map:0",
+      available_run_key: "synthetic-map:1",
+      available_cycle: "2026-10-18T12:00:00Z",
+      detail: null,
+    };
+    const waiting: SyncComponent = { ...map, kind: "spots", source: "blend", state: "waiting", available_run_key: "blend:1", detail: "waiting for synthetic_fields" };
+    const done: SyncRun = { id: 5, trigger: "daemon", status: "success", started_at: now, finished_at: now, published_at: now, anchor_cycle: null, stages: [] };
+    const synced = { ...sync, components: [...sync.components!, map, waiting], last_run: done, last_published: done };
+    const base = report({ sync: synced });
+    const data = report({
+      sync: synced,
+      forecast_sources: base.forecast_sources.map((s) => (s.code === "synthetic" ? { ...s, newest_run_key: "synthetic:2" } : s)),
+      map_fields: { ...base.map_fields, run_key: "synthetic-map:1" },
+    });
+    const { rerender } = render(<SyncCard data={data} />);
+    const spots = screen.getByTestId("sync-component-spots-synthetic");
+    expect(spots).toHaveAttribute("data-state", "current");
+    expect(spots).toHaveTextContent("Current");
+    expect(spots).toHaveTextContent("stored since this check");
+    expect(screen.getByTestId("sync-component-map-synthetic_fields")).toHaveAttribute("data-state", "current");
+    // Only states a sync resolves: a waiting component keeps the backend's state and detail.
+    expect(screen.getByTestId("sync-component-spots-blend")).toHaveAttribute("data-state", "waiting");
+    expect(screen.getByTestId("sync-component-spots-blend")).toHaveTextContent("waiting for synthetic_fields");
+    // Nothing changes while a sync runs (stored is not yet published), nor without a stored match.
+    rerender(<SyncCard data={{ ...data, sync: { ...synced, last_run: { ...done, status: "running", finished_at: null } } }} />);
+    expect(screen.getByTestId("sync-component-spots-synthetic")).toHaveAttribute("data-state", "new");
+    expect(screen.getByTestId("sync-component-map-synthetic_fields")).toHaveAttribute("data-state", "new");
+    rerender(<SyncCard data={base} />);
+    expect(screen.getByTestId("sync-component-spots-synthetic")).toHaveAttribute("data-state", "new");
+    expect(screen.getByTestId("sync-component-map-synthetic_fields")).toHaveAttribute("data-state", "new");
   });
 });

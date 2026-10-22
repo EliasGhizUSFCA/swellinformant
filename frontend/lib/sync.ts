@@ -190,3 +190,25 @@ export function formatCpuHours(hours: number): string {
 
 /** Both are the same sync (the newest sync is the one last published). */
 export const isSameRun = (a: SyncRun | null | undefined, b: SyncRun | null | undefined): boolean => !!a && !!b && a.id === b.id;
+
+/** States a sync resolves: the run was found, or its sync was running, at the check. */
+const RESOLVED_BY_A_SYNC: ReadonlySet<string> = new Set<SyncComponentState>(["new", "in_progress"]);
+
+/**
+ * The components as they stand now. The daemon writes its heartbeat again when a sync it
+ * started ends, with the components as that check found them, so a run the sync has stored
+ * since still reads "New run" until the next check. A component in a state a sync resolves
+ * whose newest available run is the run the same report lists as stored (`storedKey`: the
+ * forecast source's newest run, or the map layers' run) is current. Nothing changes while a
+ * sync runs (a run it stored is not published before its publish stage).
+ */
+export function componentsNow(
+  components: readonly SyncComponent[],
+  storedKey: (c: SyncComponent) => string | null | undefined,
+  syncRunning: boolean,
+): SyncComponent[] {
+  return components.map((c) => {
+    if (syncRunning || !RESOLVED_BY_A_SYNC.has(c.state) || !c.available_run_key || storedKey(c) !== c.available_run_key) return c;
+    return { ...c, state: "current", stored_run_key: c.available_run_key, detail: "stored since this check" };
+  });
+}
