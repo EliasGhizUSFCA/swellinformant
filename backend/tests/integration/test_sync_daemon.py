@@ -109,6 +109,33 @@ def test_once_initialises_consumes_kicks_writes_the_heartbeat_and_syncs(
     assert known is not None and known.stored["demo"].startswith("demo:")
 
 
+def test_a_failed_init_db_still_restores_the_redacting_logging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alembic's fileConfig replaces the root handlers (and the redaction filter) during
+    migrate; when init-db then fails, the start-up error must still be logged through the
+    application's redacting handlers."""
+    import logging
+
+    from app.core.logging import RedactingFilter, configure_logging
+
+    configure_logging()
+
+    def init_database() -> dict[str, Any]:
+        root = logging.getLogger()
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+        root.addHandler(logging.StreamHandler())  # what alembic/env.py's fileConfig does
+        raise RuntimeError("the database is still waking up (test)")
+
+    monkeypatch.setattr(cli, "init_database", init_database)
+    with pytest.raises(RuntimeError, match="still waking"):
+        SyncDaemon(get_settings()).start(init_db=True)
+    root = logging.getLogger()
+    assert root.handlers and all(getattr(h, "_swell", False) for h in root.handlers)
+    assert any(isinstance(f, RedactingFilter) for h in root.handlers for f in h.filters)
+
+
 def test_an_idle_check_makes_no_database_query(
     db: Session, published: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

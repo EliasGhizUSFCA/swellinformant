@@ -198,8 +198,10 @@ class SyncDaemon:
         if init_db:
             from app.cli import init_database
 
-            done = init_database()
-            restore_logging()
+            try:
+                done = init_database()
+            finally:  # also when it fails: the error is logged through the redaction filter
+                restore_logging()
             logger.info("Sync daemon: init-db %s", done)
         cached = state.read_known()
         with SessionLocal() as db:
