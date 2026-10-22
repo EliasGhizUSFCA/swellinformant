@@ -5,17 +5,20 @@
  *
  * Everything shown is what the backend reports: forecast-source ages against each
  * source's own stale limit, the last result of every scheduled job, map-layer and buoy
- * freshness, and an overall ok / degraded / failing status with plain reasons. The
- * limits are operational heuristics (how late data may be), not forecast accuracy.
+ * freshness, the model-run sync (components/status/sync-status.tsx), and an overall
+ * ok / degraded / failing status with plain reasons. The limits are operational heuristics
+ * (how late data may be), not forecast accuracy.
  */
 import { useQuery } from "@tanstack/react-query";
 import { Activity, AlertTriangle, CheckCircle2, Database, HeartPulse, Map as MapIcon, Radio, XCircle } from "lucide-react";
 
+import { SyncStatus } from "@/components/status/sync-status";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { get } from "@/lib/api";
 import { relativeTime, titleCase } from "@/lib/format";
+import { componentsNow, type SyncHealth } from "@/lib/sync";
 
 export type OverallStatus = "ok" | "degraded" | "failing";
 type Freshness = "ok" | "stale" | "missing";
@@ -76,6 +79,8 @@ export interface DataHealth {
   };
   heartbeat: { last_job_finished_at: string | null; age_minutes: number | null; limit_minutes: number };
   storage: { database_bytes: number; database_max_gb: number | null; redis?: RedisHealth | null };
+  /** The synced pipeline (runner, last check, syncs, components, CPU); absent from older backends. */
+  sync?: SyncHealth | null;
 }
 
 /** Redis (job queue, locks, call budgets, provider cache) memory against its cap. */
@@ -110,12 +115,25 @@ export function formatBytes(bytes: number): string {
   return `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
+/** How often an open status page re-reads data health (TanStack Query skips it while the tab is
+ * hidden; focusing the tab re-reads a report older than 30 s). Every minute while a sync runs
+ * (its stages and running time move) and under the Celery runner or an older backend without
+ * a sync block (as before). Under the sync daemon (the hosted profile), every 5 minutes
+ * otherwise: the sync part changes at most once per check (SYNC_CHECK_MINUTES, 10 by default),
+ * and each report costs a function call, several Redis commands (Upstash bills each one) and
+ * database reads that keep a scale-to-zero database awake. */
+export function dataHealthRefetchMs(data: DataHealth | undefined): number {
+  const sync = data?.sync;
+  if (!sync || sync.runner !== "daemon" || sync.last_run?.status === "running") return 60_000;
+  return 5 * 60_000;
+}
+
 export const useDataHealth = () =>
   useQuery({
     queryKey: ["health", "data"],
     queryFn: ({ signal }) => get<DataHealth>("/api/health/data", signal),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: (q) => dataHealthRefetchMs(q.state.data),
   });
 
 type Tone = "good" | "warn" | "danger" | "muted" | "info";
@@ -173,7 +191,9 @@ export function DataHealthSummary({ data }: { data: DataHealth }) {
         {data.reasons.length === 0 ? (
           <p>Every forecast source is within its freshness limit and every scheduled job is running.</p>
         ) : (
-          <ul className="list-disc space-y-1 pl-4" data-testid="data-health-reasons">
+          // wrap-anywhere: Open-Meteo run keys ("gfswave016:2026102106|gfswave025:...") have no
+          // break opportunity and would widen the page on phones.
+          <ul className="list-disc space-y-1 pl-4 wrap-anywhere" data-testid="data-health-reasons">
             {data.problems.map((p) => (
               <li key={p.key}>
                 {p.severity === "failing" && <strong>Failing: </strong>}
@@ -200,7 +220,7 @@ export function SourceFreshness({ sources }: { sources: SourceHealth[] }) {
             <Badge variant={freshnessTone(s.status)}>{s.status === "ok" ? "fresh" : s.status}</Badge>
           </div>
           <div className="mt-1 text-xs text-muted-foreground">{ROLE_LABEL[s.role]}</div>
-          <div className="mt-1 text-xs text-muted-foreground">{ageLine(s)}</div>
+          <div className="mt-1 text-xs text-muted-foreground wrap-anywhere">{ageLine(s)}</div>
           {s.latest_attempt_status === "failed" && s.latest_attempt_started_at && (
             <div className="mt-1 text-xs text-destructive">Latest attempt {relativeTime(s.latest_attempt_started_at)} failed</div>
           )}
@@ -319,4 +339,22 @@ export function JobsCard({ jobs }: { jobs: JobHealth[] }) {
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * The sync section; nothing when the backend sends no sync block (older backends). Component
+ * states found before a sync that has stored their run since are brought up to date from the
+ * same report's stored runs (lib/sync.ts componentsNow).
+ */
+export function SyncCard({ data, className }: { data: DataHealth; className?: string }) {
+  const { sync } = data;
+  if (!sync) return null;
+  const names = new Map(data.forecast_sources.map((s) => [s.code, s.name] as const));
+  const stored = new Map(data.forecast_sources.map((s) => [s.code, s.newest_run_key] as const));
+  const components = componentsNow(
+    sync.components ?? [],
+    (c) => (c.kind === "map" ? data.map_fields?.run_key : stored.get(c.source)),
+    sync.last_run?.status === "running",
+  );
+  return <SyncStatus sync={{ ...sync, components }} sourceNames={names} className={className} />;
 }

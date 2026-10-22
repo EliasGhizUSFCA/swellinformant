@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ageLine,
   type DataHealth,
+  dataHealthRefetchMs,
   DataHealthSummary,
   formatBytes,
   formatHours,
@@ -14,7 +15,9 @@ import {
   redisLine,
   SourceFreshness,
   type SourceHealth,
+  SyncCard,
 } from "@/app/status/data-health";
+import type { SyncComponent, SyncHealth, SyncRun } from "@/lib/sync";
 
 // SYNTHETIC test data: an invented data-health report that exists only to exercise the
 // status-page components. It does not describe a real run, job or buoy.
@@ -159,6 +162,18 @@ describe("data health components", () => {
     expect(screen.getByTestId("data-health-summary")).toHaveTextContent("All data checks pass");
   });
 
+  it("lets long run keys wrap so phones do not scroll sideways", () => {
+    // Real Open-Meteo run keys are one unbreakable token, e.g. "gfswave016:2026102106|gfswave025:2026102106|gfs013:2026102106|gfs025:2026102106".
+    const key = "synthetic016:2026102106|synthetic025:2026102106|synthetic013:2026102106|synthetic025:2026102106";
+    const message = `Synthetic source: newest run ${key} was issued 20.6 h ago (stale after 17.2 h).`;
+    const data = report({ problems: [{ key: "forecast_stale:synthetic", severity: "degraded", message }] });
+    render(<DataHealthSummary data={data} />);
+    expect(screen.getByTestId("data-health-reasons")).toHaveClass("wrap-anywhere");
+    const [source] = data.forecast_sources as [SourceHealth];
+    render(<SourceFreshness sources={[{ ...source, newest_run_key: key }]} />);
+    expect(screen.getByText(new RegExp(`Run ${key.replace(/\|/g, "\\|")}`))).toHaveClass("wrap-anywhere");
+  });
+
   it("lists sources with their age, limit, role and a failed attempt", () => {
     render(<SourceFreshness sources={report().forecast_sources} />);
     const list = screen.getByTestId("data-health-sources");
@@ -210,5 +225,98 @@ describe("data health components", () => {
     expect(redisLine(uncapped)).toBe("Redis 1 MB of 256 MB (REDIS_MAXMEMORY; Redis itself runs uncapped) (0.4 %, alarm above 80 %)");
     expect(redisLine({ available: false, alert_fraction: 0.8 })).toBe("Redis is not answering");
     expect(redisLine({ available: true, used_memory_bytes: 1024 ** 2, alert_fraction: 0.8 })).toBe("Redis 1 MB (no memory cap known, alarm above 80 %)");
+  });
+});
+
+describe("sync section on the status page", () => {
+  // SYNTHETIC sync block (backend app/schemas/sync.py shape); invented run keys and times.
+  const sync: SyncHealth = {
+    runner: "daemon",
+    check_minutes: 10,
+    last_check_at: now,
+    heartbeat_stale: false,
+    last_run: null,
+    last_published: null,
+    components: [
+      {
+        kind: "spots",
+        source: "synthetic",
+        provider: "open_meteo",
+        state: "new",
+        stored_run_key: "synthetic:1",
+        available_run_key: "synthetic:2",
+        available_cycle: "2026-10-18T12:00:00Z",
+        detail: null,
+      },
+    ],
+    cpu_hours_month: 0.5,
+    cpu_budget_hours: null,
+  };
+
+  it("is absent when the backend sends no sync block (older backends)", () => {
+    const { container, rerender } = render(<SyncCard data={report()} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(<SyncCard data={report({ sync: null })} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("sync-status")).toBeNull();
+  });
+
+  it("re-reads every 5 minutes under the sync daemon, every minute while a sync runs or without the daemon", () => {
+    expect(dataHealthRefetchMs(undefined)).toBe(60_000);
+    expect(dataHealthRefetchMs(report())).toBe(60_000); // older backend: no sync block
+    expect(dataHealthRefetchMs(report({ sync: { ...sync, runner: "celery" } }))).toBe(60_000);
+    expect(dataHealthRefetchMs(report({ sync }))).toBe(300_000);
+    const run: SyncRun = { id: 3, trigger: "daemon", status: "running", started_at: now, finished_at: null, published_at: null, anchor_cycle: null, stages: [] };
+    expect(dataHealthRefetchMs(report({ sync: { ...sync, last_run: run } }))).toBe(60_000);
+    expect(dataHealthRefetchMs(report({ sync: { ...sync, last_run: { ...run, status: "success", finished_at: now } } }))).toBe(300_000);
+  });
+
+  it("renders the sync block with the report's source names", () => {
+    render(<SyncCard data={report({ sync })} />);
+    expect(screen.getByTestId("sync-status")).toHaveTextContent("Forecast sync");
+    const row = screen.getByTestId("sync-component-spots-synthetic");
+    expect(row).toHaveTextContent("Synthetic source · newest run 12Z Oct 18");
+    expect(row).toHaveTextContent("New run");
+    expect(screen.getByTestId("sync-published")).toHaveTextContent("Nothing published yet.");
+  });
+
+  it("shows a run that a sync stored after the check as current, from the same report's stored runs", () => {
+    // The daemon rewrites its heartbeat when its sync ends, with the components as the check
+    // before that sync found them (seen live: "new" for both runs sync 5 had just stored).
+    const map: SyncComponent = {
+      kind: "map",
+      source: "synthetic_fields",
+      provider: "map_fields",
+      state: "new",
+      stored_run_key: "synthetic-map:0",
+      available_run_key: "synthetic-map:1",
+      available_cycle: "2026-10-18T12:00:00Z",
+      detail: null,
+    };
+    const waiting: SyncComponent = { ...map, kind: "spots", source: "blend", state: "waiting", available_run_key: "blend:1", detail: "waiting for synthetic_fields" };
+    const done: SyncRun = { id: 5, trigger: "daemon", status: "success", started_at: now, finished_at: now, published_at: now, anchor_cycle: null, stages: [] };
+    const synced = { ...sync, components: [...sync.components!, map, waiting], last_run: done, last_published: done };
+    const base = report({ sync: synced });
+    const data = report({
+      sync: synced,
+      forecast_sources: base.forecast_sources.map((s) => (s.code === "synthetic" ? { ...s, newest_run_key: "synthetic:2" } : s)),
+      map_fields: { ...base.map_fields, run_key: "synthetic-map:1" },
+    });
+    const { rerender } = render(<SyncCard data={data} />);
+    const spots = screen.getByTestId("sync-component-spots-synthetic");
+    expect(spots).toHaveAttribute("data-state", "current");
+    expect(spots).toHaveTextContent("Current");
+    expect(spots).toHaveTextContent("stored since this check");
+    expect(screen.getByTestId("sync-component-map-synthetic_fields")).toHaveAttribute("data-state", "current");
+    // Only states a sync resolves: a waiting component keeps the backend's state and detail.
+    expect(screen.getByTestId("sync-component-spots-blend")).toHaveAttribute("data-state", "waiting");
+    expect(screen.getByTestId("sync-component-spots-blend")).toHaveTextContent("waiting for synthetic_fields");
+    // Nothing changes while a sync runs (stored is not yet published), nor without a stored match.
+    rerender(<SyncCard data={{ ...data, sync: { ...synced, last_run: { ...done, status: "running", finished_at: null } } }} />);
+    expect(screen.getByTestId("sync-component-spots-synthetic")).toHaveAttribute("data-state", "new");
+    expect(screen.getByTestId("sync-component-map-synthetic_fields")).toHaveAttribute("data-state", "new");
+    rerender(<SyncCard data={base} />);
+    expect(screen.getByTestId("sync-component-spots-synthetic")).toHaveAttribute("data-state", "new");
+    expect(screen.getByTestId("sync-component-map-synthetic_fields")).toHaveAttribute("data-state", "new");
   });
 });

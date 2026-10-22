@@ -4,6 +4,7 @@ import { AlertTriangle } from "lucide-react";
 
 import type { FieldIndex } from "@/lib/map-fields";
 import { cycleLabel, leadLabel, modelName } from "@/lib/map-time";
+import { utcDateTime } from "@/lib/sync";
 import { cn } from "@/lib/utils";
 import type { MapSnapshot } from "@/types/api";
 
@@ -29,9 +30,31 @@ export function mapStaleness(
 }
 
 /**
+ * The model run behind the ocean layers and when it reached the map: the sync publication that
+ * made it the served run (`published_at`), or, without one (older backends, or before the first
+ * sync), when storing the run finished (`updated_at`). Null without layers or a cycle time.
+ */
+export function mapPublication(index: FieldIndex | null | undefined): { cycle: string; at: string | null; published: boolean } | null {
+  if (!index?.available || !index.cycle_time) return null;
+  if (index.published_at) return { cycle: index.cycle_time, at: index.published_at, published: true };
+  return { cycle: index.cycle_time, at: index.updated_at ?? null, published: false };
+}
+
+/** "model run 12Z Oct 18 (Z = UTC), published Oct 18, 14:32 UTC" (or "stored ..." without a
+ * publication); null without layers. */
+export function publicationText(index: FieldIndex | null | undefined): string | null {
+  const pub = mapPublication(index);
+  if (!pub) return null;
+  const when = pub.at ? `, ${pub.published ? "published" : "stored"} ${utcDateTime(pub.at)}` : "";
+  return `model run ${cycleLabel(pub.cycle)} (Z = UTC)${when}`;
+}
+
+/**
  * The map's freshness chip: "Forecast out of date — model run 54 h old" once the newest model
  * run behind the ocean layers or the spot markers is older than its limit (12 h by default).
  * The layers and markers keep showing that run; this says so. Nothing while the data is fresh.
+ * When a sync published the layers' run, larger screens add when: "· published Oct 16, 14:32
+ * UTC" (phones keep one line; screen readers still get it). The tooltip names the run.
  */
 export function MapFreshness({
   index,
@@ -47,10 +70,13 @@ export function MapFreshness({
 }) {
   const { stale, ageHours, limitHours } = mapStaleness(index, snapshot, now);
   if (!stale) return null;
+  const pub = mapPublication(index);
+  const run = publicationText(index);
   return (
     <p
       role="status"
       data-testid="map-stale"
+      title={run ? `Ocean layers: ${run}` : undefined}
       className={cn(
         "flex w-fit items-center gap-1.5 rounded-full bg-amber-300 px-3 py-1.5 text-xs font-semibold text-[#2a1d00] shadow-[0_6px_22px_rgba(0,0,0,0.38)]",
         className,
@@ -58,6 +84,13 @@ export function MapFreshness({
     >
       <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
       {ageHours != null ? `Forecast out of date — model run ${Math.round(ageHours)} h old` : `Forecast out of date — model run over ${Math.round(limitHours)} h old`}
+      {pub?.published && pub.at && (
+        // A flex item drops a leading plain space, so the space before "·" is a no-break space
+        // and the negative margin cancels the flex gap: one space on each side of the dot.
+        <span className="sr-only font-medium sm:not-sr-only sm:-ml-1.5" data-testid="map-published">
+          {"\u00a0"}· published {utcDateTime(pub.at)}
+        </span>
+      )}
     </p>
   );
 }
@@ -65,8 +98,9 @@ export function MapFreshness({
 /**
  * Beside the timeline bubble: the model run and the selected step's lead time after it,
  * "GFS 18Z Oct 11 · +6 h", or "analysis" at the run's own time (still model output, not an
- * observation). Phones show the lead time only (screen readers still get the run); the full
- * source is in the tooltip and the legend.
+ * observation). Phones show the lead time only (screen readers still get the run). The
+ * tooltip has the full source and when the run was published (or stored, before any sync
+ * published one); the legend has the source too.
  */
 export function ModelRunLabel({ index, at }: { index: FieldIndex | null | undefined; at: string | null }) {
   if (!index?.available || !index.source || !index.cycle_time) return null;
@@ -75,7 +109,8 @@ export function ModelRunLabel({ index, at }: { index: FieldIndex | null | undefi
   return (
     <span
       data-testid="map-lead-time"
-      title={`${index.source.name}, model run ${cycleLabel(index.cycle_time)} (Z = UTC). Forecast values, not observations.`}
+      data-published-at={index.published_at ?? undefined}
+      title={`${index.source.name}, ${publicationText(index)}. Forecast values, not observations.`}
       // Inline, not a flex box: flex items would drop the spaces around the "·".
       className="pointer-events-auto inline-block rounded-full bg-[#15191d]/90 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-white/85 tabular-nums shadow ring-1 ring-white/15"
     >

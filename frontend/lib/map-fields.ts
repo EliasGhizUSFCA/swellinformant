@@ -17,6 +17,12 @@
  */
 import type { components } from "@/types/openapi";
 
+/**
+ * `GET /api/map/fields`. `published_at` and `sync_run_id` (optional: older backends omit them)
+ * name the sync publication that made the served run the map's run; both are null before the
+ * first sync published a map run, or when the server fell back to another run. `updated_at` is
+ * when storing the served run finished (its forecast run's completed_at).
+ */
 export type FieldIndex = components["schemas"]["FieldIndexOut"];
 export type FieldVariable = components["schemas"]["FieldVariableOut"];
 
