@@ -14,10 +14,10 @@ own values and uncertainty:
 * whether the run is stale by its source's rule (``queries.is_stale``).
 
 Only the columns and JSON keys these inputs use are read (database egress; a scoring pass
-runs after every model run). A comparison's ``sources`` arrive with each member's
-``family`` and ``role`` only, and an assessment's ``per_variable`` without the evidence
-lists of the variables other than wind (the wind dispute ranks the wind evidence). Every
-value the inputs use is the stored one.
+runs after every model run). Of a comparison's ``sources`` only the members' ``family``
+values arrive, and an assessment's ``per_variable`` without the evidence lists of the
+variables other than wind (the wind dispute ranks the wind evidence). Every value the
+inputs use is the stored one.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ColumnElement, Text, case, cast, func, literal, select
+from sqlalchemy import ColumnElement, Text, and_, case, cast, column, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
@@ -145,23 +145,31 @@ def previous_run(db: Session, run: ForecastRun) -> ForecastRun | None:
     )
 
 
-def _member_roles(sources: Any) -> ColumnElement[Any]:
-    """``sources`` (code -> per-member values) with only each member's ``family`` and
-    ``role`` keys, where present: all :func:`_comparisons` reads of a member's values (the
-    rest, Hs, Tp, direction, wind, weight and lead, is about 3/4 of the column). NULL for an
-    empty object, which reads as empty."""
-    member = func.jsonb_each(sources).table_valued("key", "value").render_derived(name="m")
-    kept = func.jsonb_each(member.c.value).table_valued("key", "value").render_derived(name="k")
-    roles = (
-        select(func.coalesce(func.jsonb_object_agg(kept.c.key, kept.c.value), cast("{}", JSONB)))
-        .select_from(kept)
-        .where(kept.c.key.in_(("family", "role")))
-        .scalar_subquery()
+def _member_families(sources: Any) -> ColumnElement[Any]:
+    """The ``family`` value of every member of ``sources`` (code -> per-member values) whose
+    ``role`` is "member" or absent, as a JSON array (in no particular order): all that
+    :func:`_comparisons` reads of the column (Hs, Tp, direction, wind, weight and lead are
+    about 9/10 of it). Which values count and their text stay in Python, as when the whole
+    column was read. NULL when there is none, which reads as empty."""
+    member = (
+        func.jsonb_each(sources)
+        .table_valued(column("key", Text), column("value", JSONB))
+        .render_derived(name="m")
     )
-    value = case((func.jsonb_typeof(member.c.value) == "object", roles), else_=member.c.value)
-    return cast(
-        select(func.jsonb_object_agg(member.c.key, value)).select_from(member).scalar_subquery(),
-        JSONB,
+    value = member.c.value
+    role = value["role"]
+    return (
+        select(func.jsonb_agg(value["family"], type_=JSONB))
+        .select_from(member)
+        .where(
+            func.jsonb_typeof(value) == "object",
+            value.has_key("family"),
+            or_(
+                ~value.has_key("role"),
+                and_(func.jsonb_typeof(role) == "string", role.astext == "member"),
+            ),
+        )
+        .scalar_subquery()
     )
 
 
@@ -176,7 +184,7 @@ def _comparisons(db: Session, run: ForecastRun) -> dict[tuple[int, datetime], Ho
         select(
             c.spot_id,
             c.valid_time,
-            _member_roles(c.sources).label("sources"),
+            _member_families(c.sources).label("families"),
             c.hs_log_ratio_max,
             c.tp_diff_max_s,
             c.direction_diff_max_deg,
@@ -186,13 +194,7 @@ def _comparisons(db: Session, run: ForecastRun) -> dict[tuple[int, datetime], Ho
     ):
         families = tuple(
             sorted(
-                {
-                    str(v.get("family"))
-                    for v in (row.sources or {}).values()
-                    if isinstance(v, dict)
-                    and v.get("role", "member") == "member"
-                    and v.get("family")
-                },
+                {str(f) for f in row.families or () if f},
                 key=lambda f: order.index(f) if f in order else len(order),
             )
         )

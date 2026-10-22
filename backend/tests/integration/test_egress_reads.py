@@ -321,7 +321,7 @@ def test_scoring_reads_the_assessments_without_the_unused_evidence(db: Session) 
 
 
 @pytest.mark.usefixtures("codes")
-def test_blend_comparisons_read_only_the_member_families_and_roles(db: Session) -> None:
+def test_blend_comparisons_read_only_the_member_families(db: Session) -> None:
     _ingest(db, SyntheticProvider("t_gfs", "ncep_gfs", 2.1, NOW - timedelta(hours=6)))
     _ingest(db, SyntheticProvider("t_ecmwf", "ecmwf_ifs", 2.6, NOW - timedelta(hours=6)), 1)
     assert blend.build_blend(db, NOW).status == "success"
@@ -332,12 +332,19 @@ def test_blend_comparisons_read_only_the_member_families_and_roles(db: Session) 
         )
     )
     assert rows
-    # SYNTHETIC edge cases: a member without a role, a JSON-null role, a non-object entry.
+    # SYNTHETIC edge cases: a member without a role, a JSON-null role, a non-object entry,
+    # falsy and non-string families, a non-string role, a family listed twice.
     rows[0].sources = {
         **rows[0].sources,
         "t_norole": {"family": "f_norole", "hs": 1.0},
         "t_nullrole": {"family": "f_null", "role": None},
         "t_scalar": 3,
+        "t_empty": {"family": ""},
+        "t_zero": {"family": 0, "role": "member"},
+        "t_number": {"family": 7},
+        "t_listrole": {"family": "f_list", "role": ["member"]},
+        "t_reference": {"family": "f_reference", "role": "reference"},
+        "t_twice": {"family": "f_norole"},
     }
     rows[1].sources = {}
     db.commit()
@@ -365,6 +372,9 @@ def test_blend_comparisons_read_only_the_member_families_and_roles(db: Session) 
         assert hour.disagreement.flags == tuple(str(f) for f in row.flags or ())
     assert "f_norole" in got[(rows[0].spot_id, rows[0].valid_time)].families
     assert "f_null" not in got[(rows[0].spot_id, rows[0].valid_time)].families
+    assert "7" in got[(rows[0].spot_id, rows[0].valid_time)].families
+    assert "f_list" not in got[(rows[0].spot_id, rows[0].valid_time)].families
+    assert "f_reference" not in got[(rows[0].spot_id, rows[0].valid_time)].families
     assert got[(rows[1].spot_id, rows[1].valid_time)].families == ()
 
 
