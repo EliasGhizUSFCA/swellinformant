@@ -89,6 +89,8 @@ def test_one_sync_stores_publishes_and_records_every_stage(
         "deliver": "success",
         "prune": "skipped",  # SYNC_PRUNE_EACH_PASS=false
     }
+    ensemble = next(s for s in result.stages if s.name == "ensemble")
+    assert ensemble.detail == {"reason": "disabled (GEFS_ENABLED=false)"}
     spots = next(s for s in result.stages if s.name == "spots")
     assert spots.detail["components"] == [
         {
@@ -154,6 +156,10 @@ def test_a_forced_second_sync_is_idempotent(db: Session, synthetic_map: MapWorld
         for c in s.detail["components"]
     ]
     assert outcomes == ["current", "current"]
+    # Force acquires every configured component, never a disabled one.
+    ensemble = next(s for s in second.stages if s.name == "ensemble")
+    assert ensemble.status == "skipped"
+    assert ensemble.detail == {"reason": "disabled (GEFS_ENABLED=false)"}
     assert counts(db) == before  # no row added or duplicated
     # The map stage only checked the cycle (.idx HEADs), it downloaded no field.
     new = synthetic_map.world.requests[requests:]
@@ -307,6 +313,23 @@ def test_a_crashed_sync_is_abandoned_and_the_next_one_completes_it(
     assert outcomes == ["current", "current"]
     assert stages(nxt)["publish"] == "success" and stages(nxt)["blend"] == "success"
     assert published_map_run_id(db) is not None
+
+
+def test_a_sync_that_cannot_open_its_job_log_releases_the_lease(
+    db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def gone(row_id: int) -> int:
+        raise RuntimeError("the database went away (test)")
+
+    with monkeypatch.context() as m:
+        m.setattr(orchestrator, "_open_log", gone)
+        with pytest.raises(RuntimeError, match="went away"):
+            orchestrator.run_sync(trigger="daemon", now=NOW)
+    db.expire_all()
+    row = db.scalar(select(SyncRun))
+    assert row is not None and row.status == "failed" and row.lease_expires_at is None
+    assert "went away" in (row.error_message or "")
+    assert orchestrator.run_sync(trigger="daemon", now=NOW).status == "success"  # not busy
 
 
 def test_a_sync_that_lost_its_lease_stops(

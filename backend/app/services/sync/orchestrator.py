@@ -29,6 +29,7 @@ due (Celery's ``sync.tick`` and ``python -m app.cli sync run --if-due``).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import secrets
@@ -323,6 +324,18 @@ def _skipped(name: StageName, reason: str) -> StageResult:
     return StageResult(name, "skipped", utcnow(), 0, 0.0, {"reason": reason})
 
 
+def _not_acquired(ctx: _Sync, kind: ComponentKind) -> str:
+    """Why an acquisition stage acquires nothing: --only, a component that is not
+    configured (its plan detail, e.g. "GEFS_ENABLED=false"), or no new run."""
+    if ctx.only is not None and kind not in ctx.only:
+        return "--only excludes it"
+    comps = [c for c in ctx.plan.components if c.kind == kind]
+    if comps and all(c.state == "disabled" for c in comps):
+        details = "; ".join(sorted({c.detail for c in comps if c.detail}))
+        return f"disabled ({details})" if details else "disabled"
+    return f"no new {kind} run"
+
+
 def _execute(name: StageName, fn: Callable[[Session], Any]) -> tuple[StageResult, Any]:
     """Run one stage as its job (lock, job log, judge); never raises."""
     spec = job_spec(STAGE_JOB_NAMES[name])
@@ -362,8 +375,7 @@ def _stage(name: StageName, ctx: _Sync) -> StageResult:
         kind = _STAGE_KIND[name]
         comps = ctx.wanted(kind)
         if not comps:
-            excluded = ctx.only is not None and kind not in ctx.only
-            return _skipped(name, "--only excludes it" if excluded else f"no new {kind} run")
+            return _skipped(name, _not_acquired(ctx, kind))
         result, details = _execute(name, _acquisition(kind, comps, now))
         result.detail["components"] = _components(ctx, comps, details, result)
         return result
@@ -597,7 +609,12 @@ def run_sync(
         row_id=lease.row_id,
     )
     t0, cpu0 = time.monotonic(), cpu_seconds()
-    log_id = _open_log(lease.row_id)
+    try:
+        log_id = _open_log(lease.row_id)
+    except BaseException as exc:  # e.g. the database went away: do not hold the lease
+        with contextlib.suppress(Exception):
+            lease.release("failed", [], _text(exc))
+        raise
     logger.info("Sync %s (%s) started: %s", lease.row_id, trigger, "; ".join(plan.reasons))
     stages: list[StageResult] = []
     stopped = lost = False
