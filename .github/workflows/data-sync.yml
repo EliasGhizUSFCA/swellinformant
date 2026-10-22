@@ -20,9 +20,13 @@
 #   Sync step). Secrets are not passed to runs triggered from forks.
 # - Variables: any other app setting by its env-var name (APP_BASE_URL, EMAIL_PROVIDER,
 #   EMAIL_FROM, GEFS_ENABLED, ...). They override the hosted profile (app/core/profiles.py),
-#   which the Vercel deployment also uses. APP_BASE_URL is required (links in alert emails).
+#   which the Vercel deployment also uses. Required: APP_BASE_URL (links in alert emails) and
+#   EMAIL_PROVIDER (smtp, resend or sendgrid) with EMAIL_FROM. A setting named like a
+#   credential (*_KEY, *_SECRET, *_TOKEN, *_PASSWORD, the URLs with passwords) is read only
+#   from secrets, and the log shows variables' names, never their values.
 # The run always uses APP_ENV=production, so the app's own checks refuse a development secret
 # key or an email provider that only captures mail.
+# Installs need backend/uv.lock (the versions the daemon image installs).
 name: Data sync (manual)
 
 on:
@@ -53,6 +57,8 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.13"
+  # The same uv as ci.yml, the Containerfile and docker/api-lean (keep them equal).
+  UV_VERSION: "0.11.32"
 
 jobs:
   sync:
@@ -71,10 +77,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
-      # Editable, so the app finds data/ (spots, tide catalog and constants) in this checkout.
-      - name: Install the backend with the sync extra
-        run: python -m pip install -e ".[sync]"
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/uv.lock
+      # The versions come from backend/uv.lock, as for the daemon image (Containerfile) and
+      # CI, so an emergency run never installs versions nobody has tested. Editable, so the
+      # app finds data/ (spots, tide catalog and constants) in this checkout.
+      - name: Install the backend with the sync extra (versions from uv.lock)
+        run: |
+          python -m pip install "uv==${UV_VERSION}"
+          uv export --locked --no-dev --no-emit-project --no-hashes --extra sync \
+            --output-file "$RUNNER_TEMP/constraints.txt"
+          python -m pip install -e ".[sync]" --constraint "$RUNNER_TEMP/constraints.txt"
       - name: Configuration (hosted profile, then repository variables)
         env:
           REPOSITORY_VARIABLES: ${{ toJSON(vars) }}
@@ -85,16 +99,16 @@ jobs:
           import secrets
           import sys
 
-          from app.core.config import Settings
+          from app.core.config import CAPTURE_EMAIL_PROVIDERS, Settings
           from app.core.profiles import profile_env
 
-          # Secrets come from the Sync step only; these names are never read from variables.
+          # Credentials reach the run only as secrets (the Sync step). These names, and any
+          # setting named like a credential, are never read from variables.
           SECRET_NAMES = {
-              "DATABASE_URL", "DATABASE_URL_UNPOOLED", "REDIS_URL", "SECRET_KEY",
-              "OPEN_METEO_API_KEY", "RESEND_API_KEY", "SENDGRID_API_KEY", "SMTP_PASSWORD",
-              "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "DUFFEL_ACCESS_TOKEN",
-              "AMADEUS_CLIENT_ID", "AMADEUS_CLIENT_SECRET", "CRON_SECRET",
+              "DATABASE_URL", "DATABASE_URL_UNPOOLED", "REDIS_URL", "CELERY_BROKER_URL",
+              "CELERY_RESULT_BACKEND", "TWILIO_ACCOUNT_SID", "AMADEUS_CLIENT_ID",
           }
+          SECRET_SUFFIXES = ("_KEY", "_SECRET", "_TOKEN", "_PASSWORD")
           # A production data run: the app refuses dev secrets and capture-only email.
           FIXED = {
               "APP_ENV": "production",
@@ -103,27 +117,46 @@ jobs:
               "JOB_RUNNER": "daemon",
               "DB_USE_UNPOOLED": "true",
           }
+
+          def is_secret(name: str) -> bool:
+              return name in SECRET_NAMES or name.endswith(SECRET_SUFFIXES)
+
           settings_names = {name.upper() for name in Settings.model_fields}
           env = profile_env("hosted", "free-database")
+          source = dict.fromkeys(env, "hosted profile")
           ignored = []
           for name, value in sorted(json.loads(os.environ["REPOSITORY_VARIABLES"] or "{}").items()):
-              if name in settings_names and name not in SECRET_NAMES and name not in FIXED:
+              if name in settings_names and not is_secret(name) and name not in FIXED:
                   env[name] = str(value)
+                  source[name] = "repository variable"
               else:
                   ignored.append(name)
           env.update(FIXED)
+          source.update(dict.fromkeys(FIXED, "fixed"))
           if ignored:
               print("::warning::repository variables left out (not app settings, secrets or fixed): "
                     + ", ".join(ignored))
+          problems = []
           if not env.get("APP_BASE_URL"):
-              print("::error::set the repository variable APP_BASE_URL (the site's URL, used in emails)")
+              problems.append("set the repository variable APP_BASE_URL (the site's URL, used in emails)")
+          if env.get("EMAIL_PROVIDER", "console") in CAPTURE_EMAIL_PROVIDERS:
+              problems.append(
+                  "set the repository variable EMAIL_PROVIDER (smtp, resend or sendgrid) and "
+                  "EMAIL_FROM: a production run refuses an email provider that only captures mail"
+              )
+          for problem in problems:
+              print(f"::error::{problem}")
+          if problems:
               sys.exit(1)
           delimiter = f"EOF_{secrets.token_hex(16)}"
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
               for name, value in env.items():
                   out.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+          # The log of a public repository is public: values of repository variables (sender
+          # addresses, URLs) are not printed, only that they were applied.
           for name in sorted(env):
-              print(f"{name}={env[name]}")
+              shown = "(set)" if source[name] == "repository variable" else env[name]
+              print(f"{name}={shown}  [{source[name]}]")
           PY
       - name: Sync
         env:
