@@ -566,7 +566,8 @@ const fillCache = new WeakMap<CanvasRenderingContext2D, Map<string, CanvasGradie
 
 function fillOf(ctx: CanvasRenderingContext2D, style: FamilyStyle, [r, g, b]: readonly [number, number, number]): CanvasGradient | string {
   let cache = fillCache.get(ctx);
-  if (!cache) fillCache.set(ctx, (cache = new Map()));
+  // (At most TINT_LEVELS x 4 systems per colour scale; cleared if many scales came and went.)
+  if (!cache || cache.size > 1024) fillCache.set(ctx, (cache = new Map()));
   const key = `${style.shape}|${style.gap}|${r},${g},${b}`;
   let fill = cache.get(key);
   if (fill == null) {
@@ -789,8 +790,10 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   // Per system in drawing order (primary last, on top), per tint and opacity level: one fill
   // style and opacity, then every quad of the batch as the unit rectangle under its own
   // transform (composed with the canvas's own, which maps CSS px to canvas px).
+  // (Without getTransform, the canvas layer's own transform is its pixel scale, CSS px to canvas px.)
   const base = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
-  const [A, B, C, D, E, F] = base ? [base.a, base.b, base.c, base.d, base.e, base.f] : [1, 0, 0, 1, 0, 0];
+  const k = ctx.canvas && view.width > 0 ? ctx.canvas.width / view.width : 1;
+  const [A, B, C, D, E, F] = base ? [base.a, base.b, base.c, base.d, base.e, base.f] : [k, 0, 0, k, 0, 0];
   for (let key = 0; key <= maxKey; key++) {
     const b = batchPool[key];
     if (!b || b.frame !== frame || !b.n) continue;
@@ -1075,7 +1078,9 @@ export class WaveAnimator {
     if (!ctx || !view || !l) return;
     const t0 = performance.now();
     ctx.clearRect(0, 0, view.width, view.height);
-    const frame = drawDashes(ctx, view, l, { t: still ? 0 : this.time, still, budget: dashBudget(view.width), maxQuads: this.budget.cap, state: this.dashes });
+    // (The cap this frame drew under: record() below may change it for the next frame.)
+    const quadCap = this.budget.cap;
+    const frame = drawDashes(ctx, view, l, { t: still ? 0 : this.time, still, budget: dashBudget(view.width), maxQuads: quadCap, state: this.dashes });
     if (this.mask) {
       ctx.globalCompositeOperation = "destination-in";
       ctx.drawImage(this.mask, 0, 0, view.width, view.height);
@@ -1089,7 +1094,7 @@ export class WaveAnimator {
     if (this.times.length > 120) this.times.shift();
     const sorted = [...this.times].sort((a, b) => a - b);
     this.framesDrawn++;
-    this.stats = { ...frame, quadCap: this.budget.cap, drawMs: ms, drawMsP50: sorted[Math.floor(sorted.length / 2)]!, drawMsP95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!, latticeMs: l.buildMs, frames: this.framesDrawn };
+    this.stats = { ...frame, quadCap, drawMs: ms, drawMsP50: sorted[Math.floor(sorted.length / 2)]!, drawMsP95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!, latticeMs: l.buildMs, frames: this.framesDrawn };
     this.listener?.(this.stats);
   }
 }

@@ -638,6 +638,28 @@ describe("device-adaptive quad budget (D11's 5 ms frame draw p95)", () => {
   });
 });
 
+describe("device-adaptive quad budget in the animator", () => {
+  it("thins a slow device's frames and reports the cap each frame was drawn under", () => {
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
+    // A slow device: every call of performance.now advances 4 ms, so a frame takes 4 ms to draw.
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (clock += 4));
+    const anim = new WaveAnimator();
+    const seen: Array<{ quads: number; cap: number }> = [];
+    anim.setListener((st) => seen.push({ quads: st.quads, cap: st.quadCap }));
+    anim.setFamilies([family("combined", 3, 12, 250)]);
+    anim.start(recorder().ctx, viewAt(2, -30, -30, 2560, 1300), "animated");
+    for (let k = 1; k <= 120; k++) anim.advance(k * 40);
+    anim.stop();
+    expect(seen.length).toBeGreaterThan(100);
+    expect(seen[0]!.cap).toBe(MAX_FRAME_QUADS);
+    expect(seen.at(-1)!.cap).toBeLessThan(MAX_FRAME_QUADS);
+    // Never more quads than the cap the frame was drawn under, also on the frame that cut it.
+    for (const f of seen) expect(f.quads).toBeLessThanOrEqual(f.cap);
+  });
+});
+
 describe("reduced motion", () => {
   it("draws one still frame at full opacity, the same whatever the time, with arrowheads", () => {
     const fam = [family("combined", 3, 12, 180)];

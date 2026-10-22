@@ -37,7 +37,7 @@ const SWATCH_SEA_M = 2.5;
  * swatch's dashes lie along it and move up (their smears hang below them).
  */
 export function CrestSwatch({ system, className }: { system: WaveSystem; className?: string }) {
-  const id = useId();
+  const id = useId().replace(/[^A-Za-z0-9_-]/g, ""); // a plain id for url(#...)
   const s = FAMILY_STYLES[system];
   const sea = colorAtValue(WAVE_HEIGHT_RAMP, SWATCH_SEA_M);
   const [r, g, b] = dashTint(sea, system);
