@@ -73,7 +73,7 @@ from app.services.forecasts.queries import (
     source_attribution_links,
     stale_after_hours,
 )
-from app.services.spot_views import predictions_with_forecasts, source_attribution
+from app.services.spot_views import source_attribution, spot_hours
 from app.services.surf_quality.forecast_confidence import STALE_REASON, api_fields
 from app.services.surf_quality.scoring import min_score_for_label
 from app.services.surf_quality.sun import TWILIGHT_MARGIN, daylight_windows, sun_times
@@ -456,17 +456,8 @@ def spot_timeline(
     run = latest_runs_by_spot(db, now).get(spot.id)
     if run is None:
         return _unavailable(db, spot, days, now, NO_FORECAST)
-    rows = [
-        (p, f)
-        for p, f in db.execute(
-            predictions_with_forecasts(
-                SurfQualityPrediction.run_id == run.id,
-                SurfQualityPrediction.spot_id == spot.id,
-                SurfQualityPrediction.valid_time >= now - LOOKBACK,
-                SurfQualityPrediction.valid_time <= now + timedelta(days=days),
-            ).order_by(SurfQualityPrediction.valid_time)
-        )
-    ]
+    # The same hours as /forecast's (one read when both are computed together).
+    rows = spot_hours(db, run.id, spot.id, now - LOOKBACK, now + timedelta(days=days))
     if not rows:
         return _unavailable(db, spot, days, now, NO_FUTURE_DATA)
 

@@ -22,9 +22,12 @@ start of the current UTC hour (:func:`public_now`) and kept in Redis under
 A key is computed at most once: the first request takes the key's Redis lock (SET NX EX)
 and stores the payload, zlib-compressed (Upstash counts bandwidth), for
 :data:`PAYLOAD_TTL_SECONDS`; concurrent requests for the same key wait for it (a few MGETs
-with backoff) instead of reading the database too. Each process also keeps
-the newest payloads in memory (:data:`MEMO_MAX_BYTES`), so a warm serverless instance
-answers a repeated request with a single Redis command (the epoch and marker).
+with backoff) instead of reading the database too. Routes that read the same rows (a
+spot page's forecast and timeline, which the page requests side by side) are computed
+together (:class:`Together`): a miss of either computes both under one lock, in one read
+of the rows. Each process also keeps the newest payloads in memory (:data:`MEMO_MAX_BYTES`),
+so a warm serverless instance answers a repeated request with a single Redis command (the
+epoch and marker).
 
 Redis unavailable: the request computes its payload directly, exactly as a cache miss
 does, and Redis is not asked again for :data:`FAIL_OPEN_SECONDS` (as the rate limiter does),
@@ -45,7 +48,8 @@ import threading
 import time
 import zlib
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -266,18 +270,25 @@ return 0
 """
 
 
-def _computed_once(client: redis.Redis, key: str, build: Callable[[], Snapshot]) -> Snapshot:
-    """``build`` under the key's lock (SET NX EX), stored for the other requests; or, when
-    another request holds the lock, its stored result. A waiter that finds the lock gone
-    without a result (the holder failed, e.g. a 404) or waits out WAIT_PAUSES_SECONDS
-    builds its own, unstored."""
-    lock = f"{key}:lock"
+def _computed_once(
+    client: redis.Redis,
+    key: str,
+    lock: str,
+    build_all: Callable[[], dict[str, Snapshot]],
+    build_own: Callable[[], Snapshot],
+) -> Snapshot:
+    """``build_all`` (``key``'s snapshot and any computed with it, by key) under ``lock``
+    (SET NX EX), each stored for the other requests; or, when another request holds the
+    lock, ``key``'s stored result. A waiter that finds the lock gone without a result (the
+    holder failed, e.g. a 404) or waits out WAIT_PAUSES_SECONDS builds its own
+    (``build_own``), unstored."""
     token = secrets.token_hex(8)
     if client.set(lock, token, nx=True, ex=LOCK_TTL_SECONDS):
         try:
-            snapshot = build()
-            client.set(key, encode(snapshot), ex=PAYLOAD_TTL_SECONDS)
-            return snapshot
+            built = build_all()
+            for name, snap in built.items():
+                client.set(name, encode(snap), ex=PAYLOAD_TTL_SECONDS)
+            return built[key]
         finally:
             try:
                 client.eval(_RELEASE_SCRIPT, 1, lock, token)
@@ -290,7 +301,24 @@ def _computed_once(client: redis.Redis, key: str, build: Callable[[], Snapshot])
             return decode(raw)
         if holder is None:
             break
-    return build()
+    return build_own()
+
+
+@dataclass(frozen=True)
+class Together:
+    """Routes computed together on a miss of any of them, because they read the same rows
+    (a spot page's forecast and timeline, about 0.8 MB of hours each): one computation
+    under one lock (``name``), inside ``reads()`` (where the builds share their reads),
+    each route's snapshot stored under its own key. A route other than the one requested
+    that fails is left to its own request."""
+
+    name: str
+    params: str
+    builds: Mapping[str, Callable[[datetime], Snapshot]]
+    reads: Callable[[], AbstractContextManager[Any]] = nullcontext
+
+    def snapshot(self, db: Session, route: str) -> Snapshot:
+        return snapshot(db, route, self.params, self.builds[route], together=self)
 
 
 def snapshot(
@@ -298,10 +326,13 @@ def snapshot(
     route: str,
     params: str,
     build: Callable[[datetime], Snapshot],
+    *,
+    together: Together | None = None,
 ) -> Snapshot:
     """The response of ``route`` for ``params`` this hour: from this process's memo, from
-    Redis, or computed by ``build(public_now())`` (once per key; see the module docstring).
-    An exception of ``build`` (e.g. a 404) propagates and nothing is stored."""
+    Redis, or computed by ``build(public_now())`` (once per key, with the other routes of
+    ``together``; see the module docstring). An exception of ``build`` (e.g. a 404)
+    propagates and nothing is stored."""
     hour = public_now()
     client = _usable_client()
     if client is None:
@@ -311,21 +342,47 @@ def snapshot(
     except redis.RedisError as exc:
         _failed(client, exc)
         return build(hour)
-    key = cache_key(epoch, marker or derived_marker(db), hour, route, params)
+    marker = marker or derived_marker(db)
+    key = cache_key(epoch, marker, hour, route, params)
     hit = _memo.get(key)
     if hit is not None:
         return hit
-    built: list[Snapshot] = []
+    built: dict[str, Snapshot] = {}
 
-    def build_once() -> Snapshot:
-        built.append(build(hour))
-        return built[-1]
+    def build_own() -> Snapshot:
+        built[key] = build(hour)
+        return built[key]
 
+    def build_all() -> dict[str, Snapshot]:
+        if together is None:
+            build_own()
+            return built
+        with together.reads():
+            build_own()
+            for other, other_build in together.builds.items():
+                if other == route:
+                    continue
+                try:
+                    built[cache_key(epoch, marker, hour, other, params)] = other_build(hour)
+                except Exception as exc:  # computed by its own request instead
+                    logger.warning(
+                        "Public snapshot %s not computed with %s: %s",
+                        other,
+                        route,
+                        type(exc).__name__,
+                    )
+        return built
+
+    lock = cache_key(epoch, marker, hour, together.name if together else route, params)
     try:
-        result = _stored(client, key) or _computed_once(client, key, build_once)
+        result = _stored(client, key) or _computed_once(
+            client, key, f"{lock}:lock", build_all, build_own
+        )
     except redis.RedisError as exc:
         _failed(client, exc)
-        result = built[-1] if built else build(hour)
+        result = built.get(key) or build(hour)
+    for name, snap in built.items():
+        _memo.put(name, snap)
     _memo.put(key, result)
     return result
 

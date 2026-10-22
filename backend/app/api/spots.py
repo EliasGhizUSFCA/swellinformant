@@ -33,15 +33,19 @@ from app.schemas.spots import (
     SpotForecastOut,
     SpotSummary,
 )
+from app.schemas.timeline import SpotTimelineOut
 from app.services import public_cache as snapshots
 from app.services.opportunity_views import list_matches
 from app.services.spot_views import (
     event_out,
+    shared_hour_reads,
     spot_detail,
     spot_events,
     spot_forecast,
     upcoming_events,
 )
+from app.services.timeline import spot_timeline as build_timeline
+from app.services.timeline import timeline_etag
 
 router = APIRouter(prefix="/api", tags=["spots"])
 
@@ -58,6 +62,7 @@ PUBLIC_STALE_SECONDS = 3600
 
 SPOT_DETAIL = TypeAdapter(SpotDetail)
 SPOT_FORECAST = TypeAdapter(SpotForecastOut)
+TIMELINE = TypeAdapter(SpotTimelineOut)
 EVENTS = TypeAdapter(list[EventOut])
 
 
@@ -113,21 +118,37 @@ def get_spot(slug: str, db: Session = Depends(get_db)) -> Response:
     )
 
 
+def spot_page(db: Session, slug: str, days: int) -> snapshots.Together:
+    """The spot page's forecast and timeline (app.api.timeline) for ``days`` days: they
+    read the same hours, so a miss of either computes both (public_cache.Together)."""
+    found: list[SurfSpot] = []
+
+    def spot() -> SurfSpot:
+        if not found:
+            found.append(_spot(db, slug))
+        return found[0]
+
+    def forecast(now: datetime) -> snapshots.Snapshot:
+        return snapshots.render(SPOT_FORECAST, spot_forecast(db, spot(), days=days, now=now))
+
+    def timeline(now: datetime) -> snapshots.Snapshot:
+        result = build_timeline(db, spot(), days, now)
+        return snapshots.render(TIMELINE, result, etag=timeline_etag(result, days))
+
+    return snapshots.Together(
+        "spot-page",
+        f"{slug}:{days}",
+        {"spot-forecast": forecast, "spot-timeline": timeline},
+        reads=lambda: shared_hour_reads(db),
+    )
+
+
 @router.get("/spots/{slug}/forecast", response_model=SpotForecastOut)
 def get_forecast(
     slug: str, days: int = Query(10, ge=1, le=16), db: Session = Depends(get_db)
 ) -> Response:
     """The spot's forecast hours and model series (public data, cacheable)."""
-    return public_json(
-        snapshots.snapshot(
-            db,
-            "spot-forecast",
-            f"{slug}:{days}",
-            lambda now: snapshots.render(
-                SPOT_FORECAST, spot_forecast(db, _spot(db, slug), days=days, now=now)
-            ),
-        )
-    )
+    return public_json(spot_page(db, slug, days).snapshot(db, "spot-forecast"))
 
 
 @router.get("/spots/{slug}/events", response_model=list[EventOut])

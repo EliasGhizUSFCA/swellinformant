@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event, select, update
 from sqlalchemy.orm import Session
 
-from app.api import timeline as timeline_api
+from app.api import spots as spots_api
 from app.core.database import SessionLocal, get_engine, utcnow
 from app.models import ForecastRun, SurfSpot, SwellEvent, SyncRun
 from app.models.enums import ConfidenceLabel, QualityLabel, SwellEventStatus
@@ -339,6 +339,92 @@ def test_concurrent_misses_compute_once(
     assert results == [b'{"synthetic":true}'] * 4
 
 
+def _hour_reads(seen: list[str]) -> int:
+    """How many of ``seen`` read a spot's hours with their forecasts (spot_views.spot_hours:
+    predictions joined to their forecasts for one run and spot, ordered by time)."""
+    return sum(
+        1
+        for s in seen
+        if "JOIN wave_forecasts" in s
+        and "surf_quality_predictions.valid_time >=" in s
+        and "ORDER BY surf_quality_predictions.valid_time" in s
+    )
+
+
+def test_a_spot_pages_forecast_and_timeline_are_computed_together(
+    app_client: ApiClient, published: Session
+) -> None:
+    """A miss of either computes both from one read of the hours, and the other is then a
+    hit; the bodies are those FastAPI gives for each route on its own."""
+    public_cache.note_published(1)  # the sync's hook: a hit then reads no database marker
+    expected = expected_bodies(published, public_cache.public_now().isoformat())
+    forecast_url = "/api/spots/pipeline/forecast?days=10"
+    timeline_url = "/api/spots/pipeline/timeline?days=10"
+    responses: list[Any] = []
+    seen = statements(lambda: responses.append(app_client.get(forecast_url)))
+    assert _hour_reads(seen) == 1
+    public_cache.clear_memo()  # another instance: from Redis
+    assert statements(lambda: responses.append(app_client.get(timeline_url))) == []
+    assert [r.content for r in responses] == [expected[forecast_url], expected[timeline_url]]
+    # The other way round, after a new epoch.
+    public_cache.clear()
+    seen = statements(lambda: app_client.get(timeline_url))
+    assert _hour_reads(seen) == 1
+    assert statements(lambda: app_client.get(forecast_url)) == []
+
+
+def test_side_by_side_spot_page_requests_read_the_hours_once(published: Session) -> None:
+    from app.api.spots import spot_page
+
+    seen: list[str] = []
+    lock = threading.Lock()
+
+    def record(conn: Any, cursor: Any, statement: str, *args: Any) -> None:
+        with lock:
+            seen.append(statement)
+
+    bodies: dict[str, bytes] = {}
+
+    def request(route: str) -> None:
+        with SessionLocal() as db:
+            bodies[route] = spot_page(db, "pipeline", 10).snapshot(db, route).body
+
+    event.listen(get_engine(), "before_cursor_execute", record)
+    try:
+        threads = [
+            threading.Thread(target=request, args=(route,))
+            for route in ("spot-forecast", "spot-timeline")
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        event.remove(get_engine(), "before_cursor_execute", record)
+    assert _hour_reads(seen) == 1
+    expected = expected_bodies(published, public_cache.public_now().isoformat())
+    assert bodies["spot-forecast"] == expected["/api/spots/pipeline/forecast?days=10"]
+    assert bodies["spot-timeline"] == expected["/api/spots/pipeline/timeline?days=10"]
+
+
+def test_a_failing_companion_is_left_to_its_own_request(
+    app_client: ApiClient, published: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = spots_api.build_timeline
+
+    def failing(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr(spots_api, "build_timeline", failing)
+    expected = expected_bodies(published, public_cache.public_now().isoformat())
+    forecast = app_client.get("/api/spots/pipeline/forecast?days=10")
+    assert forecast.status_code == 200
+    assert forecast.content == expected["/api/spots/pipeline/forecast?days=10"]
+    monkeypatch.setattr(spots_api, "build_timeline", real)
+    timeline = app_client.get("/api/spots/pipeline/timeline?days=10")  # not stored: computed
+    assert timeline.content == expected["/api/spots/pipeline/timeline?days=10"]
+
+
 def test_a_failed_computation_frees_its_waiters_at_once(published: Session) -> None:
     """A holder whose computation fails (a 404) releases the lock without a result: a
     waiter sees the lock gone at its first poll and computes, instead of waiting out
@@ -420,9 +506,9 @@ def test_the_timeline_etag_and_304_come_from_the_snapshot(
     app_client: ApiClient, published: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     builds: list[int] = []
-    real = timeline_api.build_timeline
+    real = spots_api.build_timeline
     monkeypatch.setattr(
-        timeline_api, "build_timeline", lambda *a, **k: builds.append(1) or real(*a, **k)
+        spots_api, "build_timeline", lambda *a, **k: builds.append(1) or real(*a, **k)
     )
     first = app_client.get("/api/spots/pipeline/timeline?days=10")
     again = app_client.get(

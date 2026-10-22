@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, get_args
 from zoneinfo import ZoneInfo
@@ -262,6 +263,48 @@ def predictions_with_forecasts(*criteria: Any) -> Select[SurfQualityPrediction, 
         .options(contains_eager(SurfQualityPrediction.forecast))
         .where(*criteria)
     )
+
+
+_SHARED_HOURS = "spot_views.shared_hours"
+HourRows = list[tuple[SurfQualityPrediction, WaveForecast]]
+
+
+@contextmanager
+def shared_hour_reads(db: Session) -> Iterator[None]:
+    """Within the block, :func:`spot_hours` reads each run, spot and window once: a spot
+    page's forecast and timeline, computed together (app.services.public_cache), read the
+    same hours with their forecasts (about 0.8 MB for a 10-day blend, docs/map-layers.md)."""
+    if _SHARED_HOURS in db.info:
+        yield
+        return
+    db.info[_SHARED_HOURS] = {}
+    try:
+        yield
+    finally:
+        db.info.pop(_SHARED_HOURS, None)
+
+
+def spot_hours(db: Session, run_id: int, spot_id: int, start: datetime, end: datetime) -> HourRows:
+    """The run's predictions for the spot from ``start`` to ``end`` (both included) with
+    their forecasts, in time order (read once per window inside :func:`shared_hour_reads`)."""
+    memo: dict[tuple[int, int, datetime, datetime], HourRows] | None = db.info.get(_SHARED_HOURS)
+    key = (run_id, spot_id, start, end)
+    if memo is not None and key in memo:
+        return memo[key]
+    rows = [
+        (p, f)
+        for p, f in db.execute(
+            predictions_with_forecasts(
+                SurfQualityPrediction.run_id == run_id,
+                SurfQualityPrediction.spot_id == spot_id,
+                SurfQualityPrediction.valid_time >= start,
+                SurfQualityPrediction.valid_time <= end,
+            ).order_by(SurfQualityPrediction.valid_time)
+        )
+    ]
+    if memo is not None:
+        memo[key] = rows
+    return rows
 
 
 def _predictions_by_id(
@@ -528,14 +571,7 @@ def forecast_points(
     *,
     stale: bool = False,
 ) -> list[ForecastPoint]:
-    rows = db.execute(
-        predictions_with_forecasts(
-            SurfQualityPrediction.run_id == run_id,
-            SurfQualityPrediction.spot_id == spot_id,
-            SurfQualityPrediction.valid_time >= start,
-            SurfQualityPrediction.valid_time <= end,
-        ).order_by(SurfQualityPrediction.valid_time)
-    ).all()
+    rows = spot_hours(db, run_id, spot_id, start, end)
     return [
         ForecastPoint(
             valid_time=p.valid_time,
