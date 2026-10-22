@@ -28,7 +28,9 @@
 #    functions). Other runtimes: fail above 250 MiB.
 # 5. Report whether the crons and the daemons from vercel.json are in .vercel/output/config.json.
 #
-# The check never migrates a database: the build runs with MIGRATE_ON_BUILD=off.
+# The check never migrates a database: the build runs with MIGRATE_ON_BUILD=off, which wins
+# over a pulled .vercel/.env.preview.local (CLI 64.5.0 loads it with dotenv, which does not
+# override variables already set).
 # Needs git, Node.js with npx, tar, and network access to the npm registry and PyPI.
 # Exit status: 0 ok (warnings allowed), 1 the build or a check failed, 2 a setup problem,
 # 64 a usage error. See docs/deploy-vercel.md.
@@ -62,7 +64,13 @@ fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/swell-vercel-build.XXXXXX")"
 SRC="$WORK/project"
 cleanup() {
-  if [ "$KEEP" = 1 ]; then say "build directory kept: $SRC"; else rm -rf "$WORK"; fi
+  if [ "$KEEP" = 1 ]; then
+    # Linked: `vercel pull` wrote the Preview environment variables (secrets) here.
+    rm -f "$SRC"/.vercel/.env.*.local
+    say "build directory kept: $SRC"
+  else
+    rm -rf "$WORK"
+  fi
 }
 trap cleanup EXIT
 mkdir -p "$SRC/.vercel" "$WORK/cli-config"

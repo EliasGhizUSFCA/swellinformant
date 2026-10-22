@@ -10,6 +10,7 @@ node_modules
 .next-*
 backend/.venv
 .venv
+venv
 **/__pycache__
 **/*.py[cod]
 *.tsbuildinfo
@@ -36,8 +37,11 @@ celerybeat-schedule*
 **/.env
 **/.env.*
 
-# Agent worktrees and editor files
+# Agent worktrees, scratch and editor files (.gitignore keeps them out of Git deployments;
+# `vercel deploy` from a checkout reads only this file)
 .claude
+/tmp
 .idea
 .vscode
+*.swp
 .DS_Store
