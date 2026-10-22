@@ -29,14 +29,15 @@ export interface MapSettings {
   /** Wind particles over the wave layers too (the Wind layer always has them). */
   windOverlay: boolean;
   /**
-   * Wave systems drawn as crests on the wave layers. Systems the model run does not have are
-   * skipped; when none of them exists the combined sea is drawn instead (lib/map-waves
+   * Wave systems drawn as crest dashes on the wave layers. Systems the model run does not have
+   * are skipped; when none of them exists the combined sea is drawn instead (lib/map-waves
    * effectiveSystems), so the stored choice survives a run without partitions.
    */
   waveSystems: WaveSystem[];
 }
 
-export const DEFAULT_WAVE_SYSTEMS: WaveSystem[] = ["primary", "secondary"];
+/** The combined sea by default (one dash field, like the owner's reference); partitions are selectable. */
+export const DEFAULT_WAVE_SYSTEMS: WaveSystem[] = ["combined"];
 
 export const DEFAULT_SETTINGS: MapSettings = {
   layer: "hs",
@@ -49,7 +50,13 @@ export const DEFAULT_SETTINGS: MapSettings = {
   waveSystems: DEFAULT_WAVE_SYSTEMS,
 };
 
-export const SETTINGS_KEY = "swell.map.settings.v1";
+/**
+ * The settings key. v2 came with the crest-dash renderer, whose default wave system is the
+ * combined sea: a v1 object is read once into v2 with every field except `waveSystems`
+ * (which takes the new default), then removed.
+ */
+export const SETTINGS_KEY = "swell.map.settings.v2";
+export const SETTINGS_KEY_V1 = "swell.map.settings.v1";
 /** The site-wide wind unit's key and same-tab event (defined once, in lib/units). */
 export { WIND_UNIT_EVENT, WIND_UNIT_KEY } from "@/lib/units";
 
@@ -88,12 +95,35 @@ export function parseSettings(raw: string | null | undefined, sharedWindUnit?: s
   };
 }
 
+/** A v1 settings object as v2 JSON: the same fields without `waveSystems` (null when it is not an object). */
+export function migrateV1(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const { waveSystems: _dropped, ...rest } = parsed as Record<string, unknown>;
+    void _dropped;
+    return JSON.stringify(rest);
+  } catch {
+    return null;
+  }
+}
+
 export function readSettings(): MapSettings {
   let raw: string | null = null;
   try {
     raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (raw === null) {
+      // Once: carry the v1 preferences over (the wave systems take the new default).
+      const v1 = window.localStorage.getItem(SETTINGS_KEY_V1);
+      if (v1 !== null) {
+        raw = migrateV1(v1);
+        if (raw !== null) window.localStorage.setItem(SETTINGS_KEY, raw);
+        window.localStorage.removeItem(SETTINGS_KEY_V1);
+      }
+    }
   } catch {
-    raw = null;
+    // Storage unavailable: whatever was read so far, else the defaults.
   }
   return parseSettings(raw, storedWindUnit());
 }

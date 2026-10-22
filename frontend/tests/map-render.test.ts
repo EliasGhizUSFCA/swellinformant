@@ -4,7 +4,7 @@ import { buildLut, LAYER_SCALES, RAMP } from "@/lib/map-colors";
 import type { Grid } from "@/lib/map-fields";
 import { mercLat, mercLon } from "@/lib/map-geo";
 import { renderField } from "@/lib/map-render";
-import { DEFAULT_SETTINGS, parseSettings, parseWaveSystems, readSettings, SETTINGS_KEY, WIND_UNIT_EVENT, WIND_UNIT_KEY, writeSettings } from "@/lib/map-settings";
+import { DEFAULT_SETTINGS, DEFAULT_WAVE_SYSTEMS, migrateV1, parseSettings, parseWaveSystems, readSettings, SETTINGS_KEY, SETTINGS_KEY_V1, WIND_UNIT_EVENT, WIND_UNIT_KEY, writeSettings } from "@/lib/map-settings";
 
 /** SYNTHETIC global 1° field: value = |lat| / 9 m, no data over a box (a fake "continent"). */
 function synthetic(): Grid {
@@ -103,7 +103,7 @@ describe("map settings", () => {
     expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings("not json")).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings("[1,2]").layer).toBe(DEFAULT_SETTINGS.layer);
-    // A settings object saved before the wind overlay and wave systems existed (v1) still loads.
+    // A settings object saved before the wind overlay and wave systems existed still loads.
     const s = parseSettings(JSON.stringify({ layer: "wind", pressure: true, heightUnits: "m", windUnits: "kn", particles: false, basemap: "streets" }));
     expect(s).toEqual({
       layer: "wind",
@@ -113,7 +113,8 @@ describe("map settings", () => {
       particles: false,
       basemap: "streets",
       windOverlay: false,
-      waveSystems: ["primary", "secondary"],
+      // The crest-dash renderer draws the combined sea by default (D11).
+      waveSystems: ["combined"],
     });
     // mph is a wind unit now (shared with the spot charts); "furlongs/h" is not.
     const bad = parseSettings(JSON.stringify({ layer: "rain", pressure: "yes", heightUnits: "yards", windUnits: "furlongs/h", particles: 1, basemap: "satellite", windOverlay: "on", waveSystems: "all" }));
@@ -125,8 +126,10 @@ describe("map settings", () => {
     expect(parseWaveSystems(["windsea", "bogus", "windsea", "primary"])).toEqual(["windsea", "primary"]);
     expect(parseWaveSystems(["combined"])).toEqual(["combined"]);
     expect(parseWaveSystems(["combined", "secondary"])).toEqual(["secondary"]); // combined is an alternative, not an addition
-    expect(parseWaveSystems([])).toEqual(["primary", "secondary"]);
-    expect(parseWaveSystems(null)).toEqual(["primary", "secondary"]);
+    expect(parseWaveSystems([])).toEqual(["combined"]);
+    expect(parseWaveSystems(null)).toEqual(["combined"]);
+    expect(DEFAULT_WAVE_SYSTEMS).toEqual(["combined"]);
+    expect(DEFAULT_SETTINGS.waveSystems).toEqual(["combined"]);
     expect(parseSettings(JSON.stringify({ windOverlay: true, waveSystems: ["windsea"] }))).toMatchObject({ windOverlay: true, waveSystems: ["windsea"] });
   });
 
@@ -151,6 +154,34 @@ describe("map settings", () => {
     } finally {
       window.removeEventListener(WIND_UNIT_EVENT, listen);
     }
+  });
+
+  it("moves v1 settings to v2 once, keeping every preference except the wave systems", () => {
+    window.localStorage.clear();
+    expect(SETTINGS_KEY).toBe("swell.map.settings.v2");
+    expect(SETTINGS_KEY_V1).toBe("swell.map.settings.v1");
+    const v1 = { layer: "tp", pressure: true, heightUnits: "m", windUnits: "kn", particles: false, basemap: "streets", windOverlay: true, waveSystems: ["primary", "secondary"] };
+    window.localStorage.setItem(SETTINGS_KEY_V1, JSON.stringify(v1));
+    const s = readSettings();
+    expect(s).toEqual({ ...v1, waveSystems: ["combined"] });
+    // Read once: v2 now holds the preferences (without waveSystems) and v1 is gone.
+    expect(window.localStorage.getItem(SETTINGS_KEY_V1)).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(SETTINGS_KEY)!)).toEqual({ layer: "tp", pressure: true, heightUnits: "m", windUnits: "kn", particles: false, basemap: "streets", windOverlay: true });
+    // A later v1 write (another tab on the old page) is not read over v2.
+    window.localStorage.setItem(SETTINGS_KEY_V1, JSON.stringify({ ...v1, layer: "wind" }));
+    expect(readSettings().layer).toBe("tp");
+    // Choices made under v2 persist.
+    writeSettings({ ...s, waveSystems: ["primary", "windsea"] });
+    expect(readSettings().waveSystems).toEqual(["primary", "windsea"]);
+    // Unusable v1 data migrates to nothing (the defaults apply).
+    expect(migrateV1("not json")).toBeNull();
+    expect(migrateV1("[1]")).toBeNull();
+    expect(migrateV1(null)).toBeNull();
+    window.localStorage.clear();
+    window.localStorage.setItem(SETTINGS_KEY_V1, "garbage");
+    expect(readSettings()).toEqual(DEFAULT_SETTINGS);
+    expect(window.localStorage.getItem(SETTINGS_KEY_V1)).toBeNull();
+    window.localStorage.clear();
   });
 
   it("round-trips through localStorage and survives storage errors", () => {

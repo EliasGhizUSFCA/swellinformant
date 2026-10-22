@@ -6,7 +6,7 @@
  * (breaking) height at a beach is a different quantity, predicted per spot elsewhere.
  */
 import { compass, type Units } from "@/lib/format";
-import { LAYER_SCALES, scalePosition, type LayerId, type LayerScale } from "@/lib/map-colors";
+import { LAYER_SCALES, metresToStops, scalePosition, WAVE_HEIGHT_RAMP, type LayerId, type LayerScale } from "@/lib/map-colors";
 import type { FieldIndex, FieldVariableName } from "@/lib/map-fields";
 import { FAMILY_STYLES, type WaveSystem } from "@/lib/map-waves";
 import { convertWind, type WindUnit } from "@/lib/units";
@@ -75,12 +75,19 @@ export const layerDef = (id: LayerId): LayerDef => LAYERS.find((l) => l.id === i
 
 export const isLayerId = (v: unknown): v is LayerId => typeof v === "string" && LAYERS.some((l) => l.id === v);
 
-/** The layer's scale, with the display range from the field index where it provides one. */
+/**
+ * The layer's scale, with the display range from the field index where it provides one. The
+ * wave-height colours stay anchored in metres (WAVE_HEIGHT_RAMP): another range moves the
+ * stops, never the colour of a given height.
+ */
 export function layerScale(id: LayerId, index?: FieldIndex | null): LayerScale {
   const base = LAYER_SCALES[id];
   const name = id === "hs" ? "hs" : id === "tp" ? "tp" : null;
   const v = name ? index?.variables?.find((x) => x.name === name) : undefined;
   if (v && Number.isFinite(v.display_min) && Number.isFinite(v.display_max) && v.display_max > v.display_min) {
+    if (id === "hs" && (v.display_min !== base.min || v.display_max !== base.max)) {
+      return { ...base, min: v.display_min, max: v.display_max, stops: metresToStops(WAVE_HEIGHT_RAMP, v.display_min, v.display_max) };
+    }
     return { ...base, min: v.display_min, max: v.display_max };
   }
   return base;
@@ -141,8 +148,19 @@ export interface LegendTick {
   pos: number;
 }
 
+/** Wave-height legend ticks: in metres where the colour ramp has its anchors, in feet every 5 ft. */
+export const HEIGHT_TICKS_M = [0, 1, 2, 3, 4, 6, 8, 10];
+export const HEIGHT_TICKS_FT = [0, 5, 10, 15, 20, 25, 30];
+
 /** Legend ticks in the user's units, positioned on the (possibly non-linear) scale. */
 export function legendTicks(id: LayerId, scale: LayerScale, u: DisplayUnits, maxTicks = 7): LegendTick[] {
+  if (id === "hs") {
+    const lo = toDisplay(id, scale.min, u);
+    const hi = toDisplay(id, scale.max, u);
+    return (u.height === "ft" ? HEIGHT_TICKS_FT : HEIGHT_TICKS_M)
+      .filter((v) => v >= lo - 1e-9 && v <= hi + 1e-9)
+      .map((v) => ({ label: String(v), pos: scalePosition(scale, fromDisplay(id, v, u)) }));
+  }
   if (id === "energy") {
     return [0, 10, 25, 50, 100, 150]
       .filter((v) => v >= scale.min && v <= scale.max)
