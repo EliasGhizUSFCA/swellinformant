@@ -261,6 +261,7 @@ describe("sync section", () => {
     expect(last).toHaveTextContent("Newest sync");
     expect(last).toHaveTextContent("Running");
     expect(last).toHaveTextContent("#13 · sync daemon · started 2 minutes ago · running for 2 min 0 s");
+    expect(within(last).getByText("2 min 0 s")).toHaveClass("whitespace-nowrap"); // never "2 / min 0 s" on phones
     expect(within(last).getAllByRole("listitem")).toHaveLength(1);
   });
 

@@ -49,7 +49,8 @@ function LastCheck({ sync, now }: { sync: SyncHealth; now: Date | undefined }) {
     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground" data-testid="sync-last-check">
       <span>
         {runnerLabel(sync.runner)} · checks every {sync.check_minutes} min ·{" "}
-        {sync.last_check_at ? `last check ${relativeTime(sync.last_check_at, now)}` : "no check recorded yet"}
+        {/* Phones wrap between the parts, not inside a time or duration. */}
+        <span className="whitespace-nowrap">{sync.last_check_at ? `last check ${relativeTime(sync.last_check_at, now)}` : "no check recorded yet"}</span>
       </span>
       {sync.heartbeat_stale && <Badge variant="danger">Not checking</Badge>}
     </p>
@@ -105,7 +106,12 @@ function LastRun({ run, published, now }: { run: SyncRun; published: boolean; no
         <Badge variant={tone}>{label}</Badge>
         <span className="text-xs text-muted-foreground">
           #{run.id} · {triggerLabel(run.trigger)} · started {relativeTime(run.started_at, now)}
-          {took !== null && ` · ${run.status === "running" ? "running for" : "took"} ${formatDurationMs(took)}`}
+          {took !== null && (
+            <>
+              {` · ${run.status === "running" ? "running for" : "took"} `}
+              <span className="whitespace-nowrap">{formatDurationMs(took)}</span>
+            </>
+          )}
         </span>
       </div>
       <SyncStages run={run} />
