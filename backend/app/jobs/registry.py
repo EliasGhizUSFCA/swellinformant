@@ -159,10 +159,17 @@ def _data_health(db: Session) -> Any:
 
 def _sync_tick(db: Session) -> dict[str, Any]:
     """Celery beat's sync check: plan with the database, sync when due (the orchestrator
-    opens its own sessions)."""
+    opens its own sessions).
+
+    The check's outcome ("not_due", "busy", or the sync's status) is logged as
+    ``sync_status``: run_job's own ``status`` is the job's (success when the check ran).
+    """
     from app.services.sync.orchestrator import tick
 
-    return tick(trigger="celery")
+    out = dict(tick(trigger="celery"))
+    if "status" in out:
+        out["sync_status"] = out.pop("status")
+    return out
 
 
 def _sync_publish(db: Session) -> dict[str, Any]:

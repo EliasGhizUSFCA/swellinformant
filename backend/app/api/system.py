@@ -21,10 +21,14 @@ from app.services.spot_views import event_counts
 
 router = APIRouter(prefix="/api", tags=["system"])
 
-# Every job the worker runs (the beat schedule's tasks plus forecasts.blend, which only runs
-# chained after an acquisition); tests/integration/test_public_and_opportunity_api.py checks
-# that the schedule has no task missing here.
+# Every job the worker or the sync daemon runs: the schedule's tasks, the sync itself
+# (sync.run, the log row of one whole sync under every runner), the stages a sync runs
+# (app.services.sync.types.STAGE_JOB_NAMES), and forecasts.blend, which also runs chained
+# after an acquisition. tests/integration/test_public_and_opportunity_api.py checks that the
+# schedule has no task missing here, tests/unit/test_job_schedule_floor.py the stages.
 JOB_NAMES = [
+    "sync.tick",
+    "sync.run",
     "forecasts.acquire",
     "forecasts.blend",
     "forecasts.acquire_ensemble",
@@ -32,6 +36,7 @@ JOB_NAMES = [
     "forecasts.check_staleness",
     "tides.acquire",
     "quality.predict",
+    "sync.publish",
     "detection.detect",
     "matching.match",
     "flights.discover",
@@ -41,6 +46,7 @@ JOB_NAMES = [
     "verification.collect_point_forecasts",
     "verification.run",
     "maintenance.cleanup",
+    "maintenance.prune_pass",
     "ops.data_health",
 ]
 

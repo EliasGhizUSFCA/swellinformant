@@ -7,9 +7,10 @@ real forecast or observation.
 
 from __future__ import annotations
 
+import json
 import zlib
 from collections.abc import Iterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select, text
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
+from app.core.redis import get_redis
 from app.jobs import runner
 from app.models import (
     BackgroundJobLog,
@@ -28,9 +30,12 @@ from app.models import (
 )
 from app.models.enums import ForecastRunStatus, JobStatus
 from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES, MapField
+from app.models.sync import SyncRun
 from app.services.health import data_health, expected_jobs
 from app.services.map_fields import field_index
 from app.services.notifications.ops_alerts import run_data_health_check
+from app.services.sync import state as sync_state
+from app.services.sync.types import ComponentStatus, SyncPlan
 from app.workers import tasks
 from app.workers.celery_app import celery_app
 from app.workers.schedule import DATA_HEALTH_TASK
@@ -249,6 +254,7 @@ def test_job_failed_overdue_stuck_running_and_never_run(db: Session) -> None:
     job_log(db, "flights.discover", JobStatus.RUNNING, 2)  # ... but it is running right now
     job_log(db, "forecasts.check_staleness", JobStatus.SUCCESS, 10)
     job_log(db, DATA_HEALTH_TASK, JobStatus.SUCCESS, 5)  # 15-min job, overdue after 60
+    job_log(db, "sync.tick", JobStatus.SUCCESS, 5)  # Celery's sync check (D14), every 10 min
     report = data_health(db)
     jobs = report.out.jobs
     detect = by_job(jobs, "detection.detect")
@@ -259,7 +265,8 @@ def test_job_failed_overdue_stuck_running_and_never_run(db: Session) -> None:
     assert by_job(jobs, "alerts.generate").status == "running"
     assert by_job(jobs, "flights.discover").status == "running"  # started: not overdue
     assert by_job(jobs, "maintenance.cleanup").status == "never_run"
-    assert by_job(jobs, "forecasts.blend").schedule == "after forecasts.acquire"
+    # D14: the blend is a sync stage (was "after forecasts.acquire", its chain parent).
+    assert by_job(jobs, "forecasts.blend").schedule == "in each sync"
     assert by_job(jobs, "forecasts.blend").overdue_after_minutes is None
     problems = {p.key: p for p in report.problems}
     assert set(problems) == {
@@ -480,6 +487,296 @@ def test_redis_down_is_degraded(db: Session, monkeypatch: pytest.MonkeyPatch) ->
     report = data_health(db)
     assert {p.key for p in report.problems} == {"redis_unavailable"}
     assert report.out.storage.redis is not None and report.out.storage.redis.available is False
+
+
+# --------------------------------------------------------------------------- synced model
+def sync_run(
+    db: Session,
+    status: str,
+    minutes_ago: float,
+    *,
+    published: bool = False,
+    error: str | None = None,
+    lease_minutes: float | None = None,
+    now: datetime | None = None,
+) -> SyncRun:
+    """A synthetic sync_runs row (no data behind it)."""
+    now = now or utcnow()
+    started = now - timedelta(minutes=minutes_ago)
+    row = SyncRun(
+        trigger="daemon",
+        status=status,
+        started_at=started,
+        finished_at=None if status == "running" else started + timedelta(minutes=1),
+        lease_expires_at=now + timedelta(minutes=lease_minutes) if lease_minutes else None,
+        holder="synthetic-host:1:token" if status == "running" else None,
+        anchor_cycle=(started - timedelta(hours=5)).replace(minute=0, second=0, microsecond=0),
+        plan={},
+        stages=[
+            {
+                "name": "spots",
+                "status": "success" if status != "failed" else "failed",
+                "started_at": started.isoformat(),
+                "duration_ms": 1500,
+                "cpu_s": 1.25,
+                "detail": {"error": error} if error else {},
+            }
+        ],
+        published_at=started + timedelta(seconds=50) if published else None,
+        error_message=error,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def raw_heartbeat(at: datetime, **extra: object) -> None:
+    """A heartbeat as the daemon writes it (app.services.sync.state), at a chosen time."""
+    payload = {"at": at.isoformat(), "runner": "daemon", "due": False, "reasons": []} | extra
+    get_redis().set(sync_state.HEARTBEAT_KEY, json.dumps(payload), ex=3600)
+
+
+def cpu_log(db: Session, name: str, cpu_s: float, started: datetime, **details: object) -> None:
+    db.add(
+        BackgroundJobLog(
+            job_name=name,
+            status=JobStatus.SUCCESS,
+            started_at=started,
+            finished_at=started + timedelta(seconds=1),
+            duration_ms=1000,
+            details={"cpu_s": cpu_s, **details},
+        )
+    )
+    db.commit()
+
+
+def test_sync_stages_are_never_overdue_and_the_celery_check_is(db: Session) -> None:
+    now = utcnow()
+    run(db, "demo", 1, now=now)
+    job_log(db, "maintenance.cleanup", JobStatus.SUCCESS, 60 * 20, now=now)  # monitoring 20 h
+    job_log(db, "forecasts.acquire", JobStatus.SUCCESS, 60 * 19, now=now)  # last sync 19 h ago
+    job_log(db, "quality.predict", JobStatus.SUCCESS, 60 * 19, now=now)
+    heartbeat(db, now=now)
+    report = data_health(db, now=now)
+    keys_ = {p.key for p in report.problems}
+    for name in ("forecasts.acquire", "quality.predict", "detection.detect", "sync.publish"):
+        job = by_job(report.out.jobs, name)
+        assert job.schedule == "in each sync" and job.overdue_after_minutes is None, name
+        assert f"job_overdue:{name}" not in keys_
+    # Celery's sync check every 10 min is a job like any other: overdue after 50 min.
+    tick = by_job(report.out.jobs, "sync.tick")
+    assert tick.status == "overdue" and tick.overdue_after_minutes == 50
+    assert "job_overdue:sync.tick" in keys_
+    sync = report.out.sync
+    assert sync is not None and sync.runner == "celery" and sync.heartbeat_stale is True
+    assert sync.last_check_at is None and sync.components == []
+    job_log(db, "sync.tick", JobStatus.SUCCESS, 4, now=now)
+    sync = data_health(db, now=now).out.sync
+    assert sync is not None and sync.heartbeat_stale is False
+    assert sync.last_check_at == now - timedelta(minutes=4)
+
+
+def test_a_celery_sync_is_stuck_only_past_its_own_time_limit(db: Session) -> None:
+    """sync.tick runs a whole sync in one task with a 60-min limit (30 min for the others):
+    a sync running for 50 min is still running, a 30-min task running that long is stuck."""
+    now = utcnow()
+    run(db, "demo", 1, now=now)
+    heartbeat(db, now=now)
+    job_log(db, "sync.tick", JobStatus.RUNNING, 50, now=now)
+    job_log(db, "maintenance.cleanup", JobStatus.RUNNING, 50, now=now)
+    report = data_health(db, now=now)
+    assert by_job(report.out.jobs, "sync.tick").status == "running"
+    assert by_job(report.out.jobs, "maintenance.cleanup").status == "stuck"
+    found = {p.key for p in report.problems}
+    assert "job_stuck:maintenance.cleanup" in found and "job_stuck:sync.tick" not in found
+    assert report.out.sync is not None and report.out.sync.heartbeat_stale is False
+    # Past 60 + 15 min it is stuck too, and the message names its own limit.
+    later = now + timedelta(minutes=26)  # running for 76 min
+    heartbeat(db, now=later)
+    report = data_health(db, now=later)
+    stuck = next(p for p in report.problems if p.key == "job_stuck:sync.tick")
+    assert "past the 60-minute task time limit" in stuck.message
+    assert report.out.sync is not None and report.out.sync.heartbeat_stale is True
+
+
+def test_the_interval_floor_widens_the_celery_job_heartbeat(
+    db: Session, env: pytest.MonkeyPatch
+) -> None:
+    """With JOB_INTERVAL_FLOOR_MINUTES=60 the most frequent job runs hourly: silence is a
+    problem after 2 x 60 min, not after DATA_HEALTH_HEARTBEAT_MINUTES (30)."""
+    set_env(env, JOB_INTERVAL_FLOOR_MINUTES="60")
+    now = utcnow()
+    run(db, "demo", 1, now=now)
+    job_log(db, "notifications.deliver", JobStatus.SUCCESS, 100, now=now)
+    report = data_health(db, now=now)
+    assert report.out.heartbeat.limit_minutes == 120
+    assert "jobs_not_running" not in {p.key for p in report.problems}
+    late = now + timedelta(minutes=25)  # 125 min of silence
+    problem = next(p for p in data_health(db, now=late).problems if p.key == "jobs_not_running")
+    assert problem.severity == "failing" and "limit 120 min" in problem.message
+    assert "alone runs every 60 min" in problem.message
+
+
+def test_the_daemon_is_judged_by_its_redis_heartbeat(db: Session, env: pytest.MonkeyPatch) -> None:
+    set_env(env, JOB_RUNNER="daemon")
+    now = utcnow()
+    run(db, "demo", 1, now=now)
+    # No job finished for hours: under the daemon that is not a problem of its own (the
+    # periodic jobs run hourly and syncs only when a model run is new).
+    job_log(db, "notifications.deliver", JobStatus.SUCCESS, 60 * 3, now=now)
+    assert "sync.tick" not in {j.name for j in expected_jobs(get_settings())}
+    report = data_health(db, now=now)
+    keys_ = {p.key for p in report.problems}
+    assert "sync_heartbeat_stale" in keys_ and report.status == "failing"
+    assert not {"jobs_not_running", "jobs_never_ran", "job_overdue:sync.tick"} & keys_
+    assert report.out.sync is not None and report.out.sync.heartbeat_stale is True
+
+    plan = SyncPlan(
+        checked_at=now,
+        due=False,
+        components=(
+            ComponentStatus(
+                kind="spots",
+                source_code="demo",
+                provider="demo",
+                state="current",
+                stored_run_key="demo:synthetic",
+                available_run_key="demo:synthetic",
+                available_cycle=None,
+            ),
+            ComponentStatus(
+                kind="map",
+                source_code="noaa_gfs_fields",
+                provider="map_fields",
+                state="unknown",
+                stored_run_key=None,
+                available_run_key=None,
+                available_cycle=None,
+                detail="ConnectError: synthetic outage at internal-host-9",
+            ),
+        ),
+        anchor_cycle=None,
+        reasons=("synthetic",),
+    )
+    sync_state.write_heartbeat(plan, runner="daemon", cpu_s_month=36.0)
+    report = data_health(db)
+    assert "sync_heartbeat_stale" not in {p.key for p in report.problems}
+    sync = report.out.sync
+    assert sync is not None and sync.runner == "daemon" and not sync.heartbeat_stale
+    assert sync.last_check_at is not None and sync.check_minutes == 10
+    assert [(c.kind, c.source, c.state) for c in sync.components] == [
+        ("spots", "demo", "current"),
+        ("map", "noaa_gfs_fields", "unknown"),
+    ]
+    assert "internal-host-9" not in report.out.model_dump_json()  # provider errors stay out
+    assert sync.cpu_hours_month is not None and sync.cpu_hours_month >= 0.01  # 36 s outside jobs
+
+    raw_heartbeat(now - timedelta(minutes=31))  # limit: max(3 x 10, 30) = 30 min
+    assert "sync_heartbeat_stale" in keys(db, now)
+    # ... unless a sync with a valid lease is running (it holds up the checks).
+    sync_run(db, "running", 25, lease_minutes=20, now=now)
+    assert "sync_heartbeat_stale" not in keys(db, now)
+
+
+def test_two_failed_syncs_are_degraded_and_the_error_stays_private(
+    db: Session, app_client: ApiClient
+) -> None:
+    now = utcnow()
+    run(db, "demo", 1, now=now)
+    heartbeat(db, now=now)
+    first = sync_run(db, "success", 300, published=True, now=now)
+    sync_run(db, "failed", 120, error="stage spots: OperationalError at db-host-7", now=now)
+    assert "sync_failed" not in keys(db, now)  # one failure is not yet a problem
+    latest = sync_run(db, "failed", 60, error="stage spots: OperationalError at db-host-7", now=now)
+    sync_run(db, "running", 1, lease_minutes=44, now=now)  # in progress: not counted
+    report = data_health(db, now=now)
+    problem = next(p for p in report.problems if p.key == "sync_failed")
+    assert problem.severity == "degraded" and f"sync {latest.id}" in problem.message
+    assert problem.detail == "stage spots: OperationalError at db-host-7"
+    sync = report.out.sync
+    assert sync is not None and sync.last_run is not None and sync.last_run.status == "running"
+    assert sync.last_published is not None and sync.last_published.id == first.id
+    assert [s.name for s in sync.last_published.stages] == ["spots"]
+    assert sync.last_published.stages[0].cpu_s == 1.25
+
+    body = app_client.get("/api/health/data").text
+    assert '"sync":{"runner":"celery"' in body and "sync_failed" in body
+    assert "db-host-7" not in body and "OperationalError" not in body
+    sync_run(db, "partial", 30, published=True, now=now)  # a sync published again
+    assert "sync_failed" not in keys(db, now)
+
+
+def test_the_cpu_budget_counts_this_month_s_jobs(db: Session, env: pytest.MonkeyPatch) -> None:
+    set_env(env, SYNC_CPU_BUDGET_HOURS="10")
+    now = utcnow()
+    start = now.astimezone(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    run(db, "demo", 1, now=now)
+    heartbeat(db, now=now)
+    cpu_log(db, "forecasts.map_fields", 7.0 * 3600, start + timedelta(seconds=1))
+    cpu_log(db, "quality.predict", 0.9 * 3600, start + timedelta(seconds=2))  # 7.9 h: 79 %
+    cpu_log(db, "forecasts.map_fields", 50.0 * 3600, start - timedelta(seconds=1))  # last month
+    # A Celery sync.tick that ran a sync: its stages (above) already count its CPU.
+    cpu_log(db, "sync.tick", 30.0 * 3600, start + timedelta(seconds=3), sync_run_id=1)
+    report = data_health(db, now=now)
+    sync = report.out.sync
+    assert sync is not None and sync.cpu_budget_hours == 10.0
+    assert sync.cpu_hours_month == pytest.approx(7.9, abs=0.01)
+    assert "sync_cpu_budget" not in {p.key for p in report.problems}
+    cpu_log(db, "sync.tick", 0.2 * 3600, start + timedelta(seconds=4), sync_run_id=None)  # 81 %
+    report = data_health(db, now=now)
+    problem = next(p for p in report.problems if p.key == "sync_cpu_budget")
+    assert problem.severity == "degraded" and "81% of SYNC_CPU_BUDGET_HOURS" in problem.message
+
+
+def test_the_cpu_budget_survives_job_log_retention(db: Session, env: pytest.MonkeyPatch) -> None:
+    """With RETENTION_JOB_LOG_DAYS=7 the logs miss most of a month: the job runner's Redis
+    counter still has every job (app.jobs.runner.record_cpu_seconds)."""
+    set_env(env, SYNC_CPU_BUDGET_HOURS="10")
+    run(db, "demo", 1)
+    heartbeat(db)
+    runner.record_cpu_seconds(8.5 * 3600)  # synthetic CPU of jobs whose logs were pruned
+    sync = data_health(db).out.sync
+    assert sync is not None and sync.cpu_hours_month == pytest.approx(8.5, abs=0.01)
+    assert "sync_cpu_budget" in keys(db)
+    get_redis().delete(runner.cpu_month_key(utcnow()))  # Redis lost its data
+    assert "sync_cpu_budget" not in keys(db)
+
+
+def test_jobs_count_their_cpu_once_even_when_nested(db: Session) -> None:
+    """Celery's sync.tick runs the stages of a sync as jobs of their own: only the outer
+    job adds to the month's counter."""
+    key = runner.cpu_month_key(utcnow())
+
+    def busy(_db: Session) -> dict[str, object]:
+        t = __import__("time").process_time()
+        while __import__("time").process_time() - t < 0.05:
+            pass
+        return {}
+
+    inner: list[dict[str, object]] = []
+    outer = tasks.run_job(
+        "sync.tick", lambda d: inner.append(tasks.run_job("quality.predict", busy)) or {}
+    )
+    counted = float(get_redis().get(key) or 0)
+    assert inner and float(inner[0]["cpu_s"]) >= 0.04  # type: ignore[arg-type]
+    assert counted == pytest.approx(float(outer["cpu_s"]), abs=0.002)  # not outer + inner
+
+
+def test_commercial_use_with_the_free_open_meteo_api_is_failing(
+    db: Session, env: pytest.MonkeyPatch
+) -> None:
+    set_env(env, COMMERCIAL_USE="true", FORECAST_PROVIDERS="open_meteo")
+    heartbeat(db)
+    report = data_health(db)
+    licence = next(p for p in report.problems if p.key == "licence")
+    assert report.status == "failing" and licence.severity == "failing"
+    assert "OPEN_METEO_API_KEY" in licence.message and "(open_meteo)" in licence.message
+    set_env(env, OPEN_METEO_API_KEY="synthetic-key-0123456789")
+    assert "licence" not in keys(db)
+    set_env(env, COMMERCIAL_USE="false")
+    env.delenv("OPEN_METEO_API_KEY")
+    get_settings.cache_clear()
+    assert "licence" not in keys(db)
 
 
 # --------------------------------------------------------------------------- API

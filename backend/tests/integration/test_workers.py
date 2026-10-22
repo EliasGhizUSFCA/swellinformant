@@ -28,6 +28,21 @@ def test_beat_schedule_references_registered_tasks() -> None:
     for entry in celery_app.conf.beat_schedule.values():
         assert entry["task"] in registered
     assert celery_app.conf.task_acks_late and celery_app.conf.task_reject_on_worker_lost
+    # D14: the sync check replaces the fixed-interval forecast jobs on beat.
+    beat_tasks = {e["task"] for e in celery_app.conf.beat_schedule.values()}
+    assert "sync.tick" in beat_tasks
+    assert not beat_tasks & {"forecasts.acquire", "quality.predict", "detection.detect"}
+
+
+def test_the_old_acquisition_tasks_stay_callable_by_hand() -> None:
+    for name in (
+        "forecasts.acquire",
+        "forecasts.acquire_ensemble",
+        "forecasts.map_fields",
+        "quality.predict",
+        "detection.detect",
+    ):
+        assert name in celery_app.tasks, name
 
 
 def test_acquisition_chains_through_every_stage(db: Session, few_spots: list[str]) -> None:

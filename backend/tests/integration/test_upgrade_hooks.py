@@ -1,5 +1,6 @@
-"""Wiring of the forecast upgrade: the tide job (beat entry, beat start, Celery task),
-the cleanup and data-health hooks, and the map-field route's new names and parameter."""
+"""Wiring of the forecast upgrade: the tide job (beat entry, beat start, Celery task), the
+sync check at beat start, the cleanup and data-health hooks, and the map-field route's new
+names and parameter."""
 
 from __future__ import annotations
 
@@ -74,11 +75,22 @@ def test_beat_start_queues_the_tide_job(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(celery_app, "send_task", lambda name, *a, **kw: sent.append(name))
     monkeypatch.setattr(get_settings(), "beat_run_on_start", True)
     _kick_off_pipeline()
-    assert sent.count("tides.acquire") == 1 and "forecasts.acquire" in sent
+    # D14: beat start queues the sync check (was forecasts.acquire, plus forecasts.map_fields
+    # in standalone mode); the sync acquires whatever has a new model run.
+    assert sent.count("tides.acquire") == 1 and sent.count("sync.tick") == 1
+    assert not {"forecasts.acquire", "forecasts.map_fields"} & set(sent)
+    sent.clear()
+    monkeypatch.setattr(get_settings(), "map_fields_enabled", True)
+    _kick_off_pipeline()
+    assert sent.count("sync.tick") == 1 and "forecasts.map_fields" not in sent
     sent.clear()
     monkeypatch.setattr(get_settings(), "tide_providers", "")
     _kick_off_pipeline()
-    assert "tides.acquire" not in sent
+    assert "tides.acquire" not in sent and sent == ["sync.tick"]
+    sent.clear()
+    monkeypatch.setattr(get_settings(), "beat_run_on_start", False)
+    _kick_off_pipeline()
+    assert sent == []
 
 
 def test_a_deployment_that_gains_the_tide_job_is_not_left_overdue(
