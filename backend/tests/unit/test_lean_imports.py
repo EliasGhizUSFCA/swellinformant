@@ -14,7 +14,9 @@ image), dev = all plus the tools.
 (d) pyproject.toml and uv.lock keep that split;
 (e) scripts/check_api_bundle.py attributes installed bytes to distributions correctly;
 (f) with LEAN_PYTHON set to the interpreter of a real lean install (CI makes one from uv.lock),
-    (a) and (c) again with nothing blocked, and `uvicorn app.main:app` serves /api/health.
+    (a) and (c) again with nothing blocked, and `uvicorn app.main:app` serves /api/health;
+(g) the classic image's entrypoint (backend/docker-entrypoint.sh) starts each role's command,
+    the sync role as the job runner, and names an invalid setting without its value.
 
 (a)-(c) run in fresh interpreters whose import system refuses the missing packages as
 ModuleNotFoundError, as an install without them would, and also fail on an import attempt
@@ -528,3 +530,103 @@ def test_the_lean_install_serves_the_health_check() -> None:
     finally:
         server.terminate()
         server.wait(timeout=30)
+
+
+# ---------------------------------------------------------------------------------- (g)
+ENTRYPOINT = BACKEND / "docker-entrypoint.sh"
+
+
+def _fake_commands(tmp_path: Path) -> Path:
+    """Stand-ins for python, uvicorn and celery, for these tests only: wait_for's ``python -``
+    reads its script and succeeds at once, and every other call prints its name, JOB_RUNNER
+    and its arguments instead of running anything."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("python", "uvicorn", "celery"):
+        fake = bin_dir / name
+        fake.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = - ]; then cat >/dev/null; exit 0; fi\n'
+            f'echo "{name} JOB_RUNNER=${{JOB_RUNNER:-unset}} $*"\n'
+        )
+        fake.chmod(0o755)
+    return bin_dir
+
+
+def _entrypoint(
+    role: str, bin_dir: Path, cwd: Path, **env: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - the repository's entrypoint, a fixed role
+        ["/bin/sh", str(ENTRYPOINT), role],
+        cwd=cwd,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(cwd), **env},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "env", "commands"),
+    [
+        ("sync", {}, ["python JOB_RUNNER=daemon -m app.cli sync daemon"]),
+        ("sync", {"JOB_RUNNER": "daemon"}, ["python JOB_RUNNER=daemon -m app.cli sync daemon"]),
+        ("migrate", {}, ["python JOB_RUNNER=unset -m app.cli init-db"]),
+        (
+            "api",
+            {},
+            [
+                "python JOB_RUNNER=unset -m app.cli init-db",
+                "uvicorn JOB_RUNNER=unset app.main:app --host 0.0.0.0 --port 8000"
+                " --no-proxy-headers --workers 2",
+            ],
+        ),
+        (
+            "worker",
+            {},
+            [
+                "celery JOB_RUNNER=unset -A app.workers.celery_app worker --loglevel=INFO"
+                " --concurrency=2 --queues=celery,bulk"
+            ],
+        ),
+        (
+            "beat",
+            {},
+            [
+                "celery JOB_RUNNER=unset -A app.workers.celery_app beat --loglevel=INFO"
+                " --schedule=/tmp/celerybeat-schedule"
+            ],
+        ),
+    ],
+)
+def test_each_container_role_runs_its_command(
+    tmp_path: Path, role: str, env: dict[str, str], commands: list[str]
+) -> None:
+    done = _entrypoint(role, _fake_commands(tmp_path), tmp_path, **env)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == commands
+    assert done.stderr == ""
+
+
+def test_the_sync_role_warns_when_celery_runs_the_jobs(tmp_path: Path) -> None:
+    """JOB_RUNNER=celery means Celery beat schedules the jobs too: the role keeps the
+    explicit setting and says so."""
+    done = _entrypoint("sync", _fake_commands(tmp_path), tmp_path, JOB_RUNNER="celery")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["python JOB_RUNNER=celery -m app.cli sync daemon"]
+    assert done.stderr.startswith("warning: JOB_RUNNER=celery: Celery beat also schedules")
+
+
+def test_wait_for_names_an_invalid_setting_without_its_value(tmp_path: Path) -> None:
+    """pydantic's own message quotes a rejected value, and a CRON_SECRET or SECRET_KEY that
+    is too short is still a secret: the container log shows the setting and the reason."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python = bin_dir / "python"
+    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    python.chmod(0o755)
+    secret = "short-secret"  # synthetic test value: 12 characters, CRON_SECRET needs 16
+    done = _entrypoint("migrate", bin_dir, tmp_path, PYTHONPATH=str(BACKEND), CRON_SECRET=secret)
+    assert done.returncode == 1, done.stderr
+    assert done.stderr.startswith("invalid configuration: cron_secret: "), done.stderr
+    assert secret not in done.stdout + done.stderr

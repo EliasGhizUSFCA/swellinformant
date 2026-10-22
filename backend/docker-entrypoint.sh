@@ -6,15 +6,26 @@ set -e
 
 # Waits until PostgreSQL and Redis answer, reaching them as the app does (app settings:
 # DATABASE_URL normalised, DATABASE_URL_UNPOOLED when DB_USE_UNPOOLED, REDIS_URL or KV_URL).
+# An invalid setting stops the container with the setting's name and the reason only:
+# pydantic's own message quotes the rejected value, which can be a secret (a CRON_SECRET or
+# SECRET_KEY that is too short).
 wait_for() {
   python - <<'PY'
 import sys, time
 import redis
+from pydantic import ValidationError
 from sqlalchemy import create_engine, text
 from app.core.config import get_settings
 from app.core.logging import redact
 
-settings = get_settings()
+try:
+    settings = get_settings()
+except ValidationError as exc:
+    problems = "; ".join(
+        f"{'.'.join(str(part) for part in error['loc']) or 'settings'}: {error['msg']}"
+        for error in exc.errors(include_input=False, include_url=False)
+    )
+    sys.exit(f"invalid configuration: {problems}")
 deadline = time.time() + 90
 while True:
     try:
