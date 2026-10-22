@@ -307,10 +307,10 @@ def _computed_once(
 @dataclass(frozen=True)
 class Together:
     """Routes computed together on a miss of any of them, because they read the same rows
-    (a spot page's forecast and timeline, about 0.8 MB of hours each): one computation
-    under one lock (``name``), inside ``reads()`` (where the builds share their reads),
-    each route's snapshot stored under its own key. A route other than the one requested
-    that fails is left to its own request."""
+    (a spot page's forecast and timeline read the same hours, about 0.8 MB for a 10-day
+    blend): one computation under one lock (``name``), inside ``reads()`` (where the
+    builds share their reads), each route's snapshot stored under its own key. A route
+    other than the one requested that fails is left to its own request."""
 
     name: str
     params: str

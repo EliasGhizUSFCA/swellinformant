@@ -3,10 +3,10 @@ the egress-map-serving package.
 
 prune_pass deletes derived data the sync can recompute: the predictions of superseded member
 runs (when PRUNE_SUPERSEDED_MEMBER_PREDICTIONS) and the map fields of runs that are neither
-among the two best servable ones nor the newest publication's map run; and, since the egress
-integration, the forecast runs past RETENTION_FORECAST_DAYS (the daily cleanup's rule, so the
-free database profile's 1 day holds between cleanups: its return dict gained
-``forecast_runs``); then it commits.
+among the two best servable ones nor the newest publication's map run. Since the egress
+integration it also applies the forecast-run retention (RETENTION_FORECAST_DAYS, the daily
+cleanup's rule, so the free database profile's 1 day holds between cleanups; its return dict
+gained ``forecast_runs``). Then it commits.
 Every forecast and field here is SYNTHETIC (tests.integration.test_retention_bounds'
 constant sea state; tests.synthetic_map_fields' constant GRIB fields).
 """
