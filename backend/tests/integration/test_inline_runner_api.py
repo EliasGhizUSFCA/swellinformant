@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import socket
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 import redis
@@ -25,7 +25,7 @@ from app.core.redis import get_redis, reset_redis
 from app.models import EmailMessage
 from app.models.enums import EmailDeliveryStatus, EmailPurpose
 from app.workers import dispatch
-from tests.conftest import ApiClient, latest_link_token, outbox_messages
+from tests.conftest import ApiClient, latest_link_token, outbox_messages, search_payload
 
 pytestmark = pytest.mark.integration
 
@@ -165,6 +165,59 @@ def test_a_failing_sms_provider_is_reported_to_the_user(
     assert resp.json()["error"]["code"] == "sms_not_sent"
     assert "synthetic" not in resp.text  # the provider's detail stays in the logs
     assert pauses == list(dispatch.INLINE_BACKOFF_SECONDS)
+
+
+def test_the_api_records_kicks_for_the_daemon(
+    make_client: Callable[[], ApiClient],
+    db: Session,
+    few_spots: list[str],
+    only_simulated_swells: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under JOB_RUNNER=daemon, "match my search" (create, update, resume) and "refresh
+    flights" leave Redis kick flags for the daemon (app.services.sync.state), never Celery
+    tasks; pausing a search asks for nothing. The opportunity comes from the demo pipeline
+    and a simulated swell (synthetic data)."""
+    from app.services.pipeline import run_pipeline
+    from app.services.sync import state
+
+    owner: ApiClient = make_client()
+    owner.register("kicks@example.com")
+    created = owner.post("/api/searches", search_payload())
+    assert created.status_code == 201, created.text
+    run_pipeline(db)
+    sim = owner.post("/api/dev/simulate-swell", {"spot_slug": "jeffreys-bay", "days_ahead": 7})
+    assert sim.status_code == 200, sim.text
+    (top, *_) = owner.get("/api/opportunities").json()
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "job_runner", "daemon")
+    monkeypatch.setattr(settings, "rate_limit_enabled", True)
+
+    def no_celery(*_: object, **__: object) -> None:
+        pytest.fail("Celery was used under JOB_RUNNER=daemon")
+
+    from app.workers.celery_app import celery_app
+
+    monkeypatch.setattr(celery_app, "signature", no_celery)
+    monkeypatch.setattr(dispatch, "_celery_tasks", no_celery)
+    assert state.pop_kicks() == {}  # nothing left over from the setup
+
+    search_id = created.json()["id"]
+    for step, call in (
+        ("create", lambda: owner.post("/api/searches", search_payload(name="Second search"))),
+        ("update", lambda: owner.put(f"/api/searches/{search_id}", search_payload())),
+        ("resume", lambda: owner.post(f"/api/searches/{search_id}/resume")),
+    ):
+        assert call().status_code in (200, 201), step
+        kicks = state.pop_kicks()
+        assert list(kicks) == ["matching.match"], (step, kicks)
+    assert owner.post(f"/api/searches/{search_id}/pause").status_code == 200
+    assert state.pop_kicks() == {}
+
+    refreshed = owner.post(f"/api/opportunities/{top['id']}/refresh-flights")
+    assert refreshed.status_code == 200, refreshed.text
+    assert state.pop_kicks() == {"flights.discover": [top["id"]]}
 
 
 def test_a_transient_email_failure_is_retried_inline(
