@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.spots import public_cache
 from app.core.database import get_db
 from app.core.errors import NotFound
 from app.models import SurfSpot
@@ -14,8 +15,6 @@ from app.services.timeline import spot_timeline as build_timeline
 from app.services.timeline import timeline_etag
 
 router = APIRouter(prefix="/api/spots", tags=["spots"])
-
-CACHE_CONTROL = "public, max-age=300"
 
 
 def _matches(if_none_match: str | None, etag: str) -> bool:
@@ -45,8 +44,11 @@ def spot_timeline(
         raise NotFound("Surf spot not found.")
     timeline = build_timeline(db, spot, days)
     etag = timeline_etag(timeline, days)
-    headers = {"Cache-Control": CACHE_CONTROL, "ETag": etag}
     if _matches(request.headers.get("if-none-match"), etag):
-        return Response(status_code=304, headers=headers)
-    response.headers.update(headers)
+        response = Response(status_code=304)
+        public_cache(response)
+        response.headers["ETag"] = etag
+        return response
+    public_cache(response)
+    response.headers["ETag"] = etag
     return timeline

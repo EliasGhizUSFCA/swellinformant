@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.spots import public_cache
 from app.core.config import get_settings
 from app.core.database import get_db, utcnow
 from app.core.errors import AppError, NotFound
@@ -79,8 +80,9 @@ def spot_tides(
         raise AppError("end must be after start.")
     if window_end - window_start > MAX_WINDOW:
         raise AppError("The window may span at most 31 days.")
-    response.headers["Cache-Control"] = "public, max-age=300"
-    return spot_tide_block(db, spot, window_start, window_end, now)
+    block = spot_tide_block(db, spot, window_start, window_end, now)
+    public_cache(response)
+    return block
 
 
 @router.get("/{slug}/observations", response_model=ObservationsBlockOut)
@@ -91,5 +93,6 @@ def spot_observations(
     spot = active_spot(db, slug)
     now = utcnow()
     start = now - timedelta(hours=get_settings().observation_lookback_hours)
-    response.headers["Cache-Control"] = "public, max-age=300"
-    return spot_observations_block(db, spot, start, now, now)
+    block = spot_observations_block(db, spot, start, now, now)
+    public_cache(response)
+    return block

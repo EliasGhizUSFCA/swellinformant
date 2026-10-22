@@ -37,9 +37,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     settings = get_settings()
     logger.info(
-        "Starting %s (env=%s, forecasts=%s, flights=%s, email=%s, sms=%s)",
+        "Starting %s (env=%s, jobs=%s, forecasts=%s, flights=%s, email=%s, sms=%s)",
         settings.app_name,
         settings.app_env,
+        settings.job_runner,
         settings.forecast_provider_list,
         settings.flight_provider,
         settings.email_provider,

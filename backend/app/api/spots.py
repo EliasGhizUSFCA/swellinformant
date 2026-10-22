@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.auth.deps import get_optional_user
 from app.core.database import get_db, utcnow
 from app.core.errors import NotFound
+from app.core.http_cache import cache_headers
 from app.models import Airport, SurfSpot, SwellEvent, User
 from app.models.enums import SwellEventStatus
 from app.schemas.opportunities import MatchSummary
@@ -37,6 +38,24 @@ from app.services.spot_views import (
 
 router = APIRouter(prefix="/api", tags=["spots"])
 
+# The user-independent public GETs (no user dependency, no cookie): browsers keep them a
+# minute, the CDN a minute and serves a stale copy for up to 5 minutes while it refreshes.
+# Used by /api/spots and /api/map/conditions here, and the timeline, tides and observations
+# routes. Never on a route with a user dependency (app.core.http_cache).
+PUBLIC_BROWSER_SECONDS = 60
+PUBLIC_CDN_SECONDS = 60
+PUBLIC_STALE_SECONDS = 300
+
+
+def public_cache(response: Response) -> None:
+    """The cache headers of a user-independent public GET (see PUBLIC_*_SECONDS)."""
+    cache_headers(
+        response,
+        browser_seconds=PUBLIC_BROWSER_SECONDS,
+        cdn_seconds=PUBLIC_CDN_SECONDS,
+        stale_while_revalidate=PUBLIC_STALE_SECONDS,
+    )
+
 
 def _spot(db: Session, slug: str) -> SurfSpot:
     spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == slug, SurfSpot.is_active))
@@ -52,13 +71,17 @@ def map_conditions(
     db: Session = Depends(get_db),
 ) -> MapSnapshotOut:
     """All spots at one forecast hour, from cached predictions (public data, cacheable)."""
-    response.headers["Cache-Control"] = "public, max-age=300"
-    return map_snapshot(db, at)
+    snapshot = map_snapshot(db, at)
+    public_cache(response)
+    return snapshot
 
 
 @router.get("/spots", response_model=list[SpotSummary])
-def list_spots(db: Session = Depends(get_db)) -> list[SpotSummary]:
-    return spot_summaries(db)
+def list_spots(response: Response, db: Session = Depends(get_db)) -> list[SpotSummary]:
+    """Every active spot with its current conditions (public data, cacheable)."""
+    spots = spot_summaries(db)
+    public_cache(response)
+    return spots
 
 
 @router.get("/spots/{slug}", response_model=SpotDetail)
