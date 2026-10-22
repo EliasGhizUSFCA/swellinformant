@@ -26,22 +26,16 @@ ENV PIP_NO_CACHE_DIR=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv
 
 WORKDIR /src
-# uv.loc[k]: the lock is optional for this COPY (the glob may match nothing), and the RUN
-# below says so loudly when it is missing.
-COPY backend/pyproject.toml backend/uv.loc[k] ./
+# The versions come from backend/uv.lock only: the COPY fails without it, and
+# `uv sync --locked` fails when it no longer matches pyproject.toml (run `uv lock` in
+# backend/), so a deployment never installs versions nobody has tested.
+COPY backend/pyproject.toml backend/uv.lock ./
 # Optional: behind a TLS-intercepting proxy, pass its CA bundle with
 #   docker build --secret id=ca,src=/path/to/ca.pem ...
 RUN --mount=type=secret,id=ca \
     if [ -f /run/secrets/ca ]; then export PIP_CERT=/run/secrets/ca SSL_CERT_FILE=/run/secrets/ca; fi; \
     pip install uv==0.11.32 \
-    && if [ -f uv.lock ]; then \
-         uv sync --locked --no-dev --extra sync --no-install-project; \
-       else \
-         echo "WARNING: backend/uv.lock is missing; installing .[sync] without a lock" >&2; \
-         uv venv /opt/venv \
-         && uv pip install --python /opt/venv/bin/python ".[sync]" \
-         && uv pip uninstall --python /opt/venv/bin/python swell-travel-agent; \
-       fi \
+    && uv sync --locked --no-dev --extra sync --no-install-project \
     && pip uninstall -y uv \
     && /opt/venv/bin/python -c "import eccodes; print('ecCodes', eccodes.codes_get_api_version())"
 # The last line fails the build when the ecCodes C library is missing: the map layers are

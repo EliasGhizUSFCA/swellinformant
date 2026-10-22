@@ -19,22 +19,18 @@ ENV PIP_NO_CACHE_DIR=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv
 
 WORKDIR /src
-COPY backend/pyproject.toml backend/uv.loc[k] ./
+# The versions come from backend/uv.lock only (the COPY fails without it; `uv sync --locked`
+# fails when it no longer matches pyproject.toml), as the Vercel builder installs them. The
+# last command fails the build when a heavy dependency slipped into [project].dependencies.
+COPY backend/pyproject.toml backend/uv.lock ./
 # Optional: behind a TLS-intercepting proxy, pass its CA bundle with
 #   docker build --secret id=ca,src=/path/to/ca.pem ...
 RUN --mount=type=secret,id=ca \
     if [ -f /run/secrets/ca ]; then export PIP_CERT=/run/secrets/ca SSL_CERT_FILE=/run/secrets/ca; fi; \
     pip install uv==0.11.32 \
-    && if [ -f uv.lock ]; then \
-         uv sync --locked --no-dev --no-install-project; \
-       else \
-         echo "WARNING: backend/uv.lock is missing; installing the dependencies without a lock" >&2; \
-         uv venv /opt/venv \
-         && uv pip install --python /opt/venv/bin/python . \
-         && uv pip uninstall --python /opt/venv/bin/python swell-travel-agent; \
-       fi \
+    && uv sync --locked --no-dev --no-install-project \
     && pip uninstall -y uv \
-    && /opt/venv/bin/python -c "import importlib.util as u; heavy = [m for m in ('celery', 'kombu', 'pandas', 'eccodes', 'pyarrow', 'sklearn', 'scipy', 'joblib') if u.find_spec(m)]; print('lean install' if not heavy else 'WARNING: not lean, installed: ' + ', '.join(heavy))"
+    && /opt/venv/bin/python -c "import importlib.util as u, sys; heavy = [m for m in ('celery', 'kombu', 'pandas', 'eccodes', 'pyarrow', 'sklearn', 'scipy', 'joblib') if u.find_spec(m)]; print('lean install') if not heavy else sys.exit('not lean, installed: ' + ', '.join(heavy))"
 
 FROM python:3.13.15-slim-trixie
 
