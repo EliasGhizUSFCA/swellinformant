@@ -17,6 +17,9 @@ decodes and draws them (rendering: [map-rendering.md](map-rendering.md)).
   `backend/app/schemas/map_fields.py`
 * Storage: table `map_fields` (`models.forecast_engine.MapField`), one row per run, valid
   time and variable
+* Serving on Vercel and Neon (the publish gate, CDN caching, binary reads, database
+  egress): [Serving, caching and database egress](#serving-caching-and-database-egress-upgrade-4);
+  the measuring script is `scripts/measure_db_egress.py`
 * Tests (synthetic GRIB2 files and arrays only; the download costs use the real `.idx`
   files in `backend/tests/fixtures/idx`): `backend/tests/unit/test_map_field_encoding.py`,
   `test_map_field_partitions.py`, `test_map_field_modes.py`, `test_noaa_provider.py`
@@ -145,11 +148,16 @@ Contract: `backend/app/schemas/map_fields.py`.
   `age_hours` (now minus `cycle_time`, the model cycle), `stale_after_hours`
   (`MAP_FIELD_STALE_AFTER_HOURS`) and `stale` (`age_hours` beyond it). Stale layers are
   still served; the map shows a badge.
-  The run is the newest one (by model cycle) with at least one complete valid time. When
-  several runs hold that cycle (for example the NOAA spot run and a fields-only run after
-  a change of mode), the one with the most complete valid times is served, and on a tie
-  the newer run (`map_fields.servable_runs`, the same order retention uses). Incomplete
-  times are logged and left out. `Cache-Control: public, max-age=300`.
+  The run served is the map run of the newest sync publication while `SYNC_PUBLISH_GATE`
+  is on (the default) and that run is still servable; then `published_at` and
+  `sync_run_id` name that publication. Otherwise (no publication yet, the gate off, or the
+  published run pruned or deleted) it is the newest run (by model cycle) with at least
+  one complete valid time, and `published_at` and `sync_run_id` are null unless that run
+  is the newest publication's. When several runs hold that cycle (for example the NOAA
+  spot run and a fields-only run after a change of mode), the one with the most complete
+  valid times is served, and on a tie the newer run (`map_fields.servable_runs`, the same
+  order retention uses). Incomplete times are logged and left out. Caching: browsers
+  60 s, the CDN 60 s plus `stale-while-revalidate=600` (see the table below).
 * `GET /api/map/fields/{variable}?at=ISO&run=RUN_KEY` returns one field as
   `application/octet-stream`. The decoding parameters are in the `X-Field-Meta` header
   (JSON with the keys of `FieldMeta`, including `group`, `valid_time` and `run_key`;
@@ -157,10 +165,12 @@ Contract: `backend/app/schemas/map_fields.py`.
   * `run` (the index's `run_key`) serves that model run while it is retained (the two
     best servable runs are). An unknown, pruned or no longer servable run is **404 with
     the error code `run_not_retained`** ("Map field run not retained"), never another
-    run's field. Without `run` the current run is served.
-  * `Cache-Control: public, max-age=3600` with `run` (a run's field never changes) and
-    `public, max-age=300` without it (the next cycle replaces the current run). Error
-    responses are `no-store`.
+    run's field. Without `run` the index's run is served (the published one under the
+    gate).
+  * Caching (`app.core.http_cache.cache_headers`): a URL with `run` and an `at` equal to
+    the served valid time is immutable (browsers an hour, the CDN a year); any other
+    field URL is cached 5 minutes by both. Error responses are `no-store` and never carry
+    `CDN-Cache-Control`. See the table below.
   * `at` defaults to now. A time without a zone is taken as UTC.
   * The served time is the complete valid time nearest to `at`; on a tie the earlier
     time wins. Values are never interpolated in time. The served `valid_time` is in
@@ -171,7 +181,7 @@ Contract: `backend/app/schemas/map_fields.py`.
     (for example a partition), or when nothing is stored.
   * An unknown variable (e.g. `swell3_hs`) is 422.
   * The index and a field request read only metadata columns, plus the bytes of the one
-    row that is served.
+    row that is served, through a binary cursor (one statement, metadata included).
 * The map client (`frontend/lib/map-fields.ts`, `hooks/map-fields.ts`) asks for a
   partition only when the index lists it with `group` "partition" and a `system`
   (`primary`, `secondary`, `windsea`); a 404 for a listed partition is treated as an
@@ -327,6 +337,9 @@ change or a file layout change.
   run) covering every map hour and core variable. A shorter run of the same cycle (for
   example a check with `--max-lead-hours 9`) does not count for the hours it did not
   read, so the scheduled job still reads the whole cycle and replaces its rows in place.
+  With the synced pipeline (Upgrade 4) a sync's `map` stage runs the same acquisition when
+  a new map cycle is out, and its `publish` stage makes the run visible (see The publish
+  gate below).
 * **CLI.** `python -m app.cli engine map-fields [--cycle YYYYMMDDHH] [--max-lead-hours N]
   [--force]` works in every mode except `off`. It prints JSON with counts, stored and
   downloaded bytes, requests, rows pruned, the duration and per-hour figures. `--cycle`
@@ -334,15 +347,20 @@ change or a file layout change.
   check (hours not yet published become gaps).
 * **Retention.** `maintenance.prune_map_fields` keeps the fields of the two best
   servable runs, in the read side's order (`map_fields.servable_runs`: newest cycle,
-  then most complete valid times, then the newer run), so the served run is never
-  deleted, and the previous run stays available to clients that still name it with
-  `run`. Every other `map_fields` row goes, including rows of runs without a single
-  complete valid time (they are never served). It runs right after every acquisition that
-  stores fields (standalone job and NOAA spot run) and in `maintenance.cleanup` (reported
-  as `map_fields`), so storage stays at about two runs between the daily cleanups. One
-  DELETE statement picks the runs to keep and deletes the rest, so fields that another
+  then most complete valid times, then the newer run), and the map run of the newest
+  sync publication, so the served run is never deleted (under `SYNC_PUBLISH_GATE` it is
+  the published run), and the previous run stays available to clients that still name it
+  with `run`. Normally the published run is one of the two best anyway (a sync stores one
+  new map run and then publishes it); a third run is kept only while newer runs wait for
+  a publication. Every other `map_fields` row goes, including rows of runs without a
+  single complete valid time (they are never served). It runs right after every
+  acquisition that stores fields (standalone job and NOAA spot run), in every sync's prune
+  stage (`maintenance.prune_pass`, with `SYNC_PRUNE_EACH_PASS`) and in
+  `maintenance.cleanup` (reported as `map_fields`), so storage stays at about two runs.
+  One DELETE statement picks the runs to keep and deletes the rest, so fields that another
   acquisition commits meanwhile are not deleted. A forecast run removed by its own
-  retention takes its fields with it (FK cascade).
+  retention takes its fields with it (FK cascade; the publication's `map_run_id` becomes
+  null and the index falls back to the newest servable run).
 
 ## Bandwidth and storage, measured live (2026-10-15)
 
@@ -427,6 +445,9 @@ run's `details.warnings` record the download ("downloaded 31.8 MB in 28 requests
 map hours f000-f009 (7.9 MB per hour)").
 
 ### Served over HTTP
+
+(The cache headers below are the ones of 2026-10-15; Upgrade 4 changed them, see
+[Serving, caching and database egress](#serving-caching-and-database-egress-upgrade-4).)
 
 uvicorn on port 28731 on the scratch database (both runs stored):
 
@@ -559,6 +580,201 @@ Open-Meteo spot providers and `MAP_FIELDS_ENABLED` unset):
 * **Not verified:** a full 61-hour cycle (its bytes and time are extrapolated above), the
   Celery job against NOAA, a `with_noaa` acquisition with partitions against NOAA, and
   behaviour across a GFS version change.
+
+## Serving, caching and database egress (Upgrade 4)
+
+Hosted on Vercel (Hobby) with Neon Postgres (Free), the map's costs that matter are the
+bytes Postgres sends to the API and to the sync ("egress": Neon Free includes 5 GB a
+month, and running out suspends the compute until the next billing period; storage is
+1 GB, https://neon.com/docs/introduction/plans, read 2026-10-18) and the requests that
+reach the API function at all. This section covers what serves the map, how responses are
+cached in front of it, and what one sync and one page view read from the database.
+
+### The publish gate
+
+A sync (app.services.sync) stores a new map run in its `map` stage and makes it visible
+in its `publish` stage, which commits `sync_runs.published_at` and `map_run_id` (the best
+servable run then). With `SYNC_PUBLISH_GATE=true` (the default):
+
+* `GET /api/map/fields` serves the map run of the newest publication (`published_at`, then
+  id) while it is servable, even when a newer run is already stored: the map switches to
+  a new GFS cycle together with the spot forecasts of the same sync, not when the map
+  stage happens to finish. `published_at` and `sync_run_id` in the index name that
+  publication (for the map's freshness chip).
+* `GET /api/map/fields/{variable}` without `run` serves the same run. With `run` it serves
+  the named retained run, as before (a client never mixes two runs).
+* Fallback to the newest servable run (`published_at` and `sync_run_id` null): before the
+  first publication, when the newest publication has no map run (none was servable then),
+  when the published run is no longer servable (its fields pruned or incomplete) or was
+  deleted (`map_run_id` is set to null by the foreign key).
+* `SYNC_PUBLISH_GATE=false` always serves the newest servable run (the behaviour before
+  Upgrade 4); the index still names the newest publication when it happens to be its run.
+* Retention keeps the published run besides the two best servable ones (see Storage,
+  jobs and retention), so the gate never points at a run that pruning removed while it
+  was served.
+
+The index reads the publication through one three-column query (id, published_at,
+map_run_id; the same filter and order as `app.services.sync.published.latest_publication`),
+never the sync's plan or stages, and the run's key, completion time and source without its
+`details`. Tests: `backend/tests/integration/test_map_publish_gate.py`.
+
+### Browser and CDN caching
+
+Both endpoints are the same for every visitor (no user dependency, no cookie), so they
+carry shared-cache headers (`app.core.http_cache.cache_headers`). Vercel's CDN reads
+`CDN-Cache-Control` before `Cache-Control` and caches a function response only with
+`s-maxage`, never one with `Set-Cookie` or for a request with an `Authorization` header,
+up to 10 MB (https://vercel.com/docs/caching/cdn-cache, read 2026-10-18; a field is at
+most about 115 kB).
+
+| Response | `Cache-Control` (browsers) | `CDN-Cache-Control` | Why |
+|----------|----------------------------|---------------------|-----|
+| `GET /api/map/fields` (the index) | `public, max-age=60` | `public, s-maxage=60, stale-while-revalidate=600` | It names the served run, which a publication switches about every 6 hours. After a publication the CDN can still hand out the previous index for up to 60 s, and for up to 600 s more to the requests that trigger its refresh; browsers keep it 60 s, and the map re-reads it every 5 minutes. |
+| A field URL with `run` and an `at` equal to the served valid time (what the map requests: `fieldUrl(variable, at, run)` with times from the index) | `public, max-age=3600, immutable` | `public, s-maxage=31536000, immutable` | The URL names the model run and the valid time, and a run's stored field never changes, so the CDN can keep it for a year and the database reads each such field about once per CDN cache. |
+| Any other field URL: no `run`, no `at` (now), or an `at` between valid times | `public, max-age=300` | `public, s-maxage=300` | The answer can change with the next publication or with the clock, so it is cached for 5 minutes only. The served time and run are in `X-Field-Meta`, which the map checks. |
+| Errors (404 `run_not_retained`, 404 no field, 422) | `no-store` (the security middleware's default) | none | A missing field or run must not stick at the edge. |
+
+`X-Field-Meta` stays exposed (`Access-Control-Expose-Headers`). An immutable URL of a run
+that is later pruned can still be answered from the CDN with that run's field (the true
+field of that run and time); the map only asks for the run its current index names.
+
+### Reading a field from Postgres
+
+`map_fields.data` is `bytea`. psycopg's default text result format sends bytea as hex, two
+characters for every stored byte, so the database sent about twice the field's size for
+every field request (2.06× measured, below). The field is now read with a binary cursor on
+the session's own connection and transaction (`map_fields._field_row`: one statement for
+the row's metadata and bytes, keyed by run, variable and valid time), and the bytes come
+back as they are stored. Served bytes are identical (tests compare them with the stored
+row); the index never reads `data`.
+
+### Storage per run
+
+From the stored sizes above (2026-10-14/15 cycles, 0.5° grid): one valid time is 516 kB
+for the six core variables and 1.16 MB with the nine partition variables. With the
+default 61 map hours a run is about 71 MB with partitions (`MAP_FIELD_PARTITIONS=on`,
+the default) and about 31.5 MB without; the two retained runs are about 142 MB (or 63 MB).
+A third run is kept only while newer runs wait for a publication. On Neon Free (1 GB for
+everything) the map is therefore about 14 % of the storage with partitions and 6 %
+without; the spot forecasts, predictions and archive share the rest (the free-database
+retention profile is `app.core.profiles.FREE_DATABASE_PROFILE`).
+
+### Database egress, measured (2026-10-22)
+
+`scripts/measure_db_egress.py` puts a counting TCP proxy between the app and Postgres and
+counts every byte of every connection, in both directions, around each pipeline stage
+(and around chosen functions inside a stage) or each API request. TLS is on between the
+app and the local Postgres (sslmode prefer, as Neon requires TLS), so the counts include
+it. "Before" is the code at 2d3ffe7 (the Upgrade 4 foundation), run from an extracted copy
+of that commit; "after" is this package. Both ran on the same machine against the same
+template database, one after the other.
+
+**One demo pass** (`measure_db_egress.py pipeline`: a fresh `init-db` scratch database
+and `run_pipeline` exactly as `python -m app.cli pipeline` runs it, with
+`FORECAST_PROVIDERS=demo`: 50 spots, 19,200 SYNTHETIC forecast rows and predictions, 4,050
+archive rows, 150 swell events, no saved searches). DB → client, MB:
+
+| Stage | Before | After |
+|-------|-------:|------:|
+| acquisition | 0.61 | 0.61 |
+| predictions (scoring and archive) | 97.94 | 14.87 |
+| of which the archive | 88.14 | 5.08 |
+| detection | 88.45 | 3.63 |
+| of which `load_steps` (50 calls) | 88.24 | 2.67 |
+| matching, flights, alerts, delivery | 0.32 | 0.32 |
+| **pass total** | **187.31** | **19.43** |
+| client → DB (writes) | 90.07 | 90.11 |
+
+The research measured 186.8 MB for the same pass before (D6). The rows after the pass were
+identical (19,200 predictions, 4,050 archive rows, 150 events). With `--searches 3` (one
+SYNTHETIC account with three saved searches for every spot) the same pass reads 239.73 MB
+before and 24.02 MB after: matching alone 49.63 → 1.81 MB (`load_steps` for 51 events:
+49.32 → 1.50 MB), with the same 150 matches.
+
+**One pass on a copy of the real 2026-10-16 live run** (`swell_u3i_live_run`: Open-Meteo
+GFS and ECMWF spot runs of 2026-10-16 00Z, their blend, GEFS statistics and 9 hours of map
+fields; `measure_db_egress.py pipeline --template swell_u3i_live_run --providers
+open_meteo,open_meteo_ecmwf --replay --no-acquire --searches 3 --now
+2026-10-16T06:00:00Z` with `GEFS_ENABLED=true`). `--replay` deletes the blend run and the
+predictions of both member runs before the pass, so the pass re-blends and re-scores
+25,000 predictions of real forecasts, as after new model runs; `--searches 3` adds one
+SYNTHETIC account with three saved searches for every spot, so matching evaluates the
+events as it does for a real user. No provider was called. DB → client, MB:
+
+| Stage | Before | After |
+|-------|-------:|------:|
+| blending | 7.80 | 7.80 |
+| predictions | 93.75 | 43.02 |
+| of which the archive | 56.70 | 5.96 |
+| of which scoring the three runs (`compute_predictions_for_run`) | 37.05 (93.75 − 56.70) | 37.05 |
+| detection | 57.32 | 2.69 |
+| of which `load_steps` (50 calls) | 56.85 | 1.68 |
+| matching | 6.80 | 0.48 |
+| of which `load_steps` (19 events) | 6.52 | 0.20 |
+| flights, alerts, delivery | 3.28 | 3.28 |
+| **pass total** | **168.95** | **57.26** |
+
+Rows after the pass were identical (25,000 predictions, 4,050 archive rows, 98 events, 57
+matches). Inside "scoring" (not changed here): the confidence context 9.21 MB (3 calls),
+tide stages 8.18 MB (150 calls: every spot's tide predictions read again for each run),
+the ensemble index 1.02 MB; the rest (about 18.6 MB) was not broken down further and
+includes reading every `wave_forecasts` row of the three runs as a whole entity.
+
+**One page view, anonymous, without a CDN in front** (`measure_db_egress.py pages
+--template swell_u3i_live_run --providers open_meteo,open_meteo_ecmwf --publish --now
+2026-10-16T06:00:00Z`: the requests the map page and a spot page make). DB → API, kB:
+
+| Request | Response | Before | After |
+|---------|---------:|-------:|------:|
+| `/api/spots` | 300.6 | 15,730.6 | 15,730.6 |
+| `/api/map/fields` (index) | 3.0 | 7.9 | 5.3 |
+| `/api/map/conditions` (twice: now and the field time) | 182.6 | 1,062.7 | 1,062.7 |
+| 9 fields (`hs`, `tp`, `wave_dir` at the step on screen and both neighbours) | 708.9 | 1,463.0 (2.06×) | 722.4 (1.02×) |
+| **map page** | 1,195.0 | **18,264.2** | **17,521.0** |
+| spot page (`/api/spots/pipeline`, `/forecast`, `/timeline`, `/events`) | 630.5 | 1,597.7 | 1,597.7 |
+
+`--now` sets the map page's step only; `/api/spots`, the conditions and the spot page read
+"now" from the wall clock, so their figures move a little from one day to the next (a
+re-run on 2026-10-22 at about 13:50 UTC: `/api/spots` 15,732.4 kB, spot page 1,545.7 kB
+for 599.9 kB; the index and the 18 field requests were the same, 1.019× in total).
+
+A field now costs 1.015 to 1.025 times its payload in database reads (it was 2.05 to 2.09
+times). Behind the CDN an immutable field URL is read from the database about once per
+CDN cache and run, and the index at most about once a minute per cache.
+
+**Against Neon Free's 5 GB a month.** At about 6 syncs a day (4 GFS, 2 ECMWF; D3), a pass
+like the replayed one above (it re-scores all three runs, so a real pass reads somewhat
+less) costs about 57 MB × 6 × 30 = 10.3 GB a month after this package, against 30.4 GB
+before; the demo pass extrapolates to 3.5 GB (before: 33.7 GB). So the sync alone still
+exceeds Neon Free's egress, and the largest remaining readers are outside the map:
+
+1. `/api/spots` reads 15.7 MB for a 301 kB response (by the code, `spot_views.
+   _current_and_best` loads whole predictions with their forecasts, the forecast twice,
+   for every spot and 7 days, to pick two hours per spot), so one
+   uncached map page view is about 17.5 MB: about 285 such views exhaust 5 GB.
+2. Scoring (`surf_quality/predict.py`, `confidence_context.py`, `tides/stage.py`) reads
+   37 MB per replayed pass.
+3. The `SurfQualityPrediction.forecast` relationship is `lazy="joined"`: every query that
+   selects predictions together with `WaveForecast` reads each forecast row twice.
+
+These are recorded as follow-ups for their owners; this package changed the archive,
+detection, matching's step reads and the map endpoints only.
+
+How to reproduce (from the repository root, with Postgres and Redis running):
+
+```bash
+backend/.venv/bin/python scripts/measure_db_egress.py pipeline --redis-url redis://localhost:6379/11
+GEFS_ENABLED=true backend/.venv/bin/python scripts/measure_db_egress.py pipeline \
+  --template swell_u3i_live_run --providers open_meteo,open_meteo_ecmwf \
+  --replay --no-acquire --searches 3 --now 2026-10-16T06:00:00Z
+backend/.venv/bin/python scripts/measure_db_egress.py pages --template swell_u3i_live_run \
+  --providers open_meteo,open_meteo_ecmwf --publish --now 2026-10-16T06:00:00Z
+```
+
+Each run creates a scratch database (`--database`, default `swell_egress_<pid>`), drops it
+afterwards unless `--keep-db`, never writes to the template, and prints the table; `--json
+FILE` saves it. `--backend-dir` measures another checkout of `backend/` (the "before"
+numbers above), and `--part MODULE:ATTR:'<stage> > <name>'` counts one more function.
 
 ## Earlier measurements (before the forecast upgrade)
 
@@ -780,6 +996,13 @@ mean of the raw `global.0p25` cells around that node (1.82 MB download).
   the badge means a cycle was missed or is late (the cost: a real miss is flagged up to 3 h
   later than with 18 h). Adding `06,18` (about 0.97 GB a day more) is not enough on its own: the
   normal maximum is then 6 + 5 + 3 = 14 h, so about 15 h would be needed.
+* **Publications that stop.** Under `SYNC_PUBLISH_GATE` a map run that a sync stores but
+  never publishes is not shown, and retention keeps the last published run. If
+  publications stop (every sync failing in its publish stage), the map stays on that run,
+  flagged stale after `MAP_FIELD_STALE_AFTER_HOURS`, until its forecast run is deleted
+  by the run retention (`RETENTION_FORECAST_DAYS`, keeping the two newest runs of the
+  source); then the newest servable run is shown. `SYNC_PUBLISH_GATE=false` shows the
+  newest run at once.
 * GFS v17 (proposed) is expected to rename files, drop the 0.5° and 1° atmosphere files
   and move WW3 to an unstructured grid. The path templates are configuration and the
   atmosphere falls back to `pgrb2.0p25` per hour, but the `global.0p25` wave grid may

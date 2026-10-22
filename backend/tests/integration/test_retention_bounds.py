@@ -1,5 +1,5 @@
 """Storage bounds: the archive's confidence digest, pruning the predictions of superseded
-member runs and the retention of quality-controlled observations.
+member runs, the retention of quality-controlled observations and of sync_runs rows.
 
 Every forecast value and observation here is SYNTHETIC test data written by the test.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -19,6 +19,7 @@ from app.models import (
     ForecastRun,
     PredictionArchive,
     SurfQualityPrediction,
+    SyncRun,
 )
 from app.services.forecasts import blend, queries
 from app.services.forecasts.archive import confidence_digest
@@ -271,3 +272,50 @@ def test_quality_controlled_observations_follow_their_own_retention(
     monkeypatch.setattr(settings, "observation_retention_days", 365)
     assert cleanup(db, NOW)["buoy_observations"] == 2
     assert db.scalar(select(func.count()).select_from(BuoyObservation)) == 0
+
+
+def test_cleanup_keeps_sync_runs_for_the_job_log_retention_and_the_newest_publication(
+    db: Session,
+) -> None:
+    """sync_runs rows (one per sync; SYNTHETIC rows here) follow RETENTION_JOB_LOG_DAYS,
+    except the newest publication, which the map index reads, and a row still marked
+    running, whose lease the next sync settles (it marks it abandoned)."""
+    days = get_settings().retention_job_log_days
+    old = NOW - timedelta(days=days + 1)
+    recent = NOW - timedelta(days=days - 1)
+
+    def row(started: datetime, status: str = "success", published: bool = False) -> SyncRun:
+        r = SyncRun(
+            trigger="daemon",
+            status=status,
+            started_at=started,
+            published_at=started + timedelta(minutes=5) if published else None,
+        )
+        db.add(r)
+        db.flush()
+        return r
+
+    old_published = row(old - timedelta(days=1), published=True)
+    newest_published = row(old, published=True)  # old, but the newest publication
+    old_plain = row(old, status="skipped")
+    old_failed = row(old - timedelta(hours=1), status="failed")
+    stuck = row(old, status="running")
+    kept_recent = row(recent, status="partial")
+    db.commit()
+
+    out = cleanup(db, NOW)
+
+    assert out["sync_runs"] == 3
+    left = set(db.scalars(select(SyncRun.id)))
+    assert left == {newest_published.id, stuck.id, kept_recent.id}
+    assert not left & {old_published.id, old_plain.id, old_failed.id}
+    # A newer publication makes the old one deletable at the next cleanup.
+    row(recent, published=True)
+    db.commit()
+    assert cleanup(db, NOW)["sync_runs"] == 1
+    assert newest_published.id not in set(db.scalars(select(SyncRun.id)))
+    # Nothing published at all: plain age-based retention.
+    db.execute(delete(SyncRun))
+    row(old, status="skipped")
+    db.commit()
+    assert cleanup(db, NOW)["sync_runs"] == 1

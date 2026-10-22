@@ -20,11 +20,18 @@ Map hours and cycles, in every mode: :func:`map_field_hours` (MAP_FIELD_STEPS, d
 3-hourly to f120 then 6-hourly to f240, i.e. 61 hours, capped at MAP_FIELD_MAX_LEAD_HOURS)
 of the cycles in MAP_FIELD_CYCLES (:func:`is_map_cycle`, default 00 and 12 UTC).
 
-The read side serves whatever is stored, from the newest run (by model cycle) with at
-least one complete valid time, so it does not depend on the mode; ``run`` picks another
-retained run. A valid time is complete when all six core variables
-(``CORE_MAP_FIELD_VARIABLES``) exist; the optional partition variables never make it
-incomplete, and the index lists a partition only when the served run stores it.
+The read side serves whatever is stored, so it does not depend on the mode: the run of the
+newest sync publication when SYNC_PUBLISH_GATE is on and that run is still servable
+(the publish stage of a sync sets ``sync_runs.map_run_id``, so the map switches to a new
+cycle together with the spot forecasts), otherwise the newest run (by model cycle) with at
+least one complete valid time; ``run`` picks another retained run. A valid time is complete
+when all six core variables (``CORE_MAP_FIELD_VARIABLES``) exist; the optional partition
+variables never make it incomplete, and the index lists a partition only when the served
+run stores it.
+
+Database egress (docs/map-layers.md): the index reads aggregates and a few columns, never
+field bytes; a field is one row read through a binary cursor (bytea in psycopg's default
+text format arrives hex-encoded, two bytes on the wire for every byte stored).
 """
 
 from __future__ import annotations
@@ -34,18 +41,20 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Row, Select, bindparam, func, select
+from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
-from app.models import ForecastRun
+from app.models import ForecastRun, ForecastSource
 from app.models.forecast_engine import (
     CORE_MAP_FIELD_VARIABLES,
     MAP_FIELD_VARIABLES,
     PARTITION_MAP_FIELD_VARIABLES,
     MapField,
 )
+from app.models.sync import SyncRun
 from app.schemas.map_fields import (
     FieldIndexOut,
     FieldMeta,
@@ -53,6 +62,7 @@ from app.schemas.map_fields import (
     FieldVariableOut,
     WaveSystem,
 )
+from app.services.sync.published import published_map_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +202,7 @@ def _unavailable_message(settings: Settings) -> str:
 
 @dataclass(frozen=True)
 class _CurrentRun:
-    run: ForecastRun
+    run_id: int
     cycle_time: datetime
     valid_times: list[datetime]  # times at which all six core variables exist
 
@@ -240,28 +250,55 @@ def servable_runs(db: Session, limit: int | None = None) -> list[ServableRun]:
     return [ServableRun(r, c, n) for r, c, n in db.execute(servable_runs_query(limit)).all()]
 
 
-def _current_run(db: Session, run_key: str | None = None) -> _CurrentRun | None:
-    """The newest run (by model cycle) that has at least one complete valid time, or with
-    ``run_key`` the best retained run of that key (RunNotRetained if there is none).
+def _publication(db: Session) -> Row[int, datetime | None, int | None] | None:
+    """(id, published_at, map_run_id) of the newest sync publication: the row
+    ``app.services.sync.published.latest_publication`` returns (same filter and order),
+    without its plan and stages."""
+    return db.execute(
+        select(SyncRun.id, SyncRun.published_at, SyncRun.map_run_id)
+        .where(SyncRun.published_at.is_not(None))
+        .order_by(SyncRun.published_at.desc(), SyncRun.id.desc())
+        .limit(1)
+    ).one_or_none()
 
-    Ties within one cycle as in :func:`servable_runs`. Reads only (run, valid time,
-    variable count) aggregates: no field bytes are loaded.
-    """
-    if run_key is None:
-        best = servable_runs(db, limit=1)
-    else:
+
+def _served(db: Session, run_key: str | None, published_run_id: int | None) -> ServableRun | None:
+    """The run to serve: with ``run_key`` the best retained run of that key
+    (RunNotRetained if there is none); otherwise ``published_run_id`` when it is servable,
+    else the best servable run (see servable_runs)."""
+    if run_key is not None:
         ids = set(db.scalars(select(ForecastRun.id).where(ForecastRun.run_key == run_key)))
         best = [r for r in servable_runs(db) if r.run_id in ids][:1] if ids else []
         if not best:
             raise RunNotRetained(run_key)
-    if not best:
+        return best[0]
+    if published_run_id is not None:
+        runs = servable_runs(db)
+        published = [r for r in runs if r.run_id == published_run_id]
+        chosen = published or runs
+        return chosen[0] if chosen else None
+    found = servable_runs(db, limit=1)
+    return found[0] if found else None
+
+
+def _current_run(
+    db: Session, run_key: str | None = None, published_run_id: int | None = None
+) -> _CurrentRun | None:
+    """The run served (see :func:`_served`; ``published_run_id`` is the gate's run, None
+    when SYNC_PUBLISH_GATE is off or nothing was published) and its complete valid times.
+
+    Ties within one cycle as in :func:`servable_runs`. Reads only (run, valid time,
+    variable count) aggregates: no field bytes are loaded.
+    """
+    best = _served(db, run_key, published_run_id)
+    if best is None:
         return None
     counts = db.execute(
         select(
             MapField.valid_time,
             func.count(func.distinct(MapField.variable)).filter(MapField.variable.in_(CORE_NAMES)),
         )
-        .where(MapField.run_id == best[0].run_id)
+        .where(MapField.run_id == best.run_id)
         .group_by(MapField.valid_time)
         .order_by(MapField.valid_time)
     ).all()
@@ -271,16 +308,27 @@ def _current_run(db: Session, run_key: str | None = None) -> _CurrentRun | None:
         logger.info(
             "map fields run %s: %d valid time(s) lack a core variable and are not served "
             "(first %s)",
-            best[0].run_id,
+            best.run_id,
             len(incomplete),
             incomplete[0].isoformat(),
         )
-    run = db.get(ForecastRun, best[0].run_id)
-    if run is None or not complete:
+    if not complete:
         if run_key is not None:
             raise RunNotRetained(run_key)
         return None
-    return _CurrentRun(run, best[0].cycle_time, complete)
+    return _CurrentRun(best.run_id, best.cycle_time, complete)
+
+
+def _gated_run_id(db: Session, settings: Settings) -> int | None:
+    """The map run of the newest publication when SYNC_PUBLISH_GATE is on, else None."""
+    return published_map_run_id(db) if settings.sync_publish_gate else None
+
+
+def served_run(db: Session) -> ServableRun | None:
+    """The run the index and run-less field requests serve: the newest publication's map
+    run while SYNC_PUBLISH_GATE is on and it is servable, else the best servable run. For
+    readers that judge what the map shows (e.g. its freshness in the data-health check)."""
+    return _served(db, None, _gated_run_id(db, get_settings()))
 
 
 def stored_systems(db: Session, run_id: int, times: list[datetime]) -> list[WaveSystem]:
@@ -319,39 +367,61 @@ def _variable_out(name: str) -> FieldVariableOut:
 
 
 def field_index(db: Session, now: datetime | None = None) -> FieldIndexOut:
-    """Which fields exist for the newest model run, their valid times and their freshness.
+    """Which fields exist for the served model run, their valid times and their freshness.
+
+    The served run is the newest publication's map run (SYNC_PUBLISH_GATE) while it is
+    servable, else the newest servable run. ``published_at`` and ``sync_run_id`` name the
+    newest publication when the served run is the one it published (None otherwise, e.g.
+    before the first sync or after a fallback).
 
     ``age_hours`` is ``now - cycle_time`` (the model cycle, not the download); the index is
     ``stale`` beyond MAP_FIELD_STALE_AFTER_HOURS. The layers are still served when stale.
     """
     settings = get_settings()
     limit = settings.map_field_stale_after_hours
-    current = _current_run(db)
-    if current is None:
+    publication = _publication(db)
+    published_run_id = publication.map_run_id if publication is not None else None
+    current = _current_run(db, None, published_run_id if settings.sync_publish_gate else None)
+    run = (
+        db.execute(
+            select(
+                ForecastRun.run_key,
+                ForecastRun.completed_at,
+                ForecastSource.code,
+                ForecastSource.name,
+                ForecastSource.attribution,
+                ForecastSource.is_demo,
+            )
+            .join(ForecastSource, ForecastSource.id == ForecastRun.source_id)
+            .where(ForecastRun.id == current.run_id)
+        ).one_or_none()
+        if current is not None
+        else None
+    )
+    if current is None or run is None:
         return FieldIndexOut(
             available=False, message=_unavailable_message(settings), stale_after_hours=limit
         )
     now = _as_utc(now) if now is not None else utcnow()
     age = (now - current.cycle_time).total_seconds() / 3600.0
-    systems = stored_systems(db, current.run.id, current.valid_times)
+    systems = stored_systems(db, current.run_id, current.valid_times)
     names = [*CORE_NAMES, *(v for s in systems for v in SYSTEM_VARIABLES[s])]
-    source = current.run.source
+    published = publication is not None and publication.map_run_id == current.run_id
     return FieldIndexOut(
         available=True,
         source=FieldSourceOut(
-            code=source.code,
-            name=source.name,
-            attribution=source.attribution,
-            is_demo=source.is_demo,
+            code=run.code, name=run.name, attribution=run.attribution, is_demo=run.is_demo
         ),
-        run_key=current.run.run_key,
+        run_key=run.run_key,
         cycle_time=current.cycle_time,
         valid_times=current.valid_times,
         variables=[_variable_out(name) for name in names],
-        updated_at=current.run.completed_at,
+        updated_at=run.completed_at,
         age_hours=round(age, 2),
         stale_after_hours=limit,
         stale=age > limit,
+        published_at=publication.published_at if publication is not None and published else None,
+        sync_run_id=publication.id if publication is not None and published else None,
     )
 
 
@@ -359,23 +429,78 @@ def _as_utc(when: datetime) -> datetime:
     return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
 
 
+def same_instant(at: datetime, valid_time: datetime) -> bool:
+    """True if ``at`` (naive = UTC, as field_bytes reads it) is the instant ``valid_time``."""
+    try:
+        return _as_utc(at) == _as_utc(valid_time)
+    except OverflowError:
+        return False
+
+
+# One field row, metadata and bytes, read through a binary cursor (see _field_row).
+_FIELD_ROW = select(
+    MapField.nx,
+    MapField.ny,
+    MapField.lat0,
+    MapField.lon0,
+    MapField.dlat,
+    MapField.dlon,
+    MapField.scale,
+    MapField.offset,
+    MapField.valid_time,
+    MapField.run_key,
+    MapField.data,
+).where(
+    MapField.run_id == bindparam("run_id"),
+    MapField.variable == bindparam("variable"),
+    MapField.valid_time == bindparam("valid_time"),
+)
+_FIELD_ROW_SQL: dict[str, str] = {}
+
+
+def _field_row_sql(dialect: Dialect) -> str:
+    sql = _FIELD_ROW_SQL.get(dialect.name)
+    if sql is None:
+        sql = _FIELD_ROW_SQL[dialect.name] = str(_FIELD_ROW.compile(dialect=dialect))
+    return sql
+
+
+def _field_row(
+    db: Session, run_id: int, variable: str, valid_time: datetime
+) -> tuple[Any, ...] | None:
+    """The stored field (``_FIELD_ROW`` columns) through a psycopg binary cursor on the
+    session's own connection and transaction: bytea comes back as its raw bytes instead of
+    hex text, so the database sends about the field's size, not twice it."""
+    connection = db.connection()
+    driver = connection.connection.driver_connection
+    params = {"run_id": run_id, "variable": variable, "valid_time": valid_time}
+    with driver.cursor(binary=True) as cursor:  # type: ignore[union-attr]
+        cursor.execute(_field_row_sql(connection.dialect), params)
+        row: tuple[Any, ...] | None = cursor.fetchone()
+    return row
+
+
 def field_bytes(
     db: Session, variable: str, at: datetime | None, run: str | None = None
 ) -> tuple[FieldMeta, bytes] | None:
-    """One field of the current run (or of the retained run ``run``, a run_key) at the
+    """One field of the served run (or of the retained run ``run``, a run_key) at the
     stored valid time nearest to ``at``.
 
-    ``at`` defaults to now; a naive value is taken as UTC. Only the run's complete valid
-    times (the ones the index lists) are candidates; on a tie the earlier time wins. Model
-    values are never interpolated in time. Returns None when ``at`` lies further before the
-    run's first or after its last valid time than one configured map step there
-    (MAP_FIELD_STEPS: 3 h near the start, 6 h after f120 by default), when the variable is
-    unknown, or when the run does not store it at that time (e.g. a partition). Raises
-    RunNotRetained when ``run`` names no retained run.
+    Without ``run`` the served run is the index's (the newest publication's run while
+    SYNC_PUBLISH_GATE is on and it is servable, else the newest servable run). ``at``
+    defaults to now; a naive value is taken as UTC. Only the run's complete valid times
+    (the ones the index lists) are candidates; on a tie the earlier time wins. Model values
+    are never interpolated in time. Returns None when ``at`` lies further before the run's
+    first or after its last valid time than one configured map step there (MAP_FIELD_STEPS:
+    3 h near the start, 6 h after f120 by default), when the variable is unknown, or when
+    the run does not store it at that time (e.g. a partition). Raises RunNotRetained when
+    ``run`` names no retained run.
     """
     if variable not in MAP_FIELD_VARIABLES:
         return None
-    current = _current_run(db, run)
+    settings = get_settings()
+    gated = _gated_run_id(db, settings) if run is None else None
+    current = _current_run(db, run, gated)
     if current is None:
         return None
     try:
@@ -383,7 +508,6 @@ def field_bytes(
     except OverflowError:
         return None  # e.g. 0001-01-01T00:00+05:00: no stored field is anywhere near it
     times = current.valid_times
-    settings = get_settings()
 
     def lead(t: datetime) -> float:
         return (t - current.cycle_time).total_seconds() / 3600.0
@@ -393,44 +517,23 @@ def field_bytes(
     if when < times[0] - before or when > times[-1] + after:
         return None
     nearest = min(times, key=lambda t: (abs(t - when), t))
-    # Metadata first, then the bytes of this one row only.
-    row = db.execute(
-        select(
-            MapField.id,
-            MapField.nx,
-            MapField.ny,
-            MapField.lat0,
-            MapField.lon0,
-            MapField.dlat,
-            MapField.dlon,
-            MapField.scale,
-            MapField.offset,
-            MapField.valid_time,
-            MapField.run_key,
-        ).where(
-            MapField.run_id == current.run.id,
-            MapField.variable == variable,
-            MapField.valid_time == nearest,
-        )
-    ).one_or_none()
-    if row is None:
+    row = _field_row(db, current.run_id, variable, nearest)
+    if row is None or row[-1] is None:
         return None
-    data = db.scalar(select(MapField.data).where(MapField.id == row.id))
-    if data is None:
-        return None
+    nx, ny, lat0, lon0, dlat, dlon, scale, offset, valid_time, run_key, data = row
     meta = FieldMeta(
         variable=variable,
         group="partition" if variable in PARTITION_MAP_FIELD_VARIABLES else "core",
         unit=MAP_FIELD_VARIABLES[variable],
-        valid_time=row.valid_time,
-        run_key=row.run_key,
-        nx=row.nx,
-        ny=row.ny,
-        lat0=row.lat0,
-        lon0=row.lon0,
-        dlat=row.dlat,
-        dlon=row.dlon,
-        scale=row.scale,
-        offset=row.offset,
+        valid_time=valid_time,
+        run_key=run_key,
+        nx=nx,
+        ny=ny,
+        lat0=lat0,
+        lon0=lon0,
+        dlat=dlat,
+        dlon=dlon,
+        scale=scale,
+        offset=offset,
     )
     return meta, bytes(data)

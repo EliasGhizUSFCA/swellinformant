@@ -8,13 +8,16 @@
   source and every run that is authoritative for some spot keep theirs; blend predictions
   are never pruned here;
 * map fields (the map's ocean layers, about 0.1 MB per field and 0.5 deg) are kept for the
-  two best servable runs only (:func:`prune_map_fields`, also run after every acquisition
-  that stores fields); other map_fields rows are deleted (a deleted forecast run also
-  takes its fields with it);
+  two best servable runs and the run of the newest sync publication (the run the map
+  serves under SYNC_PUBLISH_GATE) only (:func:`prune_map_fields`, also run after every
+  acquisition that stores fields and by every sync's prune stage, :func:`prune_pass`);
+  other map_fields rows are deleted (a deleted forecast run also takes its fields with it);
 * flight searches older than RETENTION_FLIGHT_DAYS are deleted unless an offer is still
   referenced by an open opportunity;
 * matches whose surf window has passed become EXPIRED;
-* expired/used auth tokens, expired sessions and old job logs are removed;
+* expired/used auth tokens, expired sessions and old job logs are removed; so are sync_runs
+  rows started more than RETENTION_JOB_LOG_DAYS ago, except the newest publication (the
+  map index reads it) and a row still marked running (the next sync settles its lease);
 * notifications older than RETENTION_NOTIFICATION_DAYS are deleted;
 * the prediction archive, forecasts at observation stations, buoy observations and
   verification pairs are kept for RETENTION_ARCHIVE_DAYS (they are the only record of
@@ -29,7 +32,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, delete, exists, func, or_, select, update
+from sqlalchemy import Select, and_, delete, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -53,6 +56,7 @@ from app.models import (
 )
 from app.models.enums import ForecastRunStatus, MatchStatus
 from app.models.forecast_engine import MapField
+from app.models.sync import SyncRun
 from app.services.forecasts.queries import PREDICTIONS_PRUNED_KEY, latest_runs_by_spot
 from app.services.map_fields import servable_runs_query
 from app.services.tides.maintenance import prune_tide_predictions
@@ -112,11 +116,25 @@ def prune_superseded_predictions(db: Session, now: datetime | None = None) -> in
     return db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
 
 
+def _newest_publication_id() -> Select[int]:
+    """The id of the newest sync publication, as app.services.sync.published orders them."""
+    return (
+        select(SyncRun.id)
+        .where(SyncRun.published_at.is_not(None))
+        .order_by(SyncRun.published_at.desc(), SyncRun.id.desc())
+        .limit(1)
+    )
+
+
 def prune_map_fields(db: Session, keep: int = MAP_FIELD_RUNS_KEPT) -> int:
-    """Delete the map fields of every run but the ``keep`` best servable ones.
+    """Delete the map fields of every run but the ``keep`` best servable ones and the map
+    run of the newest sync publication.
 
     "Best" is the read side's order (``map_fields.servable_runs``: newest cycle, then the
-    most complete valid times, then the newer run), so the served run is always kept.
+    most complete valid times, then the newer run). The served run is always kept: it is
+    the published run under SYNC_PUBLISH_GATE, otherwise the best one. Normally the
+    published run is one of the two best anyway (a sync stores one new map run, then
+    publishes it); only while newer runs wait for their publication is a third run kept.
     Rows of runs without a single complete valid time are never served and go too
     (a failed fields run that is retried re-fetches every hour anyway). Returns the
     number of rows deleted; the caller commits.
@@ -125,20 +143,41 @@ def prune_map_fields(db: Session, keep: int = MAP_FIELD_RUNS_KEPT) -> int:
     fields another acquisition commits meanwhile are neither seen nor deleted.
     """
     best = servable_runs_query(limit=keep).subquery()
-    stmt = delete(MapField).where(MapField.run_id.notin_(select(best.c.run_id)))
+    published = select(SyncRun.map_run_id).where(
+        SyncRun.id.in_(_newest_publication_id()), SyncRun.map_run_id.is_not(None)
+    )
+    stmt = delete(MapField).where(
+        MapField.run_id.notin_(select(best.c.run_id)), MapField.run_id.notin_(published)
+    )
     return db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
 
 
 def prune_pass(db: Session, now: datetime | None = None) -> dict[str, int]:
-    """The light prune a sync runs after publishing (SYNC_PRUNE_EACH_PASS): superseded
-    member predictions (when PRUNE_SUPERSEDED_MEMBER_PREDICTIONS) and the map fields of
-    runs that are no longer among the best servable ones. Commits; returns rows deleted."""
+    """The light prune a sync runs after publishing (its ``prune`` stage, when
+    SYNC_PRUNE_EACH_PASS): the map fields of runs that are neither among the two best
+    servable ones nor published (:func:`prune_map_fields`), then the predictions of
+    superseded member runs (:func:`prune_superseded_predictions`, when
+    PRUNE_SUPERSEDED_MEMBER_PREDICTIONS). Both are derived data the sync can recompute; the
+    rest of the retention policy stays with the daily :func:`cleanup`. Commits; returns
+    the rows deleted, ``{"superseded_predictions", "map_fields"}``."""
     out = {"superseded_predictions": 0, "map_fields": prune_map_fields(db)}
     if get_settings().prune_superseded_member_predictions:
         out["superseded_predictions"] = prune_superseded_predictions(db, now)
     db.commit()
     logger.info("Prune pass: %s", out)
     return out
+
+
+def prune_sync_runs(db: Session, now: datetime) -> int:
+    """Delete sync_runs rows started more than RETENTION_JOB_LOG_DAYS before ``now``, except
+    the newest publication and rows still marked running. The caller commits."""
+    cutoff = now - timedelta(days=get_settings().retention_job_log_days)
+    stmt = delete(SyncRun).where(
+        SyncRun.started_at < cutoff,
+        SyncRun.status != "running",
+        SyncRun.id.notin_(_newest_publication_id()),
+    )
+    return db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
 
 
 def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
@@ -233,6 +272,7 @@ def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
         ).rowcount
         or 0
     )
+    out["sync_runs"] = prune_sync_runs(db, now)
     out["notifications"] = (
         db.execute(  # type: ignore[attr-defined]
             delete(Notification).where(

@@ -21,15 +21,24 @@ and the reason sentences (they follow from the rules and the method version), an
 per-variable research classes (they follow from the research assessment id). Measured on
 the 3,950 archive rows of the real 2026-10-11 blend (``swell_live2``): the inputs take
 1,222 B of a 1,506 B row, the digest 278 B, so a row is 562 B (docs/operations.md).
+
+Database egress (docs/map-layers.md, "Database egress, measured"): the archive reads only
+what it stores. The 3-hourly valid times and the lead window are selected in SQL, and the
+query returns plain rows of the archived columns (:data:`ARCHIVED_COLUMNS`), not ORM
+entities: a column that is not selected raises AttributeError instead of loading lazily,
+nothing is left half-loaded in the session (``load_only(..., raiseload=True)`` entities
+would stay in the identity map and raise for a later ``db.get`` of the same row), and the
+prediction's joined ``forecast`` relationship, which repeated every wave_forecasts column,
+is not read. One demo pass: 88.1 MB before, 5.1 MB after.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Select, extract, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -53,6 +62,27 @@ OFFSHORE_FIELDS = (
     "wind_direction_deg",
 )
 
+
+# The columns archive_authoritative reads: the archived prediction values and the offshore
+# inputs (no name is in both tables).
+ARCHIVED_COLUMNS = (
+    SurfQualityPrediction.spot_id,
+    SurfQualityPrediction.valid_time,
+    SurfQualityPrediction.breaking_height_mid_ft,
+    SurfQualityPrediction.breaking_p10_ft,
+    SurfQualityPrediction.breaking_p90_ft,
+    SurfQualityPrediction.uncertainty_kind,
+    SurfQualityPrediction.score,
+    SurfQualityPrediction.confidence,
+    SurfQualityPrediction.breaking_height_method,
+    SurfQualityPrediction.algorithm_version,
+    SurfQualityPrediction.ml_model_version,
+    SurfQualityPrediction.forecast_confidence_class,
+    SurfQualityPrediction.local_confidence_class,
+    SurfQualityPrediction.confidence_method,
+    SurfQualityPrediction.confidence_inputs,
+    *(getattr(WaveForecast, k) for k in OFFSHORE_FIELDS),
+)
 
 DIGEST_VERSION = 1
 
@@ -101,6 +131,24 @@ def _research_class(inputs: dict[str, Any] | None) -> str | None:
     return str(value) if value else None
 
 
+def _archived_rows(run_id: int, spot_ids: list[int], issued_at: datetime) -> Select[Any]:
+    """The run's archived rows (:data:`ARCHIVED_COLUMNS`): valid times on the 3-hourly UTC
+    grid (ARCHIVE_STEP_HOURS) from 6 h before ``issued_at`` to ARCHIVE_MAX_LEAD_HOURS after
+    it, inclusive, for ``spot_ids``."""
+    hour = extract("hour", func.timezone("UTC", SurfQualityPrediction.valid_time))
+    return (
+        select(*ARCHIVED_COLUMNS)
+        .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
+        .where(
+            SurfQualityPrediction.run_id == run_id,
+            SurfQualityPrediction.spot_id.in_(spot_ids),
+            hour % ARCHIVE_STEP_HOURS == 0,
+            SurfQualityPrediction.valid_time >= issued_at - timedelta(hours=6),
+            SurfQualityPrediction.valid_time <= issued_at + timedelta(hours=ARCHIVE_MAX_LEAD_HOURS),
+        )
+    )
+
+
 def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str, int]:
     use_digest = get_settings().archive_confidence_digest
     chosen = latest_runs_by_spot(db, now)
@@ -115,20 +163,8 @@ def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str,
     for run_id, spot_ids in by_run.items():
         run = runs[run_id]
         rows: list[dict[str, Any]] = []
-        for pred, fc in db.execute(
-            select(SurfQualityPrediction, WaveForecast)
-            .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
-            .where(
-                SurfQualityPrediction.run_id == run_id,
-                SurfQualityPrediction.spot_id.in_(spot_ids),
-            )
-        ):
+        for pred in db.execute(_archived_rows(run_id, spot_ids, run.issued_at)):
             lead = (pred.valid_time - run.issued_at).total_seconds() / 3600.0
-            if (
-                pred.valid_time.hour % ARCHIVE_STEP_HOURS
-                or not -6 <= lead <= ARCHIVE_MAX_LEAD_HOURS
-            ):
-                continue
             rows.append(
                 {
                     "spot_id": pred.spot_id,
@@ -137,7 +173,7 @@ def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str,
                     "issued_at": run.issued_at,
                     "valid_time": pred.valid_time,
                     "lead_hours": round(lead, 2),
-                    **{k: getattr(fc, k) for k in OFFSHORE_FIELDS},
+                    **{k: getattr(pred, k) for k in OFFSHORE_FIELDS},
                     "breaking_height_mid_ft": pred.breaking_height_mid_ft,
                     "breaking_p10_ft": pred.breaking_p10_ft,
                     "breaking_p90_ft": pred.breaking_p90_ft,
