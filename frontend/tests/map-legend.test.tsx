@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { leadText, LegendDrawer } from "@/components/map/legend-drawer";
 import { publishMapFlowStatus } from "@/hooks/map-fields";
-import { LAYER_SCALES } from "@/lib/map-colors";
+import { colorAtValue, LAYER_SCALES, rgbToHex, WAVE_HEIGHT_RAMP } from "@/lib/map-colors";
 import type { FieldIndex } from "@/lib/map-fields";
 import { DEFAULT_SETTINGS } from "@/lib/map-settings";
+import { BLOB_PROFILE, dashTint } from "@/lib/map-waves";
 
 // The index below is SYNTHETIC test data.
 const INDEX: FieldIndex = {
@@ -43,15 +44,23 @@ describe("map legend", () => {
     act(() => publishMapFlowStatus({ systems: ["secondary", "primary"], waveMode: "animated", validTime: "2026-10-14T12:00:00Z", zoom: 2, centreLat: 0 }));
     legend(INDEX);
     const items = screen.getByRole("list", { name: "Wave systems drawn" }).querySelectorAll("li");
-    expect([...items].map((li) => li.textContent)).toEqual(["Primary swell (white dashes)", "Secondary swell (split amber dashes)"]);
-    // Each system's swatch is drawn in its own dash shape: two solid dashes, two split dashes.
+    expect([...items].map((li) => li.textContent)).toEqual(["Primary swell (light tinted blobs)", "Secondary swell (split amber bars)"]);
+    // Each system's swatch is drawn in its own dash shape on a patch of a typical (2.5 m) sea:
+    // two soft blobs with the map's falloff for the primary, two split bars for the secondary.
     const swatch = (system: string) => screen.getByTestId("legend-crests").querySelector(`svg[data-swatch="${system}"]`)!;
-    expect(swatch("primary").querySelectorAll("line").length).toBe(2 * 2); // halo + core per dash
-    expect(swatch("secondary").querySelectorAll("line").length).toBe(4 * 2); // each dash split in two
-    // Behind each primary dash its fading trail in the map's two steps; the secondary's split dashes have none.
-    expect(swatch("primary").querySelectorAll("rect[data-trail]").length).toBe(2 * 2);
-    expect(swatch("secondary").querySelectorAll("rect[data-trail]").length).toBe(0);
-    expect(screen.getByTestId("legend-crests").textContent).toContain("the faint trail behind a white or cyan dash is where it just was");
+    expect(swatch("primary").querySelectorAll("rect[data-blob]").length).toBe(2);
+    expect(swatch("primary").querySelectorAll("rect[data-bar]").length).toBe(0);
+    expect(swatch("secondary").querySelectorAll("rect[data-bar]").length).toBe(2 * 2); // each dash split in two
+    expect(swatch("secondary").querySelectorAll("rect[data-blob]").length).toBe(0);
+    const stops = [...swatch("primary").querySelectorAll("linearGradient stop")];
+    expect(stops.map((st) => Number(st.getAttribute("offset")))).toEqual(BLOB_PROFILE.map((p) => p.at));
+    // The blobs are a lighter tint of the sea patch under them, not white.
+    const sea = swatch("primary").querySelector("rect:not([data-blob])")!.getAttribute("fill");
+    expect(sea).toBe(rgbToHex(colorAtValue(WAVE_HEIGHT_RAMP, 2.5)));
+    expect(stops[0]!.getAttribute("stop-color")).toBe(`rgb(${dashTint(colorAtValue(WAVE_HEIGHT_RAMP, 2.5), "primary").join(", ")})`);
+    expect(stops[0]!.getAttribute("stop-color")).not.toBe("rgb(255, 255, 255)");
+    expect(screen.getByTestId("legend-crests").textContent).toContain("the bright edge is the crest, the fading smear behind it where it just was");
+    expect(screen.getByTestId("legend-crests").textContent).toContain("each is a lighter tint of the colour under it");
     expect(screen.getByTestId("legend-crests").textContent).toContain("Short dashes are wave crests moving with the waves");
     expect(screen.getByTestId("legend-scales").textContent).toBe("Crest spacing ×4,700 at the map centre; time runs 4× faster than real.");
     expect(screen.getByTestId("legend-crests").textContent).toContain("Stylised crests from the forecast model, not individual waves.");

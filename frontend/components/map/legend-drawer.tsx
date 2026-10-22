@@ -1,17 +1,17 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useMemo } from "react";
+import { useId, useMemo, type JSX } from "react";
 
 import { DemoBadge } from "@/components/quality";
 import { useMapFlowStatus } from "@/hooks/map-fields";
 import { ARROW_CONVENTION_TEXT } from "@/lib/directions";
 import { formatDateTime, formatSpotDateTime } from "@/lib/format";
-import { cssGradient, type LayerScale } from "@/lib/map-colors";
+import { colorAtValue, cssGradient, rgbToHex, WAVE_HEIGHT_RAMP, type LayerScale } from "@/lib/map-colors";
 import type { FieldIndex } from "@/lib/map-fields";
 import { layerDef, layerUnit, legendTicks, type DisplayUnits } from "@/lib/map-layers";
 import type { MapSettings } from "@/lib/map-settings";
-import { DASH_PASSES, FAMILY_STYLES, scaleStatement, TRAIL_STEPS, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
+import { BLOB_MAX_DEPTH_SHARE, BLOB_PROFILE, dashTint, FAMILY_STYLES, scaleStatement, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
 import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_COLORS_DARK, QUALITY_LABELS } from "@/lib/quality";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
@@ -25,59 +25,51 @@ export function markerLegend(basemap: MapSettings["basemap"]): Array<{ label: st
   return [{ label: "No usable forecast", color: NO_FORECAST_COLOR }, ...(Object.keys(ramp) as QualityLabel[]).map((q) => ({ label: QUALITY_LABELS[q], color: ramp[q] }))];
 }
 
+/** The sea colour the swatches are drawn on: the Wave Height ramp at 2.5 m, a typical sea. */
+const SWATCH_SEA_M = 2.5;
+
 /**
- * A few crest dashes in a wave system's colour and shape, as the map draws them (section 4.6
- * of docs/map-rendering.md): a soft halo under a round-capped core and, for the systems that
- * have one, the trail of where the dash just was behind it (the whole band, then its front
- * half). Two solid dashes for the primary swell and the combined sea, two split dashes for the
- * secondary swell (no trail), three short dashes for the wind sea. The swatch's dashes lie
- * along it and move up (their trails hang below them).
+ * A few crest dashes in a wave system's shape and tint, as the map draws them (section 4.6 of
+ * docs/map-rendering.md), on a patch of a typical sea: soft blobs with a bright leading edge
+ * and a smear fading behind it (two for the primary swell and the combined sea, three short
+ * ones for the wind sea), or two thin split bars for the secondary swell. Each is a lighter
+ * tint of the sea under it, mixed with the system's own colour for the partitions. The
+ * swatch's dashes lie along it and move up (their smears hang below them).
  */
 export function CrestSwatch({ system, className }: { system: WaveSystem; className?: string }) {
+  const id = useId();
   const s = FAMILY_STYLES[system];
-  const core = 2 * s.widthFactor;
-  const count = s.lengthFactor < 0.7 ? 3 : 2;
-  const length = Math.min(11, 8 * s.lengthFactor);
+  const sea = colorAtValue(WAVE_HEIGHT_RAMP, SWATCH_SEA_M);
+  const [r, g, b] = dashTint(sea, system);
+  const tint = `rgb(${r}, ${g}, ${b})`;
+  const count = s.lengthFactor < 0.8 ? 3 : 2;
+  const length = Math.min(11, 8.5 * s.lengthFactor);
   const step = 26 / count;
-  const dashes: Array<[number, number]> = [];
-  const pieces: Array<[number, number]> = [];
+  const front = 2.5;
+  const gradient = `${id}-blob`;
+  const shapes: JSX.Element[] = [];
   for (let i = 0; i < count; i++) {
     const a = 1 + i * step + (step - length) / 2;
-    const b = a + length;
-    dashes.push([a, b]);
-    if (s.gap > 0) {
-      const mid = (a + b) / 2;
-      const g = (s.gap * length) / 2 + core / 2; // the core's gap between its round caps
-      pieces.push([a, mid - g], [mid + g, b]);
+    if (s.shape === "blob") {
+      shapes.push(<rect key={i} data-blob={i} x={a} y={front} width={length} height={Math.min(length * BLOB_MAX_DEPTH_SHARE, 5.5) * s.depthFactor} fill={`url(#${gradient})`} />);
     } else {
-      pieces.push([a, b]);
+      const piece = (length * (1 - s.gap)) / 2;
+      for (const [k, x] of [a, a + length - piece].entries()) {
+        shapes.push(<rect key={`${i}-${k}`} data-bar={i} x={x} y={front + 0.6} width={piece} height={1.6} fill={tint} />);
+      }
     }
   }
-  const front = 2.4;
-  const trail = 8 - front;
   return (
-    <svg viewBox="0 0 28 8" className={cn("h-2 w-7 shrink-0", className)} aria-hidden data-swatch={system}>
-      {s.trail &&
-        TRAIL_STEPS.map((t, k) =>
-          dashes.map(([a, b], i) => (
-            <rect key={`trail-${k}-${i}`} data-trail={k} x={a - core / 2} y={front} width={b - a + core} height={trail * t.length} fill={s.color} fillOpacity={0.95 * t.alpha} />
-          )),
-        )}
-      {DASH_PASSES.map((pass) =>
-        pieces.map(([a, b], i) => (
-          <line
-            key={`${pass.width}-${i}`}
-            x1={a}
-            y1={front}
-            x2={b}
-            y2={front}
-            stroke={s.color}
-            strokeOpacity={0.95 * pass.alpha}
-            strokeWidth={pass.width * core}
-            strokeLinecap="round"
-          />
-        )),
-      )}
+    <svg viewBox="0 0 28 10" className={cn("h-2.5 w-7 shrink-0 rounded-[2px]", className)} aria-hidden data-swatch={system}>
+      <defs>
+        <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
+          {BLOB_PROFILE.map((p) => (
+            <stop key={p.at} offset={p.at} stopColor={tint} stopOpacity={0.85 * p.alpha} />
+          ))}
+        </linearGradient>
+      </defs>
+      <rect width={28} height={10} rx={2} fill={rgbToHex(sea)} />
+      {shapes}
     </svg>
   );
 }
@@ -189,9 +181,10 @@ export function LegendDrawer({
                 ))}
               </ul>
               <p>
-                Short dashes are wave crests moving with the waves (a swell from the SW travels NE); the faint trail behind a white or cyan dash is
-                where it just was. Longer, brighter dashes are higher waves. Rows of dashes are one crest spacing apart. <span data-testid="legend-scales">{scaleStatement(status.zoom, status.centreLat)}</span> Each dash
-                fades in and out over three crest passages; the fades and the trails are display choices. Stylised crests from the forecast model, not individual waves.
+                Short dashes are wave crests moving with the waves (a swell from the SW travels NE): the bright edge is the crest, the fading smear
+                behind it where it just was. Bigger, brighter dashes are higher waves; each is a lighter tint of the colour under it. Rows are one
+                crest spacing apart. <span data-testid="legend-scales">{scaleStatement(status.zoom, status.centreLat)}</span> Fades and smears are
+                display choices. Stylised crests from the forecast model, not individual waves.
               </p>
               {crests.includes("combined") && (
                 <p className="mt-1 text-white/60">

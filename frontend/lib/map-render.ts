@@ -10,8 +10,8 @@
  * interpolated vector, the same value the hover readout and the particles use. (Interpolating
  * the node speeds instead gives up to ~3 m/s more where the wind turns between nodes.)
  */
-import { LUT_SIZE, type LayerScale } from "@/lib/map-colors";
-import { wrapsLongitude, type Grid } from "@/lib/map-fields";
+import { LUT_SIZE, scalePosition, type LayerScale } from "@/lib/map-colors";
+import { sampleGrid, wrapsLongitude, type Grid } from "@/lib/map-fields";
 import { mercLat, mercLon, type PixelView } from "@/lib/map-geo";
 
 export interface FieldPaint {
@@ -32,6 +32,18 @@ export interface PixelBuffer {
   data: Uint8ClampedArray;
   width: number;
   height: number;
+}
+
+/**
+ * Scale position (0..1; NaN without a value) of the painted field at one place: the bilinear
+ * value with the same minimum weight as renderField (for a vector field, the length of the
+ * interpolated vector), through the layer's transform. The crest dashes take their tint from
+ * it (components/map/wavefronts.ts).
+ */
+export function fieldPositionAt(p: Pick<FieldPaint, "grid" | "v" | "scale" | "minWeight">, lat: number, lon: number): number {
+  const u = sampleGrid(p.grid, lat, lon, p.minWeight);
+  const value = p.v ? Math.hypot(u, sampleGrid(p.v, lat, lon, p.minWeight)) : u;
+  return value === value ? scalePosition(p.scale, value) : NaN;
 }
 
 /** Fills `out` and returns the number of painted (non-transparent) pixels. */

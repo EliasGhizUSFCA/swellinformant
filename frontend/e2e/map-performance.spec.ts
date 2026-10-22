@@ -11,7 +11,10 @@ import { field, openMapWithFields, requested } from "./map-helpers";
  * synthetic fields with the earlier traced-crest renderer: draw time p95 4.5 ms without a
  * recorder, 6.7 ms with one). `trace` can only be set per file. The crest-dash frame cost is
  * measured once the layer has settled (see below). The dash thresholds are D11's: draw p95
- * at most 5 ms (the traced crests had 8 ms) and 12,000 vertices (they had 20,000).
+ * at most 5 ms (the traced crests had 8 ms) and 12,000 stroked path vertices (they had
+ * 20,000). Since integration the dashes are filled quads (one fillRect per blob, no path),
+ * so the frame is also held to the quad budget, MAX_FRAME_QUADS, which adapts to the device
+ * (docs/map-rendering.md section 4.8).
  */
 test.use({ viewport: { width: 1440, height: 900 }, trace: "off" });
 
@@ -58,6 +61,8 @@ test.describe("map frame cost (synthetic fields)", () => {
     const drawP95 = Number(await wave(page).getAttribute("data-draw-ms-p95"));
     const vertices = Number(await wave(page).getAttribute("data-vertices"));
     const dashes = Number(await wave(page).getAttribute("data-crests"));
+    const quads = Number(await wave(page).getAttribute("data-quads"));
+    const quadCap = Number(await wave(page).getAttribute("data-quad-cap"));
     await page.getByRole("radio", { name: "Wind Speed" }).click();
     const particles = page.locator("canvas.map-particle-canvas");
     await expect(particles).toHaveAttribute("data-mode", "animated");
@@ -68,7 +73,7 @@ test.describe("map frame cost (synthetic fields)", () => {
     await expect(particles).toHaveAttribute("data-mode", "off");
     const still = await perFrame(3000);
     const note =
-      `wave crest dashes: ${crests.scriptMs.toFixed(2)} ms script / ${crests.taskMs.toFixed(2)} ms task per frame, draw p95 ${drawP95} ms, ${dashes} dashes, ${vertices} vertices (canvas ${size}); ` +
+      `wave crest dashes: ${crests.scriptMs.toFixed(2)} ms script / ${crests.taskMs.toFixed(2)} ms task per frame, draw p95 ${drawP95} ms, ${dashes} dashes, ${quads} quads (adaptive cap ${quadCap}), ${vertices} vertices (canvas ${size}); ` +
       `wind particles: ${animated.scriptMs.toFixed(2)} / ${animated.taskMs.toFixed(2)} ms (${animated.frames} frames); off: ${still.scriptMs.toFixed(2)} / ${still.taskMs.toFixed(2)} ms`;
     console.log(note);
     test.info().annotations.push({ type: "flow frame cost (1440x900)", description: note });
@@ -76,6 +81,8 @@ test.describe("map frame cost (synthetic fields)", () => {
     expect(crests.scriptMs).toBeLessThan(12);
     expect(drawP95, "crest-dash frame draw time p95 (ms)").toBeLessThanOrEqual(5);
     expect(vertices).toBeLessThanOrEqual(12_000);
+    expect(quads, "filled quads (one per blob)").toBeLessThanOrEqual(quadCap);
+    expect(quadCap).toBeLessThanOrEqual(7_000); // MAX_FRAME_QUADS
     expect(dashes, "dashes drawn").toBeGreaterThan(500);
     // The dark basemap redraw at zoom 2 (no closePath per ring).
     const basemapMs = Number(await page.locator("canvas.map-basemap-canvas").getAttribute("data-draw-ms"));

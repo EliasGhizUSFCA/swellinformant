@@ -15,7 +15,7 @@ import { publishMapFlowStatus, type FieldSet } from "@/hooks/map-fields";
 import { buildLut, type LayerScale } from "@/lib/map-colors";
 import { directionFromUV, sampleDirection, sampleGrid, waveEnergyGrid, windSpeedGrid, type FieldGrid, type Grid } from "@/lib/map-fields";
 import type { LayerId, PartitionSample, PointSample } from "@/lib/map-layers";
-import { renderField, type FieldPaint } from "@/lib/map-render";
+import { fieldPositionAt, renderField, type FieldPaint } from "@/lib/map-render";
 import type { Basemap, MapSettings } from "@/lib/map-settings";
 import { effectiveSystems, exaggeration, PARTITION_SYSTEMS, SYSTEM_VARIABLES, type WaveSystem } from "@/lib/map-waves";
 
@@ -23,7 +23,7 @@ import { loadBasemap, NATURAL_EARTH_ATTRIBUTION } from "./basemap-data";
 import { drawBasemap, tracePaths, type BasemapGeometry, type CityLabel, type IsobarPath } from "./basemap-draw";
 import { CanvasLayer } from "./canvas-layer";
 import { ParticleAnimator, type Flow, type TrailMode } from "./particles";
-import { MAX_CORNER_SPREAD_DEG, WaveAnimator, type WaveFamilyGrids, type WaveMode } from "./wavefronts";
+import { MAX_CORNER_SPREAD_DEG, WaveAnimator, type DashTintSource, type WaveFamilyGrids, type WaveMode } from "./wavefronts";
 
 /**
  * CSS pixels per pixel of the colour-field buffer: the field is painted at half resolution,
@@ -144,6 +144,8 @@ function useBasemapGeometry(): BasemapGeometry | null {
 interface FieldCanvasProps {
   paint: { grid: Grid; v: Grid | null } | null;
   scale: LayerScale;
+  /** RGBA lookup table of the scale (buildLut). */
+  lut: Uint8ClampedArray;
   basemap: Basemap;
   label: string;
   at: string | null;
@@ -152,7 +154,7 @@ interface FieldCanvasProps {
   clipLand: BasemapGeometry["land"] | null;
 }
 
-function FieldCanvas({ paint, scale, basemap, label, at, layer, clipLand }: FieldCanvasProps) {
+function FieldCanvas({ paint, scale, lut, basemap, label, at, layer, clipLand }: FieldCanvasProps) {
   const map = useMap();
   const layerRef = useRef<CanvasLayer | null>(null);
   const paintRef = useRef<FieldPaint | null>(null);
@@ -222,7 +224,6 @@ function FieldCanvas({ paint, scale, basemap, label, at, layer, clipLand }: Fiel
     };
   }, [map]);
 
-  const lut = useMemo(() => buildLut(scale.stops), [scale.stops]);
   useEffect(() => {
     metaRef.current = { label, at, layer, clipLand };
     // On the dark basemap the field may reach slightly under the land mask (no coastal gap);
@@ -309,7 +310,20 @@ function ParticleCanvas({ flow, mode, overlay }: { flow: Flow | null; mode: Part
   return null;
 }
 
-function WaveCanvas({ families, mode, land, oceanMask }: { families: WaveFamilyGrids[]; mode: WaveMode; land: BasemapGeometry["land"] | null; oceanMask: boolean }) {
+function WaveCanvas({
+  families,
+  tint,
+  mode,
+  land,
+  oceanMask,
+}: {
+  families: WaveFamilyGrids[];
+  /** The colour field under the dashes, for their tint (null: the systems' own colours). */
+  tint: DashTintSource | null;
+  mode: WaveMode;
+  land: BasemapGeometry["land"] | null;
+  oceanMask: boolean;
+}) {
   const map = useMap();
   const layerRef = useRef<CanvasLayer | null>(null);
   const [animator] = useState(() => new WaveAnimator());
@@ -349,6 +363,8 @@ function WaveCanvas({ families, mode, land, oceanMask }: { families: WaveFamilyG
       if (!c) return;
       frames++;
       c.dataset.crests = String(s.crests);
+      c.dataset.quads = String(s.quads);
+      c.dataset.quadCap = String(s.quadCap);
       c.dataset.vertices = String(s.vertices);
       c.dataset.strokes = String(s.strokes);
       c.dataset.dashTrails = String(s.trails);
@@ -356,6 +372,7 @@ function WaveCanvas({ families, mode, land, oceanMask }: { families: WaveFamilyG
       if (s.arrows) c.dataset.arrows = String(s.arrows);
       if (frames % 10 === 1 || modeRef.current === "static") {
         c.dataset.drawMs = s.drawMs.toFixed(2);
+        c.dataset.drawMsP50 = s.drawMsP50.toFixed(2);
         c.dataset.drawMsP95 = s.drawMsP95.toFixed(2);
         c.dataset.latticeMs = s.latticeMs.toFixed(1);
         c.dataset.frames = String(s.frames);
@@ -383,9 +400,9 @@ function WaveCanvas({ families, mode, land, oceanMask }: { families: WaveFamilyG
   // New fields keep the live dashes and the clock: the lattice is rebuilt for the same view.
   useEffect(() => {
     familiesRef.current = families;
-    animator.setFamilies(families);
+    animator.setFamilies(families, tint);
     layerRef.current?.canvas?.setAttribute("data-families", families.map((f) => f.system).join(","));
-  }, [families, animator]);
+  }, [families, tint, animator]);
 
   useEffect(() => {
     const changed = modeRef.current !== effective;
@@ -501,6 +518,12 @@ export function MapDataLayers(props: MapDataLayersProps) {
   const { layer, fields, particles, basemap, scale, settings } = props;
   const geometry = useBasemapGeometry();
   const paint = useMemo(() => layerPaint(layer, fields), [layer, fields]);
+  const lut = useMemo(() => buildLut(scale.stops), [scale.stops]);
+  // The crest dashes are tinted from the colour field under them (the same values and colours).
+  const tint = useMemo<DashTintSource | null>(
+    () => (paint ? { position: (lat, lon) => fieldPositionAt({ grid: paint.grid, v: paint.v, scale, minWeight: 0.5 }, lat, lon), lut } : null),
+    [paint, scale, lut],
+  );
   const windParticles = layer === "wind" || settings.windOverlay;
   const flow = useMemo(() => (windParticles ? layerFlow(fields) : null), [windParticles, fields]);
   const families = useMemo(() => waveFamilies(layer, fields, settings.waveSystems), [layer, fields, settings.waveSystems]);
@@ -516,13 +539,14 @@ export function MapDataLayers(props: MapDataLayersProps) {
       <FieldCanvas
         paint={paint}
         scale={scale}
+        lut={lut}
         basemap={basemap}
         label={props.fieldLabel ?? ""}
         at={props.fieldsAt ?? null}
         layer={layer}
         clipLand={basemap === "streets" && layer !== "wind" ? land : null}
       />
-      {layer !== "wind" && <WaveCanvas families={families} mode={waveMode} land={land} oceanMask={basemap !== "dark"} />}
+      {layer !== "wind" && <WaveCanvas families={families} tint={tint} mode={waveMode} land={land} oceanMask={basemap !== "dark"} />}
       {windParticles && <ParticleCanvas flow={flow} mode={particles} overlay={layer !== "wind"} />}
       <BasemapCanvas
         vector={basemap === "dark"}

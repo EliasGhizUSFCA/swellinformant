@@ -363,7 +363,7 @@ test.describe("ocean layers (synthetic fields)", () => {
     });
     expect(stats.opaque).toBeGreaterThan(0.5);
     expect(stats.colours).toBeGreaterThan(40);
-    // The South Pacific shows the field; inland Western Australia shows the grey land (#3a3a3c)
+    // The South Pacific shows the field; inland Western Australia shows the grey land (#737376)
     // drawn over it (the synthetic field has values everywhere, the land masks them).
     const lp = await screenPoint(page, -27, 121);
     const land = await pixels(page, lp.x, lp.y);
@@ -1037,8 +1037,8 @@ test.describe("wave crest dashes (synthetic partitions)", () => {
     await page.getByRole("button", { name: "Legend", exact: true }).click();
     const legend = page.getByTestId("legend-drawer");
     await expect(legend.getByTestId("legend-title")).toHaveText("Offshore wave height, Hs (ft)");
-    await expect(legend.getByTestId("legend-crests")).toContainText("Primary swell (white dashes)");
-    await expect(legend.getByTestId("legend-crests")).toContainText("Secondary swell (split amber dashes)");
+    await expect(legend.getByTestId("legend-crests")).toContainText("Primary swell (light tinted blobs)");
+    await expect(legend.getByTestId("legend-crests")).toContainText("Secondary swell (split amber bars)");
     await expect(legend.getByTestId("legend-crests")).toContainText("Short dashes are wave crests moving with the waves");
     await expect(legend.getByTestId("legend-scales")).toHaveText(/^Crest spacing ×[\d,]+ at the map centre; time runs 4× faster than real\.$/);
     await expect(legend.getByTestId("legend-crests")).toContainText("Stylised crests from the forecast model, not individual waves.");
