@@ -119,6 +119,52 @@ def test_env_example_names_only_settings_or_stack_variables() -> None:
     assert not unknown, f"not a setting or a stack variable: {unknown}"
 
 
+def _load_example_settings(monkeypatch: pytest.MonkeyPatch, **filled: str) -> Settings:
+    """Settings from the example's non-empty values (as Vercel would set them), plus
+    ``filled``; the test process's own settings environment (tests/conftest.py) is cleared
+    first, so only the example speaks."""
+    for name in settings_env_names():
+        monkeypatch.delenv(name, raising=False)
+    env = {n: v for n, v in example_env().items() if v.strip() and n not in STACK_ONLY}
+    for name, value in (env | filled).items():
+        monkeypatch.setenv(name, value)
+    return Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_env_example_is_a_valid_production_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The placeholders as the owner fills them in (synthetic test values) and the
+    # Marketplace sets them (Neon's postgresql:// URLs, Upstash's rediss:// KV_URL).
+    settings = _load_example_settings(
+        monkeypatch,
+        SECRET_KEY="test-only-" + "s" * 40,
+        CRON_SECRET="test-only-" + "c" * 30,
+        DATABASE_URL="postgresql://u:p@ep-test-pooler.example.neon.tech/neondb?sslmode=require",
+        DATABASE_URL_UNPOOLED="postgresql://u:p@ep-test.example.neon.tech/neondb?sslmode=require",
+        KV_URL="rediss://default:test-token@test.upstash.io:6379",
+        RESEND_API_KEY="re_test_only",
+    )
+    assert settings.app_env == "production"
+    assert settings.job_runner == "daemon"
+    assert settings.client_ip_header == "x-vercel-forwarded-for"
+    assert settings.engine_database_url.startswith("postgresql+psycopg://u:p@ep-test-pooler.")
+    assert settings.migration_database_url.startswith("postgresql+psycopg://u:p@ep-test.example")
+    assert settings.redis_url == "rediss://default:test-token@test.upstash.io:6379"
+    assert settings.forecast_provider_list == ["open_meteo", "open_meteo_ecmwf"]
+    assert settings.map_fields_enabled is True
+    assert settings.missing_live_credentials() == []
+
+
+def test_env_example_unfilled_is_refused_or_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without SECRET_KEY the production validator refuses to start.
+    with pytest.raises(ValueError, match="SECRET_KEY"):
+        _load_example_settings(monkeypatch)
+    # With it, the empty credentials the hosted setup needs are reported, not ignored.
+    settings = _load_example_settings(monkeypatch, SECRET_KEY="test-only-" + "s" * 40)
+    missing = settings.missing_live_credentials()
+    assert "RESEND_API_KEY" in missing
+    assert "CRON_SECRET (daily watchdog)" in missing
+
+
 def test_env_example_has_no_secret_values_and_leaves_db_use_unpooled_to_the_image() -> None:
     env = example_env()
     filled = sorted(n for n, v in env.items() if SECRET_NAMES.search(n) and v.strip())
