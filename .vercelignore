@@ -1,0 +1,47 @@
+# Files `vercel deploy` (Vercel CLI) does not upload; the syntax is .gitignore's
+# (https://vercel.com/docs/deployments/vercel-ignore). The CLI already skips .git, .next,
+# .vercel, .venv, node_modules, __pycache__, .env.local and .env.*.local by default; they are
+# listed again so this file is the whole picture. Keep backend/, frontend/, data/ and the
+# Containerfile: the api and web services and the sync daemon are built from them.
+
+# Dependencies and build output (Vercel installs and builds from scratch)
+node_modules
+.next
+.next-*
+backend/.venv
+.venv
+venv
+**/__pycache__
+**/*.py[cod]
+*.tsbuildinfo
+backend/build
+*.egg-info
+.vercel
+
+# Test and tool output
+test-results
+playwright-report
+blob-report
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Local state and secrets: never upload them. Vercel injects the environment variables.
+*.rdb
+celerybeat-schedule*
+*.log
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Agent worktrees, scratch and editor files (.gitignore keeps them out of Git deployments;
+# `vercel deploy` from a checkout reads only this file)
+.claude
+/tmp
+.idea
+.vscode
+*.swp
+.DS_Store

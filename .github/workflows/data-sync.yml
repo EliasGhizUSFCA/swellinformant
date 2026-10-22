@@ -1,0 +1,224 @@
+# Data sync, manual only: an emergency and backfill runner for the synced data pipeline
+# (`python -m app.cli sync run --trigger github`) on a GitHub-hosted runner. It is NOT the
+# production scheduler: on Vercel the sync daemon (vercel.json "daemons") follows the model
+# runs. Use this when the daemon is stopped (for example its monthly CPU quota is used up),
+# for a backfill, or to run migrations. docs/deploy-vercel.md explains when and how.
+#
+# Triggers. There is deliberately no `schedule:`: GitHub's terms say Actions should not be used
+# "as part of a serverless application", and scheduled runs "can be delayed during periods of
+# high loads" and are disabled after 60 days without repository activity (docs/deploy-vercel.md
+# quotes the sources and shows how to add one anyway).
+# - Actions tab -> "Data sync (manual)" -> Run workflow, with the inputs below.
+# - repository_dispatch, event type "data-sync":
+#     POST https://api.github.com/repos/OWNER/REPO/dispatches
+#     {"event_type": "data-sync", "client_payload": {"force": false, "only": "map", "migrate": false}}
+#   with a fine-grained token that has Contents: write on this repository.
+#
+# Configuration, under Settings -> Secrets and variables -> Actions:
+# - Secrets: DATABASE_URL_UNPOOLED (Neon's direct URL), KV_URL or REDIS_URL, SECRET_KEY (the
+#   same value as on Vercel), plus the provider credentials the deployment uses (listed in the
+#   Sync step). Secrets are not passed to runs triggered from forks.
+# - Variables: any other app setting by its env-var name (APP_BASE_URL, EMAIL_PROVIDER,
+#   EMAIL_FROM, GEFS_ENABLED, ...). They override the hosted profile (app/core/profiles.py),
+#   which the Vercel deployment also uses. Required: APP_BASE_URL (links in alert emails) and
+#   EMAIL_PROVIDER (smtp, resend or sendgrid) with EMAIL_FROM. A setting named like a
+#   credential (*_KEY, *_SECRET, *_TOKEN, *_PASSWORD, the URLs with passwords) is read only
+#   from secrets, and the log shows variables' names, never their values.
+# The run always uses APP_ENV=production, so the app's own checks refuse a development secret
+# key or an email provider that only captures mail.
+# Installs need backend/uv.lock (the versions the daemon image installs).
+name: Data sync (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run every stage even when no new model run is out (stored runs are still skipped)"
+        type: boolean
+        default: false
+      only:
+        description: "Acquire only these components: a comma-separated subset of spots,ensemble,map (empty: all)"
+        type: string
+        default: ""
+      migrate:
+        description: "Run the database migrations (python -m app.cli migrate) first"
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [data-sync]
+
+permissions:
+  contents: read
+
+# One run at a time; a run is never cancelled half-way (the sync holds a database lease).
+concurrency:
+  group: data-sync
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.13"
+  # The same uv as ci.yml, the Containerfile and docker/api-lean (keep them equal).
+  UV_VERSION: "0.11.32"
+
+jobs:
+  sync:
+    name: Sync (python -m app.cli sync run)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/uv.lock
+      # The versions come from backend/uv.lock, as for the daemon image (Containerfile) and
+      # CI, so an emergency run never installs versions nobody has tested. Editable, so the
+      # app finds data/ (spots, tide catalog and constants) in this checkout.
+      - name: Install the backend with the sync extra (versions from uv.lock)
+        run: |
+          python -m pip install "uv==${UV_VERSION}"
+          uv export --locked --no-dev --no-emit-project --no-hashes --extra sync \
+            --output-file "$RUNNER_TEMP/constraints.txt"
+          python -m pip install -e ".[sync]" --constraint "$RUNNER_TEMP/constraints.txt"
+      - name: Configuration (hosted profile, then repository variables)
+        env:
+          REPOSITORY_VARIABLES: ${{ toJSON(vars) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import secrets
+          import sys
+
+          from app.core.config import CAPTURE_EMAIL_PROVIDERS, Settings
+          from app.core.profiles import profile_env
+
+          # Credentials reach the run only as secrets (the Sync step). These names, and any
+          # setting named like a credential, are never read from variables.
+          SECRET_NAMES = {
+              "DATABASE_URL", "DATABASE_URL_UNPOOLED", "REDIS_URL", "CELERY_BROKER_URL",
+              "CELERY_RESULT_BACKEND", "TWILIO_ACCOUNT_SID", "AMADEUS_CLIENT_ID",
+          }
+          SECRET_SUFFIXES = ("_KEY", "_SECRET", "_TOKEN", "_PASSWORD")
+          # A production data run: the app refuses dev secrets and capture-only email.
+          FIXED = {
+              "APP_ENV": "production",
+              "COOKIE_SECURE": "true",
+              "ENABLE_DEV_ENDPOINTS": "false",
+              "JOB_RUNNER": "daemon",
+              "DB_USE_UNPOOLED": "true",
+          }
+
+          def is_secret(name: str) -> bool:
+              return name in SECRET_NAMES or name.endswith(SECRET_SUFFIXES)
+
+          settings_names = {name.upper() for name in Settings.model_fields}
+          env = profile_env("hosted", "free-database")
+          source = dict.fromkeys(env, "hosted profile")
+          ignored = []
+          for name, value in sorted(json.loads(os.environ["REPOSITORY_VARIABLES"] or "{}").items()):
+              if name in settings_names and not is_secret(name) and name not in FIXED:
+                  env[name] = str(value)
+                  source[name] = "repository variable"
+              else:
+                  ignored.append(name)
+          env.update(FIXED)
+          source.update(dict.fromkeys(FIXED, "fixed"))
+          if ignored:
+              print("::warning::repository variables left out (not app settings, secrets or fixed): "
+                    + ", ".join(ignored))
+          problems = []
+          if not env.get("APP_BASE_URL"):
+              problems.append("set the repository variable APP_BASE_URL (the site's URL, used in emails)")
+          if env.get("EMAIL_PROVIDER", "console") in CAPTURE_EMAIL_PROVIDERS:
+              problems.append(
+                  "set the repository variable EMAIL_PROVIDER (smtp, resend or sendgrid) and "
+                  "EMAIL_FROM: a production run refuses an email provider that only captures mail"
+              )
+          for problem in problems:
+              print(f"::error::{problem}")
+          if problems:
+              sys.exit(1)
+          delimiter = f"EOF_{secrets.token_hex(16)}"
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
+              for name, value in env.items():
+                  out.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+          # The log of a public repository is public: values of repository variables (sender
+          # addresses, URLs) are not printed, only that they were applied.
+          for name in sorted(env):
+              shown = "(set)" if source[name] == "repository variable" else env[name]
+              print(f"{name}={shown}  [{source[name]}]")
+          PY
+      - name: Sync
+        env:
+          # Inputs: workflow_dispatch inputs, or repository_dispatch client_payload. Read from the
+          # environment and validated below, never pasted into the script.
+          SYNC_FORCE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.force || inputs.force }}
+          SYNC_ONLY: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.only || inputs.only }}
+          SYNC_MIGRATE: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.migrate || inputs.migrate }}
+          # The daemon's connection: Neon's direct URL (also as DATABASE_URL: the same database).
+          DATABASE_URL: ${{ secrets.DATABASE_URL_UNPOOLED }}
+          DATABASE_URL_UNPOOLED: ${{ secrets.DATABASE_URL_UNPOOLED }}
+          REDIS_URL: ${{ secrets.REDIS_URL || secrets.KV_URL }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          DUFFEL_ACCESS_TOKEN: ${{ secrets.DUFFEL_ACCESS_TOKEN }}
+          AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
+          AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
+        run: |
+          for name in DATABASE_URL_UNPOOLED REDIS_URL SECRET_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::the secret ${name/REDIS_URL/KV_URL (or REDIS_URL)} is not set"
+              exit 1
+            fi
+          done
+          # Unset secrets are empty strings here; drop them so the settings keep their defaults.
+          for name in OPEN_METEO_API_KEY RESEND_API_KEY SENDGRID_API_KEY SMTP_PASSWORD \
+            TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN DUFFEL_ACCESS_TOKEN AMADEUS_CLIENT_ID \
+            AMADEUS_CLIENT_SECRET; do
+            if [ -z "${!name:-}" ]; then unset "$name"; fi
+          done
+
+          args=(--trigger github)
+          case "${SYNC_FORCE:-false}" in
+            true) args+=(--force) ;;
+            false | "") ;;
+            *) echo "::error::force must be true or false"; exit 1 ;;
+          esac
+          if [ -n "${SYNC_ONLY:-}" ]; then
+            if ! [[ "$SYNC_ONLY" =~ ^(spots|ensemble|map)(,(spots|ensemble|map))*$ ]]; then
+              echo "::error::only must be a comma-separated subset of spots,ensemble,map"
+              exit 1
+            fi
+            args+=(--only "$SYNC_ONLY")
+          fi
+          case "${SYNC_MIGRATE:-false}" in
+            true) python -m app.cli migrate ;;
+            false | "") ;;
+            *) echo "::error::migrate must be true or false"; exit 1 ;;
+          esac
+
+          python -m app.cli check-config || true
+          status=0
+          python -m app.cli sync run "${args[@]}" || status=$?
+          python -m app.cli sync status --limit 3 || true
+          case $status in
+            0) ;;
+            3) echo "::error::another sync holds the lease (the daemon is syncing now); run this again later" ;;
+            *) echo "::error::the sync failed (exit $status); its stages are in the output above and on /status" ;;
+          esac
+          exit "$status"
