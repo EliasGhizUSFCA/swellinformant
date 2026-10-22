@@ -1,11 +1,17 @@
 """Cache headers of the user-independent public GETs. Owned by the api-serverless package.
 
-The five user-independent public GETs below send app.core.http_cache.cache_headers(browser
-60 s, CDN 60 s, stale-while-revalidate 300 s): ``Cache-Control: public, max-age=60`` and
-``CDN-Cache-Control: public, s-maxage=60, stale-while-revalidate=300`` (Vercel's CDN reads
+The user-independent public GETs below send app.core.http_cache.cache_headers(browser 60 s,
+CDN 300 s, stale-while-revalidate 3600 s): ``Cache-Control: public, max-age=60`` and
+``CDN-Cache-Control: public, s-maxage=300, stale-while-revalidate=3600`` (Vercel's CDN reads
 CDN-Cache-Control before Cache-Control and caches a function response only with s-maxage).
 They were ``public, max-age=300`` (browser only) and, for /api/spots, the middleware's
-``no-store`` before Upgrade 4.
+``no-store`` before Upgrade 4; the CDN windows were 60 s and 300 s until the egress
+integration, which serves these routes from the public snapshot cache (their data changes
+only with a publication or the hour) and gives every public GET and the map-field index the
+same windows, so after a publication the edge mixes old and new answers for about 5
+minutes. The spot detail, forecast and events and the next swells (/api/events) read the
+same published data with no user dependency and became shared-cacheable then (they were the
+middleware's ``no-store``).
 
 The constants are also what the route tests of other files assert (test_tides_api,
 test_spot_observations_api, test_timeline_api, test_public_and_opportunity_api,
@@ -40,16 +46,22 @@ pytestmark = pytest.mark.integration
 PUBLIC_GET_CACHE_CONTROL = "public, max-age=60"
 # /api/spots: the same headers since Upgrade 4 (it was the middleware's no-store).
 SPOT_LIST_CACHE_CONTROL = "public, max-age=60"
-# What the CDN reads on every route above.
-PUBLIC_CDN_CACHE_CONTROL = "public, s-maxage=60, stale-while-revalidate=300"
-# /api/spots/{slug}: kept out of shared caches by design (D8), so the middleware's default.
-USER_ROUTE_CACHE_CONTROL = "no-store"
+# What the CDN reads on every route above (s-maxage 60 and 300 s of stale before the egress
+# integration: the snapshot data changes only with a publication or the hour).
+PUBLIC_CDN_CACHE_CONTROL = "public, s-maxage=300, stale-while-revalidate=3600"
 
 PUBLIC_GETS = (
     "/api/map/conditions",
     "/api/spots/pipeline/timeline",
     "/api/spots/pipeline/tides",
     "/api/spots/pipeline/observations",
+)
+# Snapshot-cached routes that were the middleware's no-store before the egress integration.
+SNAPSHOT_GETS = (
+    "/api/spots/pipeline",
+    "/api/spots/pipeline/forecast",
+    "/api/spots/pipeline/events",
+    "/api/events",
 )
 USER_DEPENDENCIES: frozenset[Callable[..., Any]] = frozenset(
     {get_auth, get_current_user, get_optional_user, require_admin}
@@ -100,11 +112,17 @@ def test_errors_of_the_public_routes_are_not_cached(app_client: ApiClient) -> No
     assert bad.status_code == 400 and not shared_cacheable(bad.headers)
 
 
-def test_the_spot_detail_stays_out_of_shared_caches(app_client: ApiClient) -> None:
-    resp = app_client.get("/api/spots/pipeline")
-    assert resp.status_code == 200
-    assert resp.headers.get_list("cache-control") == [USER_ROUTE_CACHE_CONTROL]
-    assert not shared_cacheable(resp.headers)
+def test_the_spot_page_routes_are_shared_cacheable(app_client: ApiClient) -> None:
+    """The spot detail used to stay out of shared caches because the design expected it to
+    depend on the signed-in user (get_optional_user); it never did (the route test below
+    checks every route's dependencies), and it, the forecast and the events now come from
+    the public snapshot cache with the public headers."""
+    for path in SNAPSHOT_GETS:
+        resp = app_client.get(path)
+        assert resp.status_code == 200, (path, resp.text)
+        assert resp.headers.get_list("cache-control") == [PUBLIC_GET_CACHE_CONTROL], path
+        assert resp.headers.get_list("cdn-cache-control") == [PUBLIC_CDN_CACHE_CONTROL], path
+        assert "set-cookie" not in resp.headers, path
 
 
 # --------------------------------------------------------------------------- every route
@@ -166,6 +184,10 @@ def test_no_route_with_a_user_dependency_is_shared_cacheable(
     expected_public = {
         "/api/spots",
         "/api/map/conditions",
+        "/api/spots/{slug}",
+        "/api/spots/{slug}/forecast",
+        "/api/spots/{slug}/events",
+        "/api/events",
         "/api/spots/{slug}/timeline",
         "/api/spots/{slug}/tides",
         "/api/spots/{slug}/observations",

@@ -1,4 +1,11 @@
-"""Surf spots, forecasts, swell events and reference data (public)."""
+"""Surf spots, forecasts, swell events and reference data (public).
+
+The public GETs that read the most (the spot list, the map conditions, a spot's detail,
+forecast and events, and the next swells) are answered from the public snapshot cache
+(app.services.public_cache): computed for the start of the current UTC hour at most once
+per published data, hour and query, and sent with the shared-cache headers below. The
+bodies are the ones the response models give (``public_cache.render``).
+"""
 
 from __future__ import annotations
 
@@ -7,15 +14,15 @@ from collections import defaultdict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Response
+from pydantic import TypeAdapter
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.deps import get_optional_user
-from app.core.database import get_db, utcnow
+from app.core.database import get_db
 from app.core.errors import NotFound
 from app.core.http_cache import cache_headers
 from app.models import Airport, SurfSpot, SwellEvent, User
-from app.models.enums import SwellEventStatus
 from app.schemas.opportunities import MatchSummary
 from app.schemas.spots import (
     AirportOut,
@@ -26,25 +33,32 @@ from app.schemas.spots import (
     SpotForecastOut,
     SpotSummary,
 )
+from app.services import public_cache as snapshots
 from app.services.opportunity_views import list_matches
 from app.services.spot_views import (
     event_out,
-    map_snapshot,
     spot_detail,
+    spot_events,
     spot_forecast,
-    spot_summaries,
     upcoming_events,
 )
 
 router = APIRouter(prefix="/api", tags=["spots"])
 
 # The user-independent public GETs (no user dependency, no cookie): browsers keep them a
-# minute, the CDN a minute and serves a stale copy for up to 5 minutes while it refreshes.
-# Used by /api/spots and /api/map/conditions here, and the timeline, tides and observations
-# routes. Never on a route with a user dependency (app.core.http_cache).
+# minute; the CDN 5 minutes, and for up to an hour more it serves its stale copy while it
+# refreshes in the background. Their data changes only with a publication or the hour, and
+# every one of them uses these windows (with the map-field index, app.api.map_fields), so
+# after a publication the edge mixes old and new answers for about 5 minutes only. Used
+# here, by the timeline, tides and observations routes. Never on a route with a user
+# dependency (app.core.http_cache).
 PUBLIC_BROWSER_SECONDS = 60
-PUBLIC_CDN_SECONDS = 60
-PUBLIC_STALE_SECONDS = 300
+PUBLIC_CDN_SECONDS = 300
+PUBLIC_STALE_SECONDS = 3600
+
+SPOT_DETAIL = TypeAdapter(SpotDetail)
+SPOT_FORECAST = TypeAdapter(SpotForecastOut)
+EVENTS = TypeAdapter(list[EventOut])
 
 
 def public_cache(response: Response) -> None:
@@ -57,6 +71,13 @@ def public_cache(response: Response) -> None:
     )
 
 
+def public_json(snapshot: snapshots.Snapshot) -> Response:
+    """A public snapshot as the JSON response FastAPI would send, with the public headers."""
+    response = Response(content=snapshot.body, media_type="application/json")
+    public_cache(response)
+    return response
+
+
 def _spot(db: Session, slug: str) -> SurfSpot:
     spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == slug, SurfSpot.is_active))
     if spot is None:
@@ -66,50 +87,60 @@ def _spot(db: Session, slug: str) -> SurfSpot:
 
 @router.get("/map/conditions", response_model=MapSnapshotOut)
 def map_conditions(
-    response: Response,
     at: datetime | None = Query(None, description="Forecast time (ISO 8601); default now"),
     db: Session = Depends(get_db),
-) -> MapSnapshotOut:
+) -> Response:
     """All spots at one forecast hour, from cached predictions (public data, cacheable)."""
-    snapshot = map_snapshot(db, at)
-    public_cache(response)
-    return snapshot
+    return public_json(snapshots.map_conditions(db, at))
 
 
 @router.get("/spots", response_model=list[SpotSummary])
-def list_spots(response: Response, db: Session = Depends(get_db)) -> list[SpotSummary]:
+def list_spots(db: Session = Depends(get_db)) -> Response:
     """Every active spot with its current conditions (public data, cacheable)."""
-    spots = spot_summaries(db)
-    public_cache(response)
-    return spots
+    return public_json(snapshots.spot_list(db))
 
 
 @router.get("/spots/{slug}", response_model=SpotDetail)
-def get_spot(slug: str, db: Session = Depends(get_db)) -> SpotDetail:
-    return spot_detail(db, _spot(db, slug))
+def get_spot(slug: str, db: Session = Depends(get_db)) -> Response:
+    """One spot's page data (public data, cacheable)."""
+    return public_json(
+        snapshots.snapshot(
+            db,
+            "spot",
+            slug,
+            lambda now: snapshots.render(SPOT_DETAIL, spot_detail(db, _spot(db, slug), now)),
+        )
+    )
 
 
 @router.get("/spots/{slug}/forecast", response_model=SpotForecastOut)
 def get_forecast(
     slug: str, days: int = Query(10, ge=1, le=16), db: Session = Depends(get_db)
-) -> SpotForecastOut:
-    return spot_forecast(db, _spot(db, slug), days=days)
+) -> Response:
+    """The spot's forecast hours and model series (public data, cacheable)."""
+    return public_json(
+        snapshots.snapshot(
+            db,
+            "spot-forecast",
+            f"{slug}:{days}",
+            lambda now: snapshots.render(
+                SPOT_FORECAST, spot_forecast(db, _spot(db, slug), days=days, now=now)
+            ),
+        )
+    )
 
 
 @router.get("/spots/{slug}/events", response_model=list[EventOut])
-def spot_events(slug: str, db: Session = Depends(get_db)) -> list[EventOut]:
-    spot = _spot(db, slug)
-    now = utcnow()
-    rows = db.scalars(
-        select(SwellEvent)
-        .where(
-            SwellEvent.spot_id == spot.id,
-            SwellEvent.end_time >= now,
-            SwellEvent.status.in_((SwellEventStatus.ACTIVE, SwellEventStatus.DOWNGRADED)),
+def get_spot_events(slug: str, db: Session = Depends(get_db)) -> Response:
+    """The spot's swell events that have not ended (public data, cacheable)."""
+    return public_json(
+        snapshots.snapshot(
+            db,
+            "spot-events",
+            slug,
+            lambda now: snapshots.render(EVENTS, spot_events(db, _spot(db, slug), now)),
         )
-        .order_by(SwellEvent.start_time)
-    ).all()
-    return [event_out(e, now) for e in rows]
+    )
 
 
 @router.get("/spots/{slug}/opportunities", response_model=list[MatchSummary])
@@ -127,8 +158,18 @@ def list_events(
     limit: int = Query(20, ge=1, le=100),
     min_score: int = Query(0, ge=0, le=100),
     db: Session = Depends(get_db),
-) -> list[EventOut]:
-    return upcoming_events(db, limit=limit, min_score=min_score)
+) -> Response:
+    """The best swells that have not ended (public data, cacheable)."""
+    return public_json(
+        snapshots.snapshot(
+            db,
+            "events",
+            f"{limit}:{min_score}",
+            lambda now: snapshots.render(
+                EVENTS, upcoming_events(db, now, limit=limit, min_score=min_score)
+            ),
+        )
+    )
 
 
 @router.get("/events/{event_id}", response_model=EventOut)

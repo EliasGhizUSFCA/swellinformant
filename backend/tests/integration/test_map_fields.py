@@ -351,11 +351,13 @@ def test_index_without_fields_says_what_to_set(app_client: ApiClient) -> None:
     assert resp.status_code == 200
     # The endpoint's own header wins: the security middleware adds "no-store" only to API
     # responses that set no Cache-Control themselves (otherwise browsers never cache fields).
-    # Upgrade 4 (D8): browsers a minute, the CDN a minute plus 10 min stale-while-revalidate
-    # (was "public, max-age=300" with no CDN header): a publication switches the served run.
+    # Upgrade 4 (D8): browsers a minute (was "public, max-age=300" with no CDN header): a
+    # publication switches the served run. The CDN: the windows of every public GET, 5 min
+    # plus an hour of stale-while-revalidate (60 s plus 10 min until the egress integration),
+    # so the index switches at the edge together with the spot list it is shown with.
     assert resp.headers.get_list("cache-control") == ["public, max-age=60"]
     assert resp.headers.get_list("cdn-cache-control") == [
-        "public, s-maxage=60, stale-while-revalidate=600"
+        "public, s-maxage=300, stale-while-revalidate=3600"
     ]
     assert app_client.get("/api/spots").headers.get_list("cache-control") == [
         SPOT_LIST_CACHE_CONTROL
