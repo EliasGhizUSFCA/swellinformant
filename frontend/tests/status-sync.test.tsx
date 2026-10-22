@@ -203,10 +203,25 @@ describe("sync section", () => {
     expect(map).toHaveTextContent("World map layers");
     expect(map).toHaveTextContent("Failed");
     expect(map).toHaveTextContent("6 failed attempts");
-    expect(within(map).getByText("synthetic_map · newest run 12Z Oct 18")).toHaveAttribute("title", "stored synthetic-map:2026101800 · available synthetic-map:2026101812");
+    expect(within(map).getByText("synthetic_map · newest run 12Z Oct 18")).toHaveAttribute("title", "synthetic_map · stored synthetic-map:2026101800 · available synthetic-map:2026101812");
     const gefs = screen.getByTestId("sync-component-ensemble-synthetic_gefs");
     expect(gefs).toHaveTextContent("Off");
     expect(gefs).toHaveTextContent("GEFS_ENABLED=false");
+  });
+
+  it("names the map-field and ensemble sources, which data health does not list, by their backend names", () => {
+    const real: SyncComponent[] = [
+      { ...COMPONENTS[2]!, source: "noaa_gfs_fields" },
+      { ...COMPONENTS[3]!, source: "noaa_gefs_wave" },
+    ];
+    const { rerender } = render(<SyncStatus sync={sync({ components: real })} now={NOW} />);
+    const map = screen.getByTestId("sync-component-map-noaa_gfs_fields");
+    expect(map).toHaveTextContent("NOAA GFS-Wave + GFS global fields · newest run 12Z Oct 18");
+    expect(within(map).getByText(/^NOAA GFS-Wave/)).toHaveAttribute("title", expect.stringMatching(/^noaa_gfs_fields · stored /));
+    expect(screen.getByTestId("sync-component-ensemble-noaa_gefs_wave")).toHaveTextContent("NOAA GEFS-Wave ensemble mean and spread");
+    // The report's own name wins (GEFS is listed as an ensemble source while it is on).
+    rerender(<SyncStatus sync={sync({ components: real })} now={NOW} sourceNames={new Map([["noaa_gefs_wave", "Report GEFS name"]])} />);
+    expect(screen.getByTestId("sync-component-ensemble-noaa_gefs_wave")).toHaveTextContent("Report GEFS name");
   });
 
   it("shows a newer unpublished sync apart from the published one, and a running sync's time so far", () => {

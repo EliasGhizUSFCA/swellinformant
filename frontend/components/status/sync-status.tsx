@@ -24,6 +24,7 @@ import {
   runDurationMs,
   runnerLabel,
   runStatus,
+  sourceName,
   stageLabel,
   stageTone,
   type SyncComponent,
@@ -114,14 +115,14 @@ function LastRun({ run, published, now }: { run: SyncRun; published: boolean; no
 
 function ComponentRow({ c, names }: { c: SyncComponent; names: ReadonlyMap<string, string> }) {
   const { label, tone } = componentState(c.state);
-  const keys = [c.stored_run_key && `stored ${c.stored_run_key}`, c.available_run_key && `available ${c.available_run_key}`].filter(Boolean).join(" · ");
+  const keys = [c.source, c.stored_run_key && `stored ${c.stored_run_key}`, c.available_run_key && `available ${c.available_run_key}`].filter(Boolean).join(" · ");
   return (
     <li className="py-2 first:pt-0 last:pb-0" data-testid={`sync-component-${c.kind}-${c.source}`} data-state={c.state}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm font-medium">{componentKindLabel(c.kind)}</div>
-          <div className="text-xs text-muted-foreground wrap-anywhere" title={keys || undefined}>
-            {names.get(c.source) ?? c.source}
+          <div className="text-xs text-muted-foreground wrap-anywhere" title={keys}>
+            {sourceName(c.source, names)}
             {c.available_cycle && ` · newest run ${cycleLabel(c.available_cycle)}`}
           </div>
         </div>

@@ -145,6 +145,20 @@ const KIND_LABEL: Record<SyncComponent["kind"], string> = {
 };
 export const componentKindLabel = (kind: string): string => KIND_LABEL[kind as SyncComponent["kind"]] ?? titleCase(kind);
 
+/**
+ * Sources that data health does not list among its forecast sources (the world map fields, and
+ * the ensemble while it is off), named as the backend's source_info names them
+ * (NoaaGfsFieldsProvider in app/services/forecasts/noaa.py, GefsWaveEnsembleProvider in
+ * ensemble.py; parenthetical dropped).
+ */
+const OTHER_SOURCE_NAMES: Record<string, string> = {
+  noaa_gfs_fields: "NOAA GFS-Wave + GFS global fields",
+  noaa_gefs_wave: "NOAA GEFS-Wave ensemble mean and spread",
+};
+
+/** A component's source by name: the data health report's name, a known one, else the code. */
+export const sourceName = (code: string, names?: ReadonlyMap<string, string>): string => names?.get(code) ?? OTHER_SOURCE_NAMES[code] ?? code;
+
 const TRIGGER_LABEL: Record<SyncRun["trigger"], string> = {
   daemon: "sync daemon",
   celery: "Celery",
