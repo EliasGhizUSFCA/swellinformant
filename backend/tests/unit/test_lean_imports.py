@@ -5,8 +5,10 @@ The extras add the rest: worker = Celery, server = uvicorn[standard], sync = pan
 pyarrow, scikit-learn and joblib (the sync daemon's image), all = the three (the classic
 image), dev = all plus the tools.
 
-(a) the API, app.main and every app.api module, imports with every extra missing;
-(b) the sync runner, the daemon's modules, imports without Celery (the sync image has none);
+(a) the API, app.main and every app.api module, and the CLI its build command runs, import
+    with every extra missing;
+(b) the sync runner, the daemon's modules and the job bodies it runs, import without Celery
+    (the sync image has none);
 (c) the light jobs the daemon runs, and the API kicks rely on, import without Celery or
     the data libraries;
 (d) pyproject.toml and uv.lock keep that split;
@@ -21,6 +23,7 @@ that the code catches.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -51,8 +54,12 @@ API_MODULES = sorted(
     for path in (BACKEND / "app" / "api").glob("*.py")
     if path.stem != "__init__"
 )
+# The command line: the API service's build command (python -m app.cli migrate --on-build)
+# runs it in the lean install, and the daemon starts as `python -m app.cli sync daemon`.
+CLI_MODULE = "app.cli"
 # The sync daemon's modules, and the job core it runs (the image has the sync extra only).
 SYNC_RUNNER_MODULES = [
+    CLI_MODULE,
     "app.services.sync.state",
     "app.jobs.runner",
     "app.jobs.registry",
@@ -65,6 +72,10 @@ SYNC_RUNNER_MODULES = [
     "app.services.sync.daemon",
     "app.services.sync.cli",
 ]
+# Where the job bodies the daemon runs are imported, inside functions: the job table and the
+# sync package (a deferred import loads only when the job runs, so importing these files
+# alone never shows a Celery import in a job body).
+DAEMON_JOB_SOURCES = ("app/jobs/registry.py", "app/services/sync/*.py")
 # Jobs the daemon runs between syncs, and that the API's kicks (JOB_RUNNER=daemon) start.
 LIGHT_JOB_MODULES = [
     "app.services.matching.service",
@@ -128,15 +139,86 @@ def assert_imported(done: subprocess.CompletedProcess[str]) -> None:
     assert done.returncode == 0 and done.stdout.strip() == "ok", done.stderr[-4000:]
 
 
+def _is_app_module(name: str) -> bool:
+    path = BACKEND.joinpath(*name.split("."))
+    return path.with_suffix(".py").is_file() or (path / "__init__.py").is_file()
+
+
+def deferred_app_imports(paths: Iterable[Path]) -> list[str]:
+    """The ``app`` modules that functions in ``paths`` import when they are called (deferred
+    imports: importing the files themselves never loads them)."""
+    found: set[str] = set()
+    for path in paths:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for function in ast.walk(tree):
+            if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for node in ast.walk(function):
+                if isinstance(node, ast.Import):
+                    found.update(a.name for a in node.names if a.name.split(".")[0] == "app")
+                elif (
+                    isinstance(node, ast.ImportFrom)
+                    and node.level == 0
+                    and (node.module or "").split(".")[0] == "app"
+                ):
+                    module = str(node.module)
+                    found.add(module)
+                    # `from app.services.sync import publish` imports a submodule.
+                    found.update(
+                        f"{module}.{a.name}"
+                        for a in node.names
+                        if _is_app_module(f"{module}.{a.name}")
+                    )
+    return sorted(found)
+
+
 # ------------------------------------------------------------------------------ (a)-(c)
 def test_the_api_imports_with_every_extra_missing() -> None:
     assert "app.api.internal" in API_MODULES and "app.api.dev" in API_MODULES
     missing = CELERY + DATA_LIBRARIES + SERVER_EXTRAS
-    assert_imported(import_without(["app.main", *API_MODULES], missing))
+    assert_imported(import_without(["app.main", *API_MODULES, CLI_MODULE], missing))
 
 
 def test_the_sync_runner_imports_without_celery() -> None:
     assert_imported(import_without(SYNC_RUNNER_MODULES, CELERY))
+
+
+def test_the_daemon_job_bodies_import_without_celery() -> None:
+    """The daemon runs the jobs of the job table, whose bodies import their services when
+    they run: each of those must load in the sync image, which has no Celery."""
+    sources = [path for pattern in DAEMON_JOB_SOURCES for path in sorted(BACKEND.glob(pattern))]
+    deferred = deferred_app_imports(sources)
+    assert {"app.services.forecasts.ingestion", "app.services.surf_quality.predict"} <= set(
+        deferred
+    ), deferred
+    assert_imported(import_without(deferred, CELERY))
+
+
+def test_the_deferred_import_scan_finds_imports_inside_functions(tmp_path: Path) -> None:
+    source = tmp_path / "jobs.py"  # synthetic source, for this test only
+    source.write_text(
+        textwrap.dedent(
+            """
+            import app.core.config
+            from app.models import User
+
+            def job(db):
+                from app.services.matching.service import match_all
+                import app.services.flights.service
+
+            class Runner:
+                async def run(self):
+                    from app.services.sync import publish
+                    from json import dumps
+            """
+        )
+    )
+    assert deferred_app_imports([source]) == [
+        "app.services.flights.service",
+        "app.services.matching.service",
+        "app.services.sync",
+        "app.services.sync.publish",
+    ]
 
 
 def test_the_light_jobs_import_without_celery_or_the_data_libraries() -> None:
