@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ageLine,
   type DataHealth,
+  dataHealthRefetchMs,
   DataHealthSummary,
   formatBytes,
   formatHours,
@@ -258,6 +259,16 @@ describe("sync section on the status page", () => {
     rerender(<SyncCard data={report({ sync: null })} />);
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByTestId("sync-status")).toBeNull();
+  });
+
+  it("re-reads every 5 minutes under the sync daemon, every minute while a sync runs or without the daemon", () => {
+    expect(dataHealthRefetchMs(undefined)).toBe(60_000);
+    expect(dataHealthRefetchMs(report())).toBe(60_000); // older backend: no sync block
+    expect(dataHealthRefetchMs(report({ sync: { ...sync, runner: "celery" } }))).toBe(60_000);
+    expect(dataHealthRefetchMs(report({ sync }))).toBe(300_000);
+    const run: SyncRun = { id: 3, trigger: "daemon", status: "running", started_at: now, finished_at: null, published_at: null, anchor_cycle: null, stages: [] };
+    expect(dataHealthRefetchMs(report({ sync: { ...sync, last_run: run } }))).toBe(60_000);
+    expect(dataHealthRefetchMs(report({ sync: { ...sync, last_run: { ...run, status: "success", finished_at: now } } }))).toBe(300_000);
   });
 
   it("renders the sync block with the report's source names", () => {
