@@ -472,7 +472,12 @@ Run in this sandbox on 2026-10-22, Vercel CLI 64.5.0, Node.js 22.22.0, Linux x86
   `.../backend/.vercel/python/services/api/.venv/bin/python` (3.13.16), and
   `python -m app.cli migrate --on-build` printed `{"command": "migrate --on-build",
   "migrate_on_build": "off", "vercel_env": null, "status": "skipped", ...}`. A local
-  `vercel build` sets no `VERCEL_ENV`.
+  `vercel build` sets no `VERCEL_ENV`. At review, on the merged clone with
+  `MIGRATE_ON_BUILD=all` and a plain `postgresql://` `DATABASE_URL` naming an empty scratch
+  database, the same command in the builder's venv ran the seven migrations up to
+  `0007_sync_runs` (46 tables) and printed `"status": "migrated"`; the build went on and
+  succeeded. A command that exits non-zero fails the build (seen on this branch alone, where
+  the stub exits 4: `[BUILD_UTILS_SPAWN_4]`).
 - **Routing on Vercel.** In the Vercel build, the Next.js routes manifest has no rewrites
   (`API_ROUTING` defaulted to `platform` because the CLI sets `VERCEL`), and no
   `.next/standalone` was produced. `.vercel/output/config.json` routes `^/api(?:/(.*))$`
