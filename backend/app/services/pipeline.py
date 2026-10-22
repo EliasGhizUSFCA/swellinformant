@@ -1,7 +1,9 @@
 """Run jobs A→G in order, synchronously (A: acquisition, then multi-model blending).
 
-Used by the developer "run pipeline" endpoint, the CLI and tests. The Celery workers run
-the same service functions as separate chained tasks.
+Used by the developer "run pipeline" endpoint, the CLI and tests. The synced pipeline
+(app.services.sync, docs/sync.md) runs the same service functions as the stages of one
+sync. After the predictions the pipeline publishes what is stored (a ``sync_runs`` row
+with trigger "pipeline"), so the map index moves to the new map run here too.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from app.services.notifications.alerts import generate_alerts
 from app.services.notifications.delivery import deliver_pending
 from app.services.surf_quality.predict import compute_pending_predictions
 from app.services.swell_detection.service import detect_events
+from app.services.sync.publish import publication_summary, publish
 
 
 def run_pipeline(
@@ -44,6 +47,9 @@ def run_pipeline(
         )
     stage("blending", lambda: build_blend(db, now).as_dict())
     stage("predictions", lambda: compute_pending_predictions(db, now))
+    # The wall clock, not ``now``: a publication is a real event (detect.load_known
+    # compares it with the runs' completed_at).
+    stage("publish", lambda: publication_summary(publish(db, trigger="pipeline")))
     stage("detection", lambda: detect_events(db, now).as_dict())
     stage("matching", lambda: match_all(db, now).as_dict())
     stage("flights", lambda: discover_flights(db, now).as_dict())
