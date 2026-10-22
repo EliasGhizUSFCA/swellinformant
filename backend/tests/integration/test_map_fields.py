@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import psycopg
 import pytest
 from sqlalchemy import delete, event, func, select, text, update
 from sqlalchemy.orm import Session
@@ -350,7 +351,12 @@ def test_index_without_fields_says_what_to_set(app_client: ApiClient) -> None:
     assert resp.status_code == 200
     # The endpoint's own header wins: the security middleware adds "no-store" only to API
     # responses that set no Cache-Control themselves (otherwise browsers never cache fields).
-    assert resp.headers.get_list("cache-control") == ["public, max-age=300"]
+    # Upgrade 4 (D8): browsers a minute, the CDN a minute plus 10 min stale-while-revalidate
+    # (was "public, max-age=300" with no CDN header): a publication switches the served run.
+    assert resp.headers.get_list("cache-control") == ["public, max-age=60"]
+    assert resp.headers.get_list("cdn-cache-control") == [
+        "public, s-maxage=60, stale-while-revalidate=600"
+    ]
     assert app_client.get("/api/spots").headers.get_list("cache-control") == [
         SPOT_LIST_CACHE_CONTROL
     ]
@@ -408,9 +414,11 @@ def test_field_bytes_and_their_metadata(
     resp = app_client.get("/api/map/fields/hs", params={"at": TIMES[0].isoformat()})
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/octet-stream"
-    # Without ``run`` the current run is served, which the next cycle replaces: 5 minutes
-    # (a URL with ``run`` never changes and is cached for an hour, see the run tests).
+    # Without ``run`` the served run is served, which the next publication replaces: 5
+    # minutes for browsers and the CDN (a URL naming the run and the valid time never
+    # changes and is immutable, see the run tests).
     assert resp.headers.get_list("cache-control") == ["public, max-age=300"]
+    assert resp.headers.get_list("cdn-cache-control") == ["public, s-maxage=300"]
     assert resp.headers["access-control-expose-headers"] == "X-Field-Meta"
     row = db.scalar(
         select(MapField).where(
@@ -600,7 +608,7 @@ def test_the_byte_budget_leaves_a_partial_run(db: Session) -> None:
 
 # --------------------------------------------------------------------------- run parameter
 def test_the_run_parameter_serves_a_retained_run(
-    db: Session, fields_run: ForecastRun, app_client: ApiClient
+    db: Session, fields_run: ForecastRun, app_client: ApiClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     newer = CYCLE + timedelta(hours=6)
     out = acquire_map_fields(db, cycle=newer, provider=fields_only(standalone_world(newer, [0]), 0))
@@ -621,8 +629,25 @@ def test_the_run_parameter_serves_a_retained_run(
         )
     )
     assert resp.content == row
-    # A run's field never changes: cached for an hour, and public.
-    assert resp.headers.get_list("cache-control") == ["public, max-age=3600"]
+    # A run's field at a valid time it lists never changes: public, an hour in browsers
+    # (unchanged) and a year at the CDN, immutable (Upgrade 4, D8: "immutable" added).
+    assert resp.headers.get_list("cache-control") == ["public, max-age=3600, immutable"]
+    assert resp.headers.get_list("cdn-cache-control") == ["public, s-maxage=31536000, immutable"]
+    # The naive form of the same instant (taken as UTC) is just as immutable.
+    naive = {**params, "at": TIMES[1].replace(tzinfo=None).isoformat()}
+    exact = app_client.get("/api/map/fields/hs", params=naive)
+    assert exact.headers.get_list("cache-control") == ["public, max-age=3600, immutable"]
+    # Not immutable when the answer to the URL can still change: an ``at`` between valid
+    # times (the nearest one is served, X-Field-Meta says which) or no ``at`` at all (the
+    # time nearest to now moves with the clock): 5 minutes, as without ``run``.
+    between = {**params, "at": (TIMES[1] - timedelta(hours=1)).isoformat()}
+    monkeypatch.setattr(map_fields_service, "utcnow", lambda: TIMES[1])
+    for loose in (between, {"run": fields_run.run_key}):
+        answer = app_client.get("/api/map/fields/hs", params=loose)
+        assert answer.status_code == 200, loose
+        assert _iso(json.loads(answer.headers["x-field-meta"])["valid_time"]) == TIMES[1]
+        assert answer.headers.get_list("cache-control") == ["public, max-age=300"], loose
+        assert answer.headers.get_list("cdn-cache-control") == ["public, s-maxage=300"], loose
     # Without run, the current run: its only valid time is the nearest one.
     current = app_client.get("/api/map/fields/hs", params={"at": newer.isoformat()})
     assert json.loads(current.headers["x-field-meta"])["run_key"] == out["run_key"]
@@ -633,6 +658,7 @@ def test_the_run_parameter_serves_a_retained_run(
     error = unknown.json()["error"]
     assert error["code"] == "run_not_retained" and "run not retained" in error["message"]
     assert unknown.headers.get_list("cache-control") == ["no-store"]
+    assert "cdn-cache-control" not in unknown.headers  # an error is never cached at the edge
 
     # Once a third cycle arrives, the oldest run's fields are pruned: no longer retained.
     third = newer + timedelta(hours=6)
@@ -693,16 +719,61 @@ def statements() -> Iterator[list[str]]:
     event.remove(engine, "before_cursor_execute", capture)
 
 
+@pytest.fixture
+def driver_statements(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, bool]]:
+    """Every statement psycopg executes, SQLAlchemy's and raw cursors' alike, with whether
+    the cursor asked for binary results."""
+    seen: list[tuple[str, bool]] = []
+    execute = psycopg.Cursor.execute
+
+    def spy(self: psycopg.Cursor[Any], query: Any, *args: Any, **kwargs: Any) -> Any:
+        binary = bool(kwargs.get("binary")) or self.format == psycopg.pq.Format.BINARY
+        seen.append((str(query), binary))
+        return execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(psycopg.Cursor, "execute", spy)
+    return seen
+
+
 def test_index_and_one_field_never_load_other_fields_bytes(
-    db: Session, fields_run: ForecastRun, statements: list[str]
+    db: Session,
+    fields_run: ForecastRun,
+    statements: list[str],
+    driver_statements: list[tuple[str, bool]],
 ) -> None:
     map_fields_service.field_index(db)
     assert statements and not any("map_fields.data" in s for s in statements)
+    assert len(driver_statements) >= len(statements)  # the spy sees SQLAlchemy's too
+    assert not any("map_fields.data" in s for s, _ in driver_statements)
     statements.clear()
+    driver_statements.clear()
     found = map_fields_service.field_bytes(db, "hs", TIMES[1])
     assert found is not None
-    loads = [s for s in statements if "map_fields.data" in s]
-    assert len(loads) == 1 and "map_fields.id =" in loads[0]
+    # Upgrade 4: the bytes are no longer read through SQLAlchemy (text format: bytea as hex,
+    # twice its size on the wire) but by one binary cursor statement for exactly one row
+    # (run, variable and valid time are its unique key), metadata included.
+    assert not any("map_fields.data" in s for s in statements)
+    loads = [(s, binary) for s, binary in driver_statements if "map_fields.data" in s]
+    assert len(loads) == 1 and loads[0][1] is True
+    sql = loads[0][0]
+    for key in ("map_fields.run_id =", "map_fields.variable =", "map_fields.valid_time ="):
+        assert key in sql, sql
+    meta, payload = found
+    row = db.scalar(
+        select(MapField).where(
+            MapField.run_id == fields_run.id,
+            MapField.variable == "hs",
+            MapField.valid_time == TIMES[1],
+        )
+    )
+    assert row is not None and payload == row.data and isinstance(payload, bytes)
+    assert (meta.nx, meta.ny, meta.scale, meta.offset, meta.run_key) == (
+        row.nx,
+        row.ny,
+        row.scale,
+        row.offset,
+        row.run_key,
+    )
 
 
 def test_the_newest_run_with_a_complete_time_is_served(
