@@ -160,3 +160,34 @@ def test_a_new_client_is_asked_at_once_and_limits_apply_again(
         if keys:
             get_redis().delete(*keys)
         reset_redis()
+
+
+# --------------------------------------------------------------------------- stored keys
+def test_counters_never_store_the_address_in_clear_text(limits_on: None) -> None:
+    """The Redis key of a counter holds a keyed digest of the IP or email address, never
+    the address (on Vercel the Redis host is a third party, Upstash); each address still
+    has its own counter. The addresses are synthetic."""
+    client = get_redis()
+    try:
+        client.ping()
+    except redis.RedisError:
+        pytest.skip("Redis not available")
+
+    def stored() -> list[str]:
+        return [str(k) for k in client.keys("rl:digest-test:*")]
+
+    client.delete(*stored() or ["-"])
+    try:
+        for _ in range(2):
+            ratelimit.hit("digest-test", "Surfer@Example.com", 2, 300)
+        with pytest.raises(RateLimited):
+            ratelimit.hit("digest-test", "Surfer@Example.com", 2, 300)
+        ratelimit.hit("digest-test", "203.0.113.9", 2, 300)  # another address: its own count
+        keys = stored()
+        assert len(keys) == 2
+        assert not any("example" in k.lower() or "203.0.113" in k for k in keys), keys
+        digest = ratelimit.limit_key("digest-test", "Surfer@Example.com")
+        assert len(digest) == 32 and any(f":{digest}:" in k for k in keys)
+        assert digest != ratelimit.limit_key("other-bucket", "Surfer@Example.com")
+    finally:
+        client.delete(*stored() or ["-"])

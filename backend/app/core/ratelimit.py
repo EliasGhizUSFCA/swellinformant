@@ -6,10 +6,16 @@ lockout stored in PostgreSQL. After a Redis error the limiter stays open for
 :data:`FAIL_OPEN_SECONDS` without asking Redis, so an unreachable Redis (each command
 waits up to REDIS_CONNECT_TIMEOUT_SECONDS) slows about one request per process every
 FAIL_OPEN_SECONDS instead of every request (twice for a request with two limits).
+
+The counters are keyed ``rl:<bucket>:<digest>:<window>``: the client IP, email address or
+user id a limit counts is stored only as a keyed digest (:func:`limit_key`), so the Redis
+host (Upstash, a third party, on Vercel) never holds an address in clear text.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import time
 from collections.abc import Callable
@@ -60,12 +66,19 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def limit_key(bucket: str, key: str) -> str:
+    """The digest a counter is stored under: HMAC-SHA256 of ``bucket:key`` with SECRET_KEY
+    (128 bits, hex). The same client, address or user maps to the same counter."""
+    secret = get_settings().secret_key.encode()
+    return hmac.new(secret, f"{bucket}:{key}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
 def hit(bucket: str, key: str, limit: int, window_seconds: int) -> None:
     global _fail_open
     if not get_settings().rate_limit_enabled:
         return
     window = int(time.time() // window_seconds)
-    redis_key = f"rl:{bucket}:{key}:{window}"
+    redis_key = f"rl:{bucket}:{limit_key(bucket, key)}:{window}"
     client = get_redis()
     if _skip_redis(client):
         return
