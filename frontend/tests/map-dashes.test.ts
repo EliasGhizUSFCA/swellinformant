@@ -446,6 +446,12 @@ describe("budget", () => {
       if (k === 89) {
         const white = now.filter((d) => d.rgb === rgb.primary).length; // primary
         expect(white).toBeGreaterThanOrEqual(0.55 * 1000);
+        // The cut leaves out an even, hashed share of the cells, never a region: every tile of
+        // a 4 x 4 split of the view keeps at least half of its fair share of the dashes.
+        const tiles = new Array<number>(16).fill(0);
+        const inView = now.filter((d) => d.x >= 0 && d.x < view.width && d.y >= 0 && d.y < view.height);
+        for (const d of inView) tiles[Math.floor((d.y / view.height) * 4) * 4 + Math.floor((d.x / view.width) * 4)]! += 1;
+        expect(Math.min(...tiles), tiles.join(",")).toBeGreaterThan((0.5 * inView.length) / 16);
       }
     }
     expect(Math.min(...counts)).toBeGreaterThan(900);
