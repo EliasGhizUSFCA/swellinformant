@@ -47,7 +47,7 @@ import zlib
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import redis
@@ -80,6 +80,9 @@ LOCK_TTL_SECONDS = 60
 WAIT_PAUSES_SECONDS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2)
 FAIL_OPEN_SECONDS = 30.0
 MEMO_MAX_BYTES = 32 * 1024 * 1024
+# The ?at= times of /api/map/conditions that are cached, relative to the current hour: the
+# map's steps (the stored forecast hours, up to 16 days ahead, and the hours just past).
+MAP_AT_CACHED_WINDOW = (timedelta(days=-2), timedelta(days=17))
 COMPRESSION_LEVEL = 6
 
 
@@ -337,14 +340,25 @@ def spot_list(db: Session) -> Snapshot:
     return snapshot(db, "spots", "", lambda now: render(SPOT_LIST, spot_summaries(db, now)))
 
 
+def cached_map_time(at: datetime, hour: datetime) -> bool:
+    """Whether /api/map/conditions?at= is cached for ``at``: a whole UTC hour (as the map
+    sends its steps) within :data:`MAP_AT_CACHED_WINDOW` of ``hour``. Any other value is
+    visitor input that would only fill Redis with keys nobody asks for again."""
+    if at.utcoffset() != timedelta(0) or (at.minute, at.second, at.microsecond) != (0, 0, 0):
+        return False
+    return MAP_AT_CACHED_WINDOW[0] <= at - hour <= MAP_AT_CACHED_WINDOW[1]
+
+
 def map_conditions(db: Session, at: datetime | None) -> Snapshot:
-    """GET /api/map/conditions (``at``: the query's time, as FastAPI parsed it)."""
-    return snapshot(
-        db,
-        "map-conditions",
-        at.isoformat() if at is not None else "",
-        lambda now: render(MAP_SNAPSHOT, map_snapshot(db, at, now)),
-    )
+    """GET /api/map/conditions (``at``: the query's time, as FastAPI parsed it). An ``at``
+    that is not cached (:func:`cached_map_time`) is computed as a miss is, unstored."""
+
+    def build(now: datetime) -> Snapshot:
+        return render(MAP_SNAPSHOT, map_snapshot(db, at, now))
+
+    if at is not None and not cached_map_time(at, public_now()):
+        return build(public_now())
+    return snapshot(db, "map-conditions", at.isoformat() if at is not None else "", build)
 
 
 def prewarm(db: Session) -> None:

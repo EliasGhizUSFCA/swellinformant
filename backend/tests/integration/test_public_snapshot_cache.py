@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -129,6 +129,39 @@ def test_every_route_serves_the_bytes_fastapi_would(
     public_cache.clear_memo()
     for url, body in expected.items():
         assert app_client.get(url).content == body, url  # computed directly, Redis down
+
+
+def test_only_the_map_steps_are_cached_for_a_time(
+    app_client: ApiClient, published: Session
+) -> None:
+    """?at= values the map never sends (not a whole UTC hour, another UTC offset, far from
+    now) are computed as a miss is, with the same bytes, and store nothing in Redis; a map
+    step is stored once."""
+    hour = public_cache.public_now()
+    store = public_cache.get_redis_bytes()
+
+    def keys() -> set[bytes]:
+        return set(store.scan_iter(f"{public_cache.PREFIX}:*"))
+
+    utc_plus_1 = timezone(timedelta(hours=1))
+    for at in (
+        hour + timedelta(hours=7, minutes=30),
+        (hour + timedelta(hours=7)).astimezone(utc_plus_1),  # the same instant, not in UTC
+        hour + timedelta(days=40),
+        hour - timedelta(days=3),
+    ):
+        before = keys()
+        response = app_client.get(f"/api/map/conditions?at={quote(at.isoformat())}")
+        assert response.status_code == 200, at
+        assert response.content == reference_body(
+            MapSnapshotOut, map_snapshot(published, at, hour)
+        ), at
+        assert keys() == before, at
+    step = hour + timedelta(hours=7)
+    before = keys()
+    response = app_client.get(f"/api/map/conditions?at={quote(step.isoformat())}")
+    assert response.content == reference_body(MapSnapshotOut, map_snapshot(published, step, hour))
+    assert [k for k in keys() - before if b":map-conditions:" in k]
 
 
 def test_a_key_is_computed_once(
