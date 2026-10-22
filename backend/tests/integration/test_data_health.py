@@ -576,6 +576,47 @@ def test_sync_stages_are_never_overdue_and_the_celery_check_is(db: Session) -> N
     assert sync.last_check_at == now - timedelta(minutes=4)
 
 
+def test_a_celery_sync_is_stuck_only_past_its_own_time_limit(db: Session) -> None:
+    """sync.tick runs a whole sync in one task with a 60-min limit (30 min for the others):
+    a sync running for 50 min is still running, a 30-min task running that long is stuck."""
+    now = utcnow()
+    run(db, "demo", 1, now=now)
+    heartbeat(db, now=now)
+    job_log(db, "sync.tick", JobStatus.RUNNING, 50, now=now)
+    job_log(db, "maintenance.cleanup", JobStatus.RUNNING, 50, now=now)
+    report = data_health(db, now=now)
+    assert by_job(report.out.jobs, "sync.tick").status == "running"
+    assert by_job(report.out.jobs, "maintenance.cleanup").status == "stuck"
+    found = {p.key for p in report.problems}
+    assert "job_stuck:maintenance.cleanup" in found and "job_stuck:sync.tick" not in found
+    assert report.out.sync is not None and report.out.sync.heartbeat_stale is False
+    # Past 60 + 15 min it is stuck too, and the message names its own limit.
+    later = now + timedelta(minutes=26)  # running for 76 min
+    heartbeat(db, now=later)
+    report = data_health(db, now=later)
+    stuck = next(p for p in report.problems if p.key == "job_stuck:sync.tick")
+    assert "past the 60-minute task time limit" in stuck.message
+    assert report.out.sync is not None and report.out.sync.heartbeat_stale is True
+
+
+def test_the_interval_floor_widens_the_celery_job_heartbeat(
+    db: Session, env: pytest.MonkeyPatch
+) -> None:
+    """With JOB_INTERVAL_FLOOR_MINUTES=60 the most frequent job runs hourly: silence is a
+    problem after 2 x 60 min, not after DATA_HEALTH_HEARTBEAT_MINUTES (30)."""
+    set_env(env, JOB_INTERVAL_FLOOR_MINUTES="60")
+    now = utcnow()
+    run(db, "demo", 1, now=now)
+    job_log(db, "notifications.deliver", JobStatus.SUCCESS, 100, now=now)
+    report = data_health(db, now=now)
+    assert report.out.heartbeat.limit_minutes == 120
+    assert "jobs_not_running" not in {p.key for p in report.problems}
+    late = now + timedelta(minutes=25)  # 125 min of silence
+    problem = next(p for p in data_health(db, now=late).problems if p.key == "jobs_not_running")
+    assert problem.severity == "failing" and "limit 120 min" in problem.message
+    assert "alone runs every 60 min" in problem.message
+
+
 def test_the_daemon_is_judged_by_its_redis_heartbeat(db: Session, env: pytest.MonkeyPatch) -> None:
     set_env(env, JOB_RUNNER="daemon")
     now = utcnow()

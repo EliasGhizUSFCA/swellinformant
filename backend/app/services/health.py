@@ -996,7 +996,9 @@ def _check_sync(
 ) -> tuple[SyncHealthOut, list[Problem]]:
     """The sync block: runner liveness, the newest syncs, components and the CPU budget."""
     problems: list[Problem] = []
-    heartbeat = state.read_heartbeat() if redis_available else None
+    # Only the daemon writes a heartbeat (one billed Redis command per report on Upstash);
+    # under Celery a key left by an earlier daemon run says nothing about this runner.
+    heartbeat = state.read_heartbeat() if redis_available and not settings.runs_celery else None
     last_check_at: datetime | None = None
     stale = False
     components: list[SyncComponentOut] = []
