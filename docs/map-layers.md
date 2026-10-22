@@ -717,8 +717,8 @@ events as it does for a real user. No provider was called. DB → client, MB:
 Rows after the pass were identical (25,000 predictions, 4,050 archive rows, 98 events, 57
 matches). Inside "scoring" (not changed here): the confidence context 9.21 MB (3 calls),
 tide stages 8.18 MB (150 calls: every spot's tide predictions read again for each run),
-the ensemble index 1.02 MB, and the rest (about 18.6 MB) is the runs' whole
-`wave_forecasts` rows.
+the ensemble index 1.02 MB; the rest (about 18.6 MB) was not broken down further and
+includes reading every `wave_forecasts` row of the three runs as a whole entity.
 
 **One page view, anonymous, without a CDN in front** (`measure_db_egress.py pages
 --template swell_u3i_live_run --providers open_meteo,open_meteo_ecmwf --publish --now
@@ -743,8 +743,9 @@ less) costs about 57 MB × 6 × 30 = 10.3 GB a month after this package, against
 before; the demo pass extrapolates to 3.5 GB (before: 33.7 GB). So the sync alone still
 exceeds Neon Free's egress, and the largest remaining readers are outside the map:
 
-1. `/api/spots` reads 15.7 MB for a 301 kB response (whole predictions with their
-   forecasts, twice, for every spot and 7 days, to pick two hours per spot), so one
+1. `/api/spots` reads 15.7 MB for a 301 kB response (by the code, `spot_views.
+   _current_and_best` loads whole predictions with their forecasts, the forecast twice,
+   for every spot and 7 days, to pick two hours per spot), so one
    uncached map page view is about 17.5 MB: about 285 such views exhaust 5 GB.
 2. Scoring (`surf_quality/predict.py`, `confidence_context.py`, `tides/stage.py`) reads
    37 MB per replayed pass.
