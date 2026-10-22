@@ -131,7 +131,8 @@ def assert_imported(done: subprocess.CompletedProcess[str]) -> None:
 # ------------------------------------------------------------------------------ (a)-(c)
 def test_the_api_imports_with_every_extra_missing() -> None:
     assert "app.api.internal" in API_MODULES and "app.api.dev" in API_MODULES
-    assert_imported(import_without(["app.main", *API_MODULES], CELERY + DATA_LIBRARIES))
+    missing = CELERY + DATA_LIBRARIES + SERVER_EXTRAS
+    assert_imported(import_without(["app.main", *API_MODULES], missing))
 
 
 def test_the_sync_runner_imports_without_celery() -> None:
