@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { MapFreshness, mapStaleness, ModelRunLabel } from "@/components/map/map-freshness";
+import { MapFreshness, mapPublication, mapStaleness, ModelRunLabel, publicationText } from "@/components/map/map-freshness";
 import type { FieldIndex } from "@/lib/map-fields";
 import type { MapSnapshot } from "@/types/api";
 
@@ -58,6 +58,60 @@ describe("map freshness", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Forecast out of date — model run over 12 h old");
     const off = { ...INDEX, available: false, stale: true, age_hours: 99 };
     expect(mapStaleness(off, SNAPSHOT, NOW).stale).toBe(false);
+  });
+});
+
+describe("map publication", () => {
+  // SYNTHETIC: the same index as published by an invented sync 7.
+  const PUBLISHED: FieldIndex = { ...INDEX, published_at: "2026-10-11T22:52:00Z", sync_run_id: 7 };
+
+  it("uses the sync publication when the server names one, else the stored time", () => {
+    expect(mapPublication(PUBLISHED)).toEqual({ cycle: CYCLE, at: "2026-10-11T22:52:00Z", published: true });
+    expect(mapPublication(INDEX)).toEqual({ cycle: CYCLE, at: "2026-10-11T22:40:00Z", published: false });
+    expect(mapPublication({ ...INDEX, published_at: null })).toEqual({ cycle: CYCLE, at: "2026-10-11T22:40:00Z", published: false });
+    expect(mapPublication({ ...INDEX, updated_at: null })).toEqual({ cycle: CYCLE, at: null, published: false });
+    expect(mapPublication({ ...INDEX, available: false })).toBeNull();
+    expect(mapPublication({ ...INDEX, cycle_time: null })).toBeNull();
+    expect(mapPublication(null)).toBeNull();
+    expect(publicationText(PUBLISHED)).toBe("model run 18Z Oct 11 (Z = UTC), published Oct 11, 22:52 UTC");
+    expect(publicationText(INDEX)).toBe("model run 18Z Oct 11 (Z = UTC), stored Oct 11, 22:40 UTC");
+    expect(publicationText({ ...INDEX, updated_at: null })).toBe("model run 18Z Oct 11 (Z = UTC)");
+  });
+
+  it("adds the publication to the out-of-date chip, and nothing without one", () => {
+    const { rerender } = render(<MapFreshness index={{ ...PUBLISHED, stale: true, age_hours: 54.2 }} snapshot={SNAPSHOT} now={NOW} />);
+    const chip = screen.getByTestId("map-stale");
+    expect(chip).toHaveTextContent("Forecast out of date — model run 54 h old · published Oct 11, 22:52 UTC");
+    // Phones keep the chip on one line: the publication is for larger screens and screen readers.
+    expect(screen.getByTestId("map-published")).toHaveClass("sr-only", "sm:not-sr-only");
+    expect(chip).toHaveAttribute("title", "Ocean layers: model run 18Z Oct 11 (Z = UTC), published Oct 11, 22:52 UTC");
+    rerender(<MapFreshness index={{ ...INDEX, stale: true, age_hours: 54.2 }} snapshot={SNAPSHOT} now={NOW} />);
+    expect(screen.getByTestId("map-stale")).toHaveTextContent(/^Forecast out of date — model run 54 h old$/);
+    expect(screen.queryByTestId("map-published")).toBeNull();
+    expect(screen.getByTestId("map-stale")).toHaveAttribute("title", "Ocean layers: model run 18Z Oct 11 (Z = UTC), stored Oct 11, 22:40 UTC");
+  });
+
+  it("keeps the stale rule: a fresh published run shows no chip", () => {
+    const { container } = render(<MapFreshness index={PUBLISHED} snapshot={SNAPSHOT} now={NOW} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(mapStaleness(PUBLISHED, SNAPSHOT, NOW)).toEqual(mapStaleness(INDEX, SNAPSHOT, NOW));
+  });
+
+  it("names the publication in the run label's tooltip, the visible text unchanged", () => {
+    const { rerender } = render(<ModelRunLabel index={PUBLISHED} at="2026-10-12T00:00:00Z" />);
+    const label = screen.getByTestId("map-lead-time");
+    expect(label).toHaveTextContent(/^Model run GFS 18Z Oct 11 · \+6 h$/);
+    expect(label).toHaveAttribute("data-published-at", "2026-10-11T22:52:00Z");
+    expect(label).toHaveAttribute(
+      "title",
+      "NOAA GFS-Wave + GFS (direct from NOAA open data), model run 18Z Oct 11 (Z = UTC), published Oct 11, 22:52 UTC. Forecast values, not observations.",
+    );
+    rerender(<ModelRunLabel index={INDEX} at="2026-10-12T00:00:00Z" />);
+    expect(screen.getByTestId("map-lead-time")).not.toHaveAttribute("data-published-at");
+    expect(screen.getByTestId("map-lead-time")).toHaveAttribute(
+      "title",
+      "NOAA GFS-Wave + GFS (direct from NOAA open data), model run 18Z Oct 11 (Z = UTC), stored Oct 11, 22:40 UTC. Forecast values, not observations.",
+    );
   });
 });
 
