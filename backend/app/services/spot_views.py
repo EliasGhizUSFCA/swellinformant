@@ -108,9 +108,30 @@ def spot_mini(spot: SurfSpot) -> SpotMini:
     )
 
 
+AttributionMemo = dict[int, list[AttributionLinkOut]]
+
+
+def run_attribution_links(
+    db: Session, run: ForecastRun, memo: AttributionMemo | None = None
+) -> list[AttributionLinkOut]:
+    """``queries.source_attribution_links`` (a statement for a blend run), read once per
+    run when the caller lists several events of the same run (``memo``)."""
+    if memo is None:
+        return source_attribution_links(db, run)
+    if run.id not in memo:
+        memo[run.id] = source_attribution_links(db, run)
+    return memo[run.id]
+
+
 def event_out(
-    event: SwellEvent, now: datetime | None = None, include_history: bool = False
+    event: SwellEvent,
+    now: datetime | None = None,
+    include_history: bool = False,
+    *,
+    links: AttributionMemo | None = None,
 ) -> EventOut:
+    """``links``: the attribution links already read for the events' runs (a list of events
+    from a few runs then reads each run's once)."""
     now = now or utcnow()
     # The read-time staleness rule, as for the same hour in the forecast (_conditions).
     db = object_session(event)
@@ -147,7 +168,7 @@ def event_out(
         # The credits its forecast run's sources ask for next to their data (Open-Meteo,
         # ECMWF, NOAA); cards show the swell, wind and our estimate from that run.
         attribution_links=(
-            source_attribution_links(db, event.latest_run)
+            run_attribution_links(db, event.latest_run, links)
             if db is not None and event.latest_run is not None
             else []
         ),
@@ -352,6 +373,7 @@ def _summary(
     events: tuple[dict[int, SwellEvent], dict[int, int]],
     research_class: str | None,
     now: datetime,
+    links: AttributionMemo | None = None,
 ) -> SpotSummary:
     first, counts = events
     upcoming = first.get(spot.id)
@@ -359,7 +381,7 @@ def _summary(
         **_summary_fields(spot),  # type: ignore[arg-type]
         current=current.get(spot.id),
         best_upcoming=best.get(spot.id),
-        next_event=event_out(upcoming, now) if upcoming is not None else None,
+        next_event=event_out(upcoming, now, links=links) if upcoming is not None else None,
         upcoming_event_count=counts.get(spot.id, 0),
         research_class=research_class,
     )
@@ -374,7 +396,8 @@ def spot_summaries(
     current, best = _current_and_best(db, latest_runs_by_spot(db, now), now, horizon_days)
     events = _active_events(db, now)
     research = research_classes(db)  # one query for all spots
-    return [_summary(s, current, best, events, research.get(s.id), now) for s in spots]
+    links: AttributionMemo = {}
+    return [_summary(s, current, best, events, research.get(s.id), now, links) for s in spots]
 
 
 def spot_detail(
@@ -834,7 +857,24 @@ def upcoming_events(
         .order_by(SwellEvent.peak_score.desc(), SwellEvent.start_time)
         .limit(limit)
     ).all()
-    return [event_out(e, now) for e in rows]
+    links: AttributionMemo = {}
+    return [event_out(e, now, links=links) for e in rows]
+
+
+def spot_events(db: Session, spot: SurfSpot, now: datetime | None = None) -> list[EventOut]:
+    """The spot's active and downgraded events that have not ended, by start time."""
+    now = now or utcnow()
+    rows = db.scalars(
+        select(SwellEvent)
+        .where(
+            SwellEvent.spot_id == spot.id,
+            SwellEvent.end_time >= now,
+            SwellEvent.status.in_((SwellEventStatus.ACTIVE, SwellEventStatus.DOWNGRADED)),
+        )
+        .order_by(SwellEvent.start_time)
+    ).all()
+    links: AttributionMemo = {}
+    return [event_out(e, now, links=links) for e in rows]
 
 
 def event_counts(db: Session) -> dict[str, int]:
