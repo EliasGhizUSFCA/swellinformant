@@ -172,16 +172,18 @@ test.describe("local Vercel-style stack", () => {
     await shot(page, "status");
   });
 
-  test("the daily cron endpoint answers 401 without the token and 200 with it", async ({ request }) => {
+  test("the daily cron endpoint answers 401 without the token and 200 with it", async ({ request, baseURL }) => {
     expect(CRON_SECRET, "VERCEL_SMOKE_CRON_SECRET (the stack's CRON_SECRET)").not.toBe("");
     const denied = await request.get(CRON_PATH);
     expect(denied.status()).toBe(401);
     const wrong = await request.get(CRON_PATH, { headers: { Authorization: "Bearer not-the-cron-secret" } });
     expect(wrong.status()).toBe(401);
 
-    const ok = await request.get(CRON_PATH, { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
-    expect(ok.status()).toBe(200);
-    expect(ok.headers()["cache-control"]).toContain("no-store");
+    // Node's fetch, not the traced `request` fixture: a retained trace (test-results/) records
+    // request headers, and the real token must not end up there.
+    const ok = await fetch(new URL(CRON_PATH, baseURL), { headers: { Authorization: `Bearer ${CRON_SECRET}` } });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("cache-control")).toContain("no-store");
     const body = (await ok.json()) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(["alerts_sent", "heartbeat_age_minutes", "problems", "status"]);
   });

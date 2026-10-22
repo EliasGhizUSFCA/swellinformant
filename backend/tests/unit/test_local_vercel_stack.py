@@ -7,6 +7,7 @@ the Containerfile, the lean API image, the edge's Caddyfile and PgBouncer's conf
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -24,6 +25,8 @@ API_LEAN = ROOT / "docker" / "api-lean" / "Dockerfile"
 PGBOUNCER = ROOT / "docker" / "pgbouncer"
 CADDYFILE = ROOT / "docker" / "edge" / "Caddyfile"
 FRONTEND_DOCKERFILE = ROOT / "frontend" / "Dockerfile"
+SCRIPT = ROOT / "scripts" / "vercel-local.sh"
+VERCEL_JSON = ROOT / "vercel.json"
 
 HOSTED_FREE = profile_env("hosted", "free-database")
 # The stack's documented departures from the hosted profile: no forecast or map provider
@@ -88,6 +91,13 @@ def compose_defaults() -> dict[str, str]:
     for key, var in re.findall(r"^\s+([A-Z][A-Z0-9_]+): \$\{([A-Z][A-Z0-9_]+):-", text, re.M):
         assert key == var or var.startswith("VERCEL_LOCAL_"), f"{key} is read from ${{{var}}}"
     return out
+
+
+def compose_service(name: str) -> str:
+    """The lines of one service of docker-compose.vercel.yml (indented by four spaces)."""
+    match = re.search(rf"^  {name}:\n((?:    .*\n|\s*\n)+)", COMPOSE.read_text(), flags=re.M)
+    assert match, f"no service {name!r}"
+    return match.group(1)
 
 
 def compose_fixed() -> dict[str, str]:
@@ -206,3 +216,53 @@ def test_frontend_dockerfile_passes_api_routing_to_the_build() -> None:
     text = FRONTEND_DOCKERFILE.read_text()
     assert re.search(r"^ARG API_ROUTING=proxy$", text, flags=re.M)
     assert "ENV API_ROUTING=${API_ROUTING}" in text
+
+
+def test_script_has_the_designed_subcommands() -> None:
+    text = SCRIPT.read_text()
+    commands = set(re.findall(r'^  ([a-z]+)\) cmd_\1 "\$@" ;;$', text, flags=re.M))
+    designed = {"up", "down", "logs", "sync", "check", "cron", "smoke", "psql", "bundle"}
+    assert designed | {"status"} <= commands, sorted(designed - commands)
+    assert "scripts/check_api_bundle.py" in text
+
+
+def test_smoke_checks_the_lean_api_the_pooler_and_the_client_ip() -> None:
+    text = SCRIPT.read_text()
+    loop = re.search(r"^  for module in ([a-z ]+); do$", text, flags=re.M)
+    assert loop, "the smoke's heavy-import loop"
+    assert {"pandas", "eccodes", "celery", "kombu"} <= set(loop.group(1).split())
+    assert "SHOW CONFIG" in text and '"$mode" = "transaction"' in text
+    for header in ("X-Vercel-Forwarded-For", "X-Forwarded-For", "X-Real-IP"):
+        assert f"-H '{header}: " in text
+    # The counter key is the edge's peer, digested as the API does (app.core.ratelimit).
+    assert "limit_key" in text
+    assert "migrate --on-build" in text
+
+
+def test_the_stack_mirrors_vercel_json() -> None:
+    if not VERCEL_JSON.is_file():
+        pytest.skip("vercel.json (package vercel-deploy) is not in this tree")
+    config = json.loads(VERCEL_JSON.read_text())
+    # Vercel Cron: the cron service calls the same path at the same time of day (UTC).
+    (cron,) = config["crons"]
+    minute, hour, *every_day = cron["schedule"].split()
+    assert every_day == ["*", "*", "*"]
+    cron_service = compose_service("cron")
+    assert f'CRON_AT: "{int(hour):02d}:{int(minute):02d}"' in cron_service
+    assert f"CRON_PATH: {cron['path']}" in cron_service
+    # The daemon: the same Containerfile, 2 GiB, the same grace period after SIGTERM.
+    daemon = config["daemons"]["sync"]
+    assert (daemon["root"], daemon["entrypoint"]) == ("./", "Containerfile")
+    assert daemon["resources"]["requests"]["memory"] == "2Gi"
+    sync_service = compose_service("sync")
+    assert "<<: *sync-image" in sync_service
+    assert "mem_limit: 2g" in sync_service
+    assert f"stop_grace_period: {daemon['terminationGracePeriodSeconds']}s" in sync_service
+    assert "dockerfile: Containerfile" in COMPOSE.read_text()
+    # Services routing and the API function's maxDuration at the edge.
+    destinations = {r["source"]: r["destination"]["service"] for r in config["rewrites"]}
+    assert destinations == {"/api/(.*)": "api", "/(.*)": "web"}
+    max_duration = config["services"]["api"]["functions"]["app/main.py"]["maxDuration"]
+    assert f"response_header_timeout {max_duration}s" in CADDYFILE.read_text()
+    assert config["services"]["api"]["root"] == "backend/"
+    assert config["services"]["web"]["root"] == "frontend/"

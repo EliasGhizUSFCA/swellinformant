@@ -4,6 +4,8 @@
 #   scripts/vercel-local.sh up [--no-build]      build, start and wait until healthy
 #   scripts/vercel-local.sh sync [--force] [--only spots,ensemble,map]
 #                                                one sync now, in the sync daemon's container
+#                                                (waits while the daemon's own sync holds
+#                                                the lease, up to VERCEL_LOCAL_SYNC_WAIT_SECONDS)
 #   scripts/vercel-local.sh check                the sync plan (provider metadata only)
 #   scripts/vercel-local.sh status               containers, images, heartbeat, newest syncs
 #   scripts/vercel-local.sh cron                 call the daily watchdog as Vercel Cron does
@@ -69,14 +71,23 @@ cmd_up() {
   took "up"
 }
 
+# `sync run` exits 3 when another sync holds the lease: right after `up` the daemon usually
+# runs its own first sync. Waiting is cheap, since run_sync checks the lease before it asks
+# any provider; VERCEL_LOCAL_SYNC_WAIT_SECONDS=0 returns at once.
 cmd_sync() {
   SECONDS=0
-  local rc=0
-  compose exec -T sync python -m app.cli sync run "$@" || rc=$?
+  local rc wait_s="${VERCEL_LOCAL_SYNC_WAIT_SECONDS:-1200}"
+  while true; do
+    rc=0
+    compose exec -T sync python -m app.cli sync run "$@" || rc=$?
+    { [ "$rc" -eq 3 ] && [ "$SECONDS" -lt "$wait_s" ]; } || break
+    echo "another sync holds the lease (the daemon's own sync); trying again in 15 s" >&2
+    sleep 15
+  done
   took "sync"
   case $rc in
     0) ;;
-    3) echo "another sync holds the lease (the daemon is syncing): try again when it is done" >&2 ;;
+    3) echo "another sync still holds the lease after ${wait_s} s: scripts/vercel-local.sh status" >&2 ;;
     *) echo "the sync failed (exit $rc); scripts/vercel-local.sh logs sync" >&2 ;;
   esac
   return "$rc"
@@ -102,6 +113,10 @@ else:
         print("  -", reason)
 '
   compose exec -T sync python -m app.cli sync status --limit "${1:-3}"
+  # Upstash bills commands: the stack's Redis counts what the API and the daemon send.
+  local commands
+  commands="$(compose exec -T redis redis-cli INFO stats | tr -d '\r' | awk -F: '$1 == "total_commands_processed" { print $2 }' || true)"
+  [ -z "$commands" ] || echo "redis: $commands commands since the redis container started"
 }
 
 cmd_cron() {
@@ -144,6 +159,15 @@ FAILURES=0
 pass() { printf '  ok    %s\n' "$*"; }
 fail() { printf '  FAIL  %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
 
+# curl to the stack on this machine, never through an HTTP(S)_PROXY of the environment.
+curl_local() { curl --noproxy '*' "$@"; }
+
+# The status code of GET $1 with "Authorization: Bearer $2"; the header goes to curl on
+# stdin, so the token is not on a command line (ps).
+status_with_token() {
+  printf 'Authorization: Bearer %s\n' "$2" | curl_local -s -o /dev/null -w '%{http_code}' --max-time 90 -H @- "$1"
+}
+
 # psql on PgBouncer's admin console, from the postgres container.
 pgbouncer_admin() {
   compose exec -T -e PGPASSWORD=swell postgres psql -h pgbouncer -p 6432 -U swell -X -A -F '|' -P footer=off pgbouncer -c "$1"
@@ -162,7 +186,7 @@ cmd_smoke() {
   base="http://localhost:$edge"
   echo "smoke: $base"
 
-  if curl -fsS --max-time 10 "$base/api/health/ready" >/dev/null; then pass "the API is ready behind the edge"; else fail "GET $base/api/health/ready"; fi
+  if curl_local -fsS --max-time 10 "$base/api/health/ready" >/dev/null; then pass "the API is ready behind the edge"; else fail "GET $base/api/health/ready"; fi
 
   # The API image is the lean install, like the Vercel function: no heavy dependency, no data/.
   local module
@@ -171,12 +195,23 @@ cmd_smoke() {
   done
   if compose exec -T api test -e /data; then fail "the api image has /data"; else pass "the api image has no data/ directory"; fi
 
+  # The api service's Vercel build command (vercel.json buildCommand) on the lean install: a
+  # production build migrates over the direct URL (DATABASE_URL_UNPOOLED); here the database
+  # is already at head, so it only checks the revision.
+  local built
+  if built="$(compose exec -T -e VERCEL_ENV=production api python -m app.cli migrate --on-build 2>&1)" \
+    && printf '%s' "$built" | grep -q '"status": "migrated"'; then
+    pass "the build command 'migrate --on-build' runs on the lean api image (VERCEL_ENV=production)"
+  else
+    fail "migrate --on-build on the api image: $(printf '%s' "$built" | tail -n 1)"
+  fi
+
   # PgBouncer in transaction mode, and the API's queries go through it.
   local mode before after
   mode="$(pgbouncer_admin "SHOW CONFIG" | awk -F'|' '$1 == "pool_mode" { print $2 }' || true)"
   if [ "$mode" = "transaction" ]; then pass "PgBouncer pool_mode = transaction"; else fail "PgBouncer pool_mode is '$mode'"; fi
   before="$(pgbouncer_xacts || true)"
-  curl -fsS --max-time 20 "$base/api/spots" >/dev/null || fail "GET /api/spots"
+  curl_local -fsS --max-time 20 "$base/api/spots" >/dev/null || fail "GET /api/spots"
   after="$(pgbouncer_xacts || true)"
   if [ -n "$before" ] && [ -n "$after" ] && [ "$after" -gt "$before" ]; then
     pass "GET /api/spots ran its transactions through PgBouncer ($before -> $after)"
@@ -185,23 +220,44 @@ cmd_smoke() {
   fi
 
   # The client IP: a client's own X-Vercel-Forwarded-For, X-Forwarded-For and X-Real-IP never
-  # reach the API. Its rate-limit key (GET /api/health/data: rl:health-data:<ip>:<window>) is
-  # the TCP peer the edge saw, the Docker network's gateway for a request from this host.
-  local network gateway keys
+  # reach the API. The rate-limit counter of GET /api/health/data (bucket health-data) must
+  # belong to the TCP peer the edge saw, the Docker network's gateway for a request from this
+  # host. The API keys counters rl:<bucket>:<key>:<window> by a keyed digest of the address
+  # (app.core.ratelimit.limit_key, with the API's SECRET_KEY) or, without that function, by
+  # the address itself, so the expected keys are computed in the api container.
+  local network gateway keys expected peer_key forged_keys forged key
   # shellcheck disable=SC2016  # a Go template, not a shell expansion
   network="$(compose ps -q edge | xargs docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' | awk '{ print $1 }' || true)"
   gateway="$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}' "$network" 2>/dev/null | awk '{ print $1 }' || true)"
   compose exec -T redis sh -c 'redis-cli --scan --pattern "rl:health-data:*" | xargs -r redis-cli del' >/dev/null || true
-  curl -fsS --max-time 20 -o /dev/null \
+  curl_local -fsS --max-time 20 -o /dev/null \
     -H 'X-Vercel-Forwarded-For: 203.0.113.77' -H 'X-Forwarded-For: 198.51.100.9' -H 'X-Real-IP: 192.0.2.5' \
     "$base/api/health/data" || fail "GET /api/health/data"
   keys="$(compose exec -T redis redis-cli --scan --pattern 'rl:health-data:*' | tr -d '\r' | tr '\n' ' ' || true)"
-  if printf '%s' "$keys" | grep -Eq '203\.0\.113\.77|198\.51\.100\.9|192\.0\.2\.5'; then
-    fail "a spoofed client-IP header reached the API: $keys"
-  elif [ -n "$gateway" ] && printf '%s' "$keys" | grep -Fq "rl:health-data:$gateway:"; then
-    pass "spoofed client-IP headers are overwritten by the edge (rate-limit key ${keys% })"
+  expected="$(compose exec -T api python - "${gateway:-none}" 203.0.113.77 198.51.100.9 192.0.2.5 <<'PY' 2>/dev/null || true
+import sys
+
+from app.core import ratelimit
+
+digest = getattr(ratelimit, "limit_key", None)
+for address in sys.argv[1:]:
+    print(f"rl:health-data:{digest('health-data', address) if digest else address}:")
+PY
+)"
+  peer_key="$(printf '%s\n' "$expected" | sed -n 1p | tr -d '\r')"
+  forged_keys="$(printf '%s\n' "$expected" | sed -n '2,$p' | tr -d '\r')"
+  forged=""
+  while IFS= read -r key; do
+    if [ -n "$key" ] && printf '%s' "$keys" | grep -Fq "$key"; then forged="$forged $key"; fi
+  done <<< "$forged_keys"
+  if [ -z "$gateway" ] || [ -z "$peer_key" ]; then
+    fail "could not work out the edge's peer address or its rate-limit key (network '$network')"
+  elif [ -n "$forged" ]; then
+    fail "a spoofed client-IP header reached the API (rate-limit key${forged})"
+  elif printf '%s' "$keys" | grep -Fq "$peer_key"; then
+    pass "spoofed client-IP headers are overwritten by the edge (the counter is the peer $gateway's: ${peer_key%:})"
   else
-    fail "no rate-limit key for the peer address $gateway (keys: '${keys% }')"
+    fail "no rate-limit counter for the peer address $gateway (keys: '${keys% }')"
   fi
 
   # Vercel's routing sends /api/* to the API: the web service itself has no /api route.
@@ -230,9 +286,9 @@ with SessionLocal() as db:
   # The daily watchdog: 401 without the token, 200 with it.
   local secret code
   secret="$(compose exec -T api printenv CRON_SECRET | tr -d '\r' || true)"
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$base/api/internal/cron/daily")"
+  code="$(curl_local -s -o /dev/null -w '%{http_code}' --max-time 20 "$base/api/internal/cron/daily")"
   if [ "$code" = "401" ]; then pass "cron without a token: 401"; else fail "cron without a token: $code"; fi
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 -H "Authorization: Bearer $secret" "$base/api/internal/cron/daily")"
+  code="$(status_with_token "$base/api/internal/cron/daily" "$secret")"
   if [ "$code" = "200" ]; then pass "cron with the token: 200"; else fail "cron with the token: $code"; fi
 
   local map_fields
