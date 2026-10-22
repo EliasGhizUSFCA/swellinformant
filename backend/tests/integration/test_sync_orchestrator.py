@@ -19,6 +19,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app import cli
+from app.core.config import get_settings
 from app.core.database import utcnow
 from app.models import BackgroundJobLog, ForecastRun, WaveForecast
 from app.models.forecast_engine import MapField
@@ -158,6 +159,73 @@ def test_a_forced_second_sync_is_idempotent(db: Session, synthetic_map: MapWorld
     new = synthetic_map.world.requests[requests:]
     assert new and {r.method for r in new} == {"HEAD"}
     assert second.published_at is not None and second.published_at > first.published_at
+
+
+def test_a_sync_that_finds_everything_stored_publishes_nothing(
+    db: Session, synthetic_map: MapWorld
+) -> None:
+    """A runner whose known runs are stale (e.g. Redis lost them) plans the stored runs as
+    new; the acquisitions find them stored and published already, so blend and publish do
+    not run, the publication does not move, and the sync ends skipped."""
+    first = orchestrator.run_sync(trigger="cli", now=NOW)
+    assert first.status == "success" and first.published_at is not None
+    plan = plan_sync(None, now=NOW, known=empty_known(NOW))
+    assert plan.due and plan.due_kinds() == {"spots", "map"}
+    second = orchestrator.run_sync(trigger="cli", now=NOW, plan=plan)
+    outcomes = [
+        c["outcome"]
+        for s in second.stages
+        if s.name in ("spots", "map")
+        for c in s.detail["components"]
+    ]
+    assert outcomes == ["current", "current"]
+    assert stages(second)["blend"] == "skipped" and stages(second)["publish"] == "skipped"
+    assert second.status == "skipped" and second.published_at is None
+    assert second.sync_run_id is not None and second.sync_run_id != first.sync_run_id
+    assert latest_publication(db).id == first.sync_run_id  # type: ignore[union-attr]
+
+
+def test_force_turns_a_given_plan_into_a_forced_one(db: Session, synthetic_map: MapWorld) -> None:
+    assert orchestrator.run_sync(trigger="cli", now=NOW).status == "success"
+    plan = plan_sync(db, now=NOW)
+    assert not plan.due and not plan.forced
+    result = orchestrator.run_sync(trigger="cli", force=True, plan=plan, now=NOW)
+    assert result.plan.forced and result.plan.due and "forced" in result.plan.reasons
+    assert result.sync_run_id is not None and result.status == "success"
+    assert stages(result)["publish"] == "success"
+
+
+def test_the_lease_is_renewed_after_every_stage(
+    db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lease_expires_at moves SYNC_LEASE_MINUTES ahead after each stage, so a sync that
+    takes longer than one lease (a slow map stage) keeps it."""
+    from app.services.forecasts import ingestion
+    from app.services.surf_quality import predict
+
+    seen: dict[str, Any] = {}
+
+    def lease(db: Session) -> Any:
+        return db.scalar(select(SyncRun.lease_expires_at).where(SyncRun.status == "running"))
+
+    real_acquire, real_predict = ingestion.acquire_all, predict.compute_pending_predictions
+
+    def acquire(db: Session, **kw: Any) -> Any:
+        seen["spots"] = lease(db)  # the lease as acquired: no stage has finished yet
+        return real_acquire(db, **kw)
+
+    def scored(db: Session, now: Any = None) -> Any:
+        seen["predict"] = lease(db)  # renewed after spots, ensemble, map and blend
+        return real_predict(db, now)
+
+    monkeypatch.setattr(ingestion, "acquire_all", acquire)
+    monkeypatch.setattr(predict, "compute_pending_predictions", scored)
+    started = utcnow()
+    result = orchestrator.run_sync(trigger="cli", now=NOW)
+    assert result.status == "success"
+    lease_time = timedelta(minutes=get_settings().sync_lease_minutes)
+    assert timedelta(0) <= seen["spots"] - (started + lease_time) < timedelta(minutes=1)
+    assert seen["predict"] > seen["spots"]
 
 
 def test_a_second_concurrent_sync_gets_sync_busy(
@@ -329,6 +397,26 @@ def test_a_failed_component_makes_a_partial_sync_and_counts_an_attempt(
     assert plan_sync(None, now=NOW + timedelta(minutes=16), known=known).due
 
 
+def test_a_failed_publication_fails_the_sync_and_publishes_nothing(
+    db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.sync import publish as publish_module
+
+    def broken(db: Session, **kw: Any) -> Any:
+        raise RuntimeError("the publication could not be committed (test)")
+
+    monkeypatch.setattr(publish_module, "publish", broken)
+    result = orchestrator.run_sync(trigger="cli", now=NOW)
+    assert result.status == "failed" and result.published_at is None
+    assert stages(result)["spots"] == "success" and stages(result)["publish"] == "failed"
+    after = [s for s in result.stages if s.name in ("detect", "match", "flights", "alerts")]
+    assert {s.status for s in after} == {"skipped"}
+    assert {s.detail["reason"] for s in after} == {"nothing was published"}
+    assert latest_publication(db) is None
+    # The data stored is unpublished, so the next check plans it again.
+    assert plan_sync(db, now=NOW + timedelta(minutes=10)).due
+
+
 def test_a_run_no_longer_served_at_acquisition_is_deferred_not_failed(
     db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -388,6 +476,68 @@ def test_publish_without_a_sync_makes_a_published_row(db: Session) -> None:
     assert latest_publication(db) == row
 
 
+def test_a_simulated_swell_run_never_counts_as_the_stored_run(
+    db: Session, few_spots: list[str]
+) -> None:
+    """simulate-swell (a developer tool) stores a demo run keyed "demo-sim:...", and the dev
+    endpoint's pipeline publishes it. The provider never offers that key, so it must not
+    replace the real demo run as the stored one (or every check would plan a sync)."""
+    from app.models import SurfSpot
+    from app.services.forecasts.ingestion import simulate_swell
+    from app.services.sync.detect import load_known
+    from app.services.sync.publish import publish
+
+    first = orchestrator.run_sync(trigger="cli")
+    assert first.status == "success"
+    real_key = load_known(db).stored["demo"]
+    spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == few_spots[0]))
+    assert spot is not None
+    outcome = simulate_swell(db, spot, start=utcnow() + timedelta(days=7))
+    assert outcome.status == "success" and (outcome.run_key or "").startswith("demo-sim:")
+    publish(db, trigger="pipeline")
+    assert load_known(db).stored["demo"] == real_key
+    plan = plan_sync(db)
+    assert not plan.due, plan.reasons
+
+
+def test_publish_records_the_newest_scored_blend_run(db: Session) -> None:
+    """blend_run_id: the newest usable blend run whose predictions are computed (a blend run
+    still being scored, or a failed one, is not what the spot pages show)."""
+    from app.models import ForecastSource
+    from app.models.enums import ForecastRunStatus
+    from app.services.sync.publish import publish
+
+    source = db.scalar(select(ForecastSource).where(ForecastSource.code == "blend"))
+    if source is None:
+        source = ForecastSource(code="blend", name="Blend (test)", provider="blend")
+        db.add(source)
+        db.flush()
+    t0 = NOW - timedelta(hours=12)
+
+    def blend_run(key: str, hours: int, status: ForecastRunStatus, scored: bool) -> ForecastRun:
+        issued = t0 + timedelta(hours=hours)
+        run = ForecastRun(
+            source_id=source.id,
+            run_key=key,
+            issued_at=issued,
+            started_at=issued,
+            completed_at=issued,
+            status=status,
+            predictions_computed_at=issued if scored else None,
+            details={},
+        )
+        db.add(run)
+        db.flush()
+        return run
+
+    scored = blend_run("blend-test:1", 0, ForecastRunStatus.SUCCESS, scored=True)
+    blend_run("blend-test:2", 6, ForecastRunStatus.SUCCESS, scored=False)  # not scored yet
+    blend_run("blend-test:3", 12, ForecastRunStatus.FAILED, scored=True)
+    db.commit()
+    row = publish(db, trigger="cli")
+    assert row.blend_run_id == scored.id
+
+
 # --------------------------------------------------------------------------- commands
 def test_sync_commands(
     db: Session, synthetic_map: MapWorld, capsys: pytest.CaptureFixture[str]
@@ -419,6 +569,47 @@ def test_sync_commands(
     rows = json.loads(capsys.readouterr().out)
     assert [r["trigger"] for r in rows][:2] == ["cli", "cli"]
     assert {"id", "status", "stages", "published_at"} <= set(rows[0])
+
+
+def test_sync_run_exits_1_when_nothing_could_be_stored(
+    db: Session,
+    few_spots: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from app.services.forecasts.demo import DemoForecastProvider
+
+    def down(self: Any, spots: Any, run: Any) -> Any:
+        raise RuntimeError("the demo provider is down (test)")
+
+    monkeypatch.setattr(DemoForecastProvider, "fetch", down)
+    assert cli.main(["sync", "run"]) == sync_cli.EXIT_FAILED == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "failed" and out["published_at"] is None
+    spots = next(s for s in out["stages"] if s["name"] == "spots")
+    assert [c["outcome"] for c in spots["detail"]["components"]] == ["failed"]
+
+
+def test_sync_run_does_not_wait_for_a_retry_but_if_due_does(
+    db: Session, few_spots: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`sync run` acquires a component the rules hold back (here: a failed attempt a moment
+    ago, SYNC_RETRY_MINUTES not over); `sync run --if-due` follows the rules and waits."""
+    from app.services.forecasts.registry import build_provider
+
+    key = build_provider("demo", get_settings()).current_run(utcnow()).run_key
+    known = empty_known()
+    known.attempts[f"demo|{key}"] = (1, utcnow())
+    state.write_known(known)
+    assert cli.main(["sync", "run", "--if-due"]) == sync_cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["status"] == "not_due"
+    assert cli.main(["sync", "run"]) == sync_cli.EXIT_OK
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "success"
+    spots = next(s for s in result["stages"] if s["name"] == "spots")
+    assert [c["outcome"] for c in spots["detail"]["components"]] == ["stored"]
+    after = state.read_known()
+    assert after is not None and after.attempts == {}  # the stored run cleared the attempt
 
 
 def test_sync_run_exits_3_while_another_sync_holds_the_lease(

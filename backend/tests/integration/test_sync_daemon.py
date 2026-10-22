@@ -8,6 +8,7 @@ stops the loop. Demo spot forecasts (synthetic by design); no live provider is c
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import threading
@@ -160,6 +161,48 @@ def test_kicks_wake_the_database_and_idle_polls_do_not(db: Session, published: N
     assert get_engine().pool.checkedin() == 0
 
 
+def test_a_flights_kick_without_ids_refreshes_every_match(
+    db: Session, published: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "Refresh flights" without match ids is stored as ALL_MATCHES: the daemon runs
+    flights.discover for every match (match_ids None), never for a match id "*"."""
+    from app.services.flights import service as flights
+
+    asked: list[Any] = []
+    real = flights.discover_flights
+
+    def discover(db: Session, now: Any = None, limit: int = 50, match_ids: Any = None) -> Any:
+        asked.append(match_ids)
+        return real(db, now, limit, match_ids)
+
+    monkeypatch.setattr(flights, "discover_flights", discover)
+    assert state.request_kick("flights.discover")
+    daemon = SyncDaemon(get_settings())
+    daemon.start(init_db=False)
+    assert daemon.poll_kicks() == {"flights.discover": [state.ALL_MATCHES]}
+    assert asked[:1] == [None]
+    assert job_names(db)[:1] == ["flights.discover"]
+
+
+def test_sync_check_reads_the_known_runs_from_redis_not_the_database(
+    db: Session, published: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`sync check` loads the stored keys from the database once (Redis has none yet) and
+    then, like the daemon's check, needs Redis and the providers only."""
+    assert state.read_known() is None
+    assert cli.main(["sync", "check", "--json"]) == 0
+    capsys.readouterr()
+    assert state.read_known() is not None
+    counter, remove = count_queries(get_engine())
+    try:
+        assert cli.main(["sync", "check", "--json"]) == 0
+    finally:
+        remove()
+    out = json.loads(capsys.readouterr().out)
+    assert out["due"] is False
+    assert counter.statements == [] and counter.checkouts == 0
+
+
 def test_periodic_jobs_run_in_one_batch_from_in_memory_timers(
     db: Session, published: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -179,6 +222,39 @@ def test_periodic_jobs_run_in_one_batch_from_in_memory_timers(
     assert daemon.run_periodic() == expected  # one batch, back to back
     assert job_names(db) == expected
     assert daemon.run_periodic() == []  # not again until the next hour
+
+
+def test_the_daemon_takes_the_known_runs_a_command_line_sync_wrote(
+    db: Session, few_spots: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `sync run` by hand while the daemon runs reloads the known runs into Redis; the
+    daemon's next check uses them and does not sync the same run again."""
+    daemon = SyncDaemon(get_settings())
+    daemon.start(init_db=False)
+    assert daemon.known is not None and daemon.known.stored == {}  # nothing published yet
+    assert cli.main(["sync", "run"]) == 0
+    capsys.readouterr()
+    plan = daemon.check()
+    assert not plan.due
+    assert daemon.known.stored.get("demo", "").startswith("demo:")
+    assert db.scalar(select(func.count()).select_from(SyncRun)) == 1  # no second sync
+
+
+def test_the_cpu_meter_carries_this_month_over_a_restart(db: Session, published: None) -> None:
+    from app.core.database import utcnow
+
+    state.write_heartbeat(None, runner="daemon", cpu_s_month=1234.5)  # the previous process
+    daemon = SyncDaemon(get_settings())
+    daemon.start(init_db=False)
+    assert daemon.cpu is not None and daemon.cpu.carry == 1234.5
+    daemon.check()
+    beat = state.read_heartbeat()
+    assert beat is not None and beat.cpu_s_month is not None and beat.cpu_s_month >= 1234.5
+    # A heartbeat of an earlier month is not carried into a new month.
+    later = utcnow() + timedelta(days=40)
+    nxt = SyncDaemon(get_settings(), wall=lambda: later)
+    nxt.start(init_db=False)
+    assert nxt.cpu is not None and nxt.cpu.carry == 0.0
 
 
 def test_sigterm_stops_the_loop(db: Session, published: None) -> None:

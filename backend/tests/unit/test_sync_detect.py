@@ -384,6 +384,9 @@ def test_a_run_the_provider_does_not_serve_unmixed_waits_without_an_attempt(
     soon = plan_sync(None, settings=settings(), now=T0, known=k)
     assert not soon.due and comp(soon, ECMWF).retry_after_s == 600.0
     assert soon.waiting_until == T0 + timedelta(seconds=600)
+    # `sync run` cannot acquire what is not served: it stays waiting, nothing is due.
+    now = promote_pending(soon)
+    assert not now.due and state(now, ECMWF) == "waiting" and now.due_kinds() == frozenset()
 
 
 class FakeOpenMeteo:
