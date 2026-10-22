@@ -1,0 +1,332 @@
+# Local Vercel-style stack: the topology of the Vercel deployment (vercel.json) on one
+# machine, to test the app as Vercel runs it before deploying. docs/local-vercel-stack.md.
+#
+#   scripts/vercel-local.sh up              # build, start, wait; http://localhost:3100
+#   scripts/vercel-local.sh sync --force    # one sync now, inside the sync daemon's container
+#   scripts/vercel-local.sh smoke           # shell checks plus the Playwright smoke spec
+#   scripts/vercel-local.sh down
+#
+# Use the script, or pass --env-file yourself: without it, docker compose reads the classic
+# stack's .env for the ${...} values below.
+#
+#   On Vercel                                    Here
+#   routing: Services rewrites (vercel.json)     edge     Caddy: /api/* to api, rest to web,
+#                                                         Vercel's client-IP headers
+#   service "web" (Next.js)                      web      production build, API_ROUTING=platform
+#   service "api" (one Python function)          api      lean image (no Celery, pandas,
+#                                                         ecCodes), no data/, read-only, 1 process
+#   daemon "sync" (Containerfile)                sync     the same Containerfile
+#   build: python -m app.cli migrate --on-build  migrate  one-shot init-db before api and sync
+#   Vercel Cron, daily 07:23 UTC                 cron     calls the watchdog through the edge
+#   Neon: pooled DATABASE_URL / direct _UNPOOLED pgbouncer (transaction mode) / postgres
+#   Upstash Redis (KV_URL)                       redis
+#   email provider (Resend, SMTP)                mailpit  every email lands in its inbox
+#
+# Defaults: demo forecasts (FORECAST_PROVIDERS=demo, synthetic data) and no map layers
+# (MAP_FIELDS_ENABLED=false), so no forecast or map provider is called until you choose
+# live sources in .env.vercel.local (copy .env.vercel.example); the daily tide job still asks
+# NOAA CO-OPS. The other ${...} defaults are the
+# hosted free profile (app.core.profiles: profile_env("hosted", "free-database")).
+# Host ports listen on 127.0.0.1 only.
+
+name: swell-vercel
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+# Settings of the API, the sync daemon and the migration (backend/app/core/config.py). Any
+# setting in .env.vercel.local reaches these containers (env_file below); the values here
+# override it. Fixed values belong to this stack's infrastructure; ${...} values can be
+# changed in .env.vercel.local.
+x-app-env: &app-env
+  # development: production refuses Mailpit and cookies over plain HTTP. Everything else
+  # runs as hosted.
+  APP_ENV: development
+  COOKIE_SECURE: "false"
+  ENABLE_DEV_ENDPOINTS: "false"
+  APP_BASE_URL: http://localhost:${EDGE_PORT:-3100}
+  API_BASE_URL: http://localhost:${EDGE_PORT:-3100}
+  CORS_ORIGINS: http://localhost:${EDGE_PORT:-3100}
+  SECRET_KEY: ${SECRET_KEY:-local-vercel-stack-insecure-secret-key}
+  # Bearer token of GET /api/internal/cron/daily (Vercel Cron sends it); local default.
+  CRON_SECRET: ${CRON_SECRET:-local-vercel-stack-cron-secret}
+  # Neon through the Vercel Marketplace sets both. VERCEL_LOCAL_DATABASE_URL(_UNPOOLED) point
+  # the stack at another database instead, e.g. a Neon development branch.
+  DATABASE_URL: ${VERCEL_LOCAL_DATABASE_URL:-postgresql+psycopg://swell:swell@pgbouncer:6432/swell?application_name=swell-api}
+  DATABASE_URL_UNPOOLED: ${VERCEL_LOCAL_DATABASE_URL_UNPOOLED:-postgresql+psycopg://swell:swell@postgres:5432/swell?application_name=swell-direct}
+  REDIS_URL: ${VERCEL_LOCAL_REDIS_URL:-redis://redis:6379/0}
+  # The edge sets x-vercel-forwarded-for from the TCP peer, as Vercel does.
+  CLIENT_IP_HEADER: x-vercel-forwarded-for
+  TRUSTED_PROXY_COUNT: "1"
+  JOB_RUNNER: daemon
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  EMAIL_PROVIDER: mailpit
+  SMTP_HOST: mailpit
+  SMTP_PORT: "1025"
+  SMTP_USERNAME: ""
+  SMTP_PASSWORD: ""
+  SMTP_USE_TLS: "false"
+  SMTP_USE_SSL: "false"
+  DEV_INBOX_URL: http://localhost:${VERCEL_MAILPIT_PORT:-18025}
+  EMAIL_FROM: ${EMAIL_FROM:-Swell Travel Agent <alerts@localhost>}
+  SMS_PROVIDER: console
+  FLIGHT_PROVIDER: ${FLIGHT_PROVIDER:-demo}
+  # Weather sources: demo (synthetic) by default, see the header.
+  FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-demo}
+  MAP_FIELDS_ENABLED: ${MAP_FIELDS_ENABLED:-false}
+  # The hosted profile (app.core.profiles.HOSTED_PROFILE).
+  MIGRATE_ON_BUILD: ${MIGRATE_ON_BUILD:-production}
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-2}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-3}
+  DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-240}
+  DB_PREPARED_STATEMENTS: ${DB_PREPARED_STATEMENTS:-false}
+  REDIS_CONNECT_TIMEOUT_SECONDS: ${REDIS_CONNECT_TIMEOUT_SECONDS:-1.5}
+  REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-2}
+  PROVIDER_RESPONSE_CACHE_ENABLED: ${PROVIDER_RESPONSE_CACHE_ENABLED:-false}
+  GEFS_ENABLED: ${GEFS_ENABLED:-false}
+  JOB_INTERVAL_FLOOR_MINUTES: ${JOB_INTERVAL_FLOOR_MINUTES:-60}
+  DATA_HEALTH_CHECK_MINUTES: ${DATA_HEALTH_CHECK_MINUTES:-60}
+  SYNC_CPU_BUDGET_HOURS: ${SYNC_CPU_BUDGET_HOURS:-10}
+  COMMERCIAL_USE: ${COMMERCIAL_USE:-false}
+  # The free database profile (app.core.profiles.FREE_DATABASE_PROFILE).
+  RETENTION_FORECAST_DAYS: ${RETENTION_FORECAST_DAYS:-1}
+  RETENTION_ARCHIVE_DAYS: ${RETENTION_ARCHIVE_DAYS:-7}
+  RETENTION_JOB_LOG_DAYS: ${RETENTION_JOB_LOG_DAYS:-7}
+  SYNC_PRUNE_EACH_PASS: ${SYNC_PRUNE_EACH_PASS:-true}
+  DATA_HEALTH_DATABASE_MAX_GB: ${DATA_HEALTH_DATABASE_MAX_GB:-0.85}
+
+x-env-file: &env-file
+  - path: ${VERCEL_LOCAL_ENV_FILE:-.env.vercel.local}
+    required: false
+
+x-sync-image: &sync-image
+  build:
+    context: .
+    dockerfile: Containerfile
+  image: swell-vercel/sync:local
+
+services:
+  postgres:
+    image: postgres:16.15-alpine3.24
+    environment:
+      POSTGRES_USER: swell
+      POSTGRES_PASSWORD: swell
+      POSTGRES_DB: swell
+    # Connections are logged with the client's application_name (swell-api through
+    # PgBouncer, swell-sync for the daemon), to see who wakes the database.
+    command:
+      - postgres
+      - -c
+      - log_connections=on
+      - -c
+      - "log_line_prefix=%m [%p] %a@%h %d "
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${VERCEL_PG_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swell -d swell"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+    restart: unless-stopped
+
+  pgbouncer:
+    build:
+      context: docker/pgbouncer
+    image: swell-vercel/pgbouncer:local
+    environment:
+      PGBOUNCER_UPSTREAM_HOST: postgres
+      PGBOUNCER_UPSTREAM_PORT: "5432"
+      PGBOUNCER_USER: swell
+      PGBOUNCER_PASSWORD: swell
+    ports:
+      - "127.0.0.1:${VERCEL_PGBOUNCER_PORT:-56432}:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "6432"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *logging
+    restart: unless-stopped
+
+  # Upstash Redis stands in here: rate limits, the sync daemon's heartbeat, known runs and
+  # the API's kicks. Nothing is persisted.
+  redis:
+    image: redis:7.4.11-alpine3.21
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "127.0.0.1:${VERCEL_REDIS_PORT:-56379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *logging
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.31.4
+    ports:
+      - "127.0.0.1:${VERCEL_MAILPIT_PORT:-18025}:8025"
+    logging: *logging
+    restart: unless-stopped # the image ships its own health check
+
+  # The build-time migration of a production deployment: migrate, seed the 50 spots and the
+  # tide catalog (idempotent), over the direct URL. api and sync start after it succeeded.
+  migrate:
+    <<: *sync-image
+    command: ["python", "-m", "app.cli", "init-db"]
+    env_file: *env-file
+    environment:
+      <<: *app-env
+      DATABASE_URL_UNPOOLED: ${VERCEL_LOCAL_DATABASE_URL_UNPOOLED:-postgresql+psycopg://swell:swell@postgres:5432/swell?application_name=swell-migrate}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *logging
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api-lean/Dockerfile
+    image: swell-vercel/api:local
+    env_file: *env-file
+    environment:
+      <<: *app-env
+    # A function's file system is read-only except /tmp; 2 GB and 1 vCPU (Vercel's default).
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 2g
+    cpus: 1.0
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=4).status == 200 else 1)"
+      interval: 10s
+      timeout: 6s
+      retries: 30
+      start_period: 10s
+    logging: *logging
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        # No /api rewrite in Next.js: the edge routes /api/* to the api service.
+        API_ROUTING: platform
+        NEXT_PUBLIC_CARTO_API_KEY: ${NEXT_PUBLIC_CARTO_API_KEY:-}
+        NEXT_PUBLIC_MAP_TILE_URL: ${NEXT_PUBLIC_MAP_TILE_URL:-}
+        NEXT_PUBLIC_MAP_ATTRIBUTION: ${NEXT_PUBLIC_MAP_ATTRIBUTION:-}
+        MAP_TILE_HOSTS: ${MAP_TILE_HOSTS:-}
+    image: swell-vercel/web:local
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    logging: *logging
+    restart: unless-stopped
+
+  edge:
+    image: caddy:2.11.6-alpine
+    volumes:
+      - ./docker/edge/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "127.0.0.1:${EDGE_PORT:-3100}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    logging: *logging
+    restart: unless-stopped
+
+  # The Vercel daemon: `python -m app.cli sync daemon` from the Containerfile, one instance,
+  # 2 GiB / 1 vCPU, 120 s to stop after SIGTERM (vercel.json). It runs init-db at start
+  # (SYNC_DAEMON_INIT_DB) and connects directly (DB_USE_UNPOOLED=true in the image).
+  sync:
+    <<: *sync-image
+    env_file: *env-file
+    environment:
+      <<: *app-env
+      DATABASE_URL_UNPOOLED: ${VERCEL_LOCAL_DATABASE_URL_UNPOOLED:-postgresql+psycopg://swell:swell@postgres:5432/swell?application_name=swell-sync}
+    mem_limit: 2g
+    cpus: 1.0
+    stop_grace_period: 120s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    logging: *logging
+    restart: unless-stopped
+
+  # Vercel Cron: GET /api/internal/cron/daily with "Authorization: Bearer $CRON_SECRET" once
+  # a day at CRON_AT (UTC, the schedule "23 7 * * *" of vercel.json), through the edge.
+  # `scripts/vercel-local.sh cron` calls it now.
+  cron:
+    image: alpine:3.24.2
+    environment:
+      CRON_SECRET: ${CRON_SECRET:-local-vercel-stack-cron-secret}
+      CRON_PATH: /api/internal/cron/daily
+      CRON_AT: "07:23"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "Vercel Cron stand-in: GET $$CRON_PATH daily at $$CRON_AT UTC"
+        while true; do
+          now=$$(date -u +%s)
+          next=$$(date -u -d "$$(date -u +%Y-%m-%d) $$CRON_AT:00" +%s)
+          [ "$$next" -gt "$$now" ] || next=$$((next + 86400))
+          sleep $$((next - now))
+          wget -q -O - -T 90 --header "Authorization: Bearer $$CRON_SECRET" "http://edge:8080$$CRON_PATH" || echo "cron call failed" >&2
+          echo
+        done
+    depends_on:
+      edge:
+        condition: service_started
+    logging: *logging
+    restart: unless-stopped
+
+volumes:
+  pgdata:
