@@ -40,10 +40,10 @@ from app.services.spot_views import (
     event_out,
     shared_hour_reads,
     spot_detail,
-    spot_events,
     spot_forecast,
     upcoming_events,
 )
+from app.services.spot_views import spot_events as events_of_spot
 from app.services.timeline import spot_timeline as build_timeline
 from app.services.timeline import timeline_etag
 
@@ -152,14 +152,14 @@ def get_forecast(
 
 
 @router.get("/spots/{slug}/events", response_model=list[EventOut])
-def get_spot_events(slug: str, db: Session = Depends(get_db)) -> Response:
+def spot_events(slug: str, db: Session = Depends(get_db)) -> Response:
     """The spot's swell events that have not ended (public data, cacheable)."""
     return public_json(
         snapshots.snapshot(
             db,
             "spot-events",
             slug,
-            lambda now: snapshots.render(EVENTS, spot_events(db, _spot(db, slug), now)),
+            lambda now: snapshots.render(EVENTS, events_of_spot(db, _spot(db, slug), now)),
         )
     )
 
