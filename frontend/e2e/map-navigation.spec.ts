@@ -552,6 +552,20 @@ for (const viewport of [
         await page.locator(`path.spot-${slug}`).dispatchEvent("click");
         const panel = page.getByTestId("map-spot-panel");
         await expect(panel).toBeVisible();
+        // The selection flies the map to the spot (0.8 s) once the sheet has opened, which can
+        // start after a quiet moment: wait until the marker has landed clear of the sheet and
+        // below the tabs, then for the map to stop, and check everything below on the settled
+        // map (the flight itself can still be under way when the sheet first shows).
+        await expect
+          .poll(
+            async () => {
+              const box = await panel.boundingBox();
+              const c = await markerCentre(page, slug);
+              return !!box && c.y > tabsBottom && (short ? c.x < box.x : c.y < box.y);
+            },
+            { message: `${slug} lands clear of the sheet`, timeout: 10_000 },
+          )
+          .toBe(true);
         await mapSettled(page);
         const sheet = (await panel.boundingBox())!;
         const m = await markerCentre(page, slug);
