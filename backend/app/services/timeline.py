@@ -73,7 +73,7 @@ from app.services.forecasts.queries import (
     source_attribution_links,
     stale_after_hours,
 )
-from app.services.spot_views import source_attribution
+from app.services.spot_views import predictions_with_forecasts, source_attribution
 from app.services.surf_quality.forecast_confidence import STALE_REASON, api_fields
 from app.services.surf_quality.scoring import min_score_for_label
 from app.services.surf_quality.sun import TWILIGHT_MARGIN, daylight_windows, sun_times
@@ -459,15 +459,12 @@ def spot_timeline(
     rows = [
         (p, f)
         for p, f in db.execute(
-            select(SurfQualityPrediction, WaveForecast)
-            .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
-            .where(
+            predictions_with_forecasts(
                 SurfQualityPrediction.run_id == run.id,
                 SurfQualityPrediction.spot_id == spot.id,
                 SurfQualityPrediction.valid_time >= now - LOOKBACK,
                 SurfQualityPrediction.valid_time <= now + timedelta(days=days),
-            )
-            .order_by(SurfQualityPrediction.valid_time)
+            ).order_by(SurfQualityPrediction.valid_time)
         )
     ]
     if not rows:

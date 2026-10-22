@@ -8,8 +8,8 @@ from datetime import date, datetime, timedelta
 from typing import Any, get_args
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, object_session
+from sqlalchemy import Select, func, select, tuple_
+from sqlalchemy.orm import Session, contains_eager, lazyload, object_session
 
 from app.core.database import utcnow
 from app.models import (
@@ -226,6 +226,33 @@ def _nearest_step(times: Sequence[datetime], now: datetime) -> int | None:
     return best if gap_h <= max(durations[best], 0.0) + 1e-9 else None
 
 
+def predictions_with_forecasts(*criteria: Any) -> Select[SurfQualityPrediction, WaveForecast]:
+    """Predictions together with their forecast rows, the forecast read once.
+
+    ``SurfQualityPrediction.forecast`` is ``lazy="joined"`` (the one reader of it, swell
+    detection's peak query, wants the forecast in the same statement), so selecting both
+    entities over a plain join would add a second, eager copy of every forecast row to the
+    statement. ``contains_eager`` fills the relationship from this join instead: one
+    statement, each forecast column once, and ``.forecast`` loaded without another query.
+    """
+    return (
+        select(SurfQualityPrediction, WaveForecast)
+        .join(SurfQualityPrediction.forecast)
+        .options(contains_eager(SurfQualityPrediction.forecast))
+        .where(*criteria)
+    )
+
+
+def _predictions_by_id(
+    db: Session, ids: set[int]
+) -> dict[int, tuple[SurfQualityPrediction, WaveForecast]]:
+    """The chosen predictions in full with their forecasts (one statement)."""
+    if not ids:
+        return {}
+    rows = db.execute(predictions_with_forecasts(SurfQualityPrediction.id.in_(ids))).all()
+    return {p.id: (p, f) for p, f in rows}
+
+
 def _current_and_best(
     db: Session,
     runs: dict[int, ForecastRun],
@@ -235,80 +262,105 @@ def _current_and_best(
 ) -> tuple[dict[int, Conditions], dict[int, Conditions]]:
     """Per spot: the current conditions (the stored step nearest to now, within one step)
     and the best daylight hour of the next ``horizon_days``, from each spot's authoritative
-    run. ``spot_id`` restricts the query to that spot's predictions."""
+    run. ``spot_id`` restricts the query to that spot's predictions.
+
+    Two statements, whatever the number of spots: the hours to choose from are scanned with
+    the five columns the choice needs (and only from each spot's own authoritative run), then
+    the at most two chosen hours per spot are read in full with their forecasts. Reading every
+    hour in full read about 5 kB per hour, 37.5 MB for the 50 spots of a fresh 2026-10-16
+    run, to answer with 2 hours a spot (docs/map-layers.md, database egress)."""
     if spot_id is not None:
         runs = {spot_id: runs[spot_id]} if spot_id in runs else {}
-    run_ids = {r.id for r in runs.values()}
-    if not run_ids:
+    if not runs:
         return {}, {}
     stale = {r.id: is_stale(r, now) for r in runs.values()}
-    stmt = (
-        select(SurfQualityPrediction, WaveForecast)
-        .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
+    p = SurfQualityPrediction
+    scan = (
+        select(p.id, p.spot_id, p.valid_time, p.is_daylight, p.score)
         .where(
-            SurfQualityPrediction.run_id.in_(run_ids),
-            SurfQualityPrediction.valid_time >= now - CURRENT_LOOKBACK,
-            SurfQualityPrediction.valid_time <= now + timedelta(days=horizon_days),
+            tuple_(p.spot_id, p.run_id).in_([(sid, r.id) for sid, r in runs.items()]),
+            p.valid_time >= now - CURRENT_LOOKBACK,
+            p.valid_time <= now + timedelta(days=horizon_days),
         )
-        .order_by(SurfQualityPrediction.spot_id, SurfQualityPrediction.valid_time)
+        .order_by(p.spot_id, p.valid_time)
     )
-    if spot_id is not None:
-        stmt = stmt.where(SurfQualityPrediction.spot_id == spot_id)
-    by_spot: dict[int, list[tuple[SurfQualityPrediction, WaveForecast]]] = defaultdict(list)
-    for p, f in db.execute(stmt).all():
-        run = runs.get(p.spot_id)
-        if run is not None and run.id == p.run_id:
-            by_spot[p.spot_id].append((p, f))
+    by_spot: dict[int, list[Any]] = defaultdict(list)
+    for row in db.execute(scan):
+        by_spot[row.spot_id].append(row)
+
+    chosen: dict[int, tuple[int | None, int | None]] = {}
+    for sid, rows in by_spot.items():
+        i = _nearest_step([r.valid_time for r in rows], now)
+        top = None
+        for r in rows:
+            if r.valid_time < now - BEST_LOOKBACK or not r.is_daylight:
+                continue
+            if top is None or r.score > top.score:
+                top = r
+        chosen[sid] = (rows[i].id if i is not None else None, top.id if top is not None else None)
+    full = _predictions_by_id(db, {i for pair in chosen.values() for i in pair if i is not None})
 
     current: dict[int, Conditions] = {}
     best: dict[int, Conditions] = {}
-    for sid, rows in by_spot.items():
+    for sid, (current_id, best_id) in chosen.items():
         run = runs[sid]
-        i = _nearest_step([p.valid_time for p, _ in rows], now)
-        if i is not None:
-            current[sid] = _conditions(*rows[i], run, stale=stale[run.id])
-        top: tuple[SurfQualityPrediction, WaveForecast] | None = None
-        for p, f in rows:
-            if p.valid_time < now - BEST_LOOKBACK or not p.is_daylight:
-                continue
-            if top is None or p.score > top[0].score:
-                top = (p, f)
-        if top is not None:
-            best[sid] = _conditions(*top, run, stale=stale[run.id])
+        # A chosen hour pruned between the two statements is left out, as if never stored.
+        if current_id is not None and current_id in full:
+            current[sid] = _conditions(*full[current_id], run, stale=stale[run.id])
+        if best_id is not None and best_id in full:
+            best[sid] = _conditions(*full[best_id], run, stale=stale[run.id])
     return current, best
 
 
 def _active_events(
     db: Session, now: datetime, spot_id: int | None = None
-) -> dict[int, list[SwellEvent]]:
+) -> tuple[dict[int, SwellEvent], dict[int, int]]:
+    """Per spot: the active event that starts first (and still runs at ``now``), read in
+    full, and the number of such events. The events are scanned by id first, so only one
+    event per spot is read in full (with its history), not every active event."""
     stmt = (
-        select(SwellEvent)
+        select(SwellEvent.id, SwellEvent.spot_id)
         .where(SwellEvent.status == SwellEventStatus.ACTIVE, SwellEvent.end_time >= now)
         .order_by(SwellEvent.start_time)
     )
     if spot_id is not None:
         stmt = stmt.where(SwellEvent.spot_id == spot_id)
-    events: dict[int, list[SwellEvent]] = defaultdict(list)
-    for e in db.scalars(stmt).all():
-        events[e.spot_id].append(e)
-    return events
+    first: dict[int, Any] = {}
+    counts: dict[int, int] = defaultdict(int)
+    for event_id, sid in db.execute(stmt):
+        first.setdefault(sid, event_id)
+        counts[sid] += 1
+    if not first:
+        return {}, {}
+    # The spots are in the session already (every caller loaded them), so the event's
+    # ``spot`` comes from the identity map instead of a joined copy of each spot row.
+    full = {
+        e.id: e
+        for e in db.scalars(
+            select(SwellEvent)
+            .where(SwellEvent.id.in_(list(first.values())))
+            .options(lazyload(SwellEvent.spot))
+        )
+    }
+    return {sid: full[eid] for sid, eid in first.items() if eid in full}, dict(counts)
 
 
 def _summary(
     spot: SurfSpot,
     current: dict[int, Conditions],
     best: dict[int, Conditions],
-    events: dict[int, list[SwellEvent]],
+    events: tuple[dict[int, SwellEvent], dict[int, int]],
     research_class: str | None,
     now: datetime,
 ) -> SpotSummary:
-    upcoming = events.get(spot.id, [])
+    first, counts = events
+    upcoming = first.get(spot.id)
     return SpotSummary(
         **_summary_fields(spot),  # type: ignore[arg-type]
         current=current.get(spot.id),
         best_upcoming=best.get(spot.id),
-        next_event=event_out(upcoming[0], now) if upcoming else None,
-        upcoming_event_count=len(upcoming),
+        next_event=event_out(upcoming, now) if upcoming is not None else None,
+        upcoming_event_count=counts.get(spot.id, 0),
         research_class=research_class,
     )
 
@@ -454,15 +506,12 @@ def forecast_points(
     stale: bool = False,
 ) -> list[ForecastPoint]:
     rows = db.execute(
-        select(SurfQualityPrediction, WaveForecast)
-        .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
-        .where(
+        predictions_with_forecasts(
             SurfQualityPrediction.run_id == run_id,
             SurfQualityPrediction.spot_id == spot_id,
             SurfQualityPrediction.valid_time >= start,
             SurfQualityPrediction.valid_time <= end,
-        )
-        .order_by(SurfQualityPrediction.valid_time)
+        ).order_by(SurfQualityPrediction.valid_time)
     ).all()
     return [
         ForecastPoint(
@@ -522,15 +571,25 @@ def _series(
     start: datetime,
     end: datetime,
 ) -> ModelSeries | None:
-    rows = db.scalars(
-        select(WaveForecast)
-        .where(
-            WaveForecast.run_id == run.id,
-            WaveForecast.spot_id == spot_id,
-            WaveForecast.valid_time >= start,
-            WaveForecast.valid_time <= end,
+    # Only the columns the series shows (a whole forecast row is 2-3 times as large).
+    w = WaveForecast
+    rows = db.execute(
+        select(
+            w.valid_time,
+            w.sig_wave_height_m,
+            w.wave_period_s,
+            w.wave_direction_deg,
+            w.wind_speed_kmh,
+            w.wind_direction_deg,
+            w.wave_period_kind,
         )
-        .order_by(WaveForecast.valid_time)
+        .where(
+            w.run_id == run.id,
+            w.spot_id == spot_id,
+            w.valid_time >= start,
+            w.valid_time <= end,
+        )
+        .order_by(w.valid_time)
     ).all()
     points = [
         ModelPoint(
@@ -813,36 +872,41 @@ def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) 
     conditions: dict[int, Conditions] = {}
     stale = {r.id: is_stale(r, now) for r in runs.values()}
     if run_ids:
+        # The hours within the window, by their time only, from each spot's own run; then
+        # the nearest one per spot in full (two statements; see _current_and_best). On a tie
+        # the earlier hour wins.
         window = timedelta(minutes=90)
-        rows = db.execute(
-            select(SurfQualityPrediction, WaveForecast)
-            .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
+        p = SurfQualityPrediction
+        scan = (
+            select(p.id, p.spot_id, p.valid_time)
             .where(
-                SurfQualityPrediction.run_id.in_(run_ids),
-                SurfQualityPrediction.valid_time >= target - window,
-                SurfQualityPrediction.valid_time <= target + window,
+                tuple_(p.spot_id, p.run_id).in_([(sid, r.id) for sid, r in runs.items()]),
+                p.valid_time >= target - window,
+                p.valid_time <= target + window,
             )
-        ).all()
-        best_gap: dict[int, float] = {}
-        for p, f in rows:
-            run = runs.get(p.spot_id)
-            if run is None or run.id != p.run_id:
-                continue
-            gap = abs((p.valid_time - target).total_seconds())
-            if gap < best_gap.get(p.spot_id, float("inf")):
-                best_gap[p.spot_id] = gap
-                conditions[p.spot_id] = _conditions(p, f, run, stale=stale[run.id])
+            .order_by(p.spot_id, p.valid_time)
+        )
+        nearest: dict[int, tuple[float, int]] = {}
+        for row in db.execute(scan):
+            gap = abs((row.valid_time - target).total_seconds())
+            if gap < nearest.get(row.spot_id, (float("inf"), 0))[0]:
+                nearest[row.spot_id] = (gap, row.id)
+        full = _predictions_by_id(db, {i for _, i in nearest.values()})
+        for sid, (_, prediction_id) in nearest.items():
+            if prediction_id in full:  # absent if pruned between the two statements
+                run = runs[sid]
+                conditions[sid] = _conditions(*full[prediction_id], run, stale=stale[run.id])
 
     covering: dict[int, int] = defaultdict(int)
     upcoming: dict[int, int] = defaultdict(int)
-    for e in db.scalars(
-        select(SwellEvent).where(
+    for spot_id, start_time, end_time in db.execute(
+        select(SwellEvent.spot_id, SwellEvent.start_time, SwellEvent.end_time).where(
             SwellEvent.status == SwellEventStatus.ACTIVE, SwellEvent.end_time >= now
         )
-    ).all():
-        upcoming[e.spot_id] += 1
-        if e.start_time <= target <= e.end_time:
-            covering[e.spot_id] += 1
+    ):
+        upcoming[spot_id] += 1
+        if start_time <= target <= end_time:
+            covering[spot_id] += 1
     # Freshness of the newest authoritative run behind the snapshot.
     newest = max(runs.values(), key=lambda r: (r.issued_at, r.id), default=None)
     links: dict[tuple[str, str], AttributionLinkOut] = {}
