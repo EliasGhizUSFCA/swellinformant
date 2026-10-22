@@ -74,10 +74,10 @@ tides-extract = [
 ]
 
 [tool.uv]
-# uv.lock (installed by the Vercel builder, the repo-root Containerfile and docker/api-lean;
-# CI installs with it as pip constraints) resolves only releases uploaded before this date,
-# so a package published days ago never reaches a deployment. When updating the lock, move it
-# to a date at least two weeks back and run `uv lock --upgrade`.
+# uv.lock (installed by the Vercel builder, backend/Dockerfile, the repo-root Containerfile
+# and docker/api-lean; CI installs with it as pip constraints) resolves only releases uploaded
+# before this date, so a package published days ago never reaches a deployment. When updating
+# the lock, move it to a date at least two weeks back and run `uv lock --upgrade`.
 exclude-newer = "2026-10-08T00:00:00Z"
 
 [tool.setuptools.packages.find]
