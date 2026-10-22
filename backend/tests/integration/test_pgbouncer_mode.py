@@ -103,6 +103,28 @@ def test_the_engine_goes_through_the_pooler_without_preparing(pooled: str) -> No
         assert raw is not None and raw.prepare_threshold is None  # type: ignore[attr-defined]
 
 
+def test_a_statement_runs_on_any_server_connection(pooled: str) -> None:
+    """The failure transaction pooling causes, made deterministic: connection A runs one
+    statement in more transactions than psycopg's prepare threshold, then B holds the
+    server connection A last used (PgBouncer reuses servers last-in first-out), so A's next
+    transaction runs on another server connection. A statement prepared on the first one
+    would fail there ('prepared statement "_pg3_0" does not exist', with PgBouncer's
+    max_prepared_statements = 0); unprepared, it runs. Needs a pool of at least two server
+    connections (default_pool_size >= 2)."""
+    engine = get_engine()
+    statement = text("SELECT count(*) FROM surf_spots WHERE is_active")
+    with engine.connect() as a, engine.connect() as b:
+        for _ in range(ROUNDS):
+            a.execute(statement).scalar_one()
+            a.commit()
+        b_server = b.execute(text("SELECT pg_backend_pid()")).scalar_one()  # B's transaction
+        a_server = a.execute(text("SELECT pg_backend_pid()")).scalar_one()
+        assert a_server != b_server  # A is on another server connection now
+        assert a.execute(statement).scalar_one() > 0
+        a.commit()
+        b.commit()
+
+
 def account_flow(client: ApiClient, n: int) -> list[tuple[str, int]]:
     email = f"pooled-{n}@example.com"
     seen: list[tuple[str, int]] = []
