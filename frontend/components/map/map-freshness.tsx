@@ -85,7 +85,7 @@ export function MapFreshness({
       <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
       {ageHours != null ? `Forecast out of date — model run ${Math.round(ageHours)} h old` : `Forecast out of date — model run over ${Math.round(limitHours)} h old`}
       {pub?.published && pub.at && (
-        <span className="sr-only font-medium sm:not-sr-only" data-testid="map-published">
+        <span className="sr-only font-medium sm:not-sr-only sm:-ml-1" data-testid="map-published">
           {" "}
           · published {utcDateTime(pub.at)}
         </span>

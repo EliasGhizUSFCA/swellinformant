@@ -178,7 +178,9 @@ export function DataHealthSummary({ data }: { data: DataHealth }) {
         {data.reasons.length === 0 ? (
           <p>Every forecast source is within its freshness limit and every scheduled job is running.</p>
         ) : (
-          <ul className="list-disc space-y-1 pl-4" data-testid="data-health-reasons">
+          // wrap-anywhere: Open-Meteo run keys ("gfswave016:2026102106|gfswave025:...") have no
+          // break opportunity and would widen the page on phones.
+          <ul className="list-disc space-y-1 pl-4 wrap-anywhere" data-testid="data-health-reasons">
             {data.problems.map((p) => (
               <li key={p.key}>
                 {p.severity === "failing" && <strong>Failing: </strong>}
@@ -205,7 +207,7 @@ export function SourceFreshness({ sources }: { sources: SourceHealth[] }) {
             <Badge variant={freshnessTone(s.status)}>{s.status === "ok" ? "fresh" : s.status}</Badge>
           </div>
           <div className="mt-1 text-xs text-muted-foreground">{ROLE_LABEL[s.role]}</div>
-          <div className="mt-1 text-xs text-muted-foreground">{ageLine(s)}</div>
+          <div className="mt-1 text-xs text-muted-foreground wrap-anywhere">{ageLine(s)}</div>
           {s.latest_attempt_status === "failed" && s.latest_attempt_started_at && (
             <div className="mt-1 text-xs text-destructive">Latest attempt {relativeTime(s.latest_attempt_started_at)} failed</div>
           )}

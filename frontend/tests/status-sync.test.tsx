@@ -193,17 +193,17 @@ describe("sync section", () => {
     const gfs = screen.getByTestId("sync-component-spots-synthetic_gfs");
     expect(gfs).toHaveAttribute("data-state", "current");
     expect(gfs).toHaveTextContent("Spot forecasts");
-    expect(gfs).toHaveTextContent("Synthetic GFS source · 12Z Oct 18 run");
+    expect(gfs).toHaveTextContent("Synthetic GFS source · newest run 12Z Oct 18");
     expect(gfs).toHaveTextContent("Current");
     const ec = screen.getByTestId("sync-component-spots-synthetic_ecmwf");
-    expect(ec).toHaveTextContent("synthetic_ecmwf · 12Z Oct 18 run"); // no name known: the code
+    expect(ec).toHaveTextContent("synthetic_ecmwf · newest run 12Z Oct 18"); // no name known: the code
     expect(ec).toHaveTextContent("Waiting");
     expect(ec).toHaveTextContent("until 2026-10-18 16:30 UTC");
     const map = screen.getByTestId("sync-component-map-synthetic_map");
     expect(map).toHaveTextContent("World map layers");
     expect(map).toHaveTextContent("Failed");
     expect(map).toHaveTextContent("6 failed attempts");
-    expect(within(map).getByText("synthetic_map · 12Z Oct 18 run")).toHaveAttribute("title", "stored synthetic-map:2026101800 · available synthetic-map:2026101812");
+    expect(within(map).getByText("synthetic_map · newest run 12Z Oct 18")).toHaveAttribute("title", "stored synthetic-map:2026101800 · available synthetic-map:2026101812");
     const gefs = screen.getByTestId("sync-component-ensemble-synthetic_gefs");
     expect(gefs).toHaveTextContent("Off");
     expect(gefs).toHaveTextContent("GEFS_ENABLED=false");
@@ -258,6 +258,12 @@ describe("CPU meter", () => {
     expect(meter).toHaveAttribute("aria-valuenow", "2.4");
     expect(meter).toHaveAttribute("aria-valuemax", "10");
     expect(meter).toHaveAttribute("data-tone", "good");
+  });
+
+  it("says <1 % rather than 0 % for a small but non-zero use", () => {
+    render(<CpuMeter sync={sync({ cpu_hours_month: 0.028, cpu_budget_hours: 10 })} />);
+    expect(screen.getByTestId("sync-cpu")).toHaveTextContent("at least 0.03 h of 10 h (<1 %)");
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuetext", "0.03 h of 10 h, <1 %");
   });
 
   it("turns amber above the alert threshold and red at the budget, the bar capped at full", () => {

@@ -122,7 +122,7 @@ function ComponentRow({ c, names }: { c: SyncComponent; names: ReadonlyMap<strin
           <div className="text-sm font-medium">{componentKindLabel(c.kind)}</div>
           <div className="text-xs text-muted-foreground wrap-anywhere" title={keys || undefined}>
             {names.get(c.source) ?? c.source}
-            {c.available_cycle && ` · ${cycleLabel(c.available_cycle)} run`}
+            {c.available_cycle && ` · newest run ${cycleLabel(c.available_cycle)}`}
           </div>
         </div>
         <Badge variant={tone} className="shrink-0">
@@ -142,6 +142,7 @@ export function CpuMeter({ sync }: { sync: SyncHealth }) {
   const cpu = cpuBudget(sync);
   if (!cpu) return null;
   const pct = Math.round(cpu.fraction * 100);
+  const share = pct === 0 && cpu.fraction > 0 ? "<1 %" : `${pct} %`;
   return (
     <div className="space-y-1.5" data-testid="sync-cpu">
       <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-xs">
@@ -149,7 +150,7 @@ export function CpuMeter({ sync }: { sync: SyncHealth }) {
           <Cpu className="size-3.5 text-ocean" aria-hidden /> CPU this month (UTC)
         </span>
         <span className="text-muted-foreground tabular-nums">
-          at least {formatCpuHours(cpu.used)} of {formatCpuHours(cpu.budget)} ({pct} %)
+          at least {formatCpuHours(cpu.used)} of {formatCpuHours(cpu.budget)} ({share})
         </span>
       </div>
       <div
@@ -158,7 +159,7 @@ export function CpuMeter({ sync }: { sync: SyncHealth }) {
         aria-valuemin={0}
         aria-valuemax={cpu.budget}
         aria-valuenow={Math.min(cpu.used, cpu.budget)}
-        aria-valuetext={`${formatCpuHours(cpu.used)} of ${formatCpuHours(cpu.budget)}, ${pct} %`}
+        aria-valuetext={`${formatCpuHours(cpu.used)} of ${formatCpuHours(cpu.budget)}, ${share}`}
         data-tone={cpu.tone}
         className="relative h-2 overflow-hidden rounded-full bg-muted"
       >

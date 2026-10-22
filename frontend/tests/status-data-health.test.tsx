@@ -161,6 +161,18 @@ describe("data health components", () => {
     expect(screen.getByTestId("data-health-summary")).toHaveTextContent("All data checks pass");
   });
 
+  it("lets long run keys wrap so phones do not scroll sideways", () => {
+    // Real Open-Meteo run keys are one unbreakable token, e.g. "gfswave016:2026102106|gfswave025:2026102106|gfs013:2026102106|gfs025:2026102106".
+    const key = "synthetic016:2026102106|synthetic025:2026102106|synthetic013:2026102106|synthetic025:2026102106";
+    const message = `Synthetic source: newest run ${key} was issued 20.6 h ago (stale after 17.2 h).`;
+    const data = report({ problems: [{ key: "forecast_stale:synthetic", severity: "degraded", message }] });
+    render(<DataHealthSummary data={data} />);
+    expect(screen.getByTestId("data-health-reasons")).toHaveClass("wrap-anywhere");
+    const [source] = data.forecast_sources as [SourceHealth];
+    render(<SourceFreshness sources={[{ ...source, newest_run_key: key }]} />);
+    expect(screen.getByText(new RegExp(`Run ${key.replace(/\|/g, "\\|")}`))).toHaveClass("wrap-anywhere");
+  });
+
   it("lists sources with their age, limit, role and a failed attempt", () => {
     render(<SourceFreshness sources={report().forecast_sources} />);
     const list = screen.getByTestId("data-health-sources");
@@ -252,7 +264,7 @@ describe("sync section on the status page", () => {
     render(<SyncCard data={report({ sync })} />);
     expect(screen.getByTestId("sync-status")).toHaveTextContent("Forecast sync");
     const row = screen.getByTestId("sync-component-spots-synthetic");
-    expect(row).toHaveTextContent("Synthetic source · 12Z Oct 18 run");
+    expect(row).toHaveTextContent("Synthetic source · newest run 12Z Oct 18");
     expect(row).toHaveTextContent("New run");
     expect(screen.getByTestId("sync-published")).toHaveTextContent("Nothing published yet.");
   });
