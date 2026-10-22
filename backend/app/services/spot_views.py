@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, get_args
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, func, select, tuple_
+from sqlalchemy import Row, Select, func, select, tuple_
 from sqlalchemy.orm import Session, contains_eager, lazyload, object_session
 
 from app.core.database import utcnow
@@ -743,7 +743,21 @@ def source_attribution(db: Session, run: ForecastRun) -> str:
     return " ".join(dict.fromkeys(parts))
 
 
-def _member_out(source: ForecastSource, run_key: str, init_time: datetime | None) -> RunMemberOut:
+# What a member shows of its source (its attribution and licence texts are most of a row).
+_MEMBER_COLUMNS = (
+    ForecastSource.code,
+    ForecastSource.name,
+    ForecastSource.family,
+    ForecastSource.wave_model,
+    ForecastSource.atmosphere_model,
+)
+MemberSource = Row[str, str, str, str | None, str | None]
+
+
+def _member_out(
+    source: ForecastSource | MemberSource, run_key: str, init_time: datetime | None
+) -> RunMemberOut:
+    """``source``: the source, or a row of its :data:`_MEMBER_COLUMNS`."""
     return RunMemberOut(
         code=source.code,
         name=source.name,
@@ -765,7 +779,7 @@ def run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
     codes = [str(m["code"]) for m in members]
     sources = {
         s.code: s
-        for s in db.scalars(select(ForecastSource).where(ForecastSource.code.in_(codes))).all()
+        for s in db.execute(select(*_MEMBER_COLUMNS).where(ForecastSource.code.in_(codes))).all()
     }
     out: list[RunMemberOut] = []
     for m in members:
