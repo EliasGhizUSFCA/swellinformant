@@ -169,7 +169,8 @@ const wave = (page: Page) => page.locator("canvas.map-wave-canvas");
  * line orientation from the structure tensor of
  * the ink (degrees in screen coordinates, x east, y down: 0 = horizontal crests, 90 =
  * vertical, 45 = running from top left to bottom right), its coherence (0..1), an
- * orientation histogram (36 bins of 5 degrees, gradient energy), and a hash of the pixels.
+ * orientation histogram (36 bins of 5 degrees, gradient energy), a hash of the pixels, and
+ * the number of dashes in that frame (data-crests, read with the pixels).
  */
 async function waveImage(page: Page) {
   return wave(page).evaluate((c: HTMLCanvasElement) => {
@@ -207,7 +208,7 @@ async function waveImage(page: Page) {
     const grad = (0.5 * Math.atan2(2 * jxy, jxx - jyy) * 180) / Math.PI;
     const orientation = (((grad + 90) % 180) + 180) % 180;
     const coherence = Math.hypot(jxx - jyy, 2 * jxy) / Math.max(1e-9, jxx + jyy);
-    return { ink, orientation, coherence, hist, hash, width: w, height: h };
+    return { ink, orientation, coherence, hist, hash, width: w, height: h, dashes: Number(c.dataset.crests) };
   });
 }
 
@@ -889,24 +890,33 @@ test.describe("wave crest dashes (synthetic partitions)", () => {
   });
 
   test("higher waves draw more ink: 4 m more than twice 1 m", async ({ browser, baseURL }) => {
+    // Ink per dash drawn: both seas draw one dash per cell, but the device-adaptive quad
+    // budget can thin one frame more than the other when the machine is busy, so the total ink
+    // would compare a full frame with a thinned one (seen: 1.89 x under load, 2.27 to 2.34 x
+    // on a quiet machine). Per dash it is the same comparison as before at equal counts.
     const ink = async (hs: number) => {
       const ctx = await browser.newContext({ baseURL, viewport: { width: 1440, height: 900 } });
       try {
         const page = await ctx.newPage();
         await openWithSwells(page, { primary: [hs, 12, 250] }, "primary");
-        let sum = 0;
+        let total = 0;
+        let perDash = 0;
         for (let i = 0; i < 4; i++) {
-          sum += (await waveImage(page)).ink;
+          const img = await waveImage(page);
+          expect(img.dashes).toBeGreaterThan(500);
+          total += img.ink / 4;
+          perDash += img.ink / img.dashes / 4;
           await page.waitForTimeout(250);
         }
-        return sum / 4;
+        return { total, perDash };
       } finally {
         await ctx.close();
       }
     };
     const [low, high] = [await ink(1), await ink(4)];
-    console.log(`crest ink: 1 m ${low.toFixed(0)}, 4 m ${high.toFixed(0)}`);
-    expect(high).toBeGreaterThan(2 * low); // D11 (the traced crests were tested at 1.5 x)
+    console.log(`crest ink: 1 m ${low.total.toFixed(0)} (${low.perDash.toFixed(2)} a dash), 4 m ${high.total.toFixed(0)} (${high.perDash.toFixed(2)} a dash)`);
+    expect(high.perDash).toBeGreaterThan(2 * low.perDash); // D11 (the traced crests were tested at 1.5 x)
+    expect(high.total).toBeGreaterThan(low.total); // and more ink in all, thinned or not
   });
 
   test("a primary swell from the W and a secondary from the S give two crest orientations; without the secondary, one", async ({ page, browser, baseURL }) => {
