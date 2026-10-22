@@ -183,6 +183,12 @@ def _cookie_app() -> FastAPI:
         response.set_cookie("sta_session", "synthetic")
         return {"ok": "yes"}
 
+    @app.get("/api/shared-with-cookie")
+    def shared_with_cookie(response: Response) -> dict[str, str]:  # directives in any case
+        response.headers["Cache-Control"] = "S-MaxAge=60"
+        response.set_cookie("sta_session", "synthetic")
+        return {"ok": "yes"}
+
     @app.get("/api/public")
     def public(response: Response) -> dict[str, str]:
         cache_headers(response, browser_seconds=60, cdn_seconds=60)
@@ -203,6 +209,8 @@ def test_a_response_that_sets_a_cookie_is_never_shared_cacheable() -> None:
     assert risky.headers.get_list("cache-control") == ["private, no-store"]
     assert not any(h in risky.headers for h in SHARED_CACHE_HEADERS)
     assert "set-cookie" in risky.headers  # the cookie itself is kept
+    shared = client.get("/api/shared-with-cookie")
+    assert shared.headers.get_list("cache-control") == ["private, no-store"]
     public = client.get("/api/public")
     assert public.headers["cache-control"] == "public, max-age=60"
     assert public.headers["cdn-cache-control"] == "public, s-maxage=60"

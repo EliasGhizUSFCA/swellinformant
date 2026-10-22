@@ -90,7 +90,8 @@ def _shared_cacheable(headers: list[tuple[bytes, bytes]]) -> bool:
         name = key.lower()
         if name in SHARED_CACHE_HEADERS:
             return True
-        if name == b"cache-control" and (b"public" in value.lower() or b"s-maxage" in value):
+        directives = value.lower()
+        if name == b"cache-control" and (b"public" in directives or b"s-maxage" in directives):
             return True
     return False
 
