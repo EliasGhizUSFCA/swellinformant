@@ -27,7 +27,9 @@ scripts/vercel-local.sh smoke
   at <http://localhost:3100> and every email it sends is in Mailpit at
   <http://localhost:18025>.
 * `sync --force` runs one sync now (spots, then map, blend, predictions, publish, ...), in
-  the sync daemon's own container.
+  the sync daemon's own container. Right after `up` the daemon usually runs its own first
+  sync; while that holds the lease, `sync` waits and tries again every 15 s (up to
+  `VERCEL_LOCAL_SYNC_WAIT_SECONDS`, default 1200; `0` returns at once with exit 3).
 * `smoke` runs the shell checks and the Playwright smoke spec (below).
 * `scripts/vercel-local.sh down` stops it; `down --volumes` also deletes the database.
 
@@ -54,17 +56,17 @@ layers, only when a new model run is published (docs/sync.md). The free Open-Met
 for non-commercial use; `COMMERCIAL_USE=true` needs `OPEN_METEO_API_KEY`.
 
 Right after `up` the daemon checks the providers too and may start a sync of its own.
-While it holds the lease, `sync --force` prints "another sync holds the lease" (exit 3);
-run it again when the daemon's sync is done (`scripts/vercel-local.sh logs sync`).
+While it holds the lease, `sync --force` prints "another sync holds the lease" and waits
+for it (above); `scripts/vercel-local.sh logs sync` shows what the daemon is doing.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `up [--no-build]` | build (unless `--no-build`), start, wait until healthy, print the URLs |
-| `sync [--force] [--only spots,ensemble,map]` | `python -m app.cli sync run` in the sync container; exit 0 success/partial/skipped, 1 failed, 3 another sync holds the lease |
+| `sync [--force] [--only spots,ensemble,map]` | `python -m app.cli sync run` in the sync container; exit 0 success/partial/skipped, 1 failed, 3 another sync still held the lease after `VERCEL_LOCAL_SYNC_WAIT_SECONDS` |
 | `check` | `sync check`: the plan from provider metadata (no data download) |
-| `status` | containers, image sizes, the daemon's heartbeat, the newest syncs |
+| `status` | containers, image sizes, the daemon's heartbeat, the newest syncs, the Redis commands processed (Upstash bills commands) |
 | `cron` | the daily watchdog, called as Vercel Cron calls it (`GET /api/internal/cron/daily` with the Bearer token, through the edge) |
 | `smoke [playwright args]` | the shell checks, then `npx playwright test -c playwright.vercel.config.ts` |
 | `logs [service...]` | follow the logs |
@@ -119,14 +121,22 @@ changed in `.env.vercel.local`.
 * the API answers behind the edge;
 * the api image cannot import pandas, eccodes, celery, kombu, sklearn, pyarrow, scipy or
   joblib, and has no `/data`;
+* the api service's Vercel build command, `python -m app.cli migrate --on-build` with
+  `VERCEL_ENV=production`, runs on the lean image (the database is at head, so it only
+  checks the revision);
 * PgBouncer's `SHOW CONFIG` says `pool_mode = transaction`, and `GET /api/spots` raises its
   transaction counter (the API's queries go through the pooler);
 * a request with forged `X-Vercel-Forwarded-For`, `X-Forwarded-For` and `X-Real-IP` headers
-  gets the rate-limit key of the address the edge saw (the Docker network's gateway for a
-  request from this machine), never one of the forged addresses;
+  gets the rate-limit counter of the address the edge saw (the Docker network's gateway for
+  a request from this machine), never one of the forged addresses. The API keys its counters
+  by a keyed digest of the address (`app.core.ratelimit.limit_key`), so the check computes
+  the expected keys in the api container;
 * the web service itself answers 404 for `/api/health` (no Next.js rewrite);
 * the daemon's heartbeat is in Redis, and a sync was published;
-* the cron endpoint answers 401 without the token and 200 with it.
+* the cron endpoint answers 401 without the token and 200 with it;
+* not a check: a `note` line with the data-health verdict the API reports
+  (`GET /api/health/data`, what the daily watchdog alerts on), as the deployed function
+  would report it.
 
 Then `frontend/e2e/vercel-smoke.spec.ts` (chromium, `frontend/playwright.vercel.config.ts`,
 base URL <http://localhost:3100>):
@@ -142,7 +152,9 @@ base URL <http://localhost:3100>):
   status page's sync section, `data-testid="sync-status"`);
 * the cron endpoint: 401 without or with a wrong token, 200 with `CRON_SECRET`.
 
-The default `playwright.config.ts` skips this spec.
+The default `playwright.config.ts` skips this spec. The token never appears on a command
+line or in a retained Playwright trace (curl reads the header from stdin; the spec makes the
+authorised call with Node's `fetch`).
 
 ## Neon development branches and Upstash
 
@@ -212,14 +224,18 @@ TEST_REDIS_URL=redis://localhost:56379/7 \
 ```
 
 `backend/tests/unit/test_local_vercel_stack.py` checks the stack's files without Docker:
-`.env.vercel.example` against the hosted profile, the compose defaults, the pinned base
-images, the Containerfile (no `ARG`), the edge's headers and PgBouncer's mode.
+`.env.vercel.example` against the hosted profile and as a production configuration (with
+its placeholders filled it loads under `APP_ENV=production` with no missing credential;
+unfilled, it is refused or the gaps are reported), the compose defaults, the pinned base
+images, the Containerfile (no `ARG`), the edge's headers, PgBouncer's mode, the script's
+subcommands and smoke checks, and, when vercel.json is present, that the stack mirrors it
+(cron path and time, daemon image, memory and grace period, routing, maxDuration).
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
-| `sync` exits 3, "another sync holds the lease" | the daemon is syncing; wait (`logs sync`) and run it again |
+| `sync` exits 3, "another sync still holds the lease" | a sync ran longer than `VERCEL_LOCAL_SYNC_WAIT_SECONDS`; `status` and `logs sync` show it, then run `sync` again |
 | map layers stay unavailable with live settings | `MAP_FIELDS_ENABLED=true` and a map cycle (00Z, 12Z) must be published; `check` shows the map component's state. A "Cannot find the ecCodes library" error means the image was built without the eccodeslib wheel: the Containerfile build checks for it |
 | the image build fails at `uv sync --locked` | `backend/uv.lock` does not match `backend/pyproject.toml`: run `uv lock` in backend/ |
 | `up` fails with a port in use | set `EDGE_PORT` or another `VERCEL_*_PORT` in `.env.vercel.local` |
@@ -228,84 +244,104 @@ images, the Containerfile (no `ARG`), the edge's headers and PgBouncer's mode.
 
 ## Measured
 
-On this development sandbox (4 vCPUs shared with other work), 2026-10-21, with
-docker-compose.vercel.yml and the other upgrade-4 packages that existed then merged into a
-scratch copy: sync-core, api-serverless and wave-look. deps-packaging (the dependency split
-and `backend/uv.lock`) and vercel-deploy (`API_ROUTING` in next.config.ts, vercel.json) did
-not exist yet; the scratch copy carried a minimal stand-in for each, written from their
-design. Image builds and the sync container reached the internet through the sandbox's
-proxy (a compose override, not part of the repository).
+On this development sandbox (4 vCPUs shared with other work). Image builds and the sync
+container reached the internet through the sandbox's proxy (compose overrides named by
+`VERCEL_LOCAL_COMPOSE_FILES`, not part of the repository), and its Playwright used a
+preinstalled Chromium (`PLAYWRIGHT_CHROMIUM_PATH`).
 
-**From a fresh clone, with the defaults** (no `.env.vercel.local`: demo forecasts, no map
-layers), no image and an empty build cache (the base images were pulled already):
+### 2026-10-22, all upgrade-4 packages merged
+
+A scratch copy with every upgrade-4 package merged: sync-core, api-serverless, jobs-health,
+egress-map-serving, vercel-deploy, deps-packaging (`backend/uv.lock`), wave-look, status-ui
+and this one.
+
+**With the defaults** (no `.env.vercel.local`: demo forecasts, no map layers), the base
+images present and no build cache for the stack's images:
 
 | Step | Result | Time |
 |---|---|---|
-| `up` | the four images built, `migrate` exited 0, the nine services up (healthy where they have a health check) | 168 s |
-| `sync --force` | exit 3 at first: the daemon was running its own first sync (the demo run, 59.2 s, 31.1 CPU s); once it finished, `sync --force` ended `success` and published | 11 s, then 15 s (the sync 9.4 s, 5.7 CPU s) |
-| `smoke` | shell checks 18 of 18; Playwright 5 of 6 (`/status`: `GET /api/health/data` has no sync block yet, see the findings below) | 38 s |
+| `up` | the four images built (the api build printed "lean install", the sync build "ecCodes 2.49.0"), `migrate` exited 0, the nine services up | 186 s |
+| `sync --force` | the daemon's own first sync held the lease: "another sync holds the lease ... trying again in 15 s", then `success`, published | 31 s (the sync 3.2 s) |
+| `smoke` | shell checks 19 of 19, Playwright 6 of 6 (the `/status` test too) | 36 s |
 
-The same from a fresh database **with the live settings** of `.env.vercel.example` and a
-24-hour map horizon: `up` 150 s (the dependency layers cached), `sync --force` 84 s,
-status `partial`. The NOAA map layers were stored (135 fields, 9 of 9 map hours, 70.8 MB),
-but Open-Meteo answered both spot requests with "Daily API request limit exceeded. Please
-try again tomorrow." (this sandbox's IP is shared), so the spot pages said "No forecast has
-been ingested for this spot yet." and the spot-page test failed with the `/status` one;
-nothing was filled in. The shell checks passed 18 of 18.
+**With the live settings** of `.env.vercel.example` and a 24-hour map horizon
+(`MAP_FIELD_STEPS=0-24:3`, `MAP_FIELD_MAX_LEAD_HOURS=24`), from an empty database:
 
-Images (`docker image ls`): sync 1.24 GB, api 417 MB, web 344 MB, pgbouncer 15.1 MB; with
-the pulled base images about 3 GB. The sync image's virtual environment is 778 MB, the api
-image's 172 MB (the lean set; its build prints "lean install"). The build cache was 5.0 GB
-after the cold build.
+| Step | Result | Time |
+|---|---|---|
+| `up` | images from the run above | 35 s |
+| `sync --force` (first) | `partial`: the NOAA GFS 00Z map layers were stored (135 fields, 9 of 9 map hours, 72.2 MB downloaded, 10.5 MB stored); the Open-Meteo GFS request failed on TLS handshake timeouts through the sandbox's proxy, and ECMWF was not read (Open-Meteo was publishing its 06Z run; this source reads only 00Z and 12Z runs) | 141 s (the sync 132.1 s, 32.7 CPU s) |
+| `sync --force` (second) | `success`: the GFS 06Z point forecasts for the 50 spots (10,300 records, 142.857 weighted Open-Meteo calls), 10,300 predictions, swell detection, published | 126 s (the sync 92.1 s, 10.8 CPU s) |
+| `smoke` | shell checks 19 of 19, Playwright 6 of 6; the map painted the GFS 00Z wave field with the crest dashes | 35 s |
 
-**Live data through the stack** (an earlier run the same evening). The daemon, started with
-the live settings, found the GFS 12Z spot run new at its first check and stored 10,200
-point forecasts for the 50 spots (142.9 weighted Open-Meteo calls). `sync --force` then
-stored the ECMWF 12Z run (4,100 point forecasts, 124.3 weighted calls) and the NOAA GFS 12Z
-map layers (135 fields, 9 of 9 map hours, 70.8 MB in 63 requests, 10.4 MB stored), built
-the two-family blend (10,200 records), computed 14,300 predictions, ran detection and
-published: status `success`, 193.9 s and 67.6 CPU s for the sync, 227 s for the command.
-Several Open-Meteo TLS handshakes through the sandbox's proxy timed out and were retried.
-The map then showed the GFS 12Z wave field with the crest dashes, and the spot pages the
-blended forecast.
+The same run also measured:
+
+* **The daemon leaves the database alone between model runs.** With `log_statement = all`
+  from 13:19:17 to 13:42:55 UTC (23.6 minutes, two checks with no new run), Postgres logged
+  no connection and no statement from the sync container. At 13:42:55 Open-Meteo listed a new
+  GFS run (the 0.25° atmosphere moved to 06Z) and the daemon opened one session: 76
+  statements until 13:44:02 (the run was still being published, so the sync ended
+  `skipped`). Every other statement in the window came through PgBouncer from the API, for
+  the compose health check (`/api/health/ready` every 10 s), which Vercel does not have.
+* **Redis commands** (Redis MONITOR, 13:33:43 to 13:45:12). Between checks the daemon sent
+  one EVAL a minute (its poll for kicks from the API) and nothing else; the check at 13:42
+  and the sync it started added 15 (GET, SET, EVAL, INCRBYFLOAT, EXPIRE). The kick poll alone
+  is about 43,000 commands a month; with 144 checks a day and a few syncs the daemon stays
+  well under Upstash Free's 500,000 (an estimate from this sample, not a month of
+  measurement). PING, which Upstash does not bill, came only from the compose health checks.
+* **SIGTERM.** `docker stop` of the sync container (PID 1 is `python -m app.cli sync daemon`)
+  took 1.5 s: "signal 15, stopping after the current stage", "Sync daemon stopped", exit 0.
+* **The client IP.** The forged `X-Vercel-Forwarded-For`, `X-Forwarded-For` and `X-Real-IP`
+  produced only the counter of the Docker gateway the edge saw (`172.22.0.1`, stored as its
+  keyed digest).
+* **The cron call** (`scripts/vercel-local.sh cron`): 200,
+  `{"status":"failing","problems":["tides_constants:harmonic_model","forecast_missing:open_meteo_ecmwf"],...}`
+  (see the findings below; ECMWF had no run yet).
+
+Images (`docker image ls`): sync 1.22 GB, api 416 MB, web 344 MB, pgbouncer 15.1 MB.
+
+### 2026-10-21, before deps-packaging and vercel-deploy existed
+
+The first runs, with stand-ins for the dependency split and `API_ROUTING` written from their
+design. From a fresh clone with the defaults: `up` 168 s, `sync --force` 15 s after the
+daemon's first sync (59.2 s, 31.1 CPU s), `smoke` 18 of 18 shell checks and 5 of 6
+Playwright tests (`/status` waited for the data-health sync block, which jobs-health and
+status-ui added). The build cache was 5.0 GB after the cold build.
+
+**Live data through the stack.** The daemon, started with the live settings, stored the
+GFS 12Z point forecasts for the 50 spots (10,200 records, 142.9 weighted Open-Meteo calls)
+at its first check. `sync --force` then stored the ECMWF 12Z run (4,100 point forecasts,
+124.3 weighted calls) and the NOAA GFS 12Z map layers (135 fields, 9 of 9 map hours,
+70.8 MB in 63 requests, 10.4 MB stored), built the two-family blend (10,200 records),
+computed 14,300 predictions, ran detection and published: `success`, 193.9 s and 67.6 CPU s
+for the sync, 227 s for the command. A later live run the same evening was refused by
+Open-Meteo ("Daily API request limit exceeded. Please try again tomorrow.", this sandbox's
+IP is shared); the spot pages then said "No forecast has been ingested for this spot yet."
+and nothing was filled in.
 
 That first live attempt also found a packaging defect: the map stage failed with "Cannot
-find the ecCodes library". `uv lock` recorded `eccodes` 2.50.0 without its `eccodeslib`
-dependency (the Linux wheel's metadata has `eccodeslib; platform_system != "Windows"`, the
-lock's entry has no such line), so `uv sync --locked` installed ecCodes without its C
-library. Declaring `eccodeslib` in the `sync` extra fixed it (ecCodes 2.50.0 loads), and
-the Containerfile now fails its build when the library is missing.
+find the ecCodes library". `uv lock` had recorded `eccodes` 2.50.0 without its `eccodeslib`
+dependency, so `uv sync --locked` installed ecCodes without its C library. The Containerfile
+build now fails when the library is missing (the 2026-10-22 build printed "ecCodes 2.49.0").
 
-**The client IP.** A request from this machine with `X-Vercel-Forwarded-For: 203.0.113.77`,
-`X-Forwarded-For: 198.51.100.9` and `X-Real-IP: 192.0.2.5` produced exactly one rate-limit
-key, `rl:health-data:172.22.0.1:<window>`: the Docker network's gateway, the address the
-edge saw. None of the forged addresses reached the API.
+**Idle database, longer window.** With `log_statement = all` from 21:29:13 to 22:12:46 UTC
+(43.5 minutes, four checks, every component current) Postgres logged no connection and no
+statement from the sync container. At 22:12:46, 60 minutes after the daemon started
+(`JOB_INTERVAL_FLOOR_MINUTES=60`), it opened one session for its hourly batch of six
+periodic jobs: 120 statements in 0.8 s, then nothing.
 
-**PgBouncer.** `SHOW CONFIG` reports `pool_mode = transaction`; `GET /api/spots` raised
-PgBouncer's `total_xact_count` (26 to 29, and 226 to 228 in a later run);
-`pg_stat_activity` showed the API's server connections (`swell-api`) only from the
-PgBouncer container's address. The API's own PgBouncer test,
+**PgBouncer.** `pg_stat_activity` showed the API's server connections (`swell-api`) only
+from the PgBouncer container's address, and the API's own PgBouncer test,
 `tests/integration/test_pgbouncer_mode.py`, passed against the stack's pooler (2 passed).
+A 5 MB login body got 413 from the edge; a 4 MB one reached the API.
 
-**The daemon leaves the database alone between wakes.** With `log_statement = all` from
-21:29:13 to 22:12:46 UTC (43.5 minutes, four metadata checks, every component current),
-Postgres logged no connection and no statement from the sync container. At 22:12:46,
-60 minutes after the daemon started (`JOB_INTERVAL_FLOOR_MINUTES=60`), it opened one
-session for its hourly batch of six periodic jobs: 120 statements in 0.8 s, then nothing.
-
-**Mailpit.** The smoke spec registered a synthetic `@example.com` account; the API sent the
-verification email inline over SMTP, the spec read it from Mailpit's API (its link pointed
-at `http://localhost:3100`), verified the address and logged in.
-
-**Findings for the other packages**, seen only in this stack:
+### Findings for the other packages, seen only in this stack
 
 * The API image has no `data/` (as the Vercel function, whose root is `backend/`). The data
-  health report the API computes, and with it the daily watchdog, is `failing` there with
-  `tides_constants:harmonic_model` ("The tide model's constants file cannot be read"),
-  although the daemon (which has `data/`) computes tides fine.
-* `/status` cannot show a published sync yet: `GET /api/health/data` has `"sync": null`
-  until the data-health sync block exists, so the spec's `/status` test fails (5 of its 6
-  tests passed).
+  health report the API computes, and with it `/status` and the daily watchdog, is
+  `failing` there with `tides_constants:harmonic_model` ("The tide model's constants file
+  cannot be read; model tides are unavailable."), although the daemon (which has `data/`)
+  computes the tides. The smoke prints this verdict as a note.
 * `vercel build` (CLI 64.5.0, offline, hand-written `.vercel/project.json`) refuses
   `daemons` ("[DAEMONS_NOT_SUPPORTED] Can't build daemons yet"), and without
   `"framework": "nextjs"` on the web service it stops at "[MULTIPLE_FRAMEWORKS_SERVICE]

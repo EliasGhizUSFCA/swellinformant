@@ -291,6 +291,17 @@ with SessionLocal() as db:
   code="$(status_with_token "$base/api/internal/cron/daily" "$secret")"
   if [ "$code" = "200" ]; then pass "cron with the token: 200"; else fail "cron with the token: $code"; fi
 
+  # Not a check of the stack: the data-health verdict of the API (GET /api/health/data), the
+  # one the daily watchdog alerts on, as the deployed function would report it.
+  local verdict
+  verdict="$(curl_local -fsS --max-time 20 "$base/api/health/data" | compose exec -T api python -c '
+import json, sys
+d = json.load(sys.stdin)
+keys = ", ".join(p["key"] for p in d.get("problems") or [])
+print(d["status"] + (f" ({keys})" if keys else ""))
+' 2>/dev/null | tr -d '\r' || true)"
+  printf '  note  data health reported by the API: %s\n' "${verdict:-unknown}"
+
   local map_fields
   map_fields="$(compose exec -T sync printenv MAP_FIELDS_ENABLED | tr -d '\r' || true)"
   echo "shell checks: $FAILURES failed ($SECONDS s)"
