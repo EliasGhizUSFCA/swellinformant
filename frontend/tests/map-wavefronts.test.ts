@@ -114,7 +114,7 @@ describe("one crest lattice everywhere", () => {
   });
 
   it("gives every dash cell its own state key, also at the street basemap's zoom 19", () => {
-    // At zoom 19 the world has about 9.6 million rows of 14 px cells. Two views exactly one
+    // At zoom 19 the world has about 11.2 million rows of 12 px cells. Two views exactly one
     // column and 2^21 rows apart: a key packed for fewer rows would give their cells the same
     // dash states (the cell one column east and 2^21 rows south shares the key).
     const worldPx = 256 * 2 ** 19;
