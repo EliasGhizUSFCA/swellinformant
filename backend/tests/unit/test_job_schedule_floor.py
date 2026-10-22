@@ -113,3 +113,18 @@ def test_beat_gets_the_floored_intervals_and_matching_expiry() -> None:
     assert beat_entries[SYNC_TICK_ENTRY]["task"] == SYNC_TICK_JOB
     assert beat.describe_schedule(beat_entries["user-matching"]["schedule"]) == "every hour"
     assert beat.max_interval(beat_entries["maintenance-cleanup"]["schedule"]) == timedelta(hours=24)
+
+
+@pytest.mark.parametrize("runner", ["celery", "daemon"])
+def test_the_system_status_lists_every_job_a_runner_logs(runner: str) -> None:
+    """/api/system/status shows the last run of JOB_NAMES: every scheduled task, the sync's
+    own log row (sync.run, under every runner) and each stage a sync runs."""
+    from app.api.system import JOB_NAMES
+    from app.services.sync.types import STAGE_JOB_NAMES, SYNC_RUN_JOB
+
+    scheduled = {e.task for e in build_schedule(settings(job_runner=runner)).values()}
+    listed = set(JOB_NAMES)
+    assert scheduled <= listed, scheduled - listed
+    assert set(STAGE_JOB_NAMES.values()) <= listed, set(STAGE_JOB_NAMES.values()) - listed
+    assert {SYNC_RUN_JOB, SYNC_TICK_JOB} <= listed
+    assert len(JOB_NAMES) == len(listed)  # no duplicates
