@@ -4,6 +4,12 @@
 # Unit and integration tests run as separate pytest processes, and every exit code is read
 # directly (no pipes): see docs/debug-audit.md on the ecCodes / psycopg exit-139 crash, which
 # an exit code read through a pipe once hid.
+#
+# Dependencies: backend/uv.lock pins every version (backend/pyproject.toml has the split:
+# [project].dependencies = the lean API set, extras worker / server / sync / all / dev). The
+# jobs install with pip, constrained to the locked versions, so tests run on what the images
+# and the Vercel function install. UV_VERSION matches the Containerfile, docker/api-lean and
+# backend/Dockerfile.
 name: CI
 
 on:
@@ -20,6 +26,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.13"
+  UV_VERSION: "0.11.32"
   NODE_VERSION: "22"
   NEXT_TELEMETRY_DISABLED: "1"
 
@@ -61,9 +68,32 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
-      - name: Install backend with dev extras
-        run: python -m pip install -e ".[dev]"
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/uv.lock
+      - name: Install uv (pinned)
+        run: python -m pip install "uv==${UV_VERSION}"
+      - name: uv lock --check (uv.lock matches pyproject.toml)
+        run: uv lock --check
+      - name: Install backend with dev extras (versions from uv.lock)
+        run: |
+          uv export --locked --no-dev --no-emit-project --no-hashes --extra dev \
+            --output-file "$RUNNER_TEMP/constraints.txt"
+          python -m pip install -e ".[dev]" --constraint "$RUNNER_TEMP/constraints.txt"
+      # The hosted API installs only [project].dependencies (the Vercel builder runs
+      # uv sync --frozen without extras): a lean environment from the lock, as docker/api-lean
+      # builds it, for the lean-import test.
+      - name: Lean API install (uv.lock, no extras)
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/lean-venv
+          UV_PYTHON_DOWNLOADS: never
+        run: uv sync --locked --no-dev --no-install-project
+      - name: Lean-import test (dev install with the extras blocked, then the lean install)
+        env:
+          LEAN_PYTHON: ${{ runner.temp }}/lean-venv/bin/python
+        run: python -m pytest -q tests/unit/test_lean_imports.py
+      - name: API bundle size (lean set from uv.lock, at most 200 MB)
+        run: python ../scripts/check_api_bundle.py --max-mb 200
       - name: PostgreSQL client tools (backup / restore script tests)
         run: |
           command -v pg_dump >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
@@ -76,7 +106,7 @@ jobs:
         run: mypy app
       - name: Shell scripts (shellcheck)
         working-directory: .
-        run: shellcheck -x -s sh scripts/backup-db.sh scripts/restore-db.sh scripts/restore-drill.sh scripts/check-health.sh scripts/lib/pg-env.sh
+        run: shellcheck -x -s sh scripts/backup-db.sh scripts/restore-db.sh scripts/restore-drill.sh scripts/check-health.sh scripts/lib/pg-env.sh backend/docker-entrypoint.sh
       - name: alembic upgrade head
         run: alembic upgrade head
       - name: alembic check (models and migrations agree)
@@ -148,11 +178,17 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/uv.lock
       - name: Backend virtualenv at backend/.venv (used by run-e2e.sh and the e2e helpers)
         run: |
+          python -m pip install "uv==${UV_VERSION}"
+          uv export --project backend --locked --no-dev --no-emit-project --no-hashes \
+            --extra dev --output-file "$RUNNER_TEMP/constraints.txt"
           python -m venv backend/.venv
-          backend/.venv/bin/python -m pip install -e "backend[dev]"
+          backend/.venv/bin/python -m pip install -e "backend[dev]" \
+            --constraint "$RUNNER_TEMP/constraints.txt"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
