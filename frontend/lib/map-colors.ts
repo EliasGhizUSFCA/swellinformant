@@ -1,7 +1,7 @@
 /**
  * Colour scales for the map's ocean layers, in one place. The Wave Height layer has its own
- * ramp with anchors in metres (deep navy for calm seas → blue → violet → magenta → pink for
- * the largest waves, WAVE_HEIGHT_RAMP); the other layers share one ramp (deep blue for calm →
+ * ramp with anchors in metres (muted navy for calm seas → slate blue → violet → magenta →
+ * pink for the largest waves, WAVE_HEIGHT_RAMP); the other layers share one ramp (deep blue for calm →
  * cyan → green → yellow → orange → red → magenta for the largest values, RAMP) placed over
  * their display range. Values beyond a range saturate at the end colours.
  *
@@ -43,26 +43,30 @@ export interface ValueAnchor {
 /**
  * Wave-height ramp, anchors in metres of offshore significant wave height, interpolated
  * linearly in metres (in sRGB) between anchors and saturating at the end colours (above
- * 10 m: #f9d0e0). Our own ramp in the spirit of the owner's reference (a smooth blue →
- * violet → magenta/pink field): CIE L* (sRGB, D65) rises strictly from 10.4 at 0 m to 87.3
- * at 10 m and neighbouring anchors differ by ΔE*ab ≥ 5.4, so a larger sea is always lighter
- * and the scale still reads in grey (tests/map-wave-ramp.test.ts).
+ * 10 m: #f3c4dc). Our own ramp in the spirit of the owner's reference (a smooth, slightly
+ * dusky field): muted navy for calm seas, slate blue at 1 m, blue-violet at 1.5 m, violet at
+ * 2 m, magenta-purple at 2.5-3 m, magenta at 4-5 m, pink at 6-8 m and pale pink at 10 m. The
+ * hue turns steadily from blue to pink with height, CIE L* (sRGB, D65) rises strictly from
+ * 12.2 at 0 m to 83.8 at 10 m and neighbouring anchors differ by ΔE*ab ≥ 7.6, so a larger
+ * sea is always lighter and the scale still reads in grey (tests/map-wave-ramp.test.ts).
+ * (Upgrade 4's first ramp, saturated blue up to 2.5 m, was re-anchored at integration: a
+ * typical 2-3 m sea read electric blue where the reference is violet to magenta.)
  */
 export const WAVE_HEIGHT_RAMP: readonly ValueAnchor[] = [
-  { value: 0, color: "#0c1846" },
-  { value: 0.5, color: "#132e78" },
-  { value: 1, color: "#1b48a6" },
-  { value: 1.5, color: "#2a5cc2" },
-  { value: 2, color: "#4363cf" },
-  { value: 2.5, color: "#5a62d6" },
-  { value: 3, color: "#7360d6" },
-  { value: 4, color: "#925ad0" },
-  { value: 5, color: "#ad55c4" },
-  { value: 6, color: "#c556b4" },
-  { value: 7, color: "#d860a6" },
-  { value: 8, color: "#e6729f" },
-  { value: 9, color: "#f19ebd" },
-  { value: 10, color: "#f9d0e0" },
+  { value: 0, color: "#151d42" },
+  { value: 0.5, color: "#212f68" },
+  { value: 1, color: "#344790" },
+  { value: 1.5, color: "#4a4ea6" },
+  { value: 2, color: "#614fb0" },
+  { value: 2.5, color: "#7a4eb2" },
+  { value: 3, color: "#8f4db0" },
+  { value: 4, color: "#a64fab" },
+  { value: 5, color: "#b856a8" },
+  { value: 6, color: "#c862a9" },
+  { value: 7, color: "#d572ae" },
+  { value: 8, color: "#df86b8" },
+  { value: 9, color: "#e9a3c7" },
+  { value: 10, color: "#f3c4dc" },
 ];
 
 export function rgbToHex([r, g, b]: readonly [number, number, number]): string {

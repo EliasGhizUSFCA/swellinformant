@@ -55,8 +55,8 @@ describe("colour scales", () => {
     expect(layerScale("hs", index).max).toBe(12);
     // The wave-height colours stay anchored in metres: 10 m keeps its colour on a 0-12 m scale.
     const wide = layerScale("hs", index);
-    expect(colorAt(wide.stops, 10 / 12)).toEqual(hexToRgb("#f9d0e0"));
-    expect(colorAt(wide.stops, 5 / 12)).toEqual(hexToRgb("#ad55c4"));
+    expect(colorAt(wide.stops, 10 / 12)).toEqual(hexToRgb("#f3c4dc"));
+    expect(colorAt(wide.stops, 5 / 12)).toEqual(hexToRgb("#b856a8"));
     expect(layerScale("tp", index).max).toBe(20);
     expect(layerScale("wind", index).max).toBe(30);
   });
