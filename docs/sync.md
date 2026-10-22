@@ -69,8 +69,10 @@ run key: the newest usable (success or partial) run of that source that complete
 the newest publication (`detect.load_known`; simulated demo runs are ignored).
 
 1. **New.** The available run key differs from the stored one. A run older than the stored
-   one (its newest `YYYYMMDDHH` cycle is earlier, e.g. a metadata cache serving the
-   previous run) is never new. A map cycle whose layers are already published is current.
+   one is never new: its newest `YYYYMMDDHH` cycle is earlier (e.g. a metadata cache
+   serving the previous run), or it has the stored run's model domains with none newer and
+   one older (a lagging Open-Meteo server offering part of the previous run). A map cycle
+   whose layers are already published is current.
 2. **Coalescing** (state `waiting`). A run whose model domains are on different cycles
    (Open-Meteo published GFS-Wave, GFS 0.13 and GFS 0.25 5.3, 6.0 and up to 8.2 h after the
    cycle on 2026-10-14/15, docs/FORECAST_SOURCES.md) waits for the late domains; the GFS
@@ -107,7 +109,8 @@ The lease is a `sync_runs` row with status `running` (unique partial index
 `uq_sync_runs_running`). Its `lease_expires_at` is SYNC_LEASE_MINUTES (45) ahead and
 renewed after every stage. A second sync meanwhile gets `SyncBusy` (`sync run` exits 3);
 an expired lease (a crashed runner) is marked `abandoned` by the next sync, which then
-does the work.
+does the work. A sync that fails before its first stage (its `sync.run` job log cannot be
+written) releases the lease at once, as `failed`.
 
 | Stage | Job log name | Runs when |
 |---|---|---|
@@ -155,7 +158,14 @@ The status of a sync is one of:
 * `abandoned`: the lease expired and was taken over.
 
 `stop` (SIGTERM in the daemon) is checked between stages: the current stage finishes,
-the other stages are recorded as skipped ("stopped"), the lease is released.
+the other stages are recorded as skipped ("stopped"), the lease is released. A stage is
+never interrupted, so a process killed before its stage ends (for example one that
+outlives its grace period after SIGTERM: vercel.json sets the daemon's
+terminationGracePeriodSeconds to 120, and a full map stage can take longer) leaves the
+lease running. The next sync then waits for the lease to expire
+(SYNC_LEASE_MINUTES after its last renewal), marks it `abandoned` and does the work; a map
+or spot run the killed stage left `running` counts as "in progress" (a failed attempt)
+until it is an hour old, and is then acquired again.
 
 ## The daemon (`python -m app.cli sync daemon`)
 
@@ -214,6 +224,9 @@ python -m app.cli migrate --on-build    # migrate a production build (MIGRATE_ON
 `sync run` exits 0 for success, partial or skipped, 1 for failed (or abandoned), 3 when
 another sync holds the lease. To re-download a run that is already stored use
 `python -m app.cli pipeline --force-acquire` or `python -m app.cli engine map-fields --force`.
+`engine map-fields` stores map layers without publishing them: with SYNC_PUBLISH_GATE the
+map keeps showing the published run until the next sync or `sync publish` (`pipeline`
+publishes on its own).
 
 `migrate --on-build` reads MIGRATE_ON_BUILD: `off` (default) never migrates; `production`
 migrates only when VERCEL_ENV=production, so preview builds and Neon preview branches are
@@ -241,9 +254,18 @@ schema).
 ## Redis keys
 
 `sync:known` (stored keys, first sightings, attempts; 7 days), `sync:heartbeat` (the last
-check; 6 h), `sync:kick:matching.match` and `sync:kick:flights.discover` (1 day). All are
-best effort: with Redis down the daemon still syncs (it loads the stored keys from the
-database), the kicks wait for Redis.
+check; 6 h), `sync:kick:matching.match` and `sync:kick:flights.discover` (1 day). Reading
+and writing them is best effort: with Redis down the daemon keeps the known runs in
+memory, checks on, and the kicks wait for Redis.
+
+A sync itself needs Redis, though: every stage runs through `run_job`, which takes the
+job's Redis lock first. Measured on 2026-10-22 with Redis refusing connections (demo
+provider, `sync run --force`): the spots, blend, predict and publish stages failed on the
+lock (`ConnectionError`) in 0.4 s, nothing was published, and the command exited 1. Each
+such sync counts a failed attempt per due component, so an outage of more than about an
+hour and a half (SYNC_MAX_ATTEMPTS attempts SYNC_RETRY_MINUTES apart) leaves the run
+`failed` until the provider offers the next one (once Redis is back, `sync run` acquires
+it at once).
 
 ## Measured
 
@@ -269,8 +291,8 @@ cell has two values, they are the two days.
 |---|---|---|---|
 | First `sync check` of a process, Redis empty (the stored keys are loaded once) | 1.82, 2.86 (provider imports included) | 1 statement | 6 `meta.json` (2.2 kB) and 2 `.idx` HEAD |
 | `sync check` after a sync | 0.18, then 0.40 and 0.33 | **0 statements, 0 checkouts** | the same metadata, **0 data requests** |
-| Daemon idle check (3 a day) | 0.17-0.18, 0.29-0.32 | **0** | the same, 0 data requests |
-| Daemon kick poll without a kick (10 a day) | < 0.01 in total | 0 | none |
+| Daemon idle check (3 in a row) | 0.17-0.18, 0.29-0.32 | **0** | the same, 0 data requests |
+| Daemon kick poll without a kick (10 in a row) | < 0.01 in total | 0 | none |
 | Hourly periodic batch (6 jobs, no users) | 0.13, 0.22 | 62-64 statements | none |
 | Daily `tides.acquire` | 13.6, 23.3 | 283 statements | 140 kB (16 GRIB ranges) |
 | Daily `maintenance.cleanup` | 0.04, 0.05 | 21-22 statements | none |
@@ -371,6 +393,54 @@ With the demo provider (synthetic data) on a fresh database, on 2026-10-21 from 
 * **SIGTERM.** The daemon stopped within a second ("stopping after the current stage"),
   and no lease was left behind.
 
+### Review re-check, 2026-10-22
+
+An independent review re-ran the checks on the same sandbox, partly while other test
+suites ran (CPU figures are therefore upper bounds).
+
+* **Demo, fresh database** (`init-db`, then `sync run --force`, FORECAST_PROVIDERS=demo,
+  synthetic data): `success`, published, 36 s wall. All 12 stages were recorded:
+  spots 2.67 CPU s, predict 16.52, detect 3.90, alerts 0.20, the rest 0.05 or less;
+  ensemble and map skipped as `disabled`, prune by SYNC_PRUNE_EACH_PASS=false. The next
+  `sync check` was not due, `sync run` returned `skipped` without a row, and
+  `sync run --if-due` `not_due`.
+* **The daemon synced a real model run by itself.** On a copy of the 10-21 database
+  (stored: GFS 06Z and the map of 00Z of 10-21), with the settings above but the map
+  capped to 3 map hours (`MAP_FIELD_STEPS=0-6:3`), real Open-Meteo and NOAA NODD, Celery
+  and kombu imports blocked, `python -m app.cli sync daemon` started at 07:47 UTC. Its
+  first check saw the GFS family's 00Z run with GFS-Wave 0.16 still on 18Z, and the map
+  of 00Z waiting for that spot run; ECMWF 00Z was not served (Open-Meteo still on
+  ecmwf_ifs025 18Z). The first sightings held through a check whose Open-Meteo requests
+  timed out (`unknown`). At 09:18, 90 minutes after the first sighting, the daemon's
+  check made the sync due and the daemon ran it: `success`, published (the map run of
+  00Z), anchor cycle 00Z, 26.6 s wall and 20.6 CPU s (spots 1.79 for 10,240 point
+  forecasts and 327 kB, map 8.49 for 3 map hours and 23.9 MB, predict 8.14 for 10,240
+  predictions, detect 2.07, the rest 0.1). Peak RSS 559 MB.
+* **Idle.** From the end of start-up (3.74 CPU s with `init-db` and the first check) to
+  the sync, 89 minutes with 9 checks and 1 hourly batch cost 2.07 CPU s. The process
+  opened one database session in that time, for the hourly batch, and held no
+  connection between wakes.
+* **Redis and HTTP per idle iteration** (counted in-process on the same database): a
+  check is 3 Redis commands (GET `sync:known`, SET `sync:known`, SET `sync:heartbeat`), no
+  SQL statement and 7-8 `meta.json` plus 2 `.idx` HEAD requests, 0.14-0.20 CPU s; a kick
+  poll without a kick is one EVAL. At the default cadence that is about 13,000 commands a
+  month for checks and 43,200 for kick polls, plus the job locks.
+* **After the sync**, `sync check` made 0 SQL statements and 0 pool checkouts and only
+  metadata requests (6 `meta.json`, 2 HEAD, 3.6 kB), and was not due. A forced sync
+  (`sync run --force`) made no data request (14 `meta.json` and 4 HEAD, 8.4 kB), added no
+  forecast run, point forecast, map field, prediction or swell event (1 `sync_runs` row
+  and 12 job logs), and reported GFS and the map `current` and ECMWF `deferred`.
+* **ECMWF on its own, and a refused request.** At 09:38 the daemon's check found ECMWF
+  00Z servable and new while GFS and the map were current, and synced it at once.
+  Open-Meteo refused the data request ("Daily API request limit exceeded", the sandbox's
+  shared IP), so the sync ended `failed` in 3.1 s and 0.2 CPU s, published nothing, and
+  counted one attempt: the next check showed ECMWF `waiting` until 15 minutes after it.
+  A two-family blend was therefore again not measured live.
+* **SIGTERM** at 09:48 (idle): "stopping after the current stage", the process ended
+  2.4 s later and no lease was left running. Over its 2 hours the daemon used 27.2 CPU s:
+  3.7 at start-up, 20.7 for the GFS and map sync, 0.2 for the refused ECMWF sync and
+  about 2.6 for 13 checks, 2 hourly batches and the kick polls.
+
 ### Monthly CPU estimate
 
 The Hobby daemon quota is 10 Active CPU-hours a month. This is an extrapolation, not a
@@ -399,5 +469,15 @@ measurement, and it rests on these assumptions:
 
 That is 44-79 % of the quota. The map layers are more than half of it, and their horizon
 and cycles are the levers: MAP_FIELD_STEPS, MAP_FIELD_MAX_LEAD_HOURS and MAP_FIELD_CYCLES.
+
+"One sync per new run" is the optimistic case for GFS. Open-Meteo's GFS family has four
+model domains (GFS-Wave 0.16 and 0.25, GFS 0.13 and 0.25), and when the last one comes
+more than SYNC_COALESCE_MINUTES after the first, the run is synced with the domains that
+are there and synced again when the last one arrives. That happened in three of the
+observed cycles: on 2026-10-15 06Z the domains came 5.3, 6.0 and 8.2 h after the cycle
+(docs/FORECAST_SOURCES.md), on 2026-10-21 06Z GFS 0.25 came 8.7 h after it, and on
+2026-10-22 00Z GFS-Wave 0.16 was still on the previous cycle 9.3 h after it, when the
+daemon synced the run (above). If every GFS cycle took two spot syncs, the GFS row
+would double, to 1.76-3.26 CPU-h, and the total would be 5.3-9.5 CPU-h (53-95 %).
 GEFS_ENABLED=true adds the ensemble acquisition, which was not measured here. Health
 warns at 80 % of SYNC_CPU_BUDGET_HOURS, from the job logs' and the heartbeat's `cpu_s`.
