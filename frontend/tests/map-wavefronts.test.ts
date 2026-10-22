@@ -112,6 +112,30 @@ describe("one crest lattice everywhere", () => {
     expect(Math.min(...xs)).toBeLessThan(-3 * crestSpacingPx(12) + 1);
     expect(Math.max(...xs)).toBeGreaterThan(a.width + 3 * crestSpacingPx(12) - g.cell - 1);
   });
+
+  it("gives every dash cell its own state key, also at the street basemap's zoom 19", () => {
+    // At zoom 19 the world has about 7.5 million rows of 18 px cells. Two views exactly one
+    // column and 2^21 rows apart: a key packed for fewer rows would give their cells the same
+    // dash states (the cell one column east and 2^21 rows south shares the key).
+    const worldPx = 256 * 2 ** 19;
+    const cell = dashCellSize(FAMILY_STYLES.combined, { originX: 0, originY: 0, width: 400, height: 300, worldPx });
+    const grid = (originX: number, originY: number) => {
+      const view = { originX, originY, width: 400, height: 300, worldPx };
+      const l = buildLattice(view, [family("combined", 2, 10, 250)]);
+      return dashGrid(l, l.families[0]!, view);
+    };
+    const a = grid(0.3 * worldPx, 0.25 * worldPx);
+    const b = grid(0.3 * worldPx + cell, 0.25 * worldPx + 2 ** 21 * cell);
+    expect(a.cells.length).toBeGreaterThan(100);
+    expect(b.cells.length).toBe(a.cells.length);
+    const keys = new Map<number, string>();
+    for (const c of [...a.cells, ...b.cells]) {
+      const id = `${c.ci},${c.cj}`;
+      expect(keys.get(c.key) ?? id, `key ${c.key}`).toBe(id);
+      keys.set(c.key, id);
+    }
+    expect(keys.size).toBe(2 * a.cells.length);
+  });
 });
 
 describe("systems", () => {

@@ -286,7 +286,10 @@ export interface DashCell {
   cj: number;
   /** Column wrapped to one world copy (the hash seed: the same place in every copy). */
   wrapped: number;
-  /** State key (column and row). */
+  /**
+   * State key, unique per (column, row): column x 2^24 + row. Rows are 0..nWorld - 1, under 2^24
+   * up to zoom 20 (7.5 million rows of 18 px at zoom 19), and the key stays an exact integer.
+   */
   key: number;
   /** Phase offset of the cell's life cycle, 0..1. */
   phase: number;
@@ -349,7 +352,7 @@ export function dashGrid(l: Lattice, f: FamilyLattice, view: PixelView): DashGri
         ci,
         cj,
         wrapped,
-        key: (ci + 1048576) * 2097152 + cj,
+        key: ci * 16777216 + cj,
         phase: hash01(wrapped * 8 + seed, cj, 7),
         lifeRef: dashLifeSeconds(tp > 0 ? tp : REFERENCE_PERIOD_S),
         keep: hash01(wrapped * 8 + seed, cj, 11),
