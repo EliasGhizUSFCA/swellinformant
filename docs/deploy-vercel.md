@@ -6,11 +6,12 @@ of Upgrade 4. Quotes from Vercel, Neon, Upstash and GitHub are at the end (secti
 with their URLs and the date they were read.
 
 What was checked here, and how, is in section 10. In short: the configuration validates
-against Vercel's published schema; an offline `vercel build` of the project succeeds once
-the lean dependency split and the `migrate --on-build` command are merged; and `vercel dev
--L` serves the site and the API. A real deployment was not made from this sandbox: the
-first production deploy is the step that proves the daemon builds and starts (daemons
-cannot be previewed).
+against Vercel's published schema; an offline `vercel build` succeeds with all the Upgrade 4
+packages merged (the lean dependency split and `migrate --on-build` are what it needs), with
+a 131 MiB API function; `vercel dev -L` serves the site and the API; and the manual GitHub
+runner's steps run end to end on this machine. A real deployment was not made from this
+sandbox: the first production deploy is the step that proves the daemon builds and starts
+(daemons cannot be previewed).
 
 ## 1. What runs where
 
@@ -92,7 +93,10 @@ scripts/vercel-build-check.sh --offline --keep   # keep the build directory to l
   image the Python builder installs Linux x86_64 wheels, which a local Python on macOS
   cannot import.
 - Linked checkouts (after `vercel link`): run it without `--offline`; it copies
-  `.vercel/project.json` and runs `vercel pull --environment=preview` first.
+  `.vercel/project.json` and runs `vercel pull --environment=preview` first. The pulled
+  file holds the Preview environment variables, secrets included; it lives only in the
+  temporary copy and is deleted with it (with `--keep`, the file alone is deleted).
+  `MIGRATE_ON_BUILD=off` still wins over the pulled value.
 - Needs git, Node.js with npx, tar, and internet access to npm and PyPI. It needs about
   1.1 GB of free space in `$TMPDIR` while it runs.
 
@@ -111,14 +115,18 @@ Steps that worked here (Vercel CLI 64.5.0, Linux):
    initialise the database: `DATABASE_URL=... backend/.venv/bin/python -m app.cli init-db`
    (run it from `backend/`).
 4. From the repository root:
-   `DATABASE_URL=postgresql+psycopg://swell:swell@localhost:5432/swell REDIS_URL=redis://localhost:6379/0 FORECAST_PROVIDERS=demo npx vercel@64.5.0 dev -L --listen 3000`
+   `DATABASE_URL=postgresql+psycopg://swell:swell@localhost:5432/swell REDIS_URL=redis://localhost:6379/0 FORECAST_PROVIDERS=demo JOB_RUNNER=daemon npx vercel@64.5.0 dev -L --listen 3000`
+   (`JOB_RUNNER=daemon` as on Vercel: the lean install has no Celery, so account emails go
+   out inline; without it they still do, after a "Celery unavailable" warning).
 5. Open http://localhost:3000/ (the site) and http://localhost:3000/api/health/ready
    (`{"status":"ok","checks":{"database":"ok","redis":"ok"}}`).
 
 It prints "`vercel dev` doesn't run daemons: sync. Run them with Docker." For data, use
 the local stack (3.1), or `python -m app.cli sync run --force` from a full install
 (`pip install -e ".[dev]"`; the lean venv has no data libraries). `vercel dev` installs the
-frontend's dependencies itself ("Synchronizing dependencies").
+frontend's dependencies itself ("Synchronizing dependencies") and runs the web service with
+`next dev`, the development server, so it is a check of the routing and the API, not of the
+production build (that is 3.2).
 
 ## 4. First deployment, step by step
 
@@ -153,8 +161,16 @@ Production, Preview and Development.
 ### Step 4. Upstash Redis (Vercel Marketplace)
 
 Install Upstash Redis from the Marketplace, Free plan, region us-east-1, and connect it to
-the project. It injects `KV_URL` (a `rediss://` URL), which the app uses when `REDIS_URL`
-is not set. `KV_REST_API_URL` and `KV_REST_API_TOKEN` are not used.
+the project. The app reads `KV_URL` (a `rediss://` URL; Upstash always uses TLS) when
+`REDIS_URL` is not set. `KV_REST_API_URL` and `KV_REST_API_TOKEN` are not used.
+
+Check it: in Project Settings, Environment Variables, look for `KV_URL` (or `REDIS_URL`).
+The Marketplace page showed `KV_URL` in its snippets on 2026-10-18, but only the REST
+variables on 2026-10-22 (section 11). If neither is there, copy the database's TLS
+connection string (`rediss://...:6379`) from its page under Storage into a `REDIS_URL`
+variable yourself. Without one the app falls back to `redis://localhost:6379/0`: the API's
+Redis check fails (`/api/health/ready` answers 503 with `"redis": "unavailable"`), rate
+limits fail open, and the daemon's heartbeat and the "match my search" kicks are lost.
 
 ### Step 5. Environment variables
 
@@ -279,8 +295,9 @@ lasting record is the `sync_runs` table, the job logs and `/status`.
 
 ### Step 8. The daily watchdog
 
-Vercel Cron calls `GET /api/internal/cron/daily` once a day at 07:23 UTC; on Hobby it runs
-"anywhere within the scheduled hour" and is not retried when it fails. It runs the
+Vercel Cron calls `GET /api/internal/cron/daily` once a day (`23 7 * * *`, UTC). On Hobby
+"Vercel may invoke these cron jobs at any point within the specified hour", so expect it
+between 07:00 and 07:59 UTC, and a failed call is not retried. It runs the
 data-health check and emails the admins when the daemon's heartbeat or the data is stale,
 so a stopped daemon (quota used up, crash) is still noticed. Try it by hand:
 
@@ -364,11 +381,17 @@ the daemon stays the scheduler.
   `SENDGRID_API_KEY`, `SMTP_PASSWORD`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
   `DUFFEL_ACCESS_TOKEN`, `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET` (only the ones you
   use). GitHub does not pass secrets to runs triggered from forks.
-- Variables: `APP_BASE_URL` (required), `EMAIL_PROVIDER`, `EMAIL_FROM`, and any setting
-  you changed on Vercel (for example `GEFS_ENABLED`). Variables override the hosted profile;
-  names that are not app settings are ignored with a warning. The run always uses
-  `APP_ENV=production`, so it fails early on a development secret key or a capture-only
-  email provider instead of marking alerts as sent to nowhere.
+- Variables: `APP_BASE_URL`, `EMAIL_PROVIDER` (`smtp`, `resend` or `sendgrid`) and
+  `EMAIL_FROM` (all three required), and any setting you changed on Vercel (for example
+  `GEFS_ENABLED`). Variables override the hosted profile; names that are not app settings
+  are ignored with a warning, and so is any setting named like a credential (`*_KEY`,
+  `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, the database and Redis URLs): those are read only
+  from secrets. The run always uses `APP_ENV=production`, so it stops at the configuration
+  step without a real email provider instead of marking alerts as sent to nowhere.
+- The log of a public repository is public. The run prints the names of the variables it
+  applied, never their values; GitHub masks the secrets.
+- It installs the backend with the `sync` extra at the versions in `backend/uv.lock`, the
+  same versions the daemon image installs.
 
 **Run it**: Actions, "Data sync (manual)", Run workflow. Inputs: `force` (run every stage
 even when no new model run is out; runs already stored are still skipped), `only` (a
@@ -428,17 +451,20 @@ Run in this sandbox on 2026-10-22, Vercel CLI 64.5.0, Node.js 22.22.0, Linux x86
   "Total bundle size (447.39 MB) exceeds the maximum function size (225 MB) even after
   optimizing dependencies" (`LAMBDA_SIZE_EXCEEDED`). Both are expected until the packages
   below are merged.
-- **Offline build of the merged layout** (this branch plus, simulated in a scratch copy:
-  deps-packaging's lean `[project].dependencies` with `backend/uv.lock` and
-  `backend/.python-version` 3.13, local-vercel-stack's `Containerfile`, and sync-core's
-  `migrate --on-build`): **`RESULT: ok`** in 98.8 s
+- **Offline build of the merged layout.** First on a scratch copy that simulated the
+  other packages (a lean `pyproject.toml` and `uv.lock` written from deps-packaging's
+  design, local-vercel-stack's `Containerfile`, sync-core's `migrate --on-build`):
+  **`RESULT: ok`** in 98.8 s, api function 131.1 MiB in 3,441 files. Then, at review, on a
+  scratch clone with all nine package branches really merged (deps-packaging's
+  `backend/uv.lock` and `.python-version` 3.13 included): **`RESULT: ok`** in 92.6 s
   (wall time, warm npm cache). The api function: python3.13, maxDuration 60 s,
-  3,441 files, **131.1 MiB** (limit 500 MiB, builder threshold 225 MiB); largest parts
+  3,430 files, **130.9 MiB** (limit 500 MiB, builder threshold 225 MiB); largest parts
   numpy with its libraries 51.7 MiB, SQLAlchemy 17.0 MiB, cryptography 14.2 MiB,
-  psycopg-binary with its libraries 19.0 MiB, pydantic-core 4.8 MiB, `ml_models` 3.8 MiB.
-  The web service: Node.js 24 functions of 4.6 MiB and less. The cron and both routes are in
-  `.vercel/output/config.json`; the daemon was left out by the CLI and its `Containerfile`
-  exists. The first attempt, with `daemons`, stopped after 1-2 s with
+  psycopg-binary with its libraries 19.0 MiB, pydantic-core 4.6 MiB, `ml_models` 3.8 MiB;
+  no tests, no `.env` file, none of Celery, pandas, ecCodes, pyarrow, scikit-learn, scipy
+  or joblib. The web service: Node.js 24 functions of 4.6 MiB and less. The cron and both
+  routes are in `.vercel/output/config.json`; the daemon was left out by the CLI and its
+  `Containerfile` exists. The first attempt, with `daemons`, stopped after 1-8 s with
   "[DAEMONS_NOT_SUPPORTED] Can't build daemons yet: sync".
 - **The build command.** The Python builder runs `services.api.buildCommand` after it has
   installed the dependencies, inside the build venv: a probe command imported fastapi,
@@ -453,7 +479,23 @@ Run in this sandbox on 2026-10-22, Vercel CLI 64.5.0, Node.js 22.22.0, Linux x86
   to `api` and everything else to `web`, and keeps the cron.
 - **`vercel dev -L`** (section 3.3) served `/` (200, the home page) and
   `/api/health/ready` (200, database and Redis ok) and `/api/spots` (200) from a lean venv
-  (133 MB, no pandas or Celery), with a warning that it does not run the daemon.
+  (133 MB, no pandas or Celery), with a warning that it does not run the daemon. Repeated at
+  review on the merged clone with a lean venv from the real `uv.lock` (132 MB) and
+  `JOB_RUNNER=daemon`: the same three answers plus `/map` 200; a registration sent its
+  verification email inline (console provider), and a login set the session cookie, after
+  which `/api/auth/me` and `/dashboard` answered 200 (signed out, `/dashboard` redirects to
+  `/login`).
+- **The manual runner.** actionlint 1.7.12 (with shellcheck 0.11.0) finds nothing in
+  `data-sync.yml`. At review its `run:` steps were run locally in order, as a runner would
+  (inputs and secrets set by hand, `$GITHUB_ENV` carried between steps), on the merged clone:
+  the install step installed the `sync` extra at the locked versions (pandas 3.0.6, numpy
+  2.5.3, ecCodes 2.49.0 with its library, no Celery); the configuration and Sync steps
+  then ran `migrate`, `check-config`, `sync run --trigger github --force --only spots` and
+  `sync status` against a scratch database with the synthetic `demo` provider (no network),
+  and the sync finished `success` in 25.9 s. Variables named like credentials were left
+  out with a warning and no variable value reached the log. A missing `EMAIL_PROVIDER`
+  stopped the configuration step; a shell command in `only` and a missing Redis secret
+  stopped the Sync step before anything ran. Not run on GitHub itself.
 - **Not checked here**: a real deployment (no Vercel account in this sandbox), the daemon
   image build on Vercel, Neon and Upstash themselves, the cron invocation, previews.
 
@@ -473,7 +515,7 @@ Read 2026-10-18 for the design (research) and re-read 2026-10-22 where marked.
 | Service path | "The service receives the original request path." | https://vercel.com/docs/services/routing |
 | Top-level build fields | "`functions`, `installCommand`, `buildCommand`, `devCommand`, `ignoreCommand`, `outputDirectory` and `framework` keys should be moved into the relevant service." | https://vercel.com/docs/services |
 | `vercel dev -L` | "To run everything locally without authenticating with the Vercel Cloud, add the `-L` flag" | https://vercel.com/docs/services |
-| Daemons, all plans | "Daemons (Public Beta) are available on all plans" | https://vercel.com/docs/daemons (re-read 2026-10-22) |
+| Daemons, all plans | "Daemons are available in Public Beta on all plans" | https://vercel.com/docs/daemons (re-read 2026-10-22) |
 | Daemons, production only | "During the beta phase, daemons only run in production environments." | same |
 | Daemons, not in `vercel dev` | "`vercel dev` currently doesn't run daemons." | same |
 | Daemon root | "Projects with a root directory such as `apps/web` can't add daemons yet." | https://vercel.com/docs/daemons/limits (re-read 2026-10-22) |
@@ -483,17 +525,19 @@ Read 2026-10-18 for the design (research) and re-read 2026-10-22 where marked.
 | Daemon output-directory rule | "If the project's output directory is the same directory as a daemon's `root`, the build fails." | same |
 | Rollout | "Vercel sends `SIGTERM` to the instances from the previous production deployment, then stops them after the shutdown grace period."; "When the new production deployment doesn't declare a daemon, Vercel stops all of that daemon's instances." | https://vercel.com/docs/daemons/managing-daemons (re-read 2026-10-22) |
 | Hobby cron | "Hobby accounts are limited to daily cron jobs." Precision "Per-hour (±59 min)". | https://vercel.com/docs/cron-jobs/usage-and-pricing |
+| Hobby cron timing | "Vercel may invoke these cron jobs at any point within the specified hour" | https://vercel.com/docs/cron-jobs/manage-cron-jobs (re-read 2026-10-22) |
 | Cron secret | "The value of the variable will be automatically sent as an `Authorization` header when Vercel invokes your cron job." | https://vercel.com/docs/cron-jobs/manage-cron-jobs |
 | Cron retries | "Vercel will not retry an invocation if a cron job fails." | same |
 | Python function size | "For Python functions, the maximum uncompressed size is **500 MB**." | https://vercel.com/docs/functions/limitations |
 | Env var changes | "Any change you make to environment variables are not applied to previous deployments, they only apply to new deployments." | https://vercel.com/docs/environment-variables |
 | CLI ignores | "These ignored files are only relevant when using Vercel CLI." | https://vercel.com/docs/builds/build-features (re-read 2026-10-22) |
-| Neon variables | "DATABASE_URL Pooled connection string (PgBouncer) DATABASE_URL_UNPOOLED Direct connection string" | https://neon.com/docs/guides/vercel-managed-integration |
+| Neon variables | A table: `DATABASE_URL`, "Pooled connection string (PgBouncer)"; `DATABASE_URL_UNPOOLED`, "Direct connection string" | https://neon.com/docs/guides/vercel-managed-integration (re-read 2026-10-22) |
 | Neon preview branches | "Environment variables for the branch connection are injected via webhook at deployment time" | same |
 | Neon Free | "100 CU-hours/project, 1 GB Postgres storage per project ... and 5 GB of egress per project." | https://neon.com/docs/introduction/plans |
 | Neon Launch | "$0.106 per CU-hr $0.35 per GB-month" | https://neon.com/pricing |
-| Upstash Free | "Free tier includes 250MB data size and 500K commands per month." | https://upstash.com/pricing/redis |
-| Upstash on Vercel | "redis-cli --tls -u {{KV_URL}}" | https://vercel.com/marketplace/upstash/upstash-kv |
+| Upstash Free | "Free tier includes 250MB data size and 500K commands per month." | https://upstash.com/pricing/redis (re-read 2026-10-22 in its `.md` version) |
+| Upstash on Vercel | "redis-cli --tls -u {{KV_URL}}" (2026-10-18). On 2026-10-22 the page's snippets showed only `KV_REST_API_URL` and `KV_REST_API_TOKEN`, so check the variables after connecting (step 4). | https://vercel.com/marketplace/upstash/upstash-kv |
+| Upstash TLS | "TLS is enabled by default for all Upstash Redis databases. It's not possible to disable it." | https://upstash.com/docs/redis/howto/connect-client (re-read 2026-10-22) |
 | Open-Meteo | "You may only use the free API services for non-commercial purposes." | docs/API_SETUP_REQUIRED.md (read 2026-10-16) |
 | GitHub terms | "Any activity that places a burden on our servers, where that burden is disproportionate to the benefits provided to users (for example, don't use Actions as a content delivery network or as part of a serverless application, but a low benefit Action could be ok if it's also low burden)" | https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features |
 | Scheduled workflows | "The schedule event can be delayed during periods of high loads of GitHub Actions workflow runs. ... some queued jobs may be dropped."; "In a public repository, scheduled workflows are automatically disabled when no repository activity has occurred in 60 days." | https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows, https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows |
@@ -501,6 +545,7 @@ Read 2026-10-18 for the design (research) and re-read 2026-10-22 where marked.
 | Secrets and forks | "With the exception of GITHUB_TOKEN , secrets are not passed to the runner when a workflow is triggered from a forked repository." | https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets |
 
 Not verified: the exact labels of Vercel's dashboard screens (the steps follow the
-documentation's wording); whether Upstash also injects `REDIS_URL` (the app reads `KV_URL`
-either way); daemon pricing on Pro (the pricing page for daemons returned 404 on
-2026-10-18).
+documentation's wording); which variable names Upstash injects today (`KV_URL` on
+2026-10-18; step 4 says how to check); the daemon rates on Pro (the limits page says "On
+Pro and Enterprise, daemons are billed for Active CPU and Provisioned Memory" and points
+to the general pricing page; read 2026-10-22).
