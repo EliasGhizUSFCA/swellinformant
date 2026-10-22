@@ -733,6 +733,11 @@ includes reading every `wave_forecasts` row of the three runs as a whole entity.
 | **map page** | 1,195.0 | **18,264.2** | **17,521.0** |
 | spot page (`/api/spots/pipeline`, `/forecast`, `/timeline`, `/events`) | 630.5 | 1,597.7 | 1,597.7 |
 
+`--now` sets the map page's step only; `/api/spots`, the conditions and the spot page read
+"now" from the wall clock, so their figures move a little from one day to the next (a
+re-run on 2026-10-22 at about 13:50 UTC: `/api/spots` 15,732.4 kB, spot page 1,545.7 kB
+for 599.9 kB; the index and the 18 field requests were the same, 1.019× in total).
+
 A field now costs 1.015 to 1.025 times its payload in database reads (it was 2.05 to 2.09
 times). Behind the CDN an immutable field URL is read from the database about once per
 CDN cache and run, and the index at most about once a minute per cache.

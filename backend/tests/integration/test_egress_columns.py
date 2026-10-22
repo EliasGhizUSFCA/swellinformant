@@ -7,7 +7,9 @@ the saved searches are made up for the test. Each comparison runs the same stage
 the same stored predictions: once with the pre-Upgrade-4 code (whole SurfQualityPrediction
 and WaveForecast entities in every step, the peak taken from them; kept below as verbatim
 reference copies) and once with the column-selective code, and compares every stored
-column.
+column. The archive's grid and lead window, which the database now applies, are checked on
+an hourly SYNTHETIC run (test_retention_bounds' constant sea state) that reaches past both
+ends of the window.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from app.models.enums import QualityLabel, SwellEventStatus
 from app.schemas.searches import SearchIn
 from app.services import searches
 from app.services.forecasts import archive
+from app.services.forecasts.base import FetchResult, RunInfo, SpotPoint
 from app.services.forecasts.ingestion import acquire_all, simulate_swell
 from app.services.forecasts.queries import latest_runs_by_spot
 from app.services.matching import service as matching
@@ -50,6 +53,11 @@ from app.services.swell_detection import service as detection
 from app.services.swell_detection.clustering import Cluster, Step, cluster_steps, overlaps
 from app.services.swell_detection.service import StepForecast, StepPrediction, load_steps
 from tests.conftest import search_payload
+from tests.integration.test_retention_bounds import (  # noqa: F401 (codes is a fixture)
+    SyntheticProvider,
+    _ingest,
+    codes,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -496,3 +504,52 @@ def test_the_archive_reads_only_the_archived_columns(
     assert reads and not any(h in s for s in reads for h in HEAVY[:2] + HEAVY[3:]), reads
     # The 3-hourly grid and the lead window are applied by the database.
     assert any("% " in s and "timezone(" in s for s in reads)
+
+
+class HourlyProvider(SyntheticProvider):
+    """test_retention_bounds' constant SYNTHETIC sea state, but hourly from 9 h before the
+    run's issue time to 243 h after it: on both sides of the archive's lead window, and
+    off its 3-hourly grid."""
+
+    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+        out = super().fetch(spots, run)
+        for spot_id, records in out.records.items():
+            out.records[spot_id] = [
+                dataclasses.replace(records[0], valid_time=run.issued_at + timedelta(hours=h))
+                for h in range(-9, archive.ARCHIVE_MAX_LEAD_HOURS + 4)
+            ]
+        return out
+
+
+@pytest.mark.usefixtures("codes")  # the synthetic member sources t_gfs and t_ecmwf
+def test_the_archive_keeps_the_utc_3_hourly_grid_and_the_lead_window(db: Session) -> None:
+    issued = NOW - timedelta(hours=6)  # 06Z: the leads -6 h and +240 h are on the grid
+    run = _ingest(db, HourlyProvider("t_gfs", "ncep_gfs", 2.0, issued, only={"pipeline"}))
+    assert compute_pending_predictions(db, NOW)["archived"] > 0
+    spot_id = db.scalar(select(SurfSpot.id).where(SurfSpot.slug == "pipeline"))
+    assert spot_id is not None and latest_runs_by_spot(db, NOW)[spot_id].id == run.id
+
+    def archived() -> list[float]:
+        rows = db.scalars(
+            select(PredictionArchive).where(PredictionArchive.run_key == run.run_key)
+        ).all()
+        assert {r.valid_time.astimezone(UTC).hour % 3 for r in rows} == {0}
+        assert all(r.lead_hours == (r.valid_time - issued).total_seconds() / 3600 for r in rows)
+        return sorted(r.lead_hours for r in rows)
+
+    # Every third hour from lead -6 h to +240 h, both ends included; -9 h and +243 h (on
+    # the grid, outside the window) and the hours between grid times are left out.
+    expected = [float(h) for h in range(-6, archive.ARCHIVE_MAX_LEAD_HOURS + 1, 3)]
+    assert archived() == expected
+    reference = reference_archive_rows(db, run.id, [spot_id])  # the pre-Upgrade-4 filter
+    assert sorted(r["lead_hours"] for r in reference) == expected
+
+    # The grid is UTC whatever the session's time zone (the old Python filter read the
+    # hour in the session's zone; UTC there is 8 h from Los Angeles, not a multiple of 3).
+    db.execute(delete(PredictionArchive))
+    run.details = {k: v for k, v in run.details.items() if k != "archived_spot_ids"}
+    db.commit()
+    db.execute(text("SET LOCAL TIME ZONE 'America/Los_Angeles'"))  # until the next commit
+    assert archive.archive_authoritative(db, NOW)["archived"] == len(expected)
+    assert db.execute(text("SHOW TimeZone")).scalar() in ("UTC", "Etc/UTC", "GMT")
+    assert archived() == expected
