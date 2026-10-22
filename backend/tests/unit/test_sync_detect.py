@@ -441,6 +441,44 @@ def test_an_older_run_than_stored_is_never_new(world: World) -> None:
     assert "older than the stored run" in (comp(plan, GFS).detail or "")
 
 
+def test_a_run_with_a_model_domain_behind_the_stored_run_is_never_new(world: World) -> None:
+    """A lagging metadata server offers the stored run with one domain still on the previous
+    cycle: same newest cycle, different key, but nothing newer to fetch."""
+    everything_current(world)
+    k = stored_06()
+    k.stored[GFS] = gfs_run(C12).run_key
+    world.runs[GFS] = gfs_run(C06, atmos=C12)  # waves still on 06Z, atmosphere on 12Z
+    plan = plan_sync(None, settings=settings(), now=T0, known=k)
+    assert not plan.due and state(plan, GFS) == "current"
+    assert "older than the stored run" in (comp(plan, GFS).detail or "")
+    # The reverse (one domain ahead of the stored run) is a newer run.
+    k.stored[GFS] = gfs_run(C06, atmos=C12).run_key
+    world.runs[GFS] = gfs_run(C12)
+    plan = plan_sync(None, settings=settings(), now=T0, known=k)
+    assert (
+        state(plan, GFS) != "current" and comp(plan, GFS).available_run_key == gfs_run(C12).run_key
+    )
+
+
+@pytest.mark.parametrize(
+    ("available", "stored", "behind"),
+    [
+        ("w:2026101906|a:2026101912", "w:2026101912|a:2026101912", True),
+        ("w:2026101912|a:2026101912", "w:2026101906|a:2026101912", False),  # ahead
+        ("w:2026101912|a:2026101906", "w:2026101906|a:2026101912", False),  # mixed
+        ("w:2026101906|a:2026101912", "w:2026101906|a:2026101912", False),  # the same
+        ("w:2026101906|b:2026101912", "w:2026101912|a:2026101912", False),  # other domains
+        ("demo:2026101906", "demo:2026101912", True),
+        ("demo-sim:20261019143012123456", "demo:2026101912", False),
+        (None, "w:2026101912", False),
+    ],
+)
+def test_domains_behind_compares_domain_by_domain(
+    available: str | None, stored: str | None, behind: bool
+) -> None:
+    assert detect.domains_behind(available, stored) is behind
+
+
 def test_the_map_is_current_when_its_cycle_is_published(world: World) -> None:
     everything_current(world)
     k = stored_06()

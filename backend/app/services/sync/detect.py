@@ -290,6 +290,35 @@ def newest_cycle(run_key: str | None) -> datetime | None:
         return None
 
 
+def domain_cycles(run_key: str | None) -> dict[str, datetime] | None:
+    """The cycle of each model domain of a multi-domain run key (Open-Meteo
+    ``"gfswave016:2026102118|gfs025:2026102200"``), or None for any other format."""
+    from datetime import UTC
+
+    if not run_key:
+        return None
+    out: dict[str, datetime] = {}
+    for part in run_key.split("|"):
+        name, sep, stamp = part.rpartition(":")
+        if not sep or not name or not _CYCLE_STAMP.fullmatch(stamp):
+            return None
+        try:
+            out[name] = datetime.strptime(stamp, "%Y%m%d%H").replace(tzinfo=UTC)
+        except ValueError:
+            return None
+    return out
+
+
+def domains_behind(available: str | None, stored: str | None) -> bool:
+    """True when the available run has the stored run's model domains, none on a newer
+    cycle and at least one on an older one: a lagging metadata server (Open-Meteo's servers
+    can disagree for minutes) offers part of the previous run, which is never new."""
+    have, kept = domain_cycles(available), domain_cycles(stored)
+    if not have or not kept or have.keys() != kept.keys():
+        return False
+    return all(have[k] <= kept[k] for k in have) and any(have[k] < kept[k] for k in have)
+
+
 # --------------------------------------------------------------------------- planning
 @dataclass
 class _Seen:
@@ -349,7 +378,9 @@ def _observe(probe: Probe, known: KnownRuns, now: datetime) -> _Seen:
     seen.cycle, seen.complete = max(inits), min(inits) == max(inits)
     if run.run_key == seen.stored:
         return seen
-    if seen.stored_cycle is not None and seen.cycle < seen.stored_cycle:
+    if (seen.stored_cycle is not None and seen.cycle < seen.stored_cycle) or domains_behind(
+        run.run_key, seen.stored
+    ):
         seen.current_detail = (
             f"the provider serves {run.run_key}, older than the stored run; nothing to fetch"
         )
