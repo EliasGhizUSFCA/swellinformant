@@ -462,10 +462,22 @@ def test_prewarm_computes_the_first_page_snapshots(
 ) -> None:
     public_cache.note_published(3)
     with SessionLocal() as db:
-        public_cache.prewarm(db)
+        assert public_cache.prewarm(db) is True
     public_cache.clear_memo()
     for url in ("/api/spots", "/api/map/conditions"):
         assert statements(lambda u=url: app_client.get(u)) == [], url  # stored by prewarm
+
+
+def test_prewarm_without_redis_reads_nothing(
+    published: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Snapshots that cannot be stored are not worth their reads during a sync."""
+    refusing = _refusing_redis()
+    monkeypatch.setattr(public_cache, "get_redis_bytes", lambda: refusing)
+    with SessionLocal() as db:
+        assert statements(lambda: public_cache.prewarm(db)) == []
+        assert public_cache._fail_open is not None  # and Redis then rests
+        assert statements(lambda: public_cache.prewarm(db)) == []
 
 
 def test_without_redis_every_request_computes_and_redis_rests(

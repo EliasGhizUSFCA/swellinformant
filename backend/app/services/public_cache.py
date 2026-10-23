@@ -418,10 +418,20 @@ def map_conditions(db: Session, at: datetime | None) -> Snapshot:
     return snapshot(db, "map-conditions", at.isoformat() if at is not None else "", build)
 
 
-def prewarm(db: Session) -> None:
+def prewarm(db: Session) -> bool:
     """Compute the snapshots every visitor's first page needs (the spot list and the
     conditions now) for the current hour, if no request has: the sync can call it after
     :func:`note_published` while its database connection is open, so the first visitor
-    after a publication does not wait for them. Redis unavailable: nothing to do."""
+    after a publication does not wait for them. Redis unavailable: nothing is read or
+    computed (they could not be stored) and the result is False."""
+    client = _usable_client()
+    if client is None:
+        return False
+    try:
+        _epoch_and_marker(client)
+    except redis.RedisError as exc:
+        _failed(client, exc)
+        return False
     spot_list(db)
     map_conditions(db, None)
+    return True
