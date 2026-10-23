@@ -22,6 +22,9 @@ const otherBrowsers: Project[] =
 
 export default defineConfig({
   testDir: "./e2e",
+  // The local Vercel-style stack's smoke spec runs only with playwright.vercel.config.ts
+  // (scripts/vercel-local.sh smoke), against that stack's edge.
+  testIgnore: /vercel-smoke\.spec\.ts$/,
   timeout: 120_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

@@ -13,7 +13,7 @@
       "functions": {
         "app/main.py": {
           "maxDuration": 60,
-          "excludeFiles": "{tests/**,**/*.rdb,swell_travel_agent.egg-info/**,build/**}"
+          "excludeFiles": "{tests/**,**/*.rdb,swell_travel_agent.egg-info/**,build/**,ml_models/**}"
         }
       }
     }
@@ -28,7 +28,7 @@
       "entrypoint": "Containerfile",
       "instances": { "iad1": 1 },
       "resources": { "requests": { "memory": "2Gi" } },
-      "terminationGracePeriodSeconds": 120
+      "terminationGracePeriodSeconds": 600
     }
   },
   "crons": [{ "path": "/api/internal/cron/daily", "schedule": "23 7 * * *" }]

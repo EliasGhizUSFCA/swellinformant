@@ -27,6 +27,10 @@
 }
 
 :8080 {
+	# Caddy's proxy adds "Via: 1.x Caddy" to every response; Vercel's routing adds none. A
+	# deleting header operation is deferred until the response is written, so it sees it.
+	header -Via
+
 	@api path /api/*
 	handle @api {
 		request_body {

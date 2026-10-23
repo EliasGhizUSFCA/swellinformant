@@ -4,7 +4,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  * Smoke test of the local Vercel-style stack (docker-compose.vercel.yml): the app as Vercel
  * runs it, through the stack's edge. Run it with playwright.vercel.config.ts, after
  * `scripts/vercel-local.sh up` and a sync (`scripts/vercel-local.sh smoke` does both checks
- * and passes the values below); the default playwright.config.ts skips this file.
+ * and passes the values below); the default playwright.config.ts ignores this file.
  *
  * Accounts are synthetic (example.com addresses); every email goes to the stack's Mailpit.
  */
@@ -14,12 +14,15 @@ const CRON_SECRET = process.env.VERCEL_SMOKE_CRON_SECRET ?? "";
 const EXPECT_MAP_FIELDS = process.env.VERCEL_SMOKE_MAP_FIELDS === "1";
 const SHOTS = process.env.VERCEL_SMOKE_SHOTS;
 const CRON_PATH = "/api/internal/cron/daily";
+// SyncComponentOut.state (backend/app/schemas/sync.py), shown as each component row's data-state.
+const COMPONENT_STATES = ["current", "new", "waiting", "in_progress", "failed", "unknown", "disabled"];
 // Headers only the API sets (backend/app/core/middleware.py). A Next.js rewrite would add the
 // web's own (next.config.ts: "default-src 'self'", "geolocation=(self)").
 const API_CSP = "default-src 'none'; frame-ancestors 'none'";
 const API_PERMISSIONS = "geolocation=(), camera=(), microphone=()";
 
-// Playwright passes the fixtures first; none is needed here.
+// Playwright passes the fixtures first; none is needed here. playwright.config.ts already
+// ignores this file; the skip keeps a run with any other config from failing on it.
 test.beforeEach(({}, testInfo) => {
   test.skip(testInfo.config.metadata?.stack !== "vercel-local", "runs with playwright.vercel.config.ts (scripts/vercel-local.sh smoke)");
 });
@@ -87,11 +90,19 @@ test.describe("local Vercel-style stack", () => {
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Chase the Swell.");
     await shot(page, "home");
 
-    const index = (await getJson(request, "/api/map/fields")) as { available: boolean; run_key: string | null; valid_times: string[]; message: string | null };
+    const index = (await getJson(request, "/api/map/fields")) as {
+      available: boolean;
+      run_key: string | null;
+      valid_times: string[];
+      message: string | null;
+      published_at: string | null;
+    };
     if (EXPECT_MAP_FIELDS) {
       expect(index.available, "map layers were synced (MAP_FIELDS_ENABLED=true)").toBe(true);
       expect(index.run_key).toBeTruthy();
       expect(index.valid_times.length).toBeGreaterThan(0);
+      // The map serves the run of the newest published sync (SYNC_PUBLISH_GATE).
+      expect(index.published_at, "the served map run was published by a sync").toBeTruthy();
     } else {
       // Map layers off (the stack's default): the index answers and says so.
       expect(index.available).toBe(false);
@@ -104,6 +115,8 @@ test.describe("local Vercel-style stack", () => {
     if (EXPECT_MAP_FIELDS) {
       const field = page.locator("canvas.map-field-canvas");
       await expect.poll(async () => Number((await field.getAttribute("data-painted")) ?? 0), { message: "ocean pixels painted", timeout: 60_000 }).toBeGreaterThan(10_000);
+      // The model-run label carries the publication the map shows (status-ui).
+      await expect(page.getByTestId("map-lead-time")).toHaveAttribute("data-published-at", index.published_at!);
     } else {
       await expect(page.getByTestId("fields-notice")).toBeVisible();
     }
@@ -159,16 +172,39 @@ test.describe("local Vercel-style stack", () => {
   });
 
   test("the /status page shows a published sync", async ({ page, request }) => {
-    const health = (await getJson(request, "/api/health/data")) as { sync: { runner: string; last_published: { published_at: string | null } | null } | null };
+    const health = (await getJson(request, "/api/health/data")) as {
+      sync: {
+        runner: string;
+        last_check_at: string | null;
+        last_published: { published_at: string | null } | null;
+        components: Array<{ kind: string; source: string; state: string }> | null;
+      } | null;
+    };
     expect(health.sync, "GET /api/health/data has a sync block").toBeTruthy();
     expect(health.sync!.runner).toBe("daemon");
     expect(health.sync!.last_published?.published_at, "a sync was published").toBeTruthy();
+    // The daemon's heartbeat: its last metadata check and the components it saw.
+    expect(health.sync!.last_check_at, "the daemon has checked the providers").toBeTruthy();
+    const components = health.sync!.components ?? [];
+    expect(components.some((c) => c.kind === "spots"), "a spot-forecast component").toBe(true);
 
     await page.goto("/status");
     await expect(page.getByTestId("data-health-summary")).toBeVisible();
     const sync = page.getByTestId("sync-status");
     await expect(sync).toBeVisible();
     await expect(sync).toContainText(/published/i);
+    // "Updated with the ... model run · published 14:32 UTC" or "Published Oct 18, 14:32 UTC",
+    // never "Nothing published yet.".
+    await expect(sync.getByTestId("sync-published")).toContainText(/published .*\d{2}:\d{2} UTC/i);
+    await expect(sync.getByTestId("sync-last-check")).toContainText(/last check/i);
+    await expect(sync.getByTestId("sync-last-check")).not.toContainText("Not checking");
+    // One row per component of the report, each with its state.
+    const rows = sync.getByTestId("sync-components").locator("li[data-state]");
+    await expect(rows).toHaveCount(components.length);
+    const states = await rows.evaluateAll((items) => items.map((item) => item.getAttribute("data-state")));
+    for (const state of states) expect(COMPONENT_STATES).toContain(state);
+    await expect(sync.locator('[data-testid^="sync-component-spots-"]').first()).toBeVisible();
+    if (EXPECT_MAP_FIELDS) await expect(sync.locator('[data-testid^="sync-component-map-"]')).toHaveCount(1);
     await shot(page, "status");
   });
 

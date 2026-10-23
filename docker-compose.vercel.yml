@@ -279,8 +279,9 @@ services:
     restart: unless-stopped
 
   # The Vercel daemon: `python -m app.cli sync daemon` from the Containerfile, one instance,
-  # 2 GiB / 1 vCPU, 120 s to stop after SIGTERM (vercel.json). It runs init-db at start
-  # (SYNC_DAEMON_INIT_DB) and connects directly (DB_USE_UNPOOLED=true in the image).
+  # 2 GiB / 1 vCPU, up to 600 s to finish its current sync stage after SIGTERM (vercel.json
+  # terminationGracePeriodSeconds). It runs init-db at start (SYNC_DAEMON_INIT_DB) and
+  # connects directly (DB_USE_UNPOOLED=true in the image).
   sync:
     <<: *sync-image
     env_file: *env-file
@@ -289,7 +290,7 @@ services:
       DATABASE_URL_UNPOOLED: ${VERCEL_LOCAL_DATABASE_URL_UNPOOLED:-postgresql+psycopg://swell:swell@postgres:5432/swell?application_name=swell-sync}
     mem_limit: 2g
     cpus: 1.0
-    stop_grace_period: 120s
+    stop_grace_period: 600s
     depends_on:
       migrate:
         condition: service_completed_successfully

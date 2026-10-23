@@ -64,8 +64,18 @@ def test_services_and_routing(vercel: dict[str, Any]) -> None:
     assert (ROOT / "backend" / "app" / "main.py").is_file()
     function = api["functions"]["app/main.py"]
     assert function["maxDuration"] == 60
-    for pattern in ("tests/**", "**/*.rdb", "swell_travel_agent.egg-info/**"):
-        assert pattern in function["excludeFiles"]
+    # Nothing the function never reads: tests, a local setuptools build/ and the ML models
+    # (the lean install has no joblib to load them).
+    excluded = function["excludeFiles"].strip("{}").split(",")
+    for pattern in (
+        "tests/**",
+        "**/*.rdb",
+        "swell_travel_agent.egg-info/**",
+        "build/**",
+        "ml_models/**",
+    ):
+        assert pattern in excluded, pattern
+    assert not {"app/**", "alembic/**", "alembic.ini", "pyproject.toml"} & set(excluded)
     # Migrations before promotion; MIGRATE_ON_BUILD decides whether it runs (D9).
     assert api["buildCommand"] == "python -m app.cli migrate --on-build"
     # First match wins: /api/* to the api (it receives the original path), the rest to web.
@@ -95,7 +105,9 @@ def test_sync_daemon(vercel: dict[str, Any]) -> None:
     assert daemon["instances"] == {"iad1": 1}  # one instance: the sync lease allows one sync
     # Hobby offers 1 GiB or 2 GiB instances.
     assert daemon["resources"] == {"requests": {"memory": "2Gi"}}
-    assert daemon["terminationGracePeriodSeconds"] == 120
+    # SIGTERM stops the daemon after its current sync stage; a full map stage is estimated at
+    # 165-287 CPU s on one vCPU (docs/sync.md), so it gets 600 s (the schema allows 3600).
+    assert daemon["terminationGracePeriodSeconds"] == 600
     # No `command`: the image's CMD runs the daemon.
     assert set(daemon) == {
         "root",
@@ -405,11 +417,14 @@ def test_data_sync_installs_the_locked_versions(workflow: dict[Any, Any]) -> Non
         'python -m pip install -e ".[sync]" --constraint "$RUNNER_TEMP/constraints.txt"' in install
     )
     uv_version = workflow["env"]["UV_VERSION"]
-    # The same uv everywhere the lock is installed (once those files pin one).
+    # The same uv everywhere the lock is installed: CI, this runner and the three images.
     ci = re.search(r'^\s*UV_VERSION: "([^"]+)"', CI_WORKFLOW.read_text(), re.M)
-    if ci:
-        assert ci.group(1) == uv_version
-    if CONTAINERFILE.is_file():
-        pinned = re.search(r"uv==([\w.]+)", CONTAINERFILE.read_text())
-        if pinned:
-            assert pinned.group(1) == uv_version
+    assert ci, "ci.yml pins UV_VERSION"
+    assert ci.group(1) == uv_version
+    for image in (
+        CONTAINERFILE,
+        ROOT / "docker" / "api-lean" / "Dockerfile",
+        BACKEND / "Dockerfile",
+    ):
+        pins = re.findall(r"uv==([\w.]+)", image.read_text())
+        assert pins == [uv_version], f"{image.relative_to(ROOT)}: {pins}"

@@ -8,7 +8,9 @@ transaction mode. The weather data is pulled by the same sync daemon image, buil
 same `Containerfile` that Vercel builds. `scripts/vercel-local.sh` drives it.
 
 The classic stack (`docker-compose.yml`: Celery worker and beat, Next.js proxying `/api`)
-stays as it was. The two stacks use different ports and volumes and can run side by side.
+stays as it was; it can also run the same sync daemon instead of Celery (its optional
+`sync` profile, described in the file). The two stacks use different ports and volumes and
+can run side by side.
 
 ## Quick start
 
@@ -87,10 +89,10 @@ one, compose reads the classic stack's `.env` for the `${...}` values.
 
 | On Vercel | Here | Notes |
 |---|---|---|
-| routing: the Services rewrites of vercel.json | `edge` (Caddy, docker/edge/Caddyfile) | `/api/*` to `api` with the original path, the rest to `web`. Sets `X-Vercel-Forwarded-For`, `X-Real-IP` and `X-Forwarded-For` to the TCP peer, overwriting whatever the client sent. A request body over 4.5 MB is refused with 413 (a 5 MB login body was; a 4 MB one reached the API), and a response that has not started after 60 s fails at the edge (maxDuration; configured, not exercised here). |
+| routing: the Services rewrites of vercel.json | `edge` (Caddy, docker/edge/Caddyfile) | `/api/*` to `api` with the original path, the rest to `web`. Sets `X-Vercel-Forwarded-For`, `X-Real-IP` and `X-Forwarded-For` to the TCP peer, overwriting whatever the client sent, and removes the `Via` header Caddy's proxy would add (Vercel sends none). A request body over 4.5 MB is refused with 413 (a 5 MB login body was; a 4 MB one reached the API), and a response that has not started after 60 s fails at the edge (maxDuration; configured, not exercised here). |
 | service `web` (Next.js) | `web` | the production build with `API_ROUTING=platform`: Next.js has no `/api` rewrite |
-| service `api` (one Python function) | `api` (docker/api-lean/Dockerfile) | `[project].dependencies` only, from `backend/uv.lock`: no Celery, kombu, pandas, ecCodes, pyarrow, scikit-learn, scipy or joblib. backend/ without tests/, no data/ directory, read-only file system except /tmp, one uvicorn process, 2 GB and 1 CPU. `JOB_RUNNER=daemon`: account emails go out inline. |
-| daemon `sync` (Containerfile) | `sync` | the same Containerfile: `python -m app.cli sync daemon`, one instance, 2 GB and 1 CPU, 120 s to stop after SIGTERM. Connects directly (`DB_USE_UNPOOLED=true` in the image) and runs init-db at start. |
+| service `api` (one Python function) | `api` (docker/api-lean/Dockerfile) | `[project].dependencies` only, from `backend/uv.lock`: no Celery, kombu, pandas, ecCodes, pyarrow, scikit-learn, scipy or joblib. backend/ without what vercel.json's `excludeFiles` leaves out of the function (tests/, ml_models/), no data/ directory, read-only file system except /tmp, one uvicorn process, 2 GB and 1 CPU. `JOB_RUNNER=daemon`: account emails go out inline. |
+| daemon `sync` (Containerfile) | `sync` | the same Containerfile: `python -m app.cli sync daemon`, one instance, 2 GB and 1 CPU; after SIGTERM it finishes its current sync stage, for up to 600 s (vercel.json `terminationGracePeriodSeconds`; compose `stop_grace_period`). Connects directly (`DB_USE_UNPOOLED=true` in the image) and runs init-db at start. |
 | build step `python -m app.cli migrate --on-build` | `migrate` | one-shot `init-db` (migrate, seed the 50 spots, the tide catalog) before `api` and `sync` start |
 | Vercel Cron, `23 7 * * *` | `cron` | calls the watchdog through the edge every day at 07:23 UTC; `vercel-local.sh cron` calls it now |
 | Neon, pooled `DATABASE_URL` | `pgbouncer` | PgBouncer 1.25 in transaction mode, `max_prepared_statements 1000`, `query_wait_timeout 120` (Neon's published values); the API connects with `DB_PREPARED_STATEMENTS=false` |
@@ -144,17 +146,24 @@ base URL <http://localhost:3100>):
 * `/api` responses carry the API's own security headers, an unknown `/api` path is the API's
   JSON 404, and `/` is the web's HTML;
 * the home page and the map load; the map index answers, with fields when the stack syncs
-  map layers (`MAP_FIELDS_ENABLED=true`) and with its "unavailable" message otherwise;
+  map layers (`MAP_FIELDS_ENABLED=true`) and with its "unavailable" message otherwise; with
+  map layers the index names its publication (`published_at`) and the map's model-run label
+  carries the same time (`data-testid="map-lead-time"`, `data-published-at`);
 * a spot page shows its forecast;
 * register, read the verification email from Mailpit's API (the link points at the edge),
   verify, sign out, log in;
-* `/status` shows a published sync (needs the sync block of `GET /api/health/data` and the
-  status page's sync section, `data-testid="sync-status"`);
+* `/status` shows a published sync: `GET /api/health/data` reports the daemon as the runner,
+  its last check and a publication, and the status page's sync section
+  (`data-testid="sync-status"`) shows the publication time (`sync-published`), the last
+  check without the "Not checking" badge (`sync-last-check`), and one row per component of
+  the report, each with its state (`sync-components`, `data-state`: current, new, waiting,
+  in_progress, failed, unknown or disabled), a spot-forecast row among them (and the map's
+  with map layers);
 * the cron endpoint: 401 without or with a wrong token, 200 with `CRON_SECRET`.
 
-The default `playwright.config.ts` skips this spec. The token never appears on a command
-line or in a retained Playwright trace (curl reads the header from stdin; the spec makes the
-authorised call with Node's `fetch`).
+The default `playwright.config.ts` ignores this spec (`testIgnore`), so `scripts/run-e2e.sh`
+never runs it. The token never appears on a command line or in a retained Playwright trace
+(curl reads the header from stdin; the spec makes the authorised call with Node's `fetch`).
 
 ## Neon development branches and Upstash
 
@@ -248,6 +257,24 @@ On this development sandbox (4 vCPUs shared with other work). Image builds and t
 container reached the internet through the sandbox's proxy (compose overrides named by
 `VERCEL_LOCAL_COMPOSE_FILES`, not part of the repository), and its Playwright used a
 preinstalled Chromium (`PLAYWRIGHT_CHROMIUM_PATH`).
+
+### 2026-10-23, checks of the configuration changes
+
+Not a run of the whole stack (`up`, `sync` and `smoke` were last run on 2026-10-22, below).
+Checked one by one, with Docker 29.8.2 and Compose 5.6.0:
+
+* **Edge.** The repository's Caddyfile (image `caddy:2.11.6-alpine`) in front of two stub
+  servers named `api` and `web`: before the change every response carried `Via: 1.0 Caddy`,
+  after it none did; `/api/health` reached `api` and `/` reached `web`. `caddy validate` and
+  `caddy fmt` accept the file.
+* **Images.** `sync` (Containerfile): built in 72 s, 1.22 GB, "ecCodes 2.49.0". `api`
+  (docker/api-lean): built in 18 s, 408 MB, "lean install", no `/data`, no `ml_models/`,
+  and `import app.main` works. No secret or proxy value is in the sync image's history.
+* **Compose.** `docker compose -f docker-compose.vercel.yml --env-file /dev/null config -q`
+  and the same with `--env-file .env.vercel.example` pass.
+* **Smoke spec.** Under the default `playwright.config.ts` the list holds no smoke test
+  (127 tests in 12 files); `playwright.vercel.config.ts` lists its 6. The added status and
+  map assertions type-check and lint; they have not run against a stack yet.
 
 ### 2026-10-22, all upgrade-4 packages merged
 
