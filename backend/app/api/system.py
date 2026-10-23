@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import Session
 
+from app.api.spots import public_json
 from app.core.config import get_settings
 from app.core.database import check_database, get_db
 from app.core.http_cache import cache_headers
@@ -16,6 +20,7 @@ from app.core.ratelimit import rate_limit
 from app.core.redis import check_redis
 from app.models import BackgroundJobLog
 from app.schemas.health import DataHealthOut
+from app.services import public_cache as snapshots
 from app.services.forecasts.queries import forecast_status
 from app.services.health import data_health
 from app.services.spot_views import event_counts
@@ -109,17 +114,22 @@ def data_health_report(
     return report.out
 
 
-@router.get("/system/status")
-def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
-    s = get_settings()
+def _latest_jobs(db: Session) -> list[dict[str, Any]]:
+    """The newest log of every job in JOB_NAMES (``never_run`` without one), in one
+    statement over the four columns shown (the newest-inserted of equal start times)."""
+    log = BackgroundJobLog
+    latest = {
+        row.job_name: row
+        for row in db.execute(
+            select(log.job_name, log.status, log.started_at, log.duration_ms)
+            .where(log.job_name.in_(JOB_NAMES))
+            .order_by(log.job_name, log.started_at.desc(), log.id.desc())
+            .ext(distinct_on(log.job_name))
+        )
+    }
     jobs = []
     for name in JOB_NAMES:
-        row = db.scalar(
-            select(BackgroundJobLog)
-            .where(BackgroundJobLog.job_name == name)
-            .order_by(BackgroundJobLog.started_at.desc())
-            .limit(1)
-        )
+        row = latest.get(name)
         jobs.append(
             {
                 "job": name,
@@ -128,6 +138,34 @@ def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
                 "duration_ms": row.duration_ms if row else None,
             }
         )
+    return jobs
+
+
+SYSTEM_STATUS = TypeAdapter(dict[str, Any])
+
+
+# Every page's shell asks for this report (the demo ribbon and the forecast freshness), so it
+# is the same for every visitor (no user dependency, no cookie) and served like the other
+# public GETs: from the public snapshot cache (app.services.public_cache: computed at most
+# once per publication and UTC hour, for the start of the hour; the job list is therefore
+# that of the hour's first request, at most an hour old, and new after each sync) with the
+# public browser and CDN windows. Before, every page view read about 22.7 kB from the
+# database and kept Neon's compute awake (docs/map-layers.md, "Free database budget").
+@router.get("/system/status", response_model=dict[str, Any])
+def system_status(db: Session = Depends(get_db)) -> Response:
+    return public_json(
+        snapshots.snapshot(
+            db,
+            "system-status",
+            "",
+            lambda now: snapshots.render(SYSTEM_STATUS, _system_status(db, now)),
+        )
+    )
+
+
+def _system_status(db: Session, now: datetime) -> dict[str, Any]:
+    s = get_settings()
+    jobs = _latest_jobs(db)
     return {
         "mode": {
             "demo_mode": s.demo_mode,
@@ -145,7 +183,7 @@ def system_status(db: Session = Depends(get_db)) -> dict[str, Any]:
             "lead_max_days": s.detection_lead_max_days,
             "event_min_score": s.swell_event_min_score,
         },
-        "forecast": forecast_status(db),
+        "forecast": forecast_status(db, now),
         "events": event_counts(db),
         "jobs": jobs,
     }

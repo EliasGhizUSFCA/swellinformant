@@ -14,7 +14,7 @@ start of the current UTC hour (:func:`public_now`) and kept in Redis under
   emptied, or it expired after :data:`MARKER_TTL_SECONDS`) each request derives one from
   the database with one small statement (:func:`derived_marker`: the newest publication
   and when it finished, and the counts and newest changes of the runs, predictions, swell
-  events, active spots and research assessments).
+  events, active spots, research assessments and map fields).
 * ``epoch`` is a random token kept in Redis: a Redis that lost its data starts a new
   epoch, so this process's memo can never hand out a payload of an earlier one.
 * ``hour`` bounds every payload to its hour, whatever the marker says.
@@ -62,6 +62,7 @@ from sqlalchemy.orm import Session
 from app.core.database import utcnow
 from app.core.redis import get_redis_bytes
 from app.models import ForecastRun, SpotResearchAssessment, SurfSpot, SwellEvent
+from app.models.forecast_engine import MapField
 from app.models.sync import SyncRun
 from app.schemas.spots import MapSnapshotOut, SpotSummary
 from app.services.spot_views import map_snapshot, spot_summaries
@@ -156,6 +157,9 @@ def derived_marker(db: Session) -> str:
             select(func.max(SwellEvent.last_updated_at)).scalar_subquery(),
             select(func.count(SurfSpot.id)).where(SurfSpot.is_active).scalar_subquery(),
             select(func.max(SpotResearchAssessment.id)).scalar_subquery(),
+            # The map-field index: a run's fields pruned or replaced outside a sync.
+            select(func.count(MapField.id)).scalar_subquery(),
+            select(func.max(MapField.id)).scalar_subquery(),
         )
     ).one()
     text = "|".join(v.isoformat() if isinstance(v, datetime) else str(v) for v in row)

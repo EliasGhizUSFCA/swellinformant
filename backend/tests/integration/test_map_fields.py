@@ -700,7 +700,12 @@ def test_the_index_reports_its_age_and_staleness(
     normal = map_fields_service.field_index(db, CYCLE + timedelta(hours=20))
     assert (normal.age_hours, normal.stale) == (20.0, False)
 
-    monkeypatch.setattr("app.api.map_fields.utcnow", lambda: CYCLE + timedelta(hours=22))
+    # The route answers from the public snapshot cache, computed for the start of the UTC
+    # hour by that cache's clock (round 2 of the egress integration; it read the route's own
+    # clock before). CYCLE + 22 h is a whole hour, so the age is the same.
+    monkeypatch.setattr(
+        "app.services.public_cache.utcnow", lambda: CYCLE + timedelta(hours=22, minutes=25)
+    )
     body = app_client.get("/api/map/fields").json()
     assert body["stale"] is True and body["age_hours"] == 22.0
     assert body["stale_after_hours"] == 21.0 and body["available"] is True
