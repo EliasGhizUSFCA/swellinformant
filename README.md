@@ -36,6 +36,18 @@ What changed in each upgrade, with the measurements behind it:
 [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md). The forecasting upgrade of 2026-10 started
 from the audit in [`docs/forecast_upgrade_audit.md`](docs/forecast_upgrade_audit.md).
 
+**What changed in upgrade 4 (2026-10).** The app can now run as a website on **Vercel** (the
+free Hobby plan for now), and you can test it on your own machine first in a Docker stack
+that copies Vercel's layout (section E.6). The weather data is pulled **only when a forecast
+model publishes a new run**: one coordinated sync fetches the point forecasts for the 50
+surf spots (and only those) and the worldwide map layers of that run, scores them and
+publishes them together, instead of fixed 3-hourly timers (section F.2). The wave layer
+follows the owner's screenshot: a smooth blue → violet → magenta → pink wave-height field
+and many short, soft crest dashes drifting with the waves (section H). A paywall later is a
+configuration change of the hosting (Vercel Pro, an Open-Meteo key, Neon Launch); the
+payment part itself is not built. The owner checklist (free now, paywall later) and the
+evidence are in [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Upgrade 4".
+
 ## B. Features
 
 **Accounts and security**
@@ -175,11 +187,26 @@ Browser ──▶ frontend (Next.js :3000) ──/api/* proxy──▶ backend (
 * FastAPI handles auth, searches, spots, opportunities and webhooks. All business logic
   lives in `backend/app/services/` and is shared by the API, the Celery tasks and the
   tests.
-* Monitoring runs only in Celery. Beat triggers each job on its schedule, and also once at
-  startup. Each stage chains to the next when it succeeds: forecasts → blend → predictions
-  → detection → matching → flights → alerts → delivery. Data downloads (`forecasts.*`,
-  `tides.*`, `observations.*`, `verification.*`) run on the `bulk` queue, everything else
+* Background work runs in one of two runners (`JOB_RUNNER`). In this Docker Compose stack
+  it is Celery (`celery`): beat runs the sync check (`sync.tick`, every
+  `SYNC_CHECK_MINUTES`) and the periodic jobs, and the worker runs them. On Vercel it is one
+  long-lived process, the **sync daemon** (`python -m app.cli sync daemon`, `daemon`). Both
+  run the same sync when a provider publishes a new model run: spots → map → blend →
+  predictions → publish → detection → matching → flights → alerts → delivery
+  ([`docs/sync.md`](docs/sync.md)). Data downloads (`forecasts.*`, `tides.*`,
+  `observations.*`, `verification.*`, `sync.tick`) run on the `bulk` queue, everything else
   (emails, alerts, matching) on `celery`.
+
+**Hosted on Vercel** (Upgrade 4; [`docs/deploy-vercel.md`](docs/deploy-vercel.md)):
+
+```
+Browser ──▶ Vercel ──/api/*──▶ service "api" (FastAPI as one Python function) ──▶ Neon Postgres (pooled URL)
+              │                                                    └────────▶ Upstash Redis (KV_URL)
+              └── everything else ──▶ service "web" (Next.js)
+daemon "sync" (python -m app.cli sync daemon) ──▶ provider metadata every 10 min; on a new run: one sync
+                                                ──▶ Neon (direct URL), Upstash, Open-Meteo, NOAA NODD, email
+Vercel Cron, once a day ──▶ GET /api/internal/cron/daily (watchdog: data health, admin email)
+```
 
 Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (jobs table and design
 decisions), [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md),
@@ -191,11 +218,13 @@ decisions), [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md),
 sources) and [`data/surf_spots/README.md`](data/surf_spots/README.md) (dataset).
 
 ```
-backend/    FastAPI app, SQLAlchemy models, Alembic migrations, services, Celery, tests
+backend/    FastAPI app, SQLAlchemy models, Alembic migrations, services, sync, Celery, tests
 frontend/   Next.js 16 app (App Router), components, Vitest unit tests, Playwright e2e
 data/       surf spot, airport, tide station and buoy datasets (JSON)
-docs/       architecture, algorithm and operations documentation
-scripts/    e2e runner, test-database reset, backups, health check, data extraction
+docs/       architecture, algorithm, operations and deployment documentation
+scripts/    e2e runner, local Vercel-style stack, Vercel build check, egress measurement,
+            test-database reset, backups, health check, data extraction
+vercel.json, Containerfile, docker-compose.vercel.yml, .env.vercel.example   the hosted setup
 ```
 
 ## D. Prerequisites
@@ -316,6 +345,38 @@ cd frontend && npm ci && npm run dev
   dev server proxies `/api/*` to `BACKEND_URL` (default `http://localhost:8000`).
 * **Running without the worker**: set `CELERY_TASK_ALWAYS_EAGER=true`; jobs then run inside
   the API process (used by the tests). `python -m app.cli pipeline` runs every job once.
+* **Without Celery at all**: `python -m app.cli sync daemon` runs every background job in
+  one process, as on Vercel (`JOB_RUNNER=daemon`; section F.2). Run either the daemon or
+  worker and beat, never both.
+
+**Install sets (Upgrade 4).** `backend/pyproject.toml` splits the dependencies, and
+`backend/uv.lock` pins every version (the Vercel builder, the images and CI install from
+it):
+
+| Install | Adds | Used by |
+|---|---|---|
+| `pip install ./backend` (no extra) | the lean API set only: FastAPI, SQLAlchemy, psycopg, redis, numpy, Argon2 and the like; no Celery, pandas, ecCodes, pyarrow or scikit-learn | the Vercel API function and the local stack's API image. The CLI's `obs`, `verify`, `ml` and `engine` groups and the data jobs need `.[sync]` |
+| `.[worker]` | Celery | the classic stack's worker and beat |
+| `.[server]` | uvicorn's speed-ups (`uvicorn[standard]`) | a long-running API server |
+| `.[sync]` | pandas, ecCodes (with its C library `eccodeslib`), pyarrow, scikit-learn, joblib | the sync daemon image (`Containerfile`), the data CLI groups |
+| `.[all]` | worker + server + sync | the classic backend image (`backend/Dockerfile`) |
+| `.[dev]` | all + pytest, ruff, mypy | development and CI (`pip install -e ".[dev]"`, as above) |
+
+The lean set from the lock, as Vercel installs it, in `backend/.venv`:
+`cd backend && uv sync --locked --no-dev` (132 MB measured; uv is pinned at 0.11.32
+everywhere: `pip install uv==0.11.32`). From the repository root,
+`backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` measures that set as the
+Vercel function would hold it (163.2 of 200 MB on 2026-10-23).
+
+**Updating dependencies.** Edit `backend/pyproject.toml`, then in `backend/` run uv 0.11.32
+to update the lock, for one package `uv lock --upgrade-package <name>`, and commit
+`backend/uv.lock`. `[tool.uv] exclude-newer` (2026-10-08 now) keeps releases younger than
+that date out of the lock, so a package published days ago never reaches a deployment: move
+it to a date at least two weeks back when you update. A security fix newer than that date
+goes in `exclude-newer-package` with the advisory named next to it (certifi is there now,
+for GHSA-6q48-6c7w-9gw2; drop the entry once `exclude-newer` has moved past it). CI runs
+`uv lock --check` and the images run `uv sync --locked`, so a lock that no longer matches
+`pyproject.toml` fails there.
 
 Verified on 2026-10-16: `init-db` on an empty database (8 s), `alembic upgrade head` and
 `alembic check`, uvicorn (`/api/health/ready` answered `database: ok, redis: ok`), a worker
@@ -369,6 +430,72 @@ trusted extension in PostgreSQL 13+.
 4. The dashboard shows the opportunity with **MOCK** fares. The outbox contains the alert
    email.
 
+### 6. Test locally (Vercel-style)
+
+Before deploying, run the app on your machine the way Vercel runs it: an edge that routes
+`/api` like Vercel and sets its client-IP headers, the lean API, the Next.js production
+build, PgBouncer in transaction mode like Neon's pooler, Redis, the sync daemon built from
+the same `Containerfile` Vercel builds, Mailpit and a cron helper. It needs Docker (Compose
+v2.24 or newer), about 3 GB of disk for the images and, for the smoke test, the frontend's
+dependencies (`cd frontend && npm ci && npx playwright install chromium`). Full guide:
+[`docs/local-vercel-stack.md`](docs/local-vercel-stack.md).
+
+```bash
+cp .env.vercel.example .env.vercel.local
+scripts/vercel-local.sh up
+scripts/vercel-local.sh sync --force
+scripts/vercel-local.sh smoke
+scripts/vercel-local.sh down
+```
+
+`cp` makes the stack use live data (Open-Meteo for the spots, NOAA for the map layers);
+without `.env.vercel.local` it runs synthetic demo forecasts and no map layers. `up` builds
+and starts everything (the app at http://localhost:3100, every email it sends in Mailpit at
+http://localhost:18025), `sync --force` runs one sync now, `smoke` runs 19 shell checks and 6
+browser checks, `down` stops it (`down --volumes` also deletes its database). For a short
+first test, add `MAP_FIELD_STEPS=0-24:3` and `MAP_FIELD_MAX_LEAD_HOURS=24` to
+`.env.vercel.local` (9 map hours instead of 61; 73.3 MB downloaded for them on 2026-10-23).
+Measured on 2026-10-23: `up` 216 s from scratch (with this sandbox's proxy overrides),
+`smoke` 19 of 19 and 6 of 6 with demo data and again with live data. If Open-Meteo answers "Daily API request limit exceeded" (its free limit is
+per IP address), set `FORECAST_PROVIDERS=demo` in `.env.vercel.local`, run
+`scripts/vercel-local.sh up --no-build` and `sync --force` again, and try live data later.
+
+The build itself can be checked without a Vercel account:
+`scripts/vercel-build-check.sh --offline` runs Vercel's own `vercel build` (CLI 64.5.0) on a
+temporary copy and checks the bundle sizes (on 2026-10-23: `RESULT: ok`, API function
+127.3 MiB of 500 MiB). CI runs it on every push.
+
+### 7. Deploy to Vercel
+
+Step by step, with what each step looks like and what to check:
+[`docs/deploy-vercel.md`](docs/deploy-vercel.md), section 4. In short (steps 1-3 and 5 run
+only on Vercel's website; step 4 runs on your machine):
+
+1. Vercel, Hobby plan: add a project from this GitHub repository and **leave the Root
+   Directory at the repository root** (`vercel.json` defines the `web` and `api` services,
+   the `sync` daemon and the daily cron).
+2. Vercel Marketplace: add **Neon Postgres** (Free, AWS us-east-1) and **Upstash Redis**
+   (Free) and connect both to the project; they set `DATABASE_URL`,
+   `DATABASE_URL_UNPOOLED` and `KV_URL`.
+3. Project Settings, Environment Variables: paste the hosted-profile block of
+   docs/deploy-vercel.md step 5, then add `APP_ENV`, `SECRET_KEY` and `CRON_SECRET`
+   (`python -c "import secrets; print(secrets.token_urlsafe(48))"`), `COOKIE_SECURE=true`,
+   `APP_BASE_URL`, `API_BASE_URL`, `CORS_ORIGINS` and the email provider.
+4. Optional head start, from `backend/` with the lean install above: point `DATABASE_URL`
+   and `DATABASE_URL_UNPOOLED` at Neon's direct URL and run
+   `.venv/bin/python -m app.cli init-db` (the daemon also runs it at every start; this
+   command was checked here against a local PostgreSQL, not against Neon).
+5. Redeploy production, then check `https://<project>.vercel.app/api/health/ready`, the
+   Vercel dashboard's Daemons page (one `sync` instance) and `/status` (the daemon's last
+   check, then a published sync).
+
+Free now: no payments, no ads (Vercel Hobby and the free Open-Meteo API are
+non-commercial). What each service costs now and after a paywall:
+[`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md), section 1.4; the checklist for
+both phases: [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Owner checklist".
+Email to other people needs a domain you own verified with the email provider; until then
+public sign-up is blocked in production.
+
 ## F. Weather data
 
 Sources, licences, measurements and limitations in full:
@@ -392,15 +519,60 @@ Every value shown from these sources carries its credit and licence link (Open-M
 4.0, "Copyright ECMWF … (modified)", NOAA, EOT20 CC BY 4.0, buoy providers): on the spot
 page, the map panel and best-spots list, swell cards, opportunity pages and alert emails.
 
-### 2. Acquisition frequency
+### 2. When data is pulled: the synced pipeline
 
-| Job | When | What it reads |
+Since Upgrade 4 no forecast is downloaded on a fixed timer. Every `SYNC_CHECK_MINUTES` (10)
+the runner reads only the providers' **metadata** (Open-Meteo's `meta.json`, which is not
+charged to the call budget, and NOAA `.idx` HEAD requests; the daemon makes no database
+query for it). When a provider has published a model run newer than the stored one, it runs
+**one sync**: the spot forecasts, the ensemble and the world map layers of that run are
+fetched, blended, scored and **published together**, then swells are detected and searches
+matched, flights refreshed and alerts sent. A run already stored is never fetched again.
+The full rules: [`docs/sync.md`](docs/sync.md).
+
+| Data | Synced when | What it reads |
 |---|---|---|
-| `forecasts.acquire` (chains to the blend and everything after it) | every `FORECAST_REFRESH_MINUTES` (180), and once when beat starts | a model run only once it is complete: the GFS family has 4 cycles a day, the ECMWF family 00Z and 12Z (published on Open-Meteo about 7-8.5 h after the cycle); a run already stored is skipped |
-| `forecasts.map_fields` (map layers, standalone mode) | same interval, and once when beat starts | the `MAP_FIELD_CYCLES` cycles (00, 12) of GFS, 61 map hours each (`MAP_FIELD_STEPS=0-120:3,120-240:6`) |
-| `forecasts.acquire_ensemble` (GEFS-Wave, with `GEFS_ENABLED=true`) | 01:40, 07:40, 13:40, 19:40 UTC (`GEFS_CYCLES`) | the cycle 7 h 40 min earlier |
-| `tides.acquire` | daily 02:20 UTC, and once when beat starts | `TIDE_HORIZON_DAYS` ahead; CO-OPS station kinds and datums re-checked weekly |
-| `observations.ingest` | hourly when enabled | NDBC `5day2` files (48 h windows) |
+| Spot forecasts, GFS family (`open_meteo`) | Open-Meteo publishes a new GFS run (4 cycles a day; its four model domains appeared 5.3 to 8.7 h after the cycle in the runs observed, and one was still missing 9.3 h after it once) | point forecasts for the active seeded surf spots only (50), one request per model |
+| Spot forecasts, ECMWF family (`open_meteo_ecmwf`) | Open-Meteo serves a new 00Z or 12Z run unmixed (7.0-8.5 h after the cycle) | as above |
+| Map layers (`MAP_FIELDS_ENABLED`) | a new cycle of `MAP_FIELD_CYCLES` (00, 12) is published on NOAA NODD; the GFS spot run and the map of the same cycle wait up to `SYNC_COALESCE_MINUTES` (90) for each other | the whole world at 0.5°, 61 map hours (`MAP_FIELD_STEPS=0-120:3,120-240:6`) |
+| GEFS-Wave (`GEFS_ENABLED=true`) | acquired by the next sync after a new run (it does not start one) | ensemble mean and spread of Hs and Tp |
+
+**On Neon Free** (the hosted free-database profile) a sync runs only for a new map cycle,
+06Z and 18Z (`SYNC_TRIGGER_SOURCES=map`, `MAP_FIELD_CYCLES=06,18`), and takes the newest spot
+runs of both families with it: spot forecasts then change twice a day. That keeps the
+database's reads at about 2.01 GB a month of Neon Free's 5 GB
+([`docs/map-layers.md`](docs/map-layers.md), "Free database budget", which also lists what it
+costs in freshness).
+
+What still runs on a timer, and why: `tides.acquire` daily at 02:20 UTC (tide predictions
+change slowly; one request per station), `observations.ingest` hourly when
+`OBSERVATIONS_ENABLED` (buoys report all the time), the two verification jobs when
+`VERIFICATION_ENABLED`, `maintenance.cleanup` daily at 03:30 UTC (retention), and the
+per-user jobs between syncs (matching every 30 min, flights hourly, alerts every 15 min,
+delivery every 2 min, the staleness and data-health checks), each at least
+`JOB_INTERVAL_FLOOR_MINUTES` apart (60 on Vercel, so the database wakes at most hourly).
+
+The sync from the command line (from `backend/`; each prints JSON):
+
+```bash
+python -m app.cli sync check
+python -m app.cli sync run
+python -m app.cli sync run --force
+python -m app.cli sync daemon
+python -m app.cli sync publish
+python -m app.cli sync status
+python -m app.cli migrate --on-build
+```
+
+`sync check` prints the plan (what is new, waiting or current) from the metadata alone;
+`sync run` syncs whatever has a newer run (exit 0 success, partial or skipped; 1 failed; 3
+another sync holds the lease), `--force` runs every stage now (runs already stored are still
+skipped), `--only` limits the acquisitions to `spots`, `ensemble` or `map`; `sync daemon` runs every background job in
+one process until stopped (`--once` for one iteration), as on Vercel; `sync publish`
+publishes what is stored; `sync status` lists the newest syncs; `migrate --on-build` is the
+Vercel build step (it migrates only where `MIGRATE_ON_BUILD` allows). Measured on
+2026-10-23 with the hosted profile: after a sync, `sync check` made 0 SQL statements and 8
+metadata requests (3,588 bytes), and a forced re-sync over stored data changed no data row.
 
 The spot timeline shows the models' own steps: with the recommended setup hourly to 120 h,
 then 3-hourly (6-hourly beyond 144 h for an ECMWF-only run). Hours Open-Meteo itself
@@ -420,11 +592,25 @@ interpolated are not stored (`OPEN_METEO_NATIVE_STEPS_ONLY=true`).
   `docker-compose.yml`; the data-health check warns above `DATA_HEALTH_REDIS_MAX_FRACTION`.
   Measured: 1.90 MB before and 2.43 MB after one full live pass.
 * **Map fields in the browser**: an LRU of 48 decoded fields, at most 64 MB.
+* **Public responses** (Upgrade 4): the anonymous spot list, map conditions, spot pages,
+  `/api/system/status` and the map-field index are computed at most once per publication
+  and UTC hour and kept in Redis for 2 hours (`app/services/public_cache.py`); they carry
+  `Cache-Control: public, max-age=60` and `CDN-Cache-Control: public, s-maxage=300,
+  stale-while-revalidate=3600`, and a map field URL that names its model run is cached by
+  the CDN for a year. Routes that depend on the signed-in user are `no-store`. The hosted
+  profile turns the provider response cache off (`PROVIDER_RESPONSE_CACHE_ENABLED=false`:
+  Upstash Free stores 250 MB). Measured page views with a warm cache (anonymous, no CDN):
+  the home page and a spot page read 0 bytes from the database
+  ([`docs/map-layers.md`](docs/map-layers.md), "Free database budget").
 * **Retention** (job `maintenance.cleanup`, daily): forecasts and predictions for
   `RETENTION_FORECAST_DAYS` (10), superseded member-run predictions pruned
   (`PRUNE_SUPERSEDED_MEMBER_PREDICTIONS`), 2 map-field runs, tides 2 past days, the archive of
   issued predictions for `RETENTION_ARCHIVE_DAYS` (730, stored as a compact confidence
-  digest).
+  digest). On Neon Free the free-database profile keeps about 1 day of forecasts
+  (`RETENTION_FORECAST_DAYS=1`), 7 days of archive and job logs, and prunes after every
+  sync (`SYNC_PRUNE_EACH_PASS=true`); the full-retention profile restores the values above
+  after moving to Neon Launch ([`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md),
+  section 5).
 * **Database size**: about 0.30 GB of blend rows a day; 10 forecast days hold about 3.3 GB,
   and the archive grows about 18.5 MB a day, to about 17 GB at 730 days (computed from row
   sizes measured on 2026-10-16). The default `DATA_HEALTH_DATABASE_MAX_GB` alert (20 GB, an
@@ -490,7 +676,10 @@ python -m app.cli engine map-fields --max-lead-hours 24
 python -m app.cli engine budget
 ```
 
-Each command prints JSON with its records, errors, bytes and timings. `--max-lead-hours 24`
+Each command prints JSON with its records, errors, bytes and timings. `pipeline` publishes
+what it stored; `engine map-fields` stores map layers without publishing them, so the map
+keeps showing the published run (`SYNC_PUBLISH_GATE`) until the next sync or
+`python -m app.cli sync publish`. `--max-lead-hours 24`
 reads the first 9 map hours (about 71 MB); leave it out to read the whole cycle (61 map
 hours, about 0.48 GB). In the same terminal, `uvicorn app.main:app --port 8000` serves that
 database to the frontend. Verified on 2026-10-16 by running the block in an interactive zsh
@@ -533,7 +722,8 @@ MAP_FIELD_MAX_LEAD_HOURS=240
 `MAP_FIELDS_ENABLED` empty means automatic: standalone with any live `FORECAST_PROVIDERS`,
 from the `noaa_gfs` files when that provider is configured, off with demo only; `true`
 forces real layers next to demo spot forecasts, `false` turns them off. The values above are
-the defaults. `MAP_FIELD_STEP_HOURS` is deprecated and no longer read. Fetch a cycle now with
+the defaults. The hosted free-database profile reads `MAP_FIELD_CYCLES=06,18` (section F.2).
+`MAP_FIELD_STEP_HOURS` is deprecated and no longer read. Fetch a cycle now with
 `python -m app.cli engine map-fields [--cycle YYYYMMDDHH] [--max-lead-hours N] [--force]`.
 Encoding, sources, licence and measurements: [`docs/map-layers.md`](docs/map-layers.md).
 
@@ -689,17 +879,37 @@ particles travel downwind. Firefox, Safari and iOS draw explicit trails (no 8-bi
 With reduced motion the particles become still arrows. On the dark basemap land is
 translucent on the Wind layer so offshore flow at the coast stays visible.
 
-**Wavefronts.** The wave layers draw stylised crest lines from the model's height, period and
-direction of each wave system, not individual waves and not wind particles: sets of curved
-crests across the travel direction (a SW swell travels NE), with faint troughs. Primary swell
-solid white, secondary dashed amber, wind sea dotted cyan (dash pattern and colour), drawn only
-where the model has that system; the chooser disables a system the run lacks. Physics: deep
-water, L = gT²/(2π), crests move at the phase speed c = L/T and each set at the group speed
-c/2. **Stated exaggeration**: crest spacing is 0.12 px per metre of wavelength (12 px at 8 s,
-48 px at 16 s, clamped to 8-64 px), so it is exaggerated by E = 0.12 × metres per pixel
-(about 4,700× at zoom 2 at the equator, 73× at zoom 8), and time runs 4× faster than real; the
-legend prints E for the current view. Line width and opacity grow with Hs; systems under
-0.2 m are not drawn; crests stop at the coast on both basemaps.
+**Wave colours (Upgrade 4).** The Wave Height layer paints offshore significant wave height
+with its own ramp, anchored in metres and interpolated in metres: muted navy for calm seas
+(#151d42 at 0 m), slate blue at 1 m, violet at 2 m, magenta-purple at 2.5-3 m, magenta at
+4-5 m, pink at 6-8 m and pale pink at 10 m (#f3c4dc; higher seas keep that colour). Its
+lightness rises with every anchor, so a bigger sea is always lighter and the scale still
+reads in grey. Legend ticks: 0, 1, 2, 3, 4, 6, 8 and 10 m (0-30 ft). Wave Period, Wave
+Energy and Wind Speed keep the shared ramp. On the dark basemap land is mid grey with a dark
+coastline. The look follows the owner's reference screenshot; it is our own ramp, shapes and
+code (no third-party map code, icons or palettes).
+
+**Crest dashes.** Over the colour field, many short soft dashes drift with the waves: each
+is one blob, a lighter tint of the colour under it, with a crisp leading edge on the crest
+line and a short smear behind it (the smear and the fading in and out are display choices).
+By default they show the **combined sea** ("Combined sea (peak)", closest to the reference);
+the primary swell, secondary swell and wind sea are chosen in **Settings** when the model run
+has them, told apart by shape and colour (light tinted blobs, split amber bars, short cyan
+blobs), and a system the run lacks is disabled in the chooser. The physics is kept and
+stated: deep water, L = gT²/(2π); dashes lie on crest lines one crest spacing apart and move
+with them at the phase speed. **Stated exaggeration**: the spacing is 0.12 px per metre of
+wavelength (12 px at 8 s, 48 px at 16 s, clamped to 8-64 px), so it is exaggerated by
+E = 0.12 × metres per pixel (about 4,700× at zoom 2 at the equator, 73× at zoom 8), and time
+runs 4× faster than real; the legend prints E for the current view. Bigger seas draw longer,
+brighter dashes; nothing is drawn under 0.2 m, and dashes stop at the coast on both
+basemaps. One dash per 12 px cell (13 for the secondary swell, 18 for the wind sea) keeps
+the density the same at every zoom, and a draw budget that adapts to the device (up to
+7,000 dashes a frame, at least 1,500) holds the median frame near 2.5 ms (the e2e draw p95
+was 3.1 and 3.4 ms on 2026-10-23). With reduced motion one still frame is drawn, with
+arrowheads. Text and readouts give directions FROM; the dashes travel TO (a swell from the
+SW moves NE). The map's display settings are kept in the browser under the key
+`swell.map.settings.v2`: settings saved under v1 carry over (layer, units, basemap,
+animation, overlays) except the wave systems, which reset to the combined sea.
 
 **Navigation bounds.** Latitude stays inside 84°N–78.5°S with a hard edge (the wave grid's
 extent), so a drag never shows blank rows; the minimum zoom is one world width for the
@@ -716,11 +926,12 @@ model cycle, valid time with lead and "(forecast, not observed)". The default ba
 dark map drawn from bundled Natural Earth data (no tile server); the optional Streets
 basemap uses OpenStreetMap tiles (section I).
 
-**Limitations.** The crests do not model refraction, shoaling or depth (deep water is
-assumed) and their sets are a drawing device; 0.5° fields smooth fronts and coasts; where the
+**Limitations.** The crest dashes do not model refraction, shoaling or depth (deep water is
+assumed) and their rows are a drawing device; 0.5° fields smooth fronts and coasts; where the
 swell direction turns fast (storms, partition swaps) crests are left out rather than drawn
 through a direction no wave has; partitions mixing in a 0.5° box are dropped by a heuristic
-guard. Firefox and WebKit were not run here (only Chromium and its Pixel 7 emulation). At the
+guard. Firefox and WebKit were not run here (only Chromium and its Pixel 7 emulation, with
+software rendering; no GPU-backed browser or real phone was measured). At the
 one-world desktop zoom the best-spots list covers the Philippines and Japan, including the
 Cloud 9 marker (an open layout decision, docs/map-navigation.md).
 
@@ -897,25 +1108,52 @@ instead of the console capture file. The e2e suite uses the demo forecast, synth
 fields and tides from route mocks, and mock flights only; it never claims real email
 delivery or real fares.
 
-**Latest full run** (2026-10-16, branch `wf3/integration`, this README's tree):
+**Latest full run** (2026-10-23, the Upgrade 4 integration branch `wf4i2/main`, run by the
+integration verifier on this tree's code):
 
 | Command | Result |
 |---|---|
-| `ruff format --check .`, `ruff check .`, `mypy app` | pass (297 files formatted, 180 files type-checked) |
-| `alembic upgrade head` + `alembic check` (empty database) | pass, no new operations |
-| `pytest tests/unit` | 1,689 passed |
-| `pytest tests/integration` | 318 passed |
-| `npm run typecheck`, `npm run lint`, `npm run build` | pass |
-| `npm test` (Vitest) | 409 passed |
-| `./scripts/run-e2e.sh` (Chromium + Pixel 7) | 127 passed (111 chromium, 16 mobile) in 18.4 min |
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (366 files formatted, 199 files type-checked) |
+| `alembic upgrade head` + `alembic check` (empty database) | pass: 0001 to 0008 applied, no new operations |
+| `pytest tests/unit` | 2,040 passed, 4 skipped (the lean-install tests; with `LEAN_PYTHON` pointing at a lean venv they pass, 27 of 27) |
+| `pytest tests/integration` | 503 passed, 3 skipped (the PgBouncer tests; against the local Vercel-style stack's PgBouncer they pass, 3 of 3) |
+| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 486 passed |
+| `npm run build` (proxy) and `API_ROUTING=platform` build | pass |
+| `./scripts/run-e2e.sh` (Chromium + Pixel 7) | 127 passed, twice (13.2 and 12.5 min), no flaky test |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`; API function 127.3 MiB (limit 500 MiB) |
+| `scripts/vercel-local.sh up`, `sync --force`, `smoke` | 19 of 19 shell checks and 6 of 6 Playwright smoke tests, with demo data and with live data |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.2 of 200 MB |
+| `npm audit --omit=dev`; pip-audit on `uv.lock` | 0 vulnerabilities; none known (after Next.js 16.4.1 and certifi 2026.10.19) |
 
 **Continuous integration** (`.github/workflows/ci.yml`, GitHub Actions) runs on every
-push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python 3.13:
-`ruff format --check`, `ruff check`, `mypy app`, shellcheck of the operations scripts,
-`alembic upgrade head` + `alembic check`, then `pytest tests/unit` and
-`pytest tests/integration` as separate steps) and a frontend job (Node 22: `tsc`,
-`eslint`, `vitest`, `next build`). The end-to-end job runs on pushes and on demand
-(Actions → CI → Run workflow).
+push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python 3.13, uv
+0.11.32: `uv lock --check`, the install from `uv.lock`, `ruff format --check`, `ruff check`,
+`mypy app`, shellcheck of the operations scripts, the lean-install import test and the API
+bundle check, `alembic upgrade head` + `alembic check`, then `pytest tests/unit` and
+`pytest tests/integration` as separate steps), a frontend job (Node 22: `tsc`, `eslint`,
+`vitest`, `next build`), a `deploy-config` job (actionlint, both compose files, a Docker
+build of the daemon's `Containerfile` and of `backend/Dockerfile`) and a `vercel-build` job
+(`scripts/vercel-build-check.sh --offline`). The end-to-end job runs on pushes and on demand
+(Actions → CI → Run workflow). These jobs were run locally, step by step; their first run
+on GitHub itself is still to come.
+
+**Tools added in Upgrade 4.** `scripts/vercel-build-check.sh --offline` (above; section E.6),
+`scripts/vercel-local.sh` (the local Vercel-style stack; `up`, `sync`, `check`, `status`,
+`cron`, `smoke`, `logs`, `psql`, `bundle`, `down`) and `scripts/measure_db_egress.py`, which
+counts the bytes PostgreSQL sends to the app (what Neon bills as egress) for a sync pass
+(`pipeline`), the periodic jobs (`jobs`) or page views (`pages`) on a scratch copy of a
+database. One demo pass on a fresh scratch database (PostgreSQL on localhost with the
+`swell` role, any free Redis database number):
+
+```bash
+backend/.venv/bin/python scripts/measure_db_egress.py pipeline --redis-url redis://localhost:6379/3 --prune
+```
+
+It prints the bytes per stage and drops its scratch database (`--keep-db` keeps it); run on
+2026-10-23 it reported 11.18 MB for the pass, the verifier's figure. The Neon Free budget in
+docs/map-layers.md was measured the same way on a copy of a recorded live run
+(`--template <database> --replay --no-acquire --searches 3`, three synthetic saved
+searches): 21.28 MB per both-family sync pass. `--help` lists the options.
 
 **Regenerate frontend API types** after changing backend schemas. This writes
 `frontend/types/openapi.json` and `openapi.d.ts`, including the dev routes:
@@ -933,17 +1171,20 @@ push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python
 | **Map:** ocean layers missing, "Ocean layers are unavailable right now" | Map layers need `MAP_FIELDS_ENABLED` (unset = on with a live spot provider, off with demo only; `GET /api/map/fields` says which). Run `python -m app.cli engine map-fields` once to fetch a cycle. A field whose run or valid time does not match the request is never drawn: the map re-reads the field index (at most every 30 s) and shows what the index lists |
 | **Map:** layers drawn but no particles or crests | Settings → "animated flow" is off (it switches the particles and crests off). With the system's reduced-motion setting they are drawn still (arrows, still crests). A wave system the run lacks is greyed out in the chooser ("Not available for this model run"), and crests are not drawn under 0.2 m |
 | **Wind direction looks wrong:** "offshore" where you expect onshore, or arrows the wrong way | Text and data say where the wind comes FROM; arrows on the charts and the map point where it travels TO (an arrow pointing east is a wind from the west). Offshore means from land to sea at that break: the spot's researched `offshore_wind_direction` (`data/surf_spots/`) decides it, never the compass alone. "Sources disagree about which wind is offshore" means the research is disputed (`python -m app.cli research lint`). "Models disagree on the wind direction" means GFS and ECMWF blow from directions more than 60° apart: the blend takes the direction of the mean wind vector and forecast confidence is at most Moderate. The map's 0.5° wind can differ from the spot's own point wind near coasts |
-| **Stale forecasts:** "Forecast out of date" banner, chip or badge | The run behind the forecast is older than its source's own limit: its cycle interval + publication lag + `FORECAST_REFRESH_MINUTES` + 2 h, about 17.2 h for the GFS family and 24.7 h for the ECMWF family (`FORECAST_STALE_HOURS`, 18 h, applies only to demo, Windy and the blend fallback; `docs/FORECAST_SOURCES.md`, "Staleness"); map layers after `MAP_FIELD_STALE_AFTER_HOURS` (21 h). Usually the provider is unreachable or beat is not running: check `/status` → *forecast.acquire* and `docker compose logs worker`. Forecast confidence is then at most Moderate; alerts pause only at twice that age (`STALE_ALERT_FACTOR`) |
+| **Stale forecasts:** "Forecast out of date" banner, chip or badge | The run behind the forecast is older than its source's own limit: its cycle interval + publication lag + `FORECAST_REFRESH_MINUTES` + 2 h, about 17.2 h for the GFS family and 24.7 h for the ECMWF family (`FORECAST_STALE_HOURS`, 18 h, applies only to demo, Windy and the blend fallback; `docs/FORECAST_SOURCES.md`, "Staleness"); map layers after `MAP_FIELD_STALE_AFTER_HOURS` (21 h). Usually the provider is unreachable, or the runner is not running (beat and worker in Docker, the sync daemon on Vercel): check `/status` (its sync section shows the last check and each component's state, for example "waiting" while Open-Meteo is still publishing a run) and `docker compose logs worker`, or `python -m app.cli sync check`. With the free-database profile spot forecasts change only twice a day, so a GFS run can read stale for up to about 1.3 h before each sync (docs/map-layers.md, "Free database budget"). Forecast confidence is then at most Moderate; alerts pause only at twice that age (`STALE_ALERT_FACTOR`) |
 | **Missing wave data:** "No forecast yet", or no secondary swell / wind-sea row | Check `/status` → *forecast.acquire*; `python -m app.cli pipeline` shows each provider's result synchronously. Partitions exist only where the model has them: the ECMWF family publishes none, so the blend takes them from GFS-Wave; a system the model does not have is left out, never drawn as 0. A spot whose nearest Open-Meteo wave cell is masked reads the nearest neighbouring cell with data (recorded in the run's warnings) |
 | **Broken chart synchronisation:** timeline rows out of step, or a `?t=` link opens the wrong time | Every row draws from one `/api/spots/{slug}/timeline` response on one time axis, and the selected time snaps to the nearest stored step. Check that response (`curl "http://localhost:8000/api/spots/pipeline/timeline?days=10"`) and the browser console. "The forecast timeline could not be loaded" means that request failed (the **Try again** button refetches). `?t=` takes an ISO time in UTC |
 | **API authentication or quota errors** from providers | A failed run shows the provider's reason on `/status` and in `docker compose logs worker`; 401/403 and other 4xx answers are permanent errors and are not retried. Open-Meteo: with `OPEN_METEO_API_KEY` set, requests go to the `customer-*` hosts, and a 4xx answer (for example a wrong key) fails the run with Open-Meteo's own reason (mock-tested only: no paid key here); "Daily API request limit exceeded" on the free tier means the IP address used its 10,000 calls (shared addresses count other users too): wait for the next day or use a key. Flights: fix `DUFFEL_ACCESS_TOKEN` / `AMADEUS_*`, run `check-config`, then **Refresh flights** on the opportunity. Email and SMS: the notification shows `failed`/`rejected` with the provider's reason. Windy without `WINDY_TERMS_ACKNOWLEDGED=true` is refused at start-up |
 | **App authentication:** login refused, "Missing or invalid CSRF token", logged out | Sessions are HttpOnly cookies on the frontend's origin: use the app through http://localhost:3000, not the API port. With HTTPS set `COOKIE_SECURE=true`, without it `false`. `LOGIN_MAX_FAILURES` (8) failed logins lock an account for `LOGIN_LOCKOUT_MINUTES` (15) |
 | **Excessive memory:** worker killed, or a job stays "running" until `job_stuck` | The prediction job peaks at about 0.6 GB, the map-field job at about 0.57 GB, GEFS at about 0.42 GB (measured 2026-10-16) and the GRIB fallbacks more (`docs/operations.md` §5 and §6). Give the worker more memory or lower `WORKER_CONCURRENCY`, or move downloads to the `bulk-worker` profile; `/status` shows `job_stuck` until the lock TTL expires. Redis near `REDIS_MAXMEMORY` (256 MB) shows as `redis_memory`: with `noeviction` writes then fail, so raise the cap rather than enabling eviction. In the browser the map's field cache is capped at 64 MB |
 | `/status` or `/api/health/data` says *degraded* or *failing* | Each reason names the source, job or layer and its limit. Follow the incident playbook in [`docs/operations.md`](docs/operations.md); `scripts/check-health.sh` prints the same reasons from a shell. "No future tide predictions from NOAA CO-OPS" means the worker cannot reach `api.tidesandcurrents.noaa.gov` (no outbound network or DNS from the containers); EOT20 tides are computed locally and still work. A database above `DATA_HEALTH_DATABASE_MAX_GB` is an alert only (size it from the disk) |
+| `/status` says `sync_heartbeat_stale` (failing) | The sync daemon has stopped checking for new model runs: on Vercel, look at the project's Daemons page and the daemon's CPU quota (10 Active CPU-hours a month on Hobby; when it runs out the daemons stop until the 1st of next month). Playbooks: [`docs/operations.md`](docs/operations.md), section 5 |
+| `/status` says `sync_failed` or `licence` | `sync_failed`: the last two syncs failed (the admin email carries the error; `python -m app.cli sync status` lists them). `licence`: `COMMERCIAL_USE=true` without `OPEN_METEO_API_KEY`, so the Open-Meteo sources refuse to run |
+| The map is blank or says "No forecast has been ingested yet" after an upgrade | Keep `FORECAST_PROVIDERS` the same as before the upgrade: the spot list and the map serve only runs of the configured sources, so a database filled by `open_meteo,open_meteo_ecmwf` and served with `demo` shows no forecast. Run `python -m app.cli migrate` (migration 0008 records one publication of the data stored before Upgrade 4) |
 | `connection refused … 5432` / `/api/health/ready` returns 503 with `"database": "unavailable"` | PostgreSQL isn't running or `DATABASE_URL` is wrong. Run `docker compose up -d postgres` and `docker compose ps` (wait for *healthy*). Outside Docker, `DATABASE_URL` must use `localhost`; inside compose it is set to `postgres` automatically |
 | `extension "btree_gist" is not available` during migration | A PostgreSQL build without contrib modules. Use the `postgres:16-alpine` image or Homebrew `postgresql@16`, which include it |
 | Redis `Connection refused` / readiness shows `"redis": "unavailable"` | Run `docker compose up -d redis`. Rate limiting fails open, but Celery and job locks need Redis |
-| Background jobs not executing | `docker compose ps` should show `worker` and `beat` healthy, and `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate worker and beat processes, and that a worker started with `-Q celery` alone never runs downloads |
+| Background jobs not executing | Under `JOB_RUNNER=daemon` (Vercel, the local Vercel-style stack): `scripts/vercel-local.sh status` locally (the daemon's heartbeat and the newest syncs), the Daemons page on Vercel. Under Celery: `docker compose ps` should show `worker` and `beat` healthy, and `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate worker and beat processes, and that a worker started with `-Q celery` alone never runs downloads |
 | `beat` shows *unhealthy* | Its schedule file has not been written for 10 minutes: beat is stuck or cannot reach Redis. `docker compose logs beat`, then `docker compose restart beat` (run exactly one beat) |
 | No verification / alert email | In Docker, open Mailpit (http://localhost:8025). Console mode writes to the outbox file. The dashboard banner and `/notifications` show each email's status: `failed`/`rejected` carry the provider's reason; `accepted` means the provider took it but has not confirmed delivery (check the provider's logs, your domain's SPF/DKIM/DMARC, and spam folders) |
 | No data-health alert email although the status is degraded | Alerts go to active admin accounts with a verified address only (`python -m app.cli make-admin you@example.com`). Each problem is emailed once, then every `DATA_HEALTH_ALERT_REPEAT_HOURS` (12 h); `DATA_HEALTH_ALERTS_ENABLED=false` switches them off |
@@ -959,14 +1200,21 @@ push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python
 
 ## L. Deployment
 
-A production deployment needs the same five processes:
+**Recommended: Vercel** (Upgrade 4). Section E.7 and
+[`docs/deploy-vercel.md`](docs/deploy-vercel.md): the web and api services and the sync
+daemon in one Vercel project, Neon Postgres and Upstash Redis from the Vercel Marketplace, a
+daily cron watchdog; test it first with the local Vercel-style stack (section E.6).
+Operations on Vercel (quotas, meters, runbooks): [`docs/operations.md`](docs/operations.md).
+
+**Any container host.** A production deployment on your own servers needs the same five
+processes:
 
 | Component | Managed option |
 |-----------|----------------|
 | PostgreSQL 16 with `btree_gist` | AWS RDS / Aurora, Google Cloud SQL, Neon, Supabase, Crunchy Bridge |
 | Redis 7 | ElastiCache, Memorystore, Upstash (TLS: use `rediss://` URLs), Redis Cloud |
 | API (`backend` image, `api` role) | ECS/Fargate, Cloud Run (min instances ≥ 1), Fly.io, Render, Kubernetes |
-| Worker + beat (same image, `worker` / `beat` roles) | **Persistent** containers: ECS services, Fly machines, Render background workers. Not serverless functions. Run **exactly one** beat instance; scale workers horizontally (both queues must be consumed) |
+| Worker + beat (same image, `worker` / `beat` roles), or instead one sync daemon (same image, `sync` role, `JOB_RUNNER=daemon`) | **Persistent** containers: ECS services, Fly machines, Render background workers. Not serverless functions. Run **exactly one** beat instance (or one daemon, never both); scale workers horizontally (both queues must be consumed) |
 | Frontend (`frontend` image, or Vercel) | Any Node host; build with `BACKEND_URL` pointing at the API's private URL |
 
 Checklist:
@@ -1010,13 +1258,29 @@ Checklist:
 * Spot dataset and seeding.
 * Scoring, detection, matching, travel windows, filtering and ranking.
 * Alert generation, de-duplication and delivery.
-* All Celery jobs, plus the web app and its pages.
+* All Celery jobs and the sync daemon, plus the web app and its pages.
 * The Docker Compose stack: built and run again on 2026-10-16 (seven services healthy, the
   first pipeline run completed, the `bulk-worker` profile splitting the queues), earlier
   including a real Celery worker delivering alerts to Mailpit.
 * Data-health monitoring (`/api/health/data`, the status page, the `ops.data_health`
   admin alerts with de-duplication and recovery notices), the backup, restore and
   restore-drill scripts and the compose `backup` profile (docs/operations.md).
+
+**Upgrade 4: verified here, and what only a real deployment can show**
+
+* Verified on 2026-10-23 (docs/UPGRADE_REPORT.md, "Upgrade 4"): the offline Vercel build;
+  the local Vercel-style stack with demo and with live data (smoke 19/19 and 6/6 both
+  times); the classic Celery stack running the sync at beat start; "data only on update"
+  (a second check made 0 SQL statements and 3,588 bytes of metadata requests; a forced
+  re-sync wrote no data row); the database egress budget (2.01 GB a month in the background
+  on the free-database profile); full e2e, 127 passed twice.
+* Not verifiable without a Vercel account, so the **first production deploy** is the test:
+  the daemon's image build and start on Vercel (daemons cannot be previewed), the CDN
+  caching, Neon's compute suspend and wake and its CU-hour accounting, real Upstash command
+  counts, the daily cron invocation, previews, and the GitHub Actions jobs on GitHub.
+* A brand-new hosted deployment has no NOAA CO-OPS tide predictions until the daemon's first
+  02:20 UTC run (up to about 24 h; the daemon runs daily jobs by the clock, never at
+  start-up), and data health does not flag it.
 
 **Demo-only**
 
@@ -1099,7 +1363,9 @@ phones were not available here.
 
 **Not implemented**
 
-* Booking or payment: the app links to the provider or a public search page.
+* Booking or payment: the app links to the provider or a public search page. The future
+  paywall (a payment provider, plans, access control for paying accounts) is not built;
+  only the hosting side of it is ready as configuration.
 * Surfline or other proprietary surf forecasts: no authorized API, and nothing is scraped.
 * Fitted per-spot calibration of breaking heights: there are no nearshore (surf-height)
   observations to fit or verify against (the schema supports them; see SURF_SCORING.md
