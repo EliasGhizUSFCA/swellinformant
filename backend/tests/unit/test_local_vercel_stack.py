@@ -261,6 +261,8 @@ def test_edge_routes_like_vercel_services_and_overwrites_client_ip_headers() -> 
         assert f"header_up {header} {{remote_host}}" in text
     assert "max_size 4500KB" in text
     assert "response_header_timeout 60s" in text
+    # Vercel's responses carry no Via; Caddy's proxy adds one unless it is deleted.
+    assert re.search(r"^\theader -Via$", text, flags=re.M)
 
 
 def test_pgbouncer_runs_in_transaction_mode_like_neon() -> None:
