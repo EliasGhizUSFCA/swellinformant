@@ -10,11 +10,15 @@ every new model run. The runs below are SYNTHETIC test inputs of tests/unit/test
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
+
+import pytest
 
 from app.core.config import Settings
 from app.core.profiles import FREE_DATABASE_PROFILE, FULL_RETENTION_PROFILE, profile_env
-from app.services.sync.detect import plan_sync
+from app.services.sync import detect
+from app.services.sync.detect import Probe, plan_sync
 from tests.unit.test_sync_detect import (  # noqa: F401 (world is a fixture)
     C06,
     C18,
@@ -90,3 +94,32 @@ def test_00z_and_12z_are_not_map_cycles_of_the_free_profile(world: World) -> Non
     plan = plan_sync(None, settings=free(), now=T18 - timedelta(hours=1), known=k)
     assert not plan.due and plan.anchor_cycle is None
     assert state(plan, GFS) == "new"  # not anchored to a map cycle, and not a trigger
+
+
+def test_without_a_map_component_spot_runs_trigger_the_syncs(
+    world: World,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # SYNC_TRIGGER_SOURCES=map while the map layers are off (MAP_FIELDS_ENABLED=false) or come
+    # with the noaa_gfs spot run: the map component is disabled and could never trigger, so
+    # new spot runs do, and the plan says why.
+    everything_current(world)
+    world.runs[ECMWF] = ecmwf_run(C06 + timedelta(hours=6))
+    probes = detect.build_probes
+
+    def without_map(s: Settings) -> list[Probe]:
+        return [
+            replace(p, current_run=None, disabled="map fields are off (MAP_FIELDS_ENABLED)")
+            if p.kind == "map"
+            else p
+            for p in probes(s)
+        ]
+
+    monkeypatch.setattr(detect, "build_probes", without_map)
+    plan = plan_sync(None, settings=free(), now=T18 - timedelta(hours=4), known=stored_06())
+    assert plan.due and state(plan, ECMWF) == "new" and state(plan, MAP) == "disabled"
+    assert any("SYNC_TRIGGER_SOURCES=map names no component" in r for r in plan.reasons)
+    assert not any("(not a trigger)" in r for r in plan.reasons)
+    # With the map component present, the same spot run waits for the next map cycle.
+    monkeypatch.setattr(detect, "build_probes", probes)
+    assert not plan_sync(None, settings=free(), now=T18 - timedelta(hours=4), known=stored_06()).due

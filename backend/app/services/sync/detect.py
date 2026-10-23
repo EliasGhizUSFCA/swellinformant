@@ -457,6 +457,24 @@ def plan_sync(
     return _decide(seen, first_seen, known, settings, now, force, running)
 
 
+def trigger_kinds(seen: Iterable[_Seen], settings: Settings) -> tuple[frozenset[str], str | None]:
+    """The component kinds whose new run makes a sync due: SYNC_TRIGGER_SOURCES, and a note.
+
+    When this setup has none of them (the free-database profile's ``map`` while the map
+    layers are off, or come with the noaa_gfs spot run), spot runs trigger instead, so the
+    spot forecasts never stop syncing; the note says so in the plan's reasons.
+    """
+    configured = settings.sync_trigger_list
+    enabled = {s.probe.kind for s in seen if s.probe.disabled is None}
+    if configured & enabled:
+        return configured, None
+    kinds = ",".join(sorted(configured))
+    return configured | {"spots"}, (
+        f"SYNC_TRIGGER_SOURCES={kinds} names no component this setup has: new spot runs "
+        "trigger the syncs"
+    )
+
+
 def _valid_lease(db: Session) -> SyncRun | None:
     row = db.scalar(select(SyncRun).where(SyncRun.status == "running").limit(1))
     if row is None or row.lease_expires_at is None or row.lease_expires_at <= utcnow():
@@ -475,6 +493,7 @@ def _decide(
 ) -> SyncPlan:
     window = timedelta(minutes=settings.sync_coalesce_minutes)
     retry = timedelta(minutes=settings.sync_retry_minutes)
+    triggers, fallback = trigger_kinds(seen, settings)
     map_seen = next((s for s in seen if s.probe.kind == "map" and not s.probe.disabled), None)
     anchor_spots = [
         s
@@ -521,7 +540,7 @@ def _decide(
         if s.not_served is not None:
             # Held back until the provider serves a run: never due, no attempt counted.
             hold_s = s.not_served_retry_s
-            if hold_s is not None and p.kind in settings.sync_trigger_list:
+            if hold_s is not None and p.kind in triggers:
                 waits.append(now + timedelta(seconds=hold_s))
             statuses.append(
                 ComponentStatus(
@@ -550,7 +569,7 @@ def _decide(
             state = "waiting"
             retry_after = (last + retry - now).total_seconds()
             detail = f"attempt {attempts} failed; next attempt after {_hhmm(last + retry)}"
-            if p.kind in settings.sync_trigger_list:
+            if p.kind in triggers:
                 waits.append(last + retry)
         else:
             start = first
@@ -572,7 +591,7 @@ def _decide(
             else:
                 state = "waiting"
                 detail = f"waiting for {', '.join(missing)} until {_hhmm(start + window)}"
-                if p.kind in settings.sync_trigger_list:
+                if p.kind in triggers:
                     waits.append(start + window)
         statuses.append(
             ComponentStatus(
@@ -585,7 +604,7 @@ def _decide(
             )
         )
 
-    triggered = [c for c in statuses if c.state == "new" and c.kind in settings.sync_trigger_list]
+    triggered = [c for c in statuses if c.state == "new" and c.kind in triggers]
     due = force or bool(triggered)
     if running is not None and not force:
         statuses = [
@@ -598,9 +617,11 @@ def _decide(
         due = False
     if force:
         reasons.append("forced")
+    if fallback:
+        reasons.append(fallback)
     for c in statuses:
         if c.state == "new":
-            trigger = "" if c.kind in settings.sync_trigger_list else " (not a trigger)"
+            trigger = "" if c.kind in triggers else " (not a trigger)"
             reasons.append(f"{c.source_code}: new run {c.available_run_key}{trigger}")
         elif c.state in ("waiting", "failed", "unknown") and c.detail:
             reasons.append(f"{c.source_code}: {c.detail}")
