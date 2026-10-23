@@ -367,6 +367,7 @@ function WaveCanvas({
       c.dataset.quadCap = String(s.quadCap);
       c.dataset.vertices = String(s.vertices);
       c.dataset.strokes = String(s.strokes);
+      c.dataset.cells = String(s.cells);
       c.dataset.dashTrails = String(s.trails);
       c.dataset.drawn = s.families.join(",");
       if (s.arrows) c.dataset.arrows = String(s.arrows);

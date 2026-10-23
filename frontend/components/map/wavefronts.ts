@@ -733,9 +733,9 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       const ex = tx * half;
       const ey = ty * half;
       if (!nodesValid(l, f, cx - ex, cy - ey) || !nodesValid(l, f, cx + ex, cy + ey)) continue;
-      const level = tintLevelAt(l, cx, cy);
+      const level = /*#__NOINLINE__*/ tintLevelAt(l, cx, cy);
       const key = (sys * PER_SYSTEM + (level === NO_TINT ? TINT_LEVELS : level)) * ALPHA_LEVELS + Math.round(alpha / ALPHA_STEP);
-      const b = batchOf(key, frame, f.system);
+      const b = /*#__NOINLINE__*/ batchOf(key, frame, f.system);
       const q = b.q;
       let n = b.n;
       if (blob) {
@@ -794,13 +794,20 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   const base = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
   const k = ctx.canvas && view.width > 0 ? ctx.canvas.width / view.width : 1;
   const [A, B, C, D, E, F] = base ? [base.a, base.b, base.c, base.d, base.e, base.f] : [k, 0, 0, k, 0, 0];
+  // One fill per system and tint level this frame: its batches differ only in opacity.
+  const fills: Array<CanvasGradient | string | undefined> = [];
   for (let key = 0; key <= maxKey; key++) {
     const b = batchPool[key];
     if (!b || b.frame !== frame || !b.n) continue;
-    const level = Math.floor(key / ALPHA_LEVELS) % PER_SYSTEM;
+    const slot = Math.floor(key / ALPHA_LEVELS);
     const style = FAMILY_STYLES[b.system];
-    const field = level < TINT_LEVELS && l.tintRgb ? l.tintRgb[level]! : null;
-    ctx.fillStyle = fillOf(ctx, style, dashTint(field, b.system));
+    let fill = fills[slot];
+    if (fill === undefined) {
+      const level = slot % PER_SYSTEM;
+      const field = level < TINT_LEVELS && l.tintRgb ? l.tintRgb[level]! : null;
+      fills[slot] = fill = fillOf(ctx, style, dashTint(field, b.system));
+    }
+    ctx.fillStyle = fill;
     ctx.globalAlpha = (key % ALPHA_LEVELS) * ALPHA_STEP;
     const y0 = style.shape === "blob" ? 0 : -0.5;
     const q = b.q;
