@@ -17,7 +17,8 @@ export DATABASE_URL="${E2E_DATABASE_URL:-postgresql+psycopg://swell:swell@localh
 export REDIS_URL="${E2E_REDIS_URL:-redis://localhost:6379/14}"
 export APP_ENV=development FORECAST_PROVIDERS=demo FLIGHT_PROVIDER=demo EMAIL_PROVIDER=console SMS_PROVIDER=console
 export ENABLE_DEV_ENDPOINTS=true CELERY_TASK_ALWAYS_EAGER=true DEMO_NATURAL_SWELLS=false RATE_LIMIT_ENABLED=false
-export OUTBOX_DIR="$(mktemp -d)"
+OUTBOX_DIR="$(mktemp -d)"  # assigned first, so a mktemp failure stops the script (set -e)
+export OUTBOX_DIR
 export APP_BASE_URL="http://127.0.0.1:${FRONTEND_PORT}" API_BASE_URL="http://127.0.0.1:${BACKEND_PORT}"
 export CORS_ORIGINS="$APP_BASE_URL"
 

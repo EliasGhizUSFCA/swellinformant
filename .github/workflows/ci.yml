@@ -1,5 +1,7 @@
 # Continuous integration: backend (lint, types, migrations, unit and integration tests),
-# frontend (types, lint, unit tests, production build) and the Playwright end-to-end suite.
+# frontend (types, lint, unit tests, production build), the deployment configuration
+# (actionlint, both compose files, the sync daemon and classic images), an offline Vercel
+# build (docs/deploy-vercel.md) and the Playwright end-to-end suite.
 #
 # Unit and integration tests run as separate pytest processes, and every exit code is read
 # directly (no pipes): see docs/debug-audit.md on the ecCodes / psycopg exit-139 crash, which
@@ -106,7 +108,12 @@ jobs:
         run: mypy app
       - name: Shell scripts (shellcheck)
         working-directory: .
-        run: shellcheck -x -s sh scripts/backup-db.sh scripts/restore-db.sh scripts/restore-drill.sh scripts/check-health.sh scripts/lib/pg-env.sh backend/docker-entrypoint.sh
+        run: |
+          shellcheck -x -s sh scripts/backup-db.sh scripts/restore-db.sh scripts/restore-drill.sh \
+            scripts/check-health.sh scripts/lib/pg-env.sh backend/docker-entrypoint.sh \
+            docker/pgbouncer/entrypoint.sh
+          shellcheck -x scripts/vercel-build-check.sh scripts/vercel-local.sh scripts/run-e2e.sh \
+            scripts/export-openapi.sh
       - name: alembic upgrade head
         run: alembic upgrade head
       - name: alembic check (models and migrations agree)
@@ -141,6 +148,59 @@ jobs:
         run: npx vitest run
       - name: next build
         run: npx next build
+
+  deploy-config:
+    name: Deployment config (workflows, compose files, images)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint (workflows; shellcheck on their run scripts)
+        run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
+      # Both stacks' compose files resolve, every profile included, with no .env of a checkout.
+      - name: docker compose config
+        run: |
+          docker compose -f docker-compose.yml --env-file /dev/null \
+            --profile bulk-worker --profile backup --profile sync config -q
+          docker compose -f docker-compose.vercel.yml --env-file /dev/null config -q
+          docker compose -f docker-compose.vercel.yml --env-file .env.vercel.example config -q
+      # The images install from backend/uv.lock; each build fails on a stale lock, a missing
+      # extra or a missing ecCodes C library. Nothing is pushed.
+      - name: Build the sync daemon image (Containerfile, the file Vercel builds)
+        run: docker build -f Containerfile -t swell-ci/sync:test .
+      - name: Build the classic image (backend/Dockerfile)
+        run: docker build -f backend/Dockerfile -t swell-ci/backend:test .
+      - name: Both images start the app's CLI
+        run: |
+          docker run --rm swell-ci/sync:test python -m app.cli --help >/dev/null
+          docker run --rm swell-ci/backend:test python -m app.cli --help >/dev/null
+
+  vercel-build:
+    name: Vercel build (offline, nothing deployed)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Vercel Python builder takes Python 3.13 (backend/.python-version) and uv from PATH.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install uv (pinned)
+        run: python -m pip install "uv==${UV_VERSION}"
+      # `vercel build` (Vercel CLI 64.5.0) of a copy of what a deployment receives: the web
+      # and api services, the api function's size against Vercel's limits, the cron and the
+      # routes. The daemon image is built by the deploy-config job (the CLI refuses daemons).
+      - name: scripts/vercel-build-check.sh --offline
+        run: scripts/vercel-build-check.sh --offline
 
   e2e:
     name: End-to-end (Playwright, demo backend)
