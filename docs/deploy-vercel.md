@@ -7,7 +7,7 @@ with their URLs and the date they were read.
 
 What was checked here, and how, is in section 10. In short: the configuration validates
 against Vercel's published schema; an offline `vercel build` of the repository succeeds
-(`RESULT: ok`, a 126.6 MiB API function; CI runs the same check on every push); the sync
+(`RESULT: ok`, a 127.1 MiB API function; CI runs the same check on every push); the sync
 daemon's image builds from the `Containerfile` Vercel uses; `vercel dev -L` serves the site
 and the API; and the manual GitHub runner's steps run end to end on a development machine.
 No real deployment was made while this was written: the first production deploy is the step
@@ -493,18 +493,18 @@ Docker 29.8.2 with Compose 5.6.0. Results of 2026-10-23 unless a date is given.
   that check skipped. A deliberately broken copy (an unknown daemon key, memory `3Gi`, a
   grace period of 4000 s) gave 3 errors.
 - **Offline build** (`scripts/vercel-build-check.sh --offline`, section 3.2): **`RESULT: ok`**
-  in 43 s with a warm npm cache. The api function: python3.13 ("Using Python 3.13 from
+  in 53 s with a warm npm cache. The api function: python3.13 ("Using Python 3.13 from
   backend/.python-version", "Installing required dependencies from uv.lock"), maxDuration
-  60 s, 3,422 files, **126.6 MiB** (limit 500 MiB, builder threshold 225 MiB); largest
+  60 s, 3,425 files, **127.1 MiB** (limit 500 MiB, builder threshold 225 MiB); largest
   parts numpy 25.5 MiB plus its libraries 26.2 MiB, SQLAlchemy 17.0 MiB, cryptography
   14.2 MiB, psycopg-binary 8.2 MiB plus 10.8 MiB, pydantic-core 4.6 MiB, redis 2.5 MiB, the
   app 2.0 MiB; no tests, no `.env` file, none of Celery, kombu, pandas, ecCodes, pyarrow,
   scikit-learn, scipy or joblib. Before `excludeFiles` also left out `ml_models/` (the
-  lean install cannot load them: no joblib), `uv.lock` and the classic image's files, the
-  same build measured 3,430 files and 130.9 MiB. The web service: Node.js 24 functions of
+  lean install cannot load them: no joblib), the same build measured 3,430 files and
+  130.9 MiB. The web service: Node.js 24 functions of
   4.6 MiB and less. The api's build command printed `"status": "skipped"`
   (`MIGRATE_ON_BUILD=off`); the cron and both routes are in `.vercel/output/config.json`;
-  the first attempt stopped after 1 s with `DAEMONS_NOT_SUPPORTED`, and the `Containerfile`
+  the first attempt stopped after 2 s with `DAEMONS_NOT_SUPPORTED`, and the `Containerfile`
   is present. In a coding-agent session, Next.js 16.4 detects the agent (environment
   variables such as `AI_AGENT` or `CLAUDECODE`) and its build stops once to recommend an
   upgrade when the installed version has a published advisory; the check above ran with

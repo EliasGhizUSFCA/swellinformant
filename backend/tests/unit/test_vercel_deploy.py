@@ -64,8 +64,8 @@ def test_services_and_routing(vercel: dict[str, Any]) -> None:
     assert (ROOT / "backend" / "app" / "main.py").is_file()
     function = api["functions"]["app/main.py"]
     assert function["maxDuration"] == 60
-    # Nothing the function never reads: tests, a local setuptools build/, the ML models (the
-    # lean install has no joblib to load them), the lock and the classic image's files.
+    # Nothing the function never reads: tests, a local setuptools build/ and the ML models
+    # (the lean install has no joblib to load them).
     excluded = function["excludeFiles"].strip("{}").split(",")
     for pattern in (
         "tests/**",
@@ -73,9 +73,6 @@ def test_services_and_routing(vercel: dict[str, Any]) -> None:
         "swell_travel_agent.egg-info/**",
         "build/**",
         "ml_models/**",
-        "uv.lock",
-        "Dockerfile",
-        "docker-entrypoint.sh",
     ):
         assert pattern in excluded, pattern
     assert not {"app/**", "alembic/**", "alembic.ini", "pyproject.toml"} & set(excluded)
