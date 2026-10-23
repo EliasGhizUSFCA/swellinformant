@@ -79,6 +79,10 @@ tides-extract = [
 # before this date, so a package published days ago never reaches a deployment. When updating
 # the lock, move it to a date at least two weeks back and run `uv lock --upgrade`.
 exclude-newer = "2026-10-08T00:00:00Z"
+# Security exceptions to that date, one per package, each naming the advisory it fixes; drop an
+# entry once exclude-newer has moved past it. certifi 2026.10.19 (uploaded 2026-10-20) removes
+# the emSign intermediates with compromised keys (GHSA-6q48-6c7w-9gw2, critical).
+exclude-newer-package = { certifi = "2026-10-21T00:00:00Z" }
 
 [tool.setuptools.packages.find]
 include = ["app*"]
