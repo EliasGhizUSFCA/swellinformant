@@ -6,7 +6,9 @@ an empty result), so neither the API nor the daemon fails because Redis is brief
 Keys:
 
 * :data:`HEARTBEAT_KEY` ``sync:heartbeat``: JSON written by the daemon at every check
-  (expires after 6 h). Data health reads it under JOB_RUNNER=daemon.
+  (expires after 6 h). Data health reads it under JOB_RUNNER=daemon. ``file_problems``
+  are the daemon's checks of files only its image ships (the tide model's constants): the
+  API function, deployed without data/, reports these instead of its own.
 * :data:`KNOWN_KEY` ``sync:known``: :meth:`KnownRuns.to_json` (expires after 7 days), so a
   restarted daemon can check without reading the database.
 * :data:`KICK_PREFIX` ``sync:kick:<job>``: requests from the API for the daemon (expire
@@ -71,6 +73,9 @@ class Heartbeat:
     components: list[dict[str, Any]] = field(default_factory=list)
     cpu_s_month: float | None = None
     note: str | None = None
+    # Problems (app.services.tides.health problem dicts) of the files the daemon reads;
+    # None from a daemon that does not report them.
+    file_problems: list[dict[str, Any]] | None = None
 
     def age_seconds(self, now: datetime | None = None) -> float:
         return ((now or utcnow()) - self.at).total_seconds()
@@ -82,6 +87,7 @@ def write_heartbeat(
     runner: str,
     cpu_s_month: float | None = None,
     note: str | None = None,
+    file_problems: list[dict[str, Any]] | None = None,
 ) -> None:
     """Record a check: when, by which runner, and what the plan found."""
     payload = {
@@ -92,6 +98,7 @@ def write_heartbeat(
         "components": [c.as_dict() for c in plan.components] if plan is not None else [],
         "cpu_s_month": cpu_s_month,
         "note": note,
+        "file_problems": file_problems,
     }
     try:
         get_redis().set(HEARTBEAT_KEY, json.dumps(payload), ex=HEARTBEAT_TTL_SECONDS)
@@ -111,6 +118,7 @@ def read_heartbeat() -> Heartbeat | None:
     try:
         data = json.loads(raw)
         cpu = data.get("cpu_s_month")
+        files = data.get("file_problems")
         return Heartbeat(
             at=datetime.fromisoformat(data["at"]),
             runner=str(data["runner"]),
@@ -119,6 +127,7 @@ def read_heartbeat() -> Heartbeat | None:
             components=[dict(c) for c in data.get("components", [])],
             cpu_s_month=float(cpu) if cpu is not None else None,
             note=data.get("note"),
+            file_problems=[dict(p) for p in files] if files is not None else None,
         )
     except (ValueError, KeyError, TypeError) as exc:
         logger.warning("Sync heartbeat unreadable: %s", type(exc).__name__)

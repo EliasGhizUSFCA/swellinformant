@@ -46,6 +46,7 @@ from app.services.forecasts.queries import candidate_runs, forecast_status, late
 from app.services.maintenance import cleanup, prune_map_fields
 from app.services.pipeline import run_pipeline
 from app.services.surf_quality.predict import compute_pending_predictions
+from tests.clock import freeze_utcnow
 from tests.conftest import ApiClient
 from tests.integration.test_public_cache_headers import SPOT_LIST_CACHE_CONTROL
 from tests.synthetic_gfs import PATHS, SyntheticGfs
@@ -312,9 +313,18 @@ def _generic(path: str) -> str:
     return re.sub(r"\[\d+\]", "[]", path)
 
 
+# The wall clock of the spot-forecast comparison below. The demo provider's natural swells
+# follow calendar slots, so the events detection finds depend on the date. On this one two
+# events at one spot lie within detection's 12 h matching tolerance: the greedy cluster-to-
+# event matching used before Upgrade 4's integration cancelled the second and created it
+# again on every re-run, which made the test fail on such dates only.
+DETECTION_CLOCK = datetime(2026, 10, 21, 12, tzinfo=UTC)
+
+
 def test_a_fields_only_run_never_changes_spot_forecasts(
-    db: Session, few_spots: list[str], app_client: ApiClient
+    db: Session, few_spots: list[str], app_client: ApiClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    freeze_utcnow(monkeypatch, DETECTION_CLOCK)
     run_pipeline(db)
     first = _snapshot(db, app_client)
     run_pipeline(db, acquire=False)  # control: re-running the stages alone

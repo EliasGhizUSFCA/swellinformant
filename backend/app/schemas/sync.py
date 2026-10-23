@@ -12,10 +12,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+ComponentKind = Literal["spots", "ensemble", "map"]
+
 
 class SyncComponentOut(BaseModel):
-    kind: Literal["spots", "ensemble", "map"]
+    kind: ComponentKind
     source: str = Field(description="Forecast source code, e.g. open_meteo_gfs")
+    # The source's name as stored (forecast_sources.name), else a known one; None: unknown.
+    source_name: str | None = None
     provider: str
     state: Literal["current", "new", "waiting", "in_progress", "failed", "unknown", "disabled"]
     stored_run_key: str | None = None
@@ -32,6 +36,17 @@ class SyncStageOut(BaseModel):
     cpu_s: float | None = None
 
 
+class SyncStoredRunOut(BaseModel):
+    """A model run a sync stored (one per component whose acquisition stored data)."""
+
+    kind: ComponentKind
+    source: str
+    source_name: str | None = None
+    run_key: str | None = None
+    # The newest model cycle of the run (the plan's, else read from the run key).
+    cycle: datetime | None = None
+
+
 class SyncRunOut(BaseModel):
     id: int
     trigger: Literal["daemon", "celery", "cli", "pipeline", "github", "http"]
@@ -41,6 +56,9 @@ class SyncRunOut(BaseModel):
     published_at: datetime | None = None
     anchor_cycle: datetime | None = None
     stages: list[SyncStageOut] = Field(default_factory=list)
+    # What this sync stored, per component: spot forecasts and map layers can be of
+    # different cycles (anchor_cycle is the coalescing cycle, not necessarily either).
+    stored: list[SyncStoredRunOut] = Field(default_factory=list)
 
 
 class SyncHealthOut(BaseModel):
@@ -56,3 +74,5 @@ class SyncHealthOut(BaseModel):
     # CPU used by the sync runner this UTC month, and SYNC_CPU_BUDGET_HOURS (None = no budget).
     cpu_hours_month: float | None = None
     cpu_budget_hours: float | None = None
+    # Data health reports the runner as degraded above this share of the budget.
+    cpu_alert_fraction: float = 0.8

@@ -8,6 +8,12 @@ everything else is truncated after each test.
 The session starts by dropping the database's public schema, so it refuses a database whose
 name does not contain "test" (e.g. a TEST_DATABASE_URL pointing at a live database by
 mistake). Set ALLOW_ANY_TEST_DB_NAME=1 to override.
+
+TEST_DATABASE_URL may name the test database through a pooler (PgBouncer in transaction
+mode, as Neon's pooled URL): then set TEST_DATABASE_URL_UNPOOLED to its direct URL. It
+becomes DATABASE_URL_UNPOOLED (migrations connect directly), and the tests that create and
+drop scratch databases or run the backup tools use it (:func:`direct_database_url`): a
+pooler keeps idle server connections, so it refuses DROP DATABASE.
 """
 
 from __future__ import annotations
@@ -42,6 +48,15 @@ os.environ.update(
         "LOG_LEVEL": "WARNING",
     }
 )
+if os.environ.get("TEST_DATABASE_URL_UNPOOLED"):
+    os.environ["DATABASE_URL_UNPOOLED"] = os.environ["TEST_DATABASE_URL_UNPOOLED"]
+
+
+def direct_database_url() -> str:
+    """The test database's direct URL (TEST_DATABASE_URL_UNPOOLED, else DATABASE_URL), for
+    creating and dropping scratch databases and for the PostgreSQL client tools."""
+    return os.environ.get("TEST_DATABASE_URL_UNPOOLED") or os.environ["DATABASE_URL"]
+
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402

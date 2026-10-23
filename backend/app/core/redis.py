@@ -95,12 +95,12 @@ class LockNotAcquired(Exception):
     """Raised when another worker already holds a job lock."""
 
 
-@contextmanager
-def redis_lock(name: str, ttl_seconds: int = 900, blocking_seconds: float = 0) -> Iterator[None]:
-    """Distributed mutex (SET NX EX + token-checked release).
+def acquire_lock(name: str, ttl_seconds: int = 900, blocking_seconds: float = 0) -> str:
+    """Take the lock ``name`` (SET NX EX); returns the token :func:`release_lock` needs.
 
-    The TTL guarantees that a crashed worker can never hold a lock forever, which is what
-    makes jobs safe across worker restarts.
+    Raises LockNotAcquired when another holder keeps it beyond ``blocking_seconds``, and
+    redis.RedisError when Redis does not answer (after the client's connect or socket
+    timeout and its retry policy, :func:`client_options`).
     """
     client = get_redis()
     key = f"lock:{name}"
@@ -108,17 +108,32 @@ def redis_lock(name: str, ttl_seconds: int = 900, blocking_seconds: float = 0) -
     deadline = time.monotonic() + blocking_seconds
     while True:
         if client.set(key, token, nx=True, ex=ttl_seconds):
-            break
+            return token
         if time.monotonic() >= deadline:
             raise LockNotAcquired(name)
         time.sleep(0.2)
+
+
+def release_lock(name: str, token: str) -> None:
+    """Release the lock ``name`` if ``token`` still holds it (best effort)."""
+    try:
+        get_redis().eval(_RELEASE_SCRIPT, 1, f"lock:{name}", token)
+    except redis.RedisError:
+        logger.warning("Failed to release lock %s", name)
+
+
+@contextmanager
+def redis_lock(name: str, ttl_seconds: int = 900, blocking_seconds: float = 0) -> Iterator[None]:
+    """Distributed mutex (SET NX EX + token-checked release).
+
+    The TTL guarantees that a crashed worker can never hold a lock forever, which is what
+    makes jobs safe across worker restarts.
+    """
+    token = acquire_lock(name, ttl_seconds, blocking_seconds)
     try:
         yield
     finally:
-        try:
-            client.eval(_RELEASE_SCRIPT, 1, key, token)
-        except redis.RedisError:  # pragma: no cover - best effort
-            logger.warning("Failed to release lock %s", name)
+        release_lock(name, token)
 
 
 class QuotaExceeded(Exception):

@@ -18,7 +18,10 @@ commands (the job then runs without its Redis lock, and the report names
 status (ok, degraded, failing), or ``skipped`` when another run of the job held its lock;
 ``alerts_sent`` lists the alerts (``<reason>:<problem key>``) the admins were emailed;
 ``heartbeat_age_minutes`` is the age of the daemon's last check (None when there is no
-heartbeat in Redis). An unexpected failure answers 503 with status ``error``. Vercel does
+heartbeat in Redis). An unexpected failure answers 503 with status ``error``. When the
+failure is the database itself (unreachable, e.g. Neon's compute suspended after its quota),
+the admins cannot be read from it, so OPS_ALERT_EMAILS (when set) are emailed instead, at
+most once per UTC day (``alerts_sent`` then lists ``new:database_unreachable``). Vercel does
 not retry a failed cron and may deliver one twice; both are safe here.
 """
 
@@ -32,6 +35,7 @@ from typing import Any
 import redis
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import InterfaceError, OperationalError
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal, utcnow
@@ -59,6 +63,7 @@ def _run_unlocked() -> dict[str, Any]:
     """The data-health job without its Redis lock (Redis unavailable), logged like
     app.jobs.runner.run_job logs it."""
     from app.jobs.registry import job_spec
+    from app.jobs.runner import LOCK_NOT_TAKEN
     from app.jobs.schedule import DATA_HEALTH_TASK
     from app.models import BackgroundJobLog
     from app.models.enums import JobStatus
@@ -82,7 +87,7 @@ def _run_unlocked() -> dict[str, Any]:
                     started_at=started_at,
                     finished_at=utcnow(),
                     duration_ms=int((time.monotonic() - started) * 1000),
-                    details=jsonable({**details, "lock": "not taken: Redis unavailable"}),
+                    details=jsonable({**details, "lock": LOCK_NOT_TAKEN}),
                     error_message=error,
                 )
             )
@@ -112,8 +117,10 @@ def run_watchdog_job() -> dict[str, Any]:
     straight away. Letting run_job fail on the lock instead would log a FAILED
     ``ops.data_health`` row that the check itself then reports (and emails) as
     ``job_failed:ops.data_health``, a problem that does not exist; the real one,
-    ``redis_unavailable``, is reported by the check. Only when Redis goes away between
-    the PING and the lock does that FAILED row appear before the unlocked run.
+    ``redis_unavailable``, is reported by the check. When Redis goes away between the PING
+    and the lock, run_job itself runs the check without the lock under JOB_RUNNER=daemon
+    (app.jobs.runner.job_lock); under Celery that FAILED row appears before the unlocked
+    run.
     """
     from app.jobs.registry import job_spec
     from app.jobs.runner import run_job
@@ -132,6 +139,21 @@ def run_watchdog_job() -> dict[str, Any]:
         return _run_unlocked()
 
 
+def alert_without_database(exc: BaseException) -> list[str]:
+    """The database is unreachable: email OPS_ALERT_EMAILS (ops_alerts); the alerts sent."""
+    from app.services.notifications.ops_alerts import (
+        DB_UNREACHABLE_ALERT,
+        alert_database_unreachable,
+    )
+
+    try:
+        result = alert_database_unreachable(exc)
+    except Exception:  # the 503 answer must still go out
+        logger.exception("Database alert to OPS_ALERT_EMAILS failed")
+        return []
+    return [DB_UNREACHABLE_ALERT] if result.get("sent") else []
+
+
 def heartbeat_age_minutes() -> float | None:
     from app.services.sync.state import read_heartbeat
 
@@ -146,10 +168,13 @@ def cron_daily(authorization: str | None = Header(default=None)) -> JSONResponse
         result = run_watchdog_job()
     except Exception as exc:
         logger.exception("Daily watchdog failed")
+        sent: list[str] = []
+        if isinstance(exc, OperationalError | InterfaceError):
+            sent = alert_without_database(exc)
         body: dict[str, Any] = {
             "status": "error",
             "problems": [f"watchdog_failed:{type(exc).__name__}"],
-            "alerts_sent": [],
+            "alerts_sent": sent,
             "heartbeat_age_minutes": heartbeat_age_minutes(),
         }
         return JSONResponse(body, status_code=503, headers={"Cache-Control": PRIVATE_NO_STORE})

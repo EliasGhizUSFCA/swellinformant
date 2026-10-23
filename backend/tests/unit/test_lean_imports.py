@@ -196,6 +196,15 @@ def test_the_daemon_job_bodies_import_without_celery() -> None:
     assert_imported(import_without(deferred, CELERY))
 
 
+def test_the_api_deferred_imports_load_with_every_extra_missing() -> None:
+    """Endpoints that import inside the function load those modules per request on Vercel;
+    dev.py is left out (its endpoints run the whole pipeline and production refuses
+    ENABLE_DEV_ENDPOINTS)."""
+    sources = [p for p in sorted((BACKEND / "app" / "api").glob("*.py")) if p.stem != "dev"]
+    deferred = deferred_app_imports([*sources, BACKEND / "app" / "main.py"])
+    assert_imported(import_without(deferred, CELERY + DATA_LIBRARIES + SERVER_EXTRAS))
+
+
 def test_the_deferred_import_scan_finds_imports_inside_functions(tmp_path: Path) -> None:
     source = tmp_path / "jobs.py"  # synthetic source, for this test only
     source.write_text(

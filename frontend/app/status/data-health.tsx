@@ -18,7 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { get } from "@/lib/api";
 import { relativeTime, titleCase } from "@/lib/format";
-import { componentsNow, type SyncHealth } from "@/lib/sync";
+import type { SyncHealth } from "@/lib/sync";
 
 export type OverallStatus = "ok" | "degraded" | "failing";
 type Freshness = "ok" | "stale" | "missing";
@@ -107,6 +107,21 @@ export function redisLine(r: RedisHealth): string {
   const share = `${pct < 10 ? pct.toFixed(1) : Math.round(pct)} %`;
   const cap = r.cap_source === "setting" ? `${formatBytes(r.cap_bytes)} (REDIS_MAXMEMORY; Redis itself runs uncapped)` : formatBytes(r.cap_bytes);
   return `Redis ${formatBytes(used)} of ${cap} (${share}, ${alarm})`;
+}
+
+/**
+ * The background-job line. Under Celery a job silence is an alarm (no job finished for
+ * `limit_minutes`: the worker or beat is down). The sync daemon runs its jobs hourly and syncs
+ * only when a model run is new, so silence is no alarm there: its liveness is its heartbeat,
+ * shown in the Forecast sync card.
+ */
+export function heartbeatLine(data: Pick<DataHealth, "heartbeat" | "sync">): string {
+  const finished = data.heartbeat.last_job_finished_at;
+  if (data.sync?.runner === "daemon") {
+    const last = finished ? `Last background job finished ${relativeTime(finished)}` : "No background job has finished yet";
+    return `${last} (the sync daemon's own heartbeat is checked instead: Forecast sync)`;
+  }
+  return finished ? `Last background job finished ${relativeTime(finished)} (alarm after ${data.heartbeat.limit_minutes} min of silence)` : "No background job has finished yet";
 }
 
 /** "184 MB", "12.3 GB" (binary units, as PostgreSQL's pg_size_pretty). */
@@ -307,10 +322,8 @@ export function LayersAndObservations({ data }: { data: DataHealth }) {
         </div>
         <div className="flex items-start gap-2">
           <HeartPulse className="mt-0.5 size-4 text-ocean" />
-          <div className="text-xs text-muted-foreground">
-            {data.heartbeat.last_job_finished_at
-              ? `Last background job finished ${relativeTime(data.heartbeat.last_job_finished_at)} (alarm after ${data.heartbeat.limit_minutes} min of silence)`
-              : "No background job has finished yet"}
+          <div className="text-xs text-muted-foreground" data-testid="data-health-heartbeat">
+            {heartbeatLine(data)}
           </div>
         </div>
         <div className="flex items-start gap-2">
@@ -342,19 +355,15 @@ export function JobsCard({ jobs }: { jobs: JobHealth[] }) {
 }
 
 /**
- * The sync section; nothing when the backend sends no sync block (older backends). Component
- * states found before a sync that has stored their run since are brought up to date from the
- * same report's stored runs (lib/sync.ts componentsNow).
+ * The sync section; nothing when the backend sends no sync block (older backends). The
+ * component states are the backend's own: after a sync the daemon reports what it stored as
+ * current (app/services/sync/detect.py settle_plan), and data health does the same for a sync
+ * of another trigger since the daemon's last check (app/services/health.py
+ * components_since_check).
  */
 export function SyncCard({ data, className }: { data: DataHealth; className?: string }) {
   const { sync } = data;
   if (!sync) return null;
   const names = new Map(data.forecast_sources.map((s) => [s.code, s.name] as const));
-  const stored = new Map(data.forecast_sources.map((s) => [s.code, s.newest_run_key] as const));
-  const components = componentsNow(
-    sync.components ?? [],
-    (c) => (c.kind === "map" ? data.map_fields?.run_key : stored.get(c.source)),
-    sync.last_run?.status === "running",
-  );
-  return <SyncStatus sync={{ ...sync, components }} sourceNames={names} className={className} />;
+  return <SyncStatus sync={sync} sourceNames={names} className={className} />;
 }

@@ -2,10 +2,12 @@
 
 Events keep a stable identity across model runs: a new cluster that overlaps an existing
 ACTIVE event (±12 h) updates that event in place (``version`` increments and a snapshot is
-appended to ``history``). Clusters overlapping several events merge them (the extras are
-CANCELLED with ``merged_into_id``). Active events that the latest run no longer supports
-are DOWNGRADED; events whose end time has passed become PASSED. A per-spot transaction
-plus the deferred exclusion constraint guarantee no duplicate overlapping active events.
+appended to ``history``); clusters and events are paired one to one, best overlap first
+(:func:`match_clusters`). A cluster that also overlaps events no other cluster continues
+merges them (the extras are CANCELLED with ``merged_into_id``). Active events that the
+latest run no longer supports are DOWNGRADED; events whose end time has passed become
+PASSED. A per-spot transaction plus the deferred exclusion constraint guarantee no duplicate
+overlapping active events.
 
 The peak hour's forecast and local confidence classes, reasons and lead time
 (forecast-v1) are stored in each history snapshot; the newest snapshot is the event's
@@ -325,6 +327,55 @@ def _apply_cluster(
     event.history = [*(event.history or [])[-19:], snapshot]
 
 
+def _overlap_seconds(event: SwellEvent, cluster: Cluster) -> float:
+    """How far an event and a cluster overlap (negative: the gap between them)."""
+    return (min(event.end_time, cluster.end) - max(event.start_time, cluster.start)).total_seconds()
+
+
+def match_clusters(
+    clusters: list[Cluster], existing: list[SwellEvent]
+) -> tuple[list[int | None], dict[int, int]]:
+    """Which active event each cluster continues, and which events merge into which cluster.
+
+    ``existing`` is ordered by (start_time, id). First one to one: the (cluster, event)
+    pairs that overlap within MATCH_TOLERANCE are taken best overlap first, each cluster and
+    each event at most once. Then an event that no cluster took merges into the cluster it
+    overlaps most, if any (that cluster always has an event: a pair whose cluster and event
+    were both free would have been taken). Of the events one cluster absorbs, the earliest
+    continues and the others are cancelled into it, as before Upgrade 4's integration: the
+    swell first seen keeps its identity and its start from before the run's coverage.
+
+    Returns the event index per cluster (None: a new event) and {event index: cluster
+    index} for the merges. A cluster that reaches past its own event into a neighbour's
+    (the ±12 h tolerance) therefore never takes the neighbour's event from the cluster that
+    continues it, so detection over unchanged data keeps every event (it used to cancel the
+    second of two close events into the first and create it again on every pass).
+    """
+    pairs = sorted(
+        (-_overlap_seconds(e, c), ei, ci)
+        for ci, c in enumerate(clusters)
+        for ei, e in enumerate(existing)
+        if overlaps(e.start_time, e.end_time, c.start, c.end, MATCH_TOLERANCE)
+    )
+    primary: list[int | None] = [None] * len(clusters)
+    taken: set[int] = set()
+    for _, ei, ci in pairs:
+        if primary[ci] is None and ei not in taken:
+            primary[ci] = ei
+            taken.add(ei)
+    merges: dict[int, int] = {}
+    for _, ei, ci in pairs:
+        if ei not in taken and ei not in merges:
+            merges[ei] = ci
+    for ei, ci in list(merges.items()):
+        first = primary[ci]
+        if first is not None and ei < first:  # an earlier event continues instead
+            del merges[ei]
+            merges[first] = ci
+            primary[ci] = ei
+    return primary, merges
+
+
 def detect_for_spot(
     db: Session, spot: SurfSpot, run: ForecastRun, now: datetime, stats: DetectionStats
 ) -> list[SwellEvent]:
@@ -344,28 +395,27 @@ def detect_for_spot(
         db.scalars(
             select(SwellEvent)
             .where(SwellEvent.spot_id == spot.id, SwellEvent.status == SwellEventStatus.ACTIVE)
-            .order_by(SwellEvent.start_time)
+            .order_by(SwellEvent.start_time, SwellEvent.id)
             .with_for_update(of=SwellEvent)
         ).all()
     )
+    matched, merges = match_clusters(clusters, existing)
     touched: set[object] = set()
     results: list[SwellEvent] = []
-    for cluster in clusters:
-        hits = [
-            e
-            for e in existing
-            if e.id not in touched
-            and overlaps(e.start_time, e.end_time, cluster.start, cluster.end, MATCH_TOLERANCE)
-        ]
-        if hits:
-            primary = hits[0]
-            for extra in hits[1:]:
+    for ci, cluster in enumerate(clusters):
+        if (index := matched[ci]) is not None:
+            primary = existing[index]
+            for ei in sorted(ei for ei, target in merges.items() if target == ci):
+                extra = existing[ei]
                 extra.status = SwellEventStatus.CANCELLED
                 extra.merged_into_id = primary.id
                 extra.last_updated_at = utcnow()
                 touched.add(extra.id)
                 stats.merged += 1
-            keep_start = primary.start_time < coverage_start
+            # An event that began before the run's coverage keeps its start only when it
+            # continues the first cluster: kept by a later one it would span the clusters
+            # before it (and overlap their events).
+            keep_start = ci == 0 and primary.start_time < coverage_start
             _apply_cluster(primary, cluster, run, keep_start, peaks[cluster.peak.payload[0].id])
             primary.version += 1
             touched.add(primary.id)

@@ -15,7 +15,6 @@ import { cycleLabel } from "@/lib/map-time";
 import {
   componentKindLabel,
   componentState,
-  CPU_BUDGET_ALERT_FRACTION,
   cpuBudget,
   formatCpuHours,
   formatDurationMs,
@@ -67,7 +66,7 @@ function Published({ run, now }: { run: SyncRun | null | undefined; now: Date | 
   }
   return (
     <p className="text-sm font-medium text-ink" data-testid="sync-published">
-      {publicationLine(run.anchor_cycle, run.published_at)}
+      {publicationLine(run)}
       <span className="ml-1.5 text-xs font-normal text-muted-foreground">({relativeTime(run.published_at, now)})</span>
     </p>
   );
@@ -128,7 +127,7 @@ function ComponentRow({ c, names }: { c: SyncComponent; names: ReadonlyMap<strin
         <div className="min-w-0">
           <div className="text-sm font-medium">{componentKindLabel(c.kind)}</div>
           <div className="text-xs text-muted-foreground wrap-anywhere" title={keys}>
-            {sourceName(c.source, names)}
+            {sourceName(c.source, names, c.source_name)}
             {c.available_cycle && ` · newest run ${cycleLabel(c.available_cycle)}`}
           </div>
         </div>
@@ -171,10 +170,12 @@ export function CpuMeter({ sync }: { sync: SyncHealth }) {
         className="relative h-2 overflow-hidden rounded-full bg-muted"
       >
         <div className={cn("h-full rounded-full", METER_TONE[cpu.tone])} style={{ width: `${Math.min(100, cpu.fraction * 100)}%` }} />
-        {/* The alert threshold (data health turns degraded above it). */}
-        <div className="absolute inset-y-0 w-px bg-ink/40" style={{ left: `${CPU_BUDGET_ALERT_FRACTION * 100}%` }} aria-hidden />
+        {/* The alert threshold the report names (data health turns degraded above it). */}
+        {cpu.alert !== null && <div className="absolute inset-y-0 w-px bg-ink/40" style={{ left: `${cpu.alert * 100}%` }} aria-hidden data-testid="sync-cpu-alert" />}
       </div>
-      <p className="text-[11px] text-muted-foreground">Budget SYNC_CPU_BUDGET_HOURS · alert above {Math.round(CPU_BUDGET_ALERT_FRACTION * 100)} %</p>
+      <p className="text-[11px] text-muted-foreground">
+        Budget SYNC_CPU_BUDGET_HOURS{cpu.alert !== null && ` · alert above ${Math.round(cpu.alert * 100)} %`}
+      </p>
     </div>
   );
 }

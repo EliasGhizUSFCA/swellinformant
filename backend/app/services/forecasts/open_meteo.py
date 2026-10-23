@@ -94,13 +94,18 @@ from app.services.forecasts.base import (
 )
 from app.services.forecasts.grib import haversine_km
 from app.services.forecasts.provider_cache import ProviderCacheKey, coords_hash
-from app.services.forecasts.quota import call_weight, consume_open_meteo_budget
+from app.services.forecasts.quota import (
+    QuotaWindowExhaustedError,
+    call_weight,
+    consume_open_meteo_budget,
+    seconds_until_next_utc_day,
+    seconds_until_next_utc_month,
+)
 from app.services.http import (
     RETRYABLE_STATUS,
     HttpTally,
     PermanentProviderError,
     ProviderError,
-    QuotaExhaustedError,
     RunNotServedError,
     TransientProviderError,
     request_with_retries,
@@ -708,7 +713,15 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         if resp.status_code == 429:
             low = reason.lower()
             if "daily" in low or "monthly" in low:
-                raise QuotaExhaustedError(f"Open-Meteo: {reason}")
+                # Nothing succeeds before the limit resets: the sync waits until then
+                # (assumed 00:00 UTC for the daily limit, the 1st for the monthly one).
+                now = self.clock()
+                wait = (
+                    seconds_until_next_utc_month(now)
+                    if "monthly" in low
+                    else seconds_until_next_utc_day(now)
+                )
+                raise QuotaWindowExhaustedError(f"Open-Meteo: {reason}", retry_after_s=wait)
             retry = _next_hour(self.clock()) if "hourly" in low else 60.0
             raise TransientProviderError(f"Open-Meteo: {reason}", retry_after_s=retry)
         if resp.status_code >= 500:

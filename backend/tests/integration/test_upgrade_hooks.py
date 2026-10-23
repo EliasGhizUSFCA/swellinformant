@@ -64,7 +64,7 @@ def test_cleanup_prunes_tide_predictions(db: Session, monkeypatch: pytest.Monkey
 
 def test_data_health_reports_tide_problems(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     problem = {"key": "tides_stale:test", "severity": "degraded", "message": "Tides are old."}
-    monkeypatch.setattr(health, "tide_freshness", lambda db, now: [problem])
+    monkeypatch.setattr(health, "tide_freshness", lambda db, now, **_: [problem])
     report = health.data_health(db)
     assert "Tides are old." in report.out.reasons
     assert any(p.key == "tides_stale:test" for p in report.problems)

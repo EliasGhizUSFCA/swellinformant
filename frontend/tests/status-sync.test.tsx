@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import { CpuMeter, SyncStatus } from "@/components/status/sync-status";
 import {
-  componentsNow,
   componentState,
   cpuBudget,
   formatCpuHours,
@@ -13,6 +12,7 @@ import {
   runDurationMs,
   runStatus,
   stageLabel,
+  storedRunsPhrase,
   type SyncComponent,
   type SyncHealth,
   type SyncRun,
@@ -35,6 +35,7 @@ const STAGES: SyncRun["stages"] = [
   { name: "detect", status: "failed", duration_ms: 79, cpu_s: 0.05 },
 ];
 
+// As an older backend reports a sync: the anchor cycle only, no stored runs.
 const PUBLISHED: SyncRun = {
   id: 12,
   trigger: "daemon",
@@ -44,6 +45,18 @@ const PUBLISHED: SyncRun = {
   published_at: iso(87.6),
   anchor_cycle: "2026-10-18T12:00:00Z",
   stages: STAGES,
+};
+
+// A catch-up sync as the backend reports it since the integration: it stored the 12Z spot runs
+// with the 00Z map layers, under the 00Z anchor cycle (invented run keys).
+const CATCH_UP: SyncRun = {
+  ...PUBLISHED,
+  id: 15,
+  anchor_cycle: "2026-10-18T00:00:00Z",
+  stored: [
+    { kind: "spots", source: "synthetic_gfs", source_name: "Synthetic GFS source", run_key: "synthetic:2026101812", cycle: "2026-10-18T12:00:00Z" },
+    { kind: "map", source: "synthetic_map", source_name: null, run_key: "synthetic-map:2026101800", cycle: "2026-10-18T00:00:00Z" },
+  ],
 };
 
 const COMPONENTS: SyncComponent[] = [
@@ -91,6 +104,7 @@ function sync(overrides: Partial<SyncHealth> = {}): SyncHealth {
     components: COMPONENTS,
     cpu_hours_month: 2.4,
     cpu_budget_hours: null,
+    cpu_alert_fraction: 0.8,
     ...overrides,
   };
 }
@@ -104,9 +118,28 @@ describe("sync helpers", () => {
     expect(publishedPhrase("2026-10-19T02:10:00Z")).toBe("published Oct 19, 02:10 UTC");
   });
 
-  it("names the published model run, or only the publication without an anchor cycle", () => {
-    expect(publicationLine("2026-10-18T12:00:00Z", "2026-10-18T14:32:00Z")).toBe("Updated with the 12Z Oct 18 model run · published 14:32 UTC");
-    expect(publicationLine(null, "2026-10-18T14:32:00Z")).toBe("Published Oct 18, 14:32 UTC");
+  it("names the published model run of an older backend, or only the publication without an anchor cycle", () => {
+    expect(publicationLine({ anchor_cycle: "2026-10-18T12:00:00Z", published_at: "2026-10-18T14:32:00Z" })).toBe("Updated with the 12Z Oct 18 model run · published 14:32 UTC");
+    expect(publicationLine({ anchor_cycle: null, published_at: "2026-10-18T14:32:00Z" })).toBe("Published Oct 18, 14:32 UTC");
+  });
+
+  it("names the spot and map runs a sync stored apart, not its anchor cycle", () => {
+    expect(publicationLine({ ...CATCH_UP, published_at: "2026-10-18T14:32:00Z" })).toBe(
+      "Updated with spot forecasts 12Z Oct 18 and map layers 00Z Oct 18 · published 14:32 UTC",
+    );
+    const twoFamilies = [
+      { kind: "spots" as const, source: "a", cycle: "2026-10-18T00:00:00Z" },
+      { kind: "spots" as const, source: "b", cycle: "2026-10-18T06:00:00Z" },
+      { kind: "spots" as const, source: "c", cycle: "2026-10-18T06:00:00Z" },
+      { kind: "ensemble" as const, source: "d", cycle: "2026-10-17T18:00:00Z" },
+    ];
+    expect(storedRunsPhrase(twoFamilies)).toBe("spot forecasts 06Z Oct 18 and 00Z Oct 18 and ensemble 18Z Oct 17");
+    expect(storedRunsPhrase([...twoFamilies, { kind: "map", source: "m", cycle: "2026-10-18T00:00:00Z" }])).toBe(
+      "spot forecasts 06Z Oct 18 and 00Z Oct 18, map layers 00Z Oct 18 and ensemble 18Z Oct 17",
+    );
+    // Nothing stored (a forced republication): only the publication, whatever the anchor.
+    expect(publicationLine({ ...CATCH_UP, stored: [], published_at: "2026-10-18T14:32:00Z" })).toBe("Published Oct 18, 14:32 UTC");
+    expect(storedRunsPhrase([{ kind: "map", source: "m", cycle: null }])).toBeNull();
   });
 
   it("formats durations from milliseconds to hours", () => {
@@ -138,14 +171,19 @@ describe("sync helpers", () => {
     expect(stageLabel("later_stage")).toBe("Later Stage");
   });
 
-  it("has a CPU budget only when one is set, and warns above 80 %", () => {
-    expect(cpuBudget({ cpu_hours_month: 2.4, cpu_budget_hours: null })).toBeNull();
-    expect(cpuBudget({ cpu_hours_month: 2.4, cpu_budget_hours: 0 })).toBeNull();
-    expect(cpuBudget({ cpu_hours_month: null, cpu_budget_hours: 10 })).toBeNull();
-    expect(cpuBudget({ cpu_hours_month: 2.4, cpu_budget_hours: 10 })).toEqual({ used: 2.4, budget: 10, fraction: 0.24, tone: "good" });
-    expect(cpuBudget({ cpu_hours_month: 8, cpu_budget_hours: 10 })?.tone).toBe("good"); // alert is above 80 %
-    expect(cpuBudget({ cpu_hours_month: 8.5, cpu_budget_hours: 10 })?.tone).toBe("warn");
-    expect(cpuBudget({ cpu_hours_month: 12, cpu_budget_hours: 10 })).toMatchObject({ fraction: 1.2, tone: "danger" });
+  it("has a CPU budget only when one is set, and warns above the report's alert share (80 %)", () => {
+    const alert = { cpu_alert_fraction: 0.8 }; // the backend's CPU_BUDGET_ALERT_FRACTION, sent in the report
+    expect(cpuBudget({ ...alert, cpu_hours_month: 2.4, cpu_budget_hours: null })).toBeNull();
+    expect(cpuBudget({ ...alert, cpu_hours_month: 2.4, cpu_budget_hours: 0 })).toBeNull();
+    expect(cpuBudget({ ...alert, cpu_hours_month: null, cpu_budget_hours: 10 })).toBeNull();
+    expect(cpuBudget({ ...alert, cpu_hours_month: 2.4, cpu_budget_hours: 10 })).toEqual({ used: 2.4, budget: 10, fraction: 0.24, alert: 0.8, tone: "good" });
+    expect(cpuBudget({ ...alert, cpu_hours_month: 8, cpu_budget_hours: 10 })?.tone).toBe("good"); // alert is above 80 %
+    expect(cpuBudget({ ...alert, cpu_hours_month: 8.5, cpu_budget_hours: 10 })?.tone).toBe("warn");
+    expect(cpuBudget({ ...alert, cpu_hours_month: 12, cpu_budget_hours: 10 })).toMatchObject({ fraction: 1.2, tone: "danger" });
+    expect(cpuBudget({ cpu_alert_fraction: 0.5, cpu_hours_month: 6, cpu_budget_hours: 10 })?.tone).toBe("warn"); // the report's share, not a copy
+    // An older backend sends no alert share: no amber step, red at the budget.
+    expect(cpuBudget({ cpu_hours_month: 8.5, cpu_budget_hours: 10 })).toMatchObject({ alert: null, tone: "good" });
+    expect(cpuBudget({ cpu_hours_month: 10, cpu_budget_hours: 10 })?.tone).toBe("danger");
     expect(formatCpuHours(0.042)).toBe("0.04 h");
     expect(formatCpuHours(2.44)).toBe("2.4 h");
     expect(formatCpuHours(12.5)).toBe("12.5 h");
@@ -154,31 +192,6 @@ describe("sync helpers", () => {
     // The backend rounds to 0.001 h: a small use early in the month is not shown as 0 h.
     expect(formatCpuHours(0.004)).toBe("0.004 h");
     expect(formatCpuHours(0.001)).toBe("0.001 h");
-  });
-});
-
-describe("components now", () => {
-  const stored = new Map([
-    ["synthetic_gfs", "synthetic:2026101812"],
-    ["synthetic_ecmwf", "synthetic-ec:2026101812"], // stored after the check found it waiting
-    ["synthetic_map", "synthetic-map:2026101812"],
-  ]);
-  const key = (c: SyncComponent) => stored.get(c.source);
-  const found = COMPONENTS.map((c) => (c.source === "synthetic_map" ? { ...c, state: "new" as const, detail: null } : c));
-
-  it("brings a component found new up to date once the report lists its run as stored", () => {
-    const now = componentsNow(found, key, false);
-    expect(now.map((c) => c.state)).toEqual(["current", "waiting", "current", "disabled"]);
-    expect(now[2]).toEqual({ ...found[2], state: "current", stored_run_key: "synthetic-map:2026101812", detail: "stored since this check" });
-    expect(now[0]).toBe(found[0]); // already current: unchanged
-  });
-
-  it("leaves everything as reported while a sync runs, or when the stored run differs", () => {
-    expect(componentsNow(found, key, true)).toEqual(found);
-    const syncing = found.map((c) => (c.kind === "map" ? { ...c, state: "in_progress" as const } : c));
-    expect(componentsNow(syncing, key, false)[2]!.state).toBe("current");
-    expect(componentsNow(syncing, () => "synthetic-map:2026101800", false)[2]!.state).toBe("in_progress");
-    expect(componentsNow([{ ...found[2]!, available_run_key: null }], () => null, false)[0]!.state).toBe("new");
   });
 });
 
@@ -238,10 +251,10 @@ describe("sync section", () => {
     expect(gefs).toHaveTextContent("GEFS_ENABLED=false");
   });
 
-  it("names the map-field and ensemble sources, which data health does not list, by their backend names", () => {
+  it("names the map-field and ensemble sources, which data health does not list, by the names the backend sends", () => {
     const real: SyncComponent[] = [
-      { ...COMPONENTS[2]!, source: "noaa_gfs_fields" },
-      { ...COMPONENTS[3]!, source: "noaa_gefs_wave" },
+      { ...COMPONENTS[2]!, source: "noaa_gfs_fields", source_name: "NOAA GFS-Wave + GFS global fields" },
+      { ...COMPONENTS[3]!, source: "noaa_gefs_wave", source_name: "NOAA GEFS-Wave ensemble mean and spread (direct from NOAA open data)" },
     ];
     const { rerender } = render(<SyncStatus sync={sync({ components: real })} now={NOW} />);
     const map = screen.getByTestId("sync-component-map-noaa_gfs_fields");
@@ -280,6 +293,11 @@ describe("sync section", () => {
     expect(screen.getByTestId("sync-components")).toHaveTextContent("The Celery runner reports no component states");
   });
 
+  it("names the spot and map runs a catch-up sync stored, not its anchor cycle", () => {
+    render(<SyncStatus sync={sync({ last_run: CATCH_UP, last_published: CATCH_UP })} now={NOW} />);
+    expect(screen.getByTestId("sync-published")).toHaveTextContent("Updated with spot forecasts 12Z Oct 18 and map layers 00Z Oct 18 · published 14:32 UTC");
+  });
+
   it("shows a published sync without an anchor cycle as a plain publication", () => {
     const forced: SyncRun = { ...PUBLISHED, id: 14, anchor_cycle: null, published_at: "2026-10-18T15:02:00Z" };
     render(<SyncStatus sync={sync({ last_run: forced, last_published: forced })} now={NOW} />);
@@ -299,10 +317,20 @@ describe("CPU meter", () => {
     expect(cpu).toHaveTextContent("CPU this month (UTC)");
     expect(cpu).toHaveTextContent("at least 2.4 h of 10 h (24 %)");
     expect(cpu).toHaveTextContent("alert above 80 %");
+    expect(screen.getByTestId("sync-cpu-alert").style.left).toBe("80%");
     const meter = screen.getByRole("meter", { name: "CPU used this month against the budget" });
     expect(meter).toHaveAttribute("aria-valuenow", "2.4");
     expect(meter).toHaveAttribute("aria-valuemax", "10");
     expect(meter).toHaveAttribute("data-tone", "good");
+  });
+
+  it("takes the alert threshold from the report, and shows none when an older backend sends none", () => {
+    const { rerender } = render(<CpuMeter sync={sync({ cpu_hours_month: 2.4, cpu_budget_hours: 10, cpu_alert_fraction: 0.5 })} />);
+    expect(screen.getByTestId("sync-cpu")).toHaveTextContent("alert above 50 %");
+    expect(screen.getByTestId("sync-cpu-alert").style.left).toBe("50%");
+    rerender(<CpuMeter sync={sync({ cpu_hours_month: 2.4, cpu_budget_hours: 10, cpu_alert_fraction: undefined })} />);
+    expect(screen.getByTestId("sync-cpu")).not.toHaveTextContent("alert above");
+    expect(screen.queryByTestId("sync-cpu-alert")).toBeNull();
   });
 
   it("says <1 % rather than 0 % for a small but non-zero use", () => {

@@ -19,6 +19,7 @@ from app.services.forecasts.base import RunInfo
 from app.services.forecasts.demo import DemoForecastProvider
 from app.services.forecasts.ingestion import acquire_from_provider
 from app.services.maintenance import cleanup
+from tests.conftest import direct_database_url
 
 pytestmark = pytest.mark.integration
 
@@ -57,7 +58,7 @@ def test_migrations_upgrade_downgrade_and_match_models() -> None:
 
     from app.core.database import Base
 
-    base_url = make_url(os.environ["DATABASE_URL"])
+    base_url = make_url(direct_database_url())  # a pooler refuses DROP DATABASE
     # One scratch database per run: test runs on the same server (each with its own test
     # database) dropped each other's fixed-name scratch database mid-migration.
     name = f"{(base_url.database or 'swell')[:40]}_migcheck_{uuid.uuid4().hex[:8]}"

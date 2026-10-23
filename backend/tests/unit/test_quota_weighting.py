@@ -17,6 +17,7 @@ from app.core.config import Settings
 from app.core.redis import QuotaExceeded, get_redis
 from app.services.forecasts.quota import (
     BudgetWindowFullError,
+    QuotaWindowExhaustedError,
     budget_windows,
     call_weight,
     consume_open_meteo_budget,
@@ -114,6 +115,9 @@ def test_day_overrun_is_permanent_quota_exhaustion(clean_redis: redis.Redis) -> 
         consume_open_meteo_budget(2.0, now=NOW + timedelta(hours=2), settings=s)
     assert isinstance(refused.value, PermanentProviderError)
     assert isinstance(refused.value, QuotaExceeded)  # flight discovery still stops on it
+    # ... and it says when the day window resets (15:20:30 -> 00:00 UTC), so a sync waits.
+    assert isinstance(refused.value, QuotaWindowExhaustedError)
+    assert refused.value.retry_after_s == pytest.approx(8 * 3600 + 39 * 60 + 30)
 
 
 def test_budget_overrun_sends_no_http_request(clean_redis: redis.Redis) -> None:

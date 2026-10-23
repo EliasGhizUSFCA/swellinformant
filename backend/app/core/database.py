@@ -3,7 +3,8 @@
 The engine connects to :func:`engine_url`: DATABASE_URL (the pooled URL on Neon) unless
 DB_USE_UNPOOLED is set, as in the sync daemon image. Migrations use :func:`migration_url`
 (the unpooled URL when there is one). DATABASE_URL_UNPOOLED is used only while it names the
-same database as DATABASE_URL (:func:`unpooled_url`): a test or tool that points
+same database as DATABASE_URL (Settings.unpooled_database_url, which the settings'
+engine_database_url and migration_database_url apply too): a test or tool that points
 DATABASE_URL at a scratch database must never migrate the database a stale unpooled URL
 names. Connections are checked before use (pre-ping) and replaced after
 DB_POOL_RECYCLE_SECONDS, because a pooler or a scaled-to-zero database closes idle
@@ -21,8 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import MetaData, create_engine, text
-from sqlalchemy.engine import Engine, make_url
-from sqlalchemy.exc import ArgumentError
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import Settings, get_settings
@@ -67,48 +67,22 @@ def engine_options(settings: Settings) -> dict[str, Any]:
     }
 
 
-def _database_name(url: str) -> str | None:
-    try:
-        return make_url(url).database
-    except ArgumentError:
-        return None
-
-
 def unpooled_url(settings: Settings) -> str | None:
-    """DATABASE_URL_UNPOOLED when it is set and names the same database as DATABASE_URL.
-
-    The direct and the pooled URL of one database differ in host (and, on some hosts, user)
-    but never in database name. Another name means the unpooled URL does not lead to this
-    process's database (a stale variable, or a test or tool that pointed DATABASE_URL
-    elsewhere): it is ignored with a warning and DATABASE_URL is used.
-    """
-    unpooled = settings.database_url_unpooled
-    if not unpooled:
-        return None
-    direct_name, pooled_name = _database_name(unpooled), _database_name(settings.database_url)
-    if direct_name != pooled_name:
-        logger.warning(
-            "DATABASE_URL_UNPOOLED names database %r but DATABASE_URL names %r; "
-            "ignoring the unpooled URL",
-            direct_name,
-            pooled_name,
-        )
-        return None
-    return unpooled
+    """DATABASE_URL_UNPOOLED when it is set and names the same database as DATABASE_URL
+    (Settings.unpooled_database_url: otherwise ignored with a warning)."""
+    return settings.unpooled_database_url
 
 
 def engine_url(settings: Settings) -> str:
     """The application engine's URL: settings.engine_database_url (the unpooled URL only
-    with DB_USE_UNPOOLED), guarded by :func:`unpooled_url`."""
-    if settings.db_use_unpooled and (direct := unpooled_url(settings)):
-        return direct
-    return settings.database_url
+    with DB_USE_UNPOOLED, and only for the same database)."""
+    return settings.engine_database_url
 
 
 def migration_url(settings: Settings) -> str:
     """Alembic's URL: settings.migration_database_url (the unpooled URL, a direct
-    connection for DDL), guarded by :func:`unpooled_url`."""
-    return unpooled_url(settings) or settings.database_url
+    connection for DDL, when it names the same database)."""
+    return settings.migration_database_url
 
 
 def get_engine() -> Engine:

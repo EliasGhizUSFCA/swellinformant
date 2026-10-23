@@ -20,8 +20,13 @@ any window would overflow:
 
 * minute or hour window full: :class:`BudgetWindowFullError` (transient; ``retry_after_s``
   says when the window resets), so the job retries soon;
-* day or month window full: :class:`~app.services.http.QuotaExhaustedError` (permanent for
-  this run; the run ends FAILED and the next provider still runs).
+* day or month window full: :class:`QuotaWindowExhaustedError`, a
+  :class:`~app.services.http.QuotaExhaustedError` (permanent for this run; the run ends
+  FAILED and the next provider still runs) whose ``retry_after_s`` is the time until the
+  window resets. Open-Meteo's own daily or monthly limit (HTTP 429, "Daily API request
+  limit exceeded") raises it too, until the next 00:00 UTC or the next month. A sync then
+  waits that long before its next attempt (app.services.sync.detect.apply_result) instead
+  of spending SYNC_MAX_ATTEMPTS attempts SYNC_RETRY_MINUTES apart on a refused day.
 
 Both Open-Meteo families (FORECAST_PROVIDERS ``open_meteo`` and ``open_meteo_ecmwf``) draw
 on the same budget: Open-Meteo counts per IP address (free tier) or per API key. The
@@ -60,6 +65,29 @@ def call_weight(locations: int, variables: int, days: float, models: int = 1) ->
         * max(1.0, days / DAYS_PER_CALL)
         * models
     )
+
+
+class QuotaWindowExhaustedError(QuotaExhaustedError):
+    """A day or month call limit is used up (this budget's window or Open-Meteo's own): no
+    request succeeds before ``retry_after_s``, when the window resets."""
+
+    def __init__(self, *args: object, retry_after_s: float) -> None:
+        super().__init__(*args)
+        self.retry_after_s = retry_after_s
+
+
+def seconds_until_next_utc_day(now: datetime) -> float:
+    """Seconds from ``now`` to the next 00:00 UTC (at least 60)."""
+    t = now.astimezone(UTC)
+    midnight = t.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return max(60.0, (midnight - t).total_seconds())
+
+
+def seconds_until_next_utc_month(now: datetime) -> float:
+    """Seconds from ``now`` to 00:00 UTC on the first day of the next month (at least 60)."""
+    t = now.astimezone(UTC)
+    start = _month_start(t.replace(second=0, microsecond=0), 1)
+    return max(60.0, (start - t).total_seconds())
 
 
 class BudgetWindowFullError(TransientProviderError):
@@ -143,7 +171,7 @@ def consume_open_meteo_budget(
     )
     if window.name in ("minute", "hour"):
         raise BudgetWindowFullError(message, retry_after_s=wait)
-    raise QuotaExhaustedError(message)
+    raise QuotaWindowExhaustedError(message, retry_after_s=wait)
 
 
 def open_meteo_budget_usage(

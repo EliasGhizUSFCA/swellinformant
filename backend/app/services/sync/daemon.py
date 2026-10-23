@@ -46,25 +46,14 @@ from app.jobs.registry import JOB_SPECS, discover_flights_run, job_spec
 from app.jobs.runner import cpu_seconds, run_job
 from app.jobs.schedule import DailyAt, Every, JobEntry, build_schedule
 from app.services.sync import state
-from app.services.sync.detect import plan_sync, refresh_known
+from app.services.sync.detect import plan_sync, refresh_known, settle_plan
 from app.services.sync.orchestrator import remember, run_sync
-from app.services.sync.types import KnownRuns, SyncBusy, SyncPlan
+from app.services.sync.types import SYNC_OWNED_TASKS, KnownRuns, SyncBusy, SyncPlan
 
 logger = logging.getLogger(__name__)
 
-# Jobs a sync runs (and Celery's sync check): never on a timer in the daemon. The D14
-# schedule (app.jobs.schedule) no longer lists the acquisition, prediction and detection
-# jobs; excluding them here keeps the daemon right with an older schedule too.
-SYNC_OWNED_TASKS = frozenset(
-    {
-        "sync.tick",
-        "forecasts.acquire",
-        "forecasts.acquire_ensemble",
-        "forecasts.map_fields",
-        "quality.predict",
-        "detection.detect",
-    }
-)
+__all__ = ["SYNC_OWNED_TASKS", "SyncDaemon", "periodic_entries", "run_daemon"]
+
 START_RETRY_SECONDS = 60
 MIN_WAIT_SECONDS = 1.0
 ERROR_WAIT_SECONDS = 60.0
@@ -271,13 +260,20 @@ class SyncDaemon:
             self.cpu.jobs += cpu_seconds() - cpu0
         remember(self.known, result)
         release_connections()
-        self._heartbeat(plan, f"sync {result.sync_run_id} {result.status}")
+        # The components as the sync left them (not the pre-sync plan: a run it stored
+        # would read "new" until the next check).
+        self.last_plan = settle_plan(plan, result)
+        self._heartbeat(self.last_plan, f"sync {result.sync_run_id} {result.status}")
         return plan
 
     def _heartbeat(self, plan: SyncPlan | None, note: str | None) -> None:
         assert self.cpu is not None
         state.write_heartbeat(
-            plan, runner="daemon", cpu_s_month=self.cpu.outside_jobs(self.wall()), note=note
+            plan,
+            runner="daemon",
+            cpu_s_month=self.cpu.outside_jobs(self.wall()),
+            note=note,
+            file_problems=file_problems(),
         )
 
     def _run(
@@ -352,6 +348,20 @@ class SyncDaemon:
             release_connections()
             logger.info("Periodic jobs: %s", ", ".join(names))
         return names
+
+
+def file_problems() -> list[dict[str, Any]]:
+    """Problems with the files this process reads and the API function does not ship (the
+    tide model's constants, data/tides/): data health there reports these from the
+    heartbeat. Cheap after the first success (the constants are cached)."""
+    from app.services.tides.health import constants_problem
+
+    try:
+        problem = constants_problem()
+    except Exception:  # never fails the daemon's heartbeat
+        logger.debug("tide constants check failed", exc_info=True)
+        return []
+    return [problem] if problem is not None else []
 
 
 def restore_logging() -> None:

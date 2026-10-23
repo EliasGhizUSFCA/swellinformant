@@ -2,7 +2,12 @@
 
 Each job:
 
-* takes a Redis lock so only one instance runs at a time (others log SKIPPED);
+* takes a Redis lock so only one instance runs at a time (others log SKIPPED). Under
+  JOB_RUNNER=daemon a Redis that does not answer does not stop the job: it runs without
+  the lock (logged with a warning and ``details["lock"]``), because the sync daemon runs
+  one job at a time and a sync's stages also hold the Postgres sync lease, so the lock
+  only guards against a second runner (a manual CLI or GitHub Actions run). Under Celery,
+  where several workers would otherwise run the same job, the job fails instead;
 * records a ``background_job_logs`` row with status, duration, the CPU time the process
   used meanwhile (``details["cpu_s"]``) and a result summary;
 * on success, passes the next pipeline stage (``NEXT_STAGE``) to ``on_success``: Celery
@@ -27,16 +32,18 @@ import logging
 import resource
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 import redis
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.database import SessionLocal, utcnow
 from app.core.logging import redact
-from app.core.redis import LockNotAcquired, get_redis, redis_lock
+from app.core.redis import LockNotAcquired, acquire_lock, get_redis, release_lock
 from app.jobs.schedule import NEXT_STAGE
 from app.models import BackgroundJobLog
 from app.models.enums import JobStatus
@@ -58,6 +65,8 @@ CPU_MONTH_KEY_PREFIX = "jobs:cpu_s:"
 CPU_MONTH_TTL_SECONDS = 62 * 86400
 # How many run_job calls this thread is inside (only the outermost one counts its CPU).
 _nesting = threading.local()
+# details["lock"] of a job that ran without its Redis lock (JOB_RUNNER=daemon).
+LOCK_NOT_TAKEN = "not taken: Redis unavailable"
 
 
 def cpu_seconds() -> float:
@@ -101,6 +110,33 @@ def cpu_seconds_this_month(now: datetime | None = None) -> float | None:
         return float(raw) if raw else 0.0
     except (TypeError, ValueError):
         return None
+
+
+@contextmanager
+def job_lock(job_name: str, ttl_seconds: int) -> Iterator[str | None]:
+    """The job's Redis lock; yields None when it is held, :data:`LOCK_NOT_TAKEN` when the
+    job runs without it (JOB_RUNNER=daemon and Redis did not answer, see the module docs).
+
+    Raises LockNotAcquired when another runner holds it, and redis.RedisError under Celery.
+    Only taking the lock is guarded: a Redis error inside the job is the job's own.
+    """
+    name = f"job:{job_name}"
+    try:
+        token = acquire_lock(name, ttl_seconds)
+    except redis.RedisError as exc:
+        if get_settings().runs_celery:
+            raise
+        logger.warning(
+            "Job %s runs without its Redis lock (%s): the daemon runs one job at a time",
+            job_name,
+            type(exc).__name__,
+        )
+        yield LOCK_NOT_TAKEN
+        return
+    try:
+        yield None
+    finally:
+        release_lock(name, token)
 
 
 def run_job(
@@ -163,10 +199,12 @@ def _run_logged(
     status, error = JobStatus.SUCCESS, None
     details: dict[str, Any] = {}
     try:
-        with redis_lock(f"job:{job_name}", ttl_seconds=lock_ttl):
+        with job_lock(job_name, lock_ttl) as lock_note:
             with SessionLocal() as db:
                 result = fn(db)
             details = result if isinstance(result, dict) else {"result": result}
+            if lock_note is not None:
+                details = {**details, "lock": lock_note}
             if judge is not None:
                 status, error = judge(details)
                 error = redact(error)[:2000] if error else None
