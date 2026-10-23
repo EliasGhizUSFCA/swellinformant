@@ -3,8 +3,9 @@
 #
 # Like the Vercel Python builder it installs only [project].dependencies, the lean set (no
 # Celery, pandas, ecCodes, pyarrow, scikit-learn, scipy or joblib), from backend/uv.lock. Like
-# the function bundle it holds backend/ without tests/ and has no data/ directory, so an API
-# path that needs a heavy dependency or a file of data/ fails here as it would on Vercel.
+# the function bundle it holds backend/ without what vercel.json's excludeFiles leaves out
+# (tests/, ml_models/, uv.lock, the classic image's files) and has no data/ directory, so an
+# API path that needs a heavy dependency or a file of data/ fails here as it would on Vercel.
 # `scripts/vercel-local.sh smoke` checks that the heavy imports fail in this image.
 
 FROM python:3.13.15-slim-trixie AS build
@@ -44,7 +45,6 @@ COPY --from=build /opt/venv /opt/venv
 COPY backend/pyproject.toml backend/alembic.ini ./
 COPY backend/alembic ./alembic
 COPY backend/app ./app
-COPY backend/ml_models ./ml_models
 
 RUN useradd --create-home --uid 10001 swell
 USER swell

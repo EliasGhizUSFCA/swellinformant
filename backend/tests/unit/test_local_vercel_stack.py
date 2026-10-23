@@ -225,6 +225,20 @@ def test_api_image_is_lean_and_has_no_data_directory() -> None:
     assert '"--no-proxy-headers"' in text
 
 
+def test_api_image_holds_what_the_function_bundle_holds() -> None:
+    if not VERCEL_JSON.is_file():
+        pytest.skip("vercel.json (package vercel-deploy) is not in this tree")
+    function = json.loads(VERCEL_JSON.read_text())["services"]["api"]["functions"]["app/main.py"]
+    excluded = {p.split("/")[0] for p in function["excludeFiles"].strip("{}").split(",")}
+    excluded.discard("**")
+    # What the final stage copies from backend/ (the build stage only installs from the lock).
+    final = API_LEAN.read_text().rsplit("\nFROM ", 1)[1]
+    copies = [line for line in final.splitlines() if line.startswith("COPY backend/")]
+    sources = set(re.findall(r"backend/([^/\s]+)", "\n".join(copies)))
+    assert sources >= {"app", "alembic", "alembic.ini", "pyproject.toml"}
+    assert not sources & excluded, sorted(sources & excluded)
+
+
 @pytest.mark.parametrize(
     "path", [CONTAINERFILE, API_LEAN, PGBOUNCER / "Dockerfile", FRONTEND_DOCKERFILE, COMPOSE]
 )
