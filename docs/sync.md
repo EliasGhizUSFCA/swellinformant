@@ -20,7 +20,8 @@ workflow).
   stored by any other path is not shown before a sync publishes it. Responses cached at
   the edge can lag by their cache lifetime (docs/map-layers.md).
 * **The GFS spot run and the map layers of the same cycle appear together.** When one of
-  them is new for a map cycle (00Z, 12Z: `MAP_FIELD_CYCLES`) and the other is not yet, the
+  them is new for a map cycle (`MAP_FIELD_CYCLES`: 00Z and 12Z by default, 06Z and 18Z in
+  the free-database profile) and the other is not yet, the
   sync waits up to `SYNC_COALESCE_MINUTES` (90) from the first sighting of either, then
   syncs whatever is available.
 * **Point forecasts only for the surf spots.** The spot stage requests the active seeded
@@ -82,8 +83,11 @@ the newest publication (`detect.load_known`; simulated demo runs are ignored).
    available run key changes again before a sync, so a domain that keeps changing never
    starves the wait. `SYNC_COALESCE_MINUTES=0` turns coalescing off.
 3. **Triggers.** A sync is **due** when a component of a kind in SYNC_TRIGGER_SOURCES
-   (default `spots,map`) is `new`. A new ensemble run (not a trigger by default) is
-   acquired by the next sync anything else triggers.
+   (default `spots,map`; `map` in the free-database profile) is `new`. A new ensemble run
+   (not a trigger by default) is acquired by the next sync anything else triggers, and so
+   are the newest spot runs when only `map` triggers. When none of the configured kinds
+   has a component in this setup (`map` with `MAP_FIELDS_ENABLED=false`, or in the
+   with_noaa mode), new spot runs trigger instead, and the plan's reasons say so.
 4. **Retries.** A component whose acquisition failed is retried SYNC_RETRY_MINUTES (15)
    after the attempt, or later when the provider asked for a longer wait (`retry_after`);
    state `waiting` meanwhile. After SYNC_MAX_ATTEMPTS (6) failed attempts for one run key
@@ -241,7 +245,8 @@ schema).
 |---|---|---|
 | SYNC_CHECK_MINUTES | 10 | metadata checks of the daemon and of Celery's `sync.tick` |
 | SYNC_COALESCE_MINUTES | 90 | how long a GFS spot run and the map layers (or late model domains) wait for each other |
-| SYNC_TRIGGER_SOURCES | `spots,map` | component kinds whose new run makes a sync due |
+| SYNC_TRIGGER_SOURCES | `spots,map` (free-database profile: `map`) | component kinds whose new run makes a sync due |
+| MAP_FIELD_CYCLES | `00,12` (free-database profile: `06,18`) | the map cycles read; with `map` triggers, also when syncs run (docs/map-layers.md) |
 | SYNC_RETRY_MINUTES | 15 | wait after a failed acquisition |
 | SYNC_MAX_ATTEMPTS | 6 | failed attempts per run key before waiting for the next run |
 | SYNC_LEASE_MINUTES | 45 (15 under JOB_RUNNER=daemon) | lease lifetime, renewed after every stage and extended every third of it while a stage runs |
@@ -446,7 +451,10 @@ suites ran (CPU figures are therefore upper bounds).
 ### Monthly CPU estimate
 
 The Hobby daemon quota is 10 Active CPU-hours a month. This is an extrapolation, not a
-measurement, and it rests on these assumptions:
+measurement. It describes the full-retention cadence (a sync for every new model run); the
+free-database profile (`SYNC_TRIGGER_SOURCES=map`, `MAP_FIELD_CYCLES=06,18`) runs about 60
+syncs a month, each with the map layers and both spot families, instead of about 180, so its
+spot-sync rows are smaller (not measured separately). It rests on these assumptions:
 
 * the default cadence: SYNC_CHECK_MINUTES=10 and JOB_INTERVAL_FLOOR_MINUTES=60;
 * 4 GFS runs a day, 2 of them map cycles with the full 61 map hours, and 2 ECMWF runs a

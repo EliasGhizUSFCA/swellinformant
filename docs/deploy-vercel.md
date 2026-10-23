@@ -38,9 +38,9 @@ Content-Security-Policy work exactly as on the classic Docker stack.
 |---|---|---|
 | Vercel | **Hobby**: "restricted to non-commercial personal use only". Free. | **Pro** ($20/month platform fee, $20 monthly usage credit) **before** the site asks for any payment: a paywall is "Any method of requesting or processing payment from visitors of the site", and ads count too. Donations do not. |
 | Open-Meteo (spot forecasts) | free API, non-commercial only | `COMMERCIAL_USE=true` plus `OPEN_METEO_API_KEY` (a paid plan). With the flag set and no key, the app refuses the free hosts. |
-| Neon | Free: 100 CU-hours, 1 GB storage and 5 GB egress per project. The free-database profile keeps about 1 day of forecast history and 1 week of verification archive. | Launch ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then restore full retention (section 4, step 5). |
+| Neon | Free: 100 CU-hours, 1 GB storage and 5 GB egress per project. The free-database profile keeps about 1 day of forecast history and 1 week of verification archive, and syncs only for the 06Z and 18Z map cycles: about 2.01 GB of egress a month in the background (40 %) and about 20 CU-hours (docs/map-layers.md, "Free database budget"). | Launch ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then restore full retention (section 4, step 5). |
 | Upstash | Free: 250 MB and 500K commands a month | pay-as-you-go ($0.2 per 100K commands, with a budget cap) or a Fixed plan (from $10/month) |
-| Daemon | Hobby quota: 10 Active CPU-hours a month (estimate for this app: 4-7) | Pro: billed for Active CPU and memory; optional `JOB_INTERVAL_FLOOR_MINUTES=0`, `SYNC_CHECK_MINUTES=5`, a 4Gi daemon |
+| Daemon | Hobby quota: 10 Active CPU-hours a month (estimate for this app: 4.4-7.9 when every new model run is synced, docs/sync.md; less with the free-database cadence) | Pro: billed for Active CPU and memory; optional `JOB_INTERVAL_FLOOR_MINUTES=0`, `SYNC_CHECK_MINUTES=5`, a 4Gi daemon |
 | Logs | runtime logs kept 1 hour | 1 day on Pro |
 
 Also worth knowing on Hobby: Vercel's terms say "if you are on a Hobby plan or trial Pro
@@ -163,6 +163,18 @@ cd frontend && npm audit --omit=dev
 
 It exits 0 when there are none. Fix a `high` or `critical` one first (usually a patch
 release of the package, for example Next.js); a public site is exposed from the first day.
+On 2026-10-23 it found three advisories in Next.js 16.4.0 (two critical); after the upgrade
+to 16.4.1 it reports 0 vulnerabilities (docs/decisions.md, ADR-037).
+
+### 3.5 Upgrading a database from before Upgrade 4
+
+Keep `FORECAST_PROVIDERS` the same as before: the spot list and the map serve only runs of
+the configured sources, so a database filled by `open_meteo,open_meteo_ecmwf` and served
+with `demo` shows "No forecast has been ingested yet". Then migrate (the build step or
+`python -m app.cli migrate`): migration `0008_publish_stored_runs` records one publication
+of the data already stored, so `/status` and the map name a publication at once and the
+first check does not re-sync everything. On a new database, or one that already has a
+publication, it does nothing.
 
 ## 4. First deployment, step by step
 
@@ -260,7 +272,7 @@ this costs).
 | Variable | Production | Preview | Why |
 |---|---|---|---|
 | `APP_ENV` | `production` | `development` | production refuses a development secret key, dev endpoints, insecure cookies and email providers that only capture mail |
-| `SECRET_KEY` | 64 random characters | a different random value | signs sessions and links; `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `SECRET_KEY` | 64 random characters | a different random value | required in production (the development default is refused); it keys the rate-limit counters; `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | `CRON_SECRET` | 16+ random characters | not needed | Vercel Cron sends it as `Authorization: Bearer ...`; without it the watchdog route answers 404 |
 | `COOKIE_SECURE` | `true` | `true` | the site is HTTPS-only |
 | `APP_BASE_URL` | `https://<project>.vercel.app` | leave unset | links in emails |
@@ -428,7 +440,8 @@ the daemon stays the scheduler.
 **Set up once** (repository Settings, Secrets and variables, Actions):
 
 - Secrets: `DATABASE_URL_UNPOOLED` (Neon's direct URL), `KV_URL` or `REDIS_URL`,
-  `SECRET_KEY` (the same value as Vercel's Production one, so links in emails stay valid),
+  `SECRET_KEY` (any long random value; the run uses `APP_ENV=production`, which refuses the
+  development default),
   and the provider keys the deployment uses: `OPEN_METEO_API_KEY`, `RESEND_API_KEY`,
   `SENDGRID_API_KEY`, `SMTP_PASSWORD`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
   `DUFFEL_ACCESS_TOKEN`, `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET` (only the ones you
@@ -516,7 +529,12 @@ Docker 29.8.2 with Compose 5.6.0. Results of 2026-10-23 unless a date is given.
   is present. In a coding-agent session, Next.js 16.4 detects the agent (environment
   variables such as `AI_AGENT` or `CLAUDECODE`) and its build stops once to recommend an
   upgrade when the installed version has a published advisory; the check above ran with
-  those variables unset, as a terminal, CI and Vercel run it.
+  those variables unset, as a terminal, CI and Vercel run it. (Historical: that was Next.js
+  16.4.0. Since the upgrade to 16.4.1 no advisory applies, and the verifier's builds and
+  this check ran on 2026-10-23 with those variables set and did not stop.)
+- **Re-run on the final integration tree** (2026-10-23): `RESULT: ok` in 83 s (the first
+  attempt refused the daemon after 12 s, the second built in 63 s); the api function 3,428
+  files, **127.3 MiB**; web functions 4.6, 3.8 and 1.7 MiB on nodejs24.x, Next.js 16.4.1.
 - **The daemon and classic images** (`docker build -f Containerfile .` and
   `docker build -f backend/Dockerfile .`): 72 s and 73 s from a warm base image; the sync
   image is 1.22 GB, the classic one 1.28 GB, and both builds printed `ecCodes 2.49.0`. The
@@ -536,7 +554,8 @@ Docker 29.8.2 with Compose 5.6.0. Results of 2026-10-23 unless a date is given.
   after installing the dependencies, inside the build venv. With `MIGRATE_ON_BUILD=all`
   and a plain `postgresql://` `DATABASE_URL` naming an empty scratch database,
   `python -m app.cli migrate --on-build` ran the seven migrations up to `0007_sync_runs`
-  (46 tables), printed `"status": "migrated"`, and the build went on. A command that exits
+  (46 tables), printed `"status": "migrated"`, and the build went on. (The schema has eight
+  since: `0008_publish_stored_runs` is data only, below.) A command that exits
   non-zero fails the build (`[BUILD_UTILS_SPAWN_4]`).
 - **Routing on Vercel** (2026-10-22). In the Vercel build, the Next.js routes manifest has
   no rewrites (`API_ROUTING` defaults to `platform` because the CLI sets `VERCEL`) and no

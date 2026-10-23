@@ -258,6 +258,33 @@ container reached the internet through the sandbox's proxy (compose overrides na
 `VERCEL_LOCAL_COMPOSE_FILES`, not part of the repository), and its Playwright used a
 preinstalled Chromium (`PLAYWRIGHT_CHROMIUM_PATH`).
 
+### 2026-10-23, the whole stack on the final integration code
+
+Run by the integration verifier with the steps above (`cp .env.vercel.example
+.env.vercel.local`, plus `MAP_FIELD_STEPS=0-24:3` and `MAP_FIELD_MAX_LEAD_HOURS=24`; this
+sandbox's build and egress overrides named by `VERCEL_LOCAL_COMPOSE_FILES`):
+
+| Step | Result |
+|---|---|
+| `up` | 216 s from a cold build cache, all nine services healthy (33-34 s from cached images). Images: sync 1.22 GB (ecCodes 2.49.0), api 409 MB ("lean install"), web 344 MB, pgbouncer 15.1 MB |
+| `sync --force`, live (first) | `partial` in 38.6 s / 30.9 CPU s: Open-Meteo refused this sandbox's shared address ("Daily API request limit exceeded. Please try again tomorrow."); the NOAA GFS 06Z map layers were stored (135 fields, 9 of 9 hours, 73.3 MB downloaded in 63 requests, 10.6 MB stored) |
+| `sync --force`, demo fallback | `FORECAST_PROVIDERS=demo` in `.env.vercel.local`, `up --no-build`, `sync --force`: `success` in 35.2 s / 17.5 CPU s, 19,200 SYNTHETIC demo records and predictions, 164 events; the map "already stored" |
+| `smoke`, demo | 19 of 19 shell checks, 6 of 6 Playwright; data health ok |
+| `sync --force`, live (later, 19:02 UTC, after two more refusals) | `success`: Open-Meteo GFS 10,264 records for the 50 spots, 10,264 predictions, 88 swell events, published (58.9 s / 10.5 CPU s); ECMWF "not served yet" (Open-Meteo was serving its 06Z run) |
+| `smoke`, live | 19 of 19 and 6 of 6, 25-27 s; data health degraded only by `forecast_missing:open_meteo_ecmwf` |
+
+Also checked: forged `X-Vercel-Forwarded-For`, `X-Forwarded-For` and `X-Real-IP` were
+overwritten (the rate-limit key was the gateway 172.22.0.1's); `GET /api/spots` went through
+PgBouncer (its transaction count rose); the cron answered 200 with the token, 401 with a
+wrong one or none, and 404 with `CRON_SECRET` unset; a second `scripts/vercel-local.sh
+check` moved 30,145 B in and 22,667 B out of the sync container and changed 0 rows; the
+backend's PgBouncer test passed 3 of 3 against the stack's pooler with the command of
+"Tests against this stack". The API's data health no longer reports
+`tides_constants:harmonic_model` (round 1: the function reports the daemon's own check from
+its heartbeat; finding below). Screenshots through the edge showed the real GFS-Wave 06Z
++12 h field with the crest dashes (1,494 crests at zoom 6 off California, draw p95 4.0-4.7
+ms on the desktop) and no "No forecast" banner.
+
 ### 2026-10-23, checks of the configuration changes
 
 Not a run of the whole stack (`up`, `sync` and `smoke` were last run on 2026-10-22, below).
@@ -364,8 +391,10 @@ A 5 MB login body got 413 from the edge; a 4 MB one reached the API.
 
 ### Findings for the other packages, seen only in this stack
 
-* The API image has no `data/` (as the Vercel function, whose root is `backend/`). The data
-  health report the API computes, and with it `/status` and the daily watchdog, is
+* (Fixed at integration round 1: the API now takes the daemon's own constants check from
+  its heartbeat, and the 2026-10-23 run above no longer shows it.) The API image has no
+  `data/` (as the Vercel function, whose root is `backend/`). The data
+  health report the API computes, and with it `/status` and the daily watchdog, was
   `failing` there with `tides_constants:harmonic_model` ("The tide model's constants file
   cannot be read; model tides are unavailable."), although the daemon (which has `data/`)
   computes the tides. The smoke prints this verdict as a note.

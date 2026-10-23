@@ -329,10 +329,12 @@ change or a file layout change.
   An integration test checks that the spot API pages, run selection, status,
   predictions, archive and events are identical with and without a fields-only run.
 * **Job.** The Celery task `forecasts.map_fields` is a no-op unless the mode is
-  `standalone`. Beat runs it on the `forecast-acquisition` interval
-  (`FORECAST_REFRESH_MINUTES`, every 3 h by default), and once when beat starts. Each run
-  looks for the newest complete map cycle (`MAP_FIELD_CYCLES`), so with the default 00Z
-  and 12Z cycles it downloads twice a day. It skips a cycle whose fields already exist: a
+  `standalone`. Until Upgrade 4 beat ran it every `FORECAST_REFRESH_MINUTES` (3 h) and
+  once at beat start; now beat has no map entry, and a sync's `map` stage runs the same
+  acquisition when the check (every `SYNC_CHECK_MINUTES`, 10) sees a new map cycle; the
+  task can still be run by hand. Each run looks for the newest complete map cycle
+  (`MAP_FIELD_CYCLES`), so with the default 00Z and 12Z cycles (06Z and 18Z in the
+  free-database profile) it downloads twice a day. It skips a cycle whose fields already exist: a
   fields run of that cycle that is SUCCESS or PARTIAL and read every requested map hour
   (`details.map_hours`), or rows of that cycle from any run (for example the NOAA spot
   run) covering every map hour and core variable. A shorter run of the same cycle (for
@@ -1367,11 +1369,14 @@ mean of the raw `global.0p25` cells around that node (1.82 MB download).
   readout shows it as "≥25.4 s" (`formatLayerValue`, `PERIOD_CEILING_S`).
 * Pressure over high terrain (Antarctica, Greenland, Tibet) is reduced to sea level and
   is not a real surface pressure.
-* **Freshness with two cycles a day.** `age_hours` counts from the model cycle. The job
-  takes a cycle once `NOAA_AVAILABILITY_LAG_HOURS` (5 h) have passed and at its next run
-  after that (every `FORECAST_REFRESH_MINUTES`, 3 h by default), so under normal
-  operation the served cycle is 12 h + 5 h + up to 3 h, i.e. 17 to 20 h old just before
-  the next map cycle replaces it. The packages' first default, 12 h, called the layers
+* **Freshness with two cycles a day.** `age_hours` counts from the model cycle. Before
+  Upgrade 4 the job took a cycle once `NOAA_AVAILABILITY_LAG_HOURS` (5 h) had passed and at
+  its next run after that (every `FORECAST_REFRESH_MINUTES`, 3 h), so the served cycle was
+  12 h + 5 h + up to 3 h, i.e. 17 to 20 h old just before the next map cycle replaced it.
+  With the synced pipeline the check runs every 10 minutes and a map cycle waits up to
+  `SYNC_COALESCE_MINUTES` (90) for the GFS spot run of its cycle, so a sync starts about
+  5 to 6.5 h after the cycle (estimated, round 2 budget below) and the 21 h limit keeps
+  its margin. The packages' first default, 12 h, called the layers
   stale for 5 to 8 h of every 12 (seen live at 13:40 UTC on 2026-10-15, when the newest
   map cycle (00Z) was 13.67 h old). 18 h still showed the badge for up to the last 2 h
   before the next cycle when a cycle was picked up late in its 3-hour acquisition window.
