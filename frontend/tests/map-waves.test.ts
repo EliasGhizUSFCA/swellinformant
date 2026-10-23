@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BLOB_HEAD_PX,
+  BLOB_MAX_DEPTH_SHARE,
+  blobDepth,
   crestSpacingPx,
   crestSpeedPxPerS,
   crestTangent,
@@ -9,7 +12,9 @@ import {
   dashFade,
   dashLength,
   dashLifeSeconds,
+  dashTint,
   dashWidth,
+  DRAW_TARGET_MS,
   drawnHeight,
   effectiveSystems,
   envelopeSpeedPxPerS,
@@ -18,21 +23,21 @@ import {
   formatFactor,
   groupSpeed,
   MAX_DASHES,
-  MAX_FRAME_VERTICES,
+  MAX_FRAME_QUADS,
   MAX_SPACING_PX,
   maxDashes,
+  MIN_FRAME_QUADS,
   MIN_SPACING_PX,
   PHONE_MAX_DASHES,
   phaseSpeed,
   propagation,
   scaleStatement,
+  SMEAR_MAX_SHARE,
+  SMEAR_SECONDS,
   TIME_SCALE,
+  TINT_HEADROOM,
+  TINT_LIFT,
   toward,
-  TRAIL_MAX_PX,
-  TRAIL_MAX_SHARE,
-  TRAIL_SECONDS,
-  TRAIL_STEPS,
-  trailLength,
   wavelengthM,
   WAVE_SYSTEMS,
   type WaveSystem,
@@ -133,37 +138,90 @@ describe("deep-water physics and the stated scales", () => {
 });
 
 describe("height and drawing styles", () => {
-  it("draws higher systems as longer, wider and brighter dashes, and very low ones not at all", () => {
+  it("draws higher systems as longer, deeper and brighter dashes, and very low ones not at all", () => {
+    const sp = crestSpacingPx(12);
+    const v = crestSpeedPxPerS(12, sp);
     let l = 0;
+    let d = 0;
     let w = 0;
     let a = 0;
     for (let hs = 0; hs <= 12; hs += 0.25) {
       expect(dashLength(hs, "combined")).toBeGreaterThanOrEqual(l);
-      expect(dashWidth(hs)).toBeGreaterThanOrEqual(w);
+      expect(blobDepth(hs, "combined", v, sp)).toBeGreaterThanOrEqual(d);
+      expect(dashWidth(hs, "secondary")).toBeGreaterThanOrEqual(w);
       expect(dashAlpha(hs)).toBeGreaterThanOrEqual(a);
       l = dashLength(hs, "combined");
-      w = dashWidth(hs);
+      d = blobDepth(hs, "combined", v, sp);
+      w = dashWidth(hs, "secondary");
       a = dashAlpha(hs);
     }
-    for (const f of [dashWidth, dashAlpha]) expect(f(4)).toBeGreaterThan(f(1));
+    expect(dashAlpha(4)).toBeGreaterThan(dashAlpha(1));
+    expect(dashWidth(4, "secondary")).toBeGreaterThan(dashWidth(1, "secondary"));
     expect(dashLength(4, "primary")).toBeGreaterThan(dashLength(1, "primary"));
-    // The stated formulas and their limits (docs/map-rendering.md section 4.6).
-    expect([dashLength(0, "primary"), dashLength(2, "primary"), dashLength(4, "primary"), dashLength(10, "primary")]).toEqual([6, 8, 11, 14]);
-    expect([dashWidth(0), dashWidth(2), dashWidth(10)]).toEqual([1.8, 2.4, 3.4]);
-    // D11's opacity: clamp(0.40 + 0.09 Hs, 0.40, 0.90) (the dashes without trails had 0.50 + 0.06 Hs).
+    expect(blobDepth(4, "primary", v, sp)).toBeGreaterThan(blobDepth(1, "primary", v, sp));
+    // The stated formulas and their limits (docs/map-rendering.md section 4.6): length along
+    // the crest clamp(6 + 0.8 Hs, 6.5, 10) px ...
+    for (const [hs, len] of [
+      [0, 6.5],
+      [2, 7.6],
+      [4, 9.2],
+      [10, 10],
+    ] as const)
+      expect(dashLength(hs, "primary")).toBeCloseTo(len, 12);
+    // ... the secondary's bar width clamp(1.8 + 0.3 Hs, 1.8, 3.4) ...
+    for (const [hs, width] of [
+      [0, 1.8],
+      [2, 2.4],
+      [10, 3.4],
+    ] as const)
+      expect(dashWidth(hs, "secondary")).toBeCloseTo(width, 12);
+    // ... and D11's opacity: clamp(0.40 + 0.09 Hs, 0.40, 0.90).
     expect(dashAlpha(0)).toBe(0.4);
     expect(dashAlpha(2)).toBeCloseTo(0.58, 12);
     expect(dashAlpha(10)).toBe(0.9);
-    // A long split dash for the secondary swell, a short thin one for the wind sea (shape, not colour alone).
-    expect(dashLength(4, "secondary")).toBeCloseTo(1.4 * dashLength(4, "primary"), 10);
-    expect(dashLength(4, "windsea")).toBeCloseTo(0.55 * dashLength(4, "primary"), 10);
-    expect(dashWidth(4, "secondary")).toBeCloseTo(0.8 * dashWidth(4), 10);
-    expect(dashWidth(4, "windsea")).toBeCloseTo(0.7 * dashWidth(4), 10);
-    expect(dashWidth(4, "combined")).toBe(dashWidth(4));
+    // A long split dash for the secondary swell, a short shallow one for the wind sea (shape, not colour alone).
+    expect(dashLength(4, "secondary")).toBeCloseTo(1.8 * dashLength(4, "primary"), 10);
+    expect(dashLength(4, "windsea")).toBeCloseTo(0.65 * dashLength(4, "primary"), 10);
+    expect(blobDepth(4, "windsea", v, sp)).toBeCloseTo(0.8 * Math.min(BLOB_HEAD_PX + v * SMEAR_SECONDS, SMEAR_MAX_SHARE * sp, BLOB_MAX_DEPTH_SHARE * dashLength(4, "windsea")), 12);
+    expect(blobDepth(4, "combined", v, sp)).toBe(blobDepth(4, "primary", v, sp));
     expect(drawnHeight(0.1)).toBe(false);
     expect(drawnHeight(0.19)).toBe(false);
     expect(drawnHeight(0.2)).toBe(true);
     expect(drawnHeight(NaN)).toBe(false);
+  });
+
+  it("smears each blob by the way its crest moved over the last SMEAR_SECONDS of animation (a display choice)", () => {
+    expect([BLOB_HEAD_PX, SMEAR_SECONDS, SMEAR_MAX_SHARE, BLOB_MAX_DEPTH_SHARE]).toEqual([1.5, 0.5, 0.5, 0.66]);
+    for (const tp of [6, 8, 10, 12, 16, 20]) {
+      const sp = crestSpacingPx(tp);
+      const v = crestSpeedPxPerS(tp, sp);
+      for (const hs of [0.5, 1, 3, 6]) {
+        expect(blobDepth(hs, "combined", v, sp)).toBeCloseTo(Math.min(BLOB_HEAD_PX + v * SMEAR_SECONDS, SMEAR_MAX_SHARE * sp, BLOB_MAX_DEPTH_SHARE * dashLength(hs, "combined")), 12);
+        // At least 1.5 times as long along the crest as it is deep.
+        expect(dashLength(hs, "combined") / blobDepth(hs, "combined", v, sp)).toBeGreaterThanOrEqual(1.5);
+      }
+    }
+    // 5.2 px for a 10 s sea of 3 m at the default spacing (1.5 + 0.5 s x 7.5 px/s; 8.4 px long) ...
+    const s10 = crestSpacingPx(10);
+    expect(blobDepth(3, "combined", crestSpeedPxPerS(10, s10), s10)).toBeCloseTo(5.25, 1);
+    // ... at most half the crest spacing (a 4 s wind sea: 8 px spacing, rows stay apart) ...
+    expect(blobDepth(8, "combined", crestSpeedPxPerS(4, 8), 8)).toBe(4);
+    // ... and only the bright head without a speed, nothing without a spacing.
+    expect(blobDepth(3, "combined", 0, 18)).toBe(BLOB_HEAD_PX);
+    expect(blobDepth(3, "combined", NaN, 18)).toBe(BLOB_HEAD_PX);
+    expect(blobDepth(3, "combined", 8, 0)).toBe(0);
+  });
+
+  it("tints each dash from the colour field under it: every channel lifted by TINT_LIFT, never to white", () => {
+    expect([TINT_LIFT, TINT_HEADROOM]).toEqual([150, 0.1]);
+    // Violet (2 m): G lifted by 150 (229); R and B keep 10 % of their way to 255 (239.2, 247.1).
+    expect(dashTint([97, 79, 176], "combined")).toEqual([239, 229, 247]);
+    expect(dashTint([97, 79, 176], "primary")).toEqual([239, 229, 247]);
+    // Pink (8 m): every channel near 255 keeps 10 % of its way there, so the tint stays pink.
+    expect(dashTint([223, 134, 184], "combined")).toEqual([252, 243, 248]);
+    // The partitions: 75 % their own colour.
+    expect(dashTint([97, 79, 176], "secondary")).toEqual([Math.round(239.2 + (255 - 239.2) * 0.75), Math.round(229 + (207 - 229) * 0.75), Math.round(247.1 + (133 - 247.1) * 0.75)]);
+    expect(dashTint(null, "windsea")).toEqual([156, 236, 255]);
   });
 
   it("lives three crest passages and fades in and out (a display choice)", () => {
@@ -177,43 +235,25 @@ describe("height and drawing styles", () => {
   });
 
   it("keeps the same density at every zoom, with a budget per frame", () => {
-    expect(DASH_CELL_PX).toEqual({ primary: 18, combined: 18, secondary: 18, windsea: 20 });
+    expect(DASH_CELL_PX).toEqual({ primary: 12, combined: 12, secondary: 13, windsea: 18 });
     expect(maxDashes(1440)).toBe(MAX_DASHES);
     expect(maxDashes(412)).toBe(PHONE_MAX_DASHES);
-    expect([MAX_DASHES, PHONE_MAX_DASHES]).toEqual([4000, 1500]);
-    expect(MAX_FRAME_VERTICES).toBe(6_000); // under D11's 12,000, for its 5 ms draw p95 (docs/map-rendering.md 4.8)
-  });
-
-  it("trails each dash by the way it moved over the last second of animation (a display choice)", () => {
-    expect([TRAIL_SECONDS, TRAIL_MAX_SHARE, TRAIL_MAX_PX]).toEqual([1, 0.5, 16]);
-    expect(TRAIL_STEPS).toEqual([
-      { length: 1, alpha: 0.25 },
-      { length: 0.5, alpha: 0.25 },
-    ]);
-    // v x 1 s: 7.5 px for a 10 s swell at the default spacing (18.7 px, 7.5 px/s) ...
-    const s10 = crestSpacingPx(10);
-    expect(trailLength(crestSpeedPxPerS(10, s10), s10)).toBeCloseTo(7.49, 2);
-    const s16 = crestSpacingPx(16);
-    expect(trailLength(crestSpeedPxPerS(16, s16), s16)).toBeCloseTo(11.99, 2);
-    // ... at most half the crest spacing (a 4 s wind sea: 8 px spacing, 8 px/s) ...
-    expect(trailLength(crestSpeedPxPerS(4, 8), 8)).toBe(4);
-    // ... and 16 px (zoomed in to true scale, crests move fast) ...
-    expect(trailLength(crestSpeedPxPerS(16, 256), 256)).toBe(16);
-    // ... and none without a speed.
-    expect(trailLength(0, 18)).toBe(0);
-    expect(trailLength(NaN, 18)).toBe(0);
+    expect([MAX_DASHES, PHONE_MAX_DASHES]).toEqual([8000, 3000]);
+    // One filled quad per blob, adapted to the device between these, for D11's 5 ms draw p95 (docs/map-rendering.md 4.8).
+    expect([MIN_FRAME_QUADS, MAX_FRAME_QUADS]).toEqual([1_500, 7_000]);
+    expect(DRAW_TARGET_MS).toBeLessThan(5);
   });
 
   it("tells the systems apart by dash shape and colour, never colour alone", () => {
     const styles = WAVE_SYSTEMS.map((s) => FAMILY_STYLES[s]);
     const partitions = (["primary", "secondary", "windsea"] as const).map((s) => FAMILY_STYLES[s]);
-    // Shape: solid, long split (a gap of 0.2 of the length) and short dashes.
-    expect(new Set(partitions.map((s) => `${s.lengthFactor}/${s.gap}`)).size).toBe(3);
+    // Shape: soft blobs, long split bars (a gap of 0.2 of the length) and short blobs.
+    expect(new Set(partitions.map((s) => `${s.shape}/${s.lengthFactor}/${s.gap}`)).size).toBe(3);
     expect(new Set(partitions.map((s) => s.color)).size).toBe(3);
-    expect(FAMILY_STYLES.primary).toMatchObject({ gap: 0, lengthFactor: 1, widthFactor: 1, color: "#ffffff", trail: true });
-    expect(FAMILY_STYLES.secondary).toMatchObject({ gap: 0.2, lengthFactor: 1.4, widthFactor: 0.8, color: "#ffd59a", trail: false });
-    expect(FAMILY_STYLES.windsea).toMatchObject({ gap: 0, lengthFactor: 0.55, widthFactor: 0.7, color: "#b8f0ff", trail: true });
-    expect(FAMILY_STYLES.combined).toMatchObject({ gap: 0, lengthFactor: 1, widthFactor: 1, color: "#ffffff", trail: true });
+    expect(FAMILY_STYLES.primary).toMatchObject({ shape: "blob", gap: 0, lengthFactor: 1, depthFactor: 1, color: "#ffffff", tintMix: 0 });
+    expect(FAMILY_STYLES.secondary).toMatchObject({ shape: "bar", gap: 0.2, lengthFactor: 1.8, depthFactor: 1, color: "#ffcf85", tintMix: 0.75 });
+    expect(FAMILY_STYLES.windsea).toMatchObject({ shape: "blob", gap: 0, lengthFactor: 0.65, depthFactor: 0.8, color: "#9cecff", tintMix: 0.75 });
+    expect(FAMILY_STYLES.combined).toMatchObject({ shape: "blob", gap: 0, lengthFactor: 1, depthFactor: 1, color: "#ffffff", tintMix: 0 });
     expect(new Set(styles.map((s) => s.label)).size).toBe(4);
     expect(FAMILY_STYLES.combined.label).not.toMatch(/primary/i);
   });

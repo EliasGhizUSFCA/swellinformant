@@ -6,7 +6,7 @@ import { sampleDirection, type FieldGrid, type Grid } from "@/lib/map-fields";
 import { mercLon } from "@/lib/map-geo";
 import { crestSpacingPx, crestSpeedPxPerS, FAMILY_STYLES } from "@/lib/map-waves";
 
-import { constant, cores, dashesOf, draw, family, globalGrid, installPath2D, orientation, rgbOf, UNBOUNDED, viewAt } from "./map-dash-fixtures";
+import { constant, dashesOf, draw, family, globalGrid, installPath2D, orientation, rgbOfQuad, UNBOUNDED, viewAt } from "./map-dash-fixtures";
 
 // Every grid below is SYNTHETIC test data, not model output. The dash geometry, motion,
 // spacing, masking, budget and reduced-motion checks of D11 are in map-dashes.test.ts.
@@ -25,7 +25,7 @@ describe("dashes follow the local field", () => {
   it("turns the dashes with a field that turns: each lies along its local crest", () => {
     // From 270 in the west of the view, turning to 230 in the east (SYNTHETIC).
     const dir = globalGrid((_lat, lon) => 270 - 40 * Math.min(1, Math.max(0, (lon + 60) / 60)));
-    const dashes = dashesOf(draw(viewAt(3, -40, -30), [family("primary", 3, 12, dir)], 2).lines);
+    const dashes = dashesOf(draw(viewAt(3, -40, -30), [family("primary", 3, 12, dir)], 2).quads);
     const mean = (ds: typeof dashes) => ds.reduce((a, d) => a + orientation(d), 0) / ds.length;
     const west = dashes.filter((d) => d.x < 300);
     const east = dashes.filter((d) => d.x > 1100);
@@ -56,13 +56,13 @@ describe("dashes follow the local field", () => {
     const view = viewAt(3, -40, -30);
     const banded = (v: number) => globalGrid((_lat, lon) => (Math.floor((lon + 180) / 10) % 2 ? NaN : v));
     const full = draw(view, [family("primary", 3, 12, 250)], 3).stats.crests;
-    const { lines, stats } = draw(view, [family("primary", banded(3), banded(12), banded(250))], 3);
+    const { quads, stats } = draw(view, [family("primary", banded(3), banded(12), banded(250))], 3);
     // Half the bands have data, and a dash moves about 76 px east in its life across 57 px
     // bands, hidden wherever it is over a band without data: about a fifth of the dashes of
     // the full sea are drawn, in every band with data.
     expect(stats.crests).toBeGreaterThan(0.15 * full);
     const bands = new Set<number>();
-    for (const d of dashesOf(lines)) {
+    for (const d of dashesOf(quads)) {
       const lon = mercLon((view.originX + d.x) / view.worldPx);
       // (within half a grid cell of a band's edge the bilinear sample still has data)
       const dataNear = [lon - 0.5, lon, lon + 0.5].some((x) => Math.floor((x + 180) / 10) % 2 === 0);
@@ -83,7 +83,7 @@ describe("one crest lattice everywhere", () => {
     const v = crestSpeedPxPerS(tp, s);
     const t = 1.3;
     const view = viewAt(2, -45, 180);
-    const dashes = dashesOf(draw(view, [family("primary", 3, tp, 270)], t, false, UNBOUNDED).lines);
+    const dashes = dashesOf(draw(view, [family("primary", 3, tp, 270)], t, false, UNBOUNDED).quads);
     expect(dashes.some((d) => d.x < 300)).toBe(true);
     expect(dashes.some((d) => d.x > 1140)).toBe(true);
     for (const d of dashes) {
@@ -114,7 +114,7 @@ describe("one crest lattice everywhere", () => {
   });
 
   it("gives every dash cell its own state key, also at the street basemap's zoom 19", () => {
-    // At zoom 19 the world has about 7.5 million rows of 18 px cells. Two views exactly one
+    // At zoom 19 the world has about 11.2 million rows of 12 px cells. Two views exactly one
     // column and 2^21 rows apart: a key packed for fewer rows would give their cells the same
     // dash states (the cell one column east and 2^21 rows south shares the key).
     const worldPx = 256 * 2 ** 19;
@@ -155,45 +155,46 @@ describe("systems", () => {
     expect(waveFamilies("hs", fields, ["combined"]).map((f) => f.system)).toEqual(["combined"]); // the default
     expect(waveFamilies("wind", fields, ["primary"])).toEqual([]); // the Wind layer draws particles, not dashes
     // A secondary grid without any data gives no secondary dashes at all.
-    const { stats, lines } = draw(viewAt(3, -40, -30), [family("secondary", NaN, NaN, NaN), family("primary", 3, 12, 250)]);
+    const { stats, quads } = draw(viewAt(3, -40, -30), [family("secondary", NaN, NaN, NaN), family("primary", 3, 12, 250)]);
     expect(stats.families).toEqual(["primary"]);
-    expect(lines.some((l) => rgbOf(l) === "255, 213, 154")).toBe(false);
-    expect(lines.some((l) => rgbOf(l) === "255, 255, 255")).toBe(true);
+    expect(quads.some((q) => rgbOfQuad(q) === "255, 207, 133")).toBe(false);
+    expect(quads.some((q) => rgbOfQuad(q) === "255, 255, 255")).toBe(true);
   });
 
   it("draws each system with its own dash shape and colour", () => {
     const fams: WaveFamilyGrids[] = [family("windsea", 1.5, 6, 280), family("secondary", 1.5, 10, 200), family("primary", 3, 14, 250)];
-    const { lines } = draw(viewAt(3, -40, -30), fams, 2);
-    const byColour = new Map<string, number[]>();
-    for (const l of cores(lines)) {
-      const len = Math.hypot(l.pts[1]![0] - l.pts[0]![0], l.pts[1]![1] - l.pts[0]![1]);
-      byColour.set(rgbOf(l), [...(byColour.get(rgbOf(l)) ?? []), len]);
-    }
-    const max = (c: string) => Math.max(...byColour.get(c)!);
-    // primary: one solid white segment per dash; secondary: amber, a long dash split into two
-    // pieces with a gap; wind sea: short cyan dashes.
-    expect(max("255, 255, 255")).toBeCloseTo(9.5, 6); // 5 + 1.5 x 3 m
-    expect(max("255, 213, 154")).toBeLessThan(0.5 * 1.4 * 7.25); // each piece is less than half the dash
-    expect(max("184, 240, 255")).toBeCloseTo(0.55 * 7.25, 6);
+    const { quads, stats } = draw(viewAt(3, -40, -30), fams, 2);
+    const byColour = new Map<string, ReturnType<typeof dashesOf>>();
+    for (const d of dashesOf(quads)) byColour.set(d.rgb, [...(byColour.get(d.rgb) ?? []), d]);
+    const max = (c: string) => Math.max(...byColour.get(c)!.map((d) => d.length));
+    // (No colour field under them here: each system in its own colour.) Primary: one soft blob
+    // per dash; secondary: amber bars, a long dash with a gap of 0.2 of its length in the middle
+    // of its fill; wind sea: short cyan blobs.
+    expect(max("255, 255, 255")).toBeCloseTo(8.4, 6); // 6 + 0.8 x 3 m
+    expect(max("255, 207, 133")).toBeCloseTo(1.8 * 7.2, 6);
+    expect(max("156, 236, 255")).toBeCloseTo(0.65 * 7.2, 6);
     expect(byColour.size).toBe(3);
-    // Twice as many secondary core segments as dashes drawn of it (each split in two).
-    const sec = cores(lines).filter((l) => rgbOf(l) === "255, 213, 154");
-    expect(sec.length % 2).toBe(0);
+    expect(byColour.get("255, 255, 255")!.every((d) => d.kind === "blob" && d.gap === 0)).toBe(true);
+    expect(byColour.get("156, 236, 255")!.every((d) => d.kind === "blob" && d.gap === 0)).toBe(true);
+    const sec = byColour.get("255, 207, 133")!;
+    for (const d of sec) {
+      expect(d.kind).toBe("bar");
+      expect(d.gap).toBeCloseTo(FAMILY_STYLES.secondary.gap, 9);
+      // Each piece either side of the gap is less than half the dash.
+      expect((d.length * (1 - d.gap)) / 2).toBeLessThan(0.5 * d.length);
+    }
+    // One quad per dash, whatever its shape.
+    expect(stats.quads).toBe(stats.crests);
   });
 
   it("gives more ink to a higher sea", () => {
-    // Stroke area x opacity: a round-capped stroke covers its segment plus its width, a
-    // butt-capped trail band its segment only.
-    const ink = (hs: number) =>
-      draw(viewAt(3, -40, -30), [family("primary", hs, 12, 250)], 3).lines.reduce((a, l) => {
-        const len = Math.hypot(l.pts[1]![0] - l.pts[0]![0], l.pts[1]![1] - l.pts[0]![1]);
-        return a + (len + (l.cap === "round" ? l.width : 0)) * l.width * Number(l.style.slice(l.style.lastIndexOf(",") + 1, -1));
-      }, 0);
+    // Blob area x opacity (every blob has the same opacity profile across its depth).
+    const ink = (hs: number) => dashesOf(draw(viewAt(3, -40, -30), [family("primary", hs, 12, 250)], 3).quads).reduce((a, d) => a + d.length * d.depth * d.alpha, 0);
     expect(ink(4)).toBeGreaterThan(2 * ink(1));
   });
 
-  it("budgets 4,000 dashes on desktops and 1,500 on phones", () => {
-    expect(dashBudget(1440)).toBe(4000);
-    expect(dashBudget(390)).toBe(1500);
+  it("budgets 8,000 dashes on desktops and 3,000 on phones", () => {
+    expect(dashBudget(1440)).toBe(8000);
+    expect(dashBudget(390)).toBe(3000);
   });
 });

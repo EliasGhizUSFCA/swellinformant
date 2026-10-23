@@ -9,14 +9,15 @@ the 0.5° encoding, the run and valid-time contract) is in [map-layers.md](map-l
 The dashes are **stylised crests from the forecast model, not individual waves**: they are
 drawn from the model's significant height, period and direction of each wave system at the
 selected valid time. Their spacing and speed are scaled to be visible (stated below and in
-the legend), and their fading in and out and the short trail behind each dash are display
-choices. Neither layer is an
-observation, and neither is for navigation.
+the legend), and their fading in and out and the smear behind each dash are display
+choices. Neither layer is an observation, and neither is for navigation.
 
-The look follows the owner's reference screenshot (Upgrade 4, decision D11: a smooth blue →
-violet → magenta/pink wave-height field, grey land with the coastline, many short soft white
-dashes drifting with the waves) with our own ramp, dash shapes and code: no third-party map
-code, icons or palettes are used.
+The look follows the owner's reference screenshot (Upgrade 4, decision D11, polished at
+integration): a smooth, slightly dusky wave-height field (slate blue for small seas, violet
+to magenta-purple for typical 2-3 m seas, pink for big ones), mid-grey land with a dark
+coastline, and many short, soft blobs, each a lighter tint of the colour under it, drifting
+with the waves. It is drawn with our own ramp, shapes and code: no third-party map code,
+icons or palettes are used, and the screenshot is a style reference only.
 
 Code:
 
@@ -59,12 +60,17 @@ Code:
 | `particlePane` (225) | wind particles | Wind layer, or a wave layer with the wind overlay |
 | `basemapPane` (230) | Natural Earth land, coastline, borders, isobars, labels | dark basemap draws land |
 
-* **Dark basemap, wave layers**: land is opaque grey (`LAND_COLOR = #3a3a3c`), drawn above the
-  colour field and the dashes, so it also masks them at the coast. The coastline is the land
-  rings stroked at `rgba(255, 255, 255, 0.35)`, 0.8 px (`COASTLINE_COLOR`,
-  `COASTLINE_WIDTH_PX`). The grey is lighter than the deepest ocean colour (#0c1846) and
-  neutral, so the land never reads as sea.
-* **Dark basemap, Wind layer**: land is translucent (`rgba(58, 58, 60, 0.55)`, `LAND_ALPHA =
+* **Dark basemap, wave layers**: land is opaque mid grey (`LAND_COLOR = #737376`, L* 48.5,
+  neutral), drawn above the colour field and the dashes, so it also masks them at the coast.
+  The coastline is the land rings stroked dark, `rgba(24, 24, 28, 0.8)` at 1 px
+  (`COASTLINE_COLOR`, `COASTLINE_WIDTH_PX`), and country borders are a faint dark line
+  (`BORDER_COLOR = rgba(30, 30, 34, 0.35)`, 0.7 px). The grey has no hue, so the land never
+  reads as sea; it is lighter than seas up to about 3.5 m (L* 12 to 45) and darker than
+  bigger ones. Country and city labels are near-white (`#e8e8e8`, `#f4f4f4`) on a dark halo
+  (`rgba(0, 0, 0, 0.6)`, 3 px), and the city dot (`#ededed`) has a thin dark ring, so they
+  stay legible on the grey land and on the sea. (Upgrade 4 first drew #3a3a3c land with a
+  light coastline; the reference has mid-grey land outlined dark.)
+* **Dark basemap, Wind layer**: land is translucent (`rgba(115, 115, 118, 0.55)`, `LAND_ALPHA =
   0.55`), so the wind colour and particles over land stay visible (offshore flow at a coast
   matters for surf). Borders, isobars and labels are unchanged.
 * **Streets basemap**: no land is drawn over the tiles, so the wave colour field is cut at the
@@ -135,17 +141,19 @@ grid, 7 to 18 px long (8 px per px-per-frame of flow), pointing downwind, drawn 
 
 ### 4.1 Wave systems
 
-| System | Variables | Dash (shape, colour) | Length factor | Width factor | Cell |
+| System | Variables | Dash (shape, tint) | Length factor | Depth factor | Cell |
 |---|---|---|---|---|---|
-| Combined sea (peak), **the default** | `hs`, `tp`, `wave_dir` | solid, white `#ffffff` | 1 | 1 | 18 px |
-| Primary swell | `swell1_hs/_tp/_dir` | solid, white `#ffffff` | 1 | 1 | 18 px |
-| Secondary swell | `swell2_*` | long and split (a gap of 0.2 of its length in the middle), amber `#ffd59a` | 1.4 | 0.8 | 18 px |
-| Wind sea | `windsea_*` | short and thin, pale cyan `#b8f0ff` | 0.55 | 0.7 | 20 px |
+| Combined sea (peak), **the default** | `hs`, `tp`, `wave_dir` | soft blob, a light tint of the field | 1 | 1 | 12 px |
+| Primary swell | `swell1_hs/_tp/_dir` | soft blob, a light tint of the field | 1 | 1 | 12 px |
+| Secondary swell | `swell2_*` | long thin bar split by a gap of 0.2 of its length, amber (`#ffcf85`, 75 % into the tint) | 1.8 | 1 (bar width) | 13 px |
+| Wind sea | `windsea_*` | short blob, cyan (`#9cecff`, 75 % into the tint) | 0.65 | 0.8 | 18 px |
 
-Systems are told apart by dash **shape** (solid, long split, short) and colour, never colour
-alone; the legend and the settings chooser show a swatch of each one's dashes. Every piece
-of every dash is at least twice as long as wide (unit test for 0.5 to 8 m), so its
-orientation still reads. The combined
+Systems are told apart by dash **shape** (soft blob, long split bar, short blob) and colour,
+never colour alone; the legend and the settings chooser show a swatch of each one's dashes
+on a patch of a typical (2.5 m) sea. A blob is at least 1.5 times as long along the crest as
+it is deep and each piece of a split bar at least twice as long as it is wide (unit test
+for 0.5 to 8 m and 6 to 18 s), and a blob's crisp leading edge runs along the crest, so the
+orientation reads (e2e: structure-tensor coherence, section 7). The combined
 sea is drawn by default (`DEFAULT_WAVE_SYSTEMS = ["combined"]`, closest to the reference);
 the primary, secondary and wind sea partitions are selectable in Settings when the model run
 stores them (the field index lists them with `group: "partition"`; the client downloads a
@@ -228,36 +236,42 @@ and 120 Hz (unit test).
 
 The Wave Height layer paints offshore significant wave height with its own ramp, anchored in
 metres (`WAVE_HEIGHT_RAMP`, `lib/map-colors.ts`), interpolated linearly in metres (in sRGB)
-between anchors and saturating at the end colours: below 0 m #0c1846, above 10 m #f9d0e0.
-CIE L* (sRGB, D65) rises strictly, so a larger sea is always lighter (the scale also reads in
-grey) and neighbouring anchors differ by ΔE*ab ≥ 5.4:
+between anchors and saturating at the end colours: below 0 m #151d42, above 10 m #f3c4dc.
+CIE L* (sRGB, D65) rises strictly, by at least 2 per anchor, so a larger sea is always
+lighter (the scale also reads in grey); neighbouring anchors differ by ΔE*ab ≥ 7.6; the hue
+turns steadily from blue (h ≈ -68°) to pink (h ≈ -15°); and CIE chroma stays at or under 62
+(muted, not electric):
 
 | Hs (m) | 0 | 0.5 | 1 | 1.5 | 2 | 2.5 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Colour | #0c1846 | #132e78 | #1b48a6 | #2a5cc2 | #4363cf | #5a62d6 | #7360d6 | #925ad0 | #ad55c4 | #c556b4 | #d860a6 | #e6729f | #f19ebd | #f9d0e0 |
-| L* | 10.4 | 21.8 | 33.2 | 41.3 | 45.1 | 46.7 | 48.1 | 49.5 | 51.1 | 53.8 | 57.8 | 62.8 | 74.1 | 87.3 |
+| Colour | #151d42 | #212f68 | #344790 | #4a4ea6 | #614fb0 | #7a4eb2 | #8f4db0 | #a64fab | #b856a8 | #c862a9 | #d572ae | #df86b8 | #e9a3c7 | #f3c4dc |
+| L* | 12.2 | 21.4 | 32.4 | 37.2 | 40.0 | 42.5 | 44.6 | 47.8 | 51.5 | 56.0 | 61.0 | 66.7 | 74.6 | 83.8 |
 
-Deep navy and blue for small seas, violet around 3 to 4 m, magenta from 5 m, pink above 8 m.
-(A first draft had L* flat at 45 to 46 between 2 and 5 m and was rejected.) `metresToStops`
-places the anchors on the layer's display range (0 to 10 m from the field index); a wider
-range moves the stops, never the colour of a given height. The legend ticks are 0, 1, 2, 3,
-4, 6, 8 and 10 m, or 0, 5, 10, 15, 20, 25 and 30 ft. Wave Period, Wave Energy and Wind Speed
-keep the shared ramp (`RAMP`). The field is painted at half resolution and drawn onto the
-canvas with `imageSmoothingQuality = "high"` (section 2).
+Muted navy for calm seas, slate blue at 1 m, blue-violet at 1.5 m, violet at 2 m,
+magenta-purple at 2.5 to 3 m, magenta at 4 to 5 m, pink at 6 to 8 m and pale pink at 10 m.
+The first Upgrade 4 ramp (saturated blue up to 2.5 m, #4363cf at 2 m) was re-anchored at
+integration: a typical 2 to 3 m sea read electric blue where the reference is violet to
+magenta. `metresToStops` places the anchors on the layer's display range (0 to 10 m from
+the field index); a wider range moves the stops, never the colour of a given height. The
+legend ticks are 0, 1, 2, 3, 4, 6, 8 and 10 m, or 0, 5, 10, 15, 20, 25 and 30 ft. Wave Period,
+Wave Energy and Wind Speed keep the shared ramp (`RAMP`). The field is painted at half
+resolution and drawn onto the canvas with `imageSmoothingQuality = "high"` (section 2).
 
 ### 4.6 Crest dashes
 
 * **Lattice**: per view, values are sampled every `LATTICE_PX = 8` px on a grid fixed in world
   pixels: per system the travel vector p (TOWARD = FROM + 180°), spacing, speed, height and a
-  validity flag. A node is invalid without data (NaN height, period or direction), with
-  `Hs < MIN_DRAW_HS_M = 0.2 m`, where the direction corners disagree (section 4.1) or over land
-  (4.7). Sampling between nodes is bilinear and needs all four nodes valid.
-* **Cells**: one dash per cell of a grid fixed in world pixels, `DASH_CELL_PX` on screen (18 px
-  for the combined sea, the primary and the secondary swell, 20 for the wind sea) at every zoom,
-  so the density on screen is the same at every zoom (the cell is adjusted so that a whole
-  number of cells spans the world: 17.96 px at zoom 2). The cells cover the view plus a margin
-  of 3 crest spacings and a dash length (how far a dash travels in its life), so dashes born
-  just outside the view drift into it.
+  validity flag, and for the dash tint the level of the colour field at the node. A node is
+  invalid without data (NaN height, period or direction), with `Hs < MIN_DRAW_HS_M = 0.2 m`,
+  where the direction corners disagree (section 4.1) or over land (4.7). Sampling between
+  nodes is bilinear and needs all four nodes valid.
+* **Cells**: one dash per cell of a grid fixed in world pixels, `DASH_CELL_PX` on screen (12 px
+  for the combined sea and the primary swell, 13 for the secondary, 18 for the wind sea) at
+  every zoom, so the density on screen is the same at every zoom (the cell is adjusted so that
+  a whole number of cells spans the world: 11.97 px at zoom 2). The cells cover the view plus
+  a margin of 3 crest spacings and a dash length (how far a dash travels in its life), so
+  dashes born just outside the view drift into it. (18 px cells until integration: the
+  reference has about 4 blobs per 1,000 CSS px², section 7.)
 * **Life**: a cell's dash lives `DASH_LIFE_PASSAGES = 3` crest passages, `3 T / tau` seconds
   (7.5 s at 10 s), then the cell's next dash is born. A cell's first dash is placed from the
   clock alone: life number `floor(t / life + phase)` with a hashed phase per cell, so the
@@ -271,91 +285,104 @@ canvas with `imageSmoothingQuality = "high"` (section 2).
   (W in world px of the view's continuous pixel plane, not wrapped to one world copy, so there
   is no seam at the antimeridian). It then moves along p at v: every dash of a uniform sea stays
   on those crest lines, so rows of dashes are one crest spacing apart and move with the crests
-  (unit tests: centres on multiples of s within 1 %, row spacing within 3 % for 8, 10 and 16 s,
-  displacement v Δt within 2 %).
+  (unit tests: leading edges on multiples of s within 1 %, row spacing within 3 % for 8, 10
+  and 16 s, displacement v Δt within 2 %).
 * **Orientation**: along the crest, perpendicular to the travel vector sampled where the dash
   is now (a quarter turn clockwise of p on screen): vertical dashes for a swell from the west,
   NW-SE dashes for a swell from the SW (unit tests within 1°).
-* **Visibility**: a dash is drawn only where its centre and both ends sample all-valid lattice
-  nodes, so no dash sits on land or where the model has no data.
+* **The blob** (combined sea, primary swell, wind sea): one soft blob per dash, a short piece
+  of a crest line smeared back along the way it came. Its crisp, bright **leading edge lies on
+  the crest line** (that is the point on the lattice above) and runs along the crest; its
+  body is the band that crest swept over in the last `SMEAR_SECONDS = 0.5` s of animation,
+  behind it (against the travel), fading towards the trailing side like a motion blur. Its
+  opacity across the depth (0 = the leading edge, 1 = the back) follows `BLOB_PROFILE`, a
+  linear gradient through 0.8 at 0, 1 at 0.06, 0.9 at 0.55, 0.5 at 0.85 and 0 at 1 (unit test:
+  the front half carries more than 1.5 times the back half). The life fade and its opacity
+  multiply it. The blob is a rectangle, not sheared like the reference's parallelograms: the
+  smear runs along the travel, which is perpendicular to the crest, and a sheared blob would
+  show a travel direction the model does not have.
+* **Size and opacity from the local Hs** (m): length along the crest `clamp(6 + 0.8 Hs, 6.5,
+  10)` px (`DASH_BASE_PX`, `DASH_PX_PER_M`, `DASH_MIN_PX`, `DASH_MAX_PX`) times the system's
+  length factor (1; 1.8 secondary; 0.65 wind sea); depth across the crest `min(1.5 + v x 0.5
+  s, 0.5 s, 0.66 x length)` px (`BLOB_HEAD_PX`, `SMEAR_SECONDS`, `SMEAR_MAX_SHARE` of the
+  crest spacing, so rows of blobs stay apart, and `BLOB_MAX_DEPTH_SHARE` of the length) times
+  the depth factor (1; 0.8 wind sea). Examples at the default spacing: 1 m, 8 s: 6.8 x 4.5 px;
+  2 m, 10 or 12 s: 7.6 x 5.0 px; 3 m, 12 s: 8.4 x 5.5 px; 5 m, 12 s: 10 x 6.0 px; 5 m and more
+  at 14 s or longer: 10 x 6.6 px (the reference's blobs are about 8 x 5 CSS px). While
+  animating a blob's depth reaches back no further than its birth, `min(depth, 1.5 + v x
+  age)`, so a young blob's smear grows in; the still frame (reduced motion) draws it whole.
+  Opacity `clamp(0.40 + 0.09 Hs, 0.40, 0.90)` (D11's formula) times the life fade, drawn
+  rounded to `ALPHA_STEP = 0.9 / 23 = 0.039` (24 levels; about 6 grey levels of the tint,
+  finer than the fade moves in two frames). Higher seas draw longer, deeper, brighter blobs
+  (e2e: more than twice the ink per dash at 4 m as at 1 m, and more in all).
+* **The secondary swell's bar**: a thin bar centred on the crest line, `clamp(1.8 + 0.3 Hs,
+  1.8, 3.4)` px wide (`dashWidth`) and 1.8 x the length long, split by a transparent gap of 0.2
+  of its length in the middle; no smear, so its shape stays distinct under the primary's
+  blobs (its two crisp long edges also carry its orientation, e2e section 7).
+* **Tint**: each dash is a lighter tint of the colour field under it (the colour layer of the
+  wave layer on screen: Wave Height, Wave Energy or Wave Period), never pure white: every
+  channel of the field colour is lifted by `TINT_LIFT = 150` (of 255) but keeps at least
+  `TINT_HEADROOM = 0.1` of its way to 255 (`dashTint`). A blob over a violet 2 m sea
+  (#614fb0) is tinted (239, 229, 247), over a pink 8 m sea (#df86b8) (252, 243, 248). Measured
+  on the owner's reference, its blobs are the field colour plus 74 to 95 per channel (a lift,
+  not a mix with white, which would grey them); drawn at the dash opacity, the lift gives
+  about that at 2 to 3 m. The field colour comes from the lattice: each node holds the level
+  of the colour scale under it in `TINT_LEVELS = 32` steps (`fieldPositionAt` in
+  `lib/map-render.ts`, the same bilinear value the colour canvas paints), and a dash takes its
+  nearest node's level. The secondary swell and the wind sea mix 75 % of their own colour
+  into the tint (`tintMix`: amber `#ffcf85`, cyan `#9cecff`), so the systems differ by colour
+  as well as shape. Without a colour field (tests) a dash takes its system's own colour.
+* **Visibility**: a dash is drawn only where its centre and its two ends sample all-valid
+  lattice nodes, and a blob also its two back corners (else only its 1.5 px head is drawn, if
+  that fits), so no dash sits on land or where the model has no data.
 * **Life fade (a display choice)**: opacity × `smoothstep(age / 0.2) x smoothstep((1 - age) /
   0.3)`: in over the first 20 % of the life, out over the last 30 %. It only keeps dashes from
   popping in and out; it is not a wave group and makes no group-speed claim.
-* **Size and opacity from the local Hs** (m): length `clamp(5 + 1.5 Hs, 6, 14)` px times the
-  system's length factor (1; 1.4 secondary; 0.55 wind sea); core width `clamp(1.8 + 0.3 Hs,
-  1.8, 3.4)` px times its width factor (1; 0.8; 0.7); opacity `clamp(0.40 + 0.09 Hs, 0.40,
-  0.90)` (D11's formula) times the life fade. Higher seas draw longer, wider, brighter dashes
-  (e2e: more than twice the ink at 4 m as at 1 m).
-* **Soft edge**: each dash is two round-capped strokes of the same segment, bottom to top: a
-  halo 1.7 x the core width at 0.45 x its opacity, and the core (`DASH_PASSES`). A split dash
-  (secondary) is two segments with a gap of 0.2 of the length between the core's caps.
-* **Motion trail (a display choice)**: under each dash of the combined sea, the primary swell
-  and the wind sea (`FamilyStyle.trail`; the secondary swell's split dashes have none, so their
-  shape stays distinct under the primary's trails), the band its crest swept over in the
-  last `TRAIL_SECONDS = 1` s of animation (0.25 s of real time at tau = 4), against the travel
-  direction: the dash moves away from its trail, so a still frame also shows where the waves
-  go. Length `min(v x 1 s, 0.5 s, 16 px)` (`trailLength`; `TRAIL_MAX_SHARE = 0.5` of the crest
-  spacing keeps rows of dashes apart, `TRAIL_MAX_PX = 16` holds when zoomed in to true scale,
-  where crests move fast): 6.0 px at 8 s, 7.5 px at 10 s, 12.0 px at 16 s at the default
-  spacing. While animating it reaches back no further than the dash's birth (`v x age`), so a
-  young dash's trail grows in; the still frame (reduced motion) draws it whole. It is as wide
-  along the crest as the dash with its round caps (length + core width) and fades backwards in
-  `TRAIL_STEPS`: the whole band at 0.25 x the dash's opacity and its front half at 0.25 x
-  again, butt-capped and stacked, so the front half shows at 1 - 0.75^2 = 0.44 x and the back
-  half at 0.25 x. The trail is drawn only where its back corners and the ends and middle of
-  each step's centre line sample all-valid lattice nodes (else the dash is drawn without one),
-  and from 3.5 px. It carries no wave data of its own: it is how the dash moved.
-* **Batching**: core strokes are batched by system, 5 core-width levels (1.2, 1.75, 2.3, 2.85,
-  3.4 px) and 8 opacity levels (0.06 to 0.90); each batch's path is built once and stroked
-  once per pass, so a dash costs two path vertices (a split dash four). Trails are batched by
-  system, 7 trail-length levels (4, 6, ..., 16 px: the length is rounded to the nearest) and the
-  dash's opacity level, with one path per step: two vertices per step, so a solid dash with its
-  trail costs 6 vertices. Per system, the trails are stroked first (butt caps), then the halos
-  and the cores (round caps). A core batch's path is a `Path2D` (stroked twice: halo, then
-  core); a trail step is stroked once, on the context's own path.
+* **Drawing (the cheaper path)**: every dash is ONE `fillRect` of the unit rectangle under its
+  own canvas transform (`setTransform`): the transform maps the rectangle onto the dash (x
+  along the crest times its length, y against the travel times its depth, the origin on its
+  leading edge), and the fill is a linear gradient in the rectangle's own coordinates, so one
+  gradient per tint serves every blob of that tint whatever its size and angle. A split bar's
+  gap is a hard-stop gradient along its length (one quad too). Dashes are batched per system,
+  tint level and opacity level: a batch sets its fill style and opacity once, then two canvas
+  calls per dash. No path is built or stroked. Gradients and colours are cached per context.
+  Drawing order: per system (wind sea, secondary, primary or combined on top), per tint.
 * **Frame cost** (none of this changes what is drawn): the cells are made in their hashed
   visiting order, so a frame walks them in memory order; a cell whose dash cannot be drawn in
   the view during its life (no data at its birth place, or a path from birth to the end of
-  its life that stays outside the view and the 14 px drawing margin) is skipped until that
+  its life that stays outside the view and the 10 px drawing margin) is skipped until that
   life ends, and its next life is placed exactly as if it had been visited (unit test: an
   animation with skipping equals one that visits every cell every frame, and still frames in
   between change nothing); each lattice cell carries an "all four nodes valid" flag, so every
   validity probe is one read; a dash too faint by its life fade alone (fade x 0.90 < 0.04) is
-  left out before any sampling; and the hot single-use helpers (`dashAt`, `sampleLattice`,
-  `trailValid`) are called with `/*#__NOINLINE__*/`, because the production minifier
-  otherwise inlines each as a function expression created anew for every cell or dash
-  (thousands of closures a frame and more garbage-collection pauses). Section 7 has the
-  measurements.
+  left out before any sampling; the hot single-use helpers (`dashAt`, `sampleLattice`,
+  `tintLevelAt`, `batchOf`) are called with `/*#__NOINLINE__*/`, because the production
+  minifier otherwise inlines each as a function expression created anew for every cell or
+  dash (thousands of closures a frame and more garbage-collection pauses); and the fill
+  style of a system and tint level is made once a frame (its batches differ only in
+  opacity). Section 7 has the measurements.
 
-**Departures from D11's first numbers.** D11 proposed dashes `clamp(6 + 3 Hs, 6, 22)` px long,
-`clamp(1.0 + 0.3 Hs, 1.0, 2.6)` px wide at opacity `clamp(0.40 + 0.09 Hs, 0.40, 0.90)` with one
-halo (2.4 x the width at 0.28 x the opacity) on 26 / 34 / 30 px cells, and a secondary dash 0.85
-x as long with a gap of 0.3 on the sparser 34 px cells. Drawn on the real NOAA GFS-Wave fields
-of 2026-10-16 00Z off California (zoom 6, Hs about 2 m) and in the Southern Ocean (Hs 5 to 7 m),
-and compared with the owner's screenshot, those dashes read as long thin hairlines (22 px at 5
-m), sparser than the reference, and a single halo at 0.28 showed either nothing or a hard ring.
-The values above (shorter, wider, softer, denser) were chosen by that comparison. The secondary
-dash is longer and thinner than proposed because its split halves came out as round dots at 1 to
-2 m (the e2e orientation test found no peak for a secondary swell from the south; with these
-values that peak holds 0.19 of the gradient energy against the test's 0.15, the primary's 0.41).
-Every physical statement (orientation, spacing, speed, time scale, masking) is unchanged, and
-the vertex budget is kept by stroking each batch's path once per pass.
+**Why filled quads (integration, 2026-10-22).** The wave-look package drew each dash as a
+round-capped core stroke with a halo and a two-step butt-capped trail (6 path vertices),
+which read as a stack of 2 to 3 hard bars ("barcode"), in pure white, and its 6,000-vertex
+frame budget held desktop views to about 1,000 dashes (1.3 per 1,000 CSS px² in the
+package's own count, against 3.75 for the reference in that count). Candidate draw paths
+were measured on this machine (headless Chromium 141, software rendering, 1440 x 900, JS
+time per frame for N random dashes, median of 130 frames; wall = time per animation frame):
 
-**The trail (2026-10-20).** D11 had no trail. Next to the reference, whose dashes are short
-bright crest edges with a soft fading smear behind them, the bare dashes read as crisp thin
-grains; the two-step trail gives the soft, drifting look. It was fitted to D11's checks rather
-than the other way round: with trails on every system and both halos (2.6 x at 0.22 and 1.7 x
-at 0.45) the e2e frame draw p95 rose from 2.4-3.6 ms to 4.7-6.7 ms on this shared machine
-(above D11's 5 ms), the secondary swell's orientation peak fell to 0.15 (the test needs more),
-and the ink ratio 4 m / 1 m to 2.03. So the outer halo, the largest stroke of a dash and most
-of its raster time, was dropped (D11 itself had one halo); the opacity went back to D11's
-`0.40 + 0.09 Hs` (ink 2.17); the secondary's split dashes have no trail (peak 0.20); the
-frame kept to 9,000 vertices (6,000 since 2026-10-21, section 4.8); and the bands went from
-0.30 to 0.25 x the dash's opacity, which lifts the orientation coherence of a uniform swell
-from 0.60 / 0.56 (desktop / Pixel 7) to 0.64 / 0.60 against the test's 0.5 (a trail's sides
-run across the crest). An
-attempt to draw a dash and its trail as one dash-patterned stroke (two vertices a dash) cost
-more, not less: Chrome dashes the path to record it (6.8-7.9 ms). Screenshots: section 7.
+| Path | N | JS per frame | Wall per frame |
+|---|---|---|---|
+| Strokes as before (core, halo, two trail steps) | 4,500 | 2.8 ms | 82 ms |
+| Pre-rendered sprite, `drawImage` under `setTransform` (ImageBitmap or canvas) | 4,500 | 27 to 29 ms (1.8 ms at 1,000, 5.1 ms at 3,000: the cost jumps between 3,000 and 4,500 images, most likely the canvas flushing its recording inside the calls) | 37 to 43 ms |
+| Batched `Path2D` quads, 3 nested per dash, 24 fills | 4,500 | 65 ms | 113 ms |
+| `fillRect` under `setTransform`, sprite as a `CanvasPattern` | 4,500 | 2.4 to 2.5 ms | 44 to 46 ms (131 ms at 2x pixels) |
+| `fillRect` under `setTransform`, linear gradient per tint (chosen) | 4,500 | 2.1 ms | 19 to 20 ms (35 ms at 2x pixels) |
+| same, 6,000 dashes, opacity set per dash / per batch | 6,000 | 2.9 / 2.6 ms | 22 to 25 ms |
+| WebGL2, one instanced draw (SwiftShader here) | 6,000 | 0.3 ms | 121 ms |
+
+The gradient quad is the cheapest overall (the pattern and the sprite cost far more to
+rasterise in software, and WebGL runs on SwiftShader here); its floor is the two canvas calls
+per dash, `setTransform` and `fillRect`, about 0.4 µs together on this machine.
 
 ### 4.7 Ocean mask (both basemaps)
 
@@ -363,9 +390,9 @@ Dashes are kept to the ocean in three ways:
 
 1. Lattice nodes without data are invalid (land and sea ice are no data in the wave model),
    and so are lattice nodes over Natural Earth land (rasterised at lattice resolution: a node is
-   land when more than 200/255 of its 8 px cell is land). A dash needs its centre and both ends
-   on valid nodes (section 4.6), so dashes stop within about one lattice cell of the coast in
-   the dash canvas itself.
+   land when more than 200/255 of its 8 px cell is land). A dash needs its centre, both ends
+   and (a blob) both back corners on valid nodes (section 4.6), so dashes stop within about
+   one lattice cell of the coast in the dash canvas itself.
 2. **Dark basemap**: the opaque land is drawn above the dash pane (section 2), so it clips the
    dashes exactly at the Natural Earth coastline.
 3. **Streets basemap** (no land drawn over the tiles): every frame is composited
@@ -381,37 +408,50 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
 ### 4.8 Reduced motion and draw budget
 
 * Reduced motion: one still frame (the dashes of the clock at 0) at full opacity for their
-  height (no fade), plus an arrowhead on every `ARROW_EVERY = 6`th dash of the primary swell or
-  the combined sea: a white chevron (1.4 px, opacity 0.85) `ARROW_PX = 5` px long and 7 px
-  wide, just ahead of the dash's halo, pointing where the waves travel; the trails are drawn
-  whole. Nothing animates (e2e: the canvas hash is unchanged over 1 s, with more than 3
+  height (no fade) and at full depth, plus an arrowhead on every `ARROW_EVERY = 6`th dash of
+  the primary swell or the combined sea: a white chevron (1.4 px, opacity 0.85) `ARROW_PX = 5`
+  px long and 7 px wide, 1.5 px ahead of the blob's leading edge, pointing where the waves
+  travel. Nothing animates (e2e: the canvas hash is unchanged over 1 s, with more than 3
   arrowheads).
-* Budget: at most `MAX_DASHES = 4,000` dashes per frame, `PHONE_MAX_DASHES = 1,500` below
-  640 px wide (`maxDashes`), and at most `MAX_FRAME_VERTICES = 6,000` vertices (under D11's
-  12,000; enforced in the renderer since the trails: a frame stops placing dashes when the next
-  one, at most 8 vertices, could pass it; about 1,030 trailed dashes, which keeps the busiest
-  desktop view, the whole world at 1440 x 900, within D11's 5 ms on the shared,
-  software-rendered test machine under load, section 7; phone views stay well under it). It
-  was 9,000 (about 1,550 dashes) until 2026-10-21, when that machine measured a draw p95 of
-  4.7 to 6.8 ms at 9,000 even with the cheaper frame of section 4.6, and up to 5.2 ms at
-  7,000 while another agent's tests ran. The top system (primary, else combined) is planned
-  first and may use 60 % (`BUDGET_SHARE`) of the dashes and of the vertices left, the next
-  60 % of the rest, the last one all of it. Cells are visited in a fixed hashed order, so a
-  frame over budget leaves out an even, random share of the cells, never a region. The
-  number of cells visited only shrinks when a budget is hit and
-  grows back by one cell a frame while under 75 % of both, so the cut is steady. Targets (D11,
-  e2e at 1440 x 900): draw p95 ≤ 5 ms and ≤ 12,000 vertices.
+* Budgets: at most `MAX_DASHES = 8,000` dashes per frame, `PHONE_MAX_DASHES = 3,000` below
+  640 px wide (`maxDashes`), and a frame budget in filled quads (one per dash) that adapts to
+  the device (`QuadBudget`, `components/map/wavefronts.ts`): it starts at `MAX_FRAME_QUADS =
+  7,000`; every 20 animated frames, when their median draw time is over `DRAW_TARGET_MS = 2.5`
+  ms, the cap drops to the quads those frames drew x 0.95 x 2.5 / median, never below
+  `MIN_FRAME_QUADS = 1,500`; when the median is under 80 % of the target and the cap limited
+  those frames (they drew at least 90 % of it), it grows by 15 % (less than 1 / 0.8, so it
+  settles instead of swinging), up to 7,000. The first 15 frames after each start (pan, zoom,
+  new mode), which place every dash afresh, are left out. A median of 2.5 ms keeps D11's
+  frame draw p95 of 5 ms: on this machine, in the QA views the cap limited, the p95 ran 1.2
+  to 2.2 times the median (section 7). The median, not a high percentile, drives it, so a
+  garbage collection or a busy moment of the page does not thin the map for good. A fast
+  device keeps the full density; this shared, software-rendered test machine draws about
+  1,500 to 2,600 blobs on busy 1440 x 900 views, depending on its load (section 7). Phone
+  views of the combined sea stay under the cap (700 to 1,430 blobs on a Pixel 7); with all
+  three partitions a phone view (about 1,950 to 2,650 dashes) can reach it too.
+* The top system (primary, else combined) is planned first and may use 60 % (`BUDGET_SHARE`)
+  of the dashes and of the quads left, the next 60 % of the rest, the last one all of it.
+  Cells are visited in a fixed hashed order, so a frame over budget leaves out an even,
+  random share of the cells, never a region. The number of cells visited only shrinks when a
+  budget is hit and grows back by one cell a frame while under 75 % of both, so the cut is
+  steady; when the adaptive cap grows, every system may visit all its cells again (the next
+  frame finds the new cut). Targets (D11, e2e at 1440 x 900): draw p95 ≤ 5 ms and ≤ 12,000
+  stroked path vertices (now only the arrowheads of reduced motion), plus quads ≤ the cap ≤
+  7,000.
 
 ### 4.9 Data attributes (tests and diagnostics)
 
 `canvas.map-wave-canvas`: `data-style` (`dashes`), `data-mode` (animated, static, off),
 `data-families` (systems drawn, in drawing order), `data-crests` (dashes drawn),
-`data-dash-trails` (dashes drawn with a trail), `data-vertices`, `data-strokes`, `data-drawn`,
-`data-arrows` (still mode), `data-exaggeration` (E rounded), `data-view` (origin, size, world
-px), `data-ocean-mask`, `data-draw-ms`, `data-draw-ms-p95` (last 120 frames), `data-frames`
-(frames drawn) and `data-lattice-ms`. The
-e2e frame-cost test (`e2e/map-performance.spec.ts`, run without the Playwright trace recorder)
-reads the p95 once more than 160 frames are drawn.
+`data-quads` (filled quads drawn, one per dash), `data-quad-cap` (the adaptive cap of the
+frame), `data-dash-trails` (blobs drawn deeper than their head, i.e. with their smear),
+`data-vertices` (stroked path vertices: the reduced-motion arrowheads, 3 each),
+`data-strokes` (canvas draw calls), `data-cells` (dash cells visited, idle ones included),
+`data-drawn`, `data-arrows` (still mode),
+`data-exaggeration` (E rounded), `data-view` (origin, size, world px), `data-ocean-mask`,
+`data-draw-ms`, `data-draw-ms-p50` and `data-draw-ms-p95` (last 120 frames), `data-frames`
+(frames drawn) and `data-lattice-ms`. The e2e frame-cost test (`e2e/map-performance.spec.ts`,
+run without the Playwright trace recorder) reads the p95 once more than 160 frames are drawn.
 `canvas.map-particle-canvas`: `data-mode`, `data-color-type`, `data-trails`, `data-arrows`.
 
 ## 5. Field client and freshness
@@ -441,93 +481,139 @@ settings share; the map listens for the `storage` event and the `swell:wind-unit
 the same tab. Heights
 follow the account's ft/m preference. The legend title states the unit of the colour layer.
 
-## 7. Measured (e2e, synthetic fields, headless Chromium, 1440 x 900, shared 4-CPU machine)
+## 7. Measured (e2e, synthetic fields, headless Chromium 141, 1440 x 900, shared 4-CPU machine)
 
-Full e2e run with the 6,000-vertex frame budget (2026-10-21, chromium and Pixel 7 projects,
-127 tests passed; the machine is shared with another agent's builds and test runs, load
-average 2 to 9, so times vary from run to run). The trailed dashes under the 9,000-vertex
-budget (2026-10-20), the dashes without trails (2026-10-19) and the traced-crest renderer
-(2026-10-15) are given for comparison.
+Full e2e run of the integrated crest blobs (2026-10-22, chromium and Pixel 7 projects, 127
+tests passed, 6 skipped; the machine is shared with other agents' builds and test runs, so
+times vary from run to run). The wave-look package's 6,000-vertex trailed dashes
+(2026-10-21) and the traced-crest renderer (2026-10-15) are given for comparison; the runs
+in between are in this file's history.
 
-| Check | 6,000-vertex budget (2026-10-21) | Trailed, 9,000 vertices (2026-10-20) | Dashes, no trail (2026-10-19) | Traced crests (2026-10-15) |
-|---|---|---|---|---|
-| Orientation, uniform swell from 225° at 12 s (structure tensor) | 44.9°, coherence 0.60 (Pixel 7: 45.1°, 0.60) | 44.9°, 0.64 (45.0°, 0.60) | 45.0°, 0.80 (0.78) | 45.0°, 0.98 |
-| Motion along the travel direction | 8.0 px in 0.88 s (expected about 8.0); Pixel 7: 8.5 px in 0.99 s (about 9.0) | 7.0 px in 0.81 s (about 7.3) | 5.0 px in 0.61 s | 5.0 px in 0.61 s |
-| Crest spacing 8 s / 16 s (ink autocorrelation) | 12 px / 48 px (ratio 4.00; D11 allows 4.0 ± 0.2) | 12 / 48 px | 12 / 48 px | 12 / 48 px |
-| Ink, Hs 1 m / 4 m | 20,862 / 48,019 (2.30 x; D11 asks > 2 x) | 30,266 / 67,118 (2.22 x) | 32,237 / 70,395 (2.18 x) | 10,117 / 35,411 |
-| Orientation peaks, swell1 from 270° + swell2 from 180° | 87.5° (0.37 of the energy) and 177.5° (0.20; threshold 0.15); 87.5° alone without swell2 | 92.5° (0.38) and 177.5° (0.20) | 92.5° (0.41) and 2.5° (0.19) | 92.5° and 2.5° |
-| Frame draw time p95 once settled (combined sea, whole world, no trace recorder) | 3.3 ms, 1,040 dashes, 5,804 vertices (D11: ≤ 5 ms, ≤ 12,000; the budget cuts this view) | 4.7 ms, 1,549 dashes, 8,676 vertices | 2.6 ms, 2,111 dashes, 4,208 vertices | 3.8 ms, 9,531 vertices |
-| Main-thread cost per animation frame | 2.51 ms script (36.5 ms task) | 2.87 ms script (32.0 ms task) | 2.06 ms script (37.6 ms task) | 2.7 ms script (33.6 ms task) |
-| Basemap redraw at zoom 2 | 8.7 ms | 4.4 ms | 4.1 ms | 6.2 ms |
-| Colour-field redraw at 1440 x 900 (median of 6 pans) | 23.3 ms (16.4 to 24.2) | 14.9 ms (10.7 to 24.8) | 18.0 ms | 16.8 ms |
-| Particle canvas after 5 s: alpha 5 / 6 / 7 counts, fade renderer (float16) | 11,738 / 9,748 / 7,765 (no spike at 6) | 11,431 / 9,652 / 7,903 | 11,546 / 9,305 / 8,376 | 11,290 / 8,922 / 8,647 |
-| Same, explicit renderer (8-bit canvas) | 3,898 / 5,132 / 4,150 | 3,721 / 5,534 / 3,577 | 3,284 / 5,323 / 3,697 | 4,071 / 6,423 / 4,012 |
-| Field cache after 48 downloads | array buffers 23.0 -> 56.2 MB (cache at most 49.9 MB decoded) | 23.0 -> 56.3 MB | 22.9 -> 56.2 MB | 23.5 -> 56.7 MB |
+| Check | Blobs, adaptive quad budget (2026-10-22) | Trailed dashes, 6,000 vertices (2026-10-21) | Traced crests (2026-10-15) |
+|---|---|---|---|
+| Orientation, uniform swell from 225° at 12 s (structure tensor) | 45.0°, coherence 0.66 (Pixel 7: 45.0°, 0.60) | 44.9°, coherence 0.60 (Pixel 7: 45.1°, 0.60) | 45.0°, 0.98 |
+| Motion along the travel direction | 5.0 px in 0.54 s (expected about 4.8); Pixel 7: 5.0 px in 0.55 s (about 5.0) | 8.0 px in 0.88 s (expected about 8.0); Pixel 7: 8.5 px in 0.99 s (about 9.0) | 5.0 px in 0.61 s |
+| Crest spacing 8 s / 16 s (ink autocorrelation) | 12 px / 48 px (ratio 4.00; D11 allows 4.0 ± 0.2) | 12 / 48 px | 12 / 48 px |
+| Ink, Hs 1 m / 4 m | 31,801 / 74,971 in total (2.36 x); 7.59 / 17.07 per dash drawn (2.25 x; D11 asks > 2 x) | 20,862 / 48,019 in total (2.30 x; D11 asks > 2 x) | 10,117 / 35,411 |
+| Orientation peaks, swell1 from 270° + swell2 from 180° | 92.5° (0.34 of the energy) and 2.5° (0.23; threshold 0.15); 92.5° alone without swell2 | 87.5° (0.37 of the energy) and 177.5° (0.20; threshold 0.15); 87.5° alone without swell2 | 92.5° and 2.5° |
+| Frame draw p95 once settled (combined sea, whole world, no trace recorder) | 2.8 ms, 2,287 dashes in 2,287 quads (adaptive cap 2,300), 0 vertices (D11: ≤ 5 ms, ≤ 12,000) | 3.3 ms, 1,040 dashes, 5,804 vertices | 3.8 ms, 9,531 vertices |
+| Main-thread cost per animation frame | 1.28 ms script (6.92 ms task) | 2.51 ms script (36.5 ms task) | 2.7 ms script (33.6 ms task) |
+| Basemap redraw at zoom 2 | 6.4 ms | 8.7 ms | 6.2 ms |
+| Colour-field redraw at 1440 x 900 (median of 6 pans) | 10.9 ms (10.4 to 22.6) | 23.3 ms (16.4 to 24.2) | 16.8 ms |
+| Particle canvas after 5 s: alpha 5 / 6 / 7 counts, fade renderer (float16) | 11,522 / 9,578 / 8,227 (no spike at 6) | 11,738 / 9,748 / 7,765 (no spike at 6) | 11,290 / 8,922 / 8,647 |
+| Same, explicit renderer (8-bit canvas) | 3,481 / 5,974 / 3,818 | 3,898 / 5,132 / 4,150 | 4,071 / 6,423 / 4,012 |
+| Field cache after 48 downloads | array buffers 24.0 -> 57.2 MB (cache at most 49.9 MB decoded) | array buffers 23.0 -> 56.2 MB (cache at most 49.9 MB decoded) | 23.5 -> 56.7 MB |
 
-Wind particles in the same run: 2.28 ms script (39.1 ms task) per frame; idle map 0.15 ms
-(0.49 ms task). "Task" includes the software rasterisation of headless Chromium, which a
+Wind particles in the same run: 0.78 ms script (15.27 ms task) per frame; idle map 0.04 ms
+(0.22 ms task). "Task" includes the software rasterisation of headless Chromium, which a
 GPU-backed canvas does off the main thread; no browser with a GPU was available here. The
-redraw times of the colour field and the basemap (one draw per pan) rose although neither
-code changed between the 2026-10-20 and 2026-10-21 runs: most likely the machine's load.
+task time of a wave frame fell from about 36 ms to about 6 to 9 ms although the frame draws
+more than twice as many dashes: a gradient-filled quad rasterises far more cheaply than the
+stroked halos and trails it replaces (section 4.6).
 
-The frame draw p95 is the measure closest to its limit, and the noisiest. The same e2e check
-(the whole world at 1440 x 900, about 1,560 dashes under 9,000 vertices) measured 4.7 to 6.8
-ms in 16 runs on 2026-10-21 while the cheaper frame of section 4.6 was being made (6.1 to 9.0
-ms in 4 runs before it); 3.8 to 5.2 ms at 7,000 vertices (about 1,220 dashes, 5 runs); and
-3.2 to 5.0 ms at 6,000 (about 1,040 dashes, 7 runs, this one 3.3 ms). `MAX_FRAME_VERTICES`
-is the knob: a lower budget thins busy desktop views evenly and lowers the cost in
-proportion.
+The ink check compares the ink per dash drawn (`data-crests`, read with the pixels), and
+asserts that the 4 m sea also draws more ink in all: both seas draw one dash per cell, but
+the adaptive budget can thin one frame more than the other on a busy machine (the 4 m blobs
+cost more to fill), which made the total 1.89 x in one full run under load, against 2.21 to
+2.34 x in seven quieter runs.
 
-Coherence is lower than for long traced crests because a short dash has round ends and its
-trail has sides, whose edges run across the crest as well as along it. The 0.5 threshold of
-the e2e check is unchanged.
+The frame draw p95 of the e2e check (the whole world at 1440 x 900) was 2.8, 3.9, 4.2 and
+4.7 ms in the full and map-only e2e runs of this round's code, the budget settling at 2,287,
+2,451, 2,390 and 3,459 dashes; the 6,000-vertex trailed dashes measured 3.2 to 5.0 ms at
+about 1,040 dashes. `DRAW_TARGET_MS` is the knob: the budget keeps the median near or under
+it on any device, and the p95 follows at 1.2 to 2.2 times the median here.
+
+Coherence is lower than for long traced crests because a blob's smear has sides that run
+across the crest as well as along it. The 0.5 threshold of the e2e check is unchanged.
 
 **Visual QA on real fields.** NOAA GFS-Wave + GFS fields of the 2026-10-16 00Z run (the 9
 stored hours of a clone of the `swell_u3i_live_run` database, with the real Open-Meteo spot
-runs of that day), served by this branch's backend to its production build, screenshots at
-1440 x 900 and in Pixel 7 emulation, compared with the owner's reference screenshot
-(2026-10-21, 6,000-vertex budget). Dashes drawn (with a trail), and the 120-frame draw p95
-with the median frame in brackets, once settled (headless Chromium, software rendering,
-machine shared):
+runs of that day), served by this branch's backend to its production build, screenshots of
+the analysis hour at 1440 x 900 and in Pixel 7 emulation (412 x 839 CSS px at 2.625 device px
+per CSS px), compared with the owner's reference screenshot. Final pass of this round's code
+(2026-10-23): Hs over the desktop view (10th / 50th / 90th percentile of its ocean cells in
+the served field, and its maximum; the Pixel 7 views see the middle of it), dashes drawn
+(with their smear in brackets), the adaptive cap when it limited the view, and the 120-frame
+draw median / p95 once settled (headless Chromium, software rendering, machine shared):
 
-| View | Desktop 1440 x 900 | Pixel 7 |
-|---|---|---|
-| California, zoom 6, centre 36.5°N 123°W (Hs about 2 m: blue) | 1,026 (972), 5,940 vertices: 3.1 ms (1.9) | 538 (513): 1.9 ms (1.3) |
-| California, zoom 5 (violet to magenta offshore) | 1,018 (954): 3.4 ms (2.0) | |
-| Gulf of Alaska storm, zoom 5 (Hs 4 to 7 m: violet, magenta, pink) | 1,020 (966): 3.6 ms (1.9) | 739 (702): 2.1 ms (1.2) |
-| Pacific, zoom 2 (Pixel 7: its whole-world view) | 1,019 (929): 5.1 ms (3.5; 4.6 ms in a first pass) | 306 (271): 1.7 ms (1.0) |
-| California, zoom 6, primary + secondary + wind sea | 1,079 (713; the secondary has no trail), 5,650 vertices: 3.9 ms (2.1) | |
-| California, zoom 6, reduced motion | still: 1,021 dashes, 988 with full trails, 171 arrowheads | |
+| View | Hs in the desktop view, m | Desktop 1440 x 900 | Pixel 7 |
+|---|---|---|---|
+| California, zoom 6, centre 36.5°N 123°W (blue-violet) | 1.2 / 1.5 / 2.0 (max 3.7) | 2,037 (2,022), cap 2,118: 2.3 / 2.8 ms | 1,207 (1,190), under the cap: 1.1 / 1.5 ms |
+| California, zoom 5 (blue-violet inshore, violet to magenta-purple offshore) | 1.3 / 1.7 / 3.5 (max 4.9) | 2,436 (2,413), cap 2,451: 2.2 / 3.2 ms | 1,143 (1,125): 1.2 / 1.5 ms |
+| Gulf of Alaska, zoom 5 (magenta-purple to magenta) | 1.5 / 3.3 / 4.3 (max 5.1) | 1,885 (1,870), cap 1,941: 2.2 / 3.2 ms | 1,434 (1,421): 1.2 / 1.6 ms |
+| Pacific, zoom 2 (Pixel 7: its whole-world view) | 0.6 / 2.2 / 4.8 (max 12.2) | 2,057 (2,025), cap 2,090: 2.3 / 2.7 ms | 700 (668): 1.1 / 2.0 ms |
+| California, zoom 6, primary + secondary + wind sea | | 1,961 (1,488; the secondary's bars have no smear), cap 2,002: 2.4 / 2.9 ms | 2,642 (1,667), under the cap: 2.2 / 2.8 ms |
+| California, zoom 6, reduced motion | | still: 4,211 dashes at full depth, 702 arrowheads; the one still frame took 50 ms | 1,328, 222 arrowheads: 26 ms |
+| California, zoom 6, legend open | | 2,280, cap 2,331: 2.1 / 2.6 ms | 1,198: 1.2 / 1.4 ms |
+| California, zoom 6, settings open (three partitions) | | 1,827, cap 1,847: 2.5 / 3.1 ms | 1,959, cap 1,984: 2.1 / 4.7 ms |
 
-Under the 9,000-vertex budget (2026-10-20) the same desktop views drew 1,507 (California,
-zoom 6), 1,552 (Alaska), 1,460 (Pacific) and 1,689 (partitions) dashes at 5.0, 4.2, 5.9 and
-4.7 ms; without trails, 1,735, 2,192 and 3,914 (partitions) at 2.1, 8.3 and 10.2 ms. The
-6,000 budget leaves out about a third of the cells of those busy desktop views, evenly; the
-phone views are barely cut (538 dashes against 545 off California, 739 against 777 off
-Alaska).
+The 2026-10-22 pass of the same views drew 2,152 to 2,581 blobs on the desktop (caps 2,206
+to 2,670) and the same Pixel 7 counts within 3 %; other passes of 2026-10-23 settled as low
+as 1,476 (Pacific, zoom 2). The desktop cap follows the machine's load, which other agents'
+builds and tests share. The reduced-motion frame is drawn once per view (after each pan or
+zoom) and does not feed the adaptive budget, so on a page that never animated it is cut
+only at 7,000 quads: here it drew every cell.
 
-The field reads as a smooth navy-blue-violet-magenta-pink surface, the land is grey with a
-light coastline, and many short, soft white dashes lie across the swell with a bright leading
-edge and a fading smear behind, drifting with it: the character of the reference, drawn with
-our own ramp, shapes and code. The California coast that day had about 2 m of sea, so it is
-blue on our ramp where the reference (a bigger day) is magenta; the colours follow the metre
-anchors, not the reference. Counted the same way on the screenshots (open-ocean regions clear
-of labels and controls; blobs at least 25 grey levels above a 31 CSS px local mean), the
-reference, a phone screenshot, has 3.75 blobs per 1,000 CSS px squared with a median of 28
-CSS px squared, and covers 11.6 % of the region; ours off California at zoom 6 has 2.3 blobs
-(35 CSS px squared, 10.1 % covered) on the Pixel 7 and 1.3 blobs (44 CSS px squared, 6.3 %
-covered; 1.8 blobs under the 9,000 budget) on the desktop. The phone view is close to the
-reference; a desktop view is about half as dense, with fewer and larger dashes, because of
-the frame budget. The screenshots are attached to the Upgrade 4 package report, not
-committed.
+**Density.** Counted the same way on every screenshot (`density.mjs` of the QA tools, not
+committed): open-ocean regions clear of labels, markers and controls; a blob is a connected
+patch at least 25 grey levels above the local mean over 31 CSS px. Blobs per 1,000 CSS px²,
+with the median blob area and the share of the region covered (final pass, 2026-10-23):
+
+| View (region) | Desktop, this machine | Desktop, budget as on a 3 x faster device (2026-10-22) | Pixel 7 |
+|---|---|---|---|
+| Owner's reference (phone screenshot, open ocean, 167 x 342 CSS px) | 4.05 (26.4 CSS px², 11.6 %) | | |
+| California, zoom 6 (desktop 600 x 400, phone 300 x 300 CSS px) | 2.20 (28 CSS px², 6.4 %) | 3.49 (27 CSS px², 11.0 %) | 3.49 (27.6 CSS px², 11.1 %) |
+| California, zoom 5 | 2.26 (30, 8.0 %) | | 3.06 (27.4, 9.6 %) |
+| Gulf of Alaska, zoom 5 | 1.92 (37, 7.2 %) | 3.14 (36, 13.3 %) | 3.65 (37.2, 16.1 %) |
+| Pacific, zoom 2 (desktop 500 x 300) | 2.01 (30, 7.3 %) | 2.72 (31, 10.3 %) | 2.65 (29.9, 10.1 %) |
+
+The 2026-10-22 pass counted 2.58, 2.31, 2.25 and 1.95 on the desktop and 3.49, 3.03, 3.73
+and 2.73 on the Pixel 7 in the same regions. The "3 x faster" column ran the same build with
+`performance.now` slowed three times in the page (a QA-only init script, not in the app), so
+the budget saw every frame three times cheaper, as a device three times faster than this one
+would, and kept its cap at 7,000: 3,866 (California), 4,080 (Alaska) and 3,284 (Pacific)
+dashes, the full cell grid. Its frames took about three times the 1.1 to 1.3 ms median they
+reported, so the column shows the density such a device gets, not a cost on this one.
+**Item 4 (at least about 3 per 1,000 CSS px²)**: met on the phone (2.65 to 3.73; 2.65 to 2.73
+in its whole-world view), and on a desktop only where the device can afford the full grid
+(3.1 to 3.5 off California and Alaska with the 3 x budget). On this software-rendered machine
+a busy 1440 x 900 view cannot keep the draw p95 under 5 ms at that density, so the adaptive
+budget holds it at 1.92 to 2.58 there. The wave-look package, counted with its own (earlier)
+tool, had 1.3 on the desktop and 2.3 on the phone against 3.75 for the reference in that
+count.
+
+**Where a desktop frame's time goes (2026-10-23).** With the same real fields in the
+frame-cost harness (no budget; California, zoom 6, at 1440 x 807, the map's size under the
+header), the full grid is about 3,958 blobs out of 13,818 cells visited, drawn in a median of
+3.0 to 3.3 ms in seven runs (0.76 to 0.83 µs a blob). About 0.4 µs of that is the two canvas
+calls per blob (`setTransform` and `fillRect`, CPU profile; section 4.6), the floor of this
+draw path; the rest is the cell walk and the per-dash sampling. Most visited cells are idle
+(over land, or with a path that never enters the view) and cost little: in the app the same
+view visited 3.6 cells per blob drawn (8,862 for 2,454, `data-cells`). In the app's passes a
+blob cost 0.9 to 1.2 µs (a 2.2 ms median for 2,454 blobs, 2.3 ms for 2,037), so the 2.5 ms
+target holds about 1,500 to 2,600 blobs here, short of the full grid. Making each system and
+tint level's fill style once a frame and keeping `tintLevelAt` and `batchOf` out of line
+(section 4.6) changed the draw time by no more than the run-to-run noise in an interleaved
+comparison with the harness (California, zoom 6: 3.1, 3.2 and 3.1 ms before, 3.1, 3.0 and 3.3
+ms after; Pacific, zoom 2: 2.6, 2.5 and 2.6 ms before, 2.4, 2.4 and 2.5 ms after).
+
+The field reads as a smooth, dusky blue-violet-magenta-pink surface, the land is mid grey
+with a dark coastline and light labels, and many short, soft blobs, each a lighter tint of
+the sea under it, lie across the swell with a crisp leading edge and a fading smear behind,
+drifting with it: the character of the reference, drawn with our own ramp, shapes and code.
+The California view that hour had 1.2 to 2.0 m of sea (median 1.5 m), so it is blue-violet
+on our ramp where the reference (a bigger day) is magenta; the Gulf of Alaska view (median
+3.3 m) shows the reference's magenta-purple. The colours follow the metre anchors, not the
+reference. The screenshots are attached to the integration report, not committed.
 
 ## 8. Limitations
 
 * The dashes are stylised crests from the model's height, period and direction per system: no
   wave rays, refraction, shoaling or depth effects (deep water is assumed), no real wave
-  groups, and the cells, births, the life fade and the trails are a drawing device. A trail is
-  the dash's own path over the last second of animation, not a wake and not a measure of
-  anything. The 0.5° fields smooth fronts and coasts.
+  groups, and the cells, births, the life fade and the smears are a drawing device. A smear
+  is the band the crest swept over in the last 0.5 s of animation, not a wake and not a
+  measure of anything. The 0.5° fields smooth fronts and coasts.
+* The blobs are rectangles, not the reference's sheared parallelograms (section 4.6).
 * Wind-sea dashes often sit on rows at the 8 px minimum spacing (periods under 6.5 s).
 * In a uniform sea, dashes of neighbouring cells line up on the same crest rows, which shows
   the crest spacing; in a real sea, where period and direction vary, rows are short.
@@ -536,13 +622,21 @@ committed.
   canvas.
 * Where the swell turns fast (around storms, at partition swaps of the peak direction) no dash
   is drawn rather than one along a direction no wave has, so such areas show gaps.
-* The dash sizes and density were tuned by eye on one real run (GFS-Wave 2026-10-16 00Z) and
-  synthetic fields against one reference screenshot. A busy desktop view (the whole world, a
-  storm at zoom 5, California at zoom 6 at 1440 x 900) reaches the 6,000-vertex budget, about
-  1,030 trailed dashes, and leaves out an even share of the cells, so it is somewhat sparser
-  than the cell grid (section 7); phone views stay under it.
-* Without a GPU (headless Chromium here) the dash layer keeps the main thread busy with
-  software rasterisation of its soft strokes (35 to 39 ms of task time per frame in the last
-  three full e2e runs).
+* The dash sizes, tints and density were tuned by eye on one real run (GFS-Wave 2026-10-16
+  00Z) and synthetic fields against one reference screenshot. On this shared,
+  software-rendered machine the adaptive budget holds busy 1440 x 900 views to about 1,500
+  to 2,600 blobs, depending on the machine's load (1.92 to 2.58 per 1,000 CSS px² counted,
+  against 4.05 on the reference); the full grid (3.1 to 3.5 off California and Alaska) needs
+  a device about three times faster.
+  No device with a GPU was measured.
+* The secondary swell's thin split bars are subtle under the primary's blobs (the e2e check
+  of two orientations passes at 0.23 of the energy for the second peak against a threshold
+  of 0.15).
+* The dashes take their tint from the layer on screen, so on Wave Period and Wave Energy
+  they follow the shared ramp, not the height ramp.
+* Without a GPU (headless Chromium here) the dash layer still keeps the main thread busy
+  with software rasterisation (about 6 to 9 ms of task time per frame in this round's e2e
+  runs), and the reduced-motion still frame of a busy desktop view (about 4,200 dashes,
+  cut only at 7,000 quads) took 50 to 60 ms to draw.
 * With the combined sea drawn (the default), the partition fields are not downloaded, so the
   hover readout lists partitions only when they are chosen in Settings.
