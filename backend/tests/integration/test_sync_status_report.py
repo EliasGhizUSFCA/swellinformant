@@ -195,3 +195,66 @@ def test_components_carry_their_source_names(db: Session, daemon_env: pytest.Mon
         "demo": "synthetic demo",  # forecast_sources.name of the synthetic row
         "synthetic_unknown": None,
     }
+
+
+def _cli_sync(db: Session, *, finished: datetime, run_key: str, status: str = "success") -> SyncRun:
+    row = SyncRun(
+        trigger="cli",
+        status=status,
+        started_at=finished - timedelta(minutes=2),
+        finished_at=None if status == "running" else finished,
+        lease_expires_at=finished + timedelta(minutes=15) if status == "running" else None,
+        stages=[
+            {
+                "name": "spots",
+                "status": "success",
+                "detail": {
+                    "components": [
+                        {"source_code": "open_meteo_noaa", "run_key": run_key, "outcome": "stored"}
+                    ]
+                },
+            }
+        ],
+        published_at=None if status == "running" else finished,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_a_run_another_trigger_stored_after_the_check_is_current(
+    db: Session, daemon_env: pytest.MonkeyPatch
+) -> None:
+    """The daemon's heartbeat is its last check: a run a CLI or GitHub sync stored since
+    then is current in the report (the status page kept a copy of this rule)."""
+    run(db, "demo", 1)
+    heartbeat(db)
+    now = utcnow()
+    key = "gfswave016:2026102206|gfs025:2026102206"
+    new = {
+        "kind": "spots",
+        "source_code": "open_meteo_noaa",
+        "provider": "open_meteo",
+        "state": "new",
+        "stored_run_key": "gfswave016:2026102200|gfs025:2026102200",
+        "available_run_key": key,
+        "attempts": 1,
+    }
+    checked = now - timedelta(minutes=5)
+    payload = {"at": checked.isoformat(), "runner": "daemon", "components": [new]}
+    get_redis().set(sync_state.HEARTBEAT_KEY, json.dumps(payload))
+
+    def state_now() -> tuple[str, str | None, str | None]:
+        sync = data_health(db).out.sync
+        assert sync is not None
+        (c,) = sync.components
+        return c.state, c.stored_run_key, c.detail
+
+    _cli_sync(db, finished=checked - timedelta(minutes=1), run_key=key)
+    assert state_now()[0] == "new"  # stored before the check: the check knew better
+    _cli_sync(db, finished=now, run_key=key, status="running")
+    assert state_now()[0] == "new"  # a sync still running publishes nothing yet
+    db.query(SyncRun).filter(SyncRun.status == "running").delete()
+    db.commit()
+    after = _cli_sync(db, finished=now - timedelta(minutes=1), run_key=key)
+    assert state_now() == ("current", key, f"stored by sync {after.id}")

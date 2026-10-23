@@ -357,7 +357,9 @@ export function JobsCard({ jobs }: { jobs: JobHealth[] }) {
 /**
  * The sync section; nothing when the backend sends no sync block (older backends). The
  * component states are the backend's own: after a sync the daemon reports what it stored as
- * current (app/services/sync/detect.py settle_plan).
+ * current (app/services/sync/detect.py settle_plan), and data health does the same for a sync
+ * of another trigger since the daemon's last check (app/services/health.py
+ * components_since_check).
  */
 export function SyncCard({ data, className }: { data: DataHealth; className?: string }) {
   const { sync } = data;

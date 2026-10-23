@@ -910,6 +910,55 @@ def source_names(db: Session, codes: Iterable[str]) -> dict[str, str]:
     }
 
 
+def components_since_check(
+    raw_components: list[dict[str, Any]],
+    checked_at: datetime | None,
+    syncs: Iterable[SyncRun | None],
+) -> list[dict[str, Any]]:
+    """The daemon's last check (its heartbeat components) with what a sync that ended after
+    it stored: a sync of another trigger (the CLI, GitHub Actions) while the daemon waits
+    for its next check. A component whose newest available run such a sync stored, or
+    found stored, is current. The daemon's own syncs are settled in its heartbeat already
+    (app.services.sync.detect.settle_plan); a sync still running changes nothing (what it
+    stored is not published before its publish stage)."""
+    if checked_at is None:
+        return raw_components
+    stored: dict[tuple[str, str], tuple[int, str]] = {}
+    for row in syncs:
+        if row is None or row.status == "running" or row.finished_at is None:
+            continue
+        if row.finished_at <= checked_at:
+            continue
+        for entry in row.stages or []:
+            detail = entry.get("detail") if isinstance(entry, dict) else None
+            comps = detail.get("components") if isinstance(detail, dict) else None
+            for comp in comps or []:
+                if not isinstance(comp, dict) or comp.get("outcome") not in ("stored", "current"):
+                    continue
+                if comp.get("source_code") and comp.get("run_key"):
+                    key = (str(comp["source_code"]), str(comp["run_key"]))
+                    if key not in stored or comp["outcome"] == "stored":
+                        stored[key] = (row.id, str(comp["outcome"]))
+    if not stored:
+        return raw_components
+    out: list[dict[str, Any]] = []
+    for raw in raw_components:
+        if isinstance(raw, dict) and raw.get("state") not in ("current", "disabled"):
+            hit = stored.get((str(raw.get("source_code")), str(raw.get("available_run_key"))))
+            if hit is not None:
+                sync_id, outcome = hit
+                raw = {
+                    **raw,
+                    "state": "current",
+                    "stored_run_key": raw["available_run_key"],
+                    "detail": f"stored by sync {sync_id}" if outcome == "stored" else None,
+                    "retry_after_s": None,
+                    "attempts": 0,
+                }
+        out.append(raw)
+    return out
+
+
 def _component_out(
     raw: dict[str, Any], names: dict[str, str] | None = None
 ) -> SyncComponentOut | None:
@@ -1119,7 +1168,11 @@ def _check_sync(
         select(SyncRun).order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).limit(1)
     )
     published = latest_publication(db)
-    raw_components = heartbeat.components if heartbeat is not None else []
+    raw_components = components_since_check(
+        heartbeat.components if heartbeat is not None else [],
+        heartbeat.at if heartbeat is not None else None,
+        (newest, published),
+    )
     codes = {
         str(raw["source_code"])
         for raw in raw_components
