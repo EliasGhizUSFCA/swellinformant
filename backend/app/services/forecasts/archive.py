@@ -29,7 +29,9 @@ entities: a column that is not selected raises AttributeError instead of loading
 nothing is left half-loaded in the session (``load_only(..., raiseload=True)`` entities
 would stay in the identity map and raise for a later ``db.get`` of the same row), and the
 prediction's joined ``forecast`` relationship, which repeated every wave_forecasts column,
-is not read. One demo pass: 88.1 MB before, 5.1 MB after.
+is not read. One demo pass: 88.1 MB before, 5.1 MB after. With ARCHIVE_CONFIDENCE_DIGEST the
+confidence inputs are not read whole either, only the parts the digest keeps
+(:data:`DIGEST_READS`, :func:`_digest_columns`).
 """
 
 from __future__ import annotations
@@ -38,8 +40,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, extract, func, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Select, case, cast, extract, func, select
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -64,8 +66,9 @@ OFFSHORE_FIELDS = (
 
 
 # The columns archive_authoritative reads: the archived prediction values and the offshore
-# inputs (no name is in both tables).
-ARCHIVED_COLUMNS = (
+# inputs (no name is in both tables). The confidence inputs are read whole only without
+# ARCHIVE_CONFIDENCE_DIGEST; with it, only the parts the digest keeps (DIGEST_READS).
+ARCHIVED_VALUE_COLUMNS = (
     SurfQualityPrediction.spot_id,
     SurfQualityPrediction.valid_time,
     SurfQualityPrediction.breaking_height_mid_ft,
@@ -80,11 +83,70 @@ ARCHIVED_COLUMNS = (
     SurfQualityPrediction.forecast_confidence_class,
     SurfQualityPrediction.local_confidence_class,
     SurfQualityPrediction.confidence_method,
-    SurfQualityPrediction.confidence_inputs,
     *(getattr(WaveForecast, k) for k in OFFSHORE_FIELDS),
 )
+ARCHIVED_COLUMNS = (*ARCHIVED_VALUE_COLUMNS, SurfQualityPrediction.confidence_inputs)
 
 DIGEST_VERSION = 1
+
+# What confidence_digest and _research_class read from a prediction's confidence inputs:
+# top-level keys whole (None) or the named keys of a nested object. Measured on the replayed
+# 2026-10-16 blend (docs/map-layers.md, "Free database budget"): the archive's read of its
+# 4,050 rows took 5.96 MB with the whole inputs (about 1.1 kB a prediction) and 2.45 MB with
+# these parts.
+DIGEST_READS: dict[str, tuple[str, ...] | None] = {
+    "class": None,
+    "rules": None,
+    "independent_families": None,
+    "run_change_ratio": None,
+    "stale": None,
+    "missing": None,
+    "wind_dispute": None,
+    "local": ("class", "assessment_id", "research_class"),
+    "disagreement": ("hs_log_ratio", "dir_diff_deg", "tp_diff_s", "wind_diff_kmh"),
+    "ensemble": ("rel_spread",),
+}
+
+
+def _digest_part_name(key: str, sub: str | None = None) -> str:
+    return f"ci_{key}" if sub is None else f"ci_{key}__{sub}"
+
+
+def _digest_columns() -> list[Any]:
+    """The confidence inputs' parts of :data:`DIGEST_READS` as labelled columns, plus
+    ``ci_object`` (true for a non-empty JSON object) and ``ci_other``: the whole value when
+    it is anything else (SQL NULL, ``{}``, a JSON null), which confidence_digest returns as
+    it is, so no row needs its whole inputs to be read."""
+    inputs = SurfQualityPrediction.confidence_inputs
+    is_object = (func.jsonb_typeof(inputs) == "object") & (inputs != cast({}, JSONB))
+    columns: list[Any] = [
+        func.coalesce(is_object, False).label("ci_object"),
+        case((is_object, None), else_=inputs).label("ci_other"),
+    ]
+    for key, subs in DIGEST_READS.items():
+        if subs is None:
+            columns.append(inputs[key].label(_digest_part_name(key)))
+        else:
+            columns += [inputs[key][sub].label(_digest_part_name(key, sub)) for sub in subs]
+    return columns
+
+
+def _digest_inputs(row: Any) -> dict[str, Any] | None:
+    """The confidence inputs of a :func:`_digest_columns` row, holding the parts
+    confidence_digest and _research_class read and nothing else. A part the stored inputs
+    lack (or hold as JSON null) is None here: both read every part with ``dict.get`` (a
+    nested one after ``or {}``), which gives None for either."""
+    values = row._mapping
+    if not values["ci_object"]:
+        other: dict[str, Any] | None = values["ci_other"]
+        return other
+    inputs: dict[str, Any] = {}
+    for key, subs in DIGEST_READS.items():
+        if subs is None:
+            inputs[key] = values[_digest_part_name(key)]
+        else:
+            inputs[key] = {sub: values[_digest_part_name(key, sub)] for sub in subs}
+    return inputs
 
 
 def confidence_digest(inputs: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -131,13 +193,17 @@ def _research_class(inputs: dict[str, Any] | None) -> str | None:
     return str(value) if value else None
 
 
-def _archived_rows(run_id: int, spot_ids: list[int], issued_at: datetime) -> Select[Any]:
-    """The run's archived rows (:data:`ARCHIVED_COLUMNS`): valid times on the 3-hourly UTC
-    grid (ARCHIVE_STEP_HOURS) from 6 h before ``issued_at`` to ARCHIVE_MAX_LEAD_HOURS after
-    it, inclusive, for ``spot_ids``."""
+def _archived_rows(
+    run_id: int, spot_ids: list[int], issued_at: datetime, *, digest: bool = False
+) -> Select[Any]:
+    """The run's archived rows (:data:`ARCHIVED_COLUMNS`; with ``digest`` the confidence
+    inputs as :func:`_digest_columns` instead): valid times on the 3-hourly UTC grid
+    (ARCHIVE_STEP_HOURS) from 6 h before ``issued_at`` to ARCHIVE_MAX_LEAD_HOURS after it,
+    inclusive, for ``spot_ids``."""
     hour = extract("hour", func.timezone("UTC", SurfQualityPrediction.valid_time))
+    columns = (*ARCHIVED_VALUE_COLUMNS, *_digest_columns()) if digest else ARCHIVED_COLUMNS
     return (
-        select(*ARCHIVED_COLUMNS)
+        select(*columns)
         .join(WaveForecast, WaveForecast.id == SurfQualityPrediction.forecast_id)
         .where(
             SurfQualityPrediction.run_id == run_id,
@@ -163,7 +229,8 @@ def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str,
     for run_id, spot_ids in by_run.items():
         run = runs[run_id]
         rows: list[dict[str, Any]] = []
-        for pred in db.execute(_archived_rows(run_id, spot_ids, run.issued_at)):
+        for pred in db.execute(_archived_rows(run_id, spot_ids, run.issued_at, digest=use_digest)):
+            inputs = _digest_inputs(pred) if use_digest else pred.confidence_inputs
             lead = (pred.valid_time - run.issued_at).total_seconds() / 3600.0
             rows.append(
                 {
@@ -185,13 +252,9 @@ def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str,
                     "ml_model_version": pred.ml_model_version,
                     "forecast_confidence_class": pred.forecast_confidence_class,
                     "local_confidence_class": pred.local_confidence_class,
-                    "research_class": _research_class(pred.confidence_inputs),
+                    "research_class": _research_class(inputs),
                     "confidence_method": pred.confidence_method,
-                    "confidence_inputs": (
-                        confidence_digest(pred.confidence_inputs)
-                        if use_digest
-                        else pred.confidence_inputs
-                    ),
+                    "confidence_inputs": confidence_digest(inputs) if use_digest else inputs,
                 }
             )
         # RETURNING counts the rows actually inserted (conflicts return nothing).
