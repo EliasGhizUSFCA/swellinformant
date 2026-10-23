@@ -20,10 +20,19 @@ frontend/blob-report/
 *.tsbuildinfo
 next-env.d.ts
 
-# Environment & secrets
+# Environment & secrets (the two examples hold placeholders only)
 .env
 .env.*
 !.env.example
+!.env.vercel.example
+# Database dumps hold accounts and password hashes (scripts/backup-db.sh writes ./backups/)
+/backups/
+*.dump
+
+# Vercel CLI: `vercel link`, `vercel pull` and `vercel build` write .vercel/ at the root
+# (project id, pulled env files with secrets, build output); `vercel dev` also writes
+# backend/.vercel/python
+.vercel/
 
 # OS / editors
 .DS_Store

@@ -29,6 +29,8 @@ blob-report
 htmlcov
 
 # Local state and secrets: never upload them. Vercel injects the environment variables.
+# `.env.*` covers .env.vercel.local (the local Vercel-style stack's settings) and the files
+# `vercel env pull` writes; they are named again so a later edit cannot drop them silently.
 *.rdb
 celerybeat-schedule*
 *.log
@@ -36,6 +38,11 @@ celerybeat-schedule*
 .env.*
 **/.env
 **/.env.*
+.env.vercel.local
+.env.local
+# Database dumps (scripts/backup-db.sh) hold accounts and password hashes.
+/backups
+*.dump
 
 # Agent worktrees, scratch and editor files (.gitignore keeps them out of Git deployments;
 # `vercel deploy` from a checkout reads only this file)
