@@ -9,6 +9,7 @@ import {
   formatBytes,
   formatHours,
   freshnessTone,
+  heartbeatLine,
   JobTable,
   LayersAndObservations,
   overallTone,
@@ -280,43 +281,40 @@ describe("sync section on the status page", () => {
     expect(screen.getByTestId("sync-published")).toHaveTextContent("Nothing published yet.");
   });
 
-  it("shows a run that a sync stored after the check as current, from the same report's stored runs", () => {
-    // The daemon rewrites its heartbeat when its sync ends, with the components as the check
-    // before that sync found them (seen live: "new" for both runs sync 5 had just stored).
+  it("shows the component states as the backend reports them", () => {
+    // The daemon settles its components after a sync (backend app/services/sync/detect.py
+    // settle_plan), so the page no longer second-guesses them: a "new" component stays new
+    // even when the report lists that run as the source's newest stored run.
     const map: SyncComponent = {
       kind: "map",
       source: "synthetic_fields",
+      source_name: "Synthetic fields",
       provider: "map_fields",
-      state: "new",
-      stored_run_key: "synthetic-map:0",
+      state: "current",
+      stored_run_key: "synthetic-map:1",
       available_run_key: "synthetic-map:1",
       available_cycle: "2026-10-18T12:00:00Z",
-      detail: null,
+      detail: "stored by sync 5",
     };
-    const waiting: SyncComponent = { ...map, kind: "spots", source: "blend", state: "waiting", available_run_key: "blend:1", detail: "waiting for synthetic_fields" };
     const done: SyncRun = { id: 5, trigger: "daemon", status: "success", started_at: now, finished_at: now, published_at: now, anchor_cycle: null, stages: [] };
-    const synced = { ...sync, components: [...sync.components!, map, waiting], last_run: done, last_published: done };
-    const base = report({ sync: synced });
-    const data = report({
-      sync: synced,
-      forecast_sources: base.forecast_sources.map((s) => (s.code === "synthetic" ? { ...s, newest_run_key: "synthetic:2" } : s)),
-      map_fields: { ...base.map_fields, run_key: "synthetic-map:1" },
-    });
-    const { rerender } = render(<SyncCard data={data} />);
-    const spots = screen.getByTestId("sync-component-spots-synthetic");
-    expect(spots).toHaveAttribute("data-state", "current");
-    expect(spots).toHaveTextContent("Current");
-    expect(spots).toHaveTextContent("stored since this check");
-    expect(screen.getByTestId("sync-component-map-synthetic_fields")).toHaveAttribute("data-state", "current");
-    // Only states a sync resolves: a waiting component keeps the backend's state and detail.
-    expect(screen.getByTestId("sync-component-spots-blend")).toHaveAttribute("data-state", "waiting");
-    expect(screen.getByTestId("sync-component-spots-blend")).toHaveTextContent("waiting for synthetic_fields");
-    // Nothing changes while a sync runs (stored is not yet published), nor without a stored match.
-    rerender(<SyncCard data={{ ...data, sync: { ...synced, last_run: { ...done, status: "running", finished_at: null } } }} />);
+    const base = report({ sync: { ...sync, components: [...sync.components!, map], last_run: done, last_published: done } });
+    render(<SyncCard data={{ ...base, forecast_sources: base.forecast_sources.map((s) => (s.code === "synthetic" ? { ...s, newest_run_key: "synthetic:2" } : s)) }} />);
     expect(screen.getByTestId("sync-component-spots-synthetic")).toHaveAttribute("data-state", "new");
-    expect(screen.getByTestId("sync-component-map-synthetic_fields")).toHaveAttribute("data-state", "new");
-    rerender(<SyncCard data={base} />);
-    expect(screen.getByTestId("sync-component-spots-synthetic")).toHaveAttribute("data-state", "new");
-    expect(screen.getByTestId("sync-component-map-synthetic_fields")).toHaveAttribute("data-state", "new");
+    const row = screen.getByTestId("sync-component-map-synthetic_fields");
+    expect(row).toHaveAttribute("data-state", "current");
+    expect(row).toHaveTextContent("Synthetic fields · newest run 12Z Oct 18");
+    expect(row).toHaveTextContent("stored by sync 5");
+  });
+
+  it("promises no job-silence alarm under the sync daemon, which is judged by its heartbeat", () => {
+    const finished = new Date(Date.now() - 180 * 60_000).toISOString();
+    const celery = { heartbeat: { last_job_finished_at: finished, age_minutes: 180, limit_minutes: 30 }, sync: { ...sync, runner: "celery" as const } };
+    expect(heartbeatLine(celery)).toBe("Last background job finished 3 hours ago (alarm after 30 min of silence)");
+    expect(heartbeatLine({ ...celery, sync: null })).toContain("alarm after 30 min of silence"); // older backend
+    const daemon = { ...celery, sync };
+    expect(heartbeatLine(daemon)).toBe("Last background job finished 3 hours ago (the sync daemon's own heartbeat is checked instead: Forecast sync)");
+    expect(heartbeatLine({ ...daemon, heartbeat: { ...daemon.heartbeat, last_job_finished_at: null } })).not.toContain("alarm");
+    render(<LayersAndObservations data={report({ sync, heartbeat: daemon.heartbeat })} />);
+    expect(screen.getByTestId("data-health-heartbeat")).not.toHaveTextContent("alarm after");
   });
 });
