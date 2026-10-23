@@ -5,8 +5,10 @@ everything stated as verified below was run, with the results shown.
 
 Contents: sections 1-8 (debugging, research, forecasting, 2026-10-11), Phase 2 (sections
 9-13: map redesign, simplified frontend, confidence), Phase 3 (sections 14-18:
-evidence-based spot profiles, validation, operations) and **Upgrade 3 (2026-10, sections
-19-37: forecasting, map, weather visualisation and UI)** at the end.
+evidence-based spot profiles, validation, operations), **Upgrade 3 (2026-10, sections
+19-37: forecasting, map, weather visualisation and UI)** and **Upgrade 4 (2026-10, sections
+38-45: a website on Vercel, data synced to model runs, the wave look; the owner checklist is
+section 44)** at the end.
 
 ## 1. Bugs fixed
 
@@ -798,3 +800,281 @@ Each item: **verified** (with how), **partial** or **not done**.
 Not done anywhere in the list: none. Partial: item 3 (MAPNAV-13), item 15 (UX-14), item 25
 (no real phone), item 29 (real flight, email and SMS providers), and every browser item
 outside Chromium.
+
+# Upgrade 4 (2026-10): a website on Vercel, data synced to model runs, the wave look
+
+Branch `wf4i2/main`, from `b84dfb4` (the end of Upgrade 3), 2026-10-18 to 2026-10-23. Work
+order: research on Vercel, Neon, Upstash and GitHub Actions, a design with decisions D1-D16
+(recorded as built in [`decisions.md`](decisions.md), ADR-021 to ADR-037), a foundation of
+shared contracts (settings, the `sync_runs` table, the sync and job interfaces), nine
+packages built in parallel and reviewed adversarially (sync-core, api-serverless,
+jobs-health, egress-map-serving, vercel-deploy, deps-packaging, local-vercel-stack,
+status-ui, wave-look), integration round 1 (database egress and the public cache, backend
+glue, the wave polish, the deployment configuration), round 2 (a second egress pass, an
+end-to-end verifier, these documents).
+
+As in Upgrade 3: everything below was measured, run or read as stated; "computed" means
+arithmetic on measured values, "estimated" says what was assumed. Nothing is marked working
+unless it was run. **No real Vercel deployment was made** (no Vercel account was used):
+section 42 lists what only the first production deploy can show.
+
+## 38. The owner's request
+
+Verbatim (2026-10-18): "I want to put this on a website. Also all of the weather data should
+be pulled when the forecast updates. The weather data should only update those specific
+spots. Also the wave should look like this. Can you make these changes"
+
+The attached screenshot showed a smooth wave-height field off California (deep blue for small
+waves, through violet, to magenta and pink for big ones), grey land with the coastline drawn,
+and many short, soft white dashes drifting in the direction the waves travel.
+
+The owner's answers to the questions that followed:
+
+* Hosting: "I am going to host it on vercel. Make it work with this. Also make it so i can
+  test it locally before i put it on vercel."
+* Map data: "Whole world, synced" (keep the worldwide map layers, fetched together with the
+  spot forecasts when a new model run comes out; point forecasts only for the surf spots).
+* Commercial use: "It will be free for now but eventually i will have a paywall to use it."
+
+The lead's defaults, which the owner can change: the architecture of the design; on Neon
+Free about 1 day of forecast history and 1 week of verification archive; the combined sea
+as the default wave layer; new ECMWF runs sync on their own (later narrowed by the
+free-database cadence, ADR-023); GEFS off on Vercel; the repository stays public; no custom
+domain yet; the paywall as configuration only.
+
+## 39. What was built, per request item
+
+| Request | Built | Evidence (section 40, 41) | Documented in |
+|---|---|---|---|
+| Put it on a website, on Vercel | One Vercel project from the repository root: services `web` (Next.js) and `api` (FastAPI as one lean Python function), the `sync` daemon (`python -m app.cli sync daemon`, repo-root `Containerfile`), a daily cron watchdog, Neon Postgres and Upstash Redis from the Marketplace; the API needs no Celery (`JOB_RUNNER=daemon`), reads the client IP from `x-vercel-forwarded-for`, uses Neon's pooled URL without prepared statements; production builds migrate the database | the offline Vercel build `RESULT: ok` (API function 127.3 MiB of 500 MiB); a real deployment was not made | [`deploy-vercel.md`](deploy-vercel.md), [`ARCHITECTURE.md`](ARCHITECTURE.md) 1.1 |
+| Test it locally first | `docker-compose.vercel.yml` with `scripts/vercel-local.sh` (an edge that routes like Vercel, the lean API, the Next.js build, PgBouncer like Neon's pooler, Redis, the same daemon image, Mailpit, the cron); `scripts/vercel-build-check.sh --offline`; `vercel dev -L` | smoke 19 of 19 shell checks and 6 of 6 Playwright tests with demo data and again with live data | [`local-vercel-stack.md`](local-vercel-stack.md), README E.6 |
+| Pull all weather data when the forecast updates | the synced pipeline: provider metadata checked every 10 minutes; a new model run starts one sync of 12 stages under a database lease; the spot forecasts and the map layers of a run are acquired, scored and published together; a run already stored is never fetched again; Celery's beat runs the same sync (`sync.tick`) in the classic stack | after a sync a check made 0 SQL statements and only metadata requests (3,588 B); a forced re-sync wrote no data row; the daemon synced a real GFS run and its map cycle by itself (2026-10-22) | [`sync.md`](sync.md), README F.2 |
+| Only those specific spots | point forecasts for the active seeded surf spots only, one Open-Meteo request per model for the 50 spots; the direct GRIB spot ingesters stay off | live: 10,264 GFS records for the 50 spots in one sync | [`sync.md`](sync.md), [`FORECAST_SOURCES.md`](FORECAST_SOURCES.md) |
+| Whole world, synced | the NOAA GFS world map layers are a stage of the same sync; the map index serves the published sync's map run (`SYNC_PUBLISH_GATE`), so the map and the spots switch together; the GFS spot run and the map of a cycle wait up to 90 min for each other | live: 135 map fields for 9 map hours stored and published by the stack's sync; the map index names its publication (smoke) | [`map-layers.md`](map-layers.md) |
+| The wave should look like this | a wave-height ramp anchored in metres (muted navy through slate blue, violet and magenta to pink), mid-grey land with a dark coastline, and short soft crest dashes, each a lighter tint of the field, on the crest lattice and moving at the stated phase speed; the combined sea by default, the partitions in Settings | screenshots (section 41) and the e2e physics checks (spacing ratio 4.00, orientation, motion); draw p95 3.1-3.4 ms | [`map-rendering.md`](map-rendering.md), README H |
+| Free now, paywall later | the hosted and free-database profiles (`backend/app/core/profiles.py`); `COMMERCIAL_USE` refuses the free Open-Meteo API without a key; the full-retention profile for after the database upgrade; the checklist in section 44 | the guard is tested with mocked HTTP; the profiles are tested against `.env.vercel.example` and the deploy guide | [`API_SETUP_REQUIRED.md`](API_SETUP_REQUIRED.md) 1.4 and 5 |
+
+Also built because the free plans demanded it: the database reads were cut so the
+background stays inside Neon Free's 5 GB of egress (one both-family sync pass from 169 MB to
+21.28 MB, section 41), a public snapshot cache in Redis computed once per publication and UTC
+hour, CDN headers on every user-independent response, a `/status` sync section with the
+daemon's heartbeat and a CPU meter against the daemon's 10 CPU-hour quota, and an
+`OPS_ALERT_EMAILS` fallback for when the database itself is down. Migration 0008 records one
+publication of the data an existing database already holds.
+
+## 40. Verification evidence
+
+Run by the integration verifier on the final code of round 2 (2026-10-23, this sandbox: 4
+shared vCPUs, local PostgreSQL 16 and Redis, Docker 29.8.2), then the documentation tests of
+this pass:
+
+| Check | Command | Result |
+|---|---|---|
+| Formatting, lint, types | `ruff format --check .`, `ruff check .`, `mypy app` | 366 files formatted, all checks passed, 199 files type-checked |
+| Migrations | `alembic upgrade head` + `alembic check` on a fresh database; round trip and the 0006 and 0008 migration tests | 0001-0008 applied, no new operations; 5 passed |
+| Backend unit | `pytest tests/unit` | 2,040 passed, 4 skipped (the lean-install tests: 27 of 27 with `LEAN_PYTHON` set to a uv 0.11.32 lean venv) |
+| Backend integration | `pytest tests/integration` | 503 passed, 3 skipped (PgBouncer mode: 3 of 3 against the local stack's PgBouncer) |
+| API bundle | `scripts/check_api_bundle.py --max-mb 200` | 163.2 of 200 MB |
+| Frontend | `tsc --noEmit`, `eslint . --max-warnings=0`, `vitest run` | pass; 486 tests in 40 files |
+| Frontend builds | `npm run build` (proxy) and `API_ROUTING=platform` | pass; the platform build has no `/api` rewrite |
+| End to end | `scripts/run-e2e.sh` (Chromium + Pixel 7) | 127 passed twice (13.2 and 12.5 min), no flaky test; wave draw p95 3.1 and 3.4 ms |
+| Offline Vercel build | `scripts/vercel-build-check.sh --offline` | `RESULT: ok` in 83 s; api python3.13, 3,428 files, 127.3 MiB; web nodejs24.x functions 4.6 / 3.8 / 1.7 MiB; the cron and both routes present |
+| Local Vercel-style stack | `cp .env.vercel.example .env.vercel.local`, `scripts/vercel-local.sh up`, `sync --force`, `smoke` | up in 216 s cold, nine services healthy; smoke 19/19 and 6/6 with demo data and with live data, including `/status` "published" and the Mailpit account round trip |
+| Stack details | forged client-IP headers, PgBouncer path, cron tokens, a second check | forged headers overwritten (key = the gateway 172.22.0.1); `/api/spots` through PgBouncer; cron 200 / 401 / 401 / 404 without `CRON_SECRET`; a second check moved about 30 kB and changed 0 rows |
+| Classic Celery stack | `docker compose up -d --build --wait` (with this sandbox's port and build overrides) | up in 154 s; beat start ran `sync.tick`: sync 1 success in 31.1 s on demo data; `/api/spots` served 50 spots |
+| Data only on update | `sync check`, `sync run`, `sync check`, `sync run --force` ×3, `sync daemon --once` on a fresh database, hosted + free-database profile, real providers | second check 0 SQL statements, 8 requests / 3,588 B; a forced re-sync over stored data changed no data row and left the swell events identical; the daemon iteration made 3 start-up SELECTs and metadata requests only |
+| Egress at the final code | `scripts/measure_db_egress.py` on replayed copies of a recorded live run | within 0.04 MB of round 2's figures (section 41) |
+| Upgrade path | a copy of a pre-Upgrade-4 database migrated to head | before 0008: no publication; after: one publication row, the index and `/status` name it, the known runs load |
+| Dependency audits | `npm audit --omit=dev`; pip-audit 2.9.0 on every extra of `uv.lock` | 0 vulnerabilities; no known vulnerabilities (after Next.js 16.4.1 and certifi 2026.10.19) |
+| Documentation tests (this pass) | `pytest tests/unit/test_api_setup_doc.py tests/unit/test_upgrade_settings.py tests/unit/test_local_vercel_stack.py tests/unit/test_vercel_deploy.py tests/unit/test_compose_classic.py tests/unit/test_surf_scoring_doc.py tests/unit/test_free_database_cadence.py` | 77 passed (the settings table, `.env.example`, the hosted-profile block of the deploy guide, both env templates and compose files) |
+
+Mutation checks across the packages and rounds: every listed mutation of the new tests was
+caught (for example 59 detection, CLI, orchestrator and daemon mutations in the sync-core
+review, 10 of 10 in the wave renderer, the eight of the egress tests and four of migration
+0008).
+
+## 41. Measurements
+
+| What | Value | How |
+|---|---|---|
+| One both-family sync pass, bytes PostgreSQL sends (Neon egress) | 169 MB (package baseline) → 57 MB → 31.41 MB (round 1) → **21.24 MB** (round 2), 21.28 MB re-measured | `scripts/measure_db_egress.py` on replayed copies of a recorded live run, clock frozen, 3 SYNTHETIC saved searches |
+| Demo pass with acquisition | 186.8 MB (design research) → 11.18 MB (verifier and this pass) | the same script, fresh `init-db` |
+| Hourly batch of periodic jobs | 2.22 → 0.87 MB | the same, `jobs` |
+| Page views, anonymous, no CDN, cold / warm | home 397.4 / 0.0 kB; map 2,513.8 / 722.4 kB (the 9 fields; the CDN keeps them a year per run); spot page 1,181.1 / 0.0 kB | the same, `pages` |
+| Monthly background egress, free-database profile | **2.01 GB (40 % of Neon Free's 5 GB)**: 60 syncs × 21.28 MB + 720 hourly batches × 0.87 MB + daily jobs and start-ups; old cadence 4.32 GB; before the egress work 7.12 GB | computed from the measured unit costs |
+| With visitors | quiet (100 views a day) 2.41 GB in all, fits; steady (1,000 views a day) 5.37 GB, does not fit | computed for stated example traffic |
+| Neon compute | about 20 CU-hours a month in the background, at most about 37 with steady visitors (100 included) | arithmetic: 0.25 CU, active until 5 min after the last statement |
+| Upstash commands | about 68,000 a month (daemon); about 375,000 with steady visitors (500K included) | measured commands per check, poll and view, times the cadence |
+| Daemon CPU, full cadence | 4.4-7.9 CPU-hours a month (10 included on Hobby) | extrapolated from measured CPU per stage (docs/sync.md) |
+| A live sync in the local stack (9 map hours) | map layers: 73.3 MB in 63 requests, 135 fields, 10.6 MB stored, 38.6 s / 30.9 CPU s; GFS spots: 10,264 records, 58.9 s / 10.5 CPU s | stack logs, 2026-10-23 |
+| Second check after a sync (stack) | 30,145 B received / 22,667 B sent, 0 rows changed | `/proc/net/dev` and `pg_stat_database` before and after |
+| Images | sync 1.22 GB (ecCodes 2.49.0), api 409 MB, web 344 MB, pgbouncer 15.1 MB; classic backend 1.28 GB | `docker image ls` |
+| Wave renderer | draw p95 3.1 / 3.4 ms (e2e); ink per dash 2.25× at 4 m vs 1 m; 2.73-3.73 dashes per 1,000 CSS px² on Pixel 7, 1.95-2.58 on desktop (budget-limited, software rendering), reference 4.05 | e2e logs; density script on screenshots |
+| Inline email under the daemon | register 0.58 s with Redis up, 2.12 s with Redis blackholed | API timing with the hosted Redis timeouts |
+
+Screenshots of the final code through the local stack's edge (real NOAA GFS-Wave 06Z +12 h
+field, combined sea; desktop 1440×900 and Pixel 7; the California view at zoom 6 drew 1,494
+crests with a draw p95 of 4.0-4.7 ms on the desktop) are kept with the integration's working
+files, outside the repository.
+
+## 42. What could not be verified here
+
+The first production deploy is the test of these:
+
+* the daemon's image build and start on Vercel (daemons do not run in previews or
+  `vercel dev`), its 600 s shutdown grace, and the daemon root `./` next to the web service's
+  assets;
+* Vercel's CDN caching of the public responses, Services routing and cookies on a real
+  domain, the client IP from `x-vercel-forwarded-for`, the build-time migration on Vercel's
+  builder against Neon;
+* Neon's compute suspend and wake and its CU-hour and egress accounting, Upstash's real
+  command counts and TLS, the variable names the Marketplace sets today (`KV_URL` or only the
+  REST variables);
+* the daily cron invocation and its timing, preview deployments with Neon branches;
+* real email through Resend (no key, no verified domain), the Open-Meteo commercial hosts
+  (no key);
+* the GitHub Actions jobs (`deploy-config`, `vercel-build`, `data-sync.yml`) on GitHub;
+* the daemon's monthly CPU on Vercel's vCPU (the estimate assumes this sandbox's speed);
+* the database cost of signed-in visitors (session reads) and of uncached visitor URLs;
+* a live two-family ECMWF acquisition in this round (Open-Meteo served its 06Z ECMWF run,
+  which this source does not read); Firefox, WebKit, GPU-backed rendering and real phones.
+
+## 43. Risks
+
+* **Vercel Daemons and Services are Beta.** The fallbacks are documented
+  (docs/deploy-vercel.md section 9): two projects, or the manual GitHub sync.
+* **The daemon quota** (10 Active CPU-hours on Hobby): when used up, the daemons stop until the
+  1st of the next month; the site serves the last data and the watchdog emails the admins.
+  The map layers are more than half of the estimate.
+* **Neon Free can still bind**: steady traffic (1,000 views a day) needs about 5.37 GB of
+  egress; anything that reaches the database every 5 minutes keeps the compute awake (180
+  CU-hours a month). Signed-in traffic was not measured.
+* **Open-Meteo's free limit is per IP**, and the daemon's address may be shared: refusals
+  delay a source to the next UTC day; an API key removes the risk.
+* **Freshness on the free database**: spot forecasts change twice a day; a GFS run can read
+  stale for up to about 1.3 h before each sync; if NOAA's map layers fail, no sync runs
+  (estimated, not observed live).
+* **Tides after a fresh deploy**: none until the first 02:20 UTC run of the daemon (up to
+  about 24 h), not flagged by data health.
+* **Logs**: Hobby keeps runtime logs 1 hour; diagnosis relies on `sync_runs`, the job logs,
+  `/status` and the watchdog email.
+* **Young releases**: Next.js 16.4.1 is 9 days old (the oldest release with the security
+  fixes); certifi is pinned past `exclude-newer` for an advisory. Dev-only advisories remain
+  in vitest 3.2.7 (the fix is vitest 5).
+* **Upgrading an existing database**: keep `FORECAST_PROVIDERS` as it was (the spot list and
+  the map serve only runs of the configured sources) and run the migrations (0008).
+* **Machine learning on the daemon**: the image ships `backend/ml_models`; a model trained at
+  run time would not survive a restart (design risk, not checked on Vercel).
+
+## 44. Owner checklist
+
+### Free now (no payments and no ads; donations are allowed on Hobby)
+
+1. **Test on your machine** (Docker; docs/local-vercel-stack.md):
+   `cp .env.vercel.example .env.vercel.local`, `scripts/vercel-local.sh up`,
+   `scripts/vercel-local.sh sync --force`, `scripts/vercel-local.sh smoke`; open
+   http://localhost:3100 and the Mailpit inbox at http://localhost:18025;
+   `scripts/vercel-local.sh down` when done. Optionally `scripts/vercel-build-check.sh
+   --offline` (Node.js needed, no Vercel account).
+2. **Vercel account** on the Hobby plan ($0), signed in with GitHub. The repository stays on
+   GitHub and public (free CI). *(Vercel's website.)*
+3. **Import the repository**: Add New Project, this repository, **Root Directory left at the
+   repository root**, build settings left at their defaults. The first deployment has no
+   database yet; that is expected. *(Vercel's website.)*
+4. **Neon**: Vercel Marketplace (Storage), Neon Postgres, **Free**, region **AWS us-east-1**,
+   connected to Production, Preview and Development. Check that `DATABASE_URL` and
+   `DATABASE_URL_UNPOOLED` appear in Environment Variables. *(Vercel's website.)*
+5. **Upstash**: Vercel Marketplace, Upstash Redis, **Free**, us-east-1, connected to the
+   project. Check for `KV_URL` (or `REDIS_URL`); if neither appears, copy the database's
+   `rediss://` URL into a `REDIS_URL` variable. *(Vercel's website.)*
+6. **Email: Resend and a domain.** A domain you own (a registrar's price; not researched
+   here); a Resend account (free: 3,000 emails a month, 100 a day); verify the domain in
+   Resend with its SPF, DKIM and DMARC records; create an API key. Until the domain is
+   verified, account emails cannot reach other people, so keep public sign-up closed.
+7. **Secrets**, generated on your machine, two different values:
+   `python -c "import secrets; print(secrets.token_urlsafe(48))"` for `SECRET_KEY` and for
+   `CRON_SECRET`.
+8. **Environment variables** (Project Settings, Environment Variables; docs/deploy-vercel.md
+   step 5): paste the hosted-profile block for Production and Preview; then `APP_ENV`
+   (`production`; Preview `development`), `SECRET_KEY`, `CRON_SECRET` (Production),
+   `COOKIE_SECURE=true`, `APP_BASE_URL`, `API_BASE_URL` and `CORS_ORIGINS`
+   (`https://<project>.vercel.app` or your domain), `EMAIL_PROVIDER=resend`, `EMAIL_FROM` on
+   your verified domain, `RESEND_API_KEY`, and `OPS_ALERT_EMAILS` with your own address (the
+   only alert that still goes out when the database is down). Keep `FLIGHT_PROVIDER=demo`
+   until you have a flight provider. *(Vercel's website.)*
+9. **Optional head start**: from `backend/` with the lean install (`uv sync --locked
+   --no-dev`), point `DATABASE_URL` and `DATABASE_URL_UNPOOLED` at Neon's direct URL and run
+   `.venv/bin/python -m app.cli init-db` (docs/deploy-vercel.md step 6; checked here against
+   a local PostgreSQL only). The daemon runs it at every start anyway.
+10. **Deploy**: redeploy production (variables reach new deployments only). The api build
+    migrates the database; Vercel builds the daemon image and starts it. *(Vercel.)*
+11. **Check** (*on the deployment*): `https://<project>.vercel.app/api/health/ready` answers
+    `{"status":"ok","checks":{"database":"ok","redis":"ok"}}`; the Daemons page shows one
+    `sync` instance whose logs show `init-db` and the first check; `/status` shows the
+    daemon's last check and, after the first sync, a published sync (on a fresh database
+    the first sync can wait up to 90 minutes while the map cycle and the GFS spot run of the
+    same cycle wait for each other); the map shows the wave layer; the watchdog answers 200
+    to `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily`.
+12. **Make yourself admin** after registering and verifying your email address:
+    `.venv/bin/python -m app.cli make-admin you@example.com` with the same environment as
+    step 9 (admins get the data-health emails and the accuracy dashboard).
+13. **Keep the free tiers healthy**: no uptime monitor on `/api/health/ready` more often
+    than every 15 minutes (each hit wakes Neon); watch the `/status` CPU meter (10 Active
+    CPU-hours a month; if it runs high, `MAP_FIELD_PARTITIONS=off` or a shorter map horizon);
+    keep `GEFS_ENABLED=false`; look at Neon's usage page now and then (egress budget 2.01 GB
+    of 5 in the background). Do not add a schedule to `data-sync.yml` (GitHub's terms); add
+    its repository secrets only if you want the manual emergency sync (docs/deploy-vercel.md
+    section 8).
+
+### Paywall later (before the site shows any price or checkout)
+
+1. **Vercel Pro** ($20 a month platform fee, $20 monthly usage credit; daemons billed for
+   Active CPU and memory, rate not read): Hobby is non-commercial, and "Any method of
+   requesting or processing payment from visitors of the site" is commercial use.
+2. **Open-Meteo plan** (Standard: 1M calls a month; confirm the price at checkout): set
+   `OPEN_METEO_API_KEY`, raise `OPEN_METEO_CALLS_PER_DAY` and `OPEN_METEO_CALLS_PER_MONTH`
+   to the plan's budget, then `COMMERCIAL_USE=true`. From then on the app refuses the free
+   API (`/status` would report `licence` if the key were missing).
+3. **Neon Launch** ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then the
+   full-retention profile: `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`,
+   `RETENTION_JOB_LOG_DAYS=30`, `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`,
+   `SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12` (a sync for every new model
+   run: about 4.32 GB of background egress a month).
+4. **Upstash** pay-as-you-go ($0.2 per 100K commands, with a budget cap) or a Fixed plan
+   (from $10 a month).
+5. **Redeploy** production after changing variables.
+6. Optional: a faster cadence (`JOB_INTERVAL_FLOOR_MINUTES=0`, `SYNC_CHECK_MINUTES=5`) and a
+   larger daemon (a `4Gi` memory request in `vercel.json`, a code change); other paid
+   services only if used: Resend Pro above 3,000 emails a month, Duffel for real fares, a
+   tile provider licensed for commercial use for the Streets basemap.
+7. **What a paywall needs that is not built**: a payment provider (none researched) and its
+   checkout and billing webhooks; plans and prices; a record of who has paid (subscription or
+   one-off, in the database); access control on the API and the pages for paying accounts,
+   and the decision which features stay free; the legal pages a paid service needs (terms,
+   privacy, refunds; not researched). The hosting side above is configuration only.
+
+## 45. Defects fixed at integration, and what is left
+
+Fixed in the two integration rounds (commits on `wf4i2/main`): detection no longer cancels
+and re-creates an event when run again over unchanged data; the API function's data health
+no longer reports the tide constants it cannot see; the daemon's lease is 15 minutes with a
+keeper; Open-Meteo's daily limit waits until 00:00 UTC; the publication hook of the public
+cache is wired; `/api/system/status` and the map index are served from the public cache;
+with `map` triggers and no map component, spot runs trigger; migration 0008 publishes the
+data of an upgraded database; Next.js 16.4.1 and certifi 2026.10.19 for their advisories;
+the regenerated OpenAPI types; the round-2 settings in the classic compose file and the
+templates. This pass: `.env.example` no longer sets `SYNC_LEASE_MINUTES=45` explicitly
+(that overrode the daemon's 15-minute default for anyone who copied it).
+
+Left open:
+
+* **Tides on a fresh hosted deployment** (section 43): the daemon could run a daily job at
+  start when it has never succeeded, or data health could flag "no tide predictions yet".
+* **Database cost of signed-in visitors** and uncached URLs: unmeasured; they decide whether
+  Neon's compute can scale to zero.
+* **Steady traffic does not fit Neon Free**: a spot page's cached responses cost 1.16 MB to
+  compute (mostly the 10-day forecast and the timeline), and scoring reads 10.85 MB per
+  pass (2.61 MB of it tide predictions); both could be narrowed.
+* **Vitest 3 → 5** for the dev-only advisories; Next.js 16.4.2 once it is two weeks old.
+* **Commit message 41572a4** says one mutation set the publication time to now; it actually
+  set it to now() minus 1 day (history is not rewritten).
