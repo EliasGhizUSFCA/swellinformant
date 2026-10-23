@@ -163,11 +163,51 @@ def blend_source_info() -> SourceInfo:
 
 
 # --------------------------------------------------------------------------- members
+@dataclass(frozen=True, slots=True)
+class MemberStep:
+    """One member forecast hour as the blend reads it: the forecast fields, the period's
+    kind and only the ``extra`` keys the blend reads (the gust definition and the
+    interpolated mark, present only when stored and not null). A whole ``wave_forecasts``
+    row also carries its id, run, issue time, wave power, missing-field list and the rest
+    of ``extra`` (grid cells, model names): the two member reads of the replayed 2026-10-16
+    pass took 7.16 MB whole and take 2.88 MB so (docs/map-layers.md, "Free database
+    budget")."""
+
+    valid_time: datetime
+    sig_wave_height_m: float | None
+    wave_period_s: float | None
+    wave_direction_deg: float | None
+    primary_swell_height_m: float | None
+    primary_swell_period_s: float | None
+    primary_swell_direction_deg: float | None
+    secondary_swell_height_m: float | None
+    secondary_swell_period_s: float | None
+    secondary_swell_direction_deg: float | None
+    tertiary_swell_height_m: float | None
+    tertiary_swell_period_s: float | None
+    tertiary_swell_direction_deg: float | None
+    wind_wave_height_m: float | None
+    wind_wave_period_s: float | None
+    wind_wave_direction_deg: float | None
+    wind_speed_kmh: float | None
+    wind_direction_deg: float | None
+    wind_gust_kmh: float | None
+    pressure_msl_hpa: float | None
+    sea_level_m: float | None
+    wave_period_kind: str | None
+    extra: dict[str, Any]
+
+
+# ``extra`` keys the blend reads: gust_kind_for's definition and the interpolated mark.
+MEMBER_EXTRA_KEYS = (EXTRA_GUST_KIND, EXTRA_INTERPOLATED)
+_MEMBER_COLUMNS = ("valid_time", *FORECAST_FIELDS, "wave_period_kind")
+
+
 @dataclass
 class Member:
     source: ForecastSource
     run: ForecastRun
-    series: dict[int, list[WaveForecast]] = field(default_factory=dict)
+    series: dict[int, list[MemberStep]] = field(default_factory=dict)
 
     @property
     def code(self) -> str:
@@ -209,13 +249,26 @@ def select_members(db: Session, now: datetime) -> tuple[list[Member], list[Membe
 
 
 def _load_series(db: Session, member: Member) -> None:
-    by_spot: dict[int, list[WaveForecast]] = {}
-    for row in db.scalars(
-        select(WaveForecast)
-        .where(WaveForecast.run_id == member.run.id)
-        .order_by(WaveForecast.spot_id, WaveForecast.valid_time)
+    """The member run's forecasts by spot and valid time (:class:`MemberStep`). ``extra``
+    holds a read key only when its stored value is not null: the blend reads it with
+    ``dict.get``, which gives None (or the default) for an absent key and a JSON null
+    alike."""
+    w = WaveForecast
+    extras = [w.extra[key].label(f"extra_{key}") for key in MEMBER_EXTRA_KEYS]
+    by_spot: dict[int, list[MemberStep]] = {}
+    for row in db.execute(
+        select(w.spot_id, *(getattr(w, name) for name in _MEMBER_COLUMNS), *extras)
+        .where(w.run_id == member.run.id)
+        .order_by(w.spot_id, w.valid_time)
     ):
-        by_spot.setdefault(row.spot_id, []).append(row)
+        values = row._mapping
+        extra = {
+            key: values[f"extra_{key}"]
+            for key in MEMBER_EXTRA_KEYS
+            if values[f"extra_{key}"] is not None
+        }
+        step = MemberStep(**{name: values[name] for name in _MEMBER_COLUMNS}, extra=extra)
+        by_spot.setdefault(values["spot_id"], []).append(step)
     member.series = by_spot
 
 
@@ -230,8 +283,8 @@ def _interp_angle(a: float, b: float, frac: float) -> float:
 
 
 def row_at(
-    rows: list[WaveForecast], times: list[datetime], t: datetime
-) -> tuple[WaveForecast | None, bool]:
+    rows: list[MemberStep], times: list[datetime], t: datetime
+) -> tuple[MemberStep | None, bool]:
     """(the member's own row at t, or the row before t; True when t is not a member step)."""
     i = bisect.bisect_left(times, t)
     if i < len(times) and times[i] == t:
@@ -239,9 +292,7 @@ def row_at(
     return (rows[i - 1] if i > 0 else None), True
 
 
-def value_at(
-    rows: list[WaveForecast], times: list[datetime], t: datetime, name: str
-) -> float | None:
+def value_at(rows: list[MemberStep], times: list[datetime], t: datetime, name: str) -> float | None:
     """Field ``name`` at time t, interpolating between neighbouring steps (no extrapolation)."""
     i = bisect.bisect_left(times, t)
     if i < len(times) and times[i] == t:
