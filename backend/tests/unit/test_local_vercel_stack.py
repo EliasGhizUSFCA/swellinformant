@@ -30,8 +30,13 @@ VERCEL_JSON = ROOT / "vercel.json"
 
 HOSTED_FREE = profile_env("hosted", "free-database")
 # The stack's documented departures from the hosted profile: no forecast or map provider
-# is called until .env.vercel.local chooses live sources.
-LOCAL_DEFAULTS = {"FORECAST_PROVIDERS": "demo", "MAP_FIELDS_ENABLED": "false"}
+# is called until .env.vercel.local chooses live sources, and without map layers a new spot
+# run triggers a sync (the hosted free-database profile syncs for new map cycles only).
+LOCAL_DEFAULTS = {
+    "FORECAST_PROVIDERS": "demo",
+    "MAP_FIELDS_ENABLED": "false",
+    "SYNC_TRIGGER_SOURCES": "spots,map",
+}
 # Read by docker-compose.vercel.yml or the Next.js build, not by Settings.
 STACK_ONLY = {
     "VERCEL_LOCAL_DATABASE_URL",

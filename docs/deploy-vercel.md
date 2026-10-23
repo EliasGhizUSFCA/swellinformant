@@ -54,9 +54,10 @@ order, before the site asks anyone for money:
    Settings, Environment Variables; then set `COMMERCIAL_USE=true`. With the flag and no
    key the spot forecasts stop: the app refuses the free hosts and `/status` reports the
    `licence` problem.
-3. Move Neon to **Launch**, then change the retention to the full-retention profile:
-   `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`, `RETENTION_JOB_LOG_DAYS=30`,
-   `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`.
+3. Move Neon to **Launch**, then change the retention and the sync cadence to the
+   full-retention profile: `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`,
+   `RETENTION_JOB_LOG_DAYS=30`, `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`,
+   `SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12`.
 4. Move Upstash off Free (pay-as-you-go with a budget cap, or a Fixed plan).
 5. Redeploy production: environment variables reach new deployments only.
 
@@ -240,12 +241,19 @@ RETENTION_ARCHIVE_DAYS=7
 RETENTION_JOB_LOG_DAYS=7
 SYNC_PRUNE_EACH_PASS=true
 DATA_HEALTH_DATABASE_MAX_GB=0.85
+SYNC_TRIGGER_SOURCES=map
+MAP_FIELD_CYCLES=06,18
 ```
 
 `GEFS_ENABLED=false` protects the daemon's 10 CPU-hours; set it to `true` to show the GEFS
-ensemble spread. After moving Neon to Launch, change the last five to the full-retention
+ensemble spread. After moving Neon to Launch, change the last seven to the full-retention
 profile: `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`,
-`RETENTION_JOB_LOG_DAYS=30`, `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`.
+`RETENTION_JOB_LOG_DAYS=30`, `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`,
+`SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12`. The last two keep the
+database inside Neon Free's 5 GB of egress a month: a sync only for a new map cycle (06Z
+and 18Z), which also brings the newest spot runs of both model families
+(docs/map-layers.md, "Free database budget", has the measured budget and the freshness
+this costs).
 
 **Yours to set.** `<project>` is your `*.vercel.app` name.
 

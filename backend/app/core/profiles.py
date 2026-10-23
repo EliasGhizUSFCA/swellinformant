@@ -8,10 +8,20 @@ local Vercel-style stack); docs/deploy-vercel.md lists them.
 * :data:`HOSTED_PROFILE`: Vercel Hobby with a sync daemon, Neon's pooled URL for the API and
   Upstash Redis. GEFS stays off (the daemon's 10 Active CPU-hours a month); GEFS_ENABLED=true
   turns it on.
-* :data:`FREE_DATABASE_PROFILE`: retention that fits Neon Free (1 GB): about 1 day of
-  forecast history and 1 week of verification archive and job logs, pruned after every sync.
-* :data:`FULL_RETENTION_PROFILE`: the retention to restore after upgrading the database
-  (Neon Launch). It equals the Settings defaults.
+* :data:`FREE_DATABASE_PROFILE`: what fits Neon Free. Storage (1 GB): about 1 day of
+  forecast history and 1 week of verification archive and job logs, pruned after every
+  sync. Egress (5 GB a month): a sync only for a new map cycle (SYNC_TRIGGER_SOURCES=map),
+  which also acquires the newest spot runs of both model families, two a day at the 06Z
+  and 18Z cycles (MAP_FIELD_CYCLES=06,18). Estimated from the publication lags measured in
+  docs/FORECAST_SOURCES.md: Open-Meteo then serves the ECMWF run of that day's 00Z or 12Z,
+  which is acquired about 11-12.5 h after its cycle and is 23-24.5 h old at the next sync,
+  just under its 24.7 h stale age; with 00Z and 12Z map cycles it would be acquired 17-18.5
+  h after its cycle and be stale for about 4-6 h of every 12. Egress measured on the
+  replayed 2026-10-16 run (docs/map-layers.md, "Free database budget"): about 1.9 GB a
+  month for the syncs and the hourly jobs, against 4.2 GB with a sync for every new spot
+  run.
+* :data:`FULL_RETENTION_PROFILE`: the retention and sync cadence to restore after upgrading
+  the database (Neon Launch). It equals the Settings defaults.
 
 Keys are environment variable names (as the deployment sets them), values are the strings
 the deployment writes.
@@ -51,6 +61,8 @@ FREE_DATABASE_PROFILE: Mapping[str, str] = MappingProxyType(
         "RETENTION_JOB_LOG_DAYS": "7",
         "SYNC_PRUNE_EACH_PASS": "true",
         "DATA_HEALTH_DATABASE_MAX_GB": "0.85",
+        "SYNC_TRIGGER_SOURCES": "map",
+        "MAP_FIELD_CYCLES": "06,18",
     }
 )
 
@@ -61,6 +73,8 @@ FULL_RETENTION_PROFILE: Mapping[str, str] = MappingProxyType(
         "RETENTION_JOB_LOG_DAYS": "30",
         "SYNC_PRUNE_EACH_PASS": "false",
         "DATA_HEALTH_DATABASE_MAX_GB": "20",
+        "SYNC_TRIGGER_SOURCES": "spots,map",
+        "MAP_FIELD_CYCLES": "00,12",
     }
 )
 

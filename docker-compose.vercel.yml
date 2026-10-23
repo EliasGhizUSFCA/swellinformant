@@ -97,6 +97,12 @@ x-app-env: &app-env
   RETENTION_JOB_LOG_DAYS: ${RETENTION_JOB_LOG_DAYS:-7}
   SYNC_PRUNE_EACH_PASS: ${SYNC_PRUNE_EACH_PASS:-true}
   DATA_HEALTH_DATABASE_MAX_GB: ${DATA_HEALTH_DATABASE_MAX_GB:-0.85}
+  # Hosted: a sync only for a new map cycle (SYNC_TRIGGER_SOURCES=map). The stack's map
+  # layers are off until .env.vercel.local turns them on, so here a new spot run triggers
+  # too (set SYNC_TRIGGER_SOURCES=map there with MAP_FIELDS_ENABLED=true to test the
+  # hosted cadence).
+  SYNC_TRIGGER_SOURCES: ${SYNC_TRIGGER_SOURCES:-spots,map}
+  MAP_FIELD_CYCLES: ${MAP_FIELD_CYCLES:-06,18}
 
 x-env-file: &env-file
   - path: ${VERCEL_LOCAL_ENV_FILE:-.env.vercel.local}
