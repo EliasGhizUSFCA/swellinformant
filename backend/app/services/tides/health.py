@@ -11,7 +11,13 @@ stored predictions end less than MIN_AHEAD from now is short. Some short station
 the daily job has not tried yet (no predictions, no attempt recorded) is not counted: a new
 deployment is covered by the job schedule check (tides.acquire overdue) instead. With
 harmonic_model configured, an unreadable constants file is "failing" on its own
-(``tides_constants:harmonic_model``).
+(``tides_constants:harmonic_model``, :func:`constants_problem`).
+
+The constants file (data/tides/, TIDE_CONSTANTS_PATH) ships with the processes that run
+the tide jobs: the classic images and the sync daemon's (/data). The Vercel API function
+(root backend/) has no data/, so there the data-health report takes the daemon's own
+result from its heartbeat instead of reading a file that is not deployed
+(app.services.health; :func:`constants_file_present`).
 """
 
 from __future__ import annotations
@@ -31,8 +37,43 @@ MIN_AHEAD = timedelta(days=2)
 PROVIDER_NAMES = {"noaa_coops": "NOAA CO-OPS", "harmonic_model": "the tide model"}
 
 
-def tide_freshness(db: Session, now: datetime) -> list[dict[str, Any]]:
-    """Problems with the stored tide predictions (e.g. none left for the coming days)."""
+CONSTANTS_KEY = "tides_constants:harmonic_model"
+
+
+def constants_problem() -> dict[str, Any] | None:
+    """The ``tides_constants:harmonic_model`` problem when this process cannot read the
+    tide model's constants file; None when it can or harmonic_model is not configured.
+
+    Without its constants file the seed links no model point, so no station would be
+    counted by :func:`tide_freshness` and the model spots' tides would vanish without a
+    problem.
+    """
+    if "harmonic_model" not in get_settings().tide_provider_list:
+        return None
+    try:
+        harmonic_model.load_model()
+    except (harmonic_model.ConstantsError, OSError) as exc:
+        return {
+            "key": CONSTANTS_KEY,
+            "severity": "failing",
+            "message": "The tide model's constants file cannot be read; "
+            "model tides are unavailable.",
+            "detail": str(exc)[:2000],
+        }
+    return None
+
+
+def constants_file_present() -> bool:
+    """Whether the configured constants file exists for this process (a file the API
+    function, deployed without data/, does not have)."""
+    return harmonic_model.resolve_constants_path().is_file()
+
+
+def tide_freshness(
+    db: Session, now: datetime, *, check_constants: bool = True
+) -> list[dict[str, Any]]:
+    """Problems with the stored tide predictions (e.g. none left for the coming days), and
+    with ``check_constants`` the constants file's (:func:`constants_problem`)."""
     providers = get_settings().tide_provider_list
     if not providers:
         return []
@@ -53,21 +94,8 @@ def tide_freshness(db: Session, now: datetime) -> list[dict[str, Any]]:
         .group_by(TideStation.id)
     ).all()
     problems: list[dict[str, Any]] = []
-    if "harmonic_model" in providers:
-        # Without its constants file the seed links no model point, so no station would be
-        # counted below and the model spots' tides would vanish without a problem.
-        try:
-            harmonic_model.load_model()
-        except harmonic_model.ConstantsError as exc:
-            problems.append(
-                {
-                    "key": "tides_constants:harmonic_model",
-                    "severity": "failing",
-                    "message": "The tide model's constants file cannot be read; "
-                    "model tides are unavailable.",
-                    "detail": str(exc)[:2000],
-                }
-            )
+    if check_constants and (problem := constants_problem()) is not None:
+        problems.append(problem)
     for provider in providers:
         mine = [r for r in rows if r[0] == provider]
         tried = [r for r in mine if r[3] is not None or (r[2] or {}).get("last_error")]

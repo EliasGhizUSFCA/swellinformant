@@ -789,16 +789,26 @@ def test_api_is_public_and_strict_mode_answers_503_when_failing(
     job_log(db, "detection.detect", JobStatus.FAILED, 5, error="OperationalError at db-host-7")
     resp = app_client.get("/api/health/data")
     assert resp.status_code == 200
-    assert resp.headers["cache-control"] == "no-store"
+    # The same report for every visitor (the request above carries a session cookie):
+    # shared by the CDN for a minute, re-asked by browsers every time.
+    assert resp.headers["cache-control"] == "public, max-age=0"
+    assert resp.headers["cdn-cache-control"] == "public, s-maxage=60"
+    assert "set-cookie" not in resp.headers
     assert resp.text.startswith('{"status":"failing"')
     body = resp.json()
     assert body["reasons"][0].startswith("No forecast source has a fresh run")
     assert "private.person" not in resp.text and "@" not in resp.text
     assert "db-host-7" not in resp.text  # raw job errors are not public
-    assert app_client.get("/api/health/data?strict=true").status_code == 503
+    strict = app_client.get("/api/health/data?strict=true")
+    assert strict.status_code == 503
+    # Monitors that want the 503 always get a fresh report.
+    assert strict.headers["cache-control"] == "no-store"
+    assert "cdn-cache-control" not in strict.headers
     run(db, "demo", 1)
     resp = app_client.get("/api/health/data?strict=true")
     assert resp.status_code == 200 and resp.json()["status"] == "degraded"  # the failed job
+    assert resp.headers["cache-control"] == "no-store"
+    assert "cdn-cache-control" not in resp.headers
 
 
 # --------------------------------------------------------------------------- alert job

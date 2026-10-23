@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import check_database, get_db
+from app.core.http_cache import cache_headers
 from app.core.ratelimit import rate_limit
 from app.core.redis import check_redis
 from app.models import BackgroundJobLog
@@ -20,6 +21,13 @@ from app.services.health import data_health
 from app.services.spot_views import event_counts
 
 router = APIRouter(prefix="/api", tags=["system"])
+
+# GET /api/health/data without ``strict``: the same report for every visitor (no user
+# dependency, no cookie), shared by the CDN for a minute, so several status pages and
+# monitors cost one report (about 4 Redis commands and a handful of database reads) a
+# minute between them. Browsers always ask again (max-age=0), so a page sees at most a
+# minute-old report. ``strict`` (uptime monitors that want the 503) stays no-store.
+DATA_HEALTH_CDN_SECONDS = 60
 
 # Every job the worker or the sync daemon runs: the schedule's tasks, the sync itself
 # (sync.run, the log row of one whole sync under every runner), the stages a sync runs
@@ -89,11 +97,15 @@ def data_health_report(
     keys, ages, limits, job statuses, reasons written by the service; no personal data,
     no raw error text), and an external uptime monitor must be able to read it without
     credentials, because a dead worker cannot send its own alert. Rate limited per IP.
+    Shared by the CDN for DATA_HEALTH_CDN_SECONDS; with ``strict`` never cached.
     """
     report = data_health(db)
-    response.headers["Cache-Control"] = "no-store"
-    if strict and report.status == "failing":
-        response.status_code = 503
+    if strict:
+        response.headers["Cache-Control"] = "no-store"
+        if report.status == "failing":
+            response.status_code = 503
+    else:
+        cache_headers(response, browser_seconds=0, cdn_seconds=DATA_HEALTH_CDN_SECONDS)
     return report.out
 
 

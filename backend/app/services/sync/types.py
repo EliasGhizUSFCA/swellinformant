@@ -85,6 +85,21 @@ STAGE_JOB_NAMES: Mapping[StageName, str] = MappingProxyType(
 SYNC_RUN_JOB = "sync.run"
 SYNC_TICK_JOB = "sync.tick"
 
+# Jobs a sync runs (and Celery's sync check): never on a timer in the sync daemon
+# (app.services.sync.daemon.periodic_entries), so data health does not expect them there
+# either. The D14 schedule (app.jobs.schedule) no longer lists the acquisition, prediction
+# and detection jobs; excluding them keeps the daemon right with an older schedule too.
+SYNC_OWNED_TASKS = frozenset(
+    {
+        SYNC_TICK_JOB,
+        "forecasts.acquire",
+        "forecasts.acquire_ensemble",
+        "forecasts.map_fields",
+        "quality.predict",
+        "detection.detect",
+    }
+)
+
 
 class SyncBusy(RuntimeError):
     """Another sync holds a valid lease (a sync_runs row with status running)."""

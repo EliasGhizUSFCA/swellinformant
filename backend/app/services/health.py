@@ -9,16 +9,20 @@ It checks, with plain reasons:
   its age and the source's own stale limit (``queries.stale_after_hours``, ADR-015). A
   stale blend is only a problem of its own when every member is fresh and no acquisition
   or blend run is in progress (the chain rebuilds it right after the acquisition).
-* **Scheduled jobs** (the job schedule of the current settings, app.jobs.schedule, plus the
-  jobs a sync runs as its stages): the last result from ``background_job_logs``,
+* **Scheduled jobs** (the job schedule of the current settings, app.jobs.schedule, as the
+  configured runner runs it: Celery beat every entry, the sync daemon every entry but the
+  sync's own jobs; plus the jobs a sync runs as its stages): the last result from
+  ``background_job_logs``,
   consecutive failures, overdue runs (no run started for ``2 x longest interval + 30
   min``; a run in progress counts) and stuck runs (still "running" 15 min after the hard
   task time limit: the process running it was killed). The sync's stages (forecast
   acquisition, map layers, ensemble, blend, predictions, publish, detection) have no
   interval of their own, so they are never overdue: a sync runs them when a provider
   publishes a new model run, and the source freshness below covers them.
-* **Map fields** (unless the mode is "off"): the served run's model cycle against
-  MAP_FIELD_STALE_AFTER_HOURS, the limit the map index uses for its "out of date" badge.
+* **Map fields** (unless the mode is "off"): the model cycle of the run the map serves
+  (``map_fields.served_run``: the newest publication's map run under SYNC_PUBLISH_GATE)
+  against MAP_FIELD_STALE_AFTER_HOURS, the limit the map index uses for its "out of date"
+  badge.
 * **Observations** (when OBSERVATIONS_ENABLED): the newest buoy observation per provider
   against DATA_HEALTH_OBSERVATION_STALE_HOURS (default: the ingestion look-back window).
 * **Heartbeat**: under JOB_RUNNER=celery, the newest finished job of any kind (this
@@ -37,7 +41,11 @@ It checks, with plain reasons:
   DATA_HEALTH_REDIS_MAX_FRACTION or with an evicting maxmemory-policy (the Celery broker
   must never lose messages; not checked under JOB_RUNNER=daemon, which has no broker and
   whose hosted Redis sets its own policy), or when Redis does not answer.
-* **Tides**: the problems app.services.tides.health.tide_freshness reports.
+* **Tides**: the problems app.services.tides.health.tide_freshness reports. The tide
+  model's constants file is checked where it is deployed (always under JOB_RUNNER=celery);
+  the Vercel API function has no data/ and reports the sync daemon's own check from its
+  heartbeat instead (``file_problems``), so both runs of the alert job see the same
+  problems.
 
 Overall status: ``failing`` when the product cannot serve fresh forecasts (no forecast
 source is fresh), the job runner is down (Celery: no background job has finished for
@@ -66,6 +74,7 @@ from app.core.config import OPEN_METEO_PROVIDER_TOKENS, Settings, get_settings
 from app.core.database import utcnow
 from app.core.logging import redact
 from app.core.redis import parse_memory_size, redis_memory
+from app.jobs.registry import JOB_SPECS
 from app.jobs.runner import cpu_seconds_this_month
 from app.jobs.schedule import (
     DATA_HEALTH_TASK,
@@ -103,11 +112,11 @@ from app.services.forecasts.registry import (
     GEFS_WAVE_CODE,
     configured_source_codes,
 )
-from app.services.map_fields import map_fields_mode, servable_runs
+from app.services.map_fields import map_fields_mode, served_run
 from app.services.sync import state
 from app.services.sync.published import latest_publication
-from app.services.sync.types import STAGE_JOB_NAMES, SYNC_TICK_JOB
-from app.services.tides.health import tide_freshness
+from app.services.sync.types import STAGE_JOB_NAMES, SYNC_OWNED_TASKS, SYNC_TICK_JOB
+from app.services.tides.health import constants_file_present, tide_freshness
 
 BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: ecCodes)
 # Jobs that (re)build the blend: forecasts.acquire, then the chained forecasts.blend stage.
@@ -368,13 +377,15 @@ def sync_stage_jobs(settings: Settings) -> list[str]:
 def expected_jobs(settings: Settings) -> list[ExpectedJob]:
     """The scheduled jobs (app.jobs.schedule) for these settings plus the sync's stages.
 
-    Under JOB_RUNNER=daemon the sync.tick entry is left out: the daemon checks on its own
-    and its Redis heartbeat is checked instead.
+    Under JOB_RUNNER=daemon only the entries the daemon runs on its timers are expected
+    (app.services.sync.daemon.periodic_entries: not the sync's own jobs, SYNC_OWNED_TASKS,
+    sync.tick included, nor a task without a job spec); its Redis heartbeat stands for the
+    sync check.
     """
     jobs: dict[str, ExpectedJob] = {}
     for entry in build_schedule(settings).values():
         name, sched = entry.task, entry.schedule
-        if name == SYNC_TICK_JOB and not settings.runs_celery:
+        if not settings.runs_celery and (name in SYNC_OWNED_TASKS or name not in JOB_SPECS):
             continue
         gap = max_interval(sched)
         known = jobs.get(name)
@@ -385,8 +396,19 @@ def expected_jobs(settings: Settings) -> list[ExpectedJob]:
     return sorted(jobs.values(), key=lambda j: j.name)
 
 
+def runner_hint(settings: Settings) -> str:
+    """Which processes run the jobs, for problem messages."""
+    if settings.runs_celery:
+        return "the scheduler (beat) or the worker"
+    return "the sync daemon (on Vercel: the project's Daemons)"
+
+
 def _job_health(
-    db: Session, job: ExpectedJob, now: datetime, monitoring_since: datetime | None
+    db: Session,
+    job: ExpectedJob,
+    now: datetime,
+    monitoring_since: datetime | None,
+    runner: str = "the scheduler (beat) or the worker",
 ) -> tuple[JobHealthOut, Problem | None]:
     rows = list(
         db.scalars(
@@ -486,8 +508,7 @@ def _job_health(
                 f"job_overdue:{job.name}",
                 "degraded",
                 f"Job {job.name} has not run for {ago(now - reference)} (schedule: "
-                f"{job.schedule}): the scheduler (beat) or the worker may be down or "
-                "saturated.",
+                f"{job.schedule}): {runner} may be down or saturated.",
             )
         elif reference is None and monitoring_since is not None:
             if now - monitoring_since > overdue_after:
@@ -528,8 +549,9 @@ def _check_jobs(
     monitoring_since = db.scalar(select(func.min(BackgroundJobLog.started_at)))
     out: list[JobHealthOut] = []
     problems: list[Problem] = []
+    runner = runner_hint(settings)
     for job in expected_jobs(settings):
-        health, problem = _job_health(db, job, now, monitoring_since)
+        health, problem = _job_health(db, job, now, monitoring_since, runner)
         out.append(health)
         if problem is not None:
             problems.append(problem)
@@ -602,8 +624,8 @@ def _check_map_fields(
     # The map index's own limit (app.services.map_fields.field_index), so the data-health
     # page and the map's "out of date" badge agree.
     limit = settings.map_field_stale_after_hours
-    best = servable_runs(db, limit=1)
-    if not best:
+    served = served_run(db)
+    if served is None:
         return MapFieldsHealthOut(mode=mode, status="missing", stale_after_hours=limit), [
             Problem(
                 "map_fields_missing",
@@ -612,7 +634,6 @@ def _check_map_fields(
                 "shows no wave or wind layer.",
             )
         ]
-    served = best[0]
     run = db.get(ForecastRun, served.run_id)
     last_valid = db.scalar(
         select(func.max(MapField.valid_time)).where(MapField.run_id == served.run_id)
@@ -993,12 +1014,11 @@ def _check_sync(
     now: datetime,
     jobs: list[JobHealthOut],
     redis_available: bool,
+    heartbeat: state.Heartbeat | None,
 ) -> tuple[SyncHealthOut, list[Problem]]:
-    """The sync block: runner liveness, the newest syncs, components and the CPU budget."""
+    """The sync block: runner liveness, the newest syncs, components and the CPU budget.
+    ``heartbeat``: the daemon's (:func:`_read_heartbeat`)."""
     problems: list[Problem] = []
-    # Only the daemon writes a heartbeat (one billed Redis command per report on Upstash);
-    # under Celery a key left by an earlier daemon run says nothing about this runner.
-    heartbeat = state.read_heartbeat() if redis_available and not settings.runs_celery else None
     last_check_at: datetime | None = None
     stale = False
     components: list[SyncComponentOut] = []
@@ -1068,6 +1088,36 @@ def _check_sync(
     return out, problems
 
 
+def _read_heartbeat(settings: Settings, redis_available: bool) -> state.Heartbeat | None:
+    """The daemon's heartbeat under JOB_RUNNER=daemon (one billed Redis command per report
+    on Upstash); under Celery a key left by an earlier daemon run says nothing about this
+    runner, so it is not read."""
+    if not redis_available or settings.runs_celery:
+        return None
+    return state.read_heartbeat()
+
+
+# --------------------------------------------------------------------------- tides
+def _check_tides(
+    db: Session, settings: Settings, now: datetime, heartbeat: state.Heartbeat | None
+) -> list[Problem]:
+    """app.services.tides.health.tide_freshness. The constants file is read here when this
+    process has it, and always under JOB_RUNNER=celery (the classic images ship data/);
+    otherwise (the Vercel API function) the daemon's check from its heartbeat stands in."""
+    local = settings.runs_celery or constants_file_present()
+    raw = tide_freshness(db, now, check_constants=local)
+    if not local and heartbeat is not None:
+        raw = [*(heartbeat.file_problems or []), *raw]
+    problems: list[Problem] = []
+    for p in raw:
+        severity = p.get("severity")
+        if severity not in ("degraded", "failing") or not p.get("key"):
+            continue
+        detail = p.get("detail")
+        problems.append(Problem(str(p["key"]), severity, str(p.get("message") or p["key"]), detail))
+    return problems
+
+
 # --------------------------------------------------------------------------- licence
 def check_licence(settings: Settings) -> list[Problem]:
     """COMMERCIAL_USE with the free Open-Meteo API (an Open-Meteo source configured and no
@@ -1108,12 +1158,10 @@ def data_health(
     observations, obs_problems = _check_observations(db, settings, now)
     storage, storage_problems = _check_storage(db, settings)
     redis_available = storage.redis is not None and storage.redis.available
-    sync, sync_problems = _check_sync(db, settings, now, jobs, redis_available)
+    daemon_beat = _read_heartbeat(settings, redis_available)
+    sync, sync_problems = _check_sync(db, settings, now, jobs, redis_available, daemon_beat)
     licence_problems = check_licence(settings)
-    tide_problems = [
-        Problem(str(p["key"]), p["severity"], str(p["message"]), p.get("detail"))
-        for p in tide_freshness(db, now)
-    ]
+    tide_problems = _check_tides(db, settings, now, daemon_beat)
     problems = [
         *source_problems,
         *job_problems,
