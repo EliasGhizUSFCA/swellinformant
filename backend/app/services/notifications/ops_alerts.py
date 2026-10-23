@@ -33,20 +33,27 @@ cleared problem's entry is kept until the repeat interval since its last alert h
 An item is only marked as alerted when at least one recipient's provider accepted (or
 the development inbox captured) the email; otherwise it stays due and the next run tries
 again. Logs carry counts only, never addresses.
+
+When the database itself cannot be reached (e.g. Neon's compute suspended after its
+monthly quota), the report cannot be built and the admin addresses cannot be read: the
+daily watchdog then emails OPS_ALERT_EMAILS instead (:func:`alert_database_unreachable`),
+at most once per UTC day.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
+from app.core.redis import get_redis
 from app.jobs.schedule import DATA_HEALTH_TASK
 from app.models import BackgroundJobLog, User
 from app.models.enums import JobStatus
@@ -333,6 +340,67 @@ def send_alert(recipients: list[str], subject: str, text: str) -> dict[str, int]
             failed += 1
             logger.warning("Data-health alert not sent to one admin: %s", type(exc).__name__)
     return {"sent": sent, "failed": failed}
+
+
+# --------------------------------------------------------------------------- no database
+# Set (NX) for the UTC day an OPS_ALERT_EMAILS alert about the database went out.
+DB_UNREACHABLE_KEY = "ops:db_unreachable_alert:{day}"
+DB_UNREACHABLE_TTL_SECONDS = 26 * 3600
+DB_UNREACHABLE_ALERT = "new:database_unreachable"
+
+
+def alert_database_unreachable(
+    error: BaseException, *, now: datetime | None = None, settings: Settings | None = None
+) -> dict[str, Any]:
+    """Email OPS_ALERT_EMAILS that the database cannot be reached (the watchdog's fallback:
+    the admin recipients live in the database). At most once per UTC day, through a Redis
+    flag; without Redis it sends at every call (the cron calls once a day). Returns counts
+    and the reason when nothing was sent; logs counts only."""
+    settings = settings or get_settings()
+    recipients = settings.ops_alert_email_list
+    if not recipients:
+        return {"sent": 0, "skipped": "OPS_ALERT_EMAILS is not set"}
+    if not settings.data_health_alerts_enabled:
+        return {"sent": 0, "skipped": "DATA_HEALTH_ALERTS_ENABLED=false"}
+    now = now or utcnow()
+    key = DB_UNREACHABLE_KEY.format(day=now.astimezone(UTC).strftime("%Y%m%d"))
+    flagged = False
+    try:
+        if not get_redis().set(key, now.isoformat(), nx=True, ex=DB_UNREACHABLE_TTL_SECONDS):
+            return {"sent": 0, "skipped": "already sent today"}
+        flagged = True
+    except redis.RedisError as exc:
+        logger.warning("Database alert sent without its daily flag: %s", type(exc).__name__)
+    subject = f"[{settings.app_name}] Data health FAILING: the database cannot be reached"
+    text = "\n".join(
+        [
+            f"The daily watchdog could not reach the database at {stamp(now)} "
+            f"({type(error).__name__}). Nothing can be synced, served or alerted while it is "
+            "unreachable.",
+            "",
+            "Check the database provider first: on Neon Free the compute is suspended once "
+            "the monthly compute or egress quota is used up (Neon console: usage). Then "
+            "check DATABASE_URL and DATABASE_URL_UNPOOLED in the deployment.",
+            "",
+            "This address gets this email because it is listed in OPS_ALERT_EMAILS; the "
+            "admin accounts cannot be read while the database is down. It is sent at most "
+            "once a day while the problem lasts.",
+            f"Status page: {settings.app_base_url}/status",
+            "Playbook: docs/operations.md, section 'Incident playbook'.",
+        ]
+    )
+    counts = send_alert(recipients, subject, text + "\n")
+    if not counts["sent"] and flagged:
+        try:  # nothing went out: the next call tries again
+            get_redis().delete(key)
+        except redis.RedisError:
+            logger.debug("database alert flag not cleared", exc_info=True)
+    logger.warning(
+        "Database unreachable: alert to OPS_ALERT_EMAILS, %d sent, %d failed",
+        counts["sent"],
+        counts["failed"],
+    )
+    return {**counts, "subject": subject}
 
 
 # --------------------------------------------------------------------------- job
