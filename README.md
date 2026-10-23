@@ -456,8 +456,8 @@ browser checks, `down` stops it (`down --volumes` also deletes its database). Fo
 first test, add `MAP_FIELD_STEPS=0-24:3` and `MAP_FIELD_MAX_LEAD_HOURS=24` to
 `.env.vercel.local` (9 map hours instead of 61; 73.3 MB downloaded for them on 2026-10-23).
 Measured on 2026-10-23: `up` 216 s from scratch (with this sandbox's proxy overrides),
-`smoke` 19 of 19 and 6 of 6 with demo data and again with live data. If Open-Meteo answers "Daily API request limit exceeded" (its free limit is
-per IP address), set `FORECAST_PROVIDERS=demo` in `.env.vercel.local`, run
+`smoke` 19 of 19 and 6 of 6 with demo data and again with live data. If Open-Meteo
+answers "Daily API request limit exceeded" (its free limit is per IP address), set `FORECAST_PROVIDERS=demo` in `.env.vercel.local`, run
 `scripts/vercel-local.sh up --no-build` and `sync --force` again, and try live data later.
 
 The build itself can be checked without a Vercel account:
