@@ -32,6 +32,8 @@ FORECAST_PROVIDER_TOKENS = frozenset(
 # Providers that capture mail locally for development: nothing reaches a real mailbox.
 CAPTURE_EMAIL_PROVIDERS = frozenset({"console", "mailpit"})
 SmsProviderName = Literal["console", "twilio", "disabled"]
+# SYNC_LEASE_MINUTES when it is not set and JOB_RUNNER=daemon (see Settings).
+DAEMON_LEASE_MINUTES = 15
 
 
 class Settings(BaseSettings):
@@ -115,7 +117,11 @@ class Settings(BaseSettings):
     # A new GFS spot run and the map layers of the same cycle wait for each other this long
     # after the first sighting, then whatever is available is synced.
     sync_coalesce_minutes: int = Field(default=90, ge=0, le=360)
-    # The sync lease (a sync_runs row with status running), renewed at every stage.
+    # The sync lease (a sync_runs row with status running), renewed after every stage and
+    # extended every third of it while a stage runs, so it lapses only when the process
+    # holding it died; the next sync then takes it over. Not set: DAEMON_LEASE_MINUTES (15)
+    # under JOB_RUNNER=daemon, where a deploy can kill the daemon mid-sync (Vercel sends
+    # SIGKILL 120 s after SIGTERM) and its successor should take over soon; 45 under Celery.
     sync_lease_minutes: int = Field(default=45, ge=10, le=240)
     # Failed attempts per model run before the sync waits for the next run.
     sync_max_attempts: int = Field(default=6, ge=1, le=50)
@@ -517,6 +523,8 @@ class Settings(BaseSettings):
             )
         if self.detection_lead_min_days > self.detection_lead_max_days:
             raise ValueError("DETECTION_LEAD_MIN_DAYS must be <= DETECTION_LEAD_MAX_DAYS")
+        if self.job_runner == "daemon" and "sync_lease_minutes" not in self.model_fields_set:
+            self.sync_lease_minutes = DAEMON_LEASE_MINUTES
         return self
 
     # ------------------------------------------------------------------ helpers

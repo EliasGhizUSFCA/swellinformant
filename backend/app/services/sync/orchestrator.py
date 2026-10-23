@@ -5,8 +5,11 @@ partial index ``uq_sync_runs_running`` allows one), runs the :data:`STAGES` in o
 app.jobs.runner.run_job (one ``background_job_logs`` row per stage under the existing job
 names, ``chain=False``), records each stage with its duration and CPU time in
 ``sync_runs.stages``, renews the lease after every stage, publishes, and releases the lease.
-It opens its own sessions and raises :class:`SyncBusy` when another sync holds a valid lease;
-an expired lease is marked ``abandoned`` and taken over.
+While a stage runs, a keeper thread extends the lease every third of SYNC_LEASE_MINUTES, so
+a stage longer than the lease (a full map stage on one vCPU) keeps it and only a process
+that died lets it lapse. It opens its own sessions and raises :class:`SyncBusy` when another
+sync holds a valid lease; an expired lease is marked ``abandoned`` and taken over (after a
+killed deploy, at most SYNC_LEASE_MINUTES later: 15 under the daemon by default).
 
 Stage rules:
 
@@ -196,6 +199,10 @@ class _Lease:
             db.commit()
             return int(getattr(res, "rowcount", 0) or 0) == 1
 
+    def extend(self) -> bool:
+        """Push the expiry SYNC_LEASE_MINUTES ahead (the keeper); False when it was lost."""
+        return self._update({"lease_expires_at": utcnow() + timedelta(minutes=self.minutes)})
+
     def renew(self, stages: list[StageResult]) -> bool:
         """Store the stages so far and extend the lease; False when the lease was lost."""
         return self._update(
@@ -215,6 +222,40 @@ class _Lease:
                 "error_message": error,
             }
         )
+
+
+class _LeaseKeeper:
+    """Extends ``lease`` every ``interval_s`` (a third of the lease) on a thread of its own
+    until stopped, so a stage that outlasts the lease keeps it. Stops by itself when the
+    lease was lost (the stage loop sees that at its next renewal). Database errors are
+    logged and retried at the next interval."""
+
+    def __init__(self, lease: _Lease, interval_s: float | None = None) -> None:
+        self.lease = lease
+        self.interval_s = interval_s if interval_s is not None else lease.minutes * 60 / 3
+        self.extended = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="sync-lease-keeper", daemon=True)
+
+    def __enter__(self) -> _LeaseKeeper:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=30)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_s):
+            try:
+                kept = self.lease.extend()
+            except Exception as exc:  # e.g. the database went away for a moment
+                logger.warning("Sync lease not extended: %s", type(exc).__name__)
+                continue
+            if not kept:
+                logger.warning("Sync %s lost its lease", self.lease.row_id)
+                return
+            self.extended += 1
 
 
 def _valid_lease(db: Session) -> SyncRun | None:
@@ -619,17 +660,18 @@ def run_sync(
     stages: list[StageResult] = []
     stopped = lost = False
     try:
-        for name in STAGES:
-            if stop is not None and stop.is_set():
-                stopped = True
-                break
-            if name == "blend":
-                with SessionLocal() as db:
-                    ctx.unpublished = _unpublished(db)
-            stages.append(_stage(name, ctx))
-            if not lease.renew(stages):
-                lost = True
-                break
+        with _LeaseKeeper(lease):
+            for name in STAGES:
+                if stop is not None and stop.is_set():
+                    stopped = True
+                    break
+                if name == "blend":
+                    with SessionLocal() as db:
+                        ctx.unpublished = _unpublished(db)
+                stages.append(_stage(name, ctx))
+                if not lease.renew(stages):
+                    lost = True
+                    break
     except BaseException as exc:  # e.g. KeyboardInterrupt: never leave the lease running
         lease.release("failed", stages, _text(exc))
         _close_log(
