@@ -102,6 +102,8 @@ def _failure(
     source_code: str, run_key: str | None, exc: BaseException, run_id: int | None = None
 ) -> AcquisitionOutcome:
     transient = isinstance(exc, ProviderError) and exc.transient
+    # A used-up day or month limit is not retried by the job (not transient), but says
+    # when the next attempt can succeed (quota.QuotaWindowExhaustedError): the sync waits.
     return AcquisitionOutcome(
         source_code,
         run_key,
@@ -109,7 +111,7 @@ def _failure(
         run_id,
         message=_error_text(exc),
         retryable=transient,
-        retry_after_s=getattr(exc, "retry_after_s", None) if transient else None,
+        retry_after_s=getattr(exc, "retry_after_s", None),
     )
 
 
