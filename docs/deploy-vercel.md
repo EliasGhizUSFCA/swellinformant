@@ -513,9 +513,10 @@ Docker 29.8.2 with Compose 5.6.0. Results of 2026-10-23 unless a date is given.
   `docker build -f backend/Dockerfile .`): 72 s and 73 s from a warm base image; the sync
   image is 1.22 GB, the classic one 1.28 GB, and both builds printed `ecCodes 2.49.0`. The
   lean API image of the local stack (`docker/api-lean/Dockerfile`): 18 s, 408 MB, "lean
-  install", no `/data`, no `ml_models/`. All three run `python -m app.cli --help`; no secret
-  and no proxy setting is in their history. (These builds reached PyPI through this
-  machine's proxy, passed on the command line; nothing of that is in the repository.)
+  install", no `/data`, no `ml_models/`, and `import app.main` works. The sync and classic
+  images run `python -m app.cli --help`, and neither has a secret or a proxy setting in its
+  history. (These builds reached PyPI through this machine's proxy, passed on the command
+  line; nothing of that is in the repository.)
 - **Compose files.** `docker compose ... config -q` passes for `docker-compose.yml` (every
   profile) and for `docker-compose.vercel.yml` (with `--env-file /dev/null` and with
   `--env-file .env.vercel.example`).

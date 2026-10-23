@@ -162,9 +162,8 @@ base URL <http://localhost:3100>):
 * the cron endpoint: 401 without or with a wrong token, 200 with `CRON_SECRET`.
 
 The default `playwright.config.ts` ignores this spec (`testIgnore`), so `scripts/run-e2e.sh`
-never runs it. The token never appears on a command
-line or in a retained Playwright trace (curl reads the header from stdin; the spec makes the
-authorised call with Node's `fetch`).
+never runs it. The token never appears on a command line or in a retained Playwright trace
+(curl reads the header from stdin; the spec makes the authorised call with Node's `fetch`).
 
 ## Neon development branches and Upstash
 
@@ -270,7 +269,7 @@ Checked one by one, with Docker 29.8.2 and Compose 5.6.0:
   `caddy fmt` accept the file.
 * **Images.** `sync` (Containerfile): built in 72 s, 1.22 GB, "ecCodes 2.49.0". `api`
   (docker/api-lean): built in 18 s, 408 MB, "lean install", no `/data`, no `ml_models/`,
-  and `import app.main` works. No secret or proxy value is in either image's history.
+  and `import app.main` works. No secret or proxy value is in the sync image's history.
 * **Compose.** `docker compose -f docker-compose.vercel.yml --env-file /dev/null config -q`
   and the same with `--env-file .env.vercel.example` pass.
 * **Smoke spec.** Under the default `playwright.config.ts` the list holds no smoke test
