@@ -30,6 +30,42 @@ x-backend-env: &backend-env
   # $proxy_add_x_forwarded_for) in front of the frontend. Without such a proxy the header
   # is whatever the client sent.
   TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
+  # A header a platform in front of the API sets and clients cannot overwrite (Vercel:
+  # x-vercel-forwarded-for); when set, it replaces X-Forwarded-For. Empty = not used.
+  CLIENT_IP_HEADER: ${CLIENT_IP_HEADER:-}
+  # Who runs the jobs. celery (this stack's default): the worker and beat below. daemon: the
+  # optional "sync" service at the end, for the whole stack (see there).
+  JOB_RUNNER: ${JOB_RUNNER:-celery}
+  # Bearer token of GET /api/internal/cron/daily, the daily watchdog Vercel Cron calls (at
+  # least 16 characters). Empty = the route answers 404; the classic stack does not need it.
+  CRON_SECRET: ${CRON_SECRET:-}
+  # true once the site is used commercially (a paywall, ads): the free Open-Meteo API is
+  # non-commercial, so Open-Meteo then needs OPEN_METEO_API_KEY.
+  COMMERCIAL_USE: ${COMMERCIAL_USE:-false}
+  # Database and Redis connections. Empty = the defaults of backend/app/core/config.py, right
+  # for this stack; a pooler in transaction mode (PgBouncer, Neon's pooled URL) needs
+  # DB_PREPARED_STATEMENTS=false.
+  DB_PREPARED_STATEMENTS: ${DB_PREPARED_STATEMENTS:-}
+  DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-}
+  REDIS_CONNECT_TIMEOUT_SECONDS: ${REDIS_CONNECT_TIMEOUT_SECONDS:-}
+  REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-}
+  # The synced data pipeline (docs/sync.md): a sync runs when a new model run is out, under
+  # Celery as the sync.tick job (every SYNC_CHECK_MINUTES), under the daemon as its checks.
+  # Empty = the defaults of backend/app/core/config.py.
+  SYNC_CHECK_MINUTES: ${SYNC_CHECK_MINUTES:-}
+  SYNC_COALESCE_MINUTES: ${SYNC_COALESCE_MINUTES:-}
+  SYNC_TRIGGER_SOURCES: ${SYNC_TRIGGER_SOURCES:-}
+  SYNC_RETRY_MINUTES: ${SYNC_RETRY_MINUTES:-}
+  SYNC_MAX_ATTEMPTS: ${SYNC_MAX_ATTEMPTS:-}
+  SYNC_LEASE_MINUTES: ${SYNC_LEASE_MINUTES:-}
+  SYNC_PUBLISH_GATE: ${SYNC_PUBLISH_GATE:-}
+  SYNC_PRUNE_EACH_PASS: ${SYNC_PRUNE_EACH_PASS:-}
+  SYNC_DAEMON_POLL_SECONDS: ${SYNC_DAEMON_POLL_SECONDS:-}
+  SYNC_DAEMON_INIT_DB: ${SYNC_DAEMON_INIT_DB:-}
+  # Monthly CPU budget in hours (health warns at 80 %); empty = none.
+  SYNC_CPU_BUDGET_HOURS: ${SYNC_CPU_BUDGET_HOURS:-}
+  # Every periodic job runs at most this often (minutes); empty = the schedule as written.
+  JOB_INTERVAL_FLOOR_MINUTES: ${JOB_INTERVAL_FLOOR_MINUTES:-}
   # Forecast sources (docs/API_SETUP_REQUIRED.md). Recommended live setup:
   # FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf (point forecasts, two model families).
   # Empty values below fall back to the defaults in backend/app/core/config.py.
@@ -78,6 +114,7 @@ x-backend-env: &backend-env
   MAP_FIELDS_ENABLED: ${MAP_FIELDS_ENABLED:-}
   MAP_FIELD_ATMOS_GRID: ${MAP_FIELD_ATMOS_GRID:-}
   MAP_FIELD_STEPS: ${MAP_FIELD_STEPS:-}
+  MAP_FIELD_MAX_LEAD_HOURS: ${MAP_FIELD_MAX_LEAD_HOURS:-}
   MAP_FIELD_CYCLES: ${MAP_FIELD_CYCLES:-}
   MAP_FIELD_PARTITIONS: ${MAP_FIELD_PARTITIONS:-}
   MAP_FIELD_MAX_BYTES_PER_RUN: ${MAP_FIELD_MAX_BYTES_PER_RUN:-}
@@ -225,7 +262,11 @@ services:
       retries: 30
       start_period: 20s
 
-  # Celery worker: runs the forecast → detection → matching → flights → alerts → delivery jobs.
+  # Celery worker: runs sync.tick, which syncs everything a new model run brings in one go
+  # (spot forecasts and map layers, blend, predictions, publish, then swell detection,
+  # matching, flights, alerts and delivery; docs/sync.md), plus the periodic jobs beat
+  # schedules (tides, emails, data health, cleanup). The default WORKER_QUEUES=celery,bulk
+  # consumes both queues.
   worker:
     <<: *backend
     command: ["worker"]
@@ -264,7 +305,8 @@ services:
       retries: 3
       start_period: 30s
 
-  # Celery beat: the job scheduler (starts once the schema exists). Run exactly one.
+  # Celery beat: the job scheduler (starts once the schema exists). Run exactly one, and never
+  # together with the "sync" service below.
   beat:
     <<: *backend
     command: ["beat"]
@@ -279,6 +321,29 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+
+  # Optional, instead of worker and beat: the sync daemon (`python -m app.cli sync daemon`),
+  # the job runner of the Vercel deployment (docs/sync.md). It checks the providers every
+  # SYNC_CHECK_MINUTES, syncs each new model run, runs the periodic jobs itself and sends
+  # email and SMS inline. Never run it together with beat: both would schedule the jobs.
+  # JOB_RUNNER=daemon must hold for the whole stack, so that the API sends account emails
+  # inline and hands "match my search" to the daemon instead of to Celery:
+  #   echo JOB_RUNNER=daemon >> .env
+  #   docker compose --profile sync up -d --scale worker=0 --scale beat=0
+  # Back to Celery: remove the line from .env, `docker compose stop sync`, `docker compose up -d`.
+  sync:
+    <<: *backend
+    profiles: ["sync"]
+    command: ["sync"]
+    environment:
+      <<: *backend-env
+      JOB_RUNNER: daemon
+    depends_on:
+      backend:
+        condition: service_healthy
+    # SIGTERM stops the daemon after the current sync stage (vercel.json gives it the same
+    # grace period).
+    stop_grace_period: 600s
 
   frontend:
     build:
