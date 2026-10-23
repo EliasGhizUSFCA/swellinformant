@@ -11,8 +11,8 @@ offshore direction as disputed), the hour also stores the wind relation under th
 contradicting direction (``components.wind_dispute``, ``confidence_inputs.wind_dispute``),
 its explanation names both relations when they differ, and its confidence reasons say
 "Sources disagree about which wind is offshore here." The score keeps the profile's
-direction. Decision records are read from the data directory once per run; a change to
-that file alone takes effect at the next rescoring.
+direction. Decision records are read from the data directory once per scoring pass; a
+change to that file alone takes effect at the next rescoring.
 
 The tide stage of each hour comes from the stored tide predictions
 (``tides.stage.tide_stages_for``: 0 at the preceding low water, 1 at the next high water),
@@ -21,6 +21,12 @@ never from model sea level; demo runs without tide predictions use their synthet
 moderate or high, its tide decision is not disputed and it has a preference; otherwise the
 stored components say why (``tide_excluded_reason``). Gusts enter the wind fit only with
 WIND_GUST_SCORING=scored and a documented gust definition.
+
+Database egress (a pass runs after every model run, docs/map-layers.md): a run's forecasts
+are read with the columns and ``extra`` keys scoring uses (:class:`ScoringForecast`), and
+:func:`compute_pending_predictions` reads what every run of the pass shares once
+(:class:`PassReads`: the spots, research inputs, profile decisions and each spot's tide
+predictions, ``tides.stage.shared_tide_reads``). The scores are unchanged.
 """
 
 from __future__ import annotations
@@ -28,12 +34,12 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -50,7 +56,6 @@ from app.models import (
 )
 from app.models.enums import ForecastRunStatus
 from app.services.ml.hook import RunCorrector
-from app.services.research import current_assessments
 from app.services.research.decisions import (
     DecisionValidationError,
     WindDispute,
@@ -59,7 +64,13 @@ from app.services.research.decisions import (
     wind_dispute,
 )
 from app.services.surf_quality.confidence import completeness, confidence_label, run_agreement
-from app.services.surf_quality.confidence_context import RunConfidenceContext, station_codes
+from app.services.surf_quality.confidence_context import (
+    AssessmentInputs,
+    RunConfidenceContext,
+    research_inputs,
+    scoring_assessments,
+    station_codes,
+)
 from app.services.surf_quality.forecast_confidence import (
     METHOD as CONFIDENCE_METHOD,
 )
@@ -73,7 +84,7 @@ from app.services.surf_quality.forecast_confidence import (
     run_change_ratio,
     wind_dispute_inputs,
 )
-from app.services.surf_quality.models import SeaState, SpotParams
+from app.services.surf_quality.models import EXTRA_GUST_KIND, SeaState, SpotParams
 from app.services.surf_quality.scoring import (
     ALGORITHM_VERSION,
     disputed_wind_relation,
@@ -85,7 +96,7 @@ from app.services.surf_quality.uncertainty import (
     breaking_uncertainty,
     confidence_index,
 )
-from app.services.tides.stage import TideStage, tide_stages_for
+from app.services.tides.stage import TideStage, shared_tide_reads, tide_stages_for
 
 logger = logging.getLogger(__name__)
 
@@ -141,11 +152,15 @@ def demo_tide_stages(
     return out
 
 
-def tide_research_classes(db: Session) -> dict[int, str | None]:
+def tide_research_classes(
+    db: Session, assessments: dict[int, AssessmentInputs] | None = None
+) -> dict[int, str | None]:
     """spot_id -> the tide class ("high" | "moderate" | "low") of its current research
-    assessment; spots without an assessment are absent."""
+    assessment; spots without an assessment are absent. ``assessments``:
+    ``confidence_context.scoring_assessments``, when the caller has read them already."""
     out: dict[int, str | None] = {}
-    for spot_id, row in current_assessments(db).items():
+    rows = scoring_assessments(db) if assessments is None else assessments
+    for spot_id, row in rows.items():
         tide = (row.per_variable or {}).get("tide")
         out[spot_id] = str(tide["class"]) if isinstance(tide, dict) and tide.get("class") else None
     return out
@@ -177,12 +192,19 @@ def _tide_detail(stage: TideStage | None) -> dict[str, Any] | None:
     }
 
 
+EnsembleIndex = dict[int, list[tuple[datetime, EnsembleInfo]]]
+
+
 def _ensemble_index(
-    db: Session, run: ForecastRun
-) -> dict[int, list[tuple[datetime, EnsembleInfo]]]:
-    """Ensemble rows per spot from the newest ensemble run close to this run's issue time."""
-    ens_run = db.scalar(
-        select(ForecastRun)
+    db: Session,
+    run: ForecastRun,
+    cache: dict[int, EnsembleIndex] | None = None,
+) -> EnsembleIndex:
+    """Ensemble rows per spot from the newest ensemble run close to this run's issue time.
+    ``cache``: ensemble run id -> its index, shared by the runs of one pass (the runs of a
+    cycle find the same ensemble run)."""
+    ens_run_id = db.scalar(
+        select(ForecastRun.id)
         .join(ForecastSource, ForecastSource.id == ForecastRun.source_id)
         .where(
             ForecastSource.kind == "ensemble",
@@ -193,26 +215,39 @@ def _ensemble_index(
         .order_by(ForecastRun.issued_at.desc(), ForecastRun.id.desc())
         .limit(1)
     )
-    out: dict[int, list[tuple[datetime, EnsembleInfo]]] = defaultdict(list)
-    if ens_run is None:
+    out: EnsembleIndex = defaultdict(list)
+    if ens_run_id is None:
         return out
-    for row in db.scalars(
-        select(ForecastEnsembleStat)
-        .where(ForecastEnsembleStat.run_id == ens_run.id)
-        .order_by(ForecastEnsembleStat.spot_id, ForecastEnsembleStat.valid_time)
+    if cache is not None and ens_run_id in cache:
+        return cache[ens_run_id]
+    e = ForecastEnsembleStat
+    for spot_id, valid_time, hs_mean, hs_spread, tp_mean, tp_spread, members in db.execute(
+        select(
+            e.spot_id,
+            e.valid_time,
+            e.hs_mean_m,
+            e.hs_spread_m,
+            e.tp_mean_s,
+            e.tp_spread_s,
+            e.members,
+        )
+        .where(e.run_id == ens_run_id)
+        .order_by(e.spot_id, e.valid_time)
     ):
-        out[row.spot_id].append(
+        out[spot_id].append(
             (
-                row.valid_time,
+                valid_time,
                 EnsembleInfo(
-                    hs_mean_m=row.hs_mean_m,
-                    hs_spread_m=row.hs_spread_m,
-                    tp_mean_s=row.tp_mean_s,
-                    tp_spread_s=row.tp_spread_s,
-                    members=row.members,
+                    hs_mean_m=hs_mean,
+                    hs_spread_m=hs_spread,
+                    tp_mean_s=tp_mean,
+                    tp_spread_s=tp_spread,
+                    members=members,
                 ),
             )
         )
+    if cache is not None:
+        cache[ens_run_id] = out
     return out
 
 
@@ -248,7 +283,91 @@ def spot_wind_dispute(
     return wind_dispute(per_variable, spot.offshore_wind_direction, record)
 
 
-def _missing_swell(f: WaveForecast) -> bool:
+@dataclass(frozen=True, slots=True)
+class ScoringForecast:
+    """The ``wave_forecasts`` columns scoring reads, with ``extra`` holding only the keys it
+    reads (the gust definition and a blend's ML corrections): a whole row also carries the
+    run, issue time, pressure, wave power, missing-field list and the rest of ``extra``,
+    about half its size."""
+
+    id: int
+    spot_id: int
+    valid_time: datetime
+    sig_wave_height_m: float | None
+    wave_period_s: float | None
+    wave_period_kind: str | None
+    wave_direction_deg: float | None
+    primary_swell_height_m: float | None
+    primary_swell_period_s: float | None
+    primary_swell_direction_deg: float | None
+    secondary_swell_height_m: float | None
+    secondary_swell_period_s: float | None
+    secondary_swell_direction_deg: float | None
+    tertiary_swell_height_m: float | None
+    tertiary_swell_period_s: float | None
+    tertiary_swell_direction_deg: float | None
+    wind_wave_height_m: float | None
+    wind_wave_period_s: float | None
+    wind_wave_direction_deg: float | None
+    wind_speed_kmh: float | None
+    wind_direction_deg: float | None
+    wind_gust_kmh: float | None
+    sea_level_m: float | None
+    extra: dict[str, Any]
+
+
+# ``extra`` keys scoring reads: SeaState's gust definition and _ml_correction's record.
+SCORING_EXTRA_KEYS = (EXTRA_GUST_KIND, "ml_corrections")
+_SCORING_COLUMNS = [name for name in ScoringForecast.__dataclass_fields__ if name != "extra"]
+
+
+def scoring_forecasts(db: Session, run_id: int) -> list[ScoringForecast]:
+    """The run's forecasts for scoring, by spot and valid time. ``extra`` holds a read key
+    only when its stored value is not null: scoring reads it with ``dict.get``, which gives
+    None for an absent key and for a JSON null alike."""
+    w = WaveForecast
+    columns = [getattr(w, name) for name in _SCORING_COLUMNS]
+    extras = [w.extra[key].label(f"extra_{key}") for key in SCORING_EXTRA_KEYS]
+    out: list[ScoringForecast] = []
+    for row in db.execute(
+        select(*columns, *extras).where(w.run_id == run_id).order_by(w.spot_id, w.valid_time)
+    ):
+        values = row._mapping
+        extra = {
+            key: values[f"extra_{key}"]
+            for key in SCORING_EXTRA_KEYS
+            if values[f"extra_{key}"] is not None
+        }
+        out.append(
+            ScoringForecast(**{name: values[name] for name in _SCORING_COLUMNS}, extra=extra)
+        )
+    return out
+
+
+@dataclass
+class PassReads:
+    """What every run of one scoring pass reads the same way, read once for the pass: the
+    spots (with their profiles), the profile decisions, the research inputs and tide
+    research classes, and the ensemble index of each ensemble run used."""
+
+    spots: dict[int, SurfSpot]
+    decisions: dict[str, list[dict[str, Any]]]
+    tide_classes: dict[int, str | None]
+    research: dict[int, ResearchBasisInput]
+    ensembles: dict[int, EnsembleIndex] = field(default_factory=dict)
+
+    @classmethod
+    def load(cls, db: Session) -> PassReads:
+        assessments = scoring_assessments(db)
+        return cls(
+            spots={s.id: s for s in db.scalars(select(SurfSpot)).all()},
+            decisions=_profile_decisions(),
+            tide_classes=tide_research_classes(db, assessments),
+            research=research_inputs(assessments),
+        )
+
+
+def _missing_swell(f: ScoringForecast) -> bool:
     """No period or no direction for the swell (nor the bulk sea the model falls back to)."""
     period = f.primary_swell_period_s if f.primary_swell_period_s is not None else f.wave_period_s
     direction = (
@@ -260,33 +379,37 @@ def _missing_swell(f: WaveForecast) -> bool:
 
 
 def compute_predictions_for_run(
-    db: Session, run_id: int, force: bool = False, now: datetime | None = None
+    db: Session,
+    run_id: int,
+    force: bool = False,
+    now: datetime | None = None,
+    *,
+    shared: PassReads | None = None,
 ) -> int:
+    """Score every forecast hour of the run. ``shared``: the pass's :class:`PassReads`
+    (read here when not given)."""
     run = db.get(ForecastRun, run_id)
     if run is None or run.status not in (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL):
         return 0
     if run.predictions_computed_at and not force:
         return 0
     now = now or utcnow()
-    # Staleness per source (queries.stale_after_hours), previous run, blend comparisons,
-    # verification and research assessments: read once for the whole run.
-    ctx = RunConfidenceContext.load(db, run, now)
+    reads = shared if shared is not None else PassReads.load(db)
+    # Staleness per source (queries.stale_after_hours), previous run, blend comparisons and
+    # verification: read once for the whole run; research assessments once per pass.
+    ctx = RunConfidenceContext.load(db, run, now, reads.research)
     stale = ctx.stale
 
-    ensembles = _ensemble_index(db, run)
+    ensembles = _ensemble_index(db, run, reads.ensembles)
     # An active ML correction of offshore Hs (ml.hook). A blend's members were already
     # corrected before blending, so a blend run is never corrected again here.
     corrector = None if run.source.kind == "blend" else RunCorrector.for_run(db, run)
-    spots = {s.id: s for s in db.scalars(select(SurfSpot)).all()}
-    decisions = _profile_decisions()
-    tide_classes = tide_research_classes(db)
+    spots = reads.spots
+    decisions = reads.decisions
+    tide_classes = reads.tide_classes
     gust_scoring = get_settings().wind_gust_scoring == "scored"
-    by_spot: dict[int, list[WaveForecast]] = defaultdict(list)
-    for row in db.scalars(
-        select(WaveForecast)
-        .where(WaveForecast.run_id == run.id)
-        .order_by(WaveForecast.spot_id, WaveForecast.valid_time)
-    ):
+    by_spot: dict[int, list[ScoringForecast]] = defaultdict(list)
+    for row in scoring_forecasts(db, run.id):
         by_spot[row.spot_id].append(row)
 
     rows: list[dict[str, object]] = []
@@ -499,6 +622,22 @@ def outdated_authoritative_runs(db: Session, now: datetime | None = None) -> lis
     )
 
 
+def _scored_windows(db: Session, run_ids: Sequence[int]) -> dict[int, tuple[datetime, datetime]]:
+    """spot_id -> the first and last valid time the runs score there (the window the
+    pass's tide predictions are read for)."""
+    if not run_ids:
+        return {}
+    w = WaveForecast
+    return {
+        spot_id: (lo, hi)
+        for spot_id, lo, hi in db.execute(
+            select(w.spot_id, func.min(w.valid_time), func.max(w.valid_time))
+            .where(w.run_id.in_(run_ids))
+            .group_by(w.spot_id)
+        )
+    }
+
+
 def compute_pending_predictions(db: Session, now: datetime | None = None) -> dict[str, int]:
     pending = db.scalars(
         select(ForecastRun.id)
@@ -509,11 +648,15 @@ def compute_pending_predictions(db: Session, now: datetime | None = None) -> dic
         .order_by(ForecastRun.issued_at)
     ).all()
     total = 0
-    for run_id in pending:
-        total += compute_predictions_for_run(db, run_id, now=now)
-    rescored = outdated_authoritative_runs(db, now)
-    for run_id in rescored:
-        total += compute_predictions_for_run(db, run_id, force=True, now=now)
+    reads: PassReads | None = None
+    with shared_tide_reads(db, _scored_windows(db, pending)):
+        for run_id in pending:
+            reads = reads or PassReads.load(db)
+            total += compute_predictions_for_run(db, run_id, now=now, shared=reads)
+        rescored = outdated_authoritative_runs(db, now)
+        for run_id in rescored:
+            reads = reads or PassReads.load(db)
+            total += compute_predictions_for_run(db, run_id, force=True, now=now, shared=reads)
     from app.services.forecasts.archive import archive_authoritative
 
     archived = archive_authoritative(db, now)
@@ -525,7 +668,7 @@ def compute_pending_predictions(db: Session, now: datetime | None = None) -> dic
     }
 
 
-def _row_values(f: WaveForecast) -> dict[str, object]:
+def _row_values(f: ScoringForecast) -> dict[str, object]:
     """The forecast values the correction's features are built from (ml.features)."""
     return {
         name: getattr(f, name)
@@ -543,7 +686,7 @@ def _row_values(f: WaveForecast) -> dict[str, object]:
     }
 
 
-def _ml_correction(f: WaveForecast) -> str | None:
+def _ml_correction(f: ScoringForecast) -> str | None:
     """Label of the correction a blend applied to one of this hour's members, if any."""
     applied = (f.extra or {}).get("ml_corrections") or {}
     labels = sorted({str(v.get("model")) for v in applied.values() if isinstance(v, dict)})

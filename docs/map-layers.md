@@ -157,7 +157,8 @@ Contract: `backend/app/schemas/map_fields.py`.
   spot run and a fields-only run after a change of mode), the one with the most complete
   valid times is served, and on a tie the newer run (`map_fields.servable_runs`, the same
   order retention uses). Incomplete times are logged and left out. Caching: browsers
-  60 s, the CDN 60 s plus `stale-while-revalidate=600` (see the table below).
+  60 s, the CDN 300 s plus `stale-while-revalidate=3600`, the windows of every public GET
+  (see the table below).
 * `GET /api/map/fields/{variable}?at=ISO&run=RUN_KEY` returns one field as
   `application/octet-stream`. The decoding parameters are in the `X-Field-Meta` header
   (JSON with the keys of `FieldMeta`, including `group`, `valid_time` and `run_key`;
@@ -629,7 +630,9 @@ most about 115 kB).
 
 | Response | `Cache-Control` (browsers) | `CDN-Cache-Control` | Why |
 |----------|----------------------------|---------------------|-----|
-| `GET /api/map/fields` (the index) | `public, max-age=60` | `public, s-maxage=60, stale-while-revalidate=600` | It names the served run, which a publication switches about every 6 hours. After a publication the CDN can still hand out the previous index for up to 60 s, and for up to 600 s more to the requests that trigger its refresh; browsers keep it 60 s, and the map re-reads it every 5 minutes. |
+| `GET /api/map/fields` (the index) | `public, max-age=60` | `public, s-maxage=300, stale-while-revalidate=3600` | It names the served run, which a publication switches about every 6 hours. After a publication the CDN can still hand out the previous index for up to 300 s, and for up to an hour more to the requests that trigger its refresh; browsers keep it 60 s, and the map re-reads it every 5 minutes. These are the windows of every other public GET (next row), so the edge switches the index, the conditions and the spot list together (60/600 s until the egress integration). |
+| The other user-independent public GETs: `/api/spots`, `/api/map/conditions`, a spot's detail, `/forecast`, `/timeline` (with its ETag and 304), `/events`, `/tides`, `/observations`, and `/api/events` | `public, max-age=60` | `public, s-maxage=300, stale-while-revalidate=3600` | Their data changes with a publication or the hour; the API answers them from the public snapshot cache (Egress integration below). |
+| Routes with a user dependency (`/api/auth/me`, a spot's `/opportunities`, accounts, searches, notifications) and `/api/system/status` | `no-store` (the middleware's default); a response that sets a cookie never keeps shared-cache headers (`private, no-store`) | none | One visitor's answer must never be handed to another. |
 | A field URL with `run` and an `at` equal to the served valid time (what the map requests: `fieldUrl(variable, at, run)` with times from the index) | `public, max-age=3600, immutable` | `public, s-maxage=31536000, immutable` | The URL names the model run and the valid time, and a run's stored field never changes, so the CDN can keep it for a year and the database reads each such field about once per CDN cache. |
 | Any other field URL: no `run`, no `at` (now), or an `at` between valid times | `public, max-age=300` | `public, s-maxage=300` | The answer can change with the next publication or with the clock, so it is cached for 5 minutes only. The served time and run are in `X-Field-Meta`, which the map checks. |
 | Errors (404 `run_not_retained`, 404 no field, 422) | `no-store` (the security middleware's default) | none | A missing field or run must not stick at the edge. |
@@ -742,7 +745,9 @@ A field now costs 1.015 to 1.025 times its payload in database reads (it was 2.0
 times). Behind the CDN an immutable field URL is read from the database about once per
 CDN cache and run, and the index at most about once a minute per cache.
 
-**Against Neon Free's 5 GB a month.** At about 6 syncs a day (4 GFS, 2 ECMWF; D3), a pass
+**Against Neon Free's 5 GB a month** (as measured by that package; the egress integration
+below did items 1 to 3 and re-measured everything). At about 6 syncs a day (4 GFS, 2
+ECMWF; D3), a pass
 like the replayed one above (it re-scores all three runs, so a real pass reads somewhat
 less) costs about 57 MB × 6 × 30 = 10.3 GB a month after this package, against 30.4 GB
 before; the demo pass extrapolates to 3.5 GB (before: 33.7 GB). So the sync alone still
@@ -766,15 +771,221 @@ How to reproduce (from the repository root, with Postgres and Redis running):
 backend/.venv/bin/python scripts/measure_db_egress.py pipeline --redis-url redis://localhost:6379/11
 GEFS_ENABLED=true backend/.venv/bin/python scripts/measure_db_egress.py pipeline \
   --template swell_u3i_live_run --providers open_meteo,open_meteo_ecmwf \
-  --replay --no-acquire --searches 3 --now 2026-10-16T06:00:00Z
+  --replay --no-acquire --searches 3 --now 2026-10-16T06:00:00Z \
+  --redis-url redis://localhost:6379/11
 backend/.venv/bin/python scripts/measure_db_egress.py pages --template swell_u3i_live_run \
-  --providers open_meteo,open_meteo_ecmwf --publish --now 2026-10-16T06:00:00Z
+  --providers open_meteo,open_meteo_ecmwf --publish --now 2026-10-16T06:00:00Z \
+  --redis-url redis://localhost:6379/11
 ```
 
 Each run creates a scratch database (`--database`, default `swell_egress_<pid>`), drops it
 afterwards unless `--keep-db`, never writes to the template, and prints the table; `--json
 FILE` saves it. `--backend-dir` measures another checkout of `backend/` (the "before"
 numbers above), and `--part MODULE:ATTR:'<stage> > <name>'` counts one more function.
+
+### Egress integration: one sync, the periodic jobs and a page view (2026-10-22)
+
+The integration narrowed what the public read paths and scoring read, put the heavy public
+GETs behind a snapshot cache in Redis, gave every public GET one CDN window, and applies
+the forecast-run retention after every publishing sync. Every number below was measured
+with `scripts/measure_db_egress.py` on this machine against a copy of `swell_u3i_live_run`
+(the real 2026-10-16 00Z run: 50 spots, Open-Meteo GFS and ECMWF spot runs, their blend,
+GEFS statistics, 9 map hours) or the demo provider, with the app's clock frozen
+(`--now`). "Before" is the base commit 3a2b4005 run from an extracted copy
+(`--backend-dir`); "after" is this branch.
+
+**What changed**
+
+* **Public read paths** (`app/services/spot_views.py`, `timeline.py`): the hours to show
+  are chosen from a few columns, and only the chosen hours are read in full;
+  predictions are read together with their forecasts in one join, each forecast column
+  once (`predictions_with_forecasts`, `contains_eager`; `SurfQualityPrediction.forecast`
+  stays `lazy="joined"` for swell detection's peak query). A run's attribution links
+  are read once per list of events; a blend's member sources by the five columns shown.
+  `/api/spots` takes 12 statements whatever the number of spots (57 before, for 50).
+* **Scoring** (`surf_quality/predict.py`, `confidence_context.py`, `tides/stage.py`):
+  the scoring forecasts by the columns and `extra` keys scoring uses; each spot's tide
+  stations and predictions once per pass for every run scored (`shared_tide_reads`);
+  the research assessments, decisions and ensemble indexes once per pass; a blend's
+  comparisons reduced in SQL to the members' families. Predictions are identical: a
+  replayed clone of `swell_u3i_live_run` scored with this branch and with the base gave
+  25,000 rows, 3,816,821 compared values, 0 mismatches, max abs diff 0.0.
+* **Public snapshot cache** (`app/services/public_cache.py`): `/api/spots`,
+  `/api/map/conditions`, the spot detail, forecast, timeline and events and
+  `/api/events` are computed for the start of the current UTC hour, at most once per
+  key `public:v1:<epoch>:<marker>:<YYYYmmddTHH>:<route>[:<sha256 of the params, 24 hex>]`,
+  stored zlib-compressed for 2 hours (`PAYLOAD_TTL_SECONDS`) and kept in each
+  process's memo (up to 32 MB). `marker` is the sync's (`note_published`, 24 h TTL) or,
+  without one, derived from the database in one small statement; while a sync's marker
+  is stored, a change made outside a sync (the development endpoints, a CLI pipeline or
+  rescore) shows from the next hour. `prewarm` computes the spot list and the conditions
+  now for the hour (the sync can call it after the hook; with Redis unavailable it reads
+  nothing). The first request for
+  a key takes its lock (`SET NX EX 60`); concurrent ones poll for its result (about
+  6.4 s at most, then compute unstored). Redis down: every request computes directly
+  and Redis is not asked again for 30 s. A spot page's forecast and timeline read the
+  same hours and are computed together under one lock (`Together`). `?at=` is cached
+  only for a whole UTC hour within 2 days before and 17 days after now (the map's
+  steps); any other value is computed as before, unstored. The bodies are the ones
+  FastAPI's response models give (tested byte for byte; 156 responses at 4 in-hour
+  times equal the base commit's at the hour starts).
+* **CDN windows**: every public GET and the map-field index send `Cache-Control:
+  public, max-age=60` and `CDN-Cache-Control: public, s-maxage=300,
+  stale-while-revalidate=3600`; a run-keyed field URL stays immutable (a year at the
+  CDN); errors and user-specific responses stay `no-store`, and a response that sets a
+  cookie never keeps shared-cache headers (it becomes `private, no-store`).
+* **Retention per pass**: `maintenance.prune_pass` (the sync's prune stage with
+  `SYNC_PRUNE_EACH_PASS=true`) now also deletes the forecast runs older than
+  `RETENTION_FORECAST_DAYS`, as the daily cleanup does; its result gained the key
+  `forecast_runs` (the count deleted).
+
+**Behaviour change: the hour floor.** The cached routes compute "now" as the start of the
+current UTC hour, so within an hour every visitor sees the same answer: the current
+conditions are the stored step nearest to the hour's start, and the forecast and timeline
+windows start 3 hours before it (one more early step from the first minute of a step
+hour on). `generated_at` of the timeline is the hour's start.
+
+**One sync pass**, DB → client, MB (`pipeline --replay --replay-sources CODE
+--no-acquire --searches 3 --prune --now 2026-10-16T06:00:00Z`: the newest run of that
+family and the blend are re-blended and re-scored, as after a new model run; one
+SYNTHETIC account with three saved searches for every spot):
+
+| Pass | Before | After | After, no saved searches |
+|------|-------:|------:|-------------------------:|
+| GFS sync (`open_meteo_noaa` and the blend: 20,800 predictions) | 49.19 | 30.57 | 27.20 |
+| ECMWF sync (`open_meteo_ecmwf` and the blend: 14,600 predictions) | 47.10 | 29.00 | 25.63 |
+| Both families and the blend (25,000 predictions) | 57.24 | 31.41 | |
+| Demo pass with acquisition (fresh `init-db`, 19,200 predictions) | 19.45 | 14.24 | |
+
+The GFS sync by stage (MB, before → after): blending 7.80 → 7.80; predictions 34.96 →
+16.41, of which the archive 5.96 → 5.96, scoring two runs 28.99 → 10.00 (the confidence
+context 8.11 → 1.58, tide stages 5.57 → 2.62, ensemble indexes 0.68 → 0.16); detection
+2.69 → 2.69 (its `load_steps` 1.68); matching 0.48 → 0.48; flights 1.65 → 1.65; alerts
+1.26 → 1.19; delivery 0.35 → 0.35; prune 0.01 → 0.01. No Redis command during a pass.
+What remains is mostly outside the files this integration owns: the blend reads both
+members' forecasts whole (7.16 MB of 7.80), the archive reads each prediction's
+`confidence_inputs` (5.95 MB for 4,050 rows), detection, flights and alerts.
+
+**The periodic jobs between syncs** (`jobs --replay --searches 3 --now
+2026-10-16T07:00:00Z`: each job of the daemon's hourly batch once, after a pass), DB →
+client, MB, before → after: `matching.match` 0.88 → 0.88, `flights.discover` 0.31 →
+0.31, `alerts.generate` 1.06 → 0.97, `notifications.deliver` 0.00 → 0.00,
+`forecasts.check_staleness` 0.02 → 0.02, `ops.data_health` 0.05 → 0.05 (2 Redis
+commands): **the hourly batch 2.32 → 2.23 MB** (0.35 MB without saved searches); the
+daily `maintenance.cleanup` 0.01 MB. Most of it is whole `opportunity_matches` rows
+(about 7 to 8.5 kB each, read by matching and alerts) and whole predictions in alerts.
+
+**One page view, anonymous, no CDN in front** (`pages --publish --now
+2026-10-16T06:00:00Z`; the requests the frontend sends for it). DB → API, kB, and Redis:
+
+| Page view | Before | After, cold | After, new instance (`warm-redis`) | After, warm instance |
+|-----------|-------:|------------:|-----------------------------------:|---------------------:|
+| home `/` (4 requests) | 1,177.3 | 403.7 (11 commands, 10.3 kB) | 22.7 (4 commands, 9.2 kB) | 22.7 (2 commands, 0.2 kB) |
+| map `/map` (15 requests) | 40,527.9 | 2,520.2 (16, 41.4 kB) | 750.4 (6, 39.8 kB) | 750.4 (3, 0.3 kB) |
+| spot page (6 requests) | 3,041.6 | 1,187.5 (18, 102.6 kB) | 22.7 (8, 100.9 kB) | 22.7 (4, 0.4 kB) |
+
+"Cold": the snapshot cache emptied; "new instance": only this process's memo emptied.
+What a warm view still reads: `/api/system/status` (22.7 kB, `no-store`, on every page)
+and, on the map, the index (5.3 kB) and 9 fields (722.4 kB, 1.02 times their payload),
+which the CDN keeps (300 s and a year). Without the sync's hook (`--no-hook`) each cached
+request also reads the database marker, about 0.6 kB (home warm 23.9 kB, spot 25.1 kB).
+
+What one key costs when it is computed (at most once per key and hour): `/api/spots`
+1,054.3 kB; `/api/map/conditions` 357.7 kB (now, and again for each map step asked);
+`/api/events?limit=4&min_score=57` 23.3 kB; a spot page (detail 66.8, forecast and
+timeline together 1,077.9, events 20.1) 1,164.8 kB. A map field is about 80.3 kB per CDN
+cache and run.
+
+**Monthly budget against Neon Free (5 GB egress) and Upstash Free (500K commands, 10 GB
+bandwidth, 250 MB).** 30 days; the background rows are the measured passes and jobs times
+the cadence; the page rows are the measured unit costs times the traffic stated (the
+traffic is an example, not a measurement).
+
+| Item | Cadence | Before | After |
+|------|---------|-------:|------:|
+| GFS syncs | 4 a day (hosted cadence, docs/sync.md) | 5.90 GB | 3.67 GB |
+| ECMWF syncs | 2 a day | 2.83 GB | 1.74 GB |
+| Hourly batch (3 saved searches) | 24 a day (`JOB_INTERVAL_FLOOR_MINUTES=60`) | 1.67 GB | 1.61 GB |
+| Daily cleanup | 1 a day | 0.0003 GB | 0.0003 GB |
+| **Background, no visitors** | | **10.40 GB (208 %)** | **7.02 GB (140 %)** |
+| Background without saved searches | | | 5.06 GB (101 %) |
+| Pages, "quiet": 4 hours a day with a map and home view, 1 new spot page in each, 100 views a day, 9 fields a run, 1 CDN cache | | | 0.47 GB |
+| Pages, "steady": every hour, 2 new spot pages an hour, 1,000 views a day, 9 fields a run, 3 CDN caches | | | 3.78 GB |
+
+So the sync and the hourly batch alone exceed Neon Free at the documented cadence, before
+any visitor; extra syncs (a GFS domain published late makes another one) add a pass each.
+A page view costs the database only when its key is computed (once per key and hour) plus
+22.7 kB for `/api/system/status`; "steady" is 1.29 GB for the map and home keys every
+hour, 1.68 GB for 1,440 spot-page hours, 0.68 GB for the status and 0.13 GB for fields.
+
+**What the owner must change to stay on Neon Free** (settings only, no code):
+
+1. `SYNC_TRIGGER_SOURCES=map`: a sync only for a new map cycle (00Z and 12Z,
+   `MAP_FIELD_CYCLES`), which also acquires the newest spot runs of both families. Two
+   passes a day like the measured both-family pass: 2 × 31.41 MB × 30 = **1.88 GB**.
+   Cost: spot runs are acquired only at those two syncs a day (the newest run each
+   family offers then), so most GFS runs are never used and an ECMWF run can wait up to
+   12 h; GFS (`open_meteo_noaa`) is stale after 17.2 h, so with the publication lags
+   measured on 2026-10-14/15 (5.3 to 8.2 h after the cycle) the spot forecasts are
+   flagged stale (confidence capped at Moderate) for up to about 3 h of every 12 before
+   the next sync, and longer when a GFS spot run comes more than SYNC_COALESCE_MINUTES
+   (90) after its map cycle's layers (it then waits for the next map cycle); alerts pause
+   only at twice the stale-after age. Not tried on a live stack.
+2. `JOB_INTERVAL_FLOOR_MINUTES=360`: the hourly batch every 6 hours: 4 × 2.23 MB × 30
+   = **0.27 GB**. Cost: matching, flight refresh, alerts and delivery between syncs, the
+   staleness check and data health run every 6 hours (each sync still runs matching to
+   delivery itself; "match my search" and "refresh flights" kicks still run within a
+   minute, SYNC_DAEMON_POLL_SECONDS).
+3. With both, the background is **2.15 GB a month (43 %)** and about 2.85 GB remain for
+   page views: the map and home keys every hour (1.29 GB) and about 1,340 spot-page
+   hours a month (about 45 a day), less 22.7 kB for every page view that reaches the
+   API. "Quiet" fits (2.62 GB in all); "steady" does not (5.93 GB).
+
+Otherwise Neon Launch (500 GB egress, docs/deploy-vercel.md) holds every row above many
+times over. The remaining code reductions are listed as follow-ups for their owners (the
+blend's and the archive's whole-row reads, `/api/system/status`, `opportunity_matches`
+in matching and alerts).
+
+**Upstash.** The cache sends 1 command for a request answered from the process's memo
+(the epoch and marker, one MGET), 2 from Redis (MGET, GET) and 5 to 6 when it computes a
+key (MGET, GET, SET NX, SET, EVAL; one more SET for the companion of a spot page). The
+daemon itself sends about 13,000 commands a month for its checks and 43,200 for its kick
+polls (docs/sync.md). "Steady" above: about 43,000 commands for computed keys (12 keys an
+hour at about 5 each), and its 1,000 views a day make at most about 3,000 cached requests
+(home 2, map 3, a spot page 4) of at most 2 commands each, 180,000 a month if the CDN
+answered none: about 280,000 a month with the daemon's, under 500K. Bandwidth: a
+new-instance view moves 9.2 (home), 39.8 (map) or 100.9 kB (spot page) and a warm one
+under 0.5 kB; at most about 1.5 GB a month at 1,000 views a day of 50 kB, plus about
+0.2 GB of stored payloads: under 10 GB. Data: the payloads of one hour are about 250 kB
+for "steady" and about 10 MB if every spot page were asked every hour (2-hour TTL),
+against 250 MB. Every request that reaches the API costs at least one command (a 404 for
+an unknown spot about four: MGET, GET, SET NX and the lock's EVAL), so a flood of URLs the
+CDN has not cached costs commands as it costs function invocations; these routes have no
+rate limit.
+
+**How to reproduce** (from the repository root, Postgres and a scratch Redis database
+running; `--json FILE` saves each result, `--backend-dir DIR` measures another checkout
+of `backend/`):
+
+```bash
+PY=backend/.venv/bin/python; S=scripts/measure_db_egress.py
+LIVE="--template swell_u3i_live_run --providers open_meteo,open_meteo_ecmwf"
+$PY $S pipeline --redis-url redis://localhost:6379/11 --prune
+$PY $S pipeline $LIVE --replay --replay-sources open_meteo_noaa --no-acquire --searches 3 \
+  --now 2026-10-16T06:00:00Z --prune --redis-url redis://localhost:6379/11
+$PY $S jobs $LIVE --replay --searches 3 --now 2026-10-16T07:00:00Z \
+  --redis-url redis://localhost:6379/11
+$PY $S pages $LIVE --publish --now 2026-10-16T06:00:00Z --redis-url redis://localhost:6379/11
+```
+
+**Limitations of these numbers.** Acquisition on live data was not measured (the replayed
+passes use `--no-acquire`; the demo pass's acquisition read 0.61 MB), nor the `map` stage
+(its GRIB download writes fields but its reads were not counted), nor `sync.tick` and the
+API's rate limiter. The traffic of the page rows is an example. The page views were made
+with FastAPI's TestClient in one process, without Vercel's CDN; how often the CDN answers
+instead of the API is not measured here. A signed-in visitor's own requests (`/api/auth/me`
+and the user-specific routes, `no-store`) were not measured. TLS to the local Postgres is
+counted as Neon's would be, but Neon's own protocol overhead may differ.
 
 ## Earlier measurements (before the forecast upgrade)
 

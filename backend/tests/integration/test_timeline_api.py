@@ -13,7 +13,7 @@ from app.core.database import utcnow
 from app.models import ForecastRun, ForecastSource, SurfQualityPrediction, SurfSpot
 from app.models.enums import ForecastRunStatus
 from app.schemas.timeline import SpotTimelineOut
-from app.services import timesteps
+from app.services import public_cache, timesteps
 from app.services.pipeline import run_pipeline
 from app.services.tides.api import NO_TIDE_SOURCE
 from app.services.timeline import NO_FORECAST
@@ -180,7 +180,8 @@ def test_timeline_of_a_stored_3_hourly_run(app_client: ApiClient, db: Session) -
     tl = _timeline(app_client, "jeffreys-bay")
     assert tl.available and tl.timezone == "Africa/Johannesburg"
     stored = [datetime.fromisoformat(r["prediction"]["valid_time"]) + shift for r in rows]
-    window_start = utcnow() - timedelta(hours=3)
+    # The public snapshot is computed for the start of the current hour.
+    window_start = public_cache.public_now() - timedelta(hours=3)
     expected = [t for t in stored if t >= window_start]
     assert [s.t for s in tl.steps] == expected
     assert all(s.step_hours == 3.0 for s in tl.steps)

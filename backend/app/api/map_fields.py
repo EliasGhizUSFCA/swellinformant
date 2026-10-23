@@ -4,8 +4,10 @@ Contract: app/schemas/map_fields.py. The implementation lives in
 app/services/map_fields.py (``field_index`` and ``field_bytes``). Neither depends on the
 visitor, so both carry shared-cache headers (app.core.http_cache, docs/map-layers.md):
 
-* the index: browsers 60 s, the CDN 60 s plus up to 10 min stale-while-revalidate. It names
-  the served run, which a publication switches about every 6 hours.
+* the index: the windows of every public GET (app.api.spots: browsers 60 s, the CDN 300 s
+  plus up to an hour of stale-while-revalidate). It names the served run, which a
+  publication switches about every 6 hours, and switches at the edge together with the
+  spot list and the map conditions it is shown with.
 * a field whose URL names the run (``run``) and the exact valid time it serves (``at``):
   that URL's bytes never change, so browsers keep it an hour and the CDN a year
   (``immutable``). The client always asks this way (lib/map-fields.ts ``fieldUrl``).
@@ -22,6 +24,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Path, Query, Response
 from sqlalchemy.orm import Session
 
+from app.api.spots import PUBLIC_BROWSER_SECONDS, PUBLIC_CDN_SECONDS, PUBLIC_STALE_SECONDS
 from app.core.database import get_db, utcnow
 from app.core.errors import NotFound
 from app.core.http_cache import cache_headers
@@ -32,9 +35,9 @@ from app.services import map_fields
 router = APIRouter(prefix="/api/map", tags=["map"])
 
 VARIABLE_PATTERN = "^(" + "|".join(MAP_FIELD_VARIABLES) + ")$"
-INDEX_BROWSER_SECONDS = 60
-INDEX_CDN_SECONDS = 60
-INDEX_STALE_WHILE_REVALIDATE = 600
+INDEX_BROWSER_SECONDS = PUBLIC_BROWSER_SECONDS
+INDEX_CDN_SECONDS = PUBLIC_CDN_SECONDS
+INDEX_STALE_WHILE_REVALIDATE = PUBLIC_STALE_SECONDS
 RUN_FIELD_BROWSER_SECONDS = 3600
 RUN_FIELD_CDN_SECONDS = 31_536_000  # one year: the URL names the run and the valid time
 FIELD_SECONDS = 300

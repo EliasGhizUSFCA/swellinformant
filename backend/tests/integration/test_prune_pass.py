@@ -3,7 +3,10 @@ the egress-map-serving package.
 
 prune_pass deletes derived data the sync can recompute: the predictions of superseded member
 runs (when PRUNE_SUPERSEDED_MEMBER_PREDICTIONS) and the map fields of runs that are neither
-among the two best servable ones nor the newest publication's map run; then it commits.
+among the two best servable ones nor the newest publication's map run. Since the egress
+integration it also applies the forecast-run retention (RETENTION_FORECAST_DAYS, the daily
+cleanup's rule, so the free database profile's 1 day holds between cleanups; its return dict
+gained ``forecast_runs``). Then it commits.
 Every forecast and field here is SYNTHETIC (tests.integration.test_retention_bounds'
 constant sea state; tests.synthetic_map_fields' constant GRIB fields).
 """
@@ -38,7 +41,7 @@ pytestmark = pytest.mark.integration
 
 
 def test_prune_pass_on_an_empty_database(db: Session) -> None:
-    assert prune_pass(db) == {"superseded_predictions": 0, "map_fields": 0}
+    assert prune_pass(db) == {"superseded_predictions": 0, "map_fields": 0, "forecast_runs": 0}
 
 
 @pytest.mark.parametrize("prune_predictions", [True, False])
@@ -53,11 +56,18 @@ def test_prune_pass_runs_both_prunes_and_commits(
         lambda _db, now=None: calls.append("predictions") or 4,
     )
     monkeypatch.setattr(maintenance, "prune_map_fields", lambda _db: calls.append("fields") or 7)
+    monkeypatch.setattr(
+        maintenance, "prune_forecast_runs", lambda _db, now: calls.append("runs") or 2
+    )
     committed: list[bool] = []
     monkeypatch.setattr(db, "commit", lambda: committed.append(True))
     out = prune_pass(db)
-    assert out == {"superseded_predictions": 4 if prune_predictions else 0, "map_fields": 7}
-    assert calls == (["fields", "predictions"] if prune_predictions else ["fields"])
+    assert out == {
+        "superseded_predictions": 4 if prune_predictions else 0,
+        "map_fields": 7,
+        "forecast_runs": 2,
+    }
+    assert calls == (["fields", "runs", "predictions"] if prune_predictions else ["fields", "runs"])
     assert committed == [True]
 
 
@@ -125,6 +135,7 @@ def test_a_pass_prunes_superseded_predictions_and_unserved_fields(
     assert out == {
         "superseded_predictions": superseded if prune_predictions else 0,
         "map_fields": 5,  # the stray run's five variables
+        "forecast_runs": 0,  # every run is younger than RETENTION_FORECAST_DAYS
     }
     with SessionLocal() as other:  # committed: another session sees the result
         runs = set(other.scalars(select(MapField.run_id).distinct()))
@@ -136,4 +147,5 @@ def test_a_pass_prunes_superseded_predictions_and_unserved_fields(
         )
         assert kept == (0 if prune_predictions else superseded)
     assert all(_predictions(db, r) > 0 for r in (new, ec, blend_run))  # never pruned here
-    assert prune_pass(db, NOW) == {"superseded_predictions": 0, "map_fields": 0}  # idempotent
+    again = prune_pass(db, NOW)  # idempotent
+    assert again == {"superseded_predictions": 0, "map_fields": 0, "forecast_runs": 0}

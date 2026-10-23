@@ -1,7 +1,9 @@
 """Job H — retention policy and housekeeping.
 
 * forecast runs older than RETENTION_FORECAST_DAYS are deleted (their wave forecasts and
-  predictions cascade), always keeping the two newest usable runs per source;
+  predictions cascade), always keeping the two newest usable runs per source
+  (:func:`prune_forecast_runs`, daily and also by every sync's prune stage, so the free
+  database profile's 1-day retention holds between the daily cleanups);
 * the surf-quality predictions of superseded runs of the blend's member sources are
   deleted (:func:`prune_superseded_predictions`): derived, recomputable data, about 2 kB
   per row and every member run scored as well as the blend. The newest usable run of every
@@ -152,15 +154,47 @@ def prune_map_fields(db: Session, keep: int = MAP_FIELD_RUNS_KEPT) -> int:
     return db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
 
 
+def prune_forecast_runs(db: Session, now: datetime) -> int:
+    """Delete the forecast runs started more than RETENTION_FORECAST_DAYS before ``now``
+    (their forecasts, predictions and map fields cascade), keeping the two newest usable
+    runs of every source whatever their age. Returns the runs deleted; the caller commits."""
+    keep_ids: set[int] = set()
+    for source_id in db.scalars(select(ForecastRun.source_id).distinct()).all():
+        keep_ids.update(
+            db.scalars(
+                select(ForecastRun.id)
+                .where(
+                    ForecastRun.source_id == source_id,
+                    ForecastRun.status.in_((ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)),
+                )
+                .order_by(ForecastRun.issued_at.desc())
+                .limit(2)
+            ).all()
+        )
+    stmt = delete(ForecastRun).where(
+        ForecastRun.started_at < now - timedelta(days=get_settings().retention_forecast_days)
+    )
+    if keep_ids:
+        stmt = stmt.where(ForecastRun.id.notin_(keep_ids))
+    return db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
+
+
 def prune_pass(db: Session, now: datetime | None = None) -> dict[str, int]:
     """The light prune a sync runs after publishing (its ``prune`` stage, when
     SYNC_PRUNE_EACH_PASS): the map fields of runs that are neither among the two best
-    servable ones nor published (:func:`prune_map_fields`), then the predictions of
-    superseded member runs (:func:`prune_superseded_predictions`, when
-    PRUNE_SUPERSEDED_MEMBER_PREDICTIONS). Both are derived data the sync can recompute; the
-    rest of the retention policy stays with the daily :func:`cleanup`. Commits; returns
-    the rows deleted, ``{"superseded_predictions", "map_fields"}``."""
-    out = {"superseded_predictions": 0, "map_fields": prune_map_fields(db)}
+    servable ones nor published (:func:`prune_map_fields`), the forecast runs past
+    RETENTION_FORECAST_DAYS (:func:`prune_forecast_runs`; the free database profile keeps
+    1 day, which the daily :func:`cleanup` alone would let grow to about 2), then the
+    predictions of superseded member runs (:func:`prune_superseded_predictions`, when
+    PRUNE_SUPERSEDED_MEMBER_PREDICTIONS). The rest of the retention policy stays with the
+    daily :func:`cleanup`. Commits; returns the rows deleted,
+    ``{"superseded_predictions", "map_fields", "forecast_runs"}`` (``forecast_runs`` counts
+    runs, added by the egress integration)."""
+    out = {
+        "superseded_predictions": 0,
+        "map_fields": prune_map_fields(db),
+        "forecast_runs": prune_forecast_runs(db, now or utcnow()),
+    }
     if get_settings().prune_superseded_member_predictions:
         out["superseded_predictions"] = prune_superseded_predictions(db, now)
     db.commit()
@@ -186,26 +220,7 @@ def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
     out: dict[str, int] = {}
 
     out["map_fields"] = prune_map_fields(db)
-
-    keep_ids: set[int] = set()
-    for source_id in db.scalars(select(ForecastRun.source_id).distinct()).all():
-        keep_ids.update(
-            db.scalars(
-                select(ForecastRun.id)
-                .where(
-                    ForecastRun.source_id == source_id,
-                    ForecastRun.status.in_((ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)),
-                )
-                .order_by(ForecastRun.issued_at.desc())
-                .limit(2)
-            ).all()
-        )
-    stmt = delete(ForecastRun).where(
-        ForecastRun.started_at < now - timedelta(days=s.retention_forecast_days)
-    )
-    if keep_ids:
-        stmt = stmt.where(ForecastRun.id.notin_(keep_ids))
-    out["forecast_runs"] = db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
+    out["forecast_runs"] = prune_forecast_runs(db, now)
     if s.prune_superseded_member_predictions:
         out["superseded_predictions"] = prune_superseded_predictions(db, now)
 

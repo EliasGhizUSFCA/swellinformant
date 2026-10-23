@@ -12,6 +12,12 @@ own values and uncertainty:
   and globally, per lead bucket;
 * the current research assessment of every spot (local confidence);
 * whether the run is stale by its source's rule (``queries.is_stale``).
+
+Only the columns and JSON keys these inputs use are read (database egress; a scoring pass
+runs after every model run). Of a comparison's ``sources`` only the members' ``family``
+values arrive, and an assessment's ``per_variable`` without the evidence lists of the
+variables other than wind (the wind dispute ranks the wind evidence). Every value the
+inputs use is the stored one.
 """
 
 from __future__ import annotations
@@ -20,14 +26,20 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, Text, and_, case, cast, column, func, literal, or_, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
-from app.models import ForecastAccuracyMetric, ForecastComparison, ForecastRun, WaveForecast
+from app.models import (
+    ForecastAccuracyMetric,
+    ForecastComparison,
+    ForecastRun,
+    SpotResearchAssessment,
+    WaveForecast,
+)
 from app.models.enums import ForecastRunStatus
 from app.services.forecasts.blend import FAMILY_VERIFICATION_SOURCES, MIN_VERIFICATION_PAIRS
 from app.services.forecasts.queries import BLEND_CODE, is_stale, stale_after_hours
-from app.services.research import current_assessments
 from app.services.surf_quality.forecast_confidence import (
     Disagreement,
     ResearchBasisInput,
@@ -133,24 +145,56 @@ def previous_run(db: Session, run: ForecastRun) -> ForecastRun | None:
     )
 
 
+def _member_families(sources: Any) -> ColumnElement[Any]:
+    """The ``family`` value of every member of ``sources`` (code -> per-member values) whose
+    ``role`` is "member" or absent, as a JSON array (in no particular order): all that
+    :func:`_comparisons` reads of the column (Hs, Tp, direction, wind, weight and lead are
+    about 9/10 of it). Which values count and their text stay in Python, as when the whole
+    column was read. NULL when there is none, which reads as empty."""
+    member = (
+        func.jsonb_each(sources)
+        .table_valued(column("key", Text), column("value", JSONB))
+        .render_derived(name="m")
+    )
+    value = member.c.value
+    role = value["role"]
+    return (
+        select(func.jsonb_agg(value["family"], type_=JSONB))
+        .select_from(member)
+        .where(
+            func.jsonb_typeof(value) == "object",
+            value.has_key("family"),
+            or_(
+                ~value.has_key("role"),
+                and_(func.jsonb_typeof(role) == "string", role.astext == "member"),
+            ),
+        )
+        .scalar_subquery()
+    )
+
+
 def _comparisons(db: Session, run: ForecastRun) -> dict[tuple[int, datetime], HourComparison]:
     out: dict[tuple[int, datetime], HourComparison] = {}
     if run.source.code != BLEND_CODE:
         return out
     # JSONB objects do not keep key order: list families in the run's member order.
     order = list(_run_families(run))
-    for row in db.scalars(
-        select(ForecastComparison).where(ForecastComparison.blend_run_id == run.id)
+    c = ForecastComparison
+    for row in db.execute(
+        select(
+            c.spot_id,
+            c.valid_time,
+            _member_families(c.sources).label("families"),
+            c.hs_log_ratio_max,
+            c.tp_diff_max_s,
+            c.direction_diff_max_deg,
+            c.wind_diff_max_kmh,
+            c.flags,
+        ).where(c.blend_run_id == run.id)
     ):
         families = tuple(
             sorted(
-                {
-                    str(v.get("family"))
-                    for v in (row.sources or {}).values()
-                    if isinstance(v, dict)
-                    and v.get("role", "member") == "member"
-                    and v.get("family")
-                },
+                {str(f) for f in row.families or () if f},
                 key=lambda f: order.index(f) if f in order else len(order),
             )
         )
@@ -174,6 +218,61 @@ def _run_families(run: ForecastRun) -> tuple[str, ...]:
     return (run.source.family,)
 
 
+@dataclass(frozen=True, slots=True)
+class AssessmentInputs:
+    """The columns of a current research assessment that scoring reads (``id``,
+    ``spot_id``, ``overall_class`` and ``per_variable`` as :func:`scoring_assessments`
+    reads it), for ``forecast_confidence.research_input`` and the tide research class."""
+
+    id: int
+    spot_id: int
+    overall_class: str
+    per_variable: dict[str, Any] | None
+
+
+def _without_evidence(per_variable: Any) -> ColumnElement[Any]:
+    """``per_variable`` without the ``evidence`` list of every variable except wind (whose
+    evidence ``research.decisions.wind_dispute`` ranks); about 4/5 of the column is
+    evidence. NULL for an empty object, which reads as empty."""
+    entry = func.jsonb_each(per_variable).table_valued("key", "value").render_derived(name="v")
+    trimmed = case(
+        (
+            (entry.c.key != "wind") & (func.jsonb_typeof(entry.c.value) == "object"),
+            entry.c.value.op("-")(cast(literal("evidence"), Text)),
+        ),
+        else_=entry.c.value,
+    )
+    return cast(
+        select(func.jsonb_object_agg(entry.c.key, trimmed)).select_from(entry).scalar_subquery(),
+        JSONB,
+    )
+
+
+def scoring_assessments(db: Session) -> dict[int, AssessmentInputs]:
+    """The current research assessment of every assessed spot (spot_id -> row), as
+    ``research.current_assessments`` returns them but with only what scoring reads."""
+    a = SpotResearchAssessment
+    rows = db.execute(
+        select(a.id, a.spot_id, a.overall_class, _without_evidence(a.per_variable)).where(
+            a.is_current
+        )
+    )
+    return {
+        spot_id: AssessmentInputs(row_id, spot_id, overall, per_variable)
+        for row_id, spot_id, overall, per_variable in rows
+    }
+
+
+def research_inputs(assessments: dict[int, AssessmentInputs]) -> dict[int, ResearchBasisInput]:
+    """spot_id -> the research basis of local confidence, for the assessed spots."""
+    research: dict[int, ResearchBasisInput] = {}
+    for spot_id, row in assessments.items():
+        entry = research_input(row)
+        if entry is not None:
+            research[spot_id] = entry
+    return research
+
+
 @dataclass
 class RunConfidenceContext:
     run: ForecastRun
@@ -188,7 +287,15 @@ class RunConfidenceContext:
     research: dict[int, ResearchBasisInput]
 
     @classmethod
-    def load(cls, db: Session, run: ForecastRun, now: datetime) -> RunConfidenceContext:
+    def load(
+        cls,
+        db: Session,
+        run: ForecastRun,
+        now: datetime,
+        research: dict[int, ResearchBasisInput] | None = None,
+    ) -> RunConfidenceContext:
+        """``research``: :func:`research_inputs`, when the caller has read them already (a
+        scoring pass reads the assessments once for all its runs)."""
         prev = previous_run(db, run)
         previous: dict[tuple[int, datetime], tuple[float | None, float | None]] = {}
         if prev is not None:
@@ -203,11 +310,8 @@ class RunConfidenceContext:
                 previous[(spot_id, valid_time)] = (hs, swell)
         families = _run_families(run)
         codes = {c for fam in families for c in FAMILY_VERIFICATION_SOURCES.get(fam, ())}
-        research: dict[int, ResearchBasisInput] = {}
-        for spot_id, row in current_assessments(db).items():
-            entry = research_input(row)
-            if entry is not None:
-                research[spot_id] = entry
+        if research is None:
+            research = research_inputs(scoring_assessments(db))
         return cls(
             run=run,
             stale=is_stale(run, now),
