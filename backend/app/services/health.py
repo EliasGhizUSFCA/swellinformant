@@ -105,15 +105,23 @@ from app.schemas.health import (
     SourceRole,
     StorageOut,
 )
-from app.schemas.sync import SyncComponentOut, SyncHealthOut, SyncRunOut, SyncStageOut
+from app.schemas.sync import (
+    SyncComponentOut,
+    SyncHealthOut,
+    SyncRunOut,
+    SyncStageOut,
+    SyncStoredRunOut,
+)
 from app.services.forecasts.open_meteo import free_api_refused
 from app.services.forecasts.queries import USABLE, is_stale, stale_after_hours
 from app.services.forecasts.registry import (
     GEFS_WAVE_CODE,
+    KNOWN_SOURCE_NAMES,
     configured_source_codes,
 )
 from app.services.map_fields import map_fields_mode, served_run
 from app.services.sync import state
+from app.services.sync.detect import newest_cycle
 from app.services.sync.published import latest_publication
 from app.services.sync.types import STAGE_JOB_NAMES, SYNC_OWNED_TASKS, SYNC_TICK_JOB
 from app.services.tides.health import constants_file_present, tide_freshness
@@ -815,8 +823,47 @@ def _check_redis(settings: Settings) -> tuple[RedisHealthOut, list[Problem]]:
 
 
 # --------------------------------------------------------------------------- sync
-def _sync_run_out(row: SyncRun) -> SyncRunOut:
-    """A sync_runs row for the public report: no error text, no stage details."""
+ACQUISITION_KINDS = ("spots", "ensemble", "map")
+
+
+def _stored_runs(row: SyncRun, names: dict[str, str]) -> list[SyncStoredRunOut]:
+    """The runs a sync stored: the acquisition stages' components with outcome "stored"
+    (sync_runs.stages), with the plan's cycle of that run (else the run key's)."""
+    cycles: dict[tuple[str, str | None], Any] = {}
+    plan = row.plan if isinstance(row.plan, dict) else {}
+    for comp in plan.get("components") or []:
+        if isinstance(comp, dict) and comp.get("available_cycle"):
+            cycles[(str(comp.get("source_code")), comp.get("available_run_key"))] = comp[
+                "available_cycle"
+            ]
+    out: list[SyncStoredRunOut] = []
+    for entry in row.stages or []:
+        if not isinstance(entry, dict) or entry.get("name") not in ACQUISITION_KINDS:
+            continue
+        detail = entry.get("detail")
+        for comp in (detail.get("components") if isinstance(detail, dict) else None) or []:
+            if not isinstance(comp, dict) or comp.get("outcome") != "stored":
+                continue
+            source, run_key = str(comp.get("source_code")), comp.get("run_key")
+            run_key = str(run_key) if run_key else None
+            try:
+                out.append(
+                    SyncStoredRunOut(
+                        kind=entry["name"],
+                        source=source,
+                        source_name=names.get(source),
+                        run_key=run_key,
+                        cycle=cycles.get((source, run_key)) or newest_cycle(run_key),
+                    )
+                )
+            except ValidationError:
+                continue
+    return out
+
+
+def _sync_run_out(row: SyncRun, names: dict[str, str] | None = None) -> SyncRunOut:
+    """A sync_runs row for the public report: no error text, no stage details; the runs
+    it stored, by component."""
     stages: list[SyncStageOut] = []
     for entry in row.stages or []:
         if not isinstance(entry, dict):
@@ -842,10 +889,30 @@ def _sync_run_out(row: SyncRun) -> SyncRunOut:
         published_at=row.published_at,
         anchor_cycle=row.anchor_cycle,
         stages=stages,
+        stored=_stored_runs(row, names or {}),
     )
 
 
-def _component_out(raw: dict[str, Any]) -> SyncComponentOut | None:
+def source_names(db: Session, codes: Iterable[str]) -> dict[str, str]:
+    """Source code -> name: forecast_sources.name, else KNOWN_SOURCE_NAMES (one query)."""
+    wanted = {c for c in codes if c}
+    if not wanted:
+        return {}
+    stored = dict(
+        db.execute(
+            select(ForecastSource.code, ForecastSource.name).where(ForecastSource.code.in_(wanted))
+        ).all()
+    )
+    return {
+        c: stored.get(c) or KNOWN_SOURCE_NAMES[c]
+        for c in wanted
+        if stored.get(c) or c in KNOWN_SOURCE_NAMES
+    }
+
+
+def _component_out(
+    raw: dict[str, Any], names: dict[str, str] | None = None
+) -> SyncComponentOut | None:
     """One component of the daemon's last check (ComponentStatus.as_dict()). The detail of
     an "unknown" component is a provider's error text: replaced by a plain statement."""
     try:
@@ -853,9 +920,11 @@ def _component_out(raw: dict[str, Any]) -> SyncComponentOut | None:
         detail = raw.get("detail")
         if detail and component_state == "unknown":
             detail = UNKNOWN_COMPONENT_DETAIL
+        source = str(raw["source_code"])
         return SyncComponentOut(
             kind=raw["kind"],
-            source=str(raw["source_code"]),
+            source=source,
+            source_name=(names or {}).get(source),
             provider=str(raw["provider"]),
             state=component_state,
             stored_run_key=raw.get("stored_run_key"),
@@ -1038,9 +1107,6 @@ def _check_sync(
     else:
         if heartbeat is not None:
             last_check_at = heartbeat.at
-            components = [
-                c for c in (_component_out(raw) for raw in heartbeat.components) if c is not None
-            ]
         if redis_available:  # otherwise redis_unavailable explains it
             problem = heartbeat_problem(
                 settings, heartbeat, now, sync_running=_sync_running(db, now)
@@ -1053,6 +1119,22 @@ def _check_sync(
         select(SyncRun).order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).limit(1)
     )
     published = latest_publication(db)
+    raw_components = heartbeat.components if heartbeat is not None else []
+    codes = {
+        str(raw["source_code"])
+        for raw in raw_components
+        if isinstance(raw, dict) and raw.get("source_code")
+    }
+    for row in (newest, published):
+        for entry in (row.stages or []) if row is not None else []:
+            detail = entry.get("detail") if isinstance(entry, dict) else None
+            for comp in (detail or {}).get("components") or []:
+                if isinstance(comp, dict) and comp.get("source_code"):
+                    codes.add(str(comp["source_code"]))
+    names = source_names(db, codes)
+    components = [
+        c for c in (_component_out(raw, names) for raw in raw_components) if c is not None
+    ]
     finished = db.scalars(
         select(SyncRun)
         .where(SyncRun.status != "running")
@@ -1079,11 +1161,12 @@ def _check_sync(
         check_minutes=settings.sync_check_minutes,
         last_check_at=last_check_at,
         heartbeat_stale=stale,
-        last_run=_sync_run_out(newest) if newest is not None else None,
-        last_published=_sync_run_out(published) if published is not None else None,
+        last_run=_sync_run_out(newest, names) if newest is not None else None,
+        last_published=_sync_run_out(published, names) if published is not None else None,
         components=components,
         cpu_hours_month=used,
         cpu_budget_hours=budget,
+        cpu_alert_fraction=CPU_BUDGET_ALERT_FRACTION,
     )
     return out, problems
 

@@ -18,6 +18,15 @@ GEFS_WAVE_CODE = "noaa_gefs_wave"
 OPEN_METEO_NOAA_CODE = OpenMeteoProvider.code  # "open_meteo_noaa", family ncep_gfs
 OPEN_METEO_ECMWF_CODE = OpenMeteoEcmwfProvider.code  # "open_meteo_ecmwf", family ecmwf_ifs
 
+# Names of the sources whose providers live in modules that import ecCodes, as their
+# source_info records them (noaa.NoaaGfsFieldsProvider, ensemble.GefsWaveEnsembleProvider),
+# for status pages that name a source before its first run is stored. A test keeps them
+# equal to the providers'.
+KNOWN_SOURCE_NAMES = {
+    "noaa_gfs_fields": "NOAA GFS-Wave + GFS global fields",
+    GEFS_WAVE_CODE: "NOAA GEFS-Wave ensemble mean and spread (direct from NOAA open data)",
+}
+
 # FORECAST_PROVIDERS token -> source code.
 SOURCE_CODES = {
     "open_meteo": OPEN_METEO_NOAA_CODE,

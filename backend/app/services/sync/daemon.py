@@ -46,7 +46,7 @@ from app.jobs.registry import JOB_SPECS, discover_flights_run, job_spec
 from app.jobs.runner import cpu_seconds, run_job
 from app.jobs.schedule import DailyAt, Every, JobEntry, build_schedule
 from app.services.sync import state
-from app.services.sync.detect import plan_sync, refresh_known
+from app.services.sync.detect import plan_sync, refresh_known, settle_plan
 from app.services.sync.orchestrator import remember, run_sync
 from app.services.sync.types import SYNC_OWNED_TASKS, KnownRuns, SyncBusy, SyncPlan
 
@@ -260,7 +260,10 @@ class SyncDaemon:
             self.cpu.jobs += cpu_seconds() - cpu0
         remember(self.known, result)
         release_connections()
-        self._heartbeat(plan, f"sync {result.sync_run_id} {result.status}")
+        # The components as the sync left them (not the pre-sync plan: a run it stored
+        # would read "new" until the next check).
+        self.last_plan = settle_plan(plan, result)
+        self._heartbeat(self.last_plan, f"sync {result.sync_run_id} {result.status}")
         return plan
 
     def _heartbeat(self, plan: SyncPlan | None, note: str | None) -> None:

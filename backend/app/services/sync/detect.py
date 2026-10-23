@@ -677,6 +677,40 @@ def promote_pending(plan: SyncPlan) -> SyncPlan:
 
 
 # --------------------------------------------------------------------------- outcomes
+def settle_plan(plan: SyncPlan, result: SyncResult) -> SyncPlan:
+    """The plan as a sync on it left the components (the daemon's heartbeat after a sync,
+    without asking the providers again): a component whose newest available run the sync
+    stored, or found stored, is current; one whose acquisition failed is failed (the next
+    check says when it is retried); one the provider stopped serving unmixed waits. Any
+    other component keeps its state, and ``due`` and the reasons stay the check's."""
+    outcomes: dict[str, dict[str, Any]] = {}
+    for stage in result.stages:
+        for comp in stage.detail.get("components", []) or []:
+            if isinstance(comp, dict) and comp.get("source_code"):
+                outcomes[str(comp["source_code"])] = comp
+    settled: list[ComponentStatus] = []
+    for c in plan.components:
+        comp = outcomes.get(c.source_code)
+        outcome = comp.get("outcome") if comp else None
+        sync = f"sync {result.sync_run_id}"
+        if comp is not None and outcome in ("stored", "current"):
+            c = replace(
+                c,
+                state="current",
+                stored_run_key=comp.get("run_key") or c.available_run_key,
+                detail=f"stored by {sync}" if outcome == "stored" else None,
+                retry_after_s=None,
+                attempts=0,
+            )
+        elif outcome == "failed":
+            message = redact(str((comp or {}).get("message") or ""))[:200]
+            c = replace(c, state="failed", detail=f"{sync} failed: {message}".rstrip(": "))
+        elif outcome == "deferred":
+            c = replace(c, state="waiting", detail=f"not served unmixed at {sync}")
+        settled.append(c)
+    return replace(plan, components=tuple(settled))
+
+
 def apply_result(known: KnownRuns, result: SyncResult, now: datetime | None = None) -> None:
     """Record a sync's acquisition outcomes in ``known``.
 
