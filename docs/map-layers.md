@@ -816,7 +816,11 @@ GEFS statistics, 9 map hours) or the demo provider, with the app's clock frozen
   key `public:v1:<epoch>:<marker>:<YYYYmmddTHH>:<route>[:<sha256 of the params, 24 hex>]`,
   stored zlib-compressed for 2 hours (`PAYLOAD_TTL_SECONDS`) and kept in each
   process's memo (up to 32 MB). `marker` is the sync's (`note_published`, 24 h TTL) or,
-  without one, derived from the database in one small statement. The first request for
+  without one, derived from the database in one small statement; while a sync's marker
+  is stored, a change made outside a sync (the development endpoints, a CLI pipeline or
+  rescore) shows from the next hour. `prewarm` computes the spot list and the conditions
+  now for the hour (the sync can call it after the hook; with Redis unavailable it reads
+  nothing). The first request for
   a key takes its lock (`SET NX EX 60`); concurrent ones poll for its result (about
   6.4 s at most, then compute unstored). Redis down: every request computes directly
   and Redis is not asked again for 30 s. A spot page's forecast and timeline read the
