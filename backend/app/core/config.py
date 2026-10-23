@@ -7,12 +7,16 @@ else. Nothing in this module is ever sent to the frontend.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, ValidationError, field_validator, model_validator
+from pydantic_core import InitErrorDetails
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 FlightProviderName = Literal["duffel", "amadeus", "demo"]
 # Who runs the background jobs: "celery" (worker + beat, classic docker compose) or "daemon"
@@ -432,6 +436,11 @@ class Settings(BaseSettings):
     data_health_database_max_gb: float | None = Field(default=20.0, gt=0)
     # Degraded once Redis uses more than this fraction of its maxmemory.
     data_health_redis_max_fraction: float = Field(default=0.8, gt=0, le=1)
+    # Comma-separated addresses the daily watchdog emails when the database itself cannot
+    # be reached (e.g. Neon's compute suspended after its quota): the admin recipients are
+    # read from the users table, so they cannot be told then. Optional; validated; logs
+    # show counts only, never the addresses.
+    ops_alert_emails: str | None = None
 
     # ------------------------------------------------------------------ worker and compose
     # Queues the Celery worker consumes (docker-entrypoint.sh) and the Redis memory cap
@@ -462,6 +471,24 @@ class Settings(BaseSettings):
                 f"CLIENT_IP_HEADER must be a header name (letters, digits, '-'), got {v!r}"
             )
         return name
+
+    @field_validator("ops_alert_emails")
+    @classmethod
+    def _check_ops_alert_emails(cls, v: str | None) -> str | None:
+        if v is None or not _split(v):
+            return None
+        from email_validator import EmailNotValidError, validate_email
+
+        out: list[str] = []
+        for index, entry in enumerate(_split(v), start=1):
+            try:
+                out.append(validate_email(entry, check_deliverability=False).normalized)
+            except EmailNotValidError:
+                # The entry is not quoted: the message reaches logs.
+                raise ValueError(
+                    f"OPS_ALERT_EMAILS entry {index} is not a valid email address"
+                ) from None
+        return ",".join(out)
 
     @field_validator("sync_trigger_sources")
     @classmethod
@@ -537,17 +564,47 @@ class Settings(BaseSettings):
         return self.celery_result_backend or self.redis_url
 
     @property
+    def unpooled_database_url(self) -> str | None:
+        """DATABASE_URL_UNPOOLED when it is set and names the same database as DATABASE_URL.
+
+        The direct and the pooled URL of one database differ in host (and, on some hosts,
+        user) but never in database name. Another name means the unpooled URL does not
+        lead to this process's database (a stale variable, or a test or tool that pointed
+        DATABASE_URL elsewhere): it is ignored with a warning (names only, never the URL),
+        so no caller can migrate or write to the database a stale unpooled URL names.
+        """
+        unpooled = self.database_url_unpooled
+        if not unpooled:
+            return None
+        direct_name, pooled_name = _database_name(unpooled), _database_name(self.database_url)
+        if direct_name != pooled_name:
+            logger.warning(
+                "DATABASE_URL_UNPOOLED names database %r but DATABASE_URL names %r; "
+                "ignoring the unpooled URL",
+                direct_name,
+                pooled_name,
+            )
+            return None
+        return unpooled
+
+    @property
     def engine_database_url(self) -> str:
-        """The URL this process's engine connects to: DATABASE_URL_UNPOOLED when
-        DB_USE_UNPOOLED is true and it is set, else DATABASE_URL."""
-        if self.db_use_unpooled and self.database_url_unpooled:
-            return self.database_url_unpooled
+        """The URL this process's engine connects to: the unpooled URL when DB_USE_UNPOOLED
+        is true and :attr:`unpooled_database_url` is usable, else DATABASE_URL."""
+        if self.db_use_unpooled and (direct := self.unpooled_database_url):
+            return direct
         return self.database_url
 
     @property
     def migration_database_url(self) -> str:
-        """Migrations need a direct connection: DATABASE_URL_UNPOOLED, else DATABASE_URL."""
-        return self.database_url_unpooled or self.database_url
+        """Migrations need a direct connection: :attr:`unpooled_database_url`, else
+        DATABASE_URL."""
+        return self.unpooled_database_url or self.database_url
+
+    @property
+    def ops_alert_email_list(self) -> list[str]:
+        """OPS_ALERT_EMAILS as a list of normalised addresses (empty when unset)."""
+        return _split(self.ops_alert_emails or "")
 
     @property
     def sync_trigger_list(self) -> frozenset[str]:
@@ -704,6 +761,17 @@ def normalize_database_url(url: str) -> str:
     return url
 
 
+def _database_name(url: str) -> str | None:
+    """The database name of a SQLAlchemy URL (None when it cannot be parsed)."""
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    try:
+        return make_url(url).database
+    except ArgumentError:
+        return None
+
+
 def _split(value: str) -> list[str]:
     """Entries of a comma-separated setting, stripped, blanks dropped."""
     return [p.strip() for p in value.split(",") if p.strip()]
@@ -727,6 +795,25 @@ def _step_ranges(value: str) -> list[tuple[int, int, int]]:
     return out
 
 
+def redacted(exc: ValidationError) -> ValidationError:
+    """``exc`` without the rejected values: pydantic's own message quotes each input, and a
+    SECRET_KEY or CRON_SECRET that is too short is still a secret. The setting, the error
+    type and its message stay (``exc.errors(include_input=False)``)."""
+    details: list[InitErrorDetails] = []
+    for error in exc.errors(include_url=False):
+        item = InitErrorDetails(type=error["type"], loc=error["loc"], input="[hidden]")
+        if "ctx" in error:
+            item["ctx"] = error["ctx"]
+        details.append(item)
+    return ValidationError.from_exception_data(exc.title, details, hide_input=True)
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    """The settings of this process (loaded once). An invalid setting raises a
+    ValidationError that names the setting and the reason but never its value, so it is
+    safe in the Vercel function's, the daemon's and the CLI's logs (:func:`redacted`)."""
+    try:
+        return Settings()
+    except ValidationError as exc:
+        raise redacted(exc) from None
