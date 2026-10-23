@@ -355,10 +355,12 @@ resolution and drawn onto the canvas with `imageSmoothingQuality = "high"` (sect
   animation with skipping equals one that visits every cell every frame, and still frames in
   between change nothing); each lattice cell carries an "all four nodes valid" flag, so every
   validity probe is one read; a dash too faint by its life fade alone (fade x 0.90 < 0.04) is
-  left out before any sampling; and the hot single-use helpers (`dashAt`, `sampleLattice`)
-  are called with `/*#__NOINLINE__*/`, because the production minifier otherwise inlines each
-  as a function expression created anew for every cell (thousands of closures a frame and
-  more garbage-collection pauses). Section 7 has the measurements.
+  left out before any sampling; the hot single-use helpers (`dashAt`, `sampleLattice`,
+  `tintLevelAt`, `batchOf`) are called with `/*#__NOINLINE__*/`, because the production
+  minifier otherwise inlines each as a function expression created anew for every cell or
+  dash (thousands of closures a frame and more garbage-collection pauses); and the fill
+  style of a system and tint level is made once a frame (its batches differ only in
+  opacity). Section 7 has the measurements.
 
 **Why filled quads (integration, 2026-10-22).** The wave-look package drew each dash as a
 round-capped core stroke with a halo and a two-step butt-capped trail (6 path vertices),
@@ -424,9 +426,9 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
   to 2.2 times the median (section 7). The median, not a high percentile, drives it, so a
   garbage collection or a busy moment of the page does not thin the map for good. A fast
   device keeps the full density; this shared, software-rendered test machine draws about
-  2,100 to 2,600 blobs on busy 1440 x 900 views (section 7). Phone views of the combined sea
-  stay under the cap (720 to 1,430 blobs on a Pixel 7); with all three partitions a phone
-  view (2,300 to 2,400 dashes) reaches it too.
+  1,500 to 2,600 blobs on busy 1440 x 900 views, depending on its load (section 7). Phone
+  views of the combined sea stay under the cap (700 to 1,430 blobs on a Pixel 7); with all
+  three partitions a phone view (about 1,950 to 2,650 dashes) can reach it too.
 * The top system (primary, else combined) is planned first and may use 60 % (`BUDGET_SHARE`)
   of the dashes and of the quads left, the next 60 % of the rest, the last one all of it.
   Cells are visited in a fixed hashed order, so a frame over budget leaves out an even,
@@ -444,7 +446,8 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
 `data-quads` (filled quads drawn, one per dash), `data-quad-cap` (the adaptive cap of the
 frame), `data-dash-trails` (blobs drawn deeper than their head, i.e. with their smear),
 `data-vertices` (stroked path vertices: the reduced-motion arrowheads, 3 each),
-`data-strokes` (canvas draw calls), `data-drawn`, `data-arrows` (still mode),
+`data-strokes` (canvas draw calls), `data-cells` (dash cells visited, idle ones included),
+`data-drawn`, `data-arrows` (still mode),
 `data-exaggeration` (E rounded), `data-view` (origin, size, world px), `data-ocean-mask`,
 `data-draw-ms`, `data-draw-ms-p50` and `data-draw-ms-p95` (last 120 frames), `data-frames`
 (frames drawn) and `data-lattice-ms`. The e2e frame-cost test (`e2e/map-performance.spec.ts`,
@@ -525,60 +528,83 @@ across the crest as well as along it. The 0.5 threshold of the e2e check is unch
 
 **Visual QA on real fields.** NOAA GFS-Wave + GFS fields of the 2026-10-16 00Z run (the 9
 stored hours of a clone of the `swell_u3i_live_run` database, with the real Open-Meteo spot
-runs of that day), served by this branch's backend to its production build, screenshots at
-1440 x 900 and in Pixel 7 emulation (412 x 839 CSS px at 2.625 device px per CSS px),
-compared with the owner's reference screenshot (2026-10-22). Dashes drawn (with their smear
-in brackets), the adaptive cap when it limited the view, and the 120-frame draw median /
-p95 once settled (headless Chromium, software rendering, machine shared):
+runs of that day), served by this branch's backend to its production build, screenshots of
+the analysis hour at 1440 x 900 and in Pixel 7 emulation (412 x 839 CSS px at 2.625 device px
+per CSS px), compared with the owner's reference screenshot. Final pass of this round's code
+(2026-10-23): Hs over the desktop view (10th / 50th / 90th percentile of its ocean cells in
+the served field, and its maximum; the Pixel 7 views see the middle of it), dashes drawn
+(with their smear in brackets), the adaptive cap when it limited the view, and the 120-frame
+draw median / p95 once settled (headless Chromium, software rendering, machine shared):
 
-| View | Desktop 1440 x 900 | Pixel 7 |
-|---|---|---|
-| California, zoom 6, centre 36.5°N 123°W (Hs about 2 m: blue-violet to violet) | 2,581 (2,559), cap 2,670: 2.4 / 4.2 ms | 1,211 (1,196), under the cap: 1.0 / 1.2 ms |
-| California, zoom 5 (violet to magenta offshore) | 2,494 (2,471), cap 2,516: 2.1 / 4.4 ms | 1,151 (1,132): 1.3 / 1.9 ms |
-| Gulf of Alaska storm, zoom 5 (Hs 4 to 7 m: magenta to pink) | 2,332 (2,311), cap 2,396: 2.2 / 3.2 ms | 1,433 (1,416): 1.2 / 1.9 ms |
-| Pacific, zoom 2 (Pixel 7: its whole-world view) | 2,152 (2,110), cap 2,206: 2.4 / 4.6 ms | 721 (687): 1.2 / 2.3 ms |
-| California, zoom 6, primary + secondary + wind sea | 2,245 (1,698; the secondary's bars have no smear), cap 2,306: 2.4 / 4.5 ms | 2,382 (1,642), cap 2,421: 2.3 / 4.0 ms |
-| California, zoom 6, reduced motion | still: 4,211 dashes at full depth, 702 arrowheads; the one still frame took 60 ms | 1,328, 222 arrowheads: 32 ms |
-| California, zoom 6, legend open | 2,491, cap 2,503: 2.1 / 2.8 ms | 1,197: 1.1 / 3.2 ms |
-| California, zoom 6, settings open (three partitions) | 2,092, cap 2,125: 2.5 / 3.0 ms | 2,318, cap 2,368: 2.0 / 4.3 ms |
+| View | Hs in the desktop view, m | Desktop 1440 x 900 | Pixel 7 |
+|---|---|---|---|
+| California, zoom 6, centre 36.5°N 123°W (blue-violet) | 1.2 / 1.5 / 2.0 (max 3.7) | 2,037 (2,022), cap 2,118: 2.3 / 2.8 ms | 1,207 (1,190), under the cap: 1.1 / 1.5 ms |
+| California, zoom 5 (blue-violet inshore, violet to magenta-purple offshore) | 1.3 / 1.7 / 3.5 (max 4.9) | 2,436 (2,413), cap 2,451: 2.2 / 3.2 ms | 1,143 (1,125): 1.2 / 1.5 ms |
+| Gulf of Alaska, zoom 5 (magenta-purple to magenta) | 1.5 / 3.3 / 4.3 (max 5.1) | 1,885 (1,870), cap 1,941: 2.2 / 3.2 ms | 1,434 (1,421): 1.2 / 1.6 ms |
+| Pacific, zoom 2 (Pixel 7: its whole-world view) | 0.6 / 2.2 / 4.8 (max 12.2) | 2,057 (2,025), cap 2,090: 2.3 / 2.7 ms | 700 (668): 1.1 / 2.0 ms |
+| California, zoom 6, primary + secondary + wind sea | | 1,961 (1,488; the secondary's bars have no smear), cap 2,002: 2.4 / 2.9 ms | 2,642 (1,667), under the cap: 2.2 / 2.8 ms |
+| California, zoom 6, reduced motion | | still: 4,211 dashes at full depth, 702 arrowheads; the one still frame took 50 ms | 1,328, 222 arrowheads: 26 ms |
+| California, zoom 6, legend open | | 2,280, cap 2,331: 2.1 / 2.6 ms | 1,198: 1.2 / 1.4 ms |
+| California, zoom 6, settings open (three partitions) | | 1,827, cap 1,847: 2.5 / 3.1 ms | 1,959, cap 1,984: 2.1 / 4.7 ms |
 
-The reduced-motion frame is drawn once per view (after each pan or zoom) and does not
-feed the adaptive budget, so on a page that never animated it is cut only at 7,000 quads:
-here it drew every cell.
+The 2026-10-22 pass of the same views drew 2,152 to 2,581 blobs on the desktop (caps 2,206
+to 2,670) and the same Pixel 7 counts within 3 %; other passes of 2026-10-23 settled as low
+as 1,476 (Pacific, zoom 2). The desktop cap follows the machine's load, which other agents'
+builds and tests share. The reduced-motion frame is drawn once per view (after each pan or
+zoom) and does not feed the adaptive budget, so on a page that never animated it is cut
+only at 7,000 quads: here it drew every cell.
 
 **Density.** Counted the same way on every screenshot (`density.mjs` of the QA tools, not
 committed): open-ocean regions clear of labels, markers and controls; a blob is a connected
 patch at least 25 grey levels above the local mean over 31 CSS px. Blobs per 1,000 CSS px²,
-with the median blob area and the share of the region covered:
+with the median blob area and the share of the region covered (final pass, 2026-10-23):
 
-| View (region) | Desktop, this machine | Desktop, budget as on a 3 x faster device | Pixel 7 |
+| View (region) | Desktop, this machine | Desktop, budget as on a 3 x faster device (2026-10-22) | Pixel 7 |
 |---|---|---|---|
 | Owner's reference (phone screenshot, open ocean, 167 x 342 CSS px) | 4.05 (26.4 CSS px², 11.6 %) | | |
-| California, zoom 6 (desktop 600 x 400, phone 300 x 300 CSS px) | 2.58 (28 CSS px², 7.8 %) | 3.49 (27 CSS px², 11.0 %) | 3.49 (27.4 CSS px², 11.2 %) |
-| California, zoom 5 | 2.31 (30, 8.1 %) | | 3.03 (27.6, 9.7 %) |
-| Gulf of Alaska, zoom 5 | 2.25 (36, 8.7 %) | 3.14 (36, 13.3 %) | 3.73 (37.2, 16.0 %) |
-| Pacific, zoom 2 (desktop 500 x 300) | 1.95 (31, 7.5 %) | 2.72 (31, 10.3 %) | 2.73 (30.6, 10.2 %) |
+| California, zoom 6 (desktop 600 x 400, phone 300 x 300 CSS px) | 2.20 (28 CSS px², 6.4 %) | 3.49 (27 CSS px², 11.0 %) | 3.49 (27.6 CSS px², 11.1 %) |
+| California, zoom 5 | 2.26 (30, 8.0 %) | | 3.06 (27.4, 9.6 %) |
+| Gulf of Alaska, zoom 5 | 1.92 (37, 7.2 %) | 3.14 (36, 13.3 %) | 3.65 (37.2, 16.1 %) |
+| Pacific, zoom 2 (desktop 500 x 300) | 2.01 (30, 7.3 %) | 2.72 (31, 10.3 %) | 2.65 (29.9, 10.1 %) |
 
-The "3 x faster" column ran the same build with `performance.now` slowed three times in the
-page (a QA-only init script, not in the app), so the budget saw every frame three times
-cheaper, as a device three times faster than this one would, and kept its cap at 7,000:
-3,866 (California), 4,080 (Alaska) and 3,284 (Pacific) dashes, the full cell grid. Its
-frames took about three times the 1.1 to 1.3 ms median they reported, so the column shows
-the density such a device gets, not a cost on this one. **Item 4 (at least about 3 per 1,000
-CSS px²)**: met on the phone (2.7 to 3.7; 2.7 in its whole-world view), and on a desktop
-only where the device can afford the full grid (3.1 to 3.5 off California and Alaska with
-the 3 x budget). On this software-rendered machine a busy 1440 x 900 view cannot keep the
-draw p95 under 5 ms at that density, so the adaptive budget holds it at 1.95 to 2.58 there.
-The wave-look package, counted with its own (earlier) tool, had 1.3 on the desktop and 2.3
-on the phone against 3.75 for the reference in that count.
+The 2026-10-22 pass counted 2.58, 2.31, 2.25 and 1.95 on the desktop and 3.49, 3.03, 3.73
+and 2.73 on the Pixel 7 in the same regions. The "3 x faster" column ran the same build with
+`performance.now` slowed three times in the page (a QA-only init script, not in the app), so
+the budget saw every frame three times cheaper, as a device three times faster than this one
+would, and kept its cap at 7,000: 3,866 (California), 4,080 (Alaska) and 3,284 (Pacific)
+dashes, the full cell grid. Its frames took about three times the 1.1 to 1.3 ms median they
+reported, so the column shows the density such a device gets, not a cost on this one.
+**Item 4 (at least about 3 per 1,000 CSS px²)**: met on the phone (2.65 to 3.73; 2.65 to 2.73
+in its whole-world view), and on a desktop only where the device can afford the full grid
+(3.1 to 3.5 off California and Alaska with the 3 x budget). On this software-rendered machine
+a busy 1440 x 900 view cannot keep the draw p95 under 5 ms at that density, so the adaptive
+budget holds it at 1.92 to 2.58 there. The wave-look package, counted with its own (earlier)
+tool, had 1.3 on the desktop and 2.3 on the phone against 3.75 for the reference in that
+count.
+
+**Where a desktop frame's time goes (2026-10-23).** With the same real fields in the
+frame-cost harness (no budget; California, zoom 6, at 1440 x 807, the map's size under the
+header), the full grid is about 3,958 blobs out of 13,818 cells visited, drawn in a median of
+3.0 to 3.3 ms in seven runs (0.76 to 0.83 µs a blob). About 0.4 µs of that is the two canvas
+calls per blob (`setTransform` and `fillRect`, CPU profile; section 4.6), the floor of this
+draw path; the rest is the cell walk and the per-dash sampling. Most visited cells are idle
+(over land, or with a path that never enters the view) and cost little: in the app the same
+view visited 3.6 cells per blob drawn (8,862 for 2,454, `data-cells`). In the app's passes a
+blob cost 0.9 to 1.2 µs (a 2.2 ms median for 2,454 blobs, 2.3 ms for 2,037), so the 2.5 ms
+target holds about 1,500 to 2,600 blobs here, short of the full grid. Making each system and
+tint level's fill style once a frame and keeping `tintLevelAt` and `batchOf` out of line
+(section 4.6) changed the draw time by no more than the run-to-run noise in an interleaved
+comparison with the harness (California, zoom 6: 3.1, 3.2 and 3.1 ms before, 3.1, 3.0 and 3.3
+ms after; Pacific, zoom 2: 2.6, 2.5 and 2.6 ms before, 2.4, 2.4 and 2.5 ms after).
 
 The field reads as a smooth, dusky blue-violet-magenta-pink surface, the land is mid grey
 with a dark coastline and light labels, and many short, soft blobs, each a lighter tint of
 the sea under it, lie across the swell with a crisp leading edge and a fading smear behind,
 drifting with it: the character of the reference, drawn with our own ramp, shapes and code.
-The California coast that day had about 2 m of sea, so it is blue-violet to violet on our
-ramp where the reference (a bigger day) is magenta; the colours follow the metre anchors,
-not the reference. The screenshots are attached to the integration report, not committed.
+The California view that hour had 1.2 to 2.0 m of sea (median 1.5 m), so it is blue-violet
+on our ramp where the reference (a bigger day) is magenta; the Gulf of Alaska view (median
+3.3 m) shows the reference's magenta-purple. The colours follow the metre anchors, not the
+reference. The screenshots are attached to the integration report, not committed.
 
 ## 8. Limitations
 
@@ -598,9 +624,10 @@ not the reference. The screenshots are attached to the integration report, not c
   is drawn rather than one along a direction no wave has, so such areas show gaps.
 * The dash sizes, tints and density were tuned by eye on one real run (GFS-Wave 2026-10-16
   00Z) and synthetic fields against one reference screenshot. On this shared,
-  software-rendered machine the adaptive budget holds busy 1440 x 900 views to about 2,100
-  to 2,600 blobs (1.95 to 2.58 per 1,000 CSS px² counted, against 4.05 on the reference); the
-  full grid (3.1 to 3.5 off California and Alaska) needs a device about three times faster.
+  software-rendered machine the adaptive budget holds busy 1440 x 900 views to about 1,500
+  to 2,600 blobs, depending on the machine's load (1.92 to 2.58 per 1,000 CSS px² counted,
+  against 4.05 on the reference); the full grid (3.1 to 3.5 off California and Alaska) needs
+  a device about three times faster.
   No device with a GPU was measured.
 * The secondary swell's thin split bars are subtle under the primary's blobs (the e2e check
   of two orientations passes at 0.23 of the energy for the second peak against a threshold
@@ -610,6 +637,6 @@ not the reference. The screenshots are attached to the integration report, not c
 * Without a GPU (headless Chromium here) the dash layer still keeps the main thread busy
   with software rasterisation (about 6 to 9 ms of task time per frame in this round's e2e
   runs), and the reduced-motion still frame of a busy desktop view (about 4,200 dashes,
-  cut only at 7,000 quads) took 60 ms to draw.
+  cut only at 7,000 quads) took 50 to 60 ms to draw.
 * With the combined sea drawn (the default), the partition fields are not downloaded, so the
   hover readout lists partitions only when they are chosen in Settings.
