@@ -14,8 +14,10 @@ only generated when (and if the search opts into updates):
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -23,7 +25,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session, object_session
+from sqlalchemy.orm import Session, lazyload, object_session, selectinload
 
 from app.core.config import get_settings
 from app.core.database import utcnow
@@ -49,6 +51,7 @@ from app.models.enums import (
     SearchStatus,
     SwellEventStatus,
 )
+from app.services.flights.base import FlightProvider
 from app.services.flights.filtering import convert
 from app.services.flights.links import google_flights_url
 from app.services.flights.registry import build_flight_provider
@@ -87,22 +90,44 @@ def label_rank(label: str | QualityLabel) -> int:
     return QUALITY_ORDER.index(QualityLabel(label))
 
 
-def _peak_prediction(match: OpportunityMatch) -> SurfQualityPrediction | None:
+@dataclass(frozen=True)
+class PeakPrediction:
+    """The columns of our prediction at the event's peak hour that an alert reads (the
+    likely range and both confidence assessments). A whole prediction also carries the
+    score components, the explanation and, through its joined ``forecast`` relationship,
+    the whole wave_forecasts row: on the replayed 2026-10-16 pass the peak hours of 47
+    alerts took 316.7 kB read whole and 75.2 kB so (6.7 and 1.6 kB a row)."""
+
+    valid_time: datetime
+    breaking_p10_ft: float | None
+    breaking_p90_ft: float | None
+    uncertainty_kind: str | None
+    forecast_confidence_class: str | None
+    local_confidence_class: str | None
+    confidence_inputs: dict[str, Any] | None
+    lead_hours: float | None
+
+
+_PEAK_COLUMNS = tuple(PeakPrediction.__dataclass_fields__)
+
+
+def _peak_prediction(match: OpportunityMatch) -> PeakPrediction | None:
     """Our prediction at the event's peak hour, from the run that set the peak."""
     event = match.swell_event
     db = object_session(match)
     if db is None or event.latest_run_id is None:
         return None
-    return db.scalar(
-        select(SurfQualityPrediction).where(
+    row = db.execute(
+        select(*(getattr(SurfQualityPrediction, name) for name in _PEAK_COLUMNS)).where(
             SurfQualityPrediction.run_id == event.latest_run_id,
             SurfQualityPrediction.spot_id == event.spot_id,
             SurfQualityPrediction.valid_time == event.peak_time,
         )
-    )
+    ).first()
+    return None if row is None else PeakPrediction(**row._mapping)
 
 
-def _peak_range(pred: SurfQualityPrediction | None) -> dict[str, Any]:
+def _peak_range(pred: PeakPrediction | None) -> dict[str, Any]:
     """The likely range of our prediction at the event's peak (heuristic: meant to hold
     the breaking height about 8 times in 10, not yet verified)."""
     if pred is None or pred.breaking_p10_ft is None or pred.breaking_p90_ft is None:
@@ -115,7 +140,7 @@ def _peak_range(pred: SurfQualityPrediction | None) -> dict[str, Any]:
 
 
 def _peak_confidence(
-    pred: SurfQualityPrediction | None, now: datetime, *, stale: bool = False
+    pred: PeakPrediction | None, now: datetime, *, stale: bool = False
 ) -> dict[str, Any]:
     """Forecast and local confidence at the event's peak hour, as the API shows them
     (EventOut uses the same peak hour, including the read-time staleness cap when the run
@@ -159,8 +184,25 @@ def _model_runs(db: Session | None, run: ForecastRun | None) -> dict[str, Any]:
     }
 
 
+def _model_runs_once(
+    db: Session | None, run: ForecastRun | None, memo: dict[int, dict[str, Any]] | None
+) -> dict[str, Any]:
+    """:func:`_model_runs`, read once per run for one alert job (``memo``): the runs, their
+    member sources and attribution links do not change while it runs."""
+    if memo is None or run is None:
+        return _model_runs(db, run)
+    if run.id not in memo:
+        memo[run.id] = _model_runs(db, run)
+    # A copy: each snapshot is stored on its own (notification and match JSON).
+    return copy.deepcopy(memo[run.id])
+
+
 def build_snapshot(
-    match: OpportunityMatch, kind: NotificationKind, now: datetime | None = None
+    match: OpportunityMatch,
+    kind: NotificationKind,
+    now: datetime | None = None,
+    *,
+    model_runs_memo: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     event = match.swell_event
     spot = match.spot
@@ -216,7 +258,7 @@ def build_snapshot(
         "currency": match.currency,
         **_peak_range(peak),
         **_peak_confidence(peak, now, stale=stale),
-        **_model_runs(db, event.latest_run),
+        **_model_runs_once(db, event.latest_run, model_runs_memo),
     }
     if offer is not None and match.best_price is not None:
         snap.update(
@@ -397,9 +439,15 @@ def _alerts_today(db: Session, user_id: object, now: datetime) -> int:
 
 
 def _revalidate_best(
-    db: Session, match: OpportunityMatch, now: datetime, stats: AlertStats
+    db: Session,
+    match: OpportunityMatch,
+    now: datetime,
+    stats: AlertStats,
+    provider_for: Callable[[], FlightProvider] | None = None,
 ) -> bool:
-    """Returns False when the best offer is no longer usable (match goes back to search)."""
+    """Returns False when the best offer is no longer usable (match goes back to search).
+    ``provider_for`` gives the flight provider (default: built here, which reads the
+    airports table)."""
     offer = match.best_offer
     if offer is None:
         return False
@@ -410,7 +458,7 @@ def _revalidate_best(
     ):
         return offer.validation_status != OfferValidation.UNAVAILABLE
     try:
-        provider = build_flight_provider(db)
+        provider = provider_for() if provider_for is not None else build_flight_provider(db)
         status = revalidate_offer(db, provider, offer, now)
     except ProviderError as exc:
         logger.warning("Offer revalidation failed for %s: %s", offer.id, exc)
@@ -493,15 +541,22 @@ def _record_suppressed(
     return recorded
 
 
-def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
-    now = now or utcnow()
-    stats = AlertStats()
+def _alert_candidates(
+    db: Session, now: datetime
+) -> list[tuple[OpportunityMatch, ForecastRun | None]]:
+    """The matches an alert may be due for, each with its event's forecast run.
+
+    Database egress: a match's event (and its spot) and its best offer are read once each
+    for all candidates (``selectinload``: 19 events and 15 offers for 57 matches of three
+    saved searches each on the replayed 2026-10-16 run) instead of once per match in a
+    joined row, the event without its ``history`` (an alert never reads it), and the few
+    forecast runs once each instead of in every row. The match's own ``spot`` is the
+    event's, already loaded with it."""
     rows = db.execute(
-        select(OpportunityMatch, ForecastRun)
+        select(OpportunityMatch, SwellEvent.latest_run_id)
         .join(SavedSearch, SavedSearch.id == OpportunityMatch.search_id)
         .join(User, User.id == OpportunityMatch.user_id)
         .join(SwellEvent, SwellEvent.id == OpportunityMatch.swell_event_id)
-        .outerjoin(ForecastRun, ForecastRun.id == SwellEvent.latest_run_id)
         .where(
             SavedSearch.status == SearchStatus.ACTIVE,
             User.is_active,
@@ -509,7 +564,35 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
             OpportunityMatch.window_start > now,
             OpportunityMatch.status.in_((MatchStatus.FLIGHT_FOUND, MatchStatus.SURF_ONLY)),
         )
+        .options(
+            selectinload(OpportunityMatch.swell_event).defer(SwellEvent.history),
+            selectinload(OpportunityMatch.best_offer),
+            lazyload(OpportunityMatch.spot),
+        )
     ).all()
+    run_ids = {run_id for _, run_id in rows if run_id is not None}
+    runs = (
+        {r.id: r for r in db.scalars(select(ForecastRun).where(ForecastRun.id.in_(run_ids)))}
+        if run_ids
+        else {}
+    )
+    return [(match, runs.get(run_id) if run_id is not None else None) for match, run_id in rows]
+
+
+def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
+    now = now or utcnow()
+    stats = AlertStats()
+    rows = _alert_candidates(db, now)
+    # Read once for the whole job: the flight provider (it reads the airports table) and
+    # each run's model-run and credit lines.
+    providers: list[FlightProvider] = []
+
+    def provider_for() -> FlightProvider:
+        if not providers:
+            providers.append(build_flight_provider(db))
+        return providers[0]
+
+    model_runs_memo: dict[int, dict[str, Any]] = {}
     for match, run in rows:
         stats.considered += 1
         search = match.search
@@ -525,7 +608,7 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
         ):
             continue  # flights not searched yet
         has_price = match.status == MatchStatus.FLIGHT_FOUND
-        if has_price and not _revalidate_best(db, match, now, stats):
+        if has_price and not _revalidate_best(db, match, now, stats, provider_for):
             db.commit()
             continue
         kind = decide_kind(match, search, has_price)
@@ -540,7 +623,7 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
             stats.no_channel += 1
             blocked = suppression_reasons(search, user, prefs)
             if blocked:
-                snapshot = build_snapshot(match, kind, now)
+                snapshot = build_snapshot(match, kind, now, model_runs_memo=model_runs_memo)
                 stats.suppressed += _record_suppressed(
                     db, user, match, kind, snapshot, prefs, blocked, now, "unverified"
                 )
@@ -549,7 +632,7 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
         if _alerts_today(db, user.id, now) >= prefs.max_alerts_per_day:
             stats.capped += 1
             logger.info("Daily alert cap reached for user %s", user.id)
-            snapshot = build_snapshot(match, kind, now)
+            snapshot = build_snapshot(match, kind, now, model_runs_memo=model_runs_memo)
             reason = f"daily alert limit reached ({prefs.max_alerts_per_day} per day)"
             stats.suppressed += _record_suppressed(
                 db,
@@ -564,7 +647,7 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
             )
             db.commit()
             continue
-        snapshot = build_snapshot(match, kind, now)
+        snapshot = build_snapshot(match, kind, now, model_runs_memo=model_runs_memo)
         links = links_for(snapshot, prefs)
         subject, text, html = render_alert_email(snapshot, links)
         queued_any = False

@@ -14,13 +14,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
-from app.models import Notification, NotificationPreference, OpportunityMatch, User
+from app.models import Notification, NotificationPreference, OpportunityMatch, SavedSearch, User
 from app.models.enums import NotificationChannel, NotificationStatus, SearchStatus
 from app.services.http import PermanentProviderError, TransientProviderError
 from app.services.notifications.providers import (
@@ -115,6 +116,20 @@ def _skip(n: Notification, reason: str, stats: DeliveryStats) -> None:
     stats.skipped += 1
 
 
+def _search_status(db: Session, match_id: Any) -> SearchStatus | None:
+    """The status of the search behind a notification's match (None: no match any more).
+    Only that column: a whole match joins its search, event, spot and best offer (about
+    15 kB a row, measured), none of which delivery reads."""
+    if not match_id:
+        return None
+    status: SearchStatus | None = db.scalar(
+        select(SavedSearch.status)
+        .join(OpportunityMatch, OpportunityMatch.search_id == SavedSearch.id)
+        .where(OpportunityMatch.id == match_id)
+    )
+    return status
+
+
 def send_one(
     db: Session, n: Notification, providers: _Providers, now: datetime, stats: DeliveryStats
 ) -> None:
@@ -125,10 +140,10 @@ def send_one(
         return _skip(n, "account inactive or deleted", stats)
     if prefs.all_paused:
         return _skip(n, "notifications paused by user", stats)
-    match = db.get(OpportunityMatch, n.match_id) if n.match_id else None
-    if match is None:
+    search_status = _search_status(db, n.match_id)
+    if search_status is None:
         return _skip(n, "opportunity or search was deleted", stats)
-    if match.search.status != SearchStatus.ACTIVE:
+    if search_status != SearchStatus.ACTIVE:
         return _skip(n, "search paused before delivery", stats)
     n.attempts += 1
     try:

@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer, lazyload
 
 from app.core.config import get_settings
 from app.core.database import utcnow
@@ -48,6 +48,18 @@ from app.services.swell_detection.clustering import Step
 from app.services.swell_detection.service import load_steps
 
 logger = logging.getLogger(__name__)
+
+# Loader options for OpportunityMatch rows read for their own columns: its many-to-one
+# relationships are loaded only if read (each from the session's identity map when the
+# search, event or spot is already loaded), not joined into every row.
+MATCH_ONLY = (
+    lazyload(OpportunityMatch.search),
+    lazyload(OpportunityMatch.swell_event),
+    lazyload(OpportunityMatch.spot),
+    lazyload(OpportunityMatch.best_offer),
+)
+# Matching never reads an event's history (up to 20 snapshots, about 80 % of the row).
+EVENT_ONLY = (defer(SwellEvent.history),)
 
 
 @dataclass
@@ -289,11 +301,13 @@ def match_all(db: Session, now: datetime | None = None) -> MatchingStats:
     migrate_merged_matches(db, stats)
 
     events = db.scalars(
-        select(SwellEvent).where(
+        select(SwellEvent)
+        .where(
             SwellEvent.status == SwellEventStatus.ACTIVE,
             SwellEvent.end_time >= now,
             SwellEvent.start_time <= now + timedelta(days=settings.detection_lead_max_days),
         )
+        .options(*EVENT_ONLY)
     ).all()
     stats.events = len(events)
     searches = db.scalars(
@@ -305,8 +319,13 @@ def match_all(db: Session, now: datetime | None = None) -> MatchingStats:
     search_ids = [s.id for s in searches]
     existing: dict[tuple[object, object], OpportunityMatch] = {}
     if search_ids:
+        # Only the matches' own columns: evaluate_match reads the search and the event it is
+        # given (both loaded above) and only sets the best offer, so the joined search,
+        # event, spot and best offer (about 85 % of each row) are not read with them.
         for m in db.scalars(
-            select(OpportunityMatch).where(OpportunityMatch.search_id.in_(search_ids))
+            select(OpportunityMatch)
+            .where(OpportunityMatch.search_id.in_(search_ids))
+            .options(*MATCH_ONLY)
         ).all():
             existing[(m.search_id, m.swell_event_id)] = m
 
