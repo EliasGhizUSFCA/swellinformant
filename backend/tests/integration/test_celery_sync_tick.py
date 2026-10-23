@@ -4,8 +4,7 @@ with the broker down.
 * ``sync.tick`` runs registry job ``sync.tick`` (app.services.sync.orchestrator.tick with
   trigger "celery") through the job runner: a job log row, the 1 h job lock, chain off.
 * With the demo provider (synthetic forecasts by design), one tick syncs and publishes and
-  a second tick is not due. This needs sync-core's orchestrator; until that package is
-  merged the foundation stub raises NotImplementedError and that test is skipped.
+  a second tick is not due (sync-core's orchestrator; never skipped since the integration).
 * With the broker refusing connections, registering an account (whose verification email
   is a messaging task) still answers in under 3 s: the messaging tasks ignore their
   result, so ``.delay()`` fails fast and the email is sent inline.
@@ -117,10 +116,7 @@ def test_one_tick_syncs_and_publishes_and_the_next_is_not_due(
     db: Session, few_spots: list[str]
 ) -> None:
     """The real orchestrator (sync-core) with the demo provider: synthetic forecasts."""
-    try:
-        first = tasks.sync_tick.delay().get()
-    except NotImplementedError as exc:
-        pytest.skip(f"sync-core's orchestrator is not merged here yet: {exc}")
+    first = tasks.sync_tick.delay().get()
     assert first["status"] == "success" and first["sync_status"] == "success", first
     assert first["due"] is True and first["sync_run_id"] is not None
     assert first["published_at"] is not None

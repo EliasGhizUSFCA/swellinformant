@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.models import ForecastRun, ForecastSource
 from app.models.enums import ForecastRunStatus
 from app.models.forecast_engine import MapField
+from tests.conftest import direct_database_url
 
 pytestmark = pytest.mark.integration
 
@@ -26,7 +27,7 @@ def test_0006_round_trip_keeps_core_fields_and_drops_partition_rows() -> None:
 
     from app.core.config import get_settings
 
-    base_url = make_url(os.environ["DATABASE_URL"])
+    base_url = make_url(direct_database_url())  # a pooler refuses DROP DATABASE
     name = f"{(base_url.database or 'swell')[:40]}_m0006_{uuid.uuid4().hex[:8]}"
     scratch = base_url.set(database=name)
     admin = create_engine(base_url, isolation_level="AUTOCOMMIT")
