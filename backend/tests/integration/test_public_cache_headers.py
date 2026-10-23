@@ -123,6 +123,12 @@ def test_the_spot_page_routes_are_shared_cacheable(app_client: ApiClient) -> Non
         assert resp.headers.get_list("cache-control") == [PUBLIC_GET_CACHE_CONTROL], path
         assert resp.headers.get_list("cdn-cache-control") == [PUBLIC_CDN_CACHE_CONTROL], path
         assert "set-cookie" not in resp.headers, path
+    # The page's one route with a user dependency (the visitor's own opportunities) stays
+    # out of shared caches, signed out too.
+    own = app_client.get("/api/spots/pipeline/opportunities")
+    assert own.status_code == 200 and own.json() == []
+    assert own.headers.get_list("cache-control") == ["no-store"]
+    assert not shared_cacheable(own.headers)
 
 
 # --------------------------------------------------------------------------- every route
