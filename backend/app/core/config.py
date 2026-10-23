@@ -135,6 +135,10 @@ class Settings(BaseSettings):
     sync_trigger_sources: str = "spots,map"
     # Prune superseded predictions and map fields after every sync, not only daily.
     sync_prune_each_pass: bool = False
+    # After a publishing sync, compute the public spot list and conditions at once (about
+    # 1.4 MB of database reads per publication on the 50-spot live data) instead of at the
+    # first visitor's request; worth it only when visitors come every hour.
+    sync_prewarm_public_cache: bool = False
     # The map index serves the run of the newest published sync (falls back to the newest
     # servable run when nothing was published).
     sync_publish_gate: bool = True

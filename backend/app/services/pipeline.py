@@ -3,7 +3,10 @@
 Used by the developer "run pipeline" endpoint, the CLI and tests. The synced pipeline
 (app.services.sync, docs/sync.md) runs the same service functions as the stages of one
 sync. After the predictions the pipeline publishes what is stored (a ``sync_runs`` row
-with trigger "pipeline"), so the map index moves to the new map run here too.
+with trigger "pipeline"), so the map index moves to the new map run here too. At the end
+it calls the public snapshot cache's hook (``public_cache.note_published``) as a sync does,
+so the developer endpoints and the CLI never leave the public pages on older data for the
+rest of the hour.
 """
 
 from __future__ import annotations
@@ -49,12 +52,27 @@ def run_pipeline(
     stage("predictions", lambda: compute_pending_predictions(db, now))
     # The wall clock, not ``now``: a publication is a real event (detect.load_known
     # compares it with the runs' completed_at).
-    stage("publish", lambda: publication_summary(publish(db, trigger="pipeline")))
-    stage("detection", lambda: detect_events(db, now).as_dict())
-    stage("matching", lambda: match_all(db, now).as_dict())
-    stage("flights", lambda: discover_flights(db, now).as_dict())
-    stage("alerts", lambda: generate_alerts(db, now).as_dict())
-    if deliver:
-        stage("delivery", lambda: deliver_pending(db, now).as_dict())
+    published: list[int] = []
+
+    def publish_stage() -> dict[str, Any]:
+        row = publish(db, trigger="pipeline")
+        published.append(row.id)
+        return publication_summary(row)
+
+    stage("publish", publish_stage)
+    try:
+        stage("detection", lambda: detect_events(db, now).as_dict())
+        stage("matching", lambda: match_all(db, now).as_dict())
+        stage("flights", lambda: discover_flights(db, now).as_dict())
+        stage("alerts", lambda: generate_alerts(db, now).as_dict())
+        if deliver:
+            stage("delivery", lambda: deliver_pending(db, now).as_dict())
+    finally:
+        # The stages commit their own work: the public snapshots (app.services.public_cache)
+        # show the publication and what followed it from the next request on, as after a
+        # sync, instead of from the next hour (also when a later stage failed).
+        from app.services import public_cache
+
+        public_cache.note_published(published[0])
     db.expire_all()
     return out

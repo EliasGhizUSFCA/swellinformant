@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.api import spots as spots_api
 from app.core.database import SessionLocal, get_engine, utcnow
+from app.core.redis import get_redis_bytes
 from app.models import ForecastRun, SurfSpot, SwellEvent, SyncRun
 from app.models.enums import ConfidenceLabel, QualityLabel, SwellEventStatus
 from app.schemas.spots import EventOut, MapSnapshotOut, SpotDetail, SpotForecastOut, SpotSummary
@@ -59,7 +60,11 @@ def frozen(db: Session, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dateti
 
 @pytest.fixture
 def published(db: Session, few_spots: list[str], frozen: list[datetime]) -> Session:
+    """Published demo data and no stored marker: run_pipeline calls the publication hook
+    (tested in test_free_tier_egress), which is undone here, so the tests below start, as
+    they always did, from the database marker and store one themselves where they test it."""
     run_pipeline(db)
+    get_redis_bytes().delete(public_cache.MARKER_KEY)
     return db
 
 

@@ -431,6 +431,8 @@ def _stage(name: StageName, ctx: _Sync) -> StageResult:
             return _skipped(name, "nothing new to publish")
         result, _ = _execute(name, _publish_body(ctx))
         ctx.publish_failed = result.status != "success" or ctx.published_at is None
+        if not ctx.publish_failed:
+            _note_published(ctx.row_id, prewarm=False)
         return result
     if ctx.published_at is None:
         return _skipped(name, "nothing was published")
@@ -525,6 +527,21 @@ def _publish_body(ctx: _Sync) -> Callable[[Session], Any]:
         return publication_summary(published)
 
     return run
+
+
+def _note_published(sync_run_id: int, *, prewarm: bool) -> None:
+    """The public snapshot cache's hook (app.services.public_cache.note_published): every
+    public snapshot is computed afresh from the next request on, and no request reads the
+    database to learn that. With ``prewarm`` (SYNC_PREWARM_PUBLIC_CACHE) the spot list and
+    the conditions are computed now. Never raises: a sync's result does not depend on it."""
+    try:
+        from app.services import public_cache
+
+        if public_cache.note_published(sync_run_id) and prewarm:
+            with SessionLocal() as db:
+                public_cache.prewarm(db)
+    except Exception:  # the snapshots then follow the database marker, or the next hour
+        logger.warning("Public snapshot hook failed after sync %s", sync_run_id, exc_info=True)
 
 
 def _status(
@@ -696,6 +713,10 @@ def run_sync(
         cpu_total=cpu_seconds() - cpu0,
         error=error,
     )
+    if ctx.published_at is not None:
+        # Again at the end: detection and the later stages changed the swell events (and the
+        # job list) the public snapshots show after the publication.
+        _note_published(lease.row_id, prewarm=settings.sync_prewarm_public_cache)
     logger.info(
         "Sync %s finished %s in %.1f s (%.1f CPU-s)%s",
         lease.row_id,

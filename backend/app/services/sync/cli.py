@@ -165,10 +165,12 @@ def _daemon(args: argparse.Namespace) -> int:
 
 def _publish(args: argparse.Namespace) -> int:
     from app.core.database import SessionLocal
+    from app.services import public_cache
     from app.services.sync.publish import publication_summary, publish
 
     with SessionLocal() as db:
         row = publish(db, trigger="cli")
+        public_cache.note_published(row.id)
         _print(publication_summary(row))
     return EXIT_OK
 
