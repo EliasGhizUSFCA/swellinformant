@@ -12,7 +12,13 @@ Pages were read on **2026-10-14**; every sentence in quotation marks below was f
 verbatim on the cited page that day (fetched fresh, not from a cache). The Open-Meteo terms,
 pricing and licence quotes and the Natural Earth terms were read again on **2026-10-16** and
 were still on those pages. Prices shown only by JavaScript widgets could not be read and are
-marked "confirm at checkout".
+marked "confirm at checkout". The hosting services of Upgrade 4 (Vercel, Neon, Upstash,
+section 1.4) were read on **2026-10-18** and partly re-read on **2026-10-22**; every quote
+about them is listed with its URL and date in `docs/deploy-vercel.md`, section 11.
+
+Upgrade 4 (2026-10) added the hosted setup: Vercel for the site, the API and the sync
+daemon, Neon Postgres and Upstash Redis from the Vercel Marketplace. What each costs now and
+after a paywall is in 1.4; every new setting is in section 5.
 
 ## 1. Summary for the owner
 
@@ -23,8 +29,8 @@ configuration" below) uses only these.
 
 | Area | Service | Cost | Licence, and what the app shows | Limits and notes |
 |---|---|---|---|---|
-| Spot forecasts | Open-Meteo free tier: GFS family (`open_meteo`) and ECMWF family (`open_meteo_ecmwf`) | Free | Data CC BY 4.0; a credit and licence link is printed next to every value derived from it (2.1) | **Non-commercial use only** (1.3). Per IP address: 600 calls a minute, 5,000 an hour, 10,000 a day, 300,000 a month; the app uses about 820 weighted calls a day (8 %) |
-| Forecast uncertainty | NOAA GEFS-Wave ensemble statistics | Free | NOAA open data, "can be used as desired"; credited "(modified)" (2.3) | 69.4 MB per run, 4 runs a day |
+| Spot forecasts | Open-Meteo free tier: GFS family (`open_meteo`) and ECMWF family (`open_meteo_ecmwf`) | Free | Data CC BY 4.0; a credit and licence link is printed next to every value derived from it (2.1) | **Non-commercial use only** (1.3). Per IP address: 600 calls a minute, 5,000 an hour, 10,000 a day, 300,000 a month; the app uses about 820 weighted calls a day (8 %) when it syncs every new run, about 534 (5 %) with the free-database cadence of the hosted setup (computed from the measured calls per run, 2.1) |
+| Forecast uncertainty | NOAA GEFS-Wave ensemble statistics | Free | NOAA open data, "can be used as desired"; credited "(modified)" (2.3) | 69.4 MB per run, 4 runs a day; off in the hosted profile (`GEFS_ENABLED=false`, to protect the daemon's CPU quota) |
 | Map layers | NOAA NODD byte ranges (GFS 0.5° atmosphere, GFS-Wave 0.25°) | Free | as GEFS-Wave (2.2) | About 0.96 GB a day with the partition layers |
 | Spot forecasts, fallback | NOAA GFS / GFS-Wave and ECMWF open data, direct GRIB | Free | NOAA as above; ECMWF CC BY 4.0, commercial use allowed with attribution (2.4) | Off by default (about 1.9 GB per NOAA cycle) |
 | Tides | NOAA CO-OPS (8 US spots), EOT20 harmonic constants (42 spots) | Free | CO-OPS public domain, NOS requests attribution; EOT20 CC BY 4.0, credited with its changes and DOI (2.7, 2.8) | No account; set an application name (`NOAA_COOPS_APPLICATION`) |
@@ -43,7 +49,9 @@ configuration" below) uses only these.
 | 4 | SMS alerts (optional) | Text-message alerts and STOP handling | Twilio account and a sending number (US numbers need A2P 10DLC registration) | US SMS "$0.0083" per segment plus carrier fees (2.12) | `SMS_PROVIDER`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` or `TWILIO_MESSAGING_SERVICE_SID` |
 | 5 | CO-OPS application name (no account) | Identifies the app in NOAA's logs | None | Free | `NOAA_COOPS_APPLICATION`, e.g. the app's name and a project URL; never a personal email address |
 | 6 | A tile provider, only for a high-traffic Streets basemap | Heavy use of the optional Streets basemap | CARTO (free key) or any XYZ provider | Free CARTO keys (about 5M tiles a month, non-commercial); providers' plans otherwise (2.13) | `NEXT_PUBLIC_CARTO_API_KEY` or `NEXT_PUBLIC_MAP_TILE_URL` + `NEXT_PUBLIC_MAP_ATTRIBUTION` |
-| 7 | Size the database alert from the disk (no account) | The data-health database-size alert | None | — | `DATA_HEALTH_DATABASE_MAX_GB` (default 20, above the computed two-year steady state of about 17 GB with the default retention; lower it for a small disk, docs/operations.md) |
+| 7 | Size the database alert from the disk (no account) | The data-health database-size alert | None | — | `DATA_HEALTH_DATABASE_MAX_GB` (default 20, above the computed two-year steady state of about 17 GB with the default retention; lower it for a small disk, docs/operations.md; 0.85 on Neon Free) |
+| 8 | **Hosting on Vercel** (optional; the classic Docker Compose stack needs none of it) | The public website | A Vercel account (Hobby), and from the Vercel Marketplace a Neon Postgres and an Upstash Redis database | $0 on the free plans now; the paid plans in 1.4 once a paywall arrives | The hosted profile (section 5): `JOB_RUNNER`, `MIGRATE_ON_BUILD`, `CLIENT_IP_HEADER`, `CRON_SECRET` and the rest; `DATABASE_URL`, `DATABASE_URL_UNPOOLED` and `KV_URL` are set by the Marketplace |
+| 9 | A domain you own, for email from the hosted site | Account emails to other people from `*.vercel.app` | A registrar account (cost not researched here) and the email provider's DNS records (row 2) | registrar's price | `EMAIL_FROM` on that domain, `APP_BASE_URL` |
 
 Not needed and not recommended: **Windy** (2.9). Its terms forbid storing the data and
 building derived databases, which is what this app does; the provider is refused unless
@@ -86,6 +94,26 @@ cd backend && python -m app.cli check-config
 
 It prints `{"missing": [...]}` and exits with 1 if anything is missing.
 
+### 1.4 Hosting on Vercel: what it costs now and after a paywall
+
+The hosted setup (`docs/deploy-vercel.md`; test it first on your machine,
+`docs/local-vercel-stack.md`). "What this app uses" comes from measurements on replayed
+real data and from arithmetic on them, as cited; nothing here was measured on a real Vercel
+deployment yet.
+
+| Service | Now: free | What this app uses of it | Later: paywall |
+|---|---|---|---|
+| **Vercel** (the website, the API as one Python function, the sync daemon, the daily cron) | **Hobby**, $0: "restricted to non-commercial personal use only". Daemons: "1 GiB or 2 GiB (1 vCPU) \| 10 Active CPU-hours per month"; "When a Hobby team reaches the quota, Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro." Cron: "Hobby accounts are limited to daily cron jobs." Runtime logs are kept 1 hour. On Hobby Vercel "may use Your Content to train our artificial intelligence" | Daemon CPU estimated at 4.4-7.9 CPU-hours a month when every new model run is synced (`docs/sync.md`, "Monthly CPU estimate": an extrapolation from this sandbox, not a Vercel measurement); the free-database cadence syncs about 60 times a month instead of about 180, so it should use less (not measured). The API function measured 127.3 MiB in the offline Vercel build (limit 500 MiB) | **Pro** before the site asks for any payment: "$20/month Pro platform fee", "Every Pro plan has $20 in monthly credit." Daemons on Pro are "billed for Active CPU and Provisioned Memory" (rate not read; check the Usage page after a week) |
+| **Neon Postgres** (Vercel Marketplace) | **Free**: "100 CU-hours/project, 1 GB Postgres storage per project ... and 5 GB of egress per project." Out of CU-hours or egress, the compute is suspended until the next billing period; over 1 GB, writes fail | With the free-database profile (section 5): **2.01 GB of egress a month in the background (40 %)**, about 20 CU-hours a month in the background and at most about 37 with steady visitors (`docs/map-layers.md`, "Free database budget": measured unit costs times the cadence, CU-hours are arithmetic on stated assumptions). With a quiet site (100 views a day) the total is 2.41 GB; steady traffic (1,000 views a day) would need 5.37 GB, more than Free | **Launch**: "$0.106 per CU-hr $0.35 per GB-month", 500 GB of egress included; then the full-retention profile (section 5), which needs about 4.32 GB of background egress a month |
+| **Upstash Redis** (Vercel Marketplace) | **Free**: "Free tier includes 250MB data size and 500K commands per month." | About 68,000 commands a month from the daemon; about 100,000 a month with a quiet site and about 375,000 (75 %) with steady visitors (`docs/map-layers.md`: measured commands per page view times the stated traffic) | pay-as-you-go "$0.2 per 100K" commands with a budget cap, or a Fixed plan from $10 a month |
+| **Resend** (email) and a domain | "$0 / mo 3,000 emails / mo 100 emails a day" (2.11), with a sending domain you control (SPF, DKIM, DMARC) | Verification, password reset, swell alerts, admin alerts. Without a verified domain the site on `*.vercel.app` cannot send account emails to other people, so public sign-up stays blocked in production | Pro "$20 / mo 50,000 emails / mo" above 3,000 emails a month |
+| **Open-Meteo** (spot forecasts) | free API, non-commercial only (1.3) | about 534 weighted calls a day with the free-database cadence (2 GFS-family runs × 142.9 + 2 ECMWF-family runs × 124.3, the calls measured per run in 2.1; a retried acquisition adds to it) | `COMMERCIAL_USE=true` plus `OPEN_METEO_API_KEY` (Standard plan: 1M calls a month; **confirm the price at checkout**) |
+| **GitHub** (CI, and the manual emergency `data-sync.yml` workflow) | "GitHub Actions usage is free for self-hosted runners and for public repositories that use standard GitHub-hosted runners." The repository stays public | CI on every push and pull request; `data-sync.yml` only when run by hand (no schedule, `docs/deploy-vercel.md` section 8) | Actions minutes of a private repository were not researched |
+
+The paywall itself (a payment provider, plans, access control for paying accounts) is not
+built; for the hosting it is a configuration change only (`docs/deploy-vercel.md`, section
+2, and `docs/UPGRADE_REPORT.md`, "Owner checklist").
+
 ### Recommended live configuration
 
 ```env
@@ -103,7 +131,9 @@ NOAA_COOPS_APPLICATION=SwellTravelAgent
 OPEN_METEO_API_KEY=
 ```
 
-Two independent model families are blended; GEFS-Wave adds the ensemble spread (Hs and Tp
+This is the classic Docker Compose stack's setup; the Vercel setup uses the hosted profile of
+section 5 (GEFS off, the free-database sync cadence). Two independent model families are
+blended; GEFS-Wave adds the ensemble spread (Hs and Tp
 only); an empty `MAP_FIELDS_ENABLED` means automatic (standalone map layers with a live
 provider); `NOAA_COOPS_APPLICATION` takes an application name, for example
 "SwellTravelAgent (+https://your.site)"; `OPEN_METEO_API_KEY` stays empty unless the app is
@@ -155,10 +185,24 @@ Behaviour worth knowing:
   sandbox's shared egress address with "Daily API request limit exceeded. Please try again
   tomorrow." while the app itself had used 143 weighted calls, and again at 21:47 UTC
   between successful requests; a full acquisition of both families went through at
-  22:04 UTC. On shared hosting a paid key avoids depending on other users of the address.
-  The run then ends FAILED with that message, is not retried until the next schedule
-  (which re-reads the responses already received from the cache), and the previous run
-  stays in use.
+  22:04 UTC. On 2026-10-23 it refused this sandbox five times between 18:36 and 19:01 UTC
+  and accepted at 18:53 and 19:02 (the proxy probably leaves through several addresses).
+  On shared hosting a paid key avoids depending on other users of the address. The run
+  then ends FAILED with that message and the previous run stays in use. In the synced
+  pipeline (docs/sync.md) that source then waits until 00:00 UTC (the first of the next
+  month for a monthly limit) instead of spending its SYNC_MAX_ATTEMPTS retries; that the
+  free tier resets at 00:00 UTC is our assumption, Open-Meteo does not say so.
+* **On Vercel** the daemon's outbound IP address may be shared with other Vercel projects,
+  whose calls then count against the same free daily limit. `OPEN_METEO_API_KEY` (a paid
+  plan, counted per key) removes that risk; until then an occasional refusal delays a sync
+  to the next UTC day for that source while the other sources sync normally.
+* Open-Meteo's servers can disagree for a few minutes about whether a run is published
+  (seen live on 2026-10-21): the sync records that component `deferred`, counts no failed
+  attempt and takes the run at a later check (docs/FORECAST_SOURCES.md, "Publication
+  timing").
+* `COMMERCIAL_USE=true` without `OPEN_METEO_API_KEY`: both Open-Meteo sources refuse to run
+  before sending any request, `/status` reports the `licence` problem (failing) and
+  `python -m app.cli check-config` lists the missing key.
 
 ### 2.2 NOAA NODD: GFS, GFS-Wave (map layers; optional spot-forecast fallback)
 
@@ -345,6 +389,15 @@ contract pricing respectively; `docs/forecast_upgrade_audit.md`, section 4.3).
 
 ## 4. What was tested here, and how
 
+* **Upgrade 4, 2026-10-23 (integration):** the local Vercel-style stack with the hosted
+  profile, real NOAA NODD map layers (135 fields, 73.3 MB downloaded) and, after several
+  daily-limit refusals of this sandbox's shared address, real Open-Meteo GFS point forecasts
+  for the 50 spots (10,264 records); the ECMWF family was "not served yet" (Open-Meteo was
+  serving its 06Z run). The cron token (200 with it, 401 wrong or missing, 404 without
+  `CRON_SECRET`), the client-IP header and the PgBouncer path were checked against that
+  stack. Not checked: Vercel, Neon and Upstash themselves (no account was used), Resend
+  (no key), the Open-Meteo commercial hosts (no key).
+
 * **Live, no account (2026-10-14):** Open-Meteo metadata for all six model domains; the
   Marine API for all 50 spots (GFS family); NOAA NODD byte ranges for the same-cycle
   comparison; every page quoted above. The full two-family acquisition is reported in
@@ -361,3 +414,99 @@ contract pricing respectively; `docs/forecast_upgrade_audit.md`, section 4.3).
 * **Mock only (no credentials here):** the Open-Meteo commercial hosts, Windy, Duffel,
   Amadeus, Resend, SendGrid and Twilio. They are not claimed to work against the live
   services until the owner supplies keys.
+
+## 5. Hosting, runner and sync settings (Upgrade 4)
+
+Every setting Upgrade 4 added, with its default (`backend/app/core/config.py`) and the value
+of the hosted profile (`backend/app/core/profiles.py`, `profile_env("hosted",
+"free-database")`, the block to paste into Vercel in `docs/deploy-vercel.md` step 5 and the
+values of `.env.vercel.example`). The Settings defaults are those of the classic Docker
+Compose stack, so a deployment that sets nothing behaves as before. Each one is also in
+`.env.example` with a one-line comment.
+
+**Runner, deployment and security**
+
+| Setting | Default | Hosted | What it does |
+|---|---|---|---|
+| `JOB_RUNNER` | `celery` | `daemon` | Who runs the background jobs: Celery worker and beat (classic stack) or one `python -m app.cli sync daemon` process (a Vercel Daemon). Under `daemon` the API never imports Celery, sends account emails and SMS inline (3 attempts, 0.5 s and 1.5 s apart) and hands "match my search" and "refresh flights" to the daemon as Redis kick flags |
+| `MIGRATE_ON_BUILD` | `off` | `production` | `python -m app.cli migrate --on-build`, the api service's build command: `off` never migrates, `production` only when Vercel's system variable VERCEL_ENV is production, `all` on every build (also Neon preview branches). A failed migration fails the build |
+| `CLIENT_IP_HEADER` | empty: X-Forwarded-For with `TRUSTED_PROXY_COUNT` | `x-vercel-forwarded-for` | The request header that carries the client IP for rate limits, set by the platform and not overwritable by clients (first entry, at most 64 characters) |
+| `CRON_SECRET` | empty: the watchdog route answers 404 | 16 or more random characters (yours) | Bearer token Vercel Cron sends to `GET /api/internal/cron/daily` (401 on a wrong token). Required in production under the daemon (`check-config` lists it) |
+| `COMMERCIAL_USE` | `false` | `false` now, `true` with a paywall | `true` makes the Open-Meteo sources require `OPEN_METEO_API_KEY`; without it they refuse to run and health reports `licence` (failing) |
+| `OPEN_METEO_API_KEY` | empty | only with a paid Open-Meteo plan | Selects Open-Meteo's commercial hosts (2.1) |
+| `OPS_ALERT_EMAILS` | empty | optional, recommended | Comma-separated addresses the daily watchdog emails, at most once per UTC day, when the database itself cannot be reached (for example Neon's compute suspended after its quota): the admin accounts are read from the database, so they cannot be told then. Logs show counts only |
+| `API_ROUTING` (frontend build) | empty: `platform` on Vercel (Vercel sets VERCEL=1), else `proxy` | `platform` (automatic) | `proxy`: Next.js rewrites `/api/*` to `BACKEND_URL` (classic stack); `platform`: the platform routes `/api` (Vercel Services, the local Vercel-style stack). Read when the web service is built |
+
+**Database (Neon)**
+
+| Setting | Default | Hosted | What it does |
+|---|---|---|---|
+| `DATABASE_URL` | the local compose database | Neon's pooled URL (set by the Marketplace) | The API's connection; `postgres://` and `postgresql://` are rewritten to the psycopg driver, keeping the query string (sslmode) |
+| `DATABASE_URL_UNPOOLED` | empty: `DATABASE_URL` | Neon's direct URL (set by the Marketplace) | Migrations, and the whole process with `DB_USE_UNPOOLED=true` (the daemon). Used only when it names the same database as `DATABASE_URL`, otherwise ignored with a warning |
+| `DB_USE_UNPOOLED` | `false` | set by the daemon image (Containerfile); do not set it for the project | This process connects through `DATABASE_URL_UNPOOLED` |
+| `DB_POOL_SIZE`, `DB_MAX_OVERFLOW` | 5, 10 | 2, 3 | SQLAlchemy pool per process |
+| `DB_POOL_RECYCLE_SECONDS` | 1800 | 240 | Replace connections older than this (a pooler or a scaled-to-zero database closes idle ones) |
+| `DB_PREPARED_STATEMENTS` | `true` | `false` | `false` = never prepare statements, required behind a PgBouncer in transaction mode such as Neon's pooled URL |
+
+**Redis (Upstash)**
+
+| Setting | Default | Hosted | What it does |
+|---|---|---|---|
+| `REDIS_URL`, alias `KV_URL` | `redis://localhost:6379/0` | `KV_URL` from the Upstash integration (a `rediss://` URL) | `REDIS_URL` wins when both are set. If the Marketplace sets neither, copy the database's TLS URL into `REDIS_URL` yourself (`docs/deploy-vercel.md`, step 4) |
+| `REDIS_CONNECT_TIMEOUT_SECONDS`, `REDIS_SOCKET_TIMEOUT_SECONDS` | 5, 5 | 1.5, 2 | An unreachable Redis costs a request at most this long (rate limits then fail open) |
+
+**The synced pipeline** (`docs/sync.md`)
+
+| Setting | Default | Hosted | What it does |
+|---|---|---|---|
+| `SYNC_CHECK_MINUTES` | 10 | 10 | Model-run checks (provider metadata only, no database access in the daemon) |
+| `SYNC_TRIGGER_SOURCES` | `spots,map` | `map` (free-database profile) | Component kinds whose new run starts a sync. `map` = a sync only for a new map cycle, which brings the newest spot runs of both families with it; when the setup has no map component, new spot runs trigger instead |
+| `MAP_FIELD_CYCLES` | `00,12` | `06,18` (free-database profile) | The GFS cycles whose map layers are read (and, with `map` triggers, when syncs run) |
+| `SYNC_COALESCE_MINUTES` | 90 | 90 | How long a GFS spot run and the map layers of the same cycle (or late model domains) wait for each other |
+| `SYNC_RETRY_MINUTES`, `SYNC_MAX_ATTEMPTS` | 15, 6 | 15, 6 | Wait after a failed acquisition; failed attempts per model run before waiting for the next run |
+| `SYNC_LEASE_MINUTES` | 45; 15 under `JOB_RUNNER=daemon` when not set | 15 (not set) | The one-sync-at-a-time lease, renewed after every stage and extended while a stage runs; a lapsed lease is taken over |
+| `SYNC_PUBLISH_GATE` | `true` | `true` | The map serves the map run of the newest publication, so the map and the spots switch together |
+| `SYNC_PRUNE_EACH_PASS` | `false` | `true` (free-database profile) | Prune superseded predictions and map fields after every sync, not only daily |
+| `SYNC_PREWARM_PUBLIC_CACHE` | `false` | `false` | After a publishing sync, compute the public spot list and conditions at once (about 1.4 MB of reads per publication) instead of at the first visitor's request |
+| `SYNC_DAEMON_POLL_SECONDS` | 60 | 60 | How often the daemon picks up the API's kicks |
+| `SYNC_DAEMON_INIT_DB` | `true` | `true` | The daemon runs `init-db` (migrate, seed, tide catalog; idempotent) at every start |
+| `SYNC_CPU_BUDGET_HOURS` | none | 10 | Monthly CPU budget of the sync runner; health warns above 80 % (`sync_cpu_budget`) |
+| `JOB_INTERVAL_FLOOR_MINUTES` | 0 | 60 | Every periodic job runs at most this often, so a scale-to-zero database is woken at most hourly between syncs |
+
+The public snapshot cache (the anonymous spot list, map conditions, spot pages, status and
+map-field index, computed at most once per publication and UTC hour and kept in Redis for
+2 hours) has no setting of its own besides `SYNC_PREWARM_PUBLIC_CACHE`.
+
+**Forecast, retention and health values of the hosted profile** (all existed before)
+
+| Setting | Default | Hosted | Why |
+|---|---|---|---|
+| `FORECAST_PROVIDERS` | `demo` | `open_meteo,open_meteo_ecmwf` | point forecasts for the 50 surf spots only, two model families |
+| `MAP_FIELDS_ENABLED` | empty (automatic) | `true` | the worldwide map layers, synced with the spot forecasts |
+| `MAP_FIELD_STEPS`, `MAP_FIELD_MAX_LEAD_HOURS` | `0-120:3,120-240:6`, 240 (61 map hours) | the defaults | `MAP_FIELD_STEPS=0-24:3` with `MAP_FIELD_MAX_LEAD_HOURS=24` (9 map hours) for a short local test |
+| `GEFS_ENABLED` | `false` | `false` | protects the daemon's 10 Active CPU-hours; `true` turns the ensemble spread on |
+| `PROVIDER_RESPONSE_CACHE_ENABLED` | `true` | `false` | Upstash Free stores 250 MB |
+| `RETENTION_FORECAST_DAYS`, `RETENTION_ARCHIVE_DAYS`, `RETENTION_JOB_LOG_DAYS` | 10, 730, 30 | 1, 7, 7 (free-database profile) | Neon Free's 1 GB; the full-retention profile restores 10, 730, 30 |
+| `DATA_HEALTH_CHECK_MINUTES` | 15 | 60 | at most one database wake an hour for the check |
+| `DATA_HEALTH_DATABASE_MAX_GB` | 20 | 0.85 (free-database profile) | warn before Neon Free's 1 GB fills |
+| `DATA_HEALTH_HEARTBEAT_MINUTES` | 30 | 30 | under the daemon its heartbeat is stale after max(3 × `SYNC_CHECK_MINUTES`, this) |
+| `DATA_HEALTH_ALERTS_ENABLED`, `DATA_HEALTH_ALERT_REPEAT_HOURS`, `DATA_HEALTH_REDIS_MAX_FRACTION`, `DATA_HEALTH_OBSERVATION_STALE_HOURS` | true, 12, 0.8, the 48 h look-back | unchanged | `docs/operations.md`, section 3 |
+
+**Full-retention profile** (after moving Neon to Launch): `RETENTION_FORECAST_DAYS=10`,
+`RETENTION_ARCHIVE_DAYS=730`, `RETENTION_JOB_LOG_DAYS=30`, `SYNC_PRUNE_EACH_PASS=false`,
+`DATA_HEALTH_DATABASE_MAX_GB=20`, `SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12`
+(the full-retention profile of `backend/app/core/profiles.py`, equal to the Settings defaults).
+
+**The local Vercel-style stack's own variables** (`scripts/vercel-local.sh` and
+`docker-compose.vercel.yml`, never read by the app; `docs/local-vercel-stack.md`):
+
+| Variable | Default | Where it is read | What it does |
+|---|---|---|---|
+| `VERCEL_LOCAL_ENV_FILE` | `.env.vercel.local` | your shell | the env file the stack uses |
+| `VERCEL_LOCAL_COMPOSE_FILES` | none | your shell | extra compose override files, space-separated (for example a proxy and its CA for image builds) |
+| `VERCEL_LOCAL_SYNC_WAIT_SECONDS` | 1200 | your shell | how long `scripts/vercel-local.sh sync` waits while another sync holds the lease (0 = exit 3 at once) |
+| `VERCEL_LOCAL_DATABASE_URL`, `VERCEL_LOCAL_DATABASE_URL_UNPOOLED` | the stack's own PgBouncer and Postgres | `.env.vercel.local` | a Neon development branch's pooled and direct URLs instead |
+| `VERCEL_LOCAL_REDIS_URL` | the stack's own Redis | `.env.vercel.local` | an Upstash database instead |
+
+The stack's host ports (edge 3100, Postgres 55432, PgBouncer 56432, Redis 56379, Mailpit
+18025) are set in `.env.vercel.local` too; `docs/local-vercel-stack.md` names them.
