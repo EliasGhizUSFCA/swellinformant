@@ -422,3 +422,271 @@ With the correction active, the heuristic offshore range around the corrected va
 covered 80-94 % by lead at the buoys and stays labelled heuristic. Deactivating
 (`ml deactivate offshore_hs_residual`) returns every spot to raw forecasts.
 
+
+# Upgrade 4 (2026-10): a website on Vercel, data synced to model runs, the wave look
+
+The owner asked to put the app on a website (Vercel, testable locally first), to pull all
+weather data when the forecast updates and only for the surf spots, to keep the worldwide
+map layers in step with the spot forecasts, and to make the wave layer look like a
+reference screenshot; it is free now, with a paywall later. The design proposed decisions
+D1-D16; they are recorded here as built, with the final numbers where they differ from the
+proposal. Measurements are those of the packages, the two integration rounds and the
+verifier of 2026-10-23 (docs/UPGRADE_REPORT.md, "Upgrade 4"); quotes from Vercel, Neon,
+Upstash and GitHub are in docs/deploy-vercel.md, section 11.
+
+## ADR-021 (D1) One Vercel project in Services mode, built from the repository root
+
+**Context.** Login cookies, the CSRF double-submit check and the CSP `connect-src 'self'`
+need the site and the API on one origin; Vercel Daemons need a project whose Root
+Directory is not a subfolder.
+**Decision.** `vercel.json` declares service `web` (`frontend/`, `framework: nextjs`) and
+service `api` (`backend/`, `framework: fastapi`, entrypoint `app.main:app`, one Python
+function, maxDuration 60 s), rewrites `/api/(.*)` to `api` and the rest to `web`, a daemon
+and a daily cron. Next.js adds no `/api` rewrite on Vercel (`API_ROUTING=platform`, the
+default when `VERCEL` is set).
+**As built.** `framework: nextjs` on the web service is required: without it the offline
+build stopped with "[MULTIPLE_FRAMEWORKS_SERVICE] Multiple frameworks detected"
+(frontend/ also holds the classic stack's Dockerfile). The offline `vercel build` (CLI
+64.5.0) of the final tree: `RESULT: ok`, the api function 3,428 files and 127.3 MiB (limit
+500 MiB, builder threshold 225 MiB), web functions 4.6, 3.8 and 1.7 MiB on nodejs24.x.
+**Alternatives.** Two projects with an external rewrite (120 s timeout, default caching,
+Deployment Protection bypass; the documented fallback, not tried).
+**Consequences.** Services is a Beta; a real deployment was not made (no Vercel account was
+used), so routing, cookies and the client IP on Vercel itself are first seen on the first
+deploy.
+
+## ADR-022 (D2) The background pipeline is one long-lived process, a Vercel Daemon
+
+**Context.** Hobby cron runs once a day; Functions share 4 Active CPU-hours with the API and
+cannot hold the data libraries; GitHub's terms rule out a scheduled production worker.
+**Decision.** `python -m app.cli sync daemon` from the repo-root `Containerfile`, one
+instance in `iad1`, 2 GiB / 1 vCPU. The same CLI runs everywhere: the daemon, the local
+stack's `sync` container, Celery's `sync.tick`, and the manual `data-sync.yml`.
+**As built.** The shutdown grace (`terminationGracePeriodSeconds`) is **600 s**, not the
+proposed 120 s: on SIGTERM the daemon finishes its current stage, and a full map stage is
+estimated at 165-287 CPU s on one vCPU (Vercel's default is 30 s, its maximum 3600 s). Under
+the daemon the sync lease is 15 minutes when not set (45 under Celery), and a keeper thread
+extends it while a stage runs, so a successor takes over a killed sync within about 15
+minutes. Monthly CPU at the full cadence: **4.4-7.9 CPU-hours** (44-79 % of the 10-hour
+Hobby quota; extrapolated from this sandbox, docs/sync.md), against the proposal's 4-7.
+**Consequences.** The daemon is first truly tested on the first production deploy
+(daemons do not run in previews or `vercel dev`); the local stack builds and runs the same
+`Containerfile`.
+
+## ADR-023 (D3) Syncs are event-driven by provider metadata and published together
+
+**Context.** "All of the weather data should be pulled when the forecast updates."
+**Decision.** Every `SYNC_CHECK_MINUTES` (10) the runner reads only metadata (Open-Meteo
+`meta.json`, NODD `.idx` HEADs); a newer run than the stored one starts one coordinated,
+idempotent sync of 12 stages under a Postgres lease, published in one commit
+(`sync_runs.published_at`, `map_run_id`, `blend_run_id`). The GFS spot run and the map of
+the same cycle coalesce for up to `SYNC_COALESCE_MINUTES` (90); failed components retry
+every 15 minutes, up to 6 attempts per run.
+**As built.** Beyond the proposal: a component Open-Meteo cannot serve unmixed (ECMWF
+between its 00Z/12Z runs) is `waiting` ("not served yet") and never makes a sync due; an
+acquisition the provider refuses for a moment (its servers disagreeing for minutes) is
+`deferred`, not a failed attempt; a lagging server offering the stored run with a domain
+still on the previous cycle is not new; an Open-Meteo daily limit makes that source wait
+until 00:00 UTC. The **free-database profile** syncs only for a new map cycle
+(`SYNC_TRIGGER_SOURCES=map`, `MAP_FIELD_CYCLES=06,18`): two syncs a day, each taking the
+newest spot runs of both families, instead of about six; with `map` triggers and no map
+component, spot runs trigger instead. Measured: after a sync, a check made 0 SQL statements
+and 8 metadata requests (3,588 B); a forced re-sync over stored data wrote no data row and
+left the swell events identical.
+**Consequences.** On Neon Free spot forecasts change twice a day (a GFS run can read stale
+for up to about 1.3 h before each sync, estimated); the full-retention profile restores a
+sync per new run.
+
+## ADR-024 (D4) Point forecasts only for the surf spots; global grids only for the map
+
+**Decision.** The spot stage requests the active seeded spots only (`surf_spots.is_active`),
+through Open-Meteo, one request per model for up to 50 spots; the direct GRIB spot
+ingesters stay off; global grids are downloaded only for the world map layers.
+**As built.** As designed. Measured live on 2026-10-23: Open-Meteo GFS, 10,264 records for
+the 50 spots; NOAA GFS 06Z map layers, 135 fields for 9 map hours, 73.3 MB downloaded in 63
+requests, 10.6 MB stored.
+
+## ADR-025 (D5) A lean, Celery-free API; dependency extras; JOB_RUNNER
+
+**Decision.** `[project].dependencies` is the lean API set; extras `worker` (Celery),
+`server` (uvicorn[standard]), `sync` (pandas, ecCodes and `eccodeslib`, pyarrow,
+scikit-learn, joblib), `all`, `dev`; `backend/uv.lock` pins every version (uv 0.11.32,
+`exclude-newer`). `JOB_RUNNER=daemon` sends account emails and SMS inline and turns
+"match my search" and "refresh flights" into Redis kick flags.
+**As built.** The lean set measures **163.2 MB** (`scripts/check_api_bundle.py`, limit 200
+MB); the function in the Vercel build 127.3 MiB. `eccodeslib` had to be named in the `sync`
+extra (uv left it out of the lock otherwise, and the map stage failed with "Cannot find the
+ecCodes library"). Inline sending: 3 attempts, 0.5 s and 1.5 s apart; the worst case is
+about 41 s when a provider hangs (2 attempts × the 20 s HTTP timeout), not the proposed
+"about 10 s", still under the 60 s function limit. Registration with Redis blackholed took
+2.12 s under the hosted timeouts. Cold import of `app.main` in the lean venv 2.18-2.75 s;
+the login's dummy hash is now computed on first use (import self time 97-105 ms → 0.2-0.3
+ms).
+**Consequences.** The API cannot run data jobs; `tests/unit/test_lean_imports.py` keeps it
+importable without the extras.
+
+## ADR-026 (D6) Neon Postgres, the pooled URL for the API, and a free-database profile
+
+**Context.** On Neon Free the binding limits are 5 GB of egress and 100 CU-hours a month,
+not only 1 GB of storage. The first measurement read 186.8 MB back per demo pass (about
+27-33 GB a month).
+**Decision.** The API uses Neon's pooled URL (pool 2+3, pre-ping, recycle 240 s, no
+prepared statements); the daemon and migrations the direct URL; the free-database profile
+keeps about 1 day of forecasts and 7 days of archive and job logs, pruned after every sync,
+and wakes the database at most hourly between syncs.
+**As built.** Two integration rounds cut the reads (column-selective queries, binary
+`bytea` reads, a public snapshot cache in Redis computed once per publication and UTC hour,
+`/api/system/status` and the map-field index served from it) and changed the free cadence
+(ADR-023). One both-family sync pass on replayed real data: **169 MB → 57 MB** (package) →
+**31.41 MB** (round 1) → **21.24 MB** (round 2), 21.28 MB re-measured by the verifier; the
+demo pass 186.8 → 11.18 MB. Monthly background egress on the default free profile: **2.01
+GB (40 % of Neon Free)**, about 20 CU-hours (arithmetic: 0.25 CU, 5 minutes after the last
+statement); a quiet site adds about 0.40 GB; steady traffic (1,000 views a day) would need
+5.37 GB in all and does not fit. Migration 0008 records one publication of the data an
+upgraded database already holds, so the first check after an upgrade does not re-sync
+everything.
+**Consequences.** Signed-in visitors' session reads and uncached visitor URLs were not
+measured and could keep the compute awake (720 h × 0.25 CU = 180 CU-hours); Neon Launch is
+the upgrade path, with the full-retention profile.
+
+## ADR-027 (D7) Upstash Redis through KV_URL; no Celery broker when hosted
+
+**Decision.** Redis holds rate limits, Open-Meteo budgets, job locks, the daemon's
+heartbeat, known runs and kick flags (and, since round 1, the public snapshot cache);
+`KV_URL` is accepted as an alias of `REDIS_URL`; hosted timeouts 1.5 s connect, 2 s socket;
+no provider response cache when hosted.
+**As built.** Measured per idle check 3 commands, per kick poll one EVAL: about 68,000
+commands a month for the daemon (proposal: about 66,000); about 375,000 (75 % of 500K) with
+steady visitors. On 2026-10-22 the Marketplace page showed only the REST variables, so
+deploy-vercel.md says how to set `REDIS_URL` by hand. Under the daemon a job runs without its
+Redis lock when Redis does not answer (Celery still fails).
+
+## ADR-028 (D8) Map fields stay in Postgres, behind the CDN
+
+**Decision.** Two retained map runs (about 71 MB each with partitions); a field URL that
+names its run and valid time is immutable at the edge; binary cursor reads.
+**As built.** Field with run: `public, max-age=3600, immutable` and CDN `s-maxage=31536000,
+immutable` (as proposed); without run: 300 s. The index and every other public GET:
+`public, max-age=60` and CDN `s-maxage=300, stale-while-revalidate=3600` (proposed 60 and
+600), so the edge switches the index, the conditions and the spot list together after a
+publication. The index is served from the public snapshot cache, so a CDN refresh every 5
+minutes no longer wakes the database. Binary reads halve a field's egress (hex text was
+2.06× the stored size).
+
+## ADR-029 (D9) Migrations at build time, and init-db in the daemon
+
+**Decision.** The api's build command is `python -m app.cli migrate --on-build`
+(`MIGRATE_ON_BUILD=production`: production builds only, through the direct URL); the daemon
+runs `init-db` at every start.
+**As built.** Verified in the Python builder (2026-10-22): the build command runs after the
+dependencies are installed, migrated an empty database ("status": "migrated") and fails the
+build on a non-zero exit. The schema now has 8 migrations; 0008 is data only (ADR-026).
+**Consequences.** Without Vercel's system variables exposed to the build it prints
+`skipped`, and the daemon's `init-db` migrates.
+
+## ADR-030 (D10) Monitoring without logs
+
+**Decision.** `sync_runs` (per-stage status, duration, `cpu_s`), job logs, the Redis
+heartbeat, a sync block in `/api/health/data` and `/status`, a daily Vercel Cron watchdog
+(`23 7 * * *`) and `SYNC_CPU_BUDGET_HOURS`.
+**As built.** New problem keys `sync_heartbeat_stale` (failing), `sync_failed`,
+`sync_cpu_budget` (above 80 %) and `licence` (failing). The month's CPU is the larger of the
+job logs and a Redis counter (`jobs:cpu_s:YYYY-MM`), plus the daemon's own. Added:
+`OPS_ALERT_EMAILS`, emailed by the watchdog at most once a day when the database itself is
+unreachable; the plain health report is shared by the CDN for 60 s. Verified in the local
+stack: cron 200 with the token, 401 wrong or missing, 404 without `CRON_SECRET`.
+
+## ADR-031 (D11) The wave layer: a metre-anchored colour field and crest dashes
+
+**Context.** The owner's screenshot: a smooth blue → violet → magenta/pink field with short,
+soft white dashes drifting with the waves.
+**Decision.** Wave Height gets its own ramp anchored in metres; the traced crest sets are
+replaced by dashes snapped to the crest lattice `p·W = n·s + v·t`, moving at the phase speed
+on the stated time scale; the combined sea by default, partitions selectable; settings key
+v2.
+**As built (differs from the proposal).** The ramp was re-anchored at integration (the first
+one read electric blue for typical 2-3 m seas): 0 m #151d42 to 10 m #f3c4dc, L* 12.2 → 83.8,
+neighbouring anchors ΔE ≥ 7.6, chroma ≤ 62. Each dash is one soft blob, a light tint of the
+field under it, with its leading edge on the crest and a 0.5 s smear behind it, drawn as one
+gradient quad (not white strokes with a halo); secondary swell split amber bars, wind sea
+short cyan blobs. Cells 12 px (combined, primary), 13 (secondary), 18 (wind sea), not
+26/34/30; length clamp(6 + 0.8 Hs, 6.5, 10) px, not up to 22. The vertex budget became a
+device-adaptive quad budget (1,500-7,000 a frame, median target 2.5 ms; at most 8,000
+dashes, 3,000 on phones). Land on the dark basemap is mid grey #737376 with a dark
+coastline (proposed #3a3a3c with a light one). Kept: the lattice, spacing clamp(0.12 px/m ×
+L, 8, 64), τ = 4, a life of 3 crest passages, the combined-sea default, `swell.map.settings.v2`.
+Measured (headless Chromium, software rendering): e2e draw p95 2.8 ms (round 1), 3.1 and
+3.4 ms (2026-10-23), within D11's 5 ms; ink per dash at 4 m 2.25× that at 1 m; density 2.73-
+3.73 dashes per 1,000 CSS px² on a Pixel 7 profile and 1.95-2.58 on a 1440×900 desktop held
+by the budget, against 4.05 in the reference.
+**Consequences.** Not measured on a GPU-backed browser or a real phone; Firefox and WebKit
+not run.
+
+## ADR-032 (D12) Local testing in two levels
+
+**Decision.** Level 1, no account: `docker-compose.vercel.yml` driven by
+`scripts/vercel-local.sh` (Caddy edge on 3100 with Vercel's client-IP headers, the lean API,
+Next.js with `API_ROUTING=platform`, PgBouncer in transaction mode, Redis, the daemon from
+the same `Containerfile`, Mailpit, a cron helper). Level 2: the Vercel CLI (`vercel build`
+offline, `vercel dev -L`).
+**As built.** `smoke` = 19 shell checks and 6 Playwright tests, passed on 2026-10-23 with demo
+and with live data. CLI 64.5.0 refuses daemons, so `scripts/vercel-build-check.sh` removes
+them from a temporary copy and builds again; `vercel dev -L` serves both services only
+while the checkout is unlinked.
+
+## ADR-033 (D13) The paywall is a configuration change of the hosting
+
+**Decision.** Before any payment is requested: Vercel Pro; `COMMERCIAL_USE=true` with
+`OPEN_METEO_API_KEY` (the Open-Meteo providers refuse the free hosts otherwise, before any
+request, and health reports `licence`); Neon Launch with the full-retention profile;
+Upstash off Free.
+**As built.** As designed; profiles in `backend/app/core/profiles.py` (`hosted`,
+`free-database`, `full-retention`, the last equal to the Settings defaults). The paywall's
+own product (a payment provider, plans, access control) is not built.
+
+## ADR-034 (D14) The classic stack keeps Celery, synced too
+
+**Decision.** Beat's acquisition, map, ensemble, prediction safety-net and detection entries
+are replaced by one `sync-tick` entry (`sync.tick`, bulk queue) running the same
+orchestrator; beat start queues it.
+**As built.** `sync.tick` has its own time limits (3600 s hard, 3300 s soft) and the broker
+visibility timeout is 5400 s, so a running sync is never handed to a second worker. The
+messaging tasks ignore their results and use a 2 s broker timeout: a `.delay()` with the
+broker refusing waited 0.71-0.73 s instead of 19 s. Verified 2026-10-23: beat start ran
+`sync.tick`, sync 1 succeeded in 31.1 s on demo data. An optional compose profile `sync`
+runs the daemon instead of worker and beat.
+
+## ADR-035 (D15) GitHub Actions for CI and a manual-only data-sync workflow
+
+**Decision.** `.github/workflows/data-sync.yml` runs `sync run --trigger github` by hand
+(or by `repository_dispatch`); no schedule (GitHub's terms on serverless use).
+**As built.** It installs the `sync` extra from `uv.lock`; credentials only from secrets;
+`backend/tests/unit/test_vercel_deploy.py` asserts that no schedule is committed. CI gained
+a `deploy-config` job (actionlint, compose files, Docker builds of the `Containerfile` and
+`backend/Dockerfile`) and a `vercel-build` job. The steps were run locally; the first run
+on GitHub is still to come.
+
+## ADR-036 (D16) The register of behaviour and test changes
+
+**As built.** The changes listed in the design landed with their tests (beat schedule,
+heartbeat source, publish gate, CDN headers, inline dispatch, client IP header, URL
+normalisation and `KV_URL`, publish in `run_pipeline`, per-pass prune, the extras, the wave
+renderer, settings v2, `API_ROUTING`, the status page). No assertion was weakened; where a
+measured value moved, the commit says why. Test counts at the final tree: unit 2,040
+passed (4 skipped without a lean venv; 27 of 27 with one), integration 503 (3 skipped
+without PgBouncer; 3 of 3 with it), Vitest 486, e2e 127 (Chromium and Pixel 7), against
+1,689, 318, 409 and 127 at the end of Upgrade 3.
+
+## ADR-037 Security patches inside the two-week dependency rule
+
+**Context.** `exclude-newer` keeps releases younger than its date out of `uv.lock`, and the
+frontend follows the same rule by hand. On 2026-10-23 `next` 16.4.0 had two critical
+advisories (GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr) and a high one (GHSA-p3m5-59mp-jv5r),
+and certifi 2026.7.22 a critical one (GHSA-6q48-6c7w-9gw2).
+**Decision.** Take the oldest patched release even when it is younger than two weeks:
+Next.js and eslint-config-next **16.4.1** (published 2026-10-14, 9 days old), certifi
+**2026.10.19** through a per-package `exclude-newer-package` entry that names the advisory.
+**Consequences.** `npm audit --omit=dev` 0 vulnerabilities, pip-audit none known. Drop the
+certifi entry once `exclude-newer` passes 2026-10-21; consider Next.js 16.4.2 once it is two
+weeks old (2026-10-29). Dev-only advisories in vitest 3.2.7 remain (the fix is vitest 5, a
+major upgrade).

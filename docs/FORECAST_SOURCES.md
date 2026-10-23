@@ -126,7 +126,9 @@ gigabytes, without losing accuracy. What the adapters do (`forecasts/open_meteo.
   (`OPEN_METEO_CALLS_PER_*`, free-tier defaults 600 / 5,000 / 10,000 / 300,000). A full
   minute or hour window is transient (the task retries when it resets); a full day or
   month is `QuotaExhaustedError`: that provider's run ends FAILED with the reason and the
-  next provider still runs. Open-Meteo's own HTTP 429 reasons are mapped the same way.
+  next provider still runs; in the synced pipeline that source then waits until the next
+  00:00 UTC (the 1st of the next month for a monthly window) instead of spending its
+  retries. Open-Meteo's own HTTP 429 reasons are mapped the same way.
   Metadata requests are free and not charged. `python -m app.cli engine budget` prints
   the counters.
 * **Response cache** (`forecasts/provider_cache.py`): bodies of one model run are kept in
@@ -134,18 +136,80 @@ gigabytes, without losing accuracy. What the adapters do (`forecasts/open_meteo.
   `PROVIDER_RESPONSE_CACHE_MAX_KEYS` (200) entries, bodies above
   `PROVIDER_RESPONSE_CACHE_MAX_BYTES` (2 MB) never cached. A retried run reads what it
   already received instead of paying for it again. Redis errors never fail a fetch.
-* **Retries and bookkeeping** (`forecasts/ingestion.py`, `workers/tasks.py`): providers
+* **Retries and bookkeeping** (`forecasts/ingestion.py`, `services/sync/`): providers
   run one after another; each run records its own `started_at`, its cost in
   `details.stats` (bytes on the wire, HTTP responses by status, weighted calls; also for a
   FAILED run) and its model runs. Any exception ends only that provider's run, FAILED,
-  never RUNNING. A transient failure retries the Celery task after 2, 4, 8 min (or the
-  provider's wait, at most 1 h); an acquisition where every provider failed is logged
-  FAILED and does not chain to the blend.
+  never RUNNING. Since Upgrade 4 the acquisition runs as the `spots` stage of a sync: a
+  failed component is retried `SYNC_RETRY_MINUTES` (15) later, or after the provider's own
+  wait, at most `SYNC_MAX_ATTEMPTS` (6) times per model run (docs/sync.md). The provider
+  response cache is off in the hosted profile (`PROVIDER_RESPONSE_CACHE_ENABLED=false`,
+  Upstash Free stores 250 MB), so there a retry pays for its requests again.
+
+### Publication timing and the synced pipeline (Upgrade 4)
+
+Since Upgrade 4 a spot forecast is fetched when its provider publishes a new model run,
+not on a timer: every `SYNC_CHECK_MINUTES` (10) the runner reads Open-Meteo's `meta.json` of
+each model domain ("not counted toward daily or monthly request limits",
+[model updates](https://open-meteo.com/en/docs/model-updates)) and uses a run only
+`OPEN_METEO_AVAILABILITY_WAIT_MINUTES` (10) after its availability time, as Open-Meteo
+advises. One sync then fetches the 50 active surf spots (one request per model) together
+with the map layers of the same GFS cycle (docs/sync.md). What was observed of Open-Meteo's
+publishing:
+
+* **Model domains appear at different times.** The GFS family has four domains (GFS-Wave
+  0.16° and 0.25°, GFS 0.13° and 0.25°). Measured: on 2026-10-14/15 GFS-Wave, GFS 0.13 and
+  GFS 0.25 were published 5.3, 6.0 and up to 8.2 h after the cycle; on 2026-10-21 GFS 0.25
+  of 06Z became available 8.7 h after its cycle; on 2026-10-22 GFS-Wave 0.16 of 00Z was
+  still on the previous cycle 9.3 h after it. The ECMWF family's 00Z and 12Z runs were
+  published 7.0-8.5 h after their cycle. A run whose domains are on different cycles waits
+  (state `waiting`) up to `SYNC_COALESCE_MINUTES` (90) from its first sighting, then is
+  synced with the domains that are there and synced again when the last one arrives.
+* **Mixed ECMWF runs.** Between the 00Z and 12Z runs that this source reads, Open-Meteo
+  serves the ECMWF 06Z/18Z run and fills its later hours from an older one, so the labelled
+  00Z/12Z run cannot be read unmixed. The check marks the component `waiting` ("not served
+  yet") and never syncs it then. Seen live on 2026-10-19 before the check existed (each such
+  window cost failed attempts), and on 2026-10-23 (06Z served; the live stack reported
+  `forecast_missing:open_meteo_ecmwf`).
+* **Servers can disagree for minutes.** On 2026-10-21 at 14:49 UTC the check saw the GFS 06Z
+  run as servable; four seconds later Open-Meteo told the acquisition that `ncep_gfs025` 06Z
+  was still being published (available 14:42, readable from 14:52). The component was
+  recorded `deferred`, with no failed attempt, and the next check took the run. A lagging
+  server that offers the stored run with one domain still on the previous cycle is not
+  treated as new (detection compares domain by domain).
+* **The free tier is per IP address.** This sandbox's shared address was refused with "Daily
+  API request limit exceeded. Please try again tomorrow." on 2026-10-14, 2026-10-16,
+  2026-10-22 and five times on 2026-10-23 (18:36-19:01 UTC, accepted at 18:53 and 19:02);
+  on 2026-10-14 the app itself had used 143 weighted calls that day.
+
+**On Vercel.** The daemon's outbound IP address may be shared with other Vercel projects,
+whose calls then count against the same free limit. A refusal makes that source wait until
+00:00 UTC (an assumption about the reset time; Open-Meteo does not document it) while the
+other sources sync normally and the previous run stays in use until it is stale.
+`OPEN_METEO_API_KEY` (a paid plan, counted per key, on the `customer-api` and
+`customer-marine-api` hosts) removes that risk.
+
+**The commercial-use guard.** Open-Meteo's free API is for non-commercial use only. With
+`COMMERCIAL_USE=true` and no `OPEN_METEO_API_KEY`, building either Open-Meteo provider,
+reading its run metadata or fetching raises a permanent provider error ("free Open-Meteo API
+is non-commercial; set OPEN_METEO_API_KEY") **before any request is sent**; `/status` and
+`/api/health/data` report the `licence` problem (failing) and `python -m app.cli
+check-config` lists the missing key. Tested with mocked HTTP only (no paid key here).
+
+**Freshness with the free-database cadence** (estimated from the lags above, not observed
+live): with `SYNC_TRIGGER_SOURCES=map` and `MAP_FIELD_CYCLES=06,18` a sync runs about 5 to
+6.5 h after the 06Z and 18Z cycles and takes the newest spot runs of both families. The
+00Z and 12Z GFS runs are then not used, and a GFS run reaches its 17.2 h stale age 17-18.5 h
+after its cycle, so it can read stale for up to about 1.3 h before each sync (longer when a
+domain is late). The ECMWF run is acquired 11-12.5 h after its cycle and is 23-24.5 h old
+at the next sync, just under its 24.7 h limit. A spot run that arrives after its map
+cycle's sync waits 12 h; if NOAA's map layers cannot be acquired, no sync runs at all.
 
 ### Staleness (per source, ADR-015)
 
 A run is stale once it is older than its source's cycle interval + publication lag +
-acquisition interval (`FORECAST_REFRESH_MINUTES`) + 2 h: **Open-Meteo GFS family 17.2 h**
+acquisition interval (`FORECAST_REFRESH_MINUTES`, 3 h; since Upgrade 4 no longer a timer, but
+kept in this limit as margin) + 2 h: **Open-Meteo GFS family 17.2 h**
 (6 + 6 + 0.17 + 3 + 2; Open-Meteo published the GFS domains 5.3-6.0 h after
 initialisation on 2026-10-14, plus the 10-minute wait), **Open-Meteo ECMWF family 24.7 h**
 (12 + 7.5 + 0.17 + 3 + 2; 7.0-7.2 h, 00Z/12Z only), **NOAA GFS direct 16 h**, **GEFS-Wave
