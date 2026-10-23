@@ -245,7 +245,7 @@ subcommands and smoke checks, and, when vercel.json is present, that the stack m
 | Symptom | Cause and fix |
 |---|---|
 | `sync` exits 3, "another sync still holds the lease" | a sync ran longer than `VERCEL_LOCAL_SYNC_WAIT_SECONDS`; `status` and `logs sync` show it, then run `sync` again |
-| map layers stay unavailable with live settings | `MAP_FIELDS_ENABLED=true` and a map cycle (00Z, 12Z) must be published; `check` shows the map component's state. A "Cannot find the ecCodes library" error means the image was built without the eccodeslib wheel: the Containerfile build checks for it |
+| map layers stay unavailable with live settings | `MAP_FIELDS_ENABLED=true` and a map cycle of `MAP_FIELD_CYCLES` (06Z and 18Z in the free hosted profile, 00Z and 12Z by default) must be published; `check` shows the map component's state. A "Cannot find the ecCodes library" error means the image was built without the eccodeslib wheel: the Containerfile build checks for it |
 | the image build fails at `uv sync --locked` | `backend/uv.lock` does not match `backend/pyproject.toml`: run `uv lock` in backend/ |
 | `up` fails with a port in use | set `EDGE_PORT` or another `VERCEL_*_PORT` in `.env.vercel.local` |
 | emails do not arrive | they are in Mailpit (<http://localhost:18025>), never in a real mailbox |

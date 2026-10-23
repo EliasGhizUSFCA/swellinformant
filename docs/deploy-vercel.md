@@ -319,8 +319,8 @@ variables. The order inside one deployment:
    finishes the sync stage it is in and exits; an idle daemon stops at once. The longest
    stage, the map layers of a full cycle, is estimated at 165-287 CPU seconds on one vCPU
    (docs/sync.md), more than Vercel's 30 s default; a stage cut off by the kill would leave
-   the sync lease held for up to `SYNC_LEASE_MINUTES` (45). While the old daemon finishes,
-   the new one finds the lease taken and syncs at its next check.
+   the sync lease held for up to `SYNC_LEASE_MINUTES` (15 under the daemon). While the old
+   daemon finishes, the new one finds the lease taken and syncs at its next check.
 
 Then check, in this order:
 

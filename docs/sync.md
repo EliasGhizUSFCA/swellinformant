@@ -161,7 +161,8 @@ The status of a sync is one of:
 the other stages are recorded as skipped ("stopped"), the lease is released. A stage is
 never interrupted, so a process killed before its stage ends (for example one that
 outlives its grace period after SIGTERM: vercel.json sets the daemon's
-terminationGracePeriodSeconds to 120, and a full map stage can take longer) leaves the
+terminationGracePeriodSeconds to 600, Vercel's default being 30 and its maximum 3600, so a
+full map stage, an estimated 165-287 CPU s on one vCPU, normally finishes) leaves the
 lease running. The next sync then waits for the lease to expire
 (SYNC_LEASE_MINUTES after its last renewal), marks it `abandoned` and does the work; a map
 or spot run the killed stage left `running` counts as "in progress" (a failed attempt)
@@ -243,9 +244,10 @@ schema).
 | SYNC_TRIGGER_SOURCES | `spots,map` | component kinds whose new run makes a sync due |
 | SYNC_RETRY_MINUTES | 15 | wait after a failed acquisition |
 | SYNC_MAX_ATTEMPTS | 6 | failed attempts per run key before waiting for the next run |
-| SYNC_LEASE_MINUTES | 45 | lease lifetime, renewed after every stage |
+| SYNC_LEASE_MINUTES | 45 (15 under JOB_RUNNER=daemon) | lease lifetime, renewed after every stage and extended every third of it while a stage runs |
 | SYNC_PUBLISH_GATE | true | the map index serves the published map run |
 | SYNC_PRUNE_EACH_PASS | false | prune superseded predictions and map fields after every sync |
+| SYNC_PREWARM_PUBLIC_CACHE | false | after a publishing sync, compute the public spot list and conditions at once (about 1.4 MB of reads per publication) |
 | SYNC_DAEMON_POLL_SECONDS | 60 | kick polling |
 | SYNC_DAEMON_INIT_DB | true | init-db at daemon start |
 | SYNC_CPU_BUDGET_HOURS | none | monthly CPU budget health warns about (10 when hosted) |

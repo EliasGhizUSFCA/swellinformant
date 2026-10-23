@@ -60,6 +60,9 @@ x-backend-env: &backend-env
   SYNC_LEASE_MINUTES: ${SYNC_LEASE_MINUTES:-}
   SYNC_PUBLISH_GATE: ${SYNC_PUBLISH_GATE:-}
   SYNC_PRUNE_EACH_PASS: ${SYNC_PRUNE_EACH_PASS:-}
+  # After a publishing sync, compute the public spot list and conditions at once (about
+  # 1.4 MB of database reads per publication) instead of at the first visitor's request.
+  SYNC_PREWARM_PUBLIC_CACHE: ${SYNC_PREWARM_PUBLIC_CACHE:-}
   SYNC_DAEMON_POLL_SECONDS: ${SYNC_DAEMON_POLL_SECONDS:-}
   SYNC_DAEMON_INIT_DB: ${SYNC_DAEMON_INIT_DB:-}
   # Monthly CPU budget in hours (health warns at 80 %); empty = none.
@@ -139,6 +142,9 @@ x-backend-env: &backend-env
   # Data health (GET /api/health/data, job ops.data_health) and the admin email alerts.
   DATA_HEALTH_CHECK_MINUTES: ${DATA_HEALTH_CHECK_MINUTES:-15}
   DATA_HEALTH_ALERTS_ENABLED: ${DATA_HEALTH_ALERTS_ENABLED:-true}
+  # Addresses (comma-separated) the daily watchdog (GET /api/internal/cron/daily) emails when
+  # the database itself cannot be reached; empty = none (the admins are read from the database).
+  OPS_ALERT_EMAILS: ${OPS_ALERT_EMAILS:-}
   DATA_HEALTH_ALERT_REPEAT_HOURS: ${DATA_HEALTH_ALERT_REPEAT_HOURS:-12}
   DATA_HEALTH_HEARTBEAT_MINUTES: ${DATA_HEALTH_HEARTBEAT_MINUTES:-30}
   DATA_HEALTH_OBSERVATION_STALE_HOURS: ${DATA_HEALTH_OBSERVATION_STALE_HOURS:-}

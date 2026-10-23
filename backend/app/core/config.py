@@ -125,7 +125,8 @@ class Settings(BaseSettings):
     # extended every third of it while a stage runs, so it lapses only when the process
     # holding it died; the next sync then takes it over. Not set: DAEMON_LEASE_MINUTES (15)
     # under JOB_RUNNER=daemon, where a deploy can kill the daemon mid-sync (Vercel sends
-    # SIGKILL 120 s after SIGTERM) and its successor should take over soon; 45 under Celery.
+    # SIGKILL once terminationGracePeriodSeconds, 600 s in vercel.json, have passed after
+    # SIGTERM) and its successor should take over soon; 45 under Celery.
     sync_lease_minutes: int = Field(default=45, ge=10, le=240)
     # Failed attempts per model run before the sync waits for the next run.
     sync_max_attempts: int = Field(default=6, ge=1, le=50)
