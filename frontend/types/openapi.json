@@ -56,7 +56,7 @@
      "system"
     ],
     "summary": "Data Health Report",
-    "description": "Data freshness and background-job health (ok / degraded / failing, with reasons).\n\nPublic on purpose, like /api/system/status: it holds operational metadata only (run\nkeys, ages, limits, job statuses, reasons written by the service; no personal data,\nno raw error text), and an external uptime monitor must be able to read it without\ncredentials, because a dead worker cannot send its own alert. Rate limited per IP.",
+    "description": "Data freshness and background-job health (ok / degraded / failing, with reasons).\n\nPublic on purpose, like /api/system/status: it holds operational metadata only (run\nkeys, ages, limits, job statuses, reasons written by the service; no personal data,\nno raw error text), and an external uptime monitor must be able to read it without\ncredentials, because a dead worker cannot send its own alert. Rate limited per IP.\nShared by the CDN for DATA_HEALTH_CDN_SECONDS; with ``strict`` never cached.",
     "operationId": "data_health_report_api_health_data_get",
     "parameters": [
      {
@@ -917,6 +917,7 @@
      "spots"
     ],
     "summary": "List Spots",
+    "description": "Every active spot with its current conditions (public data, cacheable).",
     "operationId": "list_spots_api_spots_get",
     "responses": {
      "200": {
@@ -942,6 +943,7 @@
      "spots"
     ],
     "summary": "Get Spot",
+    "description": "One spot's page data (public data, cacheable).",
     "operationId": "get_spot_api_spots__slug__get",
     "parameters": [
      {
@@ -984,6 +986,7 @@
      "spots"
     ],
     "summary": "Get Forecast",
+    "description": "The spot's forecast hours and model series (public data, cacheable).",
     "operationId": "get_forecast_api_spots__slug__forecast_get",
     "parameters": [
      {
@@ -1038,6 +1041,7 @@
      "spots"
     ],
     "summary": "Spot Events",
+    "description": "The spot's swell events that have not ended (public data, cacheable).",
     "operationId": "spot_events_api_spots__slug__events_get",
     "parameters": [
      {
@@ -1131,6 +1135,7 @@
      "spots"
     ],
     "summary": "List Events",
+    "description": "The best swells that have not ended (public data, cacheable).",
     "operationId": "list_events_api_events_get",
     "parameters": [
      {
@@ -2363,7 +2368,7 @@
      "map"
     ],
     "summary": "Fields Index",
-    "description": "Which global fields exist for the current model run, and their valid times.",
+    "description": "Which global fields exist for the served model run, and their valid times.",
     "operationId": "fields_index_api_map_fields_get",
     "responses": {
      "200": {
@@ -2431,10 +2436,10 @@
          "type": "null"
         }
        ],
-       "description": "Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the current run.",
+       "description": "Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the served run.",
        "title": "Run"
       },
-      "description": "Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the current run."
+      "description": "Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the served run."
      }
     ],
     "responses": {
@@ -10810,6 +10815,17 @@
       "title": "Source",
       "description": "Forecast source code, e.g. open_meteo_gfs"
      },
+     "source_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Name"
+     },
      "provider": {
       "type": "string",
       "title": "Provider"
@@ -10961,6 +10977,11 @@
        }
       ],
       "title": "Cpu Budget Hours"
+     },
+     "cpu_alert_fraction": {
+      "type": "number",
+      "title": "Cpu Alert Fraction",
+      "default": 0.8
      }
     },
     "type": "object",
@@ -11047,6 +11068,13 @@
       },
       "type": "array",
       "title": "Stages"
+     },
+     "stored": {
+      "items": {
+       "$ref": "#/components/schemas/SyncStoredRunOut"
+      },
+      "type": "array",
+      "title": "Stored"
      }
     },
     "type": "object",
@@ -11096,6 +11124,64 @@
      "duration_ms"
     ],
     "title": "SyncStageOut"
+   },
+   "SyncStoredRunOut": {
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "spots",
+       "ensemble",
+       "map"
+      ],
+      "title": "Kind"
+     },
+     "source": {
+      "type": "string",
+      "title": "Source"
+     },
+     "source_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Name"
+     },
+     "run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Key"
+     },
+     "cycle": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle"
+     }
+    },
+    "type": "object",
+    "required": [
+     "kind",
+     "source"
+    ],
+    "title": "SyncStoredRunOut",
+    "description": "A model run a sync stored (one per component whose acquisition stored data)."
    },
    "TideBlockOut": {
     "properties": {

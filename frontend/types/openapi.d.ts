@@ -53,6 +53,7 @@ export interface paths {
          *     keys, ages, limits, job statuses, reasons written by the service; no personal data,
          *     no raw error text), and an external uptime monitor must be able to read it without
          *     credentials, because a dead worker cannot send its own alert. Rate limited per IP.
+         *     Shared by the CDN for DATA_HEALTH_CDN_SECONDS; with ``strict`` never cached.
          */
         get: operations["data_health_report_api_health_data_get"];
         put?: never;
@@ -459,7 +460,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Spots */
+        /**
+         * List Spots
+         * @description Every active spot with its current conditions (public data, cacheable).
+         */
         get: operations["list_spots_api_spots_get"];
         put?: never;
         post?: never;
@@ -476,7 +480,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Spot */
+        /**
+         * Get Spot
+         * @description One spot's page data (public data, cacheable).
+         */
         get: operations["get_spot_api_spots__slug__get"];
         put?: never;
         post?: never;
@@ -493,7 +500,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Forecast */
+        /**
+         * Get Forecast
+         * @description The spot's forecast hours and model series (public data, cacheable).
+         */
         get: operations["get_forecast_api_spots__slug__forecast_get"];
         put?: never;
         post?: never;
@@ -510,7 +520,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Spot Events */
+        /**
+         * Spot Events
+         * @description The spot's swell events that have not ended (public data, cacheable).
+         */
         get: operations["spot_events_api_spots__slug__events_get"];
         put?: never;
         post?: never;
@@ -547,7 +560,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Events */
+        /**
+         * List Events
+         * @description The best swells that have not ended (public data, cacheable).
+         */
         get: operations["list_events_api_events_get"];
         put?: never;
         post?: never;
@@ -933,7 +949,7 @@ export interface paths {
         };
         /**
          * Fields Index
-         * @description Which global fields exist for the current model run, and their valid times.
+         * @description Which global fields exist for the served model run, and their valid times.
          */
         get: operations["fields_index_api_map_fields_get"];
         put?: never;
@@ -3659,6 +3675,8 @@ export interface components {
              * @description Forecast source code, e.g. open_meteo_gfs
              */
             source: string;
+            /** Source Name */
+            source_name?: string | null;
             /** Provider */
             provider: string;
             /**
@@ -3699,6 +3717,11 @@ export interface components {
             cpu_hours_month?: number | null;
             /** Cpu Budget Hours */
             cpu_budget_hours?: number | null;
+            /**
+             * Cpu Alert Fraction
+             * @default 0.8
+             */
+            cpu_alert_fraction: number;
         };
         /** SyncRunOut */
         SyncRunOut: {
@@ -3727,6 +3750,8 @@ export interface components {
             anchor_cycle?: string | null;
             /** Stages */
             stages?: components["schemas"]["SyncStageOut"][];
+            /** Stored */
+            stored?: components["schemas"]["SyncStoredRunOut"][];
         };
         /** SyncStageOut */
         SyncStageOut: {
@@ -3741,6 +3766,25 @@ export interface components {
             duration_ms: number;
             /** Cpu S */
             cpu_s?: number | null;
+        };
+        /**
+         * SyncStoredRunOut
+         * @description A model run a sync stored (one per component whose acquisition stored data).
+         */
+        SyncStoredRunOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "spots" | "ensemble" | "map";
+            /** Source */
+            source: string;
+            /** Source Name */
+            source_name?: string | null;
+            /** Run Key */
+            run_key?: string | null;
+            /** Cycle */
+            cycle?: string | null;
         };
         /** TideBlockOut */
         TideBlockOut: {
@@ -5829,7 +5873,7 @@ export interface operations {
             query?: {
                 /** @description Valid time (ISO 8601); default now */
                 at?: string | null;
-                /** @description Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the current run. */
+                /** @description Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the served run. */
                 run?: string | null;
             };
             header?: never;

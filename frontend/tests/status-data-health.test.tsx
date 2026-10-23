@@ -252,6 +252,7 @@ describe("sync section on the status page", () => {
     ],
     cpu_hours_month: 0.5,
     cpu_budget_hours: null,
+    cpu_alert_fraction: 0.8,
   };
 
   it("is absent when the backend sends no sync block (older backends)", () => {

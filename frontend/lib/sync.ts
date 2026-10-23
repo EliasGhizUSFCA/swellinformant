@@ -11,28 +11,13 @@ import { cycleLabel } from "@/lib/map-time";
 import { titleCase } from "@/lib/format";
 import type { components } from "@/types/openapi";
 
-/**
- * The fields the backend added at the Upgrade 4 integration (a sync's stored runs per component,
- * source names, the CPU alert share), declared here until frontend/types/openapi.* is
- * regenerated; with the regenerated schema these intersections change nothing.
- */
-export interface SyncStoredRun {
-  kind: "spots" | "ensemble" | "map";
-  source: string;
-  source_name?: string | null;
-  run_key?: string | null;
-  /** The newest model cycle of the stored run. */
-  cycle?: string | null;
-}
-export type SyncComponent = components["schemas"]["SyncComponentOut"] & { source_name?: string | null };
-export type SyncRun = components["schemas"]["SyncRunOut"] & { stored?: SyncStoredRun[] };
-export type SyncHealth = Omit<components["schemas"]["SyncHealthOut"], "components" | "last_run" | "last_published"> & {
-  components?: SyncComponent[];
-  last_run?: SyncRun | null;
-  last_published?: SyncRun | null;
-  /** Data health reports the runner as degraded above this share of SYNC_CPU_BUDGET_HOURS. */
-  cpu_alert_fraction?: number;
-};
+/** A model run a sync stored, per component; `cycle` is the newest model cycle of that run. */
+export type SyncStoredRun = components["schemas"]["SyncStoredRunOut"];
+export type SyncComponent = components["schemas"]["SyncComponentOut"];
+export type SyncRun = components["schemas"]["SyncRunOut"];
+/** `cpu_alert_fraction`: data health reports the runner as degraded above this share of
+ * SYNC_CPU_BUDGET_HOURS. */
+export type SyncHealth = components["schemas"]["SyncHealthOut"];
 export type SyncStage = components["schemas"]["SyncStageOut"];
 export type SyncComponentState = SyncComponent["state"];
 export type SyncRunStatus = SyncRun["status"];
@@ -208,7 +193,7 @@ export const runnerLabel = (runner: SyncHealth["runner"]): string => (runner ===
  * budget; a report without it (an older backend) has no amber step and no `alert`.
  */
 export function cpuBudget(
-  sync: Pick<SyncHealth, "cpu_hours_month" | "cpu_budget_hours" | "cpu_alert_fraction">,
+  sync: Pick<SyncHealth, "cpu_hours_month" | "cpu_budget_hours"> & Partial<Pick<SyncHealth, "cpu_alert_fraction">>,
 ): { used: number; budget: number; fraction: number; alert: number | null; tone: Tone } | null {
   const budget = sync.cpu_budget_hours;
   const used = sync.cpu_hours_month;
