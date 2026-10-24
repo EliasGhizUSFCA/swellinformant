@@ -162,6 +162,9 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_domain: str | None = None
     rate_limit_enabled: bool = True
+    # Requests of one client IP an hour that miss the public snapshot cache and so read the
+    # database (app.services.public_cache); more answer 429. Cache hits are not counted.
+    public_cache_miss_limit_per_hour: int = Field(default=120, ge=1, le=100_000)
     login_max_failures: int = 8
     login_lockout_minutes: int = 15
     email_verification_ttl_hours: int = 48

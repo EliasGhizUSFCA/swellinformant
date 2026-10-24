@@ -7,17 +7,33 @@ start of the current UTC hour (:func:`public_now`) and kept in Redis under
 
     public:v1:<epoch>:<marker>:<YYYYmmddTHH>:<route>[:<params>]
 
+* ``public:v1`` is production's namespace (:func:`namespace`): the production functions,
+  the sync daemon, the GitHub runner and the local stacks (VERCEL_ENV production or unset)
+  share it. A preview or ``vercel dev`` deployment (VERCEL_ENV preview or development)
+  keeps its own, ``public:v1:<env>:<deployment>``: its code or its database may differ, so
+  production never serves a payload it computed, even when both use one Redis.
 * ``marker`` names the published data. :func:`note_published` (the sync's hook: after its
   publish stage and again at its end) stores a new random marker, so the next request of
   every route computes afresh, and no request reads the database to learn the marker
-  (Neon's compute can stay asleep). Without a stored marker (no hook ran since Redis was
-  emptied, or it expired after :data:`MARKER_TTL_SECONDS`) each request derives one from
-  the database with one small statement (:func:`derived_marker`: the newest publication
-  and when it finished, and the counts and newest changes of the runs, predictions, swell
-  events, active spots, research assessments and map fields).
+  (Neon's compute can stay asleep). The marker does not expire: it is replaced at every
+  publication, and the hour in each key bounds every payload whatever the marker says, so
+  a pause in the syncs (the daemon's CPU quota, unreachable map layers) does not send
+  every request to the database. Without a stored marker (no hook ran since Redis was
+  emptied, or in a preview's namespace) each request derives one from the database with
+  one small statement (:func:`derived_marker`: the newest publication and when it
+  finished, and the counts and newest changes of the runs, predictions, swell events,
+  active spots, research assessments and map fields).
 * ``epoch`` is a random token kept in Redis: a Redis that lost its data starts a new
   epoch, so this process's memo can never hand out a payload of an earlier one.
 * ``hour`` bounds every payload to its hour, whatever the marker says.
+
+Every key is one of a bounded set: the map's ``?at=`` is read as its UTC hour within
+:data:`MAP_AT_CACHED_WINDOW` (:func:`map_time`), the other query values are bounded by
+their routes. A visitor whose request misses the cache (and so reads the database) is
+counted: more than PUBLIC_CACHE_MISS_LIMIT_PER_HOUR misses from one client IP in an hour
+answer 429 (app.core.ratelimit; RATE_LIMIT_ENABLED), which bounds what one client can make
+the database send (Neon Free suspends the compute for the rest of the month once its
+egress is used up). Hits are never counted.
 
 A key is computed at most once: the first request takes the key's Redis lock (SET NX EX)
 and stores the payload, zlib-compressed (Upstash counts bandwidth), for
@@ -43,6 +59,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import secrets
 import threading
 import time
@@ -51,7 +68,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import redis
@@ -59,6 +76,8 @@ from pydantic import TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core import ratelimit
+from app.core.config import get_settings
 from app.core.database import utcnow
 from app.core.redis import get_redis_bytes
 from app.models import ForecastRun, SpotResearchAssessment, SurfSpot, SwellEvent
@@ -69,14 +88,15 @@ from app.services.spot_views import map_snapshot, spot_summaries
 
 logger = logging.getLogger(__name__)
 
+# Production's namespace (:func:`namespace`) and its epoch and marker keys.
 PREFIX = "public:v1"
 EPOCH_KEY = f"{PREFIX}:epoch"
 MARKER_KEY = f"{PREFIX}:marker"
 # A payload outlives its hour a little (the hour is part of its key), then Redis drops it.
 PAYLOAD_TTL_SECONDS = 2 * 3600
-# A marker the sync stored is trusted this long; the sync stores a new one at every
-# publication (about 6 a day), so it expires only when the syncs stop.
-MARKER_TTL_SECONDS = 24 * 3600
+# The rate-limit bucket of the requests that miss the cache (app.core.ratelimit).
+MISS_BUCKET = "public-miss"
+MISS_WINDOW_SECONDS = 3600
 # The single-flight lock outlives the slowest computation (about 2 s measured for a
 # spot's forecast on Neon-like latency); a crashed holder frees it after this.
 LOCK_TTL_SECONDS = 60
@@ -85,8 +105,9 @@ LOCK_TTL_SECONDS = 60
 WAIT_PAUSES_SECONDS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2)
 FAIL_OPEN_SECONDS = 30.0
 MEMO_MAX_BYTES = 32 * 1024 * 1024
-# The ?at= times of /api/map/conditions that are cached, relative to the current hour: the
-# map's steps (the stored forecast hours, up to 16 days ahead, and the hours just past).
+# The ?at= times of /api/map/conditions, relative to the current hour: the map's steps (the
+# stored forecast hours, up to 16 days ahead, and the hours just past). A time outside is
+# answered for the nearer end, as the forecast range would clamp it anyway (map_time).
 MAP_AT_CACHED_WINDOW = (timedelta(days=-2), timedelta(days=17))
 COMPRESSION_LEVEL = 6
 
@@ -94,6 +115,28 @@ COMPRESSION_LEVEL = 6
 def public_now(now: datetime | None = None) -> datetime:
     """The instant the public snapshots are computed for: the start of the UTC hour."""
     return (now or utcnow()).replace(minute=0, second=0, microsecond=0)
+
+
+def namespace(environ: Mapping[str, str] | None = None) -> str:
+    """The key namespace of this deployment: :data:`PREFIX` for production (VERCEL_ENV
+    production or unset), so the daemon's marker reaches the production API whether or not
+    the daemon sees VERCEL_ENV; ``public:v1:<env>:<digest of the deployment>`` for a
+    preview or development deployment (VERCEL_DEPLOYMENT_ID, else VERCEL_URL)."""
+    env = os.environ if environ is None else environ
+    target = (env.get("VERCEL_ENV") or "production").strip().lower()
+    if target == "production":
+        return PREFIX
+    deployment = env.get("VERCEL_DEPLOYMENT_ID") or env.get("VERCEL_URL") or "local"
+    digest = hashlib.sha256(deployment.encode()).hexdigest()[:12]
+    return f"{PREFIX}:{target}:{digest}"
+
+
+def epoch_key() -> str:
+    return f"{namespace()}:epoch"
+
+
+def marker_key() -> str:
+    return f"{namespace()}:marker"
 
 
 @dataclass(frozen=True)
@@ -128,7 +171,8 @@ def note_published(sync_run_id: int | None = None) -> bool:
     store the marker (the snapshots then follow the database marker, or the next hour)."""
     marker = f"p{sync_run_id if sync_run_id is not None else 0}.{secrets.token_hex(6)}"
     try:
-        get_redis_bytes().set(MARKER_KEY, marker.encode(), ex=MARKER_TTL_SECONDS)
+        # No expiry: the next publication replaces it (see the module docstring).
+        get_redis_bytes().set(marker_key(), marker.encode())
     except redis.RedisError as exc:
         logger.warning("Public snapshot marker not stored: %s", type(exc).__name__)
         return False
@@ -219,7 +263,7 @@ def clear() -> None:
     _memo.clear()
     _fail_open = None
     try:
-        get_redis_bytes().delete(EPOCH_KEY)
+        get_redis_bytes().delete(epoch_key())
     except redis.RedisError as exc:
         logger.warning("Public snapshot epoch not reset: %s", type(exc).__name__)
 
@@ -242,10 +286,11 @@ def _failed(client: redis.Redis, exc: Exception) -> None:
 
 
 def _epoch_and_marker(client: redis.Redis) -> tuple[str, str | None]:
-    raw_epoch, raw_marker = client.mget([EPOCH_KEY, MARKER_KEY])
+    epoch_name = epoch_key()
+    raw_epoch, raw_marker = client.mget([epoch_name, marker_key()])
     if raw_epoch is None:
         token = secrets.token_hex(6).encode()
-        raw_epoch = token if client.set(EPOCH_KEY, token, nx=True) else client.get(EPOCH_KEY)
+        raw_epoch = token if client.set(epoch_name, token, nx=True) else client.get(epoch_name)
         raw_epoch = raw_epoch or token
     marker = raw_marker.decode() if isinstance(raw_marker, bytes) else None
     epoch = raw_epoch.decode() if isinstance(raw_epoch, bytes) else str(raw_epoch)
@@ -258,7 +303,7 @@ def _stored(client: redis.Redis, key: str) -> Snapshot | None:
 
 
 def cache_key(epoch: str, marker: str, hour: datetime, route: str, params: str) -> str:
-    key = f"{PREFIX}:{epoch}:{marker}:{hour:%Y%m%dT%H}:{route}"
+    key = f"{namespace()}:{epoch}:{marker}:{hour:%Y%m%dT%H}:{route}"
     if params:
         # Query values are visitor input: hashed, so a key stays short and plain.
         key += ":" + hashlib.sha256(params.encode()).hexdigest()[:24]
@@ -321,8 +366,18 @@ class Together:
     builds: Mapping[str, Callable[[datetime], Snapshot]]
     reads: Callable[[], AbstractContextManager[Any]] = nullcontext
 
-    def snapshot(self, db: Session, route: str) -> Snapshot:
-        return snapshot(db, route, self.params, self.builds[route], together=self)
+    def snapshot(self, db: Session, route: str, *, visitor: str | None = None) -> Snapshot:
+        return snapshot(db, route, self.params, self.builds[route], together=self, visitor=visitor)
+
+
+def charge_miss(visitor: str | None) -> None:
+    """Count one cache miss of ``visitor`` (a client IP; None: the sync or a CLI, never
+    limited). More than PUBLIC_CACHE_MISS_LIMIT_PER_HOUR in an hour raise RateLimited
+    (429); RATE_LIMIT_ENABLED=false or an unreachable Redis lets every miss through."""
+    if visitor is None:
+        return
+    limit = get_settings().public_cache_miss_limit_per_hour
+    ratelimit.hit(MISS_BUCKET, visitor, limit, MISS_WINDOW_SECONDS)
 
 
 def snapshot(
@@ -332,11 +387,13 @@ def snapshot(
     build: Callable[[datetime], Snapshot],
     *,
     together: Together | None = None,
+    visitor: str | None = None,
 ) -> Snapshot:
     """The response of ``route`` for ``params`` this hour: from this process's memo, from
     Redis, or computed by ``build(public_now())`` (once per key, with the other routes of
     ``together``; see the module docstring). An exception of ``build`` (e.g. a 404)
-    propagates and nothing is stored."""
+    propagates and nothing is stored. A computation counts as a miss of ``visitor``
+    (:func:`charge_miss`), before the database is read."""
     hour = public_now()
     client = _usable_client()
     if client is None:
@@ -352,8 +409,12 @@ def snapshot(
     if hit is not None:
         return hit
     built: dict[str, Snapshot] = {}
+    charged: list[bool] = []
 
     def build_own() -> Snapshot:
+        if not charged:
+            charged.append(True)
+            charge_miss(visitor)
         built[key] = build(hour)
         return built[key]
 
@@ -396,30 +457,41 @@ SPOT_LIST = TypeAdapter(list[SpotSummary])
 MAP_SNAPSHOT = TypeAdapter(MapSnapshotOut)
 
 
-def spot_list(db: Session) -> Snapshot:
+def spot_list(db: Session, *, visitor: str | None = None) -> Snapshot:
     """GET /api/spots."""
-    return snapshot(db, "spots", "", lambda now: render(SPOT_LIST, spot_summaries(db, now)))
+    return snapshot(
+        db,
+        "spots",
+        "",
+        lambda now: render(SPOT_LIST, spot_summaries(db, now)),
+        visitor=visitor,
+    )
 
 
-def cached_map_time(at: datetime, hour: datetime) -> bool:
-    """Whether /api/map/conditions?at= is cached for ``at``: a whole UTC hour (as the map
-    sends its steps) within :data:`MAP_AT_CACHED_WINDOW` of ``hour``. Any other value is
-    visitor input that would only fill Redis with keys nobody asks for again."""
-    if at.utcoffset() != timedelta(0) or (at.minute, at.second, at.microsecond) != (0, 0, 0):
-        return False
-    return MAP_AT_CACHED_WINDOW[0] <= at - hour <= MAP_AT_CACHED_WINDOW[1]
+def map_time(at: datetime, hour: datetime) -> datetime:
+    """The time /api/map/conditions?at= is answered for: ``at`` in UTC (a time without an
+    offset is read as UTC), floored to its hour and clamped to :data:`MAP_AT_CACHED_WINDOW`
+    around ``hour``. The answer is the one ``at`` itself gets: map_snapshot answers whole
+    hours and clamps to the forecast range, which lies within the window (from 3 h before
+    the current hour to the newest run's last hour, at most 16 days ahead). So every
+    request is served from one of a bounded set of keys (the map's steps are whole UTC
+    hours), and no visitor input (a different second, a far date) bypasses the cache."""
+    utc = at.replace(tzinfo=UTC) if at.utcoffset() is None else at.astimezone(UTC)
+    floored = utc.replace(minute=0, second=0, microsecond=0)
+    earliest, latest = hour + MAP_AT_CACHED_WINDOW[0], hour + MAP_AT_CACHED_WINDOW[1]
+    return min(max(floored, earliest), latest)
 
 
-def map_conditions(db: Session, at: datetime | None) -> Snapshot:
-    """GET /api/map/conditions (``at``: the query's time, as FastAPI parsed it). An ``at``
-    that is not cached (:func:`cached_map_time`) is computed as a miss is, unstored."""
+def map_conditions(db: Session, at: datetime | None, *, visitor: str | None = None) -> Snapshot:
+    """GET /api/map/conditions (``at``: the query's time, as FastAPI parsed it, read as
+    :func:`map_time`)."""
+    when = map_time(at, public_now()) if at is not None else None
 
     def build(now: datetime) -> Snapshot:
-        return render(MAP_SNAPSHOT, map_snapshot(db, at, now))
+        return render(MAP_SNAPSHOT, map_snapshot(db, when, now))
 
-    if at is not None and not cached_map_time(at, public_now()):
-        return build(public_now())
-    return snapshot(db, "map-conditions", at.isoformat() if at is not None else "", build)
+    params = when.isoformat() if when is not None else ""
+    return snapshot(db, "map-conditions", params, build, visitor=visitor)
 
 
 def prewarm(db: Session) -> bool:

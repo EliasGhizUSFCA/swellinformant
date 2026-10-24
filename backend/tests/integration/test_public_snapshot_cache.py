@@ -7,10 +7,11 @@ with the body FastAPI's own serialization gives for the same data and hour.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -22,6 +23,7 @@ from sqlalchemy import event, select, update
 from sqlalchemy.orm import Session
 
 from app.api import spots as spots_api
+from app.core.config import get_settings
 from app.core.database import SessionLocal, get_engine, utcnow
 from app.core.redis import get_redis_bytes
 from app.models import ForecastRun, SurfSpot, SwellEvent, SyncRun
@@ -136,37 +138,145 @@ def test_every_route_serves_the_bytes_fastapi_would(
         assert app_client.get(url).content == body, url  # computed directly, Redis down
 
 
-def test_only_the_map_steps_are_cached_for_a_time(
-    app_client: ApiClient, published: Session
+def test_every_map_time_is_answered_from_its_utc_hours_snapshot(
+    app_client: ApiClient, published: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """?at= values the map never sends (not a whole UTC hour, another UTC offset, far from
-    now) are computed as a miss is, with the same bytes, and store nothing in Redis; a map
-    step is stored once."""
+    """?at= values the map never sends (not a whole UTC hour, another UTC offset, no offset,
+    far from now) get the bytes of their UTC hour, clamped to the cached window, from that
+    hour's snapshot: one key each, so a visitor varying the second, the offset or the date
+    cannot make every request read the database (each one used to compute unstored)."""
     hour = public_cache.public_now()
     store = public_cache.get_redis_bytes()
+    computed: list[datetime | None] = []
+    real = public_cache.map_snapshot
+
+    def counted(db: Session, at: datetime | None, now: datetime | None = None) -> MapSnapshotOut:
+        computed.append(at)
+        return real(db, at, now)
+
+    monkeypatch.setattr(public_cache, "map_snapshot", counted)
 
     def keys() -> set[bytes]:
-        return set(store.scan_iter(f"{public_cache.PREFIX}:*"))
+        return {k for k in store.scan_iter(f"{public_cache.PREFIX}:*") if b":map-conditions:" in k}
 
+    step = hour + timedelta(hours=7)
     utc_plus_1 = timezone(timedelta(hours=1))
-    for at in (
-        hour + timedelta(hours=7, minutes=30),
-        (hour + timedelta(hours=7)).astimezone(utc_plus_1),  # the same instant, not in UTC
-        hour + timedelta(days=40),
-        hour - timedelta(days=3),
-    ):
+    earliest = hour + public_cache.MAP_AT_CACHED_WINDOW[0]
+    latest = hour + public_cache.MAP_AT_CACHED_WINDOW[1]
+    cases = [
+        (step, step),
+        (step + timedelta(minutes=30), step),
+        (step + timedelta(seconds=1), step),
+        (step + timedelta(seconds=2, microseconds=5), step),
+        (step.astimezone(utc_plus_1), step),  # the same instant, not in UTC
+        (step.replace(tzinfo=None), step),  # no offset: read as UTC
+        (hour + timedelta(days=40), latest),
+        (hour + timedelta(days=41, minutes=7), latest),
+        (hour - timedelta(days=3), earliest),
+        (hour - timedelta(days=30, seconds=9), earliest),
+    ]
+    for at, answered in cases:
+        assert public_cache.map_time(at, hour) == answered, at
         before = keys()
         response = app_client.get(f"/api/map/conditions?at={quote(at.isoformat())}")
-        assert response.status_code == 200, at
+        assert response.status_code == 200, (at, response.text)
+        assert response.headers.get_list("cdn-cache-control") == [CDN], at
+        monkeypatch.setattr(public_cache, "map_snapshot", real)
         assert response.content == reference_body(
-            MapSnapshotOut, map_snapshot(published, at, hour)
+            MapSnapshotOut, map_snapshot(published, answered, hour)
         ), at
-        assert keys() == before, at
-    step = hour + timedelta(hours=7)
-    before = keys()
-    response = app_client.get(f"/api/map/conditions?at={quote(step.isoformat())}")
-    assert response.content == reference_body(MapSnapshotOut, map_snapshot(published, step, hour))
-    assert [k for k in keys() - before if b":map-conditions:" in k]
+        # The answer the time itself gets, in UTC (map_snapshot answers whole hours and
+        # clamps to the forecast range); requested_at names the hour answered.
+        in_utc = at.astimezone(UTC) if at.tzinfo else at.replace(tzinfo=UTC)
+        own = json.loads(reference_body(MapSnapshotOut, map_snapshot(published, in_utc, hour)))
+        served = response.json()
+        assert served["requested_at"] == answered.isoformat().replace("+00:00", "Z"), at
+        assert {**served, "requested_at": None} == {**own, "requested_at": None}, at
+        monkeypatch.setattr(public_cache, "map_snapshot", counted)
+        assert len(keys() - before) <= 1, at
+    # One computation per answered hour: the step, the window's two ends.
+    assert computed == [step, latest, earliest]
+    assert len(keys()) == 3
+
+
+def test_a_visitors_cache_misses_are_rate_limited(
+    app_client: ApiClient, published: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each request that misses the cache (and so reads the database) counts against its
+    client IP; hits never count, other visitors and the sync's own snapshots are not
+    limited, and the limit answers 429 (never cached by the CDN)."""
+    monkeypatch.setattr(get_settings(), "rate_limit_enabled", True)
+    monkeypatch.setattr(get_settings(), "public_cache_miss_limit_per_hour", 3)
+    # One window for the whole test (an hourly window could turn while it runs).
+    monkeypatch.setattr(public_cache, "MISS_WINDOW_SECONDS", 10**9)
+    hour = public_cache.public_now()
+    visitor = {"X-Forwarded-For": "198.51.100.7"}  # SYNTHETIC documentation addresses
+    other = {"X-Forwarded-For": "198.51.100.8"}
+
+    def at(hours: int) -> str:
+        return f"/api/map/conditions?at={quote((hour + timedelta(hours=hours)).isoformat())}"
+
+    for hours in (1, 2, 3):
+        assert app_client.get(at(hours), headers=visitor).status_code == 200
+        assert app_client.get(at(hours), headers=visitor).status_code == 200  # a hit
+    public_cache.clear_memo()
+    assert app_client.get(at(2), headers=visitor).status_code == 200  # from Redis: a hit
+    limited = app_client.get(at(4), headers=visitor)
+    assert limited.status_code == 429 and "Retry-After" in limited.headers
+    assert "public" not in limited.headers.get("cache-control", "")
+    assert "cdn-cache-control" not in limited.headers
+    assert app_client.get("/api/spots/pipeline", headers=visitor).status_code == 429
+    assert app_client.get(at(1), headers=visitor).status_code == 200  # hits still answer
+    assert app_client.get(at(4), headers=other).status_code == 200
+    assert app_client.get(at(4), headers=visitor).status_code == 200  # now a hit
+    public_cache.note_published(9)  # new snapshots: the sync's prewarm is never limited
+    assert public_cache.prewarm(published) is True
+    assert app_client.get("/api/spots", headers=visitor).status_code == 200
+    monkeypatch.setattr(get_settings(), "rate_limit_enabled", False)
+    assert app_client.get(at(5), headers=visitor).status_code == 200
+
+
+def test_a_preview_deployment_never_shares_productions_snapshots(
+    published: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production (VERCEL_ENV production or unset: the API, the daemon) and a preview on the
+    same Redis keep apart: the preview computes its own payloads, never reads production's
+    marker, and production never serves what the preview computed."""
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
+    store = public_cache.get_redis_bytes()
+
+    def built(body: bytes) -> Callable[[datetime], public_cache.Snapshot]:
+        return lambda now: public_cache.Snapshot(body)
+
+    assert public_cache.note_published(3) is True
+    prod = public_cache.snapshot(published, "test-namespace", "", built(b'"production"'))
+    assert prod.body == b'"production"'
+    monkeypatch.setenv("VERCEL_ENV", "preview")
+    monkeypatch.setenv("VERCEL_DEPLOYMENT_ID", "dpl_synthetic_preview")
+    public_cache.clear_memo()
+    assert store.get(public_cache.marker_key()) is None  # the daemon's marker is not seen
+    preview = public_cache.snapshot(published, "test-namespace", "", built(b'"preview"'))
+    assert preview.body == b'"preview"'
+    keys = {k.decode() for k in store.scan_iter(f"{public_cache.PREFIX}:*test-namespace")}
+    assert len(keys) == 2
+    assert sum(k.startswith(f"{public_cache.PREFIX}:preview:") for k in keys) == 1
+    monkeypatch.setenv("VERCEL_ENV", "production")
+    public_cache.clear_memo()
+    again = public_cache.snapshot(published, "test-namespace", "", built(b'"recomputed"'))
+    assert again.body == b'"production"'  # from Redis, production's own
+
+
+def test_the_stored_marker_does_not_expire(published: Session) -> None:
+    """The marker is replaced at every publication; without an expiry a pause in the syncs
+    (the daemon's CPU quota, unreachable map layers) does not send every request back to
+    the database marker (the hour in each key still bounds every payload)."""
+    store = public_cache.get_redis_bytes()
+    assert public_cache.note_published(11) is True
+    assert store.ttl(public_cache.MARKER_KEY) == -1
+    first = store.get(public_cache.MARKER_KEY)
+    assert public_cache.note_published(12) is True
+    assert store.get(public_cache.MARKER_KEY) != first
+    assert store.ttl(public_cache.MARKER_KEY) == -1
 
 
 def test_a_key_is_computed_once(

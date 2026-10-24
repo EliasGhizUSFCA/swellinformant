@@ -121,6 +121,8 @@ class AttributionLinkOut(BaseModel):
 class MapSnapshotOut(BaseModel):
     """Every monitored spot at one forecast time, from cached predictions only."""
 
+    # The time asked for (?at=) as answered: its UTC hour, within 2 days before and 17 days
+    # after the current hour (app.services.public_cache.map_time). None: "now".
     requested_at: datetime | None
     valid_time: datetime | None
     range_start: datetime | None

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Path, Query, Response
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from pydantic import TypeAdapter
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,7 @@ from app.api.spots import public_json
 from app.core.database import get_db
 from app.core.errors import NotFound
 from app.core.http_cache import cache_headers
+from app.core.ratelimit import client_ip
 from app.models.forecast_engine import MAP_FIELD_VARIABLES
 from app.schemas.map_fields import FieldIndexOut
 from app.services import map_fields
@@ -47,7 +48,7 @@ FIELD_INDEX = TypeAdapter(FieldIndexOut)
 
 
 @router.get("/fields", response_model=FieldIndexOut)
-def fields_index(db: Session = Depends(get_db)) -> Response:
+def fields_index(request: Request, db: Session = Depends(get_db)) -> Response:
     """Which global fields exist for the served model run, and their valid times."""
     # From the public snapshot cache (app.services.public_cache), like the spot list and the
     # conditions it is shown with: computed at most once per publication and UTC hour, for
@@ -59,6 +60,7 @@ def fields_index(db: Session = Depends(get_db)) -> Response:
             "map-field-index",
             "",
             lambda now: snapshots.render(FIELD_INDEX, map_fields.field_index(db, now)),
+            visitor=client_ip(request),
         )
     )
 

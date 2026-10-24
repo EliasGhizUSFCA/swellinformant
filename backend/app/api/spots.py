@@ -13,7 +13,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import TypeAdapter
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -22,6 +22,7 @@ from app.auth.deps import get_optional_user
 from app.core.database import get_db
 from app.core.errors import NotFound
 from app.core.http_cache import cache_headers
+from app.core.ratelimit import client_ip
 from app.models import Airport, SurfSpot, SwellEvent, User
 from app.schemas.opportunities import MatchSummary
 from app.schemas.spots import (
@@ -92,21 +93,26 @@ def _spot(db: Session, slug: str) -> SurfSpot:
 
 @router.get("/map/conditions", response_model=MapSnapshotOut)
 def map_conditions(
-    at: datetime | None = Query(None, description="Forecast time (ISO 8601); default now"),
+    request: Request,
+    at: datetime | None = Query(
+        None,
+        description="Forecast time (ISO 8601; UTC when it has no offset); default now. "
+        "Answered for its UTC hour, within 2 days before and 17 days after the current hour",
+    ),
     db: Session = Depends(get_db),
 ) -> Response:
     """All spots at one forecast hour, from cached predictions (public data, cacheable)."""
-    return public_json(snapshots.map_conditions(db, at))
+    return public_json(snapshots.map_conditions(db, at, visitor=client_ip(request)))
 
 
 @router.get("/spots", response_model=list[SpotSummary])
-def list_spots(db: Session = Depends(get_db)) -> Response:
+def list_spots(request: Request, db: Session = Depends(get_db)) -> Response:
     """Every active spot with its current conditions (public data, cacheable)."""
-    return public_json(snapshots.spot_list(db))
+    return public_json(snapshots.spot_list(db, visitor=client_ip(request)))
 
 
 @router.get("/spots/{slug}", response_model=SpotDetail)
-def get_spot(slug: str, db: Session = Depends(get_db)) -> Response:
+def get_spot(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
     """One spot's page data (public data, cacheable)."""
     return public_json(
         snapshots.snapshot(
@@ -114,6 +120,7 @@ def get_spot(slug: str, db: Session = Depends(get_db)) -> Response:
             "spot",
             slug,
             lambda now: snapshots.render(SPOT_DETAIL, spot_detail(db, _spot(db, slug), now)),
+            visitor=client_ip(request),
         )
     )
 
@@ -145,14 +152,18 @@ def spot_page(db: Session, slug: str, days: int) -> snapshots.Together:
 
 @router.get("/spots/{slug}/forecast", response_model=SpotForecastOut)
 def get_forecast(
-    slug: str, days: int = Query(10, ge=1, le=16), db: Session = Depends(get_db)
+    slug: str,
+    request: Request,
+    days: int = Query(10, ge=1, le=16),
+    db: Session = Depends(get_db),
 ) -> Response:
     """The spot's forecast hours and model series (public data, cacheable)."""
-    return public_json(spot_page(db, slug, days).snapshot(db, "spot-forecast"))
+    page = spot_page(db, slug, days)
+    return public_json(page.snapshot(db, "spot-forecast", visitor=client_ip(request)))
 
 
 @router.get("/spots/{slug}/events", response_model=list[EventOut])
-def spot_events(slug: str, db: Session = Depends(get_db)) -> Response:
+def spot_events(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
     """The spot's swell events that have not ended (public data, cacheable)."""
     return public_json(
         snapshots.snapshot(
@@ -160,6 +171,7 @@ def spot_events(slug: str, db: Session = Depends(get_db)) -> Response:
             "spot-events",
             slug,
             lambda now: snapshots.render(EVENTS, events_of_spot(db, _spot(db, slug), now)),
+            visitor=client_ip(request),
         )
     )
 
@@ -176,6 +188,7 @@ def spot_opportunities(
 
 @router.get("/events", response_model=list[EventOut])
 def list_events(
+    request: Request,
     limit: int = Query(20, ge=1, le=100),
     min_score: int = Query(0, ge=0, le=100),
     db: Session = Depends(get_db),
@@ -189,6 +202,7 @@ def list_events(
             lambda now: snapshots.render(
                 EVENTS, upcoming_events(db, now, limit=limit, min_score=min_score)
             ),
+            visitor=client_ip(request),
         )
     )
 

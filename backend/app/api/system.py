@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 from sqlalchemy import select
@@ -16,7 +16,7 @@ from app.api.spots import public_json
 from app.core.config import get_settings
 from app.core.database import check_database, get_db
 from app.core.http_cache import cache_headers
-from app.core.ratelimit import rate_limit
+from app.core.ratelimit import client_ip, rate_limit
 from app.core.redis import check_redis
 from app.models import BackgroundJobLog
 from app.schemas.health import DataHealthOut
@@ -152,13 +152,14 @@ SYSTEM_STATUS = TypeAdapter(dict[str, Any])
 # public browser and CDN windows. Before, every page view read about 22.7 kB from the
 # database and kept Neon's compute awake (docs/map-layers.md, "Free database budget").
 @router.get("/system/status", response_model=dict[str, Any])
-def system_status(db: Session = Depends(get_db)) -> Response:
+def system_status(request: Request, db: Session = Depends(get_db)) -> Response:
     return public_json(
         snapshots.snapshot(
             db,
             "system-status",
             "",
             lambda now: snapshots.render(SYSTEM_STATUS, _system_status(db, now)),
+            visitor=client_ip(request),
         )
     )
 

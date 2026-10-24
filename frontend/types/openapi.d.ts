@@ -4939,7 +4939,7 @@ export interface operations {
     map_conditions_api_map_conditions_get: {
         parameters: {
             query?: {
-                /** @description Forecast time (ISO 8601); default now */
+                /** @description Forecast time (ISO 8601; UTC when it has no offset); default now. Answered for its UTC hour, within 2 days before and 17 days after the current hour */
                 at?: string | null;
             };
             header?: never;
