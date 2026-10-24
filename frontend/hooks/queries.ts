@@ -114,11 +114,15 @@ export const useSearchMatches = (id: string) =>
     queryFn: ({ signal }) => get<MatchSummary[]>(`/api/searches/${id}/matches`, signal),
   });
 
+/** The signed-in user's opportunities (no-store: every read reaches the database). Read on
+ * mount and when the window regains focus (after the 30 s staleTime), never on a timer: a
+ * poll every minute kept a scale-to-zero database (Neon) awake for as long as any dashboard
+ * stayed visible, while matching runs hourly and after syncs anyway. */
 export const useOpportunities = (includePast = false) =>
   useQuery({
     queryKey: qk.opportunities(includePast),
     queryFn: ({ signal }) => get<MatchSummary[]>(`/api/opportunities?include_past=${includePast}`, signal),
-    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
 export const useOpportunity = (id: string) =>

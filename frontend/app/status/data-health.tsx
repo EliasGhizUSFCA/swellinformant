@@ -130,17 +130,17 @@ export function formatBytes(bytes: number): string {
   return `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
-/** How often an open status page re-reads data health (TanStack Query skips it while the tab is
- * hidden; focusing the tab re-reads a report older than 30 s). Every minute while a sync runs
- * (its stages and running time move) and under the Celery runner or an older backend without
- * a sync block (as before). Under the sync daemon (the hosted profile), every 5 minutes
- * otherwise: the sync part changes at most once per check (SYNC_CHECK_MINUTES, 10 by default),
- * and each report costs a function call, several Redis commands (Upstash bills each one) and
- * database reads that keep a scale-to-zero database awake. */
-export function dataHealthRefetchMs(data: DataHealth | undefined): number {
+/** How often an open status page re-reads data health on a timer (TanStack Query skips it while
+ * the tab is hidden), besides the re-read when the tab regains focus (a report older than 30 s).
+ * Every minute while a sync runs (its stages and running time move) and under the Celery runner
+ * or an older backend without a sync block (as before). Under the sync daemon (the hosted
+ * profile) not at all otherwise: each report reads the database (37 statements, measured), and
+ * the CDN keeps it only a minute, so a poll every 5 minutes (Neon's suspend delay) kept a
+ * scale-to-zero database awake for as long as a /status tab stayed visible. */
+export function dataHealthRefetchMs(data: DataHealth | undefined): number | false {
   const sync = data?.sync;
   if (!sync || sync.runner !== "daemon" || sync.last_run?.status === "running") return 60_000;
-  return 5 * 60_000;
+  return false;
 }
 
 export const useDataHealth = () =>
@@ -148,6 +148,8 @@ export const useDataHealth = () =>
     queryKey: ["health", "data"],
     queryFn: ({ signal }) => get<DataHealth>("/api/health/data", signal),
     staleTime: 30_000,
+    // The app's default is off (components/providers.tsx); this page re-reads on focus.
+    refetchOnWindowFocus: true,
     refetchInterval: (q) => dataHealthRefetchMs(q.state.data),
   });
 
