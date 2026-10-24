@@ -8,8 +8,11 @@ only).
 Per provider in TIDE_PROVIDERS, over the stations linked to an active spot: a station whose
 stored predictions end less than MIN_AHEAD from now is short. Some short stations are
 "degraded", no station of the provider with any future prediction is "failing". A station
-the daily job has not tried yet (no predictions, no attempt recorded) is not counted: a new
-deployment is covered by the job schedule check (tides.acquire overdue) instead. With
+the daily job has not tried yet (no predictions, no attempt recorded) is not counted as
+short. When no station of a provider was tried :data:`NEVER_ACQUIRED_GRACE` after the
+tide catalog was loaded, the provider's tides were never acquired (``tides_missing:<p>``,
+"degraded"): the daemon's start-up catch-up and Celery beat's start run the daily job at
+once, so only a job that cannot run, or a runner that does not catch up, gets there. With
 harmonic_model configured, an unreadable constants file is "failing" on its own
 (``tides_constants:harmonic_model``, :func:`constants_problem`).
 
@@ -34,6 +37,9 @@ from app.services.tides import harmonic_model
 
 # The daily job stores TIDE_HORIZON_DAYS + 1 day; two days left means it missed two runs.
 MIN_AHEAD = timedelta(days=2)
+# Linked stations of a provider that none of them was tried this long after they were
+# loaded: the tides were never acquired.
+NEVER_ACQUIRED_GRACE = timedelta(hours=3)
 PROVIDER_NAMES = {"noaa_coops": "NOAA CO-OPS", "harmonic_model": "the tide model"}
 
 
@@ -88,6 +94,7 @@ def tide_freshness(
             TideStation.code,
             TideStation.metadata_,
             func.max(TidePrediction.valid_time),
+            TideStation.created_at,
         )
         .outerjoin(TidePrediction, TidePrediction.station_id == TideStation.id)
         .where(TideStation.id.in_(linked), TideStation.provider.in_(providers))
@@ -99,11 +106,26 @@ def tide_freshness(
     for provider in providers:
         mine = [r for r in rows if r[0] == provider]
         tried = [r for r in mine if r[3] is not None or (r[2] or {}).get("last_error")]
+        name = PROVIDER_NAMES.get(provider, provider)
+        if mine and not tried:
+            loaded = min((r[4] for r in mine if r[4] is not None), default=None)
+            if loaded is not None and now - loaded > NEVER_ACQUIRED_GRACE:
+                problems.append(
+                    {
+                        "key": f"tides_missing:{provider}",
+                        "severity": "degraded",
+                        "message": f"No tide predictions from {name} have been acquired yet.",
+                        "detail": (
+                            f"{len(mine)} stations linked to active spots, loaded "
+                            f"{loaded.isoformat()}; no tides.acquire run stored or tried any"
+                        ),
+                    }
+                )
+            continue
         short = [r for r in tried if r[3] is None or r[3] < now + MIN_AHEAD]
         if not short:
             continue
         failing = all(r[3] is None or r[3] <= now for r in tried)
-        name = PROVIDER_NAMES.get(provider, provider)
         detail = "; ".join(
             f"{r[1]}: last prediction {r[3].isoformat() if r[3] else 'none'}"
             + (

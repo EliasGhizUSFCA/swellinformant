@@ -42,6 +42,10 @@ os.environ.update(
         "ENABLE_DEV_ENDPOINTS": "true",
         "CELERY_TASK_ALWAYS_EAGER": "true",
         "RATE_LIMIT_ENABLED": "false",
+        # The daemon's start-up catch-up runs every overdue periodic job, the tide
+        # acquisition (NOAA CO-OPS) included: on only where a test asks for it
+        # (tests/integration/test_sync_daemon.py).
+        "SYNC_DAEMON_CATCH_UP": "false",
         "OUTBOX_DIR": _OUTBOX,
         "SECRET_KEY": "test-secret-key-0123456789",
         "COOKIE_SECURE": "false",

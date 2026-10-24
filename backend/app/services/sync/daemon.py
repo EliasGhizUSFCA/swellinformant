@@ -2,7 +2,10 @@
 
 :func:`run_daemon` initialises the database when asked (SYNC_DAEMON_INIT_DB: migrate, seed,
 tide catalog; idempotent), loads the known runs from the database (keeping the first
-sightings and attempts cached in Redis), and loops until ``stop`` is set (SIGTERM, SIGINT):
+sightings and attempts cached in Redis), runs once each periodic job that is overdue
+(SYNC_DAEMON_CATCH_UP, :func:`overdue_entries`: e.g. the daily tide acquisition of a new
+deployment, which would otherwise wait for 02:20 UTC), and loops until ``stop`` is set
+(SIGTERM, SIGINT):
 
 * every SYNC_DAEMON_POLL_SECONDS: the API's kicks (Redis only). "Match my search" runs
   matching.match and the stages after it (flights, alerts, delivery), "refresh flights"
@@ -38,13 +41,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import SessionLocal, get_engine, utcnow
 from app.jobs.registry import JOB_SPECS, discover_flights_run, job_spec
 from app.jobs.runner import cpu_seconds, run_job
-from app.jobs.schedule import DailyAt, Every, JobEntry, build_schedule
+from app.jobs.schedule import DailyAt, Every, JobEntry, build_schedule, max_interval
+from app.models import BackgroundJobLog
+from app.models.enums import JobStatus
 from app.services.sync import state
 from app.services.sync.detect import plan_sync, refresh_known, settle_plan
 from app.services.sync.orchestrator import remember, run_sync
@@ -57,6 +63,10 @@ __all__ = ["SYNC_OWNED_TASKS", "SyncDaemon", "periodic_entries", "run_daemon"]
 START_RETRY_SECONDS = 60
 MIN_WAIT_SECONDS = 1.0
 ERROR_WAIT_SECONDS = 60.0
+# The start-up catch-up skips a job that started (with any result) this recently, or within
+# its own interval when that is shorter: a daemon in a restart loop does not ask a provider
+# (NOAA CO-OPS for the tides) again at every start.
+CATCH_UP_GUARD = timedelta(hours=1)
 
 
 # --------------------------------------------------------------------------- periodic jobs
@@ -130,6 +140,37 @@ class PeriodicJobs:
             if slots:
                 waits.append((slots[0] - now_wall).total_seconds())
         return max(0.0, min(waits)) if waits else float("inf")
+
+
+def overdue_entries(db: Session, entries: Iterable[JobEntry], now: datetime) -> list[JobEntry]:
+    """The entries to run once at start-up (one statement over the job logs): no success
+    within the entry's longest gap (app.jobs.schedule.max_interval: the interval, 24 h for a
+    job once a day), or none at all, and no run started within min(that gap,
+    CATCH_UP_GUARD). In the entries' order."""
+    entries = list(entries)
+    if not entries:
+        return []
+    log = BackgroundJobLog
+    rows = db.execute(
+        select(
+            log.job_name,
+            func.max(log.started_at).filter(log.status == JobStatus.SUCCESS),
+            func.max(log.started_at),
+        )
+        .where(log.job_name.in_(sorted({e.task for e in entries})))
+        .group_by(log.job_name)
+    ).all()
+    last = {str(name): (success, started) for name, success, started in rows}
+    out: list[JobEntry] = []
+    for entry in entries:
+        gap = max_interval(entry.schedule)
+        success, started = last.get(entry.task, (None, None))
+        if success is not None and now - success < gap:
+            continue
+        if started is not None and now - started < min(gap, CATCH_UP_GUARD):
+            continue
+        out.append(entry)
+    return out
 
 
 def periodic_entries(settings: Settings) -> list[JobEntry]:
@@ -213,7 +254,27 @@ class SyncDaemon:
         if previous is not None and same_month and previous.cpu_s_month is not None:
             carry = previous.cpu_s_month
         self.cpu = CpuMeter((now_wall.year, now_wall.month), carry=carry)
+        if self.settings.sync_daemon_catch_up:
+            self.catch_up()
         release_connections()
+
+    def catch_up(self) -> list[str]:
+        """Run, once and back to back, the periodic jobs that are overdue at start-up
+        (:func:`overdue_entries`), before the first check. A failing job is logged and the
+        daemon carries on; its timer stays as it was."""
+        assert self.jobs is not None
+        entries = [*(t.entry for t in self.jobs.timers), *self.jobs.daily]
+        with SessionLocal() as db:
+            due = overdue_entries(db, entries, self.wall())
+        names: list[str] = []
+        for entry in due:
+            if self.stop.is_set():
+                break
+            self._run(entry.task, job_spec(entry.task).run, chain=False)
+            names.append(entry.task)
+        if names:
+            logger.info("Start-up catch-up: %s", ", ".join(names))
+        return names
 
     # ---------------------------------------------------------------- one iteration
     def step(self) -> float:

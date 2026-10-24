@@ -422,6 +422,32 @@ def test_tide_stages_and_pruning(db: Session, tide_spots: list[str]) -> None:
     assert db.scalar(select(func.min(TidePrediction.valid_time))) >= cutoff
 
 
+def test_tides_never_acquired_are_flagged_after_the_grace(
+    db: Session, tide_spots: list[str]
+) -> None:
+    """Stations linked but never tried (no prediction, no error) are no problem right after
+    the catalog was loaded (the daily job is about to run: at the daemon's start-up
+    catch-up or Celery beat's start), and "tides_missing" (degraded) once
+    NEVER_ACQUIRED_GRACE has passed without a run storing or trying any."""
+    from app.core.database import utcnow
+    from app.services.tides.health import NEVER_ACQUIRED_GRACE
+
+    seed_tide_catalog(db)
+    loaded = utcnow()
+    assert tide_freshness(db, loaded + timedelta(minutes=30)) == []
+    late = {
+        p["key"]: (p["severity"], p["message"])
+        for p in tide_freshness(db, loaded + NEVER_ACQUIRED_GRACE + timedelta(minutes=5))
+    }
+    assert late["tides_missing:noaa_coops"] == (
+        "degraded",
+        "No tide predictions from NOAA CO-OPS have been acquired yet.",
+    )
+    acquire_tides(db, NOW, client=coops_transport([]), backoff_seconds=0)
+    after = tide_freshness(db, loaded + NEVER_ACQUIRED_GRACE + timedelta(minutes=5))
+    assert not [p for p in after if p["key"].startswith("tides_missing:")]
+
+
 def test_freshness_degrades_then_fails_as_predictions_run_out(
     db: Session, tide_spots: list[str]
 ) -> None:

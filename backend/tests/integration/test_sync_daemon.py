@@ -339,6 +339,86 @@ def test_every_jobs_start_one_interval_after_start_and_respect_the_floor() -> No
     assert [e.name for e in without_floor.due(120.0, T)] == ["delivery"]
 
 
+def test_a_timer_far_behind_restarts_instead_of_catching_up() -> None:
+    """An iteration delayed past several intervals (a long sync, a stalled start) runs the
+    job once and restarts its timer one interval later, never back to back."""
+    jobs = PeriodicJobs([JobEntry("health", "ops.data_health", Every(60))], start=0.0, start_wall=T)
+    assert [e.name for e in jobs.due(10800.0, T + timedelta(hours=3))] == ["health"]
+    assert jobs.due(10801.0, T + timedelta(hours=3, seconds=1)) == []
+    assert jobs.timers[0].next_due == 14400.0
+
+
+def _log(db: Session, job: str, status: str, started: datetime) -> None:
+    from app.models.enums import JobStatus
+
+    db.add(
+        BackgroundJobLog(
+            job_name=job,
+            status=JobStatus(status),
+            started_at=started,
+            finished_at=started + timedelta(seconds=5),
+        )
+    )
+    db.commit()
+
+
+def test_overdue_entries_are_the_jobs_without_a_success_within_their_gap(db: Session) -> None:
+    entries = [
+        JobEntry("tides", "tides.acquire", DailyAt((2,), 20)),
+        JobEntry("cleanup", "maintenance.cleanup", DailyAt((3,), 30)),
+        JobEntry("matching", "matching.match", Every(60)),
+        JobEntry("flights", "flights.discover", Every(60)),
+        JobEntry("alerts", "alerts.generate", Every(60)),
+    ]
+    now = T + timedelta(days=3)
+    _log(db, "maintenance.cleanup", "success", now - timedelta(hours=20))  # within 24 h
+    _log(db, "matching.match", "success", now - timedelta(hours=2))  # missed its hour
+    _log(db, "flights.discover", "success", now - timedelta(hours=2))
+    _log(db, "flights.discover", "failed", now - timedelta(minutes=10))  # just tried: guard
+    _log(db, "alerts.generate", "success", now - timedelta(minutes=30))
+    due = daemon_module.overdue_entries(db, entries, now)
+    assert [e.task for e in due] == ["tides.acquire", "matching.match"]  # never / overdue
+    # A tide run that failed 30 minutes ago is not retried at every restart (the guard).
+    _log(db, "tides.acquire", "failed", now - timedelta(minutes=30))
+    assert [e.task for e in daemon_module.overdue_entries(db, entries, now)] == ["matching.match"]
+    later = now + timedelta(minutes=31)
+    assert "tides.acquire" in {e.task for e in daemon_module.overdue_entries(db, entries, later)}
+    assert daemon_module.overdue_entries(db, [], now) == []
+
+
+def test_a_new_deployment_acquires_the_tides_at_start_not_at_the_next_0220(
+    db: Session, few_spots: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The daily tide job (02:20 UTC) runs once at start-up when it never succeeded, before
+    the first check; a restart soon after runs nothing again. The tide provider is not
+    contacted (the job body is a SYNTHETIC recorder)."""
+    from app.services.tides import ingest
+
+    calls: list[int] = []
+    monkeypatch.setattr(ingest, "acquire_tides", lambda db: calls.append(1) or {"stations": 0})
+    monkeypatch.setattr(get_settings(), "sync_daemon_catch_up", True)
+    monkeypatch.setattr(get_settings(), "job_interval_floor_minutes", 60)
+    daemon = SyncDaemon(get_settings())
+    daemon.start(init_db=False)
+    names = job_names(db)
+    assert calls == [1] and "tides.acquire" in names
+    assert "maintenance.cleanup" in names and "matching.match" in names
+    assert not set(names) & daemon_module.SYNC_OWNED_TASKS
+    assert get_engine().pool.checkedin() == 0  # start() left no idle connection open
+    daemon.step()  # the first check follows as before
+    assert daemon.last_plan is not None
+    again = SyncDaemon(get_settings())
+    again.start(init_db=False)  # a restart a moment later: everything succeeded just now
+    assert calls == [1]
+    assert job_names(db).count("tides.acquire") == 1
+    off = SyncDaemon(get_settings())
+    monkeypatch.setattr(get_settings(), "sync_daemon_catch_up", False)
+    db.execute(BackgroundJobLog.__table__.delete())
+    db.commit()
+    off.start(init_db=False)
+    assert calls == [1] and job_names(db) == []
+
+
 def test_the_daemon_never_schedules_the_syncs_own_jobs() -> None:
     tasks = {e.task for e in periodic_entries(get_settings())}
     assert tasks and not tasks & daemon_module.SYNC_OWNED_TASKS

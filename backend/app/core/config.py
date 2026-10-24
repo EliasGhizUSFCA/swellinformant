@@ -147,6 +147,10 @@ class Settings(BaseSettings):
     sync_daemon_poll_seconds: int = Field(default=60, ge=10, le=600)
     # The daemon migrates, seeds and loads the tide catalog when it starts (idempotent).
     sync_daemon_init_db: bool = True
+    # At start the daemon runs, once, every periodic job that has not succeeded within its
+    # longest gap (or never): a new deployment gets tide predictions at once instead of at
+    # the next 02:20 UTC, and frequent restarts never starve the hourly jobs.
+    sync_daemon_catch_up: bool = True
     # Monthly CPU budget of the sync runner in hours (e.g. 10 = Vercel Hobby's daemon
     # quota); health warns near it. None = no budget.
     sync_cpu_budget_hours: float | None = Field(default=None, gt=0)
