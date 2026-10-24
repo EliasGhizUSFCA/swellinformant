@@ -60,17 +60,19 @@ Code:
 | `particlePane` (225) | wind particles | Wind layer, or a wave layer with the wind overlay |
 | `basemapPane` (230) | Natural Earth land, coastline, borders, isobars, labels | dark basemap draws land |
 
-* **Dark basemap, wave layers**: land is opaque mid grey (`LAND_COLOR = #737376`, L* 48.5,
-  neutral), drawn above the colour field and the dashes, so it also masks them at the coast.
+* **Dark basemap, wave layers**: land is opaque mid grey (`LAND_COLOR = #808080`, L* 53.6,
+  neutral: the owner's reference's land, sampled at every land point of the screenshot),
+  drawn above the colour field and the dashes, so it also masks them at the coast.
   The coastline is the land rings stroked dark, `rgba(24, 24, 28, 0.8)` at 1 px
   (`COASTLINE_COLOR`, `COASTLINE_WIDTH_PX`), and country borders are a faint dark line
   (`BORDER_COLOR = rgba(30, 30, 34, 0.35)`, 0.7 px). The grey has no hue, so the land never
-  reads as sea; it is lighter than seas up to about 3.5 m (L* 12 to 45) and darker than
-  bigger ones. Country and city labels are near-white (`#e8e8e8`, `#f4f4f4`) on a dark halo
+  reads as sea; it is lighter than seas up to about 5.5 m (L* 12 to 51.5 up to 5 m) and
+  darker than bigger ones. Country and city labels are near-white (`#e8e8e8`, `#f4f4f4`) on a dark halo
   (`rgba(0, 0, 0, 0.6)`, 3 px), and the city dot (`#ededed`) has a thin dark ring, so they
   stay legible on the grey land and on the sea. (Upgrade 4 first drew #3a3a3c land with a
-  light coastline; the reference has mid-grey land outlined dark.)
-* **Dark basemap, Wind layer**: land is translucent (`rgba(115, 115, 118, 0.55)`, `LAND_ALPHA =
+  light coastline, then #737376, L* 48.5, darker than the reference side by side; the
+  reference has #808080 land outlined dark.)
+* **Dark basemap, Wind layer**: land is translucent (`rgba(128, 128, 128, 0.55)`, `LAND_ALPHA =
   0.55`), so the wind colour and particles over land stay visible (offshore flow at a coast
   matters for surf). Borders, isobars and labels are unchanged.
 * **Streets basemap**: no land is drawn over the tiles, so the wave colour field is cut at the

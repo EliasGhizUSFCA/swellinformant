@@ -91,8 +91,8 @@ export async function chooseWaveSystems(page: Page, systems: string[]) {
   }, systems);
 }
 
-/** The dark basemap's land colour (components/map/basemap-draw.ts LAND_COLOR #737376), RGB. */
-export const LAND_RGB = [0x73, 0x73, 0x76] as const;
+/** The dark basemap's land colour (components/map/basemap-draw.ts LAND_COLOR #808080), RGB. */
+export const LAND_RGB = [0x80, 0x80, 0x80] as const;
 
 export const field = (page: Page) => page.locator("canvas.map-field-canvas");
 export const painted = async (page: Page) => Number((await field(page).getAttribute("data-painted")) ?? 0);

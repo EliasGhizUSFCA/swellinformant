@@ -364,7 +364,7 @@ test.describe("ocean layers (synthetic fields)", () => {
     });
     expect(stats.opaque).toBeGreaterThan(0.5);
     expect(stats.colours).toBeGreaterThan(40);
-    // The South Pacific shows the field; inland Western Australia shows the grey land (#737376)
+    // The South Pacific shows the field; inland Western Australia shows the grey land (#808080)
     // drawn over it (the synthetic field has values everywhere, the land masks them).
     const lp = await screenPoint(page, -27, 121);
     const land = await pixels(page, lp.x, lp.y);

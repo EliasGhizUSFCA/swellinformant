@@ -41,14 +41,15 @@ export interface BasemapDrawOptions {
 }
 
 /**
- * Land on the dark basemap: a neutral mid grey (L* 48), lighter than the ocean colours of
- * small and typical seas (L* 12 to 45 up to 3 m) and without their hue, so land never reads
- * as sea. (Upgrade 4 first drew #3a3a3c; the owner's reference has mid-grey land.)
+ * Land on the dark basemap: the owner's reference's flat mid grey #808080 (L* 53.6, sampled at
+ * every land point of the screenshot), lighter than the ocean colours of seas up to about
+ * 5.5 m (L* 12 to 51.5 up to 5 m) and without their hue, so land never reads as sea. (Upgrade 4
+ * first drew #3a3a3c, then #737376, L* 48.5: darker than the reference side by side.)
  */
-export const LAND_COLOR = "#737376";
+export const LAND_COLOR = "#808080";
 /** Land opacity with `translucentLand`: the wind colour and particles show through, dimmed. */
 export const LAND_ALPHA = 0.55;
-const TRANSLUCENT_LAND = `rgba(115, 115, 118, ${LAND_ALPHA})`;
+const TRANSLUCENT_LAND = `rgba(128, 128, 128, ${LAND_ALPHA})`;
 /** The coastline drawn along the land's edge on the dark basemap: a dark line, as in the reference. */
 export const COASTLINE_COLOR = "rgba(24, 24, 28, 0.8)";
 export const COASTLINE_WIDTH_PX = 1;

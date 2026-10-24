@@ -46,7 +46,7 @@ describe("basemap redraw", () => {
     const opaque = counting();
     drawBasemap(opaque.ctx, view, { geometry, vector: true, isobars: null, cities: null, zoom: 2 });
     expect(opaque.fills[0]).toBe(LAND_COLOR);
-    expect(LAND_COLOR).toBe("#737376");
+    expect(LAND_COLOR).toBe("#808080"); // the reference's land, sampled
     // The coastline: the land rings stroked right after the land fill, darker than the land.
     expect(opaque.strokes[0]).toEqual({ style: "rgba(24, 24, 28, 0.8)", width: 1 });
     expect([COASTLINE_COLOR, COASTLINE_WIDTH_PX]).toEqual(["rgba(24, 24, 28, 0.8)", 1]);
@@ -54,7 +54,7 @@ describe("basemap redraw", () => {
     expect(opaque.strokes[1]).toEqual({ style: BORDER_COLOR, width: 0.7 });
     const wind = counting();
     drawBasemap(wind.ctx, view, { geometry, vector: true, isobars: null, cities: null, zoom: 2, translucentLand: true });
-    const m = /^rgba\(115, 115, 118, ([\d.]+)\)$/.exec(wind.fills[0]!); // LAND_COLOR #737376, translucent
+    const m = /^rgba\(128, 128, 128, ([\d.]+)\)$/.exec(wind.fills[0]!); // LAND_COLOR #808080, translucent
     expect(m).not.toBeNull();
     expect(Number(m![1])).toBe(LAND_ALPHA);
     expect(Math.round(Number(m![1]) * 255)).toBeLessThan(255);

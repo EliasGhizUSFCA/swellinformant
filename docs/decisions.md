@@ -612,8 +612,8 @@ gradient quad (not white strokes with a halo); secondary swell split amber bars,
 short cyan blobs. Cells 12 px (combined, primary), 13 (secondary), 18 (wind sea), not
 26/34/30; length clamp(6 + 0.8 Hs, 6.5, 10) px, not up to 22. The vertex budget became a
 device-adaptive quad budget (1,500-7,000 a frame, median target 2.5 ms; at most 8,000
-dashes, 3,000 on phones). Land on the dark basemap is mid grey #737376 with a dark
-coastline (proposed #3a3a3c with a light one). Kept: the lattice, spacing clamp(0.12 px/m ×
+dashes, 3,000 on phones). Land on the dark basemap is the reference's mid grey #808080 with a
+dark coastline (proposed #3a3a3c with a light one; #737376 until the final review). Kept: the lattice, spacing clamp(0.12 px/m ×
 L, 8, 64), τ = 4, a life of 3 crest passages, the combined-sea default, `swell.map.settings.v2`.
 Measured (headless Chromium, software rendering): e2e draw p95 2.8 ms (round 1), 3.1 and
 3.4 ms (2026-10-23), within D11's 5 ms; ink per dash at 4 m 2.25× that at 1 m; density 2.73-
