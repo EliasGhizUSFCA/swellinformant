@@ -912,23 +912,25 @@ code (no third-party map code, icons or palettes).
 is one blob, a lighter tint of the colour under it, with a crisp leading edge on the crest
 line and a short smear behind it (the smear and the fading in and out are display choices).
 By default they show the **combined sea** ("Combined sea (peak)", closest to the reference);
-the primary swell, secondary swell and wind sea are chosen in **Settings** when the model run
-has them, told apart by shape and colour (light tinted blobs, split amber bars, short cyan
-blobs), and a system the run lacks is disabled in the chooser. The physics is kept and
-stated: deep water, L = gT²/(2π); dashes lie on crest lines one crest spacing apart and move
-with them at the phase speed. **Stated exaggeration**: the spacing is 0.12 px per metre of
-wavelength (12 px at 8 s, 48 px at 16 s, clamped to 8-64 px), so it is exaggerated by
-E = 0.12 × metres per pixel (about 4,700× at zoom 2 at the equator, 73× at zoom 8), and time
-runs 4× faster than real; the legend prints E for the current view. Bigger seas draw longer,
-brighter dashes; nothing is drawn under 0.2 m, and dashes stop at the coast on both
-basemaps. One dash per 12 px cell (13 for the secondary swell, 18 for the wind sea) keeps
-the density the same at every zoom, and a draw budget that adapts to the device (up to
-7,000 dashes a frame, at least 1,500) holds the median frame near 2.5 ms (the e2e draw p95
-was 3.1 and 3.4 ms on 2026-10-23). With reduced motion one still frame is drawn, with
-arrowheads. Text and readouts give directions FROM; the dashes travel TO (a swell from the
-SW moves NE). The map's display settings are kept in the browser under the key
-`swell.map.settings.v2`: settings saved under v1 carry over (layer, units, basemap,
-animation, overlays) except the wave systems, which reset to the combined sea.
+the primary swell, secondary swell and wind sea are chosen in **Settings** when the model
+run has them, told apart by shape and colour (light tinted blobs, split amber bars, short
+cyan blobs), and a system the run lacks is disabled in the chooser. The physics is kept and
+stated: deep water, L = gT²/(2π); each dash is born on a crest line and moves with it at the
+phase speed, so in an even swell the dashes line up in rows one crest spacing apart (in real
+model fields, where period and direction vary, they sit at random phases, as in the
+reference). **Stated exaggeration**: the spacing is 0.12 px per metre of wavelength (12 px
+at 8 s, 48 px at 16 s, clamped to 8-64 px), so it is exaggerated by E = 0.12 × metres per
+pixel (about 4,700× at zoom 2 at the equator, 73× at zoom 8), and time runs 4× faster than
+real; the legend prints E for the current view. Bigger seas draw longer, brighter dashes;
+nothing is drawn under 0.2 m, and dashes stop at the coast on both basemaps. One dash per 12
+px cell (13 for the secondary swell, 18 for the wind sea) keeps the density the same at
+every zoom, and a draw budget that adapts to the device (up to 7,000 dashes a frame, at
+least 1,500) holds the median frame near 2.5 ms (the e2e draw p95 was 3.1 and 3.4 ms on
+2026-10-23). With reduced motion one still frame is drawn, with arrowheads. Text and
+readouts give directions FROM; the dashes travel TO (a swell from the SW moves NE). The
+map's display settings are kept in the browser under the key `swell.map.settings.v2`:
+settings saved under v1 carry over (layer, units, basemap, animation, overlays) except the
+wave systems, which reset to the combined sea.
 
 **Navigation bounds.** Latitude stays inside 84°N–78.5°S with a hard edge (the wave grid's
 extent), so a drag never shows blank rows; the minimum zoom is one world width for the
