@@ -817,8 +817,15 @@ GEFS statistics, 9 map hours) or the demo provider, with the app's clock frozen
   `/api/events` are computed for the start of the current UTC hour, at most once per
   key `public:v1:<epoch>:<marker>:<YYYYmmddTHH>:<route>[:<sha256 of the params, 24 hex>]`,
   stored zlib-compressed for 2 hours (`PAYLOAD_TTL_SECONDS`) and kept in each
-  process's memo (up to 32 MB). `marker` is the sync's (`note_published`, 24 h TTL) or,
-  without one, derived from the database in one small statement; while a sync's marker
+  process's memo (up to 32 MB). `public:v1` is production's namespace (VERCEL_ENV
+  `production` or unset: the API, the daemon, the runner, the local stacks); a preview or
+  development deployment uses `public:v1:<env>:<digest of the deployment>`, so production
+  never serves what another deployment's code or database computed (before the final
+  review a preview on the shared Redis could fill production's keys). `marker` is the
+  sync's (`note_published`; no expiry since the final review: it is replaced at every
+  publication, and the hour in each key bounds every payload, so a pause in the syncs no
+  longer sends every request to the database marker) or, without one, derived from the
+  database in one small statement; while a sync's marker
   is stored, a change made outside a sync (the development endpoints, a CLI pipeline or
   rescore) shows from the next hour. `prewarm` computes the spot list and the conditions
   now for the hour (the sync can call it after the hook; with Redis unavailable it reads
@@ -826,9 +833,15 @@ GEFS statistics, 9 map hours) or the demo provider, with the app's clock frozen
   a key takes its lock (`SET NX EX 60`); concurrent ones poll for its result (about
   6.4 s at most, then compute unstored). Redis down: every request computes directly
   and Redis is not asked again for 30 s. A spot page's forecast and timeline read the
-  same hours and are computed together under one lock (`Together`). `?at=` is cached
-  only for a whole UTC hour within 2 days before and 17 days after now (the map's
-  steps); any other value is computed as before, unstored. The bodies are the ones
+  same hours and are computed together under one lock (`Together`). `?at=` is read as its
+  UTC hour (no offset: UTC), clamped to 2 days before and 17 days after the current hour
+  (`map_time`; the answer is the one the time itself gets, since `map_snapshot` answers
+  whole hours and clamps to the forecast range, which lies inside), so every value is
+  served from one of a bounded set of keys; before the final review any other value was
+  computed from the database on every request, a way to use up the egress. Every request
+  that misses the cache counts against its client IP: more than
+  `PUBLIC_CACHE_MISS_LIMIT_PER_HOUR` (120) misses an hour answer 429, never cached
+  (RATE_LIMIT_ENABLED; 1-2 Upstash commands per miss). The bodies are the ones
   FastAPI's response models give (tested byte for byte; 156 responses at 4 in-hour
   times equal the base commit's at the hour starts).
 * **CDN windows**: every public GET and the map-field index send `Cache-Control:
@@ -988,7 +1001,8 @@ passes use `--no-acquire`; the demo pass's acquisition read 0.61 MB), nor the `m
 API's rate limiter. The traffic of the page rows is an example. The page views were made
 with FastAPI's TestClient in one process, without Vercel's CDN; how often the CDN answers
 instead of the API is not measured here. A signed-in visitor's own requests (`/api/auth/me`
-and the user-specific routes, `no-store`) were not measured. TLS to the local Postgres is
+and the user-specific routes, `no-store`) were not measured in this round; the final review
+measured them (below, round 2). TLS to the local Postgres is
 counted as Neon's would be, but Neon's own protocol overhead may differ.
 
 ### Free database budget: round 2 of the egress integration (2026-10-23)
@@ -1131,35 +1145,60 @@ checks and kick polls use only Redis, docs/sync.md); wakes never overlap (an upp
 | Pages "quiet": the keys of 4 hours a day (computed in under 0.5 s here) | 120 | about 5.0 min | 10.0 | 2.5 |
 | Pages "steady": the keys of every hour and after each publication | 780 | about 5.0 min | 65.0 | 16.3 |
 
-Background and "steady" visitors: at most about 37 CU-hours a month. Not counted, and able
-to keep the compute awake all month (720 h × 0.25 CU = 180 CU-hours) if they reach the
-database at least every 5 minutes: signed-in visitors (each request reads the session),
-`/api/health/data` on the status page (shared by the CDN for 60 s), and visitor-chosen URLs
-the CDN has not cached (unknown spots, arbitrary `?at=` times). Neon's autoscaling up to
-2 CU, if turned on, multiplies only the active minutes it scales.
+Background and "steady" anonymous visitors: at most about 37 CU-hours a month. Not counted,
+and able to keep the compute awake all month (720 h × 0.25 CU = 180 CU-hours) if they reach
+the database at least every 5 minutes:
+
+* signed-in visitors, measured at the final review (a clone of the live run, one process):
+  every signed-in page view runs `/api/auth/me` (5 SELECTs, 3.2 kB), a dashboard view
+  about 27 statements (23-53 kB), a spot page 13. Until the final review an open dashboard
+  re-read `/api/opportunities` (no-store, 5 SELECTs) every 60 s, so one visible dashboard
+  kept the compute awake (0.25 CU-h an hour); it now reads on mount and on focus.
+* `/api/health/data` on the status page (shared by the CDN for 60 s, 37 statements): an
+  open `/status` tab re-read it every 5 minutes, Neon's suspend delay; it now re-reads on
+  focus, and every minute only while a sync runs.
+* uptime monitors on `/api/health/ready` or `/api/health/data?strict=true`: every 15
+  minutes about 45-60 CU-hours a month (the 5 active minutes of each wake, a quarter of
+  them merged with the hourly batch); hourly at most about 15. `/api/health` and `/` do not
+  reach the database.
+* visitor-chosen URLs the CDN has not cached (unknown spots, other `?at=` times). Each key
+  reaches the database once an hour; deliberate misses could use up the 5 GB of egress,
+  after which Neon suspends the compute until the next billing period (one conditions
+  computation sends about 358 kB: about 14,000 such requests). Since the final review every
+  `?at=` maps to one of a bounded set of keys and a client IP gets at most 120 misses an
+  hour (above); many clients together could still do it.
+
+Neon's autoscaling up to 2 CU, if turned on, multiplies only the active minutes it scales.
 
 **Upstash Free (500K commands, 10 GB bandwidth, 250 MB data).** Commands per page view,
 measured: home 3 (warm instance) / 6 (new instance) / 16 (cold), map 5 / 10 / 26, spot
 page 5 / 10 / 23 (the status and the index now count one each). The daemon: about 13,000
-for checks and 43,200 for kick polls (docs/sync.md), 2 per job lock (SET NX, EVAL):
-8,640 for the hourly jobs, 1,440 for data health's own, 1,440 for the stages of 60 syncs,
-120 for the daily jobs, and 120 for the hook: about 68,000 a month. "Steady" (1,000 views a
-day, a third each, every request reaching the API on a new instance): 260,000, plus about
-47,500 for the keys computed (12 an hour, about 5.5 each): about 375,000 a month (75 %).
-"Quiet": about 100,000. Bandwidth: at most about 51.6 kB a view on a new instance (1.55
-GB a month at 1,000 views a day) plus about 0.19 GB of stored payloads; data: about 265 kB
-of payloads an hour, kept 2 hours.
+for checks and 43,200 for kick polls (docs/sync.md), and 4 per job run (the job lock's SET
+NX and EVAL, and the CPU counter's INCRBYFLOAT and EXPIRE, which `run_job` records after
+every job that is not nested in another; data health adds 3 of its own): 19,440 for the
+hourly batch (27 an hour, measured), about 2,760 for 60 syncs (about 46 each with the map
+stage and the hook; 42 measured for a 10-stage sync), 240 for the daily jobs: about 79,000
+a month (corrected at the final review: this count first had 2 per job, about 68,000).
+"Steady" (1,000 views a day, a third each, every request reaching the API on a new
+instance): 260,000, plus about 47,500 for the keys computed (12 an hour, about 5.5 each):
+about 386,000 a month (77 %). The per-visitor miss limit of the final review adds at most 2
+commands per computed key (INCR, and EXPIRE at a client's first miss of the hour): at most
+about 17,000 a month at 12 keys an hour, about 403,000 in all (81 %). "Quiet": about
+111,000. Bandwidth: at most about 51.6 kB a view on a new instance (1.55 GB a month at 1,000
+views a day) plus about 0.19 GB of stored payloads; data: about 265 kB of payloads an hour,
+kept 2 hours.
 
 **How to reproduce** (as above, plus): `python full_dump.py` and `compare_dumps.py` of
 the identity check and `daily_egress.py` (init-db and tides) are scratch tools of this
 round, kept with its results outside the repository; the measurements are the
 `measure_db_egress.py` commands above with `--backend-dir` for the base.
 
-**Limitations.** As above: the map stage's own reads, acquisition on live data and signed-in
-visitors were not measured; page traffic is an example; TestClient in one process stood in
-for Vercel's CDN, Neon and Upstash. The freshness of the new cadence is estimated from the
-measured publication lags and was not observed on a live stack. The CU-hour rows are
-arithmetic on stated assumptions; sync durations are this sandbox's (local Postgres).
+**Limitations.** As above: the map stage's own reads and acquisition on live data were not
+measured (signed-in visitors were measured at the final review, above); page traffic is an
+example; TestClient in one process stood in for Vercel's CDN, Neon and Upstash. The
+freshness of the new cadence is estimated from the measured publication lags and was not
+observed on a live stack. The CU-hour rows are arithmetic on stated assumptions; sync
+durations are this sandbox's (local Postgres).
 
 ## Earlier measurements (before the forecast upgrade)
 

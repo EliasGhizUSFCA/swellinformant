@@ -82,10 +82,15 @@ stays asleep between syncs.
 Still on timers, and why:
 
 * **Tides** (`tides.acquire`, daily 02:20 UTC): tide predictions change slowly; one request
-  (or local computation) per station a day. A brand-new deployment under the daemon gets
-  its first tide predictions at the first 02:20 UTC after start (up to about 24 h; the
-  daemon runs daily jobs by the clock, never at start-up), and data health does not flag
-  that; Celery's beat runs the job once at start (`BEAT_RUN_ON_START`).
+  (or local computation) per station a day. At start the daemon runs, once, every periodic
+  job that has not succeeded within its longest gap (24 h for a daily job) or never has
+  (`SYNC_DAEMON_CATCH_UP`, default true), after init-db and before the first check, so a
+  brand-new deployment gets its tide predictions within minutes, not at the next 02:20 UTC.
+  A job that started in the last hour (or its own interval, when shorter) is skipped, so a
+  restart loop does not ask NOAA CO-OPS again at every start. Celery's beat runs the job
+  once at start (`BEAT_RUN_ON_START`). Data health flags a tide provider none of whose
+  linked stations was ever tried 3 h after the tide catalog was loaded
+  (`tides_missing:<provider>`).
 * **Observations and verification**, when `OBSERVATIONS_ENABLED` / `VERIFICATION_ENABLED`:
   buoys report all the time (hourly ingest); the verification jobs pair forecasts with
   them (00:50/06:50/12:50/18:50 and 04:10 UTC).
@@ -103,12 +108,12 @@ Still on timers, and why:
 |---|---|---|
 | Process | one `python -m app.cli sync daemon` | a worker (`celery`, `bulk` queues) and exactly one beat |
 | Model-run check | its own, every `SYNC_CHECK_MINUTES`, from Redis and the providers only | beat's `sync.tick` (bulk queue, 60 min time limit), which plans with the database |
-| Periodic jobs | in-memory timers starting one interval after the daemon, batched hourly when floored; daily jobs by the UTC clock | beat entries, also once at beat start |
+| Periodic jobs | in-memory timers starting one interval after the daemon, batched hourly when floored; daily jobs by the UTC clock; at start, once, the jobs without a success within their longest gap (`SYNC_DAEMON_CATCH_UP`) | beat entries, also once at beat start |
 | "Match my search", "refresh flights" | the API writes a Redis kick flag; the daemon picks it up within `SYNC_DAEMON_POLL_SECONDS` (60) | queued Celery tasks |
 | Account emails, SMS | sent inline by the API (3 attempts, 0.5 s and 1.5 s apart) | queued; inline when the broker does not answer within 2 s |
 | Liveness | Redis heartbeat at every check (`sync_heartbeat_stale`) | the newest finished job (`jobs_not_running`) |
 | Lease when unset | `SYNC_LEASE_MINUTES` 15 | 45 |
-| At start | `init-db` (migrate, seed, tide catalog), then the known runs | beat queues `sync.tick` and `tides.acquire` |
+| At start | `init-db` (migrate, seed, tide catalog), the known runs, then the overdue periodic jobs (the start-up catch-up) | beat queues `sync.tick` and `tides.acquire` |
 
 Run either the daemon or worker and beat, never both against one database.
 
@@ -221,19 +226,21 @@ else `ok`, and `reasons` lists one plain sentence per problem, the most severe f
 limits are operational heuristics (how late data may be before someone should look),
 not statements about forecast accuracy.
 
-**Public on purpose.** The report holds operational metadata only: run keys, ages,
-limits, job states and sentences written by the service. No personal data, no settings
-values beyond the limits, and no raw error text (a failed job's redacted error appears
-in the admin email only). It must be readable without credentials because the most
-important failure, a dead worker, cannot report itself. It is rate limited (60 requests
-per minute per IP). Since Upgrade 4 the plain report is shared by the CDN for 60 s
-(`Cache-Control: public, max-age=0`, `CDN-Cache-Control: public, s-maxage=60`), so every
-visitor of `/status` reads at most one report a minute; with `?strict=true` it is never
-cached (`no-store`) and the API answers 503 instead of 200 when the status is `failing`, for
-monitors that only look at status codes. The status page (`/status`) shows the same report,
-with a sync section: the runner, the daemon's last check, the newest and the newest
-published sync with their stages, each component's state (current, new, waiting,
-in_progress, failed, unknown, disabled) and the CPU meter.
+**Public on purpose.** The report holds operational metadata only: run keys, ages, limits,
+job states and sentences written by the service. No personal data, no settings values beyond
+the limits, and no raw error text (a failed job's redacted error appears in the admin email
+only). It must be readable without credentials because the most important failure, a dead
+worker, cannot report itself. It is rate limited (60 requests per minute per IP). Since
+Upgrade 4 the plain report is shared by the CDN for 60 s (`Cache-Control: public,
+max-age=0`, `CDN-Cache-Control: public, s-maxage=60`), so every visitor of `/status` reads
+at most one report a minute; with `?strict=true` it is never cached (`no-store`) and the API
+answers 503 instead of 200 when the status is `failing`, for monitors that only look at
+status codes. The status page (`/status`) shows the same report (an open tab re-reads it
+when it regains focus, and every minute only while a sync runs or under Celery: before the
+final review it re-read every 5 minutes under the daemon, which kept Neon awake as long as a
+`/status` tab stayed visible), with a sync section: the runner, the daemon's last check, the
+newest and the newest published sync with their stages, each component's state (current,
+new, waiting, in_progress, failed, unknown, disabled) and the CPU meter.
 
 **Problem keys** (the `problems` of the report and the subject of the admin emails), and
 what to do:
@@ -250,7 +257,7 @@ what to do:
 | `sync_failed` | degraded | the last two syncs failed; the email has the error | `python -m app.cli sync status`, then the provider's runbook |
 | `sync_cpu_budget` | degraded | above 80 % of `SYNC_CPU_BUDGET_HOURS` this month | "Daemon quota reached" |
 | `licence` | failing | commercial use with the free Open-Meteo API | set `OPEN_METEO_API_KEY`, or `COMMERCIAL_USE=false` if the site is not commercial |
-| `tides_stale:<provider>`, `tides_constants:harmonic_model` | degraded | no future tide predictions; the model's constants file unreadable | check outbound access to `api.tidesandcurrents.noaa.gov`; run `python -m app.cli tides acquire` |
+| `tides_stale:<provider>`, `tides_missing:<provider>`, `tides_constants:harmonic_model` | degraded | no future tide predictions; none ever acquired 3 h after the tide catalog was loaded; the model's constants file unreadable | check outbound access to `api.tidesandcurrents.noaa.gov`; run `python -m app.cli tides acquire` |
 | `observations_missing:<provider>`, `observations_stale:<provider>` | degraded | a buoy provider has no recent observation | the provider's status; `python -m app.cli obs ingest` |
 | `database_size` | degraded | above `DATA_HEALTH_DATABASE_MAX_GB` (0.85 on Neon Free) | "Database or disk full"; on Neon Free, "Neon suspended" |
 | `redis_unavailable`, `redis_memory`, `redis_eviction_policy` | degraded | Redis not answering, near its cap, or evicting | "Redis memory high" |
@@ -317,9 +324,11 @@ makes the same call to the local stack):
 curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily
 ```
 
-Do not point an uptime monitor at `/api/health/ready` more often than every 15 minutes on
-Neon Free: every request that reaches the database wakes its compute (section "Budgets and
-meters").
+Point an uptime monitor at `/api/health` (the API without the database) or at `/`, at any
+rate. `/api/health/ready` and `/api/health/data?strict=true` wake Neon on every hit: every 15
+minutes costs about 45-60 CU-hours a month (on top of about 20 in the background); hourly
+costs at most about 15. On Neon Free, rely on the daily watchdog for the database (section
+"Budgets and meters").
 
 ### Budgets and meters (hosted, free plans)
 
@@ -333,15 +342,23 @@ runs in docs/sync.md; monthly figures are arithmetic on them; none was measured 
 | Daemon Active CPU (Vercel Hobby) | 10 CPU-hours a month; when used up "Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro" | estimated 4.4-7.9 CPU-hours a month when every new model run is synced (docs/sync.md, "Monthly CPU estimate"; the map layers are more than half of it); the free-database cadence syncs about 60 times a month instead of about 180 (not measured). Measured in the local stack on 2026-10-23: a sync of the 9-hour map layers 38.6 s and 30.9 CPU s (Open-Meteo refused the spots), a sync of the GFS spot forecasts 58.9 s and 10.5 CPU s; an idle daemon used 1.35-2.1 CPU s an hour (docs/sync.md) | `/status` CPU meter and `sync_cpu_budget` at 80 % of `SYNC_CPU_BUDGET_HOURS` (10); the daemon's usage charts on Vercel |
 | Function Active CPU (Vercel Hobby) | 4 CPU-hours a month | not measured | Vercel Usage |
 | Neon egress (bytes the database sends) | 5 GB a month | background 2.01 GB a month with the free-database profile (40 %): 60 syncs × 21.28 MB + 720 hourly batches × 0.87 MB + daily jobs and start-ups; a quiet site adds about 0.40 GB (2.41 GB in all); steady traffic (1,000 views a day) would need 5.37 GB | Neon console (usage); `scripts/measure_db_egress.py` to re-measure a change |
-| Neon compute | 100 CU-hours a month; scale to zero after 5 idle minutes | about 20 CU-hours a month in the background, at most about 37 with steady visitors (assumptions: 0.25 CU, active until 5 min after a wake's last statement). Anything that reaches the database at least every 5 minutes keeps it awake all month: 720 h × 0.25 CU = 180 CU-hours | Neon console |
+| Neon compute | 100 CU-hours a month; scale to zero after 5 idle minutes | about 20 CU-hours a month in the background, at most about 37 with steady anonymous visitors (assumptions: 0.25 CU, active until 5 min after a wake's last statement). Signed-in visitors are not in that figure: every signed-in page view reads the database (measured below). Anything that reaches the database at least every 5 minutes keeps it awake all month: 720 h × 0.25 CU = 180 CU-hours | Neon console |
 | Neon storage | 1 GB | the map layers of the two retained runs are about 142 MB with partitions (14 %); the free-database retention keeps about 1 day of forecasts and 7 days of archive | `database_size` at `DATA_HEALTH_DATABASE_MAX_GB` (0.85) |
-| Upstash commands | 500K a month | about 68,000 a month from the daemon (checks about 13,000, kick polls 43,200, job locks, data health, sync stages); about 100,000 with a quiet site, about 375,000 (75 %) with steady visitors | Vercel Storage, Upstash console; `scripts/vercel-local.sh status` counts the local stack's commands |
+| Upstash commands | 500K a month | about 79,000 a month from the daemon (checks about 13,000, kick polls 43,200, the hourly batch 19,440: 4 commands per job run, the job lock and the CPU counter, 7 for data health; 60 syncs about 2,760; daily jobs 240); about 111,000 with a quiet site, about 386,000 (77 %) with steady visitors, plus 1-2 commands per public cache miss for the per-visitor miss limit (at most about 17,000 a month with steady visitors, 12 computed keys an hour: about 403,000, 81 %, in all) | Vercel Storage, Upstash console; `scripts/vercel-local.sh status` counts the local stack's commands |
 | Upstash data | 250 MB | about 265 kB of cached public payloads an hour, kept 2 hours; no provider response cache (`PROVIDER_RESPONSE_CACHE_ENABLED=false`) | `redis_memory` |
 | Open-Meteo calls | 10,000 a day per IP address | about 534 weighted calls a day with the free-database cadence (computed from the measured calls per run) | `python -m app.cli engine budget` |
 
-Not measured and able to break the Neon budget: signed-in visitors (each request reads the
-session), `/api/health/data` (shared by the CDN for 60 s) and visitor-chosen URLs the CDN
-has not cached.
+Signed-in visitors, measured at the final review (a clone of the live run, one process):
+every signed-in page view runs `/api/auth/me` (5 SELECTs, 3.2 kB); a dashboard view about
+27 statements (23-53 kB), a spot page 13. Every such view wakes Neon, so signed-in traffic
+costs compute in proportion to the hours it spans, not covered by the 37 CU-hours above. Open
+tabs no longer poll the database: the dashboard reads the opportunities on mount and on
+focus, and `/status` (`/api/health/data`, 37 statements, shared by the CDN for 60 s) on
+focus and while a sync runs. Visitor-chosen URLs the CDN has not cached still reach the
+database once per key and hour: every map time is answered from its UTC hour within the
+cached window, and a client IP gets at most `PUBLIC_CACHE_MISS_LIMIT_PER_HOUR` (120) misses
+an hour, then 429, so one client cannot use up Neon Free's 5 GB of egress (Neon then
+suspends the compute for the rest of the month). Many clients together still can.
 
 ### Logs and job history
 
@@ -485,10 +502,19 @@ same database and Redis) prints the plan: `current` (stored), `new` (a sync is d
    Open-Meteo publishes a domain late; if NOAA's map layers cannot be acquired, no sync
    runs at all (estimated from the measured lags, docs/map-layers.md "Free database
    budget"). That is the price of the free database, not a fault.
-5. To sync now, from any machine with the sync install: `python -m app.cli sync run`
-   (whatever is newer) or `sync run --force` (every stage; runs already stored are still
-   skipped). Exit 3 means the daemon holds the lease right now: wait and try again. On
-   GitHub: the manual "Data sync (manual)" workflow (docs/deploy-vercel.md section 8).
+5. To sync production now, use the manual GitHub workflow "Data sync (manual)"
+   (docs/deploy-vercel.md section 8): it applies the hosted profile, `APP_ENV=production`
+   and `DB_USE_UNPOOLED=true` itself. `force` runs every stage (runs already stored are
+   still skipped); a run that reports the lease busy means the daemon is syncing right now:
+   wait and run it again. A run from your own machine (from `backend/` with the dev venv of
+   README E.3, which has the `sync` extra the map layers need: `python -m app.cli sync run`,
+   or `sync run --force`) only with the Production environment loaded: the hosted-profile
+   block of docs/deploy-vercel.md step 5, your Production variables (`APP_ENV=production`,
+   `SECRET_KEY`, a real `EMAIL_PROVIDER`, `APP_BASE_URL`) and `DB_USE_UNPOOLED=true`. Never
+   with only `DATABASE_URL`: the defaults are synthetic demo forecasts and console email,
+   and the sync would publish them to the live site. First run `python -m app.cli sync
+   check` and confirm the components name `open_meteo` / `open_meteo_ecmwf`, not `demo`.
+   Exit 3 means the daemon holds the lease: wait and try again.
 
 ### Daemon quota reached (Vercel Hobby)
 
@@ -498,13 +524,20 @@ stops the team's daemons until the first of the next month (UTC) or until the te
 upgrades to Pro." The site keeps serving the last published data; the daily watchdog emails
 the admins.
 
-**What to do.** (Vercel) Check the Daemons page and the daemon's usage. Until the 1st:
-run syncs by hand when the data must not wait (`python -m app.cli sync run` from your
-machine against the production database, or the manual GitHub workflow), and reduce the
-cost for the rest of the month: `GEFS_ENABLED=false` if you turned it on,
-`MAP_FIELD_PARTITIONS=off`, or a shorter map horizon (`MAP_FIELD_STEPS`,
-`MAP_FIELD_MAX_LEAD_HOURS`); the map layers are more than half of the estimate. A
-permanent fix is Vercel Pro. Environment changes reach new deployments only: redeploy.
+**What to do.** (Vercel) Check the Daemons page and the daemon's usage. Until the 1st: run
+syncs by hand when the data must not wait, with the manual GitHub workflow "Data sync
+(manual)" (docs/deploy-vercel.md section 8: it applies the hosted profile,
+`APP_ENV=production` and `DB_USE_UNPOOLED=true`). From your own machine (`python -m app.cli
+sync run`) only with the Production environment loaded: the hosted-profile block of
+docs/deploy-vercel.md step 5, your Production variables (`APP_ENV=production`, `SECRET_KEY`,
+a real `EMAIL_PROVIDER`, `APP_BASE_URL`) and `DB_USE_UNPOOLED=true`. Never with only
+`DATABASE_URL`: the defaults are synthetic demo forecasts and console email, and the sync
+would publish them to the live site. First run `python -m app.cli sync check` and confirm
+the components name `open_meteo` / `open_meteo_ecmwf`, not `demo`. Then reduce the cost for
+the rest of the month: `GEFS_ENABLED=false` if you turned it on, `MAP_FIELD_PARTITIONS=off`,
+or a shorter map horizon (`MAP_FIELD_STEPS`, `MAP_FIELD_MAX_LEAD_HOURS`); the map layers are
+more than half of the estimate. A permanent fix is Vercel Pro. Environment changes reach new
+deployments only: redeploy.
 
 ### Neon suspended (free quota used up)
 
@@ -515,14 +548,16 @@ in the database. On Neon Free the compute is suspended until the next billing pe
 its 100 CU-hours or 5 GB of egress are used up; writes fail above 1 GB of storage.
 
 **What to do.** (Vercel, Neon console) Read the usage: compute hours, egress or storage.
-Then either wait for the next billing period or move to Neon Launch (usage-based) and
-switch to the full-retention profile (docs/API_SETUP_REQUIRED.md section 5). To stay on
-Free: keep the free-database profile (`SYNC_TRIGGER_SOURCES=map`, `MAP_FIELD_CYCLES=06,18`,
-the 1-day retention), do not point an uptime monitor at `/api/health/ready` (every hit wakes
-the compute), and expect steady traffic to exceed Free (5.37 GB of egress a month at 1,000
-views a day, computed in docs/map-layers.md). Storage: lower `RETENTION_ARCHIVE_DAYS` or
-`RETENTION_FORECAST_DAYS`; the daily `maintenance.cleanup` (03:30 UTC) applies them, and
-`SYNC_PRUNE_EACH_PASS=true` prunes superseded predictions and map fields after every sync.
+Then either wait for the next billing period or move to Neon Launch (usage-based) and switch
+to the full-retention profile (docs/API_SETUP_REQUIRED.md section 5). To stay on Free: keep
+the free-database profile (`SYNC_TRIGGER_SOURCES=map`, `MAP_FIELD_CYCLES=06,18`, the 1-day
+retention), point an uptime monitor at `/api/health` or `/` only, never at
+`/api/health/ready` or `/api/health/data?strict=true` (every hit wakes the compute: every 15
+minutes costs about 45-60 CU-hours a month), and expect steady traffic to exceed Free (5.37
+GB of egress a month at 1,000 views a day, computed in docs/map-layers.md). Storage: lower
+`RETENTION_ARCHIVE_DAYS` or `RETENTION_FORECAST_DAYS`; the daily `maintenance.cleanup`
+(03:30 UTC) applies them, and `SYNC_PRUNE_EACH_PASS=true` prunes superseded predictions and
+map fields after every sync.
 
 ### Open-Meteo daily limit ("Daily API request limit exceeded")
 
@@ -541,18 +576,20 @@ period (a full map cycle is estimated at 165-287 CPU s on one vCPU), the old syn
 stays `running`: the new daemon waits until it lapses (`SYNC_LEASE_MINUTES`, 15 under the
 daemon), marks it `abandoned` and does the work, and a map or spot run the killed stage left
 `running` counts as in progress until it is an hour old. Nothing to do but wait about
-15-60 minutes, or run `python -m app.cli sync run --force` after the lease has lapsed.
+15-60 minutes, or, after the lease has lapsed, run the manual GitHub workflow with `force`
+("Data is stale" step 5; from your machine only with the Production environment loaded).
 `/status` and `python -m app.cli sync status` show the abandoned sync. Avoid deploying while
 `/status` shows a sync in progress.
 
 ### Rotate SECRET_KEY or CRON_SECRET
 
-* `SECRET_KEY`: generate a new value (`python -c "import secrets; print(secrets.token_urlsafe(48))"`),
-  set it in Vercel's Production environment (and in the GitHub `SECRET_KEY` secret if you
-  use the manual workflow), redeploy. It keys the rate-limit counters (the HMAC of each
-  client's counter), so those start from zero; sessions and email links are random tokens
-  stored hashed in the database and are not affected. Production refuses the development
-  default.
+* `SECRET_KEY`: generate a new value with
+  `python3.13 -c "import secrets; print(secrets.token_urlsafe(48))"` or
+  `openssl rand -base64 48`, set it in Vercel's Production environment (and in the GitHub
+  `SECRET_KEY` secret if you use the manual workflow), redeploy. It keys the rate-limit
+  counters (the HMAC of each client's counter), so those start from zero; sessions and email
+  links are random tokens stored hashed in the database and are not affected. Production
+  refuses the development default.
 * `CRON_SECRET`: set a new value of 16 or more characters, redeploy (Vercel Cron sends the
   deployment's value as the Bearer token). Check it with the `curl` of section 3: 200 with
   the new token, 401 with the old one.
@@ -587,7 +624,8 @@ every source is stale the report says `failing` (`forecasts_unavailable`).
 4. Our side: DNS, TLS or proxy errors in the worker log mean the server's outbound HTTPS
    is broken, not the provider.
 5. Once fixed, sync now: `python -m app.cli sync run` (from `backend/`, or inside the
-   backend container); the recovery email follows at the next data-health check.
+   backend container; on Vercel the manual GitHub workflow, "Data is stale" step 5); the
+   recovery email follows at the next data-health check.
 6. A provider gone for days: leave it configured (the system works on the other family
    and tells you every 12 h). Removing it from `FORECAST_PROVIDERS` silences the alert
    but also turns the blend off.

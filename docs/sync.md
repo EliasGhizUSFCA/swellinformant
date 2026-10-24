@@ -31,7 +31,12 @@ workflow).
   there, not in the database.
 * **Nothing is published half-way.** A sync that stops before `publish` (SIGTERM, a crash)
   leaves its data unpublished; the next check treats it as new and the next sync publishes
-  it (below, "stored" means "stored and published").
+  it (below, "stored" means "stored and published"). A sync whose `predict` stage failed,
+  or could not run because another holder had its job lock (a daemon killed mid-stage: the
+  lock outlives it by its 30-minute TTL), does not publish either, unless it was forced:
+  the map and the spot pages never switch to runs that were not scored. The components it
+  stored or found stored count as failed attempts, so the next check retries after
+  SYNC_RETRY_MINUTES, at most SYNC_MAX_ATTEMPTS times per run.
 * **The check is free.** It reads Open-Meteo `meta.json` (not charged to the call budget)
   and NOAA NODD `.idx` HEAD requests, and in the daemon it makes **no database query**, so
   a scale-to-zero database (Neon) stays asleep between syncs.
@@ -122,8 +127,8 @@ written) releases the lease at once, as `failed`.
 | `ensemble` | `forecasts.acquire_ensemble` | the ensemble is new |
 | `map` | `forecasts.map_fields` | the map is new |
 | `blend` | `forecasts.blend` | new spot or ensemble data (stored now, or stored but unpublished) |
-| `predict` | `quality.predict` | always (pending runs only) |
-| `publish` | `sync.publish` | anything new was stored, or stored data is unpublished |
+| `predict` | `quality.predict` | always (pending runs only); failed, not skipped, when another holder has its lock (so does `blend`) |
+| `publish` | `sync.publish` | anything new was stored, or stored data is unpublished; never after a failed `predict` unless forced |
 | `detect`, `match`, `flights`, `alerts`, `deliver` | `detection.detect`, `matching.match`, `flights.discover`, `alerts.generate`, `notifications.deliver` | after a publish |
 | `prune` | `maintenance.prune_pass` | after a publish, with SYNC_PRUNE_EACH_PASS=true |
 
@@ -175,9 +180,15 @@ until it is an hour old, and is then acquired again.
 ## The daemon (`python -m app.cli sync daemon`)
 
 At start: `init-db` (migrate, seed, tide catalog; idempotent) when SYNC_DAEMON_INIT_DB is
-true (the default; `--no-init-db` skips it), then the known runs from the database. A
-start-up failure (e.g. the database still waking) is retried every minute. Then, until
-SIGTERM or SIGINT:
+true (the default; `--no-init-db` skips it), then the known runs from the database, then
+the start-up catch-up (SYNC_DAEMON_CATCH_UP, default true): every periodic job that has not
+succeeded within its longest gap (its interval; 24 h for a job once a day) or never has
+runs once, back to back, before the first check (one statement over the job logs decides).
+A job that started within an hour (or its own interval, when shorter) is skipped, so a
+restart loop does not ask a provider again at every start. Without it a new deployment had
+no tide predictions until the next 02:20 UTC, and frequent restarts could keep restarting
+the hourly timers before they fired. A start-up failure (e.g. the database still waking) is
+retried every minute. Then, until SIGTERM or SIGINT:
 
 * every SYNC_DAEMON_POLL_SECONDS (60): the API's kicks from Redis (`sync:kick:*`, one Lua
   call). "Match my search" runs `matching.match` and the stages after it (flights, alerts,
@@ -213,18 +224,23 @@ CPU to the job logs: every stage is also a job log.
 
 ## Commands
 
-```bash
-cd backend
-python -m app.cli sync check [--json]   # the plan (Redis + metadata; the DB only the first time)
-python -m app.cli sync run              # sync every component with a newer run, no waiting
-python -m app.cli sync run --if-due     # only when the rules say a sync is due (like the daemon)
-python -m app.cli sync run --force      # every stage now; stored runs are still skipped
-python -m app.cli sync run --only map   # limit the acquisitions (spots, ensemble, map)
-python -m app.cli sync daemon [--once] [--no-init-db]
-python -m app.cli sync publish          # publish what is stored now
-python -m app.cli sync status [--limit 10]
-python -m app.cli migrate --on-build    # migrate a production build (MIGRATE_ON_BUILD)
-```
+From `backend/` (`cd backend`):
+
+| Command | What it does |
+|---|---|
+| `python -m app.cli sync check`, with `--json` for JSON | the plan (Redis and provider metadata; the database only the first time) |
+| `python -m app.cli sync run` | sync every component with a newer run, no waiting |
+| `python -m app.cli sync run --if-due` | only when the rules say a sync is due (like the daemon) |
+| `python -m app.cli sync run --force` | every stage now; stored runs are still skipped |
+| `python -m app.cli sync run --only map` | limit the acquisitions (spots, ensemble, map) |
+| `python -m app.cli sync daemon`, with `--once` and `--no-init-db` | the daemon (one iteration with `--once`; no init-db with `--no-init-db`) |
+| `python -m app.cli sync publish` | publish what is stored now |
+| `python -m app.cli sync status`, with `--limit 10` | the newest syncs and their stages |
+| `python -m app.cli migrate --on-build` | migrate a production build (MIGRATE_ON_BUILD) |
+
+Against a production database only with the Production environment loaded
+(docs/operations.md, "Data is stale" step 5): with only `DATABASE_URL` set, a sync stores
+synthetic demo forecasts and publishes them.
 
 `sync run` exits 0 for success, partial or skipped, 1 for failed (or abandoned), 3 when
 another sync holds the lease. To re-download a run that is already stored use
@@ -255,6 +271,7 @@ schema).
 | SYNC_PREWARM_PUBLIC_CACHE | false | after a publishing sync, compute the public spot list and conditions at once (about 1.4 MB of reads per publication) |
 | SYNC_DAEMON_POLL_SECONDS | 60 | kick polling |
 | SYNC_DAEMON_INIT_DB | true | init-db at daemon start |
+| SYNC_DAEMON_CATCH_UP | true | run the overdue periodic jobs once at daemon start |
 | SYNC_CPU_BUDGET_HOURS | none | monthly CPU budget health warns about (10 when hosted) |
 | JOB_INTERVAL_FLOOR_MINUTES | 0 | minimum interval of every periodic job (60 when hosted) |
 
@@ -342,9 +359,10 @@ predictions), detect 4.4-4.5 CPU s. Importing pandas, scikit-learn and the model
 The acquisitions reported `current` ("run already ingested", "already stored"), and ECMWF
 `deferred`.
 
-One exception is a detection defect outside the sync. Re-running `detection.detect` over
-unchanged data can merge an event into its neighbour and then recreate it, adding one
-cancelled row per re-run. On 10-21 this happened at 1 of the 50 spots.
+On 10-21 a forced re-sync also added one cancelled swell event at 1 of the 50 spots
+(detection matched clusters to events greedily). Commit 9eb96d5 fixed this: match_clusters
+pairs clusters and events one to one, and a forced re-sync now creates, merges and cancels
+no swell events (integration round 2, step 7: the swell-event digest was identical).
 
 **Deferred, live.** On 10-21 at 14:49 the check saw the GFS 06Z run as servable. Four
 seconds later, Open-Meteo told the acquisition that ncep_gfs025 06Z was still being

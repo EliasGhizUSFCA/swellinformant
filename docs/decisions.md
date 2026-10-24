@@ -555,11 +555,13 @@ the upgrade path, with the full-retention profile.
 heartbeat, known runs and kick flags (and, since round 1, the public snapshot cache);
 `KV_URL` is accepted as an alias of `REDIS_URL`; hosted timeouts 1.5 s connect, 2 s socket;
 no provider response cache when hosted.
-**As built.** Measured per idle check 3 commands, per kick poll one EVAL: about 68,000
-commands a month for the daemon (proposal: about 66,000); about 375,000 (75 % of 500K) with
-steady visitors. On 2026-10-22 the Marketplace page showed only the REST variables, so
-deploy-vercel.md says how to set `REDIS_URL` by hand. Under the daemon a job runs without its
-Redis lock when Redis does not answer (Celery still fails).
+**As built.** Measured per idle check 3 commands, per kick poll one EVAL, per job run 4 (the
+job lock and the CPU counter; 7 for data health): about 79,000 commands a month for the
+daemon (proposal: about 66,000; first counted as about 68,000 without the CPU counter,
+corrected at the final review); about 386,000 (77 % of 500K) with steady visitors. On
+2026-10-22 the Marketplace page showed only the REST variables, so deploy-vercel.md says how
+to set `REDIS_URL` by hand. Under the daemon a job runs without its Redis lock when Redis
+does not answer (Celery still fails).
 
 ## ADR-028 (D8) Map fields stay in Postgres, behind the CDN
 
@@ -698,3 +700,11 @@ Next.js and eslint-config-next **16.4.1** (published 2026-10-14, 9 days old), ce
 certifi entry once `exclude-newer` passes 2026-10-21; consider Next.js 16.4.2 once it is two
 weeks old (2026-10-29). Dev-only advisories in vitest 3.2.7 remain (the fix is vitest 5, a
 major upgrade).
+**Later (final review, 2026-10-24).** GitHub reviewed GHSA-mrhx-c7xc-m3w5 (high: zod below
+4.6.6 can exhaust memory while validating oversized constrained collections) on 2026-10-23
+at 18:26 UTC, after the audit above. zod runs only in client components (the forms'
+validation), so only a visitor's own browser was exposed. By the same rule, zod **4.6.6**
+(published 2026-10-11, 12 days old) replaced 4.6.5. `npm audit --omit=dev` then reports no
+high or critical advisory and one moderate one, fast-uri below 3.1.9 (GHSA-w74x-v6f9-j3xg,
+GHSA-xhq7-xmqj-769h, GHSA-wjr9-j795-jxcr, GHSA-333x-w4r6-6crp; 3.1.9 was published
+2026-10-19), a dependency of ajv under @hookform/resolvers; not fixed in this review.
