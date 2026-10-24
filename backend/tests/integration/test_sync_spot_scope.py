@@ -96,3 +96,51 @@ def test_a_sync_never_requests_an_inactive_spot(
     assert stored == 0
     run = db.scalar(select(ForecastRun).where(ForecastRun.status == ForecastRunStatus.SUCCESS))
     assert run is not None and spot_id not in run.details["spot_ids"]
+
+
+def test_a_sync_acquires_only_the_spot_providers_its_plan_marked_new(
+    db: Session, few_spots: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The spots stage asks acquire_all for the new components' providers only: a run
+    waiting for its coalescing partner or in a retry wait (e.g. after Open-Meteo's daily
+    limit) is not fetched by a sync another component triggered. Run keys are SYNTHETIC."""
+    from datetime import UTC, datetime
+
+    from app.services.forecasts import ingestion
+    from app.services.sync import orchestrator
+    from app.services.sync.types import ComponentStatus, SyncPlan
+
+    now = datetime(2026, 10, 10, 23, 40, tzinfo=UTC)
+    asked: list[frozenset[str] | None] = []
+
+    def recorder(_db: object, now: object = None, only: Any = None) -> list[Any]:
+        asked.append(frozenset(only) if only is not None else None)
+        return []
+
+    monkeypatch.setattr(ingestion, "acquire_all", recorder)
+
+    def component(source: str, provider: str, state: Any) -> ComponentStatus:
+        return ComponentStatus(
+            kind="spots",
+            source_code=source,
+            provider=provider,
+            state=state,
+            stored_run_key=f"{provider}:2026101012",
+            available_run_key=f"{provider}:2026101018",
+            available_cycle=datetime(2026, 10, 10, 18, tzinfo=UTC),
+        )
+
+    plan = SyncPlan(
+        checked_at=now,
+        due=True,
+        components=(
+            component("open_meteo_noaa", "open_meteo", "new"),
+            component("open_meteo_ecmwf", "open_meteo_ecmwf", "waiting"),
+        ),
+        anchor_cycle=None,
+        reasons=("synthetic",),
+    )
+    result = orchestrator.run_sync(trigger="daemon", plan=plan, now=now)
+    assert asked == [frozenset({"open_meteo"})]
+    spots = next(s for s in result.stages if s.name == "spots")
+    assert [c["source_code"] for c in spots.detail["components"]] == ["open_meteo_noaa"]
