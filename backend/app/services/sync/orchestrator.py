@@ -17,10 +17,17 @@ Stage rules:
   components (every configured one when forced); ``ensemble`` and ``map`` only when new
   (or forced). Acquisitions are idempotent: a run key already stored is skipped.
 * ``blend``: only with new member data (spot runs or the ensemble), or unpublished member
-  data, or forced. ``predict`` always runs (it scores pending runs only).
+  data, or forced. ``predict`` always runs (it scores pending runs only). Either one
+  whose job lock another holder has (e.g. a daemon killed mid-stage: the lock outlives it
+  by its TTL) did not run: the stage is failed, not skipped.
 * ``publish``: when an acquisition stored new data, data stored earlier is unpublished, or
-  forced. ``detect``, ``match``, ``flights``, ``alerts`` and ``deliver`` run only after a
-  publish; ``prune`` too, and only with SYNC_PRUNE_EACH_PASS.
+  forced; but never after a failed ``predict`` (unless forced), so the map and the spot
+  pages never switch to runs that were not scored. The runs then stay unpublished, and
+  the components this sync acquired or found stored count as failed attempts: the next
+  check retries after SYNC_RETRY_MINUTES, at most SYNC_MAX_ATTEMPTS times per run (a
+  predict that fails every time does not re-sync forever). ``detect``, ``match``,
+  ``flights``, ``alerts`` and ``deliver`` run only after a publish; ``prune`` too, and
+  only with SYNC_PRUNE_EACH_PASS.
 * ``stop`` (SIGTERM in the daemon) is checked between stages: the current stage finishes,
   the rest is recorded as skipped and the lease is released.
 
@@ -107,6 +114,10 @@ _STAGE_KIND: dict[StageName, ComponentKind] = {
     "ensemble": "ensemble",
     "map": "map",
 }
+# Stages the publication depends on: one that did not run (its job lock was held) failed.
+REQUIRED_STAGES: frozenset[StageName] = frozenset({"blend", "predict"})
+PUBLISH_HELD = "predict did not complete"
+HELD_MESSAGE = "stored, not published: predict did not complete"
 
 
 def _holder() -> str:
@@ -294,6 +305,9 @@ class _Sync:
     unpublished: set[str] = field(default_factory=set)
     published_at: datetime | None = None
     publish_failed: bool = False
+    predict_ok: bool = True
+    # The acquisition stages' component outcomes (the dicts in their stage details).
+    components: list[dict[str, Any]] = field(default_factory=list)
 
     def wanted(self, kind: ComponentKind) -> list[ComponentStatus]:
         if self.only is not None and kind not in self.only:
@@ -397,8 +411,11 @@ def _execute(name: StageName, fn: Callable[[Session], Any]) -> tuple[StageResult
     duration = int((time.monotonic() - t0) * 1000)
     cpu = float(out.get("cpu_s", round(cpu_seconds() - cpu0, 3)))
     if not seen.get("ran"):
-        detail = {"reason": str(out.get("reason") or "another runner holds this job's lock")}
-        return StageResult(name, "skipped", started, duration, cpu, detail), None
+        reason = str(out.get("reason") or "another runner holds this job's lock")
+        if name in REQUIRED_STAGES:
+            failed = {"error": f"did not run: {reason}"}
+            return StageResult(name, "failed", started, duration, cpu, failed), None
+        return StageResult(name, "skipped", started, duration, cpu, {"reason": reason}), None
     raw = seen.get("out")
     details = raw if isinstance(raw, dict) else {"result": raw}
     status = JobStatus.SUCCESS
@@ -419,16 +436,22 @@ def _stage(name: StageName, ctx: _Sync) -> StageResult:
             return _skipped(name, _not_acquired(ctx, kind))
         result, details = _execute(name, _acquisition(kind, comps, now))
         result.detail["components"] = _components(ctx, comps, details, result)
+        ctx.components.extend(result.detail["components"])
         return result
     if name == "blend":
         if not (forced or ctx.stored & {"spots", "ensemble"} or "member" in ctx.unpublished):
             return _skipped(name, "no new member data")
         return _execute(name, _job("blend", now))[0]
     if name == "predict":
-        return _execute(name, _job("predict", now))[0]
+        result = _execute(name, _job("predict", now))[0]
+        ctx.predict_ok = result.status == "success"
+        return result
     if name == "publish":
         if not (forced or ctx.stored or ctx.unpublished):
             return _skipped(name, "nothing new to publish")
+        if not ctx.predict_ok and not forced:
+            _hold_back(ctx)
+            return _skipped(name, PUBLISH_HELD)
         result, _ = _execute(name, _publish_body(ctx))
         ctx.publish_failed = result.status != "success" or ctx.published_at is None
         if not ctx.publish_failed:
@@ -439,6 +462,23 @@ def _stage(name: StageName, ctx: _Sync) -> StageResult:
     if name == "prune" and not ctx.settings.sync_prune_each_pass:
         return _skipped(name, "SYNC_PRUNE_EACH_PASS=false (the daily cleanup prunes)")
     return _execute(name, _job(name, now))[0]
+
+
+def _hold_back(ctx: _Sync) -> None:
+    """The publication waits for a predict that completes: every component this sync
+    stored or found stored becomes a failed attempt (apply_result: retried after
+    SYNC_RETRY_MINUTES, at most SYNC_MAX_ATTEMPTS times; an outcome "current" would clear
+    the attempts at every retry). Its runs stay newer than the newest publication, so the
+    next check finds them new again."""
+    held = 0
+    for comp in ctx.components:
+        if comp.get("outcome") in ("stored", "current"):
+            comp["outcome"], comp["message"] = "failed", HELD_MESSAGE
+            held += 1
+    ctx.failed.append(
+        f"publication held back: {PUBLISH_HELD}"
+        + (f" ({held} component(s) retried after SYNC_RETRY_MINUTES)" if held else "")
+    )
 
 
 def _acquisition(

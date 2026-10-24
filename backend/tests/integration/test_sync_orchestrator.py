@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app import cli
 from app.core.config import get_settings
 from app.core.database import utcnow
+from app.core.redis import get_redis
 from app.models import BackgroundJobLog, ForecastRun, WaveForecast
 from app.models.forecast_engine import MapField
 from app.models.sync import SyncRun
@@ -438,6 +439,159 @@ def test_a_failed_publication_fails_the_sync_and_publishes_nothing(
     assert latest_publication(db) is None
     # The data stored is unpublished, so the next check plans it again.
     assert plan_sync(db, now=NOW + timedelta(minutes=10)).due
+
+
+PREDICT_LOCK = f"lock:job:{STAGE_JOB_NAMES['predict']}"
+
+
+def _predictions(db: Session) -> int:
+    from app.models import SurfQualityPrediction
+
+    db.expire_all()
+    return int(db.scalar(select(func.count()).select_from(SurfQualityPrediction)) or 0)
+
+
+def test_a_sync_whose_predict_could_not_run_publishes_nothing_and_retries(
+    db: Session, synthetic_map: MapWorld
+) -> None:
+    """A daemon killed mid-predict leaves the job's lock for its TTL; the takeover sync's
+    predict cannot run. It must not publish the unscored runs (the map would switch while
+    the spot pages stay on the old run): the sync fails visibly, the runs stay unpublished,
+    each acquired component counts a failed attempt, and the check after the retry wait
+    syncs again and publishes the scored runs."""
+    get_redis().set(PREDICT_LOCK, "killed-process", ex=1800)
+    known = empty_known()
+    plan = plan_sync(db, now=NOW, known=known)
+    assert plan.due
+    result = orchestrator.run_sync(trigger="daemon", now=NOW, plan=plan)
+    assert result.status == "failed" and result.published_at is None
+    predict_stage = next(s for s in result.stages if s.name == "predict")
+    assert predict_stage.status == "failed"
+    assert "another worker is running this job" in predict_stage.detail["error"]
+    publish_stage = next(s for s in result.stages if s.name == "publish")
+    assert publish_stage.status == "skipped"
+    assert publish_stage.detail == {"reason": orchestrator.PUBLISH_HELD}
+    assert {s.status for s in result.stages if s.name in orchestrator.AFTER_PUBLISH} == {"skipped"}
+    components = [
+        c for s in result.stages if s.name in ("spots", "map") for c in s.detail["components"]
+    ]
+    assert [(c["source_code"], c["outcome"]) for c in components] == [
+        ("demo", "failed"),
+        ("noaa_gfs_fields", "failed"),
+    ]
+    assert {c["message"] for c in components} == {orchestrator.HELD_MESSAGE}
+    assert latest_publication(db) is None and _predictions(db) == 0
+    db.expire_all()
+    row = db.get(SyncRun, result.sync_run_id)
+    assert row is not None and row.status == "failed"
+    assert "publication held back" in (row.error_message or "")
+    assert row.stages[3 + 1]["status"] == "failed"  # sync_runs.stages: predict
+    orchestrator.remember(known, result, now=NOW)
+    assert known.attempts[f"demo|demo:{CYCLE:%Y%m%d%H}"][0] == 1
+    # Inside SYNC_RETRY_MINUTES nothing is due; after it the next check syncs again.
+    soon = plan_sync(None, now=NOW + timedelta(minutes=5), known=known)
+    assert not soon.due
+    assert {c.source_code: c.state for c in soon.components}["demo"] == "waiting"
+    get_redis().delete(PREDICT_LOCK)  # the lock's TTL ran out
+    later = NOW + timedelta(minutes=16)
+    retry = plan_sync(db, now=later, known=known)
+    assert retry.due
+    nxt = orchestrator.run_sync(trigger="daemon", now=NOW, plan=retry)
+    assert nxt.status == "success" and nxt.published_at is not None
+    assert stages(nxt)["predict"] == "success" and stages(nxt)["publish"] == "success"
+    assert _predictions(db) > 0
+    assert published_map_run_id(db) is not None
+    orchestrator.remember(known, nxt, now=later)
+    # (the demo provider's next run starts at 00Z, 20 minutes after NOW)
+    assert not plan_sync(db, now=later + timedelta(minutes=2), known=known).due
+
+
+def test_a_predict_that_fails_every_time_stops_after_the_attempt_limit(
+    db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deterministic predict error never publishes and does not re-sync at every check:
+    after SYNC_MAX_ATTEMPTS failed attempts the run waits for the next one."""
+    from app.services.surf_quality import predict
+
+    def broken(db: Session, now: Any = None) -> Any:
+        raise RuntimeError("scoring is broken (test)")
+
+    monkeypatch.setattr(predict, "compute_pending_predictions", broken)
+    monkeypatch.setattr(get_settings(), "sync_max_attempts", 2)
+    # Retries 5 minutes apart: all within the demo run of NOW (its next run starts at 00Z).
+    monkeypatch.setattr(get_settings(), "sync_retry_minutes", 5)
+    known = empty_known()
+    when = NOW
+    for attempt in (1, 2):
+        plan = plan_sync(db, now=when, known=known)
+        assert plan.due, (attempt, plan.reasons)
+        result = orchestrator.run_sync(trigger="daemon", now=NOW, plan=plan)
+        assert result.status == "failed" and result.published_at is None
+        assert stages(result)["predict"] == "failed" and stages(result)["publish"] == "skipped"
+        orchestrator.remember(known, result, now=when)
+        assert known.attempts[f"demo|demo:{CYCLE:%Y%m%d%H}"][0] == attempt
+        when += timedelta(minutes=6)
+    final = plan_sync(db, now=when, known=known)
+    assert not final.due
+    demo = {c.source_code: c for c in final.components}["demo"]
+    assert demo.state == "failed" and "SYNC_MAX_ATTEMPTS" in (demo.detail or "")
+    assert latest_publication(db) is None
+
+
+def test_a_forced_sync_publishes_even_when_predict_could_not_run(
+    db: Session, synthetic_map: MapWorld
+) -> None:
+    """--force is the owner's override: the publication is not held back."""
+    get_redis().set(PREDICT_LOCK, "killed-process", ex=1800)
+    result = orchestrator.run_sync(trigger="cli", force=True, now=NOW)
+    assert stages(result)["predict"] == "failed" and stages(result)["publish"] == "success"
+    assert result.status == "partial" and result.published_at is not None
+
+
+def test_a_stopped_sync_after_a_publication_is_published_by_the_next_check(
+    db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Runs stored by a sync that stopped (SIGTERM on a deploy) before publishing are newer
+    than the newest publication, so they do not count as stored: the next check is due and
+    publishes them (load_known's "completed before the newest publication")."""
+    from app.services.surf_quality import predict
+    from tests.synthetic_map_fields import add_map_hours
+
+    first = orchestrator.run_sync(trigger="daemon", now=NOW)
+    assert first.status == "success" and first.published_at is not None
+    later = NOW + timedelta(hours=6)
+    add_map_hours(synthetic_map.world, CYCLE + timedelta(hours=6), [0, 12, 24])
+    plan = plan_sync(db, now=later)
+    assert plan.due, plan.reasons
+    stop = threading.Event()
+    real = predict.compute_pending_predictions
+
+    def predict_then_sigterm(db: Session, now: Any = None) -> Any:
+        out = real(db, now)
+        stop.set()
+        return out
+
+    monkeypatch.setattr(predict, "compute_pending_predictions", predict_then_sigterm)
+    stopped = orchestrator.run_sync(trigger="daemon", now=later, stop=stop, plan=plan)
+    assert stopped.status == "partial" and stopped.published_at is None
+    new_keys = {
+        c["run_key"]
+        for s in stopped.stages
+        if s.name in ("spots", "map")
+        for c in s.detail["components"]
+        if c["outcome"] == "stored"
+    }
+    assert new_keys, stopped.as_dict()
+    monkeypatch.setattr(predict, "compute_pending_predictions", real)
+    again = plan_sync(db, now=later)
+    assert again.due, again.reasons
+    nxt = orchestrator.run_sync(trigger="daemon", now=later, plan=again)
+    assert nxt.status == "success" and nxt.published_at is not None
+    assert nxt.published_at > first.published_at
+    db.expire_all()
+    stored_keys = set(db.scalars(select(ForecastRun.run_key)))
+    assert new_keys <= stored_keys
+    assert not plan_sync(db, now=later + timedelta(minutes=10)).due
 
 
 def test_a_run_no_longer_served_at_acquisition_is_deferred_not_failed(
