@@ -16,17 +16,23 @@
 #
 # Configuration, under Settings -> Secrets and variables -> Actions:
 # - Secrets: DATABASE_URL_UNPOOLED (Neon's direct URL), KV_URL or REDIS_URL, SECRET_KEY (the
-#   same value as on Vercel), plus the provider credentials the deployment uses (listed in the
-#   Sync step). Secrets are not passed to runs triggered from forks.
-# - Variables: any other app setting by its env-var name (APP_BASE_URL, EMAIL_PROVIDER,
-#   EMAIL_FROM, GEFS_ENABLED, ...). They override the hosted profile (app/core/profiles.py),
-#   which the Vercel deployment also uses. Required: APP_BASE_URL (links in alert emails) and
-#   EMAIL_PROVIDER (smtp, resend or sendgrid) with EMAIL_FROM. A setting named like a
-#   credential (*_KEY, *_SECRET, *_TOKEN, *_PASSWORD, the URLs with passwords) is read only
-#   from secrets, and the log shows variables' names, never their values.
+#   same value as on Vercel), plus the provider credentials and private values the
+#   deployment uses (listed in the Sync step: API keys, SMTP_USERNAME and SMTP_PASSWORD, the
+#   Twilio sender). Secrets are not passed to runs triggered from forks, and GitHub masks
+#   them in the log.
+# - Variables: the public settings listed in the Configuration step's env (APP_BASE_URL,
+#   EMAIL_PROVIDER, EMAIL_FROM, GEFS_ENABLED, ...), by their env-var names. They override
+#   the hosted profile (app/core/profiles.py), which the Vercel deployment also uses.
+#   Required: APP_BASE_URL (links in alert emails) and EMAIL_PROVIDER (smtp, resend or
+#   sendgrid) with EMAIL_FROM. GitHub prints every step's environment at the top of its log,
+#   and this repository's logs are public: the VALUE of every variable read here is public.
+#   Save only public values as variables, never a credential or a private address
+#   (CRON_SECRET, OPS_ALERT_EMAILS and SMTP_USERNAME are never variables). Only the listed
+#   names are read (not toJSON(vars), which would print every variable of the repository),
+#   and a name that looks like a credential is ignored even if listed.
 # The run always uses APP_ENV=production, so the app's own checks refuse a development secret
 # key or an email provider that only captures mail.
-# Installs need backend/uv.lock (the versions the daemon image installs).
+# Installs need backend/uv.lock (the files the daemon image installs, hash-checked).
 name: Data sync (manual)
 
 on:
@@ -76,25 +82,46 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: |
-            backend/pyproject.toml
-            backend/uv.lock
-      # The versions come from backend/uv.lock, as for the daemon image (Containerfile) and
-      # CI, so an emergency run never installs versions nobody has tested. Editable, so the
-      # app finds data/ (spots, tide catalog and constants) in this checkout.
-      - name: Install the backend with the sync extra (versions from uv.lock)
+      # This job holds the production database URL and the provider keys: it installs
+      # exactly the files backend/uv.lock records, each checked against its sha256 hash, as
+      # the daemon image does (Containerfile: uv sync --locked), so an emergency run never
+      # installs versions or files nobody has tested. The project is installed editable
+      # into backend/.venv, so the app finds data/ (spots, tide catalog and constants) in
+      # this checkout; the later steps' python is that environment's.
+      - name: Install the backend with the sync extra (hash-checked files from uv.lock)
         run: |
           python -m pip install "uv==${UV_VERSION}"
-          uv export --locked --no-dev --no-emit-project --no-hashes --extra sync \
-            --output-file "$RUNNER_TEMP/constraints.txt"
-          python -m pip install -e ".[sync]" --constraint "$RUNNER_TEMP/constraints.txt"
+          uv sync --locked --no-dev --extra sync
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Configuration (hosted profile, then repository variables)
+        # Only these public settings are read from repository variables (VARIABLE_<name>).
+        # GitHub prints this environment, with the values, at the top of the step's log.
         env:
-          REPOSITORY_VARIABLES: ${{ toJSON(vars) }}
+          VARIABLE_APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+          VARIABLE_EMAIL_PROVIDER: ${{ vars.EMAIL_PROVIDER }}
+          VARIABLE_EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          VARIABLE_SMTP_HOST: ${{ vars.SMTP_HOST }}
+          VARIABLE_SMTP_PORT: ${{ vars.SMTP_PORT }}
+          VARIABLE_SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
+          VARIABLE_SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
+          VARIABLE_SMS_PROVIDER: ${{ vars.SMS_PROVIDER }}
+          VARIABLE_FLIGHT_PROVIDER: ${{ vars.FLIGHT_PROVIDER }}
+          VARIABLE_FORECAST_PROVIDERS: ${{ vars.FORECAST_PROVIDERS }}
+          VARIABLE_GEFS_ENABLED: ${{ vars.GEFS_ENABLED }}
+          VARIABLE_COMMERCIAL_USE: ${{ vars.COMMERCIAL_USE }}
+          VARIABLE_MAP_FIELDS_ENABLED: ${{ vars.MAP_FIELDS_ENABLED }}
+          VARIABLE_MAP_FIELD_CYCLES: ${{ vars.MAP_FIELD_CYCLES }}
+          VARIABLE_SYNC_TRIGGER_SOURCES: ${{ vars.SYNC_TRIGGER_SOURCES }}
+          VARIABLE_SYNC_PRUNE_EACH_PASS: ${{ vars.SYNC_PRUNE_EACH_PASS }}
+          VARIABLE_SYNC_CPU_BUDGET_HOURS: ${{ vars.SYNC_CPU_BUDGET_HOURS }}
+          VARIABLE_RETENTION_FORECAST_DAYS: ${{ vars.RETENTION_FORECAST_DAYS }}
+          VARIABLE_RETENTION_ARCHIVE_DAYS: ${{ vars.RETENTION_ARCHIVE_DAYS }}
+          VARIABLE_RETENTION_JOB_LOG_DAYS: ${{ vars.RETENTION_JOB_LOG_DAYS }}
+          VARIABLE_DATA_HEALTH_DATABASE_MAX_GB: ${{ vars.DATA_HEALTH_DATABASE_MAX_GB }}
+          VARIABLE_JOB_INTERVAL_FLOOR_MINUTES: ${{ vars.JOB_INTERVAL_FLOOR_MINUTES }}
+          VARIABLE_LOG_LEVEL: ${{ vars.LOG_LEVEL }}
         run: |
           python - <<'PY'
-          import json
           import os
           import secrets
           import sys
@@ -102,12 +129,16 @@ jobs:
           from app.core.config import CAPTURE_EMAIL_PROVIDERS, Settings
           from app.core.profiles import profile_env
 
-          # Credentials reach the run only as secrets (the Sync step). These names, and any
-          # setting named like a credential, are never read from variables.
+          # Credentials and private values reach the run only as secrets (the Sync step).
+          # These names, and any setting named like a credential, are never read from
+          # variables (a variable's value is printed in the log).
           SECRET_NAMES = {
               "DATABASE_URL", "DATABASE_URL_UNPOOLED", "REDIS_URL", "CELERY_BROKER_URL",
               "CELERY_RESULT_BACKEND", "TWILIO_ACCOUNT_SID", "AMADEUS_CLIENT_ID",
+              "SMTP_USERNAME", "OPS_ALERT_EMAILS", "TWILIO_FROM_NUMBER",
+              "TWILIO_MESSAGING_SERVICE_SID",
           }
+          PREFIX = "VARIABLE_"
           SECRET_SUFFIXES = ("_KEY", "_SECRET", "_TOKEN", "_PASSWORD")
           # A production data run: the app refuses dev secrets and capture-only email.
           FIXED = {
@@ -125,7 +156,13 @@ jobs:
           env = profile_env("hosted", "free-database")
           source = dict.fromkeys(env, "hosted profile")
           ignored = []
-          for name, value in sorted(json.loads(os.environ["REPOSITORY_VARIABLES"] or "{}").items()):
+          # An unset repository variable arrives as an empty string: not applied.
+          variables = {
+              key[len(PREFIX):]: value
+              for key, value in os.environ.items()
+              if key.startswith(PREFIX) and value != ""
+          }
+          for name, value in sorted(variables.items()):
               if name in settings_names and not is_secret(name) and name not in FIXED:
                   env[name] = str(value)
                   source[name] = "repository variable"
@@ -152,8 +189,8 @@ jobs:
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
               for name, value in env.items():
                   out.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
-          # The log of a public repository is public: values of repository variables (sender
-          # addresses, URLs) are not printed, only that they were applied.
+          # Only that a repository variable was applied, not its value (GitHub prints the
+          # values in the step's environment anyway: only public settings are variables).
           for name in sorted(env):
               shown = "(set)" if source[name] == "repository variable" else env[name]
               print(f"{name}={shown}  [{source[name]}]")
@@ -173,9 +210,12 @@ jobs:
           OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
           TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
+          TWILIO_MESSAGING_SERVICE_SID: ${{ secrets.TWILIO_MESSAGING_SERVICE_SID }}
           DUFFEL_ACCESS_TOKEN: ${{ secrets.DUFFEL_ACCESS_TOKEN }}
           AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
           AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
@@ -187,8 +227,9 @@ jobs:
             fi
           done
           # Unset secrets are empty strings here; drop them so the settings keep their defaults.
-          for name in OPEN_METEO_API_KEY RESEND_API_KEY SENDGRID_API_KEY SMTP_PASSWORD \
-            TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN DUFFEL_ACCESS_TOKEN AMADEUS_CLIENT_ID \
+          for name in OPEN_METEO_API_KEY RESEND_API_KEY SENDGRID_API_KEY SMTP_USERNAME \
+            SMTP_PASSWORD TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_FROM_NUMBER \
+            TWILIO_MESSAGING_SERVICE_SID DUFFEL_ACCESS_TOKEN AMADEUS_CLIENT_ID \
             AMADEUS_CLIENT_SECRET; do
             if [ -z "${!name:-}" ]; then unset "$name"; fi
           done
