@@ -8,7 +8,10 @@ the Containerfile, the lean API image, the edge's Caddyfile and PgBouncer's conf
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -333,3 +336,57 @@ def test_the_stack_mirrors_vercel_json() -> None:
     assert f"response_header_timeout {max_duration}s" in CADDYFILE.read_text()
     assert config["services"]["api"]["root"] == "backend/"
     assert config["services"]["web"]["root"] == "frontend/"
+
+
+def _bashes() -> list[str]:
+    """The system bash, plus VERCEL_LOCAL_TEST_BASH when it names another one (e.g. a bash
+    3.2 build: macOS's /bin/bash, which `#!/usr/bin/env bash` runs on a stock Mac)."""
+    found = [b for b in (shutil.which("bash"), os.environ.get("VERCEL_LOCAL_TEST_BASH")) if b]
+    if not found:
+        pytest.skip("bash is not installed")
+    return found
+
+
+def _run_with_stub_docker(bash: str, tmp_path: Path, *args: str) -> tuple[int, str, list[str]]:
+    """The script with `docker` replaced by a stub recording its arguments (and answering
+    `compose port` as Docker does)."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    calls = tmp_path / "docker.log"
+    stub = bindir / "docker"
+    stub.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_CALLS"\n'
+        'case "$*" in *" port "*) echo "127.0.0.1:8080" ;; esac\n'
+    )
+    stub.chmod(0o755)
+    env = {
+        "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "HOME": str(tmp_path),
+        "DOCKER_CALLS": str(calls),
+        "VERCEL_LOCAL_ENV_FILE": str(tmp_path / "missing.env"),
+    }
+    result = subprocess.run(  # noqa: S603 - the repository's own script
+        [bash, str(SCRIPT), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    lines = calls.read_text().splitlines() if calls.exists() else []
+    return result.returncode, result.stdout + result.stderr, lines
+
+
+@pytest.mark.parametrize("bash", _bashes())
+def test_up_with_and_without_building_runs_under_every_bash(bash: str, tmp_path: Path) -> None:
+    """README E.6's recovery step is `scripts/vercel-local.sh up --no-build`: it expanded an
+    empty array under `set -u`, which bash before 4.4 (macOS's 3.2) refuses ("build[@]:
+    unbound variable") before calling Docker."""
+    for args, flag in ((("up",), "--build"), (("up", "--no-build"), "--no-build")):
+        code, output, calls = _run_with_stub_docker(bash, tmp_path / flag, *args)
+        assert code == 0, output
+        ups = [c for c in calls if " up " in f" {c} "]
+        assert len(ups) == 1, calls
+        assert ups[0].endswith(f"up -d {flag} --wait --wait-timeout 900"), ups[0]
+        assert "unbound variable" not in output
+    code, output, calls = _run_with_stub_docker(bash, tmp_path / "bad", "up", "--fast")
+    assert code == 64 and "unknown argument --fast" in output and calls == []

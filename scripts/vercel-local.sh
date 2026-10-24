@@ -52,15 +52,17 @@ published_port() {
 took() { printf '%s took %d s\n' "$1" "$SECONDS"; }
 
 cmd_up() {
-  local build=(--build)
+  # A word, never an empty array: macOS's /bin/bash 3.2 treats "${empty[@]}" under set -u
+  # as an unbound variable.
+  local build=--build
   case "${1:-}" in
-    --no-build) build=() ;;
+    --no-build) build=--no-build ;;
     "") ;;
     *) echo "up: unknown argument $1" >&2; exit 64 ;;
   esac
   if [ -f "$ENV_FILE" ]; then echo "settings: $ENV_FILE"; else echo "settings: none ($ENV_FILE is missing): demo forecasts, no map layers"; fi
   SECONDS=0
-  compose up -d "${build[@]}" --wait --wait-timeout 900
+  compose up -d "$build" --wait --wait-timeout 900
   local edge mail
   edge="$(published_port edge 8080)"
   mail="$(published_port mailpit 8025)"
