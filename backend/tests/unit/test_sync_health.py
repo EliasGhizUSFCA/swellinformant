@@ -13,7 +13,9 @@ import pytest
 from app.core.config import Settings
 from app.models.sync import SyncRun
 from app.services import health
+from app.services.sync.detect import settle_plan
 from app.services.sync.state import Heartbeat
+from app.services.sync.types import ComponentStatus, StageResult, SyncPlan, SyncResult
 
 NOW = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
 
@@ -259,6 +261,55 @@ def test_components_never_carry_a_provider_error() -> None:
     )
     assert health._component_out({"kind": "spots"}) is None
     assert health._component_out(raw | {"state": "nonsense"}) is None
+
+
+def test_a_failed_components_error_text_stays_out_of_the_public_report() -> None:
+    """settle_plan writes "sync N failed: <the stage's exception text>"; a database error
+    names the host, port and role (SYNTHETIC values here). The public report keeps only
+    which sync failed; the service's own failure details are shown as written."""
+    plan = SyncPlan(
+        checked_at=NOW,
+        due=True,
+        components=(
+            ComponentStatus(
+                kind="spots",
+                source_code="open_meteo_noaa",
+                provider="open_meteo",
+                state="new",
+                stored_run_key="gfs:2026102100",
+                available_run_key="gfs:2026102106",
+                available_cycle=datetime(2026, 10, 21, 6, tzinfo=UTC),
+            ),
+        ),
+        anchor_cycle=None,
+        reasons=("synthetic",),
+    )
+    error = (
+        "OperationalError: (psycopg.OperationalError) connection failed: connection to server "
+        'at "203.0.113.7", port 5432 failed: FATAL:  password authentication failed for user '
+        '"synthetic_owner"'
+    )
+    stage = StageResult(
+        "spots",
+        "failed",
+        NOW,
+        10,
+        0.1,
+        {"components": [{"source_code": "open_meteo_noaa", "outcome": "failed", "message": error}]},
+    )
+    settled = settle_plan(plan, SyncResult(7, "failed", plan, [stage], None))
+    internal = settled.components[0].as_dict()
+    assert internal["state"] == "failed" and "synthetic_owner" in internal["detail"]
+    out = health._component_out(internal)
+    assert out is not None and out.state == "failed"
+    assert out.detail == "sync 7 failed; the error text is not shown publicly"
+    for leaked in ("203.0.113.7", "5432", "synthetic_owner", "port", "user"):
+        assert leaked not in out.model_dump_json(), leaked
+    attempts = health._component_out(
+        internal | {"detail": "6 failed attempts for gfs:2026102106; waiting for the next run"}
+    )
+    assert attempts is not None and attempts.detail is not None
+    assert attempts.detail.startswith("6 failed attempts for gfs:2026102106")
 
 
 def test_sync_runs_are_served_without_error_text_or_stage_details() -> None:

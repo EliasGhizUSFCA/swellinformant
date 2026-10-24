@@ -60,6 +60,7 @@ cannot send its own alert: poll this endpoint from an external monitor as well
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -151,6 +152,12 @@ SYNC_FAILURES_IN_A_ROW = 2
 CPU_BUDGET_ALERT_FRACTION = 0.8
 # Component states whose detail is shown as written; "unknown" carries a provider error.
 UNKNOWN_COMPONENT_DETAIL = "the provider's run metadata could not be read"
+# A failed component's detail after a sync (detect.settle_plan) ends with the stage's
+# exception text (redacted for keys and addresses, but e.g. a database host, port and
+# role): the public report keeps only "sync N failed". The text stays in sync_runs and in
+# the admin email of a failed sync.
+SYNC_FAILURE_DETAIL = re.compile(r"^(sync \d+) failed\b")
+SYNC_FAILURE_PUBLIC = "{sync} failed; the error text is not shown publicly"
 DETAIL_MAX_CHARS = 300
 
 
@@ -963,12 +970,17 @@ def _component_out(
     raw: dict[str, Any], names: dict[str, str] | None = None
 ) -> SyncComponentOut | None:
     """One component of the daemon's last check (ComponentStatus.as_dict()). The detail of
-    an "unknown" component is a provider's error text: replaced by a plain statement."""
+    an "unknown" component is a provider's error text, and a failed one's after a sync ends
+    with the stage's exception text: both are replaced by a plain statement."""
     try:
         component_state = raw["state"]
         detail = raw.get("detail")
         if detail and component_state == "unknown":
             detail = UNKNOWN_COMPONENT_DETAIL
+        elif detail and component_state == "failed":
+            failed = SYNC_FAILURE_DETAIL.match(str(detail))
+            if failed:
+                detail = SYNC_FAILURE_PUBLIC.format(sync=failed.group(1))
         source = str(raw["source_code"])
         return SyncComponentOut(
             kind=raw["kind"],
