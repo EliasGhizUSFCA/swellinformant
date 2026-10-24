@@ -363,8 +363,15 @@ it):
 | `.[dev]` | all + pytest, ruff, mypy | development and CI (`pip install -e ".[dev]"`, as above) |
 
 The lean set from the lock, as Vercel installs it, in `backend/.venv`:
-`cd backend && uv sync --locked --no-dev` (132 MB measured; uv is pinned at 0.11.32
-everywhere: `pip install uv==0.11.32`). From the repository root,
+`cd backend && uv sync --locked --no-dev` (132 MB measured). This makes `backend/.venv`
+exactly the lean set: uv removes Celery, pandas, ecCodes and the dev tools from an existing
+venv, such as the one of section E.3 (reinstall with `pip install -e ".[dev]"`
+afterwards), so for a check next to your dev venv put it in its own:
+`UV_PROJECT_ENVIRONMENT=.venv-lean uv sync --locked --no-dev`. uv is pinned at 0.11.32
+everywhere; install that version with uv's pinned installer,
+`curl -LsSf https://astral.sh/uv/0.11.32/install.sh | sh` (not `python3 -m pip install`,
+which Homebrew's Python refuses under PEP 668, and not `brew install uv`, a newer version).
+From the repository root,
 `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` measures that set as the
 Vercel function would hold it (163.2 of 200 MB on 2026-10-23).
 
@@ -474,15 +481,19 @@ only on Vercel's website; step 4 runs on your machine):
 1. Vercel, Hobby plan: add a project from this GitHub repository and **leave the Root
    Directory at the repository root** (`vercel.json` defines the `web` and `api` services,
    the `sync` daemon and the daily cron).
-2. Vercel Marketplace: add **Neon Postgres** (Free, AWS us-east-1) and **Upstash Redis**
-   (Free) and connect both to the project; they set `DATABASE_URL`,
-   `DATABASE_URL_UNPOOLED` and `KV_URL`.
+2. Vercel Marketplace: add **Neon Postgres** (Free, AWS us-east-1) and connect it to the
+   project, and **Upstash Redis** (Free), connected to Production and Development only;
+   they set `DATABASE_URL` and `DATABASE_URL_UNPOOLED`, and `KV_URL`. Check: if only
+   `KV_REST_API_URL` and `KV_REST_API_TOKEN` appear, copy the database's `rediss://` URL
+   into `REDIS_URL` (docs/deploy-vercel.md step 4).
 3. Project Settings, Environment Variables: paste the hosted-profile block of
    docs/deploy-vercel.md step 5, then add `APP_ENV`, `SECRET_KEY` and `CRON_SECRET`
-   (`python -c "import secrets; print(secrets.token_urlsafe(48))"`), `COOKIE_SECURE=true`,
-   `APP_BASE_URL`, `API_BASE_URL`, `CORS_ORIGINS` and the email provider.
-4. Optional head start, from `backend/` with the lean install above: point `DATABASE_URL`
-   and `DATABASE_URL_UNPOOLED` at Neon's direct URL and run
+   (`python3.13 -c "import secrets; print(secrets.token_urlsafe(48))"`, or
+   `openssl rand -base64 48`), `COOKIE_SECURE=true`, `APP_BASE_URL`, `API_BASE_URL`,
+   `CORS_ORIGINS` and the email provider.
+4. Optional head start, from `backend/` with the dev venv of section E.3 (it works for
+   `init-db` and `make-admin`): point `DATABASE_URL` and `DATABASE_URL_UNPOOLED` at Neon's
+   direct URL (two `export` lines, docs/deploy-vercel.md step 6) and run
    `.venv/bin/python -m app.cli init-db` (the daemon also runs it at every start; this
    command was checked here against a local PostgreSQL, not against Neon).
 5. Redeploy production, then check `https://<project>.vercel.app/api/health/ready`, the
@@ -493,8 +504,16 @@ Free now: no payments, no ads (Vercel Hobby and the free Open-Meteo API are
 non-commercial). What each service costs now and after a paywall:
 [`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md), section 1.4; the checklist for
 both phases: [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Owner checklist".
-Email to other people needs a domain you own verified with the email provider; until then
-public sign-up is blocked in production.
+Email to other people needs a domain you own verified with the email provider. Before you
+have one: `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` from a free Resend account and
+`EMAIL_FROM=Swell Travel Agent <onboarding@resend.dev>`. Resend then delivers only to the
+address of your Resend account ("The resend.dev domain is only available for testing
+purposes and can only send emails to the email address associated with your Resend
+account"): register on the site with that address, verify it, run `make-admin` and set
+`OPS_ALERT_EMAILS` to it; switch `EMAIL_FROM` to your verified domain once you have one.
+Sign-up stays open: visitors can create accounts, but verification, password-reset and
+alert emails reach nobody (with the onboarding@resend.dev sender, only you) until the
+domain is verified. Do not publicise the site yet.
 
 ## F. Weather data
 
@@ -1123,7 +1142,7 @@ integration verifier on this tree's code):
 | `scripts/vercel-build-check.sh --offline` | `RESULT: ok`; API function 127.3 MiB (limit 500 MiB) |
 | `scripts/vercel-local.sh up`, `sync --force`, `smoke` | 19 of 19 shell checks and 6 of 6 Playwright smoke tests, with demo data and with live data |
 | `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.2 of 200 MB |
-| `npm audit --omit=dev`; pip-audit on `uv.lock` | 0 vulnerabilities; none known (after Next.js 16.4.1 and certifi 2026.10.19) |
+| `npm audit --omit=dev`; pip-audit on `uv.lock` | 0 vulnerabilities; none known (after Next.js 16.4.1 and certifi 2026.10.19). At the final review (2026-10-24) npm reported a high advisory in zod 4.6.5 that GitHub had reviewed after this run (GHSA-mrhx-c7xc-m3w5); with zod 4.6.6 no high or critical one remains, and one moderate: fast-uri below 3.1.9, under @hookform/resolvers and ajv, not fixed (docs/decisions.md, ADR-037) |
 
 **Continuous integration** (`.github/workflows/ci.yml`, GitHub Actions) runs on every
 push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python 3.13, uv
@@ -1278,9 +1297,10 @@ Checklist:
   the daemon's image build and start on Vercel (daemons cannot be previewed), the CDN
   caching, Neon's compute suspend and wake and its CU-hour accounting, real Upstash command
   counts, the daily cron invocation, previews, and the GitHub Actions jobs on GitHub.
-* A brand-new hosted deployment has no NOAA CO-OPS tide predictions until the daemon's first
-  02:20 UTC run (up to about 24 h; the daemon runs daily jobs by the clock, never at
-  start-up), and data health does not flag it.
+* A brand-new hosted deployment gets its NOAA CO-OPS tide predictions at the daemon's start
+  (the start-up catch-up runs every periodic job that has not succeeded within its longest
+  gap, `SYNC_DAEMON_CATCH_UP`), not at the next 02:20 UTC; data health flags tides never
+  acquired 3 h after the catalog was loaded (`tides_missing:<provider>`).
 
 **Demo-only**
 

@@ -38,7 +38,7 @@ Content-Security-Policy work exactly as on the classic Docker stack.
 |---|---|---|
 | Vercel | **Hobby**: "restricted to non-commercial personal use only". Free. | **Pro** ($20/month platform fee, $20 monthly usage credit) **before** the site asks for any payment: a paywall is "Any method of requesting or processing payment from visitors of the site", and ads count too. Donations do not. |
 | Open-Meteo (spot forecasts) | free API, non-commercial only | `COMMERCIAL_USE=true` plus `OPEN_METEO_API_KEY` (a paid plan). With the flag set and no key, the app refuses the free hosts. |
-| Neon | Free: 100 CU-hours, 1 GB storage and 5 GB egress per project. The free-database profile keeps about 1 day of forecast history and 1 week of verification archive, and syncs only for the 06Z and 18Z map cycles: about 2.01 GB of egress a month in the background (40 %) and about 20 CU-hours (docs/map-layers.md, "Free database budget"). | Launch ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then restore full retention (section 4, step 5). |
+| Neon | Free: 100 CU-hours, 1 GB storage and 5 GB egress per project. The free-database profile keeps about 1 day of forecast history and 1 week of verification archive, and syncs only for the 06Z and 18Z map cycles: about 2.01 GB of egress a month in the background (40 %) and about 20 CU-hours, at most about 37 with steady anonymous visitors (docs/map-layers.md, "Free database budget"); every signed-in page view also reads the database (`/api/auth/me`: 5 statements, measured), so signed-in traffic adds compute for the hours it spans. | Launch ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then restore full retention (section 4, step 5). |
 | Upstash | Free: 250 MB and 500K commands a month | pay-as-you-go ($0.2 per 100K commands, with a budget cap) or a Fixed plan (from $10/month) |
 | Daemon | Hobby quota: 10 Active CPU-hours a month (estimate for this app: 4.4-7.9 when every new model run is synced, docs/sync.md; less with the free-database cadence) | Pro: billed for Active CPU and memory; optional `JOB_INTERVAL_FLOOR_MINUTES=0`, `SYNC_CHECK_MINUTES=5`, a 4Gi daemon |
 | Logs | runtime logs kept 1 hour | 1 day on Pro |
@@ -81,9 +81,16 @@ not emulate.
 It runs Vercel's own build (`vercel build`, Vercel CLI 64.5.0 through `npx`) on a temporary
 copy of the repository and checks the result against Vercel's limits:
 
+Without a login (about 1 minute with a warm npm cache):
+
 ```bash
-scripts/vercel-build-check.sh --offline          # no login; about 1 min with a warm npm cache
-scripts/vercel-build-check.sh --offline --keep   # keep the build directory to look at it
+scripts/vercel-build-check.sh --offline
+```
+
+With `--keep` it keeps the build directory, so you can look at it:
+
+```bash
+scripts/vercel-build-check.sh --offline --keep
 ```
 
 CI runs `scripts/vercel-build-check.sh --offline` on every push and pull request (the
@@ -132,8 +139,13 @@ Steps that worked here (Vercel CLI 64.5.0, Linux, 2026-10-23):
    to fetch the project and fails without a login).
 2. Install the API's lean dependencies (the versions of `backend/uv.lock`, as Vercel
    installs them) into `backend/.venv`: `cd backend && uv sync --locked --no-dev`
-   (132 MB; no Celery, pandas, ecCodes or scikit-learn). It needs uv; the repository pins
-   0.11.32 everywhere (`pip install uv==0.11.32`).
+   (132 MB; no Celery, pandas, ecCodes or scikit-learn). This makes `backend/.venv` exactly
+   the lean set: uv removes Celery, pandas, ecCodes and the dev tools from an existing venv,
+   such as the one of README E.3 (reinstall them with `pip install -e ".[dev]"`
+   afterwards). It needs uv; the repository pins 0.11.32 everywhere. Install that version
+   with uv's pinned installer: `curl -LsSf https://astral.sh/uv/0.11.32/install.sh | sh`
+   (not `python3 -m pip install`, which Homebrew's Python refuses under PEP 668, and not
+   `brew install uv`, which is a newer version).
 3. Start PostgreSQL and Redis (for example `docker compose up -d postgres redis`), then
    initialise the database from `backend/`:
    `DATABASE_URL=postgresql://swell:swell@localhost:5432/swell .venv/bin/python -m app.cli init-db`
@@ -155,7 +167,7 @@ production build (that is 3.2).
 ### 3.4 Known security advisories
 
 Before a production deploy, ask npm whether the web service's dependencies have published
-advisories:
+advisories (from the repository root):
 
 ```bash
 cd frontend && npm audit --omit=dev
@@ -164,7 +176,12 @@ cd frontend && npm audit --omit=dev
 It exits 0 when there are none. Fix a `high` or `critical` one first (usually a patch
 release of the package, for example Next.js); a public site is exposed from the first day.
 On 2026-10-23 it found three advisories in Next.js 16.4.0 (two critical); after the upgrade
-to 16.4.1 it reports 0 vulnerabilities (docs/decisions.md, ADR-037).
+to 16.4.1 it reported 0 vulnerabilities. Later that day GitHub reviewed a high one in zod
+4.6.5 (GHSA-mrhx-c7xc-m3w5: memory exhaustion while validating oversized arrays; zod runs
+only in the browser's form validation), fixed by zod 4.6.6. On 2026-10-24 it reports no
+high or critical advisory and one moderate one: fast-uri below 3.1.9 (GHSA-w74x-v6f9-j3xg
+and three others), a dependency of ajv under @hookform/resolvers, not fixed yet
+(docs/decisions.md, ADR-037).
 
 ### 3.5 Upgrading a database from before Upgrade 4
 
@@ -209,8 +226,10 @@ Production, Preview and Development.
 ### Step 4. Upstash Redis (Vercel Marketplace)
 
 Install Upstash Redis from the Marketplace, Free plan, region us-east-1, and connect it to
-the project. The app reads `KV_URL` (a `rediss://` URL; Upstash always uses TLS) when
-`REDIS_URL` is not set. `KV_REST_API_URL` and `KV_REST_API_TOKEN` are not used.
+Production and Development only (section 6: a preview on the production Redis would share
+its rate-limit counters and the kick flags the daemon reads). The app reads `KV_URL` (a
+`rediss://` URL; Upstash always uses TLS) when `REDIS_URL` is not set. `KV_REST_API_URL`
+and `KV_REST_API_TOKEN` are not used.
 
 Check it: in Project Settings, Environment Variables, look for `KV_URL` (or `REDIS_URL`).
 The Marketplace page showed `KV_URL` in its snippets on 2026-10-18, but only the REST
@@ -272,19 +291,30 @@ this costs).
 | Variable | Production | Preview | Why |
 |---|---|---|---|
 | `APP_ENV` | `production` | `development` | production refuses a development secret key, dev endpoints, insecure cookies and email providers that only capture mail |
-| `SECRET_KEY` | 64 random characters | a different random value | required in production (the development default is refused); it keys the rate-limit counters; `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `SECRET_KEY` | 64 random characters | a different random value | required in production (the development default is refused); it keys the rate-limit counters; `python3.13 -c "import secrets; print(secrets.token_urlsafe(48))"` (the interpreter of README D) or `openssl rand -base64 48` |
 | `CRON_SECRET` | 16+ random characters | not needed | Vercel Cron sends it as `Authorization: Bearer ...`; without it the watchdog route answers 404 |
 | `COOKIE_SECURE` | `true` | `true` | the site is HTTPS-only |
 | `APP_BASE_URL` | `https://<project>.vercel.app` | leave unset | links in emails |
 | `API_BASE_URL` | `https://<project>.vercel.app` | leave unset | email-provider webhook validation |
 | `CORS_ORIGINS` | `https://<project>.vercel.app` | leave unset | the browser calls the same origin; kept consistent |
-| `EMAIL_PROVIDER`, `EMAIL_FROM` and the provider's key (`RESEND_API_KEY`, `SENDGRID_API_KEY` or `SMTP_*`) | a real provider | `console` | docs/API_SETUP_REQUIRED.md, section 2.11 |
+| `EMAIL_PROVIDER`, `EMAIL_FROM` and the provider's key (`RESEND_API_KEY`, `SENDGRID_API_KEY` or `SMTP_*`) | a real provider (before you have a domain: Resend's testing sender, below) | `console` | docs/API_SETUP_REQUIRED.md, section 2.11 |
 | `OPEN_METEO_API_KEY` | only with a paid Open-Meteo plan | | required once `COMMERCIAL_USE=true` |
 | `FLIGHT_PROVIDER`, `SMS_PROVIDER` and their keys | as in docs/API_SETUP_REQUIRED.md | | optional |
 
 Email needs a domain verified with the email provider, and this project has no custom
-domain yet (it runs on `*.vercel.app`). Until then, account emails cannot reach other
-people, so public sign-up is blocked in production. Previews use `EMAIL_PROVIDER=console`,
+domain yet (it runs on `*.vercel.app`). Production refuses the `console` and `mailpit`
+providers, so the API, the daemon and the build command need a real one from the start.
+
+**Before you have a domain**: `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` from a free Resend
+account, `EMAIL_FROM=Swell Travel Agent <onboarding@resend.dev>`. Resend then delivers only
+to the address of your Resend account ("The resend.dev domain is only available for testing
+purposes and can only send emails to the email address associated with your Resend
+account"). Register on the site with that address, verify it, run `make-admin` (step 6) and
+set `OPS_ALERT_EMAILS` to it. Switch `EMAIL_FROM` to your verified domain once you have one.
+
+Sign-up stays open: visitors can create accounts, but verification, password-reset and
+alert emails reach nobody (with the onboarding@resend.dev sender, only you) until the
+domain is verified. Do not publicise the site yet. Previews use `EMAIL_PROVIDER=console`,
 which only writes the messages to the function's log and a temporary outbox file
 (`OUTBOX_DIR`); nothing is delivered.
 
@@ -296,16 +326,23 @@ yourself means the site has its spots before the daemon's first sync.
 
 1. Copy the **direct** connection string (`DATABASE_URL_UNPOOLED`) from the database's page
    in Vercel's Storage tab, or from the Neon console.
-2. From `backend/` in your checkout, with the lean install of section 3.3, step 2
-   (`uv sync --locked --no-dev`; it is enough for `init-db`):
+2. From `backend/` in your checkout, with the dev venv of README E.3 (`backend/.venv`;
+   it works for `init-db` and `make-admin`). If you want the lean set instead, put it in a
+   venv of its own, so the dev venv keeps its packages:
+   `UV_PROJECT_ENVIRONMENT=.venv-lean uv sync --locked --no-dev`, then use
+   `.venv-lean/bin/python` below.
 
    ```bash
-   export DATABASE_URL='postgresql://...direct URL...' DATABASE_URL_UNPOOLED="$DATABASE_URL"
+   export DATABASE_URL='postgresql://...direct URL...'
+   export DATABASE_URL_UNPOOLED="$DATABASE_URL"
    .venv/bin/python -m app.cli init-db
    ```
 
    Both variables name the same database on purpose: the app uses `DATABASE_URL_UNPOOLED`
-   only when it names the same database as `DATABASE_URL`.
+   only when it names the same database as `DATABASE_URL`. Keep the two `export` lines
+   apart: in one `export` the shell expands `$DATABASE_URL` before it assigns the new
+   value, so `DATABASE_URL_UNPOOLED` would get the previous one (empty in a new shell, or an
+   earlier branch's URL, which migrations would then use).
 3. Later, after you have registered on the site and verified your email address:
    `.venv/bin/python -m app.cli make-admin you@example.com` (same environment). The data-health
    alerts go to active admin accounts with a verified email address.
@@ -402,10 +439,14 @@ Every pull request gets a preview deployment with its own URL.
   Preview environment (it then migrates that preview's branch, never production). Without
   Preview Branching, previews share the production database: keep `MIGRATE_ON_BUILD` at
   `production` then.
-- **Redis**: if Upstash is connected to Preview too, previews share the production Redis
-  (rate-limit counters and the kick flags the daemon reads). To keep previews apart,
-  connect Upstash to Production (and Development) only; previews then run without Redis,
-  rate limits fail open, and "match my search" kicks are not delivered.
+- **Redis**: if Upstash is connected to Preview too, previews share the production Redis:
+  its rate-limit counters and the kick flags the daemon reads. The public snapshot cache is
+  kept apart since the final review: a preview stores its payloads under a namespace of its
+  own (`public:v1:preview:<digest of the deployment>`), so production never serves what a
+  preview's code or database computed (before, it could, for up to an hour). Connect
+  Upstash to Production and Development only (step 4) to keep previews apart altogether;
+  previews then run without Redis, rate limits fail open, and "match my search" kicks are
+  not delivered.
 - **Access**: Vercel's standard Deployment Protection covers previews ("Protects all
   deployments **except** production domains").
 
@@ -442,21 +483,31 @@ the daemon stays the scheduler.
 - Secrets: `DATABASE_URL_UNPOOLED` (Neon's direct URL), `KV_URL` or `REDIS_URL`,
   `SECRET_KEY` (any long random value; the run uses `APP_ENV=production`, which refuses the
   development default),
-  and the provider keys the deployment uses: `OPEN_METEO_API_KEY`, `RESEND_API_KEY`,
-  `SENDGRID_API_KEY`, `SMTP_PASSWORD`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
-  `DUFFEL_ACCESS_TOKEN`, `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET` (only the ones you
-  use). GitHub does not pass secrets to runs triggered from forks.
+  and the provider keys and private values the deployment uses: `OPEN_METEO_API_KEY`,
+  `RESEND_API_KEY`, `SENDGRID_API_KEY`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
+  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`,
+  `TWILIO_MESSAGING_SERVICE_SID`, `DUFFEL_ACCESS_TOKEN`, `AMADEUS_CLIENT_ID`,
+  `AMADEUS_CLIENT_SECRET` (only the ones you use). GitHub does not pass secrets to runs
+  triggered from forks.
 - Variables: `APP_BASE_URL`, `EMAIL_PROVIDER` (`smtp`, `resend` or `sendgrid`) and
-  `EMAIL_FROM` (all three required), and any setting you changed on Vercel (for example
-  `GEFS_ENABLED`). Variables override the hosted profile; names that are not app settings
-  are ignored with a warning, and so is any setting named like a credential (`*_KEY`,
-  `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, the database and Redis URLs): those are read only
-  from secrets. The run always uses `APP_ENV=production`, so it stops at the configuration
-  step without a real email provider instead of marking alerts as sent to nowhere.
-- The log of a public repository is public. The run prints the names of the variables it
-  applied, never their values; GitHub masks the secrets.
-- It installs the backend with the `sync` extra at the versions in `backend/uv.lock`, the
-  same versions the daemon image installs.
+  `EMAIL_FROM` (all three required), and any non-secret, non-personal setting you changed
+  on Vercel among those the workflow reads (the `VARIABLE_*` entries of its Configuration
+  step: for example `GEFS_ENABLED`, `FORECAST_PROVIDERS`, the sync and retention settings,
+  `SMTP_HOST`). Variables override the hosted profile. Never make `CRON_SECRET`,
+  `OPS_ALERT_EMAILS` or `SMTP_USERNAME` a variable (the sync uses neither of the first two;
+  `SMTP_USERNAME` is a secret); a setting named like a credential (`*_KEY`, `*_SECRET`,
+  `*_TOKEN`, `*_PASSWORD`, the database and Redis URLs) is ignored with a warning even if
+  it were listed. The run always uses `APP_ENV=production`, so it stops at the
+  configuration step without a real email provider instead of marking alerts as sent to
+  nowhere.
+- GitHub prints each step's environment, with the values, at the top of the step's log,
+  and this repository's logs are public: the value of every repository variable the
+  workflow reads is public. It reads only the public settings it lists, by name (never
+  `toJSON(vars)`, so a value saved under another name is not printed). Save only public
+  values as variables, never a credential or a private address. GitHub masks the secrets.
+- It installs the backend with the `sync` extra from `backend/uv.lock` with
+  `uv sync --locked`, which checks every file against its hash in the lock, as the daemon
+  image does.
 
 **Run it**: Actions, "Data sync (manual)", Run workflow. Inputs: `force` (run every stage
 even when no new model run is out; runs already stored are still skipped), `only` (a
@@ -568,7 +619,11 @@ Docker 29.8.2 with Compose 5.6.0. Results of 2026-10-23 unless a date is given.
   `migrate`, `check-config`, `sync run --trigger github --force --only spots` and
   `sync status` against a scratch database with the synthetic `demo` provider, and the
   sync finished `success` in 25.9 s. Variables named like credentials were left out with a
-  warning and no variable value reached the log. Not run on GitHub itself.
+  warning, and the script printed no variable value. That local re-run could not show the
+  runner's own environment header, which prints every value in a step's environment: the
+  workflow then passed `toJSON(vars)`, so all repository variables would have been printed
+  (found at the final review; it now reads only the public settings it lists). Not run on
+  GitHub itself.
 - **Not checked here**: a real deployment (no Vercel account was used), the daemon image
   build and start on Vercel, Neon and Upstash themselves, the cron invocation, previews.
 

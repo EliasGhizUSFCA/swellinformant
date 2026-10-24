@@ -885,7 +885,7 @@ this pass:
 | Data only on update | `sync check`, `sync run`, `sync check`, `sync run --force` ×3, `sync daemon --once` on a fresh database, hosted + free-database profile, real providers | second check 0 SQL statements, 8 requests / 3,588 B; a forced re-sync over stored data changed no data row and left the swell events identical; the daemon iteration made 3 start-up SELECTs and metadata requests only |
 | Egress at the final code | `scripts/measure_db_egress.py` on replayed copies of a recorded live run | within 0.04 MB of round 2's figures (section 41) |
 | Upgrade path | a copy of a pre-Upgrade-4 database migrated to head | before 0008: no publication; after: one publication row, the index and `/status` name it, the known runs load |
-| Dependency audits | `npm audit --omit=dev`; pip-audit 2.9.0 on every extra of `uv.lock` | 0 vulnerabilities; no known vulnerabilities (after Next.js 16.4.1 and certifi 2026.10.19) |
+| Dependency audits | `npm audit --omit=dev`; pip-audit 2.9.0 on every extra of `uv.lock` | 0 vulnerabilities; no known vulnerabilities (after Next.js 16.4.1 and certifi 2026.10.19). Re-run at the final review (2026-10-24): GitHub had reviewed a high advisory in zod 4.6.5 (GHSA-mrhx-c7xc-m3w5) the evening before, fixed by zod 4.6.6; then no high or critical one, and one moderate (fast-uri below 3.1.9, under @hookform/resolvers and ajv; not fixed) |
 | Documentation tests (this pass) | `pytest tests/unit/test_api_setup_doc.py tests/unit/test_upgrade_settings.py tests/unit/test_local_vercel_stack.py tests/unit/test_vercel_deploy.py tests/unit/test_compose_classic.py tests/unit/test_surf_scoring_doc.py tests/unit/test_free_database_cadence.py` | 77 passed (the settings table, `.env.example`, the hosted-profile block of the deploy guide, both env templates and compose files) |
 
 Mutation checks across the packages and rounds: every listed mutation of the new tests was
@@ -903,8 +903,8 @@ review, 10 of 10 in the wave renderer, the eight of the egress tests and four of
 | Page views, anonymous, no CDN, cold / warm | home 397.4 / 0.0 kB; map 2,513.8 / 722.4 kB (the 9 fields; the CDN keeps them a year per run); spot page 1,181.1 / 0.0 kB | the same, `pages` |
 | Monthly background egress, free-database profile | **2.01 GB (40 % of Neon Free's 5 GB)**: 60 syncs × 21.28 MB + 720 hourly batches × 0.87 MB + daily jobs and start-ups; old cadence 4.32 GB; before the egress work 7.12 GB | computed from the measured unit costs |
 | With visitors | quiet (100 views a day) 2.41 GB in all, fits; steady (1,000 views a day) 5.37 GB, does not fit | computed for stated example traffic |
-| Neon compute | about 20 CU-hours a month in the background, at most about 37 with steady visitors (100 included) | arithmetic: 0.25 CU, active until 5 min after the last statement |
-| Upstash commands | about 68,000 a month (daemon); about 375,000 with steady visitors (500K included) | measured commands per check, poll and view, times the cadence |
+| Neon compute | about 20 CU-hours a month in the background, at most about 37 with steady anonymous visitors (100 included); signed-in views are extra (each reads the database: `/api/auth/me` 5 statements, a dashboard about 27, measured at the final review) | arithmetic: 0.25 CU, active until 5 min after the last statement |
+| Upstash commands | about 79,000 a month (daemon: 4 commands per job run, the lock and the CPU counter, 7 for data health); about 386,000 with steady visitors (500K included), plus at most about 17,000 for the per-visitor miss limit of the final review (2 commands per computed key, 12 keys an hour): about 403,000 (81 %) | measured commands per check, poll, job and view, times the cadence (corrected at the final review: the first count left out each job's CPU counter) |
 | Daemon CPU, full cadence | 4.4-7.9 CPU-hours a month (10 included on Hobby) | extrapolated from measured CPU per stage (docs/sync.md) |
 | A live sync in the local stack (9 map hours) | map layers: 73.3 MB in 63 requests, 135 fields, 10.6 MB stored, 38.6 s / 30.9 CPU s; GFS spots: 10,264 records, 58.9 s / 10.5 CPU s | stack logs, 2026-10-23 |
 | Second check after a sync (stack) | 30,145 B received / 22,667 B sent, 0 rows changed | `/proc/net/dev` and `pg_stat_database` before and after |
@@ -935,7 +935,10 @@ The first production deploy is the test of these:
   (no key);
 * the GitHub Actions jobs (`deploy-config`, `vercel-build`, `data-sync.yml`) on GitHub;
 * the daemon's monthly CPU on Vercel's vCPU (the estimate assumes this sandbox's speed);
-* the database cost of signed-in visitors (session reads) and of uncached visitor URLs;
+* the database cost of signed-in visitors on Neon itself (measured at the final review in one
+  process: every signed-in view runs `/api/auth/me`, 5 statements; a dashboard about 27) and
+  of uncached visitor URLs (now one key per map hour, and at most 120 misses an hour per
+  client IP);
 * a live two-family ECMWF acquisition in this round (Open-Meteo served its 06Z ECMWF run,
   which this source does not read); Firefox, WebKit, GPU-backed rendering and real phones.
 
@@ -948,14 +951,22 @@ The first production deploy is the test of these:
   The map layers are more than half of the estimate.
 * **Neon Free can still bind**: steady traffic (1,000 views a day) needs about 5.37 GB of
   egress; anything that reaches the database every 5 minutes keeps the compute awake (180
-  CU-hours a month). Signed-in traffic was not measured.
+  CU-hours a month). Every signed-in page view reads the database (measured at the final
+  review: `/api/auth/me` 5 statements, a dashboard about 27); open pages no longer poll it
+  (the dashboard and `/status` re-read on focus). Requests made on purpose to miss the
+  cache could use up the 5 GB of egress (about 14,000 conditions computations), after which
+  Neon suspends the compute until the next billing period; since the final review one
+  client IP gets at most 120 misses an hour (`PUBLIC_CACHE_MISS_LIMIT_PER_HOUR`), so it
+  takes many clients.
 * **Open-Meteo's free limit is per IP**, and the daemon's address may be shared: refusals
   delay a source to the next UTC day; an API key removes the risk.
 * **Freshness on the free database**: spot forecasts change twice a day; a GFS run can read
   stale for up to about 1.3 h before each sync; if NOAA's map layers fail, no sync runs
   (estimated, not observed live).
-* **Tides after a fresh deploy**: none until the first 02:20 UTC run of the daemon (up to
-  about 24 h), not flagged by data health.
+* **Tides after a fresh deploy**: fixed at the final review. The daemon runs every overdue
+  periodic job once at start (`SYNC_DAEMON_CATCH_UP`), so the tides come within minutes, and
+  data health flags tides never acquired 3 h after the catalog was loaded
+  (`tides_missing:<provider>`).
 * **Logs**: Hobby keeps runtime logs 1 hour; diagnosis relies on `sync_runs`, the job logs,
   `/status` and the watchdog email.
 * **Young releases**: Next.js 16.4.1 is 9 days old (the oldest release with the security
@@ -984,28 +995,42 @@ The first production deploy is the test of these:
 4. **Neon**: Vercel Marketplace (Storage), Neon Postgres, **Free**, region **AWS us-east-1**,
    connected to Production, Preview and Development. Check that `DATABASE_URL` and
    `DATABASE_URL_UNPOOLED` appear in Environment Variables. *(Vercel's website.)*
-5. **Upstash**: Vercel Marketplace, Upstash Redis, **Free**, us-east-1, connected to the
-   project. Check for `KV_URL` (or `REDIS_URL`); if neither appears, copy the database's
-   `rediss://` URL into a `REDIS_URL` variable. *(Vercel's website.)*
-6. **Email: Resend and a domain.** A domain you own (a registrar's price; not researched
-   here); a Resend account (free: 3,000 emails a month, 100 a day); verify the domain in
-   Resend with its SPF, DKIM and DMARC records; create an API key. Until the domain is
-   verified, account emails cannot reach other people, so keep public sign-up closed.
+5. **Upstash**: Vercel Marketplace, Upstash Redis, **Free**, us-east-1, connected to
+   Production and Development only (a preview on the production Redis shares its rate-limit
+   counters and the daemon's kick flags; docs/deploy-vercel.md section 6). Check for
+   `KV_URL` (or `REDIS_URL`); if neither appears, copy the database's `rediss://` URL into a
+   `REDIS_URL` variable. *(Vercel's website.)*
+6. **Email: Resend and a domain.** A Resend account (free: 3,000 emails a month, 100 a day)
+   and an API key. Before you have a domain: `EMAIL_FROM=Swell Travel Agent
+   <onboarding@resend.dev>`. Resend then delivers only to the address of your Resend account
+   ("The resend.dev domain is only available for testing purposes and can only send emails
+   to the email address associated with your Resend account"): register on the site with
+   that address, verify it, run `make-admin` (step 12) and set `OPS_ALERT_EMAILS` to it.
+   Later, a domain you own (a registrar's price; not researched here), verified in Resend
+   with its SPF, DKIM and DMARC records; then switch `EMAIL_FROM` to it. Sign-up stays open:
+   visitors can create accounts, but verification, password-reset and alert emails reach
+   nobody (with the onboarding@resend.dev sender, only you) until the domain is verified.
+   Do not publicise the site yet.
 7. **Secrets**, generated on your machine, two different values:
-   `python -c "import secrets; print(secrets.token_urlsafe(48))"` for `SECRET_KEY` and for
-   `CRON_SECRET`.
+   `python3.13 -c "import secrets; print(secrets.token_urlsafe(48))"` (or
+   `openssl rand -base64 48`) for `SECRET_KEY` and for `CRON_SECRET`.
 8. **Environment variables** (Project Settings, Environment Variables; docs/deploy-vercel.md
    step 5): paste the hosted-profile block for Production and Preview; then `APP_ENV`
    (`production`; Preview `development`), `SECRET_KEY`, `CRON_SECRET` (Production),
    `COOKIE_SECURE=true`, `APP_BASE_URL`, `API_BASE_URL` and `CORS_ORIGINS`
-   (`https://<project>.vercel.app` or your domain), `EMAIL_PROVIDER=resend`, `EMAIL_FROM` on
-   your verified domain, `RESEND_API_KEY`, and `OPS_ALERT_EMAILS` with your own address (the
-   only alert that still goes out when the database is down). Keep `FLIGHT_PROVIDER=demo`
+   (`https://<project>.vercel.app` or your domain), `EMAIL_PROVIDER=resend`, `EMAIL_FROM`
+   (`Swell Travel Agent <onboarding@resend.dev>` until your domain is verified, then an
+   address on it), `RESEND_API_KEY`, and `OPS_ALERT_EMAILS` with your own address (your
+   Resend account's while you use the testing sender; the only alert that still goes out
+   when the database is down). Keep `FLIGHT_PROVIDER=demo`
    until you have a flight provider. *(Vercel's website.)*
-9. **Optional head start**: from `backend/` with the lean install (`uv sync --locked
-   --no-dev`), point `DATABASE_URL` and `DATABASE_URL_UNPOOLED` at Neon's direct URL and run
-   `.venv/bin/python -m app.cli init-db` (docs/deploy-vercel.md step 6; checked here against
-   a local PostgreSQL only). The daemon runs it at every start anyway.
+9. **Optional head start**: from `backend/` with the dev venv of README E.3 (it works for
+   `init-db` and `make-admin`; `uv sync --locked --no-dev` would strip it to the lean set,
+   so put a lean install in its own venv: `UV_PROJECT_ENVIRONMENT=.venv-lean uv sync
+   --locked --no-dev`), point `DATABASE_URL` and then `DATABASE_URL_UNPOOLED` at Neon's
+   direct URL (two `export` lines, docs/deploy-vercel.md step 6) and run
+   `.venv/bin/python -m app.cli init-db` (checked here against a local PostgreSQL only).
+   The daemon runs it at every start anyway.
 10. **Deploy**: redeploy production (variables reach new deployments only). The api build
     migrates the database; Vercel builds the daemon image and starts it. *(Vercel.)*
 11. **Check** (*on the deployment*): `https://<project>.vercel.app/api/health/ready` answers
@@ -1015,16 +1040,21 @@ The first production deploy is the test of these:
     the first sync can wait up to 90 minutes while the map cycle and the GFS spot run of the
     same cycle wait for each other); the map shows the wave layer; the watchdog answers 200
     to `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily`.
-12. **Make yourself admin** after registering and verifying your email address:
-    `.venv/bin/python -m app.cli make-admin you@example.com` with the same environment as
-    step 9 (admins get the data-health emails and the accuracy dashboard).
-13. **Keep the free tiers healthy**: no uptime monitor on `/api/health/ready` more often
-    than every 15 minutes (each hit wakes Neon); watch the `/status` CPU meter (10 Active
-    CPU-hours a month; if it runs high, `MAP_FIELD_PARTITIONS=off` or a shorter map horizon);
-    keep `GEFS_ENABLED=false`; look at Neon's usage page now and then (egress budget 2.01 GB
-    of 5 in the background). Do not add a schedule to `data-sync.yml` (GitHub's terms); add
-    its repository secrets only if you want the manual emergency sync (docs/deploy-vercel.md
-    section 8).
+12. **Make yourself admin** after registering and verifying your email address (your Resend
+    account's address while you use the testing sender, step 6):
+    `.venv/bin/python -m app.cli make-admin you@example.com` with the dev venv and the same
+    environment as step 9 (admins get the data-health emails and the accuracy dashboard).
+13. **Keep the free tiers healthy**: point an uptime monitor at `/api/health` (the API
+    without the database) or at `/`, at any rate; never at `/api/health/ready` or
+    `/api/health/data?strict=true`, which wake Neon on every hit (every 15 minutes costs
+    about 45-60 CU-hours a month, on top of about 20 in the background; hourly at most about
+    15): on Neon Free the daily watchdog covers the database. Close `/status` when you are
+    done (an open tab re-reads on focus, and every minute while a sync runs). Watch the
+    `/status` CPU meter (10 Active CPU-hours a month; if it runs high,
+    `MAP_FIELD_PARTITIONS=off` or a shorter map horizon); keep `GEFS_ENABLED=false`; look at
+    Neon's usage page now and then (egress budget 2.01 GB of 5 in the background). Do not
+    add a schedule to `data-sync.yml` (GitHub's terms); add its repository secrets only if
+    you want the manual emergency sync (docs/deploy-vercel.md section 8).
 
 ### Paywall later (before the site shows any price or checkout)
 
@@ -1068,10 +1098,16 @@ templates. This pass: `.env.example` no longer sets `SYNC_LEASE_MINUTES=45` expl
 
 Left open:
 
-* **Tides on a fresh hosted deployment** (section 43): the daemon could run a daily job at
-  start when it has never succeeded, or data health could flag "no tide predictions yet".
-* **Database cost of signed-in visitors** and uncached URLs: unmeasured; they decide whether
-  Neon's compute can scale to zero.
+* **Tides on a fresh hosted deployment** (section 43): done at the final review: the
+  daemon's start-up catch-up and the `tides_missing:<provider>` problem.
+* **Database cost of signed-in visitors** and uncached URLs: measured at the final review
+  in one process (every signed-in page view runs `/api/auth/me`, 5 statements; a dashboard
+  about 27), not on Neon; they decide whether Neon's compute can scale to zero. Open pages
+  no longer poll the database, every `?at=` maps to one of a bounded set of cache keys, and
+  a client IP gets at most `PUBLIC_CACHE_MISS_LIMIT_PER_HOUR` (120) cache misses an hour,
+  then 429. Many clients together could still use up Neon Free's 5 GB of egress on purpose
+  (one conditions computation sends about 358 kB), and Neon then suspends the compute until
+  the next billing period (docs/map-layers.md, "Free database budget").
 * **Steady traffic does not fit Neon Free**: a spot page's cached responses cost 1.16 MB to
   compute (mostly the 10-day forecast and the timeline), and scoring reads 10.85 MB per
   pass (2.61 MB of it tide predictions); both could be narrowed.

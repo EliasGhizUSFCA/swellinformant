@@ -43,11 +43,12 @@ is the hosted free profile (`profile_env("hosted", "free-database")` in
 
 ## Live weather data
 
+Copy the example settings, then start the stack and sync once. For a short test, first add
+a 24-hour map horizon (9 map hours, about 70 MB a cycle) to `.env.vercel.local`: the lines
+`MAP_FIELD_STEPS=0-24:3` and `MAP_FIELD_MAX_LEAD_HOURS=24`.
+
 ```bash
 cp .env.vercel.example .env.vercel.local
-# optional, for a short test: a 24-hour map horizon (9 map hours, about 70 MB a cycle)
-#   MAP_FIELD_STEPS=0-24:3
-#   MAP_FIELD_MAX_LEAD_HOURS=24
 scripts/vercel-local.sh up
 scripts/vercel-local.sh sync --force
 ```
@@ -168,12 +169,12 @@ never runs it. The token never appears on a command line or in a retained Playwr
 ## Neon development branches and Upstash
 
 To try the stack against a real Neon database, create a development branch in Neon (never
-the production branch) and put its URLs in `.env.vercel.local`:
+the production branch) and put its URLs in `.env.vercel.local` (the third line is optional:
+an Upstash database instead of the local Redis):
 
-```bash
+```env
 VERCEL_LOCAL_DATABASE_URL=postgresql://USER:PASSWORD@ep-...-pooler.REGION.aws.neon.tech/neondb?sslmode=require
 VERCEL_LOCAL_DATABASE_URL_UNPOOLED=postgresql://USER:PASSWORD@ep-....REGION.aws.neon.tech/neondb?sslmode=require
-# optional: an Upstash database instead of the local Redis
 VERCEL_LOCAL_REDIS_URL=rediss://default:TOKEN@HOST:6379
 ```
 
@@ -221,10 +222,11 @@ web and api services only; this stack is the local check of the daemon image.
 ## Tests against this stack
 
 The API's PgBouncer test (`backend/tests/integration/test_pgbouncer_mode.py`) can use the
-stack's pooler: create a test database and point both URLs at it.
+stack's pooler: create a test database and point both URLs at it. First open psql on the
+stack's database with `scripts/vercel-local.sh psql` and run
+`CREATE DATABASE swell_test_pgb;` there; then:
 
 ```bash
-scripts/vercel-local.sh psql   # then: CREATE DATABASE swell_test_pgb;
 cd backend
 TEST_DATABASE_URL=postgresql+psycopg://swell:swell@localhost:55432/swell_test_pgb \
 TEST_PGBOUNCER_URL=postgresql+psycopg://swell:swell@localhost:56432/swell_test_pgb \
