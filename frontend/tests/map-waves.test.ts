@@ -158,14 +158,16 @@ describe("height and drawing styles", () => {
     expect(dashAlpha(4)).toBeGreaterThan(dashAlpha(1));
     expect(dashWidth(4, "secondary")).toBeGreaterThan(dashWidth(1, "secondary"));
     expect(dashLength(4, "primary")).toBeGreaterThan(dashLength(1, "primary"));
-    expect(blobDepth(4, "primary", v, sp)).toBeGreaterThan(blobDepth(1, "primary", v, sp));
+    // The smear is speed x time (the crest's motion), not height: never shallower for a higher sea.
+    expect(blobDepth(4, "primary", v, sp)).toBeGreaterThanOrEqual(blobDepth(1, "primary", v, sp));
     // The stated formulas and their limits (docs/map-rendering.md section 4.6): length along
-    // the crest clamp(6 + 0.8 Hs, 6.5, 10) px ...
+    // the crest clamp(4 + 0.7 Hs, 4.5, 7.2) px ...
     for (const [hs, len] of [
-      [0, 6.5],
-      [2, 7.6],
-      [4, 9.2],
-      [10, 10],
+      [0, 4.5],
+      [1.5, 5.05],
+      [2, 5.4],
+      [4, 6.8],
+      [10, 7.2],
     ] as const)
       expect(dashLength(hs, "primary")).toBeCloseTo(len, 12);
     // ... the secondary's bar width clamp(1.8 + 0.3 Hs, 1.8, 3.4) ...
@@ -175,12 +177,12 @@ describe("height and drawing styles", () => {
       [10, 3.4],
     ] as const)
       expect(dashWidth(hs, "secondary")).toBeCloseTo(width, 12);
-    // ... and D11's opacity: clamp(0.40 + 0.09 Hs, 0.40, 0.90).
+    // ... and the opacity: clamp(0.40 + 0.14 Hs, 0.40, 0.95).
     expect(dashAlpha(0)).toBe(0.4);
-    expect(dashAlpha(2)).toBeCloseTo(0.58, 12);
-    expect(dashAlpha(10)).toBe(0.9);
+    expect(dashAlpha(2)).toBeCloseTo(0.68, 12);
+    expect(dashAlpha(10)).toBe(0.95);
     // A long split dash for the secondary swell, a short shallow one for the wind sea (shape, not colour alone).
-    expect(dashLength(4, "secondary")).toBeCloseTo(1.8 * dashLength(4, "primary"), 10);
+    expect(dashLength(4, "secondary")).toBeCloseTo(2.5 * dashLength(4, "primary"), 10);
     expect(dashLength(4, "windsea")).toBeCloseTo(0.65 * dashLength(4, "primary"), 10);
     expect(blobDepth(4, "windsea", v, sp)).toBeCloseTo(0.8 * Math.min(BLOB_HEAD_PX + v * SMEAR_SECONDS, SMEAR_MAX_SHARE * sp, BLOB_MAX_DEPTH_SHARE * dashLength(4, "windsea")), 12);
     expect(blobDepth(4, "combined", v, sp)).toBe(blobDepth(4, "primary", v, sp));
@@ -191,19 +193,24 @@ describe("height and drawing styles", () => {
   });
 
   it("smears each blob by the way its crest moved over the last SMEAR_SECONDS of animation (a display choice)", () => {
-    expect([BLOB_HEAD_PX, SMEAR_SECONDS, SMEAR_MAX_SHARE, BLOB_MAX_DEPTH_SHARE]).toEqual([1.5, 0.5, 0.5, 0.66]);
+    expect([BLOB_HEAD_PX, SMEAR_SECONDS, SMEAR_MAX_SHARE, BLOB_MAX_DEPTH_SHARE]).toEqual([2, 0.55, 0.5, 1.6]);
     for (const tp of [6, 8, 10, 12, 16, 20]) {
       const sp = crestSpacingPx(tp);
       const v = crestSpeedPxPerS(tp, sp);
       for (const hs of [0.5, 1, 3, 6]) {
-        expect(blobDepth(hs, "combined", v, sp)).toBeCloseTo(Math.min(BLOB_HEAD_PX + v * SMEAR_SECONDS, SMEAR_MAX_SHARE * sp, BLOB_MAX_DEPTH_SHARE * dashLength(hs, "combined")), 12);
-        // At least 1.5 times as long along the crest as it is deep.
-        expect(dashLength(hs, "combined") / blobDepth(hs, "combined", v, sp)).toBeGreaterThanOrEqual(1.5);
+        const depth = blobDepth(hs, "combined", v, sp);
+        expect(depth).toBeCloseTo(Math.min(BLOB_HEAD_PX + v * SMEAR_SECONDS, SMEAR_MAX_SHARE * sp, BLOB_MAX_DEPTH_SHARE * dashLength(hs, "combined")), 12);
+        // Like the reference's (about 5 along the crest by 7 along the travel): a typical sea's
+        // blob (1 to 3 m, 10 s or more) is at least as deep as it is long, and from 10 s on no
+        // blob lies across its swell (a higher sea's longer crest reaches 0.85 of its depth).
+        if (tp >= 10 && hs <= 3) expect(depth, `${hs} m, ${tp} s`).toBeGreaterThanOrEqual(dashLength(hs, "combined"));
+        if (tp >= 10) expect(depth, `${hs} m, ${tp} s`).toBeGreaterThanOrEqual(0.8 * dashLength(hs, "combined"));
       }
     }
-    // 5.2 px for a 10 s sea of 3 m at the default spacing (1.5 + 0.5 s x 7.5 px/s; 8.4 px long) ...
+    // 6.1 px for a 10 s sea of 3 m at the default spacing (2 + 0.55 s x 7.5 px/s; 6.1 px long) ...
     const s10 = crestSpacingPx(10);
-    expect(blobDepth(3, "combined", crestSpeedPxPerS(10, s10), s10)).toBeCloseTo(5.25, 1);
+    expect(blobDepth(3, "combined", crestSpeedPxPerS(10, s10), s10)).toBeCloseTo(6.12, 1);
+    expect(dashLength(3, "combined")).toBeCloseTo(6.1, 12);
     // ... at most half the crest spacing (a 4 s wind sea: 8 px spacing, rows stay apart) ...
     expect(blobDepth(8, "combined", crestSpeedPxPerS(4, 8), 8)).toBe(4);
     // ... and only the bright head without a speed, nothing without a spacing.
@@ -213,14 +220,15 @@ describe("height and drawing styles", () => {
   });
 
   it("tints each dash from the colour field under it: every channel lifted by TINT_LIFT, never to white", () => {
-    expect([TINT_LIFT, TINT_HEADROOM]).toEqual([150, 0.1]);
-    // Violet (2 m): G lifted by 150 (229); R and B keep 10 % of their way to 255 (239.2, 247.1).
-    expect(dashTint([97, 79, 176], "combined")).toEqual([239, 229, 247]);
-    expect(dashTint([97, 79, 176], "primary")).toEqual([239, 229, 247]);
-    // Pink (8 m): every channel near 255 keeps 10 % of its way there, so the tint stays pink.
-    expect(dashTint([223, 134, 184], "combined")).toEqual([252, 243, 248]);
+    expect([TINT_LIFT, TINT_HEADROOM]).toEqual([95, 0.02]);
+    // Violet (2 m): R and G lifted by 95 (192, 174); B keeps 2 % of its way to 255 (253.4), a
+    // lift of 77: about the same in every channel, so the blob stays violet-lavender, not grey.
+    expect(dashTint([97, 79, 176], "combined")).toEqual([192, 174, 253]);
+    expect(dashTint([97, 79, 176], "primary")).toEqual([192, 174, 253]);
+    // Pink (8 m): the channels near 255 keep 2 % of their way there, so the tint stays pink.
+    expect(dashTint([223, 134, 184], "combined")).toEqual([254, 229, 254]);
     // The partitions: 75 % their own colour.
-    expect(dashTint([97, 79, 176], "secondary")).toEqual([Math.round(239.2 + (255 - 239.2) * 0.75), Math.round(229 + (207 - 229) * 0.75), Math.round(247.1 + (133 - 247.1) * 0.75)]);
+    expect(dashTint([97, 79, 176], "secondary")).toEqual([Math.round(192 + (255 - 192) * 0.75), Math.round(174 + (207 - 174) * 0.75), Math.round(253.42 + (133 - 253.42) * 0.75)]);
     expect(dashTint(null, "windsea")).toEqual([156, 236, 255]);
   });
 
@@ -251,7 +259,13 @@ describe("height and drawing styles", () => {
     expect(new Set(partitions.map((s) => `${s.shape}/${s.lengthFactor}/${s.gap}`)).size).toBe(3);
     expect(new Set(partitions.map((s) => s.color)).size).toBe(3);
     expect(FAMILY_STYLES.primary).toMatchObject({ shape: "blob", gap: 0, lengthFactor: 1, depthFactor: 1, color: "#ffffff", tintMix: 0 });
-    expect(FAMILY_STYLES.secondary).toMatchObject({ shape: "bar", gap: 0.2, lengthFactor: 1.8, depthFactor: 1, color: "#ffcf85", tintMix: 0.75 });
+    expect(FAMILY_STYLES.secondary).toMatchObject({ shape: "bar", gap: 0.2, lengthFactor: 2.5, depthFactor: 1, color: "#ffcf85", tintMix: 0.75 });
+    // The blobs were made shorter along the crest (the reference's proportions); the
+    // secondary's bars kept their length: 2.5 x the new base, within 4.5 % of 1.8 x the old one.
+    for (const hs of [0.5, 1, 2, 3, 4, 6, 8]) {
+      const before = 1.8 * Math.min(10, Math.max(6.5, 6 + 0.8 * hs));
+      expect(Math.abs(dashLength(hs, "secondary") / before - 1), `${hs} m`).toBeLessThan(0.045);
+    }
     expect(FAMILY_STYLES.windsea).toMatchObject({ shape: "blob", gap: 0, lengthFactor: 0.65, depthFactor: 0.8, color: "#9cecff", tintMix: 0.75 });
     expect(FAMILY_STYLES.combined).toMatchObject({ shape: "blob", gap: 0, lengthFactor: 1, depthFactor: 1, color: "#ffffff", tintMix: 0 });
     expect(new Set(styles.map((s) => s.label)).size).toBe(4);

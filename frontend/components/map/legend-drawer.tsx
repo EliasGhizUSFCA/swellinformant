@@ -11,7 +11,7 @@ import { colorAtValue, cssGradient, rgbToHex, WAVE_HEIGHT_RAMP, type LayerScale 
 import type { FieldIndex } from "@/lib/map-fields";
 import { layerDef, layerUnit, legendTicks, type DisplayUnits } from "@/lib/map-layers";
 import type { MapSettings } from "@/lib/map-settings";
-import { BLOB_MAX_DEPTH_SHARE, BLOB_PROFILE, dashTint, FAMILY_STYLES, scaleStatement, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
+import { BLOB_PROFILE, dashAlpha, dashTint, FAMILY_STYLES, scaleStatement, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
 import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_COLORS_DARK, QUALITY_LABELS } from "@/lib/quality";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
@@ -25,8 +25,11 @@ export function markerLegend(basemap: MapSettings["basemap"]): Array<{ label: st
   return [{ label: "No usable forecast", color: NO_FORECAST_COLOR }, ...(Object.keys(ramp) as QualityLabel[]).map((q) => ({ label: QUALITY_LABELS[q], color: ramp[q] }))];
 }
 
-/** The sea colour the swatches are drawn on: the Wave Height ramp at 2.5 m, a typical sea. */
+/** The sea colour the swatches are drawn on, and their opacity: a typical sea of 2.5 m. */
 const SWATCH_SEA_M = 2.5;
+/** A swatch blob, px of its 28 x 10 box: about 5 along the crest by 7 along the travel, as the reference's. */
+const SWATCH_BLOB_LENGTH = 5;
+const SWATCH_BLOB_DEPTH = 7;
 
 /**
  * A few crest dashes in a wave system's shape and tint, as the map draws them (section 4.6 of
@@ -43,7 +46,7 @@ export function CrestSwatch({ system, className }: { system: WaveSystem; classNa
   const [r, g, b] = dashTint(sea, system);
   const tint = `rgb(${r}, ${g}, ${b})`;
   const count = s.lengthFactor < 0.8 ? 3 : 2;
-  const length = Math.min(11, 8.5 * s.lengthFactor);
+  const length = Math.min(11, SWATCH_BLOB_LENGTH * s.lengthFactor);
   const step = 26 / count;
   const front = 2.5;
   const gradient = `${id}-blob`;
@@ -51,7 +54,7 @@ export function CrestSwatch({ system, className }: { system: WaveSystem; classNa
   for (let i = 0; i < count; i++) {
     const a = 1 + i * step + (step - length) / 2;
     if (s.shape === "blob") {
-      shapes.push(<rect key={i} data-blob={i} x={a} y={front} width={length} height={Math.min(length * BLOB_MAX_DEPTH_SHARE, 5.5) * s.depthFactor} fill={`url(#${gradient})`} />);
+      shapes.push(<rect key={i} data-blob={i} x={a} y={front} width={length} height={SWATCH_BLOB_DEPTH * s.depthFactor} fill={`url(#${gradient})`} />);
     } else {
       const piece = (length * (1 - s.gap)) / 2;
       for (const [k, x] of [a, a + length - piece].entries()) {
@@ -64,7 +67,7 @@ export function CrestSwatch({ system, className }: { system: WaveSystem; classNa
       <defs>
         <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
           {BLOB_PROFILE.map((p) => (
-            <stop key={p.at} offset={p.at} stopColor={tint} stopOpacity={0.85 * p.alpha} />
+            <stop key={p.at} offset={p.at} stopColor={tint} stopOpacity={dashAlpha(SWATCH_SEA_M) * p.alpha} />
           ))}
         </linearGradient>
       </defs>
@@ -182,8 +185,8 @@ export function LegendDrawer({
               </ul>
               <p>
                 Short dashes are wave crests moving with the waves (a swell from the SW travels NE): the bright edge is the crest, the fading smear
-                behind it where it just was. Bigger, brighter dashes are higher waves; each is a lighter tint of the colour under it. Rows are one
-                crest spacing apart. <span data-testid="legend-scales">{scaleStatement(status.zoom, status.centreLat)}</span> Fades and smears are
+                behind it where it just was. Bigger, brighter dashes are higher waves; each is a lighter tint of the colour under it. In an even
+                swell the dashes line up in rows one crest spacing apart. <span data-testid="legend-scales">{scaleStatement(status.zoom, status.centreLat)}</span> Fades and smears are
                 display choices. Stylised crests from the forecast model, not individual waves.
               </p>
               {crests.includes("combined") && (

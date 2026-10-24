@@ -170,9 +170,9 @@ describe("systems", () => {
     // (No colour field under them here: each system in its own colour.) Primary: one soft blob
     // per dash; secondary: amber bars, a long dash with a gap of 0.2 of its length in the middle
     // of its fill; wind sea: short cyan blobs.
-    expect(max("255, 255, 255")).toBeCloseTo(8.4, 6); // 6 + 0.8 x 3 m
-    expect(max("255, 207, 133")).toBeCloseTo(1.8 * 7.2, 6);
-    expect(max("156, 236, 255")).toBeCloseTo(0.65 * 7.2, 6);
+    expect(max("255, 255, 255")).toBeCloseTo(6.1, 6); // 4 + 0.7 x 3 m
+    expect(max("255, 207, 133")).toBeCloseTo(2.5 * 5.05, 6); // 1.5 m
+    expect(max("156, 236, 255")).toBeCloseTo(0.65 * 5.05, 6);
     expect(byColour.size).toBe(3);
     expect(byColour.get("255, 255, 255")!.every((d) => d.kind === "blob" && d.gap === 0)).toBe(true);
     expect(byColour.get("156, 236, 255")!.every((d) => d.kind === "blob" && d.gap === 0)).toBe(true);

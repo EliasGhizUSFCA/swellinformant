@@ -607,18 +607,26 @@ v2.
 **As built (differs from the proposal).** The ramp was re-anchored at integration (the first
 one read electric blue for typical 2-3 m seas): 0 m #151d42 to 10 m #f3c4dc, L* 12.2 → 83.8,
 neighbouring anchors ΔE ≥ 7.6, chroma ≤ 62. Each dash is one soft blob, a light tint of the
-field under it, with its leading edge on the crest and a 0.5 s smear behind it, drawn as one
-gradient quad (not white strokes with a halo); secondary swell split amber bars, wind sea
-short cyan blobs. Cells 12 px (combined, primary), 13 (secondary), 18 (wind sea), not
-26/34/30; length clamp(6 + 0.8 Hs, 6.5, 10) px, not up to 22. The vertex budget became a
-device-adaptive quad budget (1,500-7,000 a frame, median target 2.5 ms; at most 8,000
-dashes, 3,000 on phones). Land on the dark basemap is the reference's mid grey #808080 with a
-dark coastline (proposed #3a3a3c with a light one; #737376 until the final review). Kept: the lattice, spacing clamp(0.12 px/m ×
-L, 8, 64), τ = 4, a life of 3 crest passages, the combined-sea default, `swell.map.settings.v2`.
-Measured (headless Chromium, software rendering): e2e draw p95 2.8 ms (round 1), 3.1 and
-3.4 ms (2026-10-23), within D11's 5 ms; ink per dash at 4 m 2.25× that at 1 m; density 2.73-
-3.73 dashes per 1,000 CSS px² on a Pixel 7 profile and 1.95-2.58 on a 1440×900 desktop held
-by the budget, against 4.05 in the reference.
+field under it, with its leading edge on the crest and a 0.55 s smear behind it, drawn as
+one gradient quad (not white strokes with a halo); secondary swell split amber bars, wind
+sea short cyan blobs. Cells 12 px (combined, primary), 13 (secondary), 18 (wind sea), not
+26/34/30; length along the crest clamp(4 + 0.7 Hs, 4.5, 7.2) px, not up to 22. At the final
+review the blobs were turned to the reference's proportions (about 5 px along the crest by 7
+along the travel; until then 1.5 times longer along the crest than deep, clamp(6 + 0.8 Hs,
+6.5, 10) px long), the tint became an even lift of every channel (`TINT_LIFT` 95, headroom
+0.02; 150 and 0.1 greyed the blobs), and the opacity became clamp(0.40 + 0.14 Hs, 0.40,
+0.95) instead of D11's clamp(0.40 + 0.09 Hs, 0.40, 0.90): the smear (speed x time) no longer
+grows with the height, and the steeper opacity keeps D11's rule of more than twice the ink
+at 4 m as at 1 m (2.17-2.22× per dash in e2e). The vertex budget became a device-adaptive
+quad budget (1,500-7,000 a frame, median target 2.5 ms; at most 8,000 dashes, 3,000 on
+phones). Land on the dark basemap is the reference's mid grey #808080 with a dark coastline
+(proposed #3a3a3c with a light one; #737376 until the final review). Kept: the lattice,
+spacing clamp(0.12 px/m × L, 8, 64), τ = 4, a life of 3 crest passages, the combined-sea
+default, `swell.map.settings.v2`. Measured (headless Chromium, software rendering): e2e draw
+p95 2.8 ms (round 1), 3.1 and 3.4 ms (2026-10-23), within D11's 5 ms; ink per dash at 4 m
+2.25× that at 1 m (before the final review); density 2.73-3.73 dashes per 1,000 CSS px² on a
+Pixel 7 profile and 1.95-2.58 on a 1440×900 desktop held by the budget, against 4.05 in the
+reference.
 **Consequences.** Not measured on a GPU-backed browser or a real phone; Firefox and WebKit
 not run.
 

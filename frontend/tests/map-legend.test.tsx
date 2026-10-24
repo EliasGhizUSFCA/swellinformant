@@ -6,7 +6,7 @@ import { publishMapFlowStatus } from "@/hooks/map-fields";
 import { colorAtValue, LAYER_SCALES, rgbToHex, WAVE_HEIGHT_RAMP } from "@/lib/map-colors";
 import type { FieldIndex } from "@/lib/map-fields";
 import { DEFAULT_SETTINGS } from "@/lib/map-settings";
-import { BLOB_PROFILE, dashTint } from "@/lib/map-waves";
+import { BLOB_PROFILE, dashAlpha, dashTint } from "@/lib/map-waves";
 
 // The index below is SYNTHETIC test data.
 const INDEX: FieldIndex = {
@@ -54,6 +54,13 @@ describe("map legend", () => {
     expect(swatch("secondary").querySelectorAll("rect[data-blob]").length).toBe(0);
     const stops = [...swatch("primary").querySelectorAll("linearGradient stop")];
     expect(stops.map((st) => Number(st.getAttribute("offset")))).toEqual(BLOB_PROFILE.map((p) => p.at));
+    // As on the map (and in the reference, about 5 px along the crest by 7 along the travel), a
+    // blob reaches further along its travel (the swatch's height) than along its crest, and it
+    // is drawn at the opacity of the 2.5 m sea under it.
+    for (const blob of swatch("primary").querySelectorAll("rect[data-blob]")) {
+      expect(Number(blob.getAttribute("height"))).toBeGreaterThan(Number(blob.getAttribute("width")));
+    }
+    stops.forEach((st, k) => expect(Number(st.getAttribute("stop-opacity"))).toBeCloseTo(dashAlpha(2.5) * BLOB_PROFILE[k]!.alpha, 9));
     // The blobs are a lighter tint of the sea patch under them, not white.
     const sea = swatch("primary").querySelector("rect:not([data-blob])")!.getAttribute("fill");
     expect(sea).toBe(rgbToHex(colorAtValue(WAVE_HEIGHT_RAMP, 2.5)));

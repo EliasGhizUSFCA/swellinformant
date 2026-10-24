@@ -147,15 +147,17 @@ grid, 7 to 18 px long (8 px per px-per-frame of flow), pointing downwind, drawn 
 |---|---|---|---|---|---|
 | Combined sea (peak), **the default** | `hs`, `tp`, `wave_dir` | soft blob, a light tint of the field | 1 | 1 | 12 px |
 | Primary swell | `swell1_hs/_tp/_dir` | soft blob, a light tint of the field | 1 | 1 | 12 px |
-| Secondary swell | `swell2_*` | long thin bar split by a gap of 0.2 of its length, amber (`#ffcf85`, 75 % into the tint) | 1.8 | 1 (bar width) | 13 px |
+| Secondary swell | `swell2_*` | long thin bar split by a gap of 0.2 of its length, amber (`#ffcf85`, 75 % into the tint) | 2.5 | 1 (bar width) | 13 px |
 | Wind sea | `windsea_*` | short blob, cyan (`#9cecff`, 75 % into the tint) | 0.65 | 0.8 | 18 px |
 
 Systems are told apart by dash **shape** (soft blob, long split bar, short blob) and colour,
 never colour alone; the legend and the settings chooser show a swatch of each one's dashes
-on a patch of a typical (2.5 m) sea. A blob is at least 1.5 times as long along the crest as
-it is deep and each piece of a split bar at least twice as long as it is wide (unit test
-for 0.5 to 8 m and 6 to 18 s), and a blob's crisp leading edge runs along the crest, so the
-orientation reads (e2e: structure-tensor coherence, section 7). The combined
+on a patch of a typical (2.5 m) sea. A blob of a 1 to 3 m sea of 10 s or more reaches at
+least as far along its travel as along its crest, as the reference's blobs do, and each
+piece of a split bar is at least twice as long as it is wide (unit tests for 0.5 to 8 m and
+6 to 18 s). A blob's crisp leading edge runs along the crest and its smear fades behind it,
+so its travel reads from the bright front (e2e: the direction of the brightness falloff,
+section 7); a bar's orientation reads from its long edges. The combined
 sea is drawn by default (`DEFAULT_WAVE_SYSTEMS = ["combined"]`, closest to the reference);
 the primary, secondary and wind sea partitions are selectable in Settings when the model run
 stores them (the field index lists them with `group: "partition"`; the client downloads a
@@ -286,16 +288,20 @@ resolution and drawn onto the canvas with `imageSmoothingQuality = "high"` (sect
   along p (by at most s / 2) onto the nearest crest line of the lattice `p . W = n s + v t`
   (W in world px of the view's continuous pixel plane, not wrapped to one world copy, so there
   is no seam at the antimeridian). It then moves along p at v: every dash of a uniform sea stays
-  on those crest lines, so rows of dashes are one crest spacing apart and move with the crests
-  (unit tests: leading edges on multiples of s within 1 %, row spacing within 3 % for 8, 10
-  and 16 s, displacement v Δt within 2 %).
+  on those crest lines, so in an even swell (the test fixtures) rows of dashes are one crest
+  spacing apart and move with the crests (unit tests: leading edges on multiples of s within
+  1 %, row spacing within 3 % for 8, 10 and 16 s, displacement v Δt within 2 %). In served
+  model fields the rows do not form (section 8): the phase p · W is counted from the world
+  origin, so neighbours whose period differs by about 0.1 s or whose direction differs by a
+  fraction of a degree snap to unrelated rows, and the dashes sit at random phases, as in the
+  reference.
 * **Orientation**: along the crest, perpendicular to the travel vector sampled where the dash
   is now (a quarter turn clockwise of p on screen): vertical dashes for a swell from the west,
   NW-SE dashes for a swell from the SW (unit tests within 1°).
 * **The blob** (combined sea, primary swell, wind sea): one soft blob per dash, a short piece
   of a crest line smeared back along the way it came. Its crisp, bright **leading edge lies on
   the crest line** (that is the point on the lattice above) and runs along the crest; its
-  body is the band that crest swept over in the last `SMEAR_SECONDS = 0.5` s of animation,
+  body is the band that crest swept over in the last `SMEAR_SECONDS = 0.55` s of animation,
   behind it (against the travel), fading towards the trailing side like a motion blur. Its
   opacity across the depth (0 = the leading edge, 1 = the back) follows `BLOB_PROFILE`, a
   linear gradient through 0.8 at 0, 1 at 0.06, 0.9 at 0.55, 0.5 at 0.85 and 0 at 1 (unit test:
@@ -303,39 +309,60 @@ resolution and drawn onto the canvas with `imageSmoothingQuality = "high"` (sect
   multiply it. The blob is a rectangle, not sheared like the reference's parallelograms: the
   smear runs along the travel, which is perpendicular to the crest, and a sheared blob would
   show a travel direction the model does not have.
-* **Size and opacity from the local Hs** (m): length along the crest `clamp(6 + 0.8 Hs, 6.5,
-  10)` px (`DASH_BASE_PX`, `DASH_PX_PER_M`, `DASH_MIN_PX`, `DASH_MAX_PX`) times the system's
-  length factor (1; 1.8 secondary; 0.65 wind sea); depth across the crest `min(1.5 + v x 0.5
-  s, 0.5 s, 0.66 x length)` px (`BLOB_HEAD_PX`, `SMEAR_SECONDS`, `SMEAR_MAX_SHARE` of the
-  crest spacing, so rows of blobs stay apart, and `BLOB_MAX_DEPTH_SHARE` of the length) times
-  the depth factor (1; 0.8 wind sea). Examples at the default spacing: 1 m, 8 s: 6.8 x 4.5 px;
-  2 m, 10 or 12 s: 7.6 x 5.0 px; 3 m, 12 s: 8.4 x 5.5 px; 5 m, 12 s: 10 x 6.0 px; 5 m and more
-  at 14 s or longer: 10 x 6.6 px (the reference's blobs are about 8 x 5 CSS px). While
-  animating a blob's depth reaches back no further than its birth, `min(depth, 1.5 + v x
-  age)`, so a young blob's smear grows in; the still frame (reduced motion) draws it whole.
-  Opacity `clamp(0.40 + 0.09 Hs, 0.40, 0.90)` (D11's formula) times the life fade, drawn
-  rounded to `ALPHA_STEP = 0.9 / 23 = 0.039` (24 levels; about 6 grey levels of the tint,
-  finer than the fade moves in two frames). Higher seas draw longer, deeper, brighter blobs
-  (e2e: more than twice the ink per dash at 4 m as at 1 m, and more in all).
+* **Size and opacity from the local Hs** (m): length along the crest `clamp(4 + 0.7 Hs, 4.5,
+  7.2)` px (`DASH_BASE_PX`, `DASH_PX_PER_M`, `DASH_MIN_PX`, `DASH_MAX_PX`) times the
+  system's length factor (1; 2.5 secondary; 0.65 wind sea); depth along the travel `min(2 +
+  v x 0.55 s, 0.5 s, 1.6 x length)` px (`BLOB_HEAD_PX`, `SMEAR_SECONDS`, `SMEAR_MAX_SHARE`
+  of the crest spacing, so the blobs of one crest never reach the next, and
+  `BLOB_MAX_DEPTH_SHARE` of the length) times the depth factor (1; 0.8 wind sea). The smear
+  is speed x time, so the depth does not grow with the height. Examples at the default
+  spacing (along the crest x along the travel): 1 m, 8 s: 4.7 x 5.3 px; 1.5 m, 12 s: 5.05 x
+  6.9 px; 2 m, 10 s: 5.4 x 6.1 px; 3 m, 12 s: 6.1 x 6.9 px; 5 m, 12 s: 7.2 x 6.9 px; 5 m, 16
+  s: 7.2 x 8.6 px. Like the reference's blobs (about 5 CSS px along the crest by 7 along the
+  travel, the smear on the long axis for about 80 % of them, measured on the owner's
+  screenshot), a blob of a 1 to 3 m sea of 10 s or more is at least as deep as it is long: a
+  short crest piece streaking forward, not a tile lying across the swell (until the final
+  review the blobs were 1.5 times longer along the crest than deep, rotated 90° from the
+  reference). While animating a blob's depth reaches back no further than its birth,
+  `min(depth, 2 + v x age)`, so a young blob's smear grows in; the still frame (reduced
+  motion) draws it whole. Opacity `clamp(0.40 + 0.14 Hs, 0.40, 0.95)` times the life fade,
+  drawn rounded to `ALPHA_STEP = 0.95 / 23 = 0.041` (24 levels; about 6 grey levels of the
+  tint, finer than the fade moves in two frames). D11's formula was `clamp(0.40 + 0.09 Hs,
+  0.40, 0.90)`; it is steeper since the final review because the depth no longer grows with
+  the height, so that higher seas still draw more than twice the ink per dash at 4 m as at 1
+  m (e2e, measured 2.17 to 2.22 times; the review's proposed 0.45 + 0.13 Hs with blobs of
+  4.2 + 0.55 Hs px measured 1.97 and 2.02 times), and more in all. Higher seas draw longer,
+  brighter blobs, never shallower ones.
 * **The secondary swell's bar**: a thin bar centred on the crest line, `clamp(1.8 + 0.3 Hs,
-  1.8, 3.4)` px wide (`dashWidth`) and 1.8 x the length long, split by a transparent gap of 0.2
-  of its length in the middle; no smear, so its shape stays distinct under the primary's
-  blobs (its two crisp long edges also carry its orientation, e2e section 7).
-* **Tint**: each dash is a lighter tint of the colour field under it (the colour layer of the
-  wave layer on screen: Wave Height, Wave Energy or Wave Period), never pure white: every
-  channel of the field colour is lifted by `TINT_LIFT = 150` (of 255) but keeps at least
-  `TINT_HEADROOM = 0.1` of its way to 255 (`dashTint`). A blob over a violet 2 m sea
-  (#614fb0) is tinted (239, 229, 247), over a pink 8 m sea (#df86b8) (252, 243, 248). Measured
-  on the owner's reference, its blobs are the field colour plus 74 to 95 per channel (a lift,
-  not a mix with white, which would grey them); drawn at the dash opacity, the lift gives
-  about that at 2 to 3 m. The field colour comes from the lattice: each node holds the level
-  of the colour scale under it in `TINT_LEVELS = 32` steps (`fieldPositionAt` in
-  `lib/map-render.ts`, the same bilinear value the colour canvas paints), and a dash takes its
-  nearest node's level. The secondary swell and the wind sea mix 75 % of their own colour
-  into the tint (`tintMix`: amber `#ffcf85`, cyan `#9cecff`), so the systems differ by colour
-  as well as shape. Without a colour field (tests) a dash takes its system's own colour.
+  1.8, 3.4)` px wide (`dashWidth`) and 2.5 x the length long (as long as before the blobs
+  were made shorter, within 4.5 %), split by a transparent gap of 0.2 of its length in the
+  middle; no smear, so its shape stays distinct under the primary's blobs (its two crisp
+  long edges also carry its orientation, e2e section 7).
+* **Tint**: each dash is a lighter tint of the colour field under it (the colour layer of
+  the wave layer on screen: Wave Height, Wave Energy or Wave Period), never pure white:
+  every channel of the field colour is lifted by `TINT_LIFT = 95` (of 255) but keeps at
+  least `TINT_HEADROOM = 0.02` of its way to 255 (`dashTint`). A blob over a violet 2 m sea
+  (#614fb0) is tinted (192, 174, 253), over a pink 8 m sea (#df86b8) (254, 229, 254).
+  Measured on the owner's reference, the heads of its blobs are the field colour plus about
+  70 to 90 in every channel alike (a lift, not a mix with white, which would grey them). The
+  lift is therefore about the same in every channel up to 3 m (blue at least three quarters
+  of red's and green's, unit test), so a blob keeps the hue of its sea: until the final
+  review `TINT_LIFT = 150` and `TINT_HEADROOM = 0.1` lifted red and green about twice as
+  much as blue (measured (76, 79, 41) over a 1.5 m sea), which greyed the blobs. Drawn at
+  the dash opacity a head is lifted by about 51 per channel at 1 m, 58 at 1.5 m, 71 at 2.5 m
+  and 78 to 90 at 3 to 4 m (measured on the real fields of the final review: (58, 57, 51)
+  over a 1.5 m sea, (76, 78, 65) over a 3 to 4 m sea, against the reference's (74, 79, 71)
+  over its magenta and (89, 90, 83) over its blue sea): 3 to 4 m heads match the
+  reference's, 1 to 1.5 m heads are about a third fainter, because D11's ink rule keeps low
+  seas fainter. The field colour comes from the lattice: each node holds the level of the
+  colour scale under it in `TINT_LEVELS = 32` steps (`fieldPositionAt` in
+  `lib/map-render.ts`, the same bilinear value the colour canvas paints), and a dash takes
+  its nearest node's level. The secondary swell and the wind sea mix 75 % of their own
+  colour into the tint (`tintMix`: amber `#ffcf85`, cyan `#9cecff`), so the systems differ
+  by colour as well as shape. Without a colour field (tests) a dash takes its system's own
+  colour.
 * **Visibility**: a dash is drawn only where its centre and its two ends sample all-valid
-  lattice nodes, and a blob also its two back corners (else only its 1.5 px head is drawn, if
+  lattice nodes, and a blob also its two back corners (else only its 2 px head is drawn, if
   that fits), so no dash sits on land or where the model has no data.
 * **Life fade (a display choice)**: opacity × `smoothstep(age / 0.2) x smoothstep((1 - age) /
   0.3)`: in over the first 20 % of the life, out over the last 30 %. It only keeps dashes from
@@ -356,7 +383,7 @@ resolution and drawn onto the canvas with `imageSmoothingQuality = "high"` (sect
   life ends, and its next life is placed exactly as if it had been visited (unit test: an
   animation with skipping equals one that visits every cell every frame, and still frames in
   between change nothing); each lattice cell carries an "all four nodes valid" flag, so every
-  validity probe is one read; a dash too faint by its life fade alone (fade x 0.90 < 0.04) is
+  validity probe is one read; a dash too faint by its life fade alone (fade x 0.95 < 0.04) is
   left out before any sampling; the hot single-use helpers (`dashAt`, `sampleLattice`,
   `tintLevelAt`, `batchOf`) are called with `/*#__NOINLINE__*/`, because the production
   minifier otherwise inlines each as a function expression created anew for every cell or
@@ -526,7 +553,20 @@ about 1,040 dashes. `DRAW_TARGET_MS` is the knob: the budget keeps the median ne
 it on any device, and the p95 follows at 1.2 to 2.2 times the median here.
 
 Coherence is lower than for long traced crests because a blob's smear has sides that run
-across the crest as well as along it. The 0.5 threshold of the e2e check is unchanged.
+across the crest as well as along it.
+
+**Final review (2026-10-24), the blobs reshaped to the reference's proportions** (map-layers
+wave checks against this round's code, the same machine): a swell from 225° at 12 s has its
+line orientation at 45.0° (the crisp fronts on the crests) with a coherence of 0.29 (Pixel
+7: 0.20), since a blob is now about as deep as it is long, so the e2e check reads the travel
+instead: the brightness falloff (sum of g |g| over the wave canvas, the sharp front
+outweighing the soft back) points to -45.9° (Pixel 7: -44.3°, expected -45°, within 15°),
+with a lean of 0.185 (0.283). Motion: 5.0 px in 0.62 s (expected about 5.6); Pixel 7: 6.0 px
+in 0.58 s (about 5.2). Spacing 12 / 48 px. Ink per dash, 1 m / 4 m: 8.37 / 18.12 (2.17 x),
+8.41 / 18.66 and 8.42 / 18.70 (2.22 x) in three runs. A primary swell from the W and a
+secondary from the S: the amber bars lie at 0.0° (coherence 0.52 of their own pixels) and
+the blobs travel at 0.6° (east); without the secondary, no amber pixel and the blobs travel
+at 0.4°. The coherence threshold of 0.5 was replaced by these travel checks.
 
 **Visual QA on real fields.** NOAA GFS-Wave + GFS fields of the 2026-10-16 00Z run (the 9
 stored hours of a clone of the `swell_u3i_live_run` database, with the real Open-Meteo spot
@@ -601,24 +641,55 @@ ms after; Pacific, zoom 2: 2.6, 2.5 and 2.6 ms before, 2.4, 2.4 and 2.5 ms after
 
 The field reads as a smooth, dusky blue-violet-magenta-pink surface, the land is mid grey
 with a dark coastline and light labels, and many short, soft blobs, each a lighter tint of
-the sea under it, lie across the swell with a crisp leading edge and a fading smear behind,
-drifting with it: the character of the reference, drawn with our own ramp, shapes and code.
+the sea under it, streak along the swell with a crisp leading edge and a fading smear
+behind, drifting with it: the character of the reference, drawn with our own ramp, shapes
+and code.
 The California view that hour had 1.2 to 2.0 m of sea (median 1.5 m), so it is blue-violet
 on our ramp where the reference (a bigger day) is magenta; the Gulf of Alaska view (median
 3.3 m) shows the reference's magenta-purple. The colours follow the metre anchors, not the
 reference. The screenshots are attached to the integration report, not committed.
+
+**Final review (2026-10-24), the same clone and hour, the reshaped blobs and tint.** Measured
+on the screenshots with the review's tools (not committed): a blob's full extent along its
+travel x along its crest (medians, CSS px), the share of blobs longer along the travel, and
+how consistently their bright heads point one way (resultant length, 1 = all alike):
+
+| Screenshot (region) | Travel x crest | Longer along travel | Heads alike | Head lift over the field, per channel |
+|---|---|---|---|---|
+| Owner's reference, offshore magenta / nearshore blue | 7.2 x 5.1 / 7.0 x 5.3 | 82 % / 90 % | 0.86 / 0.90 | (74, 79, 71) / (89, 90, 83) |
+| California, zoom 6, desktop, before / after | 6.6 x 6.8 / 6.7 x 5.7 | 52 % / 93 % | 0.34 / 0.74 | (76, 79, 41) / (58, 57, 51) |
+| California, zoom 6, Pixel 7, before / after | 8.4 x 6.1 / 6.4 x 4.9 | 61 % / 97 % | 0.62 / 0.80 | (77, 78, 42) / (58, 57, 52) |
+| California, zoom 5, desktop (3 to 4 m), before / after | 5.9 x 8.2 / 6.2 x 6.7 | 29 % / 35 % | 0.69 / 0.79 | (62, 100, 48) / (76, 78, 65) |
+
+The blobs of the typical (1.5 m) sea now streak along their travel as the reference's do,
+and keep the hue of the sea; a 3 to 4 m blob is about as long along its crest (6.1 to 6.8
+px) as its smear is deep (6.1 px at 10 s, 6.9 at 12 s), as the length grows with the height
+and the smear does not. In this pass the desktop drew 1,725
+dashes at California zoom 6 and 5 (cap 1,725: 2.1 / 4.9 ms) and the Pixel 7 1,188 and 1,145
+(1.8 / 4.0 and 1.5 / 2.2 ms); the reduced-motion still frame drew 4,406 dashes in 105 ms on
+the desktop and 1,295 in 55 ms on the Pixel 7, while the machine also ran this review's other
+checks.
 
 ## 8. Limitations
 
 * The dashes are stylised crests from the model's height, period and direction per system: no
   wave rays, refraction, shoaling or depth effects (deep water is assumed), no real wave
   groups, and the cells, births, the life fade and the smears are a drawing device. A smear
-  is the band the crest swept over in the last 0.5 s of animation, not a wake and not a
+  is the band the crest swept over in the last 0.55 s of animation, not a wake and not a
   measure of anything. The 0.5° fields smooth fronts and coasts.
 * The blobs are rectangles, not the reference's sheared parallelograms (section 4.6).
 * Wind-sea dashes often sit on rows at the 8 px minimum spacing (periods under 6.5 s).
-* In a uniform sea, dashes of neighbouring cells line up on the same crest rows, which shows
-  the crest spacing; in a real sea, where period and direction vary, rows are short.
+* Crest rows form only in a uniform sea (the test fixtures): there the dashes of neighbouring
+  cells line up one crest spacing apart. In served model fields they do not form at all: the
+  lattice phase p · W is counted from the world origin (thousands of px at zoom 6), so
+  neighbours whose period differs by about 0.1 s, or whose direction differs by a fraction of
+  a degree (directions are stored in 1.5° steps), snap to unrelated rows, and the dashes sit
+  at random phases, as in the reference (whose blobs show no crest rows either). The legend
+  says rows line up only in an even swell.
+* The blobs' motion blur is softer than the reference's: the front third of a blob is about
+  1.5 times as bright as its back third, the reference's about 1.8 to 2.0 times (measured on
+  the real fields of the final review), and low seas (1 to 1.5 m) are about a third fainter
+  than the reference's heads, because D11's ink rule keeps them fainter (section 4.6).
 * Firefox and WebKit were not run here (their browsers are not installed in this sandbox):
   the 8-bit particle renderer is verified in unit tests and in Chromium forced to an 8-bit
   canvas.

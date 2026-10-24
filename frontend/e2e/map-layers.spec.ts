@@ -212,6 +212,67 @@ async function waveImage(page: Page) {
   });
 }
 
+/**
+ * Which way the crest dashes travel, read from their shape. A blob has a crisp bright front on
+ * its crest and a smear fading behind it, so the brightness gradient summed with its own
+ * magnitude (sum of g x |g|: the sharp front outweighs the soft back) points from the front
+ * into the blob, against the travel, and the blob's two sides cancel. `travel` is that
+ * direction reversed, degrees in screen coordinates (0 = east, 90 = south, -90 = north), and
+ * `lean` its strength (|sum g |g|| / sum |g|^2, 0..1; 0 for symmetric shapes such as bars).
+ * `which` picks the pixels: "amber" (a secondary swell's bars: red well above blue), "other"
+ * (everything else) or "all". Also the structure tensor's line orientation and coherence of
+ * those pixels (as waveImage).
+ */
+async function waveTravel(page: Page, which: "all" | "amber" | "other" = "all") {
+  return wave(page).evaluate((c: HTMLCanvasElement, pick) => {
+    const { width: w, height: h } = c;
+    const d = c.getContext("2d")!.getImageData(0, 0, w, h).data;
+    const b = new Float32Array(w * h);
+    let ink = 0;
+    let picked = 0;
+    for (let k = 0; k < w * h; k++) {
+      const a = d[k * 4 + 3]!;
+      if (!a) continue;
+      const amber = d[k * 4]! > d[k * 4 + 2]! + 40;
+      if ((pick === "amber" && !amber) || (pick === "other" && amber)) continue;
+      b[k] = ((a / 255) * (d[k * 4]! + d[k * 4 + 1]! + d[k * 4 + 2]!)) / 765;
+      ink += b[k]!;
+      picked++;
+    }
+    let sx = 0;
+    let sy = 0;
+    let energy = 0;
+    let jxx = 0;
+    let jyy = 0;
+    let jxy = 0;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const k = y * w + x;
+        const gx = (b[k + 1]! - b[k - 1]!) / 2;
+        const gy = (b[k + w]! - b[k - w]!) / 2;
+        const e = gx * gx + gy * gy;
+        if (!e) continue;
+        const m = Math.sqrt(e);
+        sx += gx * m;
+        sy += gy * m;
+        energy += e;
+        jxx += gx * gx;
+        jyy += gy * gy;
+        jxy += gx * gy;
+      }
+    }
+    const travel = (Math.atan2(-sy, -sx) * 180) / Math.PI;
+    const lean = Math.hypot(sx, sy) / Math.max(1e-9, energy);
+    const grad = (0.5 * Math.atan2(2 * jxy, jxx - jyy) * 180) / Math.PI;
+    const orientation = (((grad + 90) % 180) + 180) % 180;
+    const coherence = Math.hypot(jxx - jyy, 2 * jxy) / Math.max(1e-9, jxx + jyy);
+    return { ink, picked, travel, lean, orientation, coherence };
+  }, which);
+}
+
+/** The smaller angle between two directions, degrees (0..180). */
+const angleOff = (a: number, b: number) => Math.abs((((a - b) % 360) + 540) % 360 - 180);
+
 /** Orientation peaks of a waveImage histogram: bins (5 degrees) holding > `share` of the energy after smoothing. */
 function orientationPeaks(hist: number[], share = 0.15): number[] {
   const total = hist.reduce((a, v) => a + v, 0);
@@ -763,6 +824,9 @@ test.describe("ocean layers: geography, motion and bandwidth (synthetic fields)"
     const still = await waveImage(page);
     expect(still.ink).toBeGreaterThan(0);
     expect(Math.abs(still.orientation - 90), JSON.stringify(still)).toBeLessThan(8);
+    // The still blobs' crisp fronts face the way the waves go (east), their smears behind them.
+    const stillTravel = await waveTravel(page);
+    expect(angleOff(stillTravel.travel, 0), JSON.stringify(stillTravel)).toBeLessThan(15);
     await page.waitForTimeout(1000);
     expect((await waveImage(page)).hash, "no animation").toBe(still.hash);
     await page.getByRole("radio", { name: "Wind Speed" }).click();
@@ -919,22 +983,32 @@ test.describe("wave crest dashes (synthetic partitions)", () => {
     expect(high.total).toBeGreaterThan(low.total); // and more ink in all, thinned or not
   });
 
-  test("a primary swell from the W and a secondary from the S give two crest orientations; without the secondary, one", async ({ page, browser, baseURL }) => {
+  test("a primary swell from the W and a secondary from the S are told apart: amber E-W bars, blobs travelling east; without the secondary, no bars", async ({ page, browser, baseURL }) => {
+    // The primary's blobs are deeper (along their travel) than long (along their crest), as the
+    // reference's, so their own line orientation is no crest direction; their travel reads
+    // from the bright front and the fading smear (waveTravel). The secondary's split bars lie
+    // along their crests: swell from the S, crests E-W, horizontal bars.
     const { mock } = await openWithSwells(page, { primary: [2.5, 13, 270], secondary: [1.8, 10, 180] }, "secondary,primary");
+    const bars = await waveTravel(page, "amber");
+    const blobs = await waveTravel(page, "other");
     const hist = (await waveImage(page)).hist;
-    const both = orientationPeaks(hist);
-    console.log(`orientation peaks (W + S): ${both.join(", ")} (smoothed shares: ${peakShares(hist)})`);
-    expect(both.some((o) => Math.abs(o - 90) <= 10), both.join(",")).toBe(true); // vertical: from the west
-    expect(both.some((o) => o <= 10 || o >= 170), both.join(",")).toBe(true); // horizontal: from the south
+    console.log(`W + S: amber bars ${bars.orientation.toFixed(1)}° (coherence ${bars.coherence.toFixed(2)}, ${bars.picked} px); blobs travel ${blobs.travel.toFixed(1)}° (lean ${blobs.lean.toFixed(3)}); orientation peaks ${orientationPeaks(hist).join(", ")} (smoothed shares: ${peakShares(hist)})`);
+    expect(bars.picked).toBeGreaterThan(1000);
+    expect(Math.min(bars.orientation, 180 - bars.orientation), JSON.stringify(bars)).toBeLessThan(10); // horizontal: from the south
+    expect(bars.coherence).toBeGreaterThan(0.3); // measured 0.52: the bars dominate their pixels
+    expect(angleOff(blobs.travel, 0), JSON.stringify(blobs)).toBeLessThan(15); // east: from the west
+    expect(blobs.lean).toBeGreaterThan(0.02);
     expect(mock.requests.some((r) => r.startsWith("swell2_dir@"))).toBe(true);
     const ctx = await browser.newContext({ baseURL, viewport: { width: 1440, height: 900 } });
     try {
       const p2 = await ctx.newPage();
       const { mock: m2 } = await openWithSwells(p2, { primary: [2.5, 13, 270] }, "primary");
-      const one = orientationPeaks((await waveImage(p2)).hist);
-      console.log(`orientation peaks (W only): ${one.join(", ")}`);
-      expect(one.every((o) => Math.abs(o - 90) <= 10), one.join(",")).toBe(true);
-      expect(one.length).toBeGreaterThan(0);
+      const all = await waveTravel(p2, "all");
+      const amber = await waveTravel(p2, "amber");
+      console.log(`W only: blobs travel ${all.travel.toFixed(1)}° (lean ${all.lean.toFixed(3)}), amber pixels ${amber.picked} of ${all.picked}`);
+      expect(angleOff(all.travel, 0), JSON.stringify(all)).toBeLessThan(15);
+      expect(all.lean).toBeGreaterThan(0.02);
+      expect(amber.picked).toBeLessThan(0.01 * all.picked); // no secondary bars
       // The secondary swell is not in the index, so it is never requested (never made up).
       expect(m2.requests.some((r) => r.startsWith("swell2"))).toBe(false);
     } finally {
@@ -1106,13 +1180,18 @@ test.describe("wave crest dashes (synthetic partitions)", () => {
 
 /** Wave crest dash checks that also run on the Pixel 7 project (no fixed viewport). */
 test.describe("wave crest dashes on any screen (synthetic partitions)", () => {
-  test("dashes of a swell from the SW run NW-SE and travel up-right (to the NE)", { tag: "@mobile" }, async ({ page }) => {
+  test("dashes of a swell from the SW have their crisp fronts on NW-SE crests and travel up-right (to the NE)", { tag: "@mobile" }, async ({ page }) => {
     await openWithSwells(page, { primary: [2.5, 12, 225] }, "primary");
     const img = await waveImage(page);
-    console.log(`orientation for a swell from 225°: ${img.orientation.toFixed(1)}° (coherence ${img.coherence.toFixed(2)})`);
-    test.info().annotations.push({ type: "crest orientation, swell from 225°", description: `${img.orientation.toFixed(1)}°, coherence ${img.coherence.toFixed(2)}` });
+    const t = await waveTravel(page);
+    console.log(`swell from 225°: line orientation ${img.orientation.toFixed(1)}° (coherence ${img.coherence.toFixed(2)}), travel ${t.travel.toFixed(1)}° (lean ${t.lean.toFixed(3)})`);
+    test.info().annotations.push({ type: "crests, swell from 225°", description: `orientation ${img.orientation.toFixed(1)}°, coherence ${img.coherence.toFixed(2)}; travel ${t.travel.toFixed(1)}°, lean ${t.lean.toFixed(3)}` });
+    // The blobs' crisp leading edges lie on the crests (NW-SE); the blobs themselves are about
+    // as deep as long, so the orientation is weak (coherence about 0.2): their travel reads
+    // from the bright front and the fading smear behind it, towards the NE (-45° on screen).
     expect(Math.abs(img.orientation - 45), JSON.stringify({ o: img.orientation, c: img.coherence })).toBeLessThan(8);
-    expect(img.coherence).toBeGreaterThan(0.5);
+    expect(angleOff(t.travel, -45), JSON.stringify(t)).toBeLessThan(15);
+    expect(t.lean).toBeGreaterThan(0.02);
     // Motion: the ink profile along the travel direction (x east, y down: (0.707, -0.707))
     // shifts forward between two frames; a crest of a 12 s swell moves 27 px x 4 / 12 s = 9 px/s.
     const a = await inkProfile(page, Math.SQRT1_2, -Math.SQRT1_2);
@@ -1178,6 +1257,8 @@ test.describe("wave crest dashes on any screen (synthetic partitions)", () => {
     const a = await waveImage(page);
     expect(a.ink).toBeGreaterThan(0);
     expect(Math.abs(a.orientation - 45), JSON.stringify({ o: a.orientation })).toBeLessThan(8);
+    const travel = await waveTravel(page); // bright fronts to the NE (-45° on screen), smears behind
+    expect(angleOff(travel.travel, -45), JSON.stringify(travel)).toBeLessThan(15);
     await page.waitForTimeout(1000);
     expect((await waveImage(page)).hash).toBe(a.hash);
   });

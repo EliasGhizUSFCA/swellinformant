@@ -179,23 +179,30 @@ describe("size and opacity follow the height", () => {
       expect(dashes.filter((d) => Math.abs(d.depth - full) < 1e-9).length).toBeGreaterThan(0.5 * dashes.length);
       return { length: dashes[0]!.length, depth: full, alpha: Math.max(...dashes.map((d) => d.alpha)) };
     });
+    // Longer and brighter with the height; the smear (speed x time) never shallower.
     for (let i = 1; i < stats.length; i++) {
       expect(stats[i]!.length).toBeGreaterThan(stats[i - 1]!.length);
       expect(stats[i]!.depth).toBeGreaterThanOrEqual(stats[i - 1]!.depth);
       expect(stats[i]!.alpha).toBeGreaterThan(stats[i - 1]!.alpha);
     }
-    expect(stats[2]!.depth).toBeGreaterThan(stats[0]!.depth);
   });
 
-  it("keeps every blob at least 1.5 times as long as deep and every bar piece twice as long as wide, so its orientation reads", () => {
+  it("streaks a typical sea's blobs along their travel (deeper than long, as the reference's) and keeps every bar piece twice as long as wide", () => {
     const view = viewAt(3, -40, -30, 480, 320);
     for (const hs of [0.5, 1, 2, 4, 8]) {
       for (const system of ["primary", "secondary", "windsea", "combined"] as const) {
         for (const tp of [6, 12, 18]) {
           const dashes = dashesOf(draw(view, [family(system, hs, tp, 270)], 3, true).quads);
-          expect(dashes.length, `${system} at ${hs} m, ${tp} s`).toBeGreaterThan(50);
+          const at = `${system} at ${hs} m, ${tp} s`;
+          expect(dashes.length, at).toBeGreaterThan(50);
           // (A split bar: each piece either side of its gap.)
-          for (const d of dashes) expect((d.length * (d.kind === "blob" ? 1 : (1 - d.gap) / 2)) / d.depth, `${system} at ${hs} m, ${tp} s`).toBeGreaterThanOrEqual((d.kind === "blob" ? 1.5 : 2) - 1e-9);
+          for (const d of dashes) if (d.kind === "bar") expect((d.length * (1 - d.gap)) / 2 / d.depth, at).toBeGreaterThanOrEqual(2 - 1e-9);
+          const blobs = dashes.filter((d) => d.kind === "blob");
+          // The still frame draws full smears: a primary or combined blob of 1 to 3 m at 12 s or
+          // more reaches at least as far along its travel as it extends along its crest.
+          if (blobs.length && system !== "windsea" && tp >= 12 && hs <= 3) {
+            expect(Math.max(...blobs.map((d) => d.depth)), at).toBeGreaterThanOrEqual(blobs[0]!.length - 1e-9);
+          }
         }
       }
     }
@@ -219,13 +226,14 @@ describe("size and opacity follow the height", () => {
 
 describe("the smear: behind each blob, the band its crest swept over the last SMEAR_SECONDS", () => {
   it.each([
-    [8, 4.5],
-    [10, 5.25],
-    [16, 6.6],
+    [6, 4.0],
+    [8, 5.3],
+    [10, 6.12],
+    [16, 8.59],
   ])("is BLOB_HEAD_PX + v x SMEAR_SECONDS deep, capped at a share of the length and half the spacing (T = %i s: %f px at 5 m)", (tp, expected) => {
     const s = crestSpacingPx(tp);
     const v = crestSpeedPxPerS(tp, s);
-    const hs = 5; // 10 px long: the speed term binds below 16 s, the share of the length (6.6 px) at 16 s
+    const hs = 5; // 6.95 px long: half the 8 px spacing binds at 6 s, the speed term from 8 s on
     const full = blobDepth(hs, "combined", v, s);
     expect(full).toBeCloseTo(Math.min(BLOB_HEAD_PX + v * SMEAR_SECONDS, 0.5 * s, BLOB_MAX_DEPTH_SHARE * dashLength(hs, "combined")), 12);
     expect(full).toBeCloseTo(expected, 1);
@@ -293,10 +301,14 @@ describe("tint: a lighter tint of the colour field under each dash", () => {
       const [r, g, b] = dashTint(field, "combined");
       for (const [c, f] of [r, g, b].map((x, i) => [x, field[i]!] as const)) {
         // Lifted by TINT_LIFT, keeping TINT_HEADROOM of the way to 255.
-        expect(c).toBe(Math.round(Math.min(f + 150, 255 - 0.1 * (255 - f))));
+        expect(c).toBe(Math.round(Math.min(f + 95, 255 - 0.02 * (255 - f))));
         expect(c).toBeGreaterThan(f);
         expect(c).toBeLessThan(255);
       }
+      // Up to 3 m the lift is about the same in every channel (blue at least three quarters of
+      // red's and green's), as the reference's: the blob keeps the sea's hue instead of greying.
+      const lift = [r, g, b].map((x, i) => x - field[i]!);
+      if (m <= 3) expect(lift[2]!, `${m} m: ${lift}`).toBeGreaterThanOrEqual(0.75 * Math.min(lift[0]!, lift[1]!));
       expect([r, g, b], `${m} m`).not.toEqual([255, 255, 255]);
       // Partitions: 75 % their own colour (amber secondary, cyan wind sea), so they stay apart by colour too.
       const sec = dashTint(field, "secondary");
