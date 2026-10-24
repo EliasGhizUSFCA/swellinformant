@@ -330,7 +330,7 @@ resolution and drawn onto the canvas with `imageSmoothingQuality = "high"` (sect
   tint, finer than the fade moves in two frames). D11's formula was `clamp(0.40 + 0.09 Hs,
   0.40, 0.90)`; it is steeper since the final review because the depth no longer grows with
   the height, so that higher seas still draw more than twice the ink per dash at 4 m as at 1
-  m (e2e, measured 2.17 to 2.22 times; the review's proposed 0.45 + 0.13 Hs with blobs of
+  m (e2e, measured 2.14 to 2.22 times; the review's proposed 0.45 + 0.13 Hs with blobs of
   4.2 + 0.55 Hs px measured 1.97 and 2.02 times), and more in all. Higher seas draw longer,
   brighter blobs, never shallower ones.
 * **The secondary swell's bar**: a thin bar centred on the crest line, `clamp(1.8 + 0.3 Hs,
@@ -563,10 +563,11 @@ instead: the brightness falloff (sum of g |g| over the wave canvas, the sharp fr
 outweighing the soft back) points to -45.9° (Pixel 7: -44.3°, expected -45°, within 15°),
 with a lean of 0.185 (0.283). Motion: 5.0 px in 0.62 s (expected about 5.6); Pixel 7: 6.0 px
 in 0.58 s (about 5.2). Spacing 12 / 48 px. Ink per dash, 1 m / 4 m: 8.37 / 18.12 (2.17 x),
-8.41 / 18.66 and 8.42 / 18.70 (2.22 x) in three runs. A primary swell from the W and a
-secondary from the S: the amber bars lie at 0.0° (coherence 0.52 of their own pixels) and
-the blobs travel at 0.6° (east); without the secondary, no amber pixel and the blobs travel
-at 0.4°. The coherence threshold of 0.5 was replaced by these travel checks.
+8.41 / 18.66 and 8.42 / 18.70 (2.22 x) in three runs, 8.47 / 18.10 (2.14 x) in the full e2e
+run of the final review (127 passed). A primary swell from the W and a secondary from the S:
+the amber bars lie at 0.0° (coherence 0.52 of their own pixels) and the blobs travel at 0.6°
+(east); without the secondary, no amber pixel and the blobs travel at 0.4°. The coherence
+threshold of 0.5 was replaced by these travel checks.
 
 **Visual QA on real fields.** NOAA GFS-Wave + GFS fields of the 2026-10-16 00Z run (the 9
 stored hours of a clone of the `swell_u3i_live_run` database, with the real Open-Meteo spot

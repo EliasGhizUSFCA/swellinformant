@@ -619,7 +619,7 @@ along the travel; until then 1.5 times longer along the crest than deep, clamp(6
 0.02; 150 and 0.1 greyed the blobs), and the opacity became clamp(0.40 + 0.14 Hs, 0.40,
 0.95) instead of D11's clamp(0.40 + 0.09 Hs, 0.40, 0.90): the smear (speed x time) no longer
 grows with the height, and the steeper opacity keeps D11's rule of more than twice the ink
-at 4 m as at 1 m (2.17-2.22× per dash in e2e). The vertex budget became a device-adaptive
+at 4 m as at 1 m (2.14-2.22× per dash in e2e). The vertex budget became a device-adaptive
 quad budget (1,500-7,000 a frame, median target 2.5 ms; at most 8,000 dashes, 3,000 on
 phones). Land on the dark basemap is the reference's mid grey #808080 with a dark coastline
 (proposed #3a3a3c with a light one; #737376 until the final review). Kept: the lattice,

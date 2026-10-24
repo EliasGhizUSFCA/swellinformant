@@ -161,7 +161,7 @@ export const DASH_WIDTH_MAX_PX = 3.4;
  * Dash opacity: 0.40 + 0.14 per metre, 0.40..0.95. (D11's 0.40 + 0.09 Hs, 0.40..0.90, made
  * steeper at the final review with the smaller blobs, whose depth no longer grows with the
  * height, and the even tint below: a 4 m sea still draws more than twice the ink of a 1 m sea
- * on screen, D11's rule; e2e "higher waves draw more ink" measured 2.17 to 2.22 times. The
+ * on screen, D11's rule; e2e "higher waves draw more ink" measured 2.14 to 2.22 times. The
  * review's 0.45 + 0.13 Hs with blobs of 4.2 + 0.55 Hs px measured 1.97 and 2.02, on the edge.)
  */
 export const DASH_ALPHA_BASE = 0.4;
