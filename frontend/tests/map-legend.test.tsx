@@ -1,7 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { LegendDrawer } from "@/components/map/legend-drawer";
+import { leadText, LegendDrawer } from "@/components/map/legend-drawer";
 import { publishMapFlowStatus } from "@/hooks/map-fields";
 import { colorAtValue, LAYER_SCALES, rgbToHex, WAVE_HEIGHT_RAMP } from "@/lib/map-colors";
 import type { FieldIndex } from "@/lib/map-fields";
@@ -91,5 +91,14 @@ describe("map legend", () => {
   it("says when the model run is out of date", () => {
     legend({ ...INDEX, stale: true, age_hours: 30.4 });
     expect(screen.getByTestId("legend-stale").textContent).toBe("Out of date: this model run is 30 h old.");
+  });
+
+  it("states the lead time from the model cycle", () => {
+    expect(leadText("2026-10-15T12:00:00Z", "2026-10-14T06:00:00Z")).toBe("+30 h");
+    expect(leadText("2026-10-14T06:00:00Z", "2026-10-14T06:00:00Z")).toBe("analysis");
+    // Before the cycle the legend keeps an ASCII hyphen (the freshness chip's leadLabel
+    // writes U+2212), so the e2e lead regex [+-]? matches it.
+    expect(leadText("2026-10-14T03:00:00Z", "2026-10-14T06:00:00Z")).toBe("-3 h");
+    expect(leadText(null, "2026-10-14T06:00:00Z")).toBeNull();
   });
 });

@@ -1128,7 +1128,7 @@ test.describe("wave crest dashes (synthetic partitions)", () => {
     await expect(legend.getByTestId("legend-crests")).toContainText("Stylised crests from the forecast model, not individual waves.");
     await expect(legend.getByTestId("legend-convention")).toContainText("Arrows point where the wind or waves are going.");
     await expect(legend.getByTestId("legend-source")).toContainText("Model cycle");
-    await expect(legend.getByTestId("legend-valid")).toContainText(/Valid .+ · [+−-]?\d+ h \(forecast, not observed\)|analysis/);
+    await expect(legend.getByTestId("legend-valid")).toContainText(/Valid .+ · [+-]?\d+ h \(forecast, not observed\)|analysis/);
     // Units: mph is offered and shared with the spot charts through swell.windUnit.
     await page.getByRole("radio", { name: "Wind Speed" }).click();
     await expect(legend.getByTestId("legend-title")).toHaveText("Wind speed (km/h)");
