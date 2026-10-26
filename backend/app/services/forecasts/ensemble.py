@@ -64,7 +64,7 @@ import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -104,6 +104,8 @@ from app.services.http import (
     ProviderError,
     TransientProviderError,
 )
+from app.services.map_fields import as_utc
+from app.services.units import ms_to_kmh
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +119,6 @@ PUBLISHED_STEPS = frozenset((*range(0, 241, 3), *range(246, MAX_LEAD_HOURS + 1, 
 MEMBERS = ("c00", *(f"p{i:02d}" for i in range(1, 31)))
 # .idx description "ens <kind>" and GRIB2 code table 4.7 value (template 4.2) per file.
 STAT_KINDS = {"mean": 0, "spread": 4}
-MS_TO_KMH = 3.6
 # Mean/spread files carry swell partitions 1-2 only, both coded "surface".
 SWELL_PARTITIONS_IN_STATS = 2
 # Partition 1 >= partition 2 (minus one packing step) held on 99.994% of ocean cells in
@@ -706,7 +707,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
                     if v is not None:
                         if kind == "spread" and v < 0:
                             raise GribError(f"{rec}: negative spread {v} at spot {spot_id}")
-                        v = round(v * MS_TO_KMH, 2) if spec is WIND else round(v, 3)
+                        v = round(ms_to_kmh(v), 2) if spec is WIND else round(v, 3)
                     step.values.setdefault(spot_id, {})[column] = v
         if SWELL1 not in self.stat_fields and SWPER1 not in self.stat_fields:
             return
@@ -803,7 +804,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
         cycle = run.wave_model_run_at or run.issued_at
         # File paths and the message checks use the cycle's UTC date and hour (a naive time
         # is taken to be UTC already).
-        cycle = cycle.replace(tzinfo=UTC) if cycle.tzinfo is None else cycle.astimezone(UTC)
+        cycle = as_utc(cycle)
         picker = CellPicker(spots, self.settings.grib_max_cell_distance_km)
         # The first readable step fixes the cells and runs the partition-order check.
         steps: list[StepValues] = []

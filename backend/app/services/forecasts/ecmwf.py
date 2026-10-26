@@ -87,6 +87,8 @@ from app.services.forecasts.base import (
     RunInfo,
     SourceInfo,
     SpotPoint,
+    bearing,
+    rounded,
 )
 from app.services.forecasts.grib import (
     CellChoice,
@@ -109,6 +111,8 @@ from app.services.http import (
     PermanentProviderError,
     TransientProviderError,
 )
+from app.services.map_fields import as_utc
+from app.services.units import ms_to_kmh
 
 logger = logging.getLogger(__name__)
 
@@ -223,15 +227,6 @@ def step_window_hours(message: bytes) -> float | None:
         return None
     finally:
         eccodes.codes_release(handle)
-
-
-def _round(value: float | None, digits: int) -> float | None:
-    return None if value is None else round(value, digits)
-
-
-def _bearing(value: float | None) -> float | None:
-    """Degrees in [0, 360) rounded to 0.1 (packing gives e.g. 360.002 for north)."""
-    return None if value is None else round(value % 360.0, 1) % 360.0
 
 
 class _RequestPacer:
@@ -438,7 +433,7 @@ class EcmwfIfsProvider(ForecastProvider):
         when = run.wave_model_run_at
         if when is not None:
             # A naive time is UTC already (astimezone would take it as the server's local time).
-            return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
+            return as_utc(when)
         try:
             stamp = run.run_key.split(":", 1)[1]
             return datetime.strptime(stamp, "%Y%m%d%H").replace(tzinfo=UTC)
@@ -748,32 +743,32 @@ class EcmwfIfsProvider(ForecastProvider):
         state: _RunState,
     ) -> ForecastRecord:
         values: dict[str, float | None] = dict.fromkeys(FORECAST_FIELDS)  # no partitions
-        values["sig_wave_height_m"] = _round(wave.get("swh"), 3)
-        values["wave_period_s"] = _round(wave.get("pp1d"), 2)
-        values["wave_direction_deg"] = _bearing(wave.get("mwd"))  # already FROM
+        values["sig_wave_height_m"] = rounded(wave.get("swh"), 3)
+        values["wave_period_s"] = rounded(wave.get("pp1d"), 2)
+        values["wave_direction_deg"] = bearing(wave.get("mwd"))  # already FROM
         u, v = atmos.get("10u"), atmos.get("10v")
         if u is not None and v is not None:
             speed_ms, direction = wind_from_uv(u, v)  # m/s; direction None when calm
-            values["wind_speed_kmh"] = round(speed_ms * 3.6, 2)
-            values["wind_direction_deg"] = _bearing(direction)
+            values["wind_speed_kmh"] = round(ms_to_kmh(speed_ms), 2)
+            values["wind_direction_deg"] = bearing(direction)
         gust = atmos.get("10fg")
-        values["wind_gust_kmh"] = None if gust is None else round(gust * 3.6, 2)
+        values["wind_gust_kmh"] = None if gust is None else round(ms_to_kmh(gust), 2)
         msl = atmos.get("msl")
         values["pressure_msl_hpa"] = None if msl is None else round(msl / 100.0, 2)
 
         # Only the parameters that were read (ECMWF_WAVE_PARAMS) appear in extra.
         extra: dict[str, object] = {}
         if "mwp" in wave:  # ECMWF mwp: mean period Tm-1,0 (s)
-            extra["mean_period_tm10_s"] = _round(wave.get("mwp"), 2)
+            extra["mean_period_tm10_s"] = rounded(wave.get("mwp"), 2)
         if "mp2" in wave:  # ECMWF mp2: mean zero-crossing period Tm02 (s)
-            extra["mean_period_tm02_s"] = _round(wave.get("mp2"), 2)
+            extra["mean_period_tm02_s"] = rounded(wave.get("mp2"), 2)
         if any(name in wave for name in BAND_PARAMS):
             # ECMWF h1012...h2530: significant height (m) of the waves in each period band.
             extra["hs_band_m"] = {
-                label: _round(wave.get(name), 3) for name, label in BAND_PARAMS.items()
+                label: rounded(wave.get(name), 3) for name, label in BAND_PARAMS.items()
             }
             # Derived here (not an ECMWF field): sqrt of the sum of squares, bands >= 12 s.
-            extra["hs_ge_12s_m"] = _round(
+            extra["hs_ge_12s_m"] = rounded(
                 combined_band_height(wave.get(n) for n in LONG_PERIOD_BANDS), 3
             )
         cell = state.wave_cells.get(spot.spot_id)
@@ -781,13 +776,13 @@ class EcmwfIfsProvider(ForecastProvider):
             extra["wave_cell"] = {
                 **cell.as_dict(),
                 # ecWAM model depth (m); the open data cap it at 999 m (= deep water).
-                "model_depth_m": _round(state.model_depth.get(spot.spot_id), 1),
+                "model_depth_m": rounded(state.model_depth.get(spot.spot_id), 1),
             }
         wind_cell = state.wind_cells.get(spot.spot_id)
         if atmos and wind_cell is not None:
             extra["wind_cell"] = {
                 **wind_cell.as_dict(),
-                "land_fraction": _round(state.land_fraction.get(spot.spot_id), 3),
+                "land_fraction": rounded(state.land_fraction.get(spot.spot_id), 3),
             }
         if values["wind_gust_kmh"] is not None:
             extra["wind_gust_window_h"] = gust_window_h

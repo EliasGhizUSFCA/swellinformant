@@ -162,6 +162,16 @@ class ForecastProvider(ABC):
     def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult: ...
 
 
+def rounded(value: float | None, digits: int) -> float | None:
+    return None if value is None else round(value, digits)
+
+
+def bearing(value: float | None) -> float | None:
+    """Degrees in [0, 360) rounded to 0.1. 359.96 rounds to 360.0, which is 0 (GRIB SWDIR
+    holds 360.0 values, and packing gives e.g. 360.002 for north)."""
+    return None if value is None else round(value % 360.0, 1) % 360.0
+
+
 def nominal_gfs_cycle(now: datetime, availability_lag_hours: float = 5.0) -> datetime:
     """Most recent 00/06/12/18Z GFS cycle that should be published by ``now``.
 

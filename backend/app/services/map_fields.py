@@ -112,7 +112,7 @@ def map_field_hours(
 
 def is_map_cycle(settings: Settings, cycle: datetime) -> bool:
     """True if map fields are read for this GFS cycle (MAP_FIELD_CYCLES, UTC hours)."""
-    return _as_utc(cycle).hour in settings.map_field_cycle_hours
+    return as_utc(cycle).hour in settings.map_field_cycle_hours
 
 
 def _step_after(settings: Settings, lead_hours: float) -> float:
@@ -402,7 +402,7 @@ def field_index(db: Session, now: datetime | None = None) -> FieldIndexOut:
         return FieldIndexOut(
             available=False, message=_unavailable_message(settings), stale_after_hours=limit
         )
-    now = _as_utc(now) if now is not None else utcnow()
+    now = as_utc(now) if now is not None else utcnow()
     age = (now - current.cycle_time).total_seconds() / 3600.0
     systems = stored_systems(db, current.run_id, current.valid_times)
     names = [*CORE_NAMES, *(v for s in systems for v in SYSTEM_VARIABLES[s])]
@@ -425,14 +425,14 @@ def field_index(db: Session, now: datetime | None = None) -> FieldIndexOut:
     )
 
 
-def _as_utc(when: datetime) -> datetime:
+def as_utc(when: datetime) -> datetime:
     return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
 
 
 def same_instant(at: datetime, valid_time: datetime) -> bool:
     """True if ``at`` (naive = UTC, as field_bytes reads it) is the instant ``valid_time``."""
     try:
-        return _as_utc(at) == _as_utc(valid_time)
+        return as_utc(at) == as_utc(valid_time)
     except OverflowError:
         return False
 
@@ -504,7 +504,7 @@ def field_bytes(
     if current is None:
         return None
     try:
-        when = _as_utc(at) if at is not None else utcnow()
+        when = as_utc(at) if at is not None else utcnow()
     except OverflowError:
         return None  # e.g. 0001-01-01T00:00+05:00: no stored field is anywhere near it
     times = current.valid_times

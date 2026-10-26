@@ -93,7 +93,7 @@ import time
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import httpx
 import numpy as np
@@ -108,7 +108,9 @@ from app.services.forecasts.base import (
     RunInfo,
     SourceInfo,
     SpotPoint,
+    bearing,
     nominal_gfs_cycle,
+    rounded,
 )
 from app.services.forecasts.fields import (
     PARTITION_SYSTEMS,
@@ -137,13 +139,13 @@ from app.services.http import (
     ProviderError,
     TransientProviderError,
 )
-from app.services.map_fields import is_map_cycle, map_field_hours, map_fields_mode
+from app.services.map_fields import as_utc, is_map_cycle, map_field_hours, map_fields_mode
+from app.services.units import ms_to_kmh
 
 logger = logging.getLogger(__name__)
 
 HTTP_PROVIDER = "noaa_gfs"  # label for retries, logs and error messages
 USER_AGENT = "SwellTravelAgent/1.0 (forecast ingestion)"
-MS_TO_KMH = 3.6
 
 # Output cadence of both the GFS-Wave gridded and the GFS pgrb2.0p25 files (v16).
 HOURLY_UNTIL_HOUR = 120
@@ -264,19 +266,10 @@ def forecast_hours(max_lead_hours: int, step_hours: int) -> list[int]:
     return hours
 
 
-def _rounded(value: float | None, digits: int) -> float | None:
-    return None if value is None else round(value, digits)
-
-
-def _direction(value: float | None) -> float | None:
-    # 359.96 rounds to 360.0, which is 0 (and GRIB SWDIR does hold 360.0 values).
-    return None if value is None else round(value % 360.0, 1) % 360.0
-
-
 def _wave_value(name: str, value: float | None) -> float | None:
     if name.endswith("_direction_deg"):
-        return _direction(value)
-    return _rounded(value, 2 if name.endswith("_period_s") else 3)
+        return bearing(value)
+    return rounded(value, 2 if name.endswith("_period_s") else 3)
 
 
 def _atmos_values(raw: dict[str, float | None]) -> dict[str, float | None]:
@@ -286,20 +279,15 @@ def _atmos_values(raw: dict[str, float | None]) -> dict[str, float | None]:
     if u is not None and v is not None:
         speed, direction = wind_from_uv(u, v)
     return {
-        "wind_speed_kmh": _rounded(None if speed is None else speed * MS_TO_KMH, 2),
-        "wind_direction_deg": _direction(direction),
-        "wind_gust_kmh": _rounded(None if gust is None else gust * MS_TO_KMH, 2),
-        "pressure_msl_hpa": _rounded(None if prmsl is None else prmsl / 100.0, 2),
+        "wind_speed_kmh": rounded(None if speed is None else ms_to_kmh(speed), 2),
+        "wind_direction_deg": bearing(direction),
+        "wind_gust_kmh": rounded(None if gust is None else ms_to_kmh(gust), 2),
+        "pressure_msl_hpa": rounded(None if prmsl is None else prmsl / 100.0, 2),
     }
 
 
 def _unique(items: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(items))
-
-
-def _as_utc(when: datetime) -> datetime:
-    """Aware UTC datetime (a naive value is taken to be UTC already)."""
-    return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
 
 
 def _range_bytes(found: dict[str, IndexEntry], keys: Iterable[str]) -> int:
@@ -348,7 +336,7 @@ class GfsPaths:
         )
 
     def _format(self, template: str, cycle: datetime, fhour: int, grid: str = "") -> str:
-        c = _as_utc(cycle)
+        c = as_utc(cycle)
         path = template.format(ymd=f"{c:%Y%m%d}", hh=f"{c:%H}", grid=grid, fhour=fhour)
         return f"{self.base_url}/{path}"
 
@@ -472,7 +460,7 @@ class GfsPointReader:
     ) -> None:
         self.client = client
         self.settings = settings or get_settings()
-        self.cycle = _as_utc(cycle)
+        self.cycle = as_utc(cycle)
         if self.cycle.hour % CYCLE_HOURS or self.cycle != self.cycle.replace(
             minute=0, second=0, microsecond=0
         ):
@@ -1105,7 +1093,7 @@ class NoaaGfsProvider(ForecastProvider):
         s = self.settings
         try:
             return FieldSink(
-                _as_utc(cycle),
+                as_utc(cycle),
                 self.map_hours(),
                 s.map_field_resolution_deg,
                 partitions=s.map_field_partitions == "on",
@@ -1386,7 +1374,7 @@ class NoaaGfsFieldsProvider(NoaaGfsProvider):
 
     def run_for_cycle(self, cycle: datetime) -> RunInfo:
         """RunInfo for a given cycle (no availability check; missing files become gaps)."""
-        c = _as_utc(cycle)
+        c = as_utc(cycle)
         if c.hour % CYCLE_HOURS or c != c.replace(minute=0, second=0, microsecond=0):
             raise PermanentProviderError(f"{c:%Y-%m-%d %H:%M}Z is not a GFS cycle time")
         return RunInfo(f"{self.RUN_KEY_PREFIX}:{c:%Y%m%d%H}", c, c, c, "noaa-s3-idx")
