@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import Counter
+from collections.abc import Sequence
 from decimal import Decimal
 
 from sqlalchemy import func, select, update
@@ -194,12 +195,22 @@ def delete_search(db: Session, search: SavedSearch) -> None:
 
 
 def _spot_slugs(db: Session, search: SavedSearch) -> list[str]:
-    ids = [d.spot_id for d in search.destinations if d.spot_id]
+    return spot_slugs_of(db, [search])[search.id]
+
+
+def spot_slugs_of(db: Session, searches: Sequence[SavedSearch]) -> dict[uuid.UUID, list[str]]:
+    """The spot slugs of each search's destinations, sorted by slug (one query)."""
+    wanted = {s.id: {d.spot_id for d in s.destinations if d.spot_id} for s in searches}
+    ids = set().union(*wanted.values())
+    out: dict[uuid.UUID, list[str]] = {s.id: [] for s in searches}
     if not ids:
-        return []
-    return list(
-        db.scalars(select(SurfSpot.slug).where(SurfSpot.id.in_(ids)).order_by(SurfSpot.slug)).all()
-    )
+        return out
+    rows = db.execute(
+        select(SurfSpot.id, SurfSpot.slug).where(SurfSpot.id.in_(ids)).order_by(SurfSpot.slug)
+    ).all()
+    for search_id, spot_ids in wanted.items():
+        out[search_id] = [slug for sid, slug in rows if sid in spot_ids]
+    return out
 
 
 def to_input(db: Session, search: SavedSearch) -> SearchIn:
@@ -271,7 +282,12 @@ def search_out_fields(search: SavedSearch, spot_slugs: list[str]) -> dict[str, o
     }
 
 
-def search_out(db: Session, search: SavedSearch, counts: Counter[str] | None = None) -> SearchOut:
+def search_out(
+    db: Session,
+    search: SavedSearch,
+    counts: Counter[str] | None = None,
+    spot_slugs: list[str] | None = None,
+) -> SearchOut:
     if counts is None:
         counts = Counter(
             dict(
@@ -282,7 +298,9 @@ def search_out(db: Session, search: SavedSearch, counts: Counter[str] | None = N
                 ).all()
             )
         )
-    fields = search_out_fields(search, _spot_slugs(db, search))
+    if spot_slugs is None:
+        spot_slugs = _spot_slugs(db, search)
+    fields = search_out_fields(search, spot_slugs)
     by_status = {str(getattr(k, "value", k)): v for k, v in counts.items()}
     fields["match_counts"] = MatchCounts(
         total=sum(by_status.values()),
