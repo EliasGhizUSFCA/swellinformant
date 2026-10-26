@@ -321,6 +321,13 @@ cell has two values, they are the two days.
 | Daily `tides.acquire` | 13.6, 23.3 | 283 statements | 140 kB (16 NOAA CO-OPS requests; EOT20 tides are computed locally) |
 | Daily `maintenance.cleanup` | 0.04, 0.05 | 21-22 statements | none |
 
+These checks ran on the code of 2026-10-21. Since the cleanup of 2026-10-26 the provider
+HTTP clients share one TLS context. On 2026-10-26 the same sandbox measured `plan_sync` (an
+idle check: live metadata requests through the proxy, GEFS on, after one warm-up check) at
+193-222 ms CPU on the earlier code and 47-53 ms on the cleaned code, in two alternating
+rounds of three checks each. The rows above and the monthly estimate below keep the earlier
+figures.
+
 ### Syncs
 
 | Sync | Plan | CPU s | Wall s | Downloaded | Rows written |
