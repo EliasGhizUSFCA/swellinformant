@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.models import SpotTideStation, SurfSpot, TideStation
 from app.services.geo import haversine_km
+from app.services.observations.stations import resolve_data_file
 from app.services.tides import coops
 from app.services.tides.harmonic_model import ConstantsError, load_model
 
@@ -49,19 +50,7 @@ class CatalogError(ValueError):
 
 
 def resolve_catalog_path(path: str | Path | None = None) -> Path:
-    """Explicit path, else the repository data/ dir (dev) or /data (Docker image)."""
-    candidates = [Path(path)] if path else []
-    candidates += [
-        DEFAULT_CATALOG,
-        Path("/data") / CATALOG_FILENAME,
-        Path.cwd() / "data" / CATALOG_FILENAME,
-    ]
-    for c in candidates:
-        if c.is_file():
-            return c
-    raise FileNotFoundError(
-        f"{CATALOG_FILENAME} not found in any of: {[str(c) for c in candidates]}"
-    )
+    return resolve_data_file(CATALOG_FILENAME, DEFAULT_CATALOG, path)
 
 
 @lru_cache(maxsize=4)
