@@ -91,6 +91,7 @@ from app.services.forecasts.base import (
     RunInfo,
     SourceInfo,
     SpotPoint,
+    http_client,
 )
 from app.services.forecasts.grib import haversine_km
 from app.services.forecasts.provider_cache import ProviderCacheKey, coords_hash
@@ -422,10 +423,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
     ) -> None:
         self.settings = settings or get_settings()
         require_commercial_licence(self.settings)
-        self.client = client or httpx.Client(
-            timeout=self.settings.forecast_http_timeout_seconds,
-            headers={"User-Agent": USER_AGENT},
-        )
+        self.client = client or http_client(self.settings.forecast_http_timeout_seconds, USER_AGENT)
         self.tally = HttpTally()
         self.tally.install(self.client)
         self.backoff_seconds = backoff_seconds

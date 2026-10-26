@@ -8,12 +8,19 @@ the model does not have at a time is None, never 0. Optional per-record metadata
 
 from __future__ import annotations
 
+import functools
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from app.services.forecasts.fields import EncodedField
 from app.services.surf_quality.models import SpotParams
+
+if TYPE_CHECKING:
+    import ssl
+
+    import httpx
 
 # ForecastRecord.extra keys shared by providers, the blend and the timeline.
 EXTRA_INTERPOLATED = "interpolated"  # bool: the source interpolated this time step
@@ -160,6 +167,23 @@ class ForecastProvider(ABC):
 
     @abstractmethod
     def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult: ...
+
+
+@functools.cache
+def _ssl_context() -> ssl.SSLContext:
+    import httpx
+
+    return httpx.create_ssl_context()  # what httpx.Client() builds by default
+
+
+def http_client(timeout: float, user_agent: str | None = None) -> httpx.Client:
+    """A provider's HTTP client. All of them share one SSL context: loading the CA bundle
+    into a new one costs about 50 ms CPU, and the sync daemon builds the providers for
+    every check."""
+    import httpx
+
+    headers = {"User-Agent": user_agent} if user_agent else None
+    return httpx.Client(timeout=timeout, headers=headers, verify=_ssl_context())
 
 
 def rounded(value: float | None, digits: int) -> float | None:

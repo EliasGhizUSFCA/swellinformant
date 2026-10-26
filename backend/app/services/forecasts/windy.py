@@ -32,6 +32,7 @@ from app.services.forecasts.base import (
     RunInfo,
     SourceInfo,
     SpotPoint,
+    http_client,
     nominal_gfs_cycle,
 )
 from app.services.geo import wind_from_uv
@@ -80,7 +81,7 @@ class WindyProvider(ForecastProvider):
         self.settings = settings or get_settings()
         if not self.settings.windy_api_key:
             raise PermanentProviderError("WINDY_API_KEY is not configured")
-        self.client = client or httpx.Client(timeout=self.settings.forecast_http_timeout_seconds)
+        self.client = client or http_client(self.settings.forecast_http_timeout_seconds)
         self.tally = HttpTally()
         self.tally.install(self.client)
         self.backoff_seconds = backoff_seconds

@@ -109,6 +109,7 @@ from app.services.forecasts.base import (
     SourceInfo,
     SpotPoint,
     bearing,
+    http_client,
     nominal_gfs_cycle,
     rounded,
 )
@@ -969,9 +970,7 @@ def sample_gfs_points(
     """
     settings = settings or get_settings()
     own_client = client is None
-    http = client or httpx.Client(
-        timeout=settings.forecast_http_timeout_seconds, headers={"User-Agent": USER_AGENT}
-    )
+    http = client or http_client(settings.forecast_http_timeout_seconds, USER_AGENT)
     try:
         reader = GfsPointReader(
             http, cycle, points, settings=settings, backoff_seconds=backoff_seconds
@@ -1037,10 +1036,7 @@ class NoaaGfsProvider(ForecastProvider):
         map_fields: bool | None = None,
     ) -> None:
         self.settings = settings or get_settings()
-        self.client = client or httpx.Client(
-            timeout=self.settings.forecast_http_timeout_seconds,
-            headers={"User-Agent": USER_AGENT},
-        )
+        self.client = client or http_client(self.settings.forecast_http_timeout_seconds, USER_AGENT)
         self.backoff_seconds = backoff_seconds
         self.paths = GfsPaths.from_settings(self.settings)
         # Diagnostics of the last fetch.

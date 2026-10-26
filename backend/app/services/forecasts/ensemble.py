@@ -83,6 +83,7 @@ from app.services.forecasts.base import (
     RunInfo,
     SourceInfo,
     SpotPoint,
+    http_client,
     nominal_gfs_cycle,
 )
 from app.services.forecasts.grib import (
@@ -572,10 +573,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
         backoff_seconds: float = 1.0,
     ) -> None:
         self.settings = settings or get_settings()
-        self.client = client or httpx.Client(
-            timeout=self.settings.forecast_http_timeout_seconds,
-            headers={"User-Agent": USER_AGENT},
-        )
+        self.client = client or http_client(self.settings.forecast_http_timeout_seconds, USER_AGENT)
         self.read_members = members
         self.backoff_seconds = backoff_seconds
         self.paths = GefsPaths(self.settings.noaa_gefs_base_url)

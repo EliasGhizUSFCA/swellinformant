@@ -88,6 +88,7 @@ from app.services.forecasts.base import (
     SourceInfo,
     SpotPoint,
     bearing,
+    http_client,
     rounded,
 )
 from app.services.forecasts.grib import (
@@ -336,9 +337,9 @@ class EcmwfIfsProvider(ForecastProvider):
     ) -> None:
         self.settings = settings or get_settings()
         self.base_url = self.settings.ecmwf_base_url.rstrip("/")
-        self.client = client or httpx.Client(
-            timeout=self.settings.forecast_http_timeout_seconds,
-            headers={"User-Agent": "SwellTravelAgent/1.0 (forecast ingestion)"},
+        self.client = client or http_client(
+            self.settings.forecast_http_timeout_seconds,
+            "SwellTravelAgent/1.0 (forecast ingestion)",
         )
         self.pacer = _RequestPacer(request_interval_seconds)
         self.counter = _ResponseCounter()
