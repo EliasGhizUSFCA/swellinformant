@@ -5,7 +5,7 @@ then 6-hourly). A step's *duration* is the gap to the next valid time (:func:`st
 :func:`forward_hours`); under the nearest-valid-step rule that the charts, the map and the
 selected time use, a step stands for the interval halfway back to the previous valid time
 and halfway on to the next (:func:`centred_extents`). Counts of steps are not hours:
-:func:`weighted_hours` sums durations and :func:`overlap_hours` measures intervals instead.
+:func:`overlap_hours` and :func:`covered_hours` measure intervals instead.
 Pure functions; times must be timezone-aware and sorted ascending.
 """
 
@@ -72,36 +72,6 @@ def _local_midnight(day: date, zone: ZoneInfo) -> datetime:
     # fold=0: a repeated midnight is its first occurrence; a skipped one maps to the instant
     # the clocks jumped, which is the first instant of that local day.
     return datetime.combine(day, time(0), tzinfo=zone).astimezone(UTC)
-
-
-def weighted_hours(
-    times: Sequence[datetime],
-    mask: Sequence[bool],
-    *,
-    tz: str | None = None,
-    day: date | None = None,
-) -> float:
-    """Total duration (hours) of the steps where ``mask`` is true.
-
-    With ``tz`` and ``day`` (both or neither), each step's interval ``[t, t + duration)`` is
-    clipped to that local day, so a 3-hourly step from 22:00 counts 2 hours towards its day.
-    """
-    if len(times) != len(mask):
-        raise ValueError("times and mask must have the same length")
-    if (tz is None) != (day is None):
-        raise ValueError("pass tz and day together")
-    bounds = local_day_bounds(day, tz) if tz is not None and day is not None else None
-    total = 0.0
-    for t, hours, on in zip(times, step_hours(times), mask, strict=True):
-        if not on:
-            continue
-        if bounds is None:
-            total += hours
-            continue
-        start, end = max(t, bounds[0]), min(t + timedelta(hours=hours), bounds[1])
-        if end > start:
-            total += (end - start).total_seconds() / 3600.0
-    return total
 
 
 def forward_hours(times: Sequence[datetime], after: datetime | None = None) -> list[float]:
