@@ -247,6 +247,31 @@ research-v1 rows. With the second pass every variable that has support has some 
 read support, so the cap no longer fires for any variable; no spot is High for other reasons
 (ADR-018).
 
+## ADR-017 NDBC: one record per wave report, APD defined per station
+
+**Context.** Checked against the live service on 2026-10-12 (docs/observations.md), the
+NDBC adapter stored each 20-minute wave report of NDBC's own buoys two or three times,
+because realtime `.txt` prints it on the 10-minute meteorological rows around the wave
+time (3,793 wave rows for 2,139 reports at 46026). It also stored every average period as
+the undefined `apd`, although NDBC documents APD as Tm02 for its own systems and Tm01 for
+CDIP buoys (confirmed against CDIP `waveTa` within 0.005 s at six buoys).
+**Decision.** Copies of one report (same height within one 0.1 m rounding step, same APD
+and MWD, within 15 min) become one record at the `.spec` time, which is also the time of
+the QC'd archive; each value comes from the closest copy that has it, and
+`parse.duplicates_merged` counts the folded rows. The catalog states `apd_kind` per
+station (`tm02` NDBC, `tm01` CDIP) and `tm_kind` is stored from it; a station without it
+keeps `apd`. Yearly and monthly archive records (`probably_good`) supersede realtime ones
+(`not_qc`) of the same report.
+**Alternatives.** Keeping every row (inflates pair counts and weights NDBC buoys two to
+three times in pooled scores); keeping only the row at the `.spec` time (often loses DPD,
+which NDBC prints on one copy only); storing APD as `apd` everywhere (mixes Tm01 and Tm02
+in one column).
+**Consequences.** One record per report, matching the archive (on the August 2026
+overlap, 191 of 192 merged records at 46026 fall on an archived time, the last one minute
+off, and all 192 at 51201; heights within 0.05 m). Copies stored before this change would
+stay, since re-ingesting does not delete rows at other times; none were stored outside
+scratch databases, because NDBC was unreachable before 2026-10-12.
+
 ## ADR-018 Research-v1.2 and the profile-decision policy
 
 **Context.** The second research pass contradicts parts of the spot profiles, which drive
@@ -299,32 +324,10 @@ High; the research basis of local confidence falls (High 8 → 3, Low 12 → 24 
 entirely through the size rule. 15 spots carry the disputed-wind note on every hour of the
 real run. Restaurants stays listed by the lint (no source describes its orientation).
 
-## ADR-017 NDBC: one record per wave report, APD defined per station
+## ADR-018b A calibrated offshore range only where the spot's own buoy agrees
 
-**Context.** Checked against the live service on 2026-10-12 (docs/observations.md), the
-NDBC adapter stored each 20-minute wave report of NDBC's own buoys two or three times,
-because realtime `.txt` prints it on the 10-minute meteorological rows around the wave
-time (3,793 wave rows for 2,139 reports at 46026). It also stored every average period as
-the undefined `apd`, although NDBC documents APD as Tm02 for its own systems and Tm01 for
-CDIP buoys (confirmed against CDIP `waveTa` within 0.005 s at six buoys).
-**Decision.** Copies of one report (same height within one 0.1 m rounding step, same APD
-and MWD, within 15 min) become one record at the `.spec` time, which is also the time of
-the QC'd archive; each value comes from the closest copy that has it, and
-`parse.duplicates_merged` counts the folded rows. The catalog states `apd_kind` per
-station (`tm02` NDBC, `tm01` CDIP) and `tm_kind` is stored from it; a station without it
-keeps `apd`. Yearly and monthly archive records (`probably_good`) supersede realtime ones
-(`not_qc`) of the same report.
-**Alternatives.** Keeping every row (inflates pair counts and weights NDBC buoys two to
-three times in pooled scores); keeping only the row at the `.spec` time (often loses DPD,
-which NDBC prints on one copy only); storing APD as `apd` everywhere (mixes Tm01 and Tm02
-in one column).
-**Consequences.** One record per report, matching the archive (on the August 2026
-overlap, 191 of 192 merged records at 46026 fall on an archived time, the last one minute
-off, and all 192 at 51201; heights within 0.05 m). Copies stored before this change would
-stay, since re-ingesting does not delete rows at other times; none were stored outside
-scratch databases, because NDBC was unreachable before 2026-10-12.
-
-## ADR-018 A calibrated offshore range only where the spot's own buoy agrees
+Numbered ADR-018 until 2026-10-26, when a second record with that number (Research-v1.2,
+above) was found.
 
 **Context.** Against five NDBC buoys (docs/ml-evaluation.md 12.2) the app's offshore 80 %
 range for one deterministic source covered 53 % at 24 h and 85-89 % beyond 5 days. A
