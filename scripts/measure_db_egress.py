@@ -228,12 +228,12 @@ class Tally:
 @dataclass
 class Meter:
     proxy: CountingProxy
-    redis_proxy: CountingProxy | None = None
+    redis_proxy: CountingProxy
     commands: RedisCommands = field(default_factory=RedisCommands)
     tallies: dict[str, Tally] = field(default_factory=dict)
 
     def _redis_bytes(self) -> int:
-        return sum(self.redis_proxy.snapshot()) if self.redis_proxy else 0
+        return sum(self.redis_proxy.snapshot())
 
     @contextlib.contextmanager
     def stage(self, name: str) -> Iterator[None]:
@@ -340,8 +340,7 @@ def point_app_at(database_url: str, args: argparse.Namespace) -> None:
     # A fresh database runs the demo provider; a copy keeps the providers its runs came
     # from (--providers), or the blend and the run selection would ignore them.
     os.environ["FORECAST_PROVIDERS"] = args.providers or "demo"
-    if args.redis_url:
-        os.environ["REDIS_URL"] = args.redis_url
+    os.environ["REDIS_URL"] = args.redis_url
     for name in ("KV_URL",):  # REDIS_URL wins over the alias; never a hosted Redis here
         os.environ.pop(name, None)
     # Nothing leaves the machine: console mail and SMS, demo flights.
@@ -459,7 +458,7 @@ def kb(n: int) -> str:
 def parse_now(value: str | None) -> datetime | None:
     if value is None:
         return None
-    when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    when = datetime.fromisoformat(value)
     return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
 
 
@@ -867,14 +866,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         proxy = CountingProxy(target.hostname or "localhost", target.port or 5432)
         port = proxy.start()
-        redis_proxy = None
-        if args.redis_url:
-            parts = urlsplit(args.redis_url)
-            redis_proxy = CountingProxy(parts.hostname or "localhost", parts.port or 6379)
-            redis_port = redis_proxy.start()
-            auth = parts.netloc.rpartition("@")[0]
-            netloc = f"{auth}@127.0.0.1:{redis_port}" if auth else f"127.0.0.1:{redis_port}"
-            args.redis_url = parts._replace(netloc=netloc).geturl()
+        parts = urlsplit(args.redis_url)
+        redis_proxy = CountingProxy(parts.hostname or "localhost", parts.port or 6379)
+        redis_port = redis_proxy.start()
+        auth = parts.netloc.rpartition("@")[0]
+        netloc = f"{auth}@127.0.0.1:{redis_port}" if auth else f"127.0.0.1:{redis_port}"
+        args.redis_url = parts._replace(netloc=netloc).geturl()
         point_app_at(app_database_url(url, port, name), args)
         meter = Meter(proxy, redis_proxy)
         meter.commands.install()
@@ -897,9 +894,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.json_out:
             Path(args.json_out).write_text(json.dumps(result, indent=2, default=str))
     finally:
-        from contextlib import suppress
-
-        with suppress(Exception):
+        with contextlib.suppress(Exception):
             from app.core.database import reset_engine
 
             reset_engine()
