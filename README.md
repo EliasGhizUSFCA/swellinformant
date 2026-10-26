@@ -503,7 +503,8 @@ only on Vercel's website; step 4 runs on your machine):
 Free now: no payments, no ads (Vercel Hobby and the free Open-Meteo API are
 non-commercial). What each service costs now and after a paywall:
 [`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md), section 1.4; the checklist for
-both phases: [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Owner checklist".
+both phases: [`docs/deploy-vercel.md`](docs/deploy-vercel.md) sections 2 and 4, and
+[`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Owner checklist".
 Email to other people needs a domain you own verified with the email provider. Before you
 have one: `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` from a free Resend account and
 `EMAIL_FROM=Swell Travel Agent <onboarding@resend.dev>`. Resend then delivers only to the

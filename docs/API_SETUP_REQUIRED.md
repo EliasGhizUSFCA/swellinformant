@@ -111,8 +111,8 @@ deployment yet.
 | **GitHub** (CI, and the manual emergency `data-sync.yml` workflow) | "GitHub Actions usage is free for self-hosted runners and for public repositories that use standard GitHub-hosted runners." The repository stays public | CI on every push and pull request; `data-sync.yml` only when run by hand (no schedule, `docs/deploy-vercel.md` section 8) | Actions minutes of a private repository were not researched |
 
 The paywall itself (a payment provider, plans, access control for paying accounts) is not
-built; for the hosting it is a configuration change only (`docs/deploy-vercel.md`, section
-2, and `docs/UPGRADE_REPORT.md`, "Owner checklist").
+built; for the hosting it is a configuration change only (`docs/deploy-vercel.md`, sections
+2 and 4, and `docs/UPGRADE_REPORT.md`, "Owner checklist").
 
 ### Recommended live configuration
 

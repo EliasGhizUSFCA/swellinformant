@@ -51,7 +51,8 @@ order, before the site asks anyone for money:
 
 1. Upgrade the Vercel team to **Pro** (Hobby is non-commercial).
 2. Buy an Open-Meteo API plan and add `OPEN_METEO_API_KEY` (Production) in Project
-   Settings, Environment Variables; then set `COMMERCIAL_USE=true`. With the flag and no
+   Settings, Environment Variables, and raise `OPEN_METEO_CALLS_PER_DAY` and
+   `OPEN_METEO_CALLS_PER_MONTH` to the plan's budget; then set `COMMERCIAL_USE=true`. With the flag and no
    key the spot forecasts stop: the app refuses the free hosts and `/status` reports the
    `licence` problem.
 3. Move Neon to **Launch**, then change the retention and the sync cadence to the
