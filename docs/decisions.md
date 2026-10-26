@@ -121,6 +121,10 @@ Suppressed alerts are stored with a reason and sent once the reason clears.
 **Decision.** OSM raster tiles with attribution and a Referer by default; CARTO only with a
 key; the Content-Security-Policy is generated from the configured tile URL.
 **Consequences.** The map works without credentials; switching providers is configuration.
+**Update (2026-10-11, map redesign).** The world map's default basemap is a dark map drawn
+from bundled Natural Earth data (no tiles); OSM tiles stay the default of the optional
+Streets basemap and of the spot page's mini map, and the CSP is still generated from the
+configured tile URL.
 
 ## ADR-011 Migration 0003 corrected before release
 
