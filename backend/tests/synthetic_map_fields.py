@@ -36,7 +36,7 @@ def field_settings(
     MAP_FIELD_CYCLES (every cycle by default, so the synthetic 18Z cycle is a map cycle),
     ``max_bytes`` MAP_FIELD_MAX_BYTES_PER_RUN. Applied after validation, as in map_settings.
     """
-    base = map_settings(lead, step, map_lead=map_lead, map_step=map_step, providers=providers, **kw)
+    base = map_settings(lead, step, map_lead=map_lead, providers=providers, **kw)
     return base.model_copy(
         update={
             "map_field_steps": f"0-{max(map_lead, map_step)}:{map_step}",
@@ -52,18 +52,14 @@ def map_atmos_url(cycle: datetime, fhour: int) -> str:
     return PATHS.map_atmos(cycle, fhour)[0]
 
 
-def add_map_atmos(
-    world: SyntheticGfs, cycle: datetime, fhour: int, *, keep_0p25: bool = False
-) -> None:
-    """The synthetic atmosphere file (a 0.5 deg grid) at the pgrb2.0p50 path; the
-    pgrb2.0p25 copy stays only with ``keep_0p25``."""
+def add_map_atmos(world: SyntheticGfs, cycle: datetime, fhour: int) -> None:
+    """The synthetic atmosphere file (a 0.5 deg grid) at the pgrb2.0p50 path, not at the
+    pgrb2.0p25 one."""
     world.add_atmos(cycle, fhour)
     src = httpx.URL(PATHS.atmos(cycle, fhour)).path
     dst = httpx.URL(map_atmos_url(cycle, fhour)).path
     for suffix in ("", ".idx"):
-        world.files[dst + suffix] = world.files[src + suffix]
-        if not keep_0p25:
-            del world.files[src + suffix]
+        world.files[dst + suffix] = world.files.pop(src + suffix)
 
 
 def add_map_hours(

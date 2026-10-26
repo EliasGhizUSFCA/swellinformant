@@ -33,7 +33,6 @@ class MapWorld:
     """The synthetic bucket behind every NoaaGfsFieldsProvider built while it is installed."""
 
     world: SyntheticGfs
-    built: int = 0
 
     def fail_everything(self, status: int = 503) -> None:
         for path in list(self.world.files):
@@ -52,7 +51,6 @@ def install_synthetic_map(monkeypatch: pytest.MonkeyPatch) -> MapWorld:
     settings = field_settings(map_lead=24, providers="demo", map_fields_enabled=True)
 
     def factory(*_args: Any, **_kw: Any) -> noaa.NoaaGfsFieldsProvider:
-        out.built += 1
         return real(settings, client=world.client(), backoff_seconds=0)
 
     monkeypatch.setattr(noaa, "NoaaGfsFieldsProvider", factory)
