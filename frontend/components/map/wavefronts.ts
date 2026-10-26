@@ -966,6 +966,8 @@ export class WaveAnimator {
   /** Animation time, ms. */
   private clock = 0;
   private times: number[] = [];
+  /** The same draw times, kept sorted (for the percentiles without a sort per frame). */
+  private sortedTimes: number[] = [];
   private framesDrawn = 0;
   private readonly dashes = new DashState();
   private readonly budget = new QuadBudget();
@@ -1087,8 +1089,9 @@ export class WaveAnimator {
     // visit all its cells again (the next frame finds the new cut).
     if (!still && ++this.sinceStart > BUDGET_WARMUP_FRAMES && this.budget.record(ms, frame.quads)) for (const f of l.families) f.limit = Infinity;
     this.times.push(ms);
-    if (this.times.length > 120) this.times.shift();
-    const sorted = [...this.times].sort((a, b) => a - b);
+    const sorted = this.sortedTimes;
+    sorted.splice(lowerBound(sorted, ms), 0, ms);
+    if (this.times.length > 120) sorted.splice(lowerBound(sorted, this.times.shift()!), 1);
     this.framesDrawn++;
     this.stats = { ...frame, quadCap, drawMs: ms, drawMsP50: sorted[Math.floor(sorted.length / 2)]!, drawMsP95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!, latticeMs: l.buildMs, frames: this.framesDrawn };
     this.listener?.(this.stats);
@@ -1097,3 +1100,15 @@ export class WaveAnimator {
 
 /** Longest clock step of one frame (after a stall the dashes do not jump). */
 const MAX_STEP_MS = 100;
+
+/** First index of ascending `sorted` whose value is not below `x` (binary search). */
+function lowerBound(sorted: readonly number[], x: number): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid]! < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
