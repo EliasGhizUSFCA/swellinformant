@@ -45,9 +45,13 @@ class StepSegment:
     step_hours: float
 
 
-def segments(times: Sequence[datetime]) -> list[StepSegment]:
-    """The series as runs of equal step durations (consecutive equal gaps merged)."""
-    durations = step_hours(times)
+def segments(
+    times: Sequence[datetime], durations: Sequence[float] | None = None
+) -> list[StepSegment]:
+    """The series as runs of equal step durations (consecutive equal durations merged).
+    ``durations`` are the steps' hours, :func:`step_hours` by default."""
+    if durations is None:
+        durations = step_hours(times)
     out: list[StepSegment] = []
     for t, hours in zip(times, durations, strict=True):
         end = t + timedelta(hours=hours)

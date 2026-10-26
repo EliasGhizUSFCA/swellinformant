@@ -472,21 +472,6 @@ def step_durations(
     return hours
 
 
-def step_segments(
-    times: Sequence[datetime], durations: Sequence[float]
-) -> list[timesteps.StepSegment]:
-    """Runs of equal step durations, as ``timesteps.segments`` merges them, with the given
-    durations (see :func:`step_durations`)."""
-    out: list[timesteps.StepSegment] = []
-    for t, hours in zip(times, durations, strict=True):
-        end = t + timedelta(hours=hours)
-        if out and abs(out[-1].step_hours - hours) <= 1e-6:
-            out[-1] = timesteps.StepSegment(out[-1].start, end, out[-1].step_hours)
-        else:
-            out.append(timesteps.StepSegment(t, end, hours))
-    return out
-
-
 def assemble_timeline(
     spot: SurfSpot,
     rows: Sequence[tuple[SurfQualityPrediction, WaveForecast]],
@@ -506,7 +491,7 @@ def assemble_timeline(
     one before a lone row (see :func:`step_durations`)."""
     times = [p.valid_time for p, _ in rows]
     durations = step_durations(times, after, before)
-    segments = step_segments(times, durations)
+    segments = timesteps.segments(times, durations)
     steps = [
         _step(p, f, hours, stale, tide, stages.get(p.valid_time))
         for (p, f), hours in zip(rows, durations, strict=True)
