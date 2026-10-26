@@ -41,10 +41,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 from app.models.types import TimestampMixin
 
-TIDE_STATION_KINDS = ("harmonic", "subordinate", "model")
-TIDE_EVENT_TYPES = ("high", "low")
-SPOT_TIDE_RELATIONS = ("primary", "fallback")
-
 
 class TideStation(TimestampMixin, Base):
     __tablename__ = "tide_stations"

@@ -45,7 +45,6 @@ from app.workers.schedule import (
     TASK_SOFT_TIME_LIMIT_SECONDS,
     TASK_TIME_LIMIT_SECONDS,
     celery_beat_schedule,
-    optional_schedule,
     task_routes,
 )
 
@@ -57,11 +56,6 @@ BROKER_CONNECTION_TIMEOUT_SECONDS = 2.0
 # longest task (sync.tick, SYNC_TICK_TIME_LIMIT_SECONDS) plus queueing, so a sync still
 # running is never handed to a second worker.
 VISIBILITY_TIMEOUT_SECONDS = SYNC_TICK_TIME_LIMIT_SECONDS + 1800
-
-
-def _optional_schedule() -> dict[str, dict[str, object]]:
-    """The feature-flagged jobs for this module's settings (schedule.optional_schedule)."""
-    return optional_schedule(settings)
 
 
 celery_app = Celery(

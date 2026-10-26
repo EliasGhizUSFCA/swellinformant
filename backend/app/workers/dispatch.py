@@ -3,8 +3,8 @@
 Transactional messages (account emails, phone verification codes):
 
 * JOB_RUNNER=daemon: sent inline, in the request, through the Celery-free senders of
-  app.services.notifications.transactional (deliver_account_email, deliver_email,
-  deliver_sms). A TransientProviderError is retried: :data:`INLINE_ATTEMPTS` attempts with
+  app.services.notifications.transactional (deliver_account_email, deliver_sms). A
+  TransientProviderError is retried: :data:`INLINE_ATTEMPTS` attempts with
   :data:`INLINE_BACKOFF_SECONDS` between them; the last attempt is final
   (deliver_account_email then records FAILED with the provider's reason). An attempt
   started after :data:`INLINE_RETRY_BUDGET_SECONDS` is also final, so a slow provider does
@@ -14,7 +14,7 @@ Transactional messages (account emails, phone verification codes):
   finish within :data:`QUEUE_TIMEOUT_SECONDS` (a blackholed broker), the message is sent
   inline as above, so a user is never left without their verification link. Should a
   stalled publish still reach the worker later, an account email whose record is done is
-  not sent again; an SMS or a plain email may arrive twice.
+  not sent again; an SMS may arrive twice.
 
 :func:`kick` asks the job runner to run a job soon ("match my search", "refresh flights").
 
@@ -122,13 +122,6 @@ def send_sms_inline(to: str, body: str) -> str | None:
         raise AppError(SMS_NOT_SENT, code="sms_not_sent", status_code=503) from exc
 
 
-def send_email_inline(to: str, subject: str, text: str, html: str | None, tag: str) -> str | None:
-    """Send an email without a delivery record now, retrying transient provider failures."""
-    from app.services.notifications.transactional import deliver_email
-
-    return _with_retries(lambda _final: deliver_email(to, subject, text, html, tag), f"{tag} email")
-
-
 def _bounded(call: Callable[[], object], what: str, timeout: float) -> bool:
     """Run ``call`` in a background thread and wait for it at most ``timeout`` seconds.
 
@@ -194,14 +187,6 @@ def dispatch_account_email(message_id: uuid.UUID | str, text: str, html: str | N
         ):
             return
     send_account_email_inline(message_id, text, html)
-
-
-def dispatch_email(to: str, subject: str, text: str, html: str | None, tag: str) -> None:
-    if get_settings().runs_celery and (tasks := _celery_tasks()) is not None:
-        task = tasks.send_email
-        if _queued(lambda: task.delay(to, subject, text, html, tag), f"Queueing {tag} email"):
-            return
-    send_email_inline(to, subject, text, html, tag)
 
 
 def dispatch_sms(to: str, body: str) -> None:

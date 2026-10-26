@@ -18,11 +18,10 @@ the job is FAILED (and does not chain) when nothing was acquired, and a transien
 task retry itself after a countdown (:func:`retry_transient`), up to ACQUIRE_MAX_RETRIES
 times.
 
-Messaging tasks (account emails, plain emails, SMS) ignore their result: the caller never
-reads it, and without a result the API's ``.delay()`` does not subscribe to the result
-backend: with Redis refusing connections it raised a RuntimeError after 19 s before, and
-raises kombu's OperationalError (which app.workers.dispatch handles) in 0.7 s now
-(measured 2026-10-21).
+Messaging tasks (account emails, SMS) ignore their result: the caller never reads it, and
+without a result the API's ``.delay()`` does not subscribe to the result backend: with
+Redis refusing connections it raised a RuntimeError after 19 s before, and raises kombu's
+OperationalError (which app.workers.dispatch handles) in 0.7 s now (measured 2026-10-21).
 """
 
 from __future__ import annotations
@@ -37,41 +36,17 @@ from sqlalchemy.orm import Session
 
 from app.jobs import runner
 from app.jobs.registry import JobSpec, discover_flights_run, job_spec
-from app.jobs.runner import (
-    ACQUIRE_MAX_RETRIES,
-    RETRY_BASE_SECONDS,
-    RETRY_HINT_MAX_SECONDS,
-    RETRY_MAX_SECONDS,
-    Judge,
-    judge_acquisition,
-    judge_single,
-    retry_countdown,
-)
+from app.jobs.runner import ACQUIRE_MAX_RETRIES, Judge, retry_countdown
 from app.jobs.schedule import (
     DATA_HEALTH_TASK,
-    NEXT_STAGE,
     SYNC_TICK_SOFT_TIME_LIMIT_SECONDS,
     SYNC_TICK_TIME_LIMIT_SECONDS,
 )
 from app.services.http import TransientProviderError
-from app.services.notifications.transactional import deliver_email, deliver_sms
+from app.services.notifications.transactional import deliver_sms
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
-
-__all__ = [
-    "ACQUIRE_MAX_RETRIES",
-    "NEXT_STAGE",
-    "RETRY_BASE_SECONDS",
-    "RETRY_HINT_MAX_SECONDS",
-    "RETRY_MAX_SECONDS",
-    "deliver_email",
-    "deliver_sms",
-    "judge_acquisition",
-    "judge_single",
-    "retry_countdown",
-    "run_job",
-]
 
 
 def queue_next_stage(stage: str) -> None:
@@ -262,9 +237,6 @@ def sync_tick(self: Task) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- transactional messages
-# deliver_email / deliver_sms live in app.services.notifications.transactional (no Celery
-# import there, so the inline paths of app.workers.dispatch need no worker extra); the
-# names stay importable from this module.
 ACCOUNT_EMAIL_MAX_RETRIES = 5
 
 
@@ -297,19 +269,6 @@ def send_account_email(self: Task, message_id: str, text: str, html: str | None)
     except TransientProviderError as exc:
         raise self.retry(exc=exc, countdown=min(600, 30 * 2**self.request.retries)) from exc
     return status.value if status else None
-
-
-# Legacy task kept so messages queued by older versions are still delivered.
-@celery_app.task(
-    name="notifications.send_email",
-    ignore_result=True,
-    autoretry_for=(TransientProviderError,),
-    retry_backoff=30,
-    retry_backoff_max=600,
-    max_retries=5,
-)
-def send_email(to: str, subject: str, text: str, html: str | None, tag: str) -> str | None:
-    return deliver_email(to, subject, text, html, tag)
 
 
 @celery_app.task(

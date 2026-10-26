@@ -103,7 +103,7 @@ def test_cycle_hours_match_the_ingesters() -> None:
 
 
 def test_blend_code_copies_match_the_blend() -> None:
-    """queries and health restate blend.BLEND_CODE instead of importing it."""
+    """queries restates blend.BLEND_CODE instead of importing it; health uses queries'."""
     from app.services import health
     from app.services.forecasts import blend
 

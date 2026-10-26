@@ -160,12 +160,10 @@ def test_daemon_dispatch_never_imports_celery(tmp_path: Path) -> None:
         transactional.deliver_account_email = (
             lambda *a, final_attempt=True: sent.append(("account", final_attempt)) or "ok"
         )
-        transactional.deliver_email = lambda *a: sent.append(("email",)) or "e1"
         transactional.deliver_sms = lambda *a: sent.append(("sms",)) or "s1"
         dispatch.dispatch_account_email("m1", "text", None)
-        dispatch.dispatch_email("a@example.com", "Hi", "text", None, "test")
         dispatch.dispatch_sms("+15550100", "code")
-        assert sent == [("account", False), ("email",), ("sms",)], sent
+        assert sent == [("account", False), ("sms",)], sent
         assert not {"celery", "kombu"} & set(sys.modules), sorted(sys.modules)
         print("ok")
         """
@@ -198,18 +196,16 @@ def test_celery_queueing_failure_falls_back_inline(
         raise error
 
     assert get_settings().job_runner == "celery"
-    for task in (tasks.send_account_email, tasks.send_email, tasks.send_sms):
+    for task in (tasks.send_account_email, tasks.send_sms):
         monkeypatch.setattr(task, "delay", broken)
     fake = FlakyAccountEmail(failures=1)
     sent: list[str] = []
     monkeypatch.setattr(transactional, "deliver_account_email", fake)
-    monkeypatch.setattr(transactional, "deliver_email", lambda *a: sent.append("email"))
     monkeypatch.setattr(transactional, "deliver_sms", lambda *a: sent.append("sms"))
     dispatch.dispatch_account_email("m1", "text", None)
-    dispatch.dispatch_email("a@example.com", "Hi", "text", None, "test")
     dispatch.dispatch_sms("+15550100", "code")
     assert fake.calls == [False, False] and pauses == [0.5]
-    assert sent == ["email", "sms"]
+    assert sent == ["sms"]
 
 
 def test_a_stalled_celery_publish_falls_back_inline(
@@ -357,7 +353,7 @@ def test_kick_under_the_daemon_writes_a_redis_flag(monkeypatch: pytest.MonkeyPat
 
 def test_the_inline_senders_need_no_celery() -> None:
     """deliver_account_email / deliver_email / deliver_sms (the inline path) import
-    neither Celery nor kombu, and the Celery task module still offers the same functions."""
+    neither Celery nor kombu, and the Celery send_sms task sends through the same function."""
     code = textwrap.dedent(
         """
         import sys
@@ -383,7 +379,6 @@ def test_the_inline_senders_need_no_celery() -> None:
     from app.services.notifications import transactional
     from app.workers import tasks
 
-    assert tasks.deliver_email is transactional.deliver_email
     assert tasks.deliver_sms is transactional.deliver_sms
 
 

@@ -16,8 +16,7 @@ prepared-statement support needs.
 from __future__ import annotations
 
 import logging
-from collections.abc import Generator, Iterator
-from contextlib import contextmanager
+from collections.abc import Generator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -67,12 +66,6 @@ def engine_options(settings: Settings) -> dict[str, Any]:
     }
 
 
-def unpooled_url(settings: Settings) -> str | None:
-    """DATABASE_URL_UNPOOLED when it is set and names the same database as DATABASE_URL
-    (Settings.unpooled_database_url: otherwise ignored with a warning)."""
-    return settings.unpooled_database_url
-
-
 def engine_url(settings: Settings) -> str:
     """The application engine's URL: settings.engine_database_url (the unpooled URL only
     with DB_USE_UNPOOLED, and only for the same database)."""
@@ -103,7 +96,7 @@ def reset_engine() -> None:
     _SessionLocal = None
 
 
-def SessionLocal() -> Session:  # noqa: N802 - factory mimics sessionmaker naming
+def SessionLocal() -> Session:  # factory mimics sessionmaker naming
     get_engine()
     assert _SessionLocal is not None
     return _SessionLocal()
@@ -114,20 +107,6 @@ def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
         yield db
-    finally:
-        db.close()
-
-
-@contextmanager
-def session_scope() -> Iterator[Session]:
-    """Transactional scope for background jobs: commit on success, rollback on error."""
-    db = SessionLocal()
-    try:
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
     finally:
         db.close()
 

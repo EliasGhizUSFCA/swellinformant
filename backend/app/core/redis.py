@@ -82,7 +82,7 @@ def check_redis() -> bool:
     return bool(get_redis().ping())
 
 
-_RELEASE_SCRIPT = """
+RELEASE_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])
 else
@@ -117,7 +117,7 @@ def acquire_lock(name: str, ttl_seconds: int = 900, blocking_seconds: float = 0)
 def release_lock(name: str, token: str) -> None:
     """Release the lock ``name`` if ``token`` still holds it (best effort)."""
     try:
-        get_redis().eval(_RELEASE_SCRIPT, 1, f"lock:{name}", token)
+        get_redis().eval(RELEASE_SCRIPT, 1, f"lock:{name}", token)
     except redis.RedisError:
         logger.warning("Failed to release lock %s", name)
 
@@ -160,12 +160,6 @@ def consume_quota(provider: str, limit: int, amount: int = 1) -> int:
         client.decrby(key, amount)
         raise QuotaExceeded(f"{provider} daily quota of {limit} requests reached")
     return used
-
-
-def quota_usage(provider: str) -> int:
-    day = datetime.now(UTC).strftime("%Y%m%d")
-    value = get_redis().get(f"quota:{provider}:{day}")
-    return int(value) if value else 0
 
 
 # KEYS = one counter per window; ARGV = amount, then (limit, ttl seconds) per key. Nothing is

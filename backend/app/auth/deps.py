@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.auth.sessions import resolve_session
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.errors import Forbidden, Unauthorized
+from app.core.errors import Unauthorized
 from app.models import User, UserSession
 
 
@@ -41,9 +41,3 @@ def get_current_user(auth: AuthContext = Depends(get_auth)) -> User:
 def get_optional_user(request: Request, db: Session = Depends(get_db)) -> User | None:
     resolved = resolve_session(db, _token(request))
     return resolved[0] if resolved else None
-
-
-def require_admin(user: User = Depends(get_current_user)) -> User:
-    if not user.is_admin:
-        raise Forbidden("Administrator access required.")
-    return user

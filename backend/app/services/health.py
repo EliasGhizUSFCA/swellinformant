@@ -68,7 +68,7 @@ from typing import Any
 
 import redis
 from pydantic import ValidationError
-from sqlalchemy import Float, and_, func, select, true
+from sqlalchemy import Float, String, and_, column, func, select, true, values
 from sqlalchemy.orm import Session
 
 from app.core.config import OPEN_METEO_PROVIDER_TOKENS, Settings, get_settings
@@ -114,7 +114,7 @@ from app.schemas.sync import (
     SyncStoredRunOut,
 )
 from app.services.forecasts.open_meteo import free_api_refused
-from app.services.forecasts.queries import USABLE, is_stale, stale_after_hours
+from app.services.forecasts.queries import BLEND_CODE, USABLE, is_stale, stale_after_hours
 from app.services.forecasts.registry import (
     GEFS_WAVE_CODE,
     KNOWN_SOURCE_NAMES,
@@ -127,7 +127,6 @@ from app.services.sync.published import latest_publication
 from app.services.sync.types import STAGE_JOB_NAMES, SYNC_OWNED_TASKS, SYNC_TICK_JOB
 from app.services.tides.health import constants_file_present, tide_freshness
 
-BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: ecCodes)
 # Jobs that (re)build the blend: forecasts.acquire, then the chained forecasts.blend stage.
 BLEND_BUILDERS = frozenset({"forecasts.acquire", "forecasts.blend"})
 OVERDUE_FACTOR = 2  # missed runs tolerated before a job counts as overdue
@@ -418,21 +417,41 @@ def runner_hint(settings: Settings) -> str:
     return "the sync daemon (on Vercel: the project's Daemons)"
 
 
+def _recent_logs(db: Session, names: list[str]) -> dict[str, list[BackgroundJobLog]]:
+    """The newest RECENT_LOGS job logs of each job in ``names`` (newest first), in one
+    statement: each name LATERAL-joined to the (job_name, started_at) index."""
+    out: dict[str, list[BackgroundJobLog]] = {name: [] for name in names}
+    if not names:
+        return out
+    log = BackgroundJobLog
+    jobs = values(column("name", String), name="jobs").data([(name,) for name in names])
+    newest = (
+        select(log.id)
+        .where(log.job_name == jobs.c.name)
+        .order_by(log.started_at.desc(), log.id.desc())
+        .limit(RECENT_LOGS)
+        .lateral("newest")
+    )
+    ids = select(newest.c.id).select_from(jobs).join(newest, true())
+    stmt = (
+        select(log)
+        .where(log.id.in_(ids))
+        .order_by(log.job_name, log.started_at.desc(), log.id.desc())
+    )
+    for row in db.scalars(stmt):
+        out[row.job_name].append(row)
+    return out
+
+
 def _job_health(
     db: Session,
     job: ExpectedJob,
+    rows: list[BackgroundJobLog],
     now: datetime,
     monitoring_since: datetime | None,
     runner: str = "the scheduler (beat) or the worker",
 ) -> tuple[JobHealthOut, Problem | None]:
-    rows = list(
-        db.scalars(
-            select(BackgroundJobLog)
-            .where(BackgroundJobLog.job_name == job.name)
-            .order_by(BackgroundJobLog.started_at.desc(), BackgroundJobLog.id.desc())
-            .limit(RECENT_LOGS)
-        ).all()
-    )
+    """``rows``: the job's newest RECENT_LOGS logs, newest first (:func:`_recent_logs`)."""
     real = [r for r in rows if r.status in REAL_RESULTS]
     if not real and rows:
         # Only skipped (lock held) or running rows in the window: look further back.
@@ -565,8 +584,10 @@ def _check_jobs(
     out: list[JobHealthOut] = []
     problems: list[Problem] = []
     runner = runner_hint(settings)
-    for job in expected_jobs(settings):
-        health, problem = _job_health(db, job, now, monitoring_since, runner)
+    jobs = expected_jobs(settings)
+    recent = _recent_logs(db, [job.name for job in jobs])
+    for job in jobs:
+        health, problem = _job_health(db, job, recent[job.name], now, monitoring_since, runner)
         out.append(health)
         if problem is not None:
             problems.append(problem)

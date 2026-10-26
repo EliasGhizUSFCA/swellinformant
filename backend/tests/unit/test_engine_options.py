@@ -168,14 +168,14 @@ def test_an_unpooled_url_of_another_database_is_ignored(
     scratch = "postgresql+psycopg://u:p@localhost:5432/swell_test_scratch_1"
     other = "postgresql+psycopg://u:p@ep-x.us-east-1.aws.neon.tech/neondb"
     settings = make(database_url=scratch, database_url_unpooled=other, db_use_unpooled=True)
-    assert database.unpooled_url(settings) is None
+    assert settings.unpooled_database_url is None
     assert database.engine_url(settings) == scratch
     assert database.migration_url(settings) == scratch
     assert "'neondb' but DATABASE_URL names 'swell_test_scratch_1'" in caplog.text
     assert "u:p" not in caplog.text  # no credentials in the log
 
     same = make(database_url=POOLED, database_url_unpooled=DIRECT)  # Neon: same name "db"
-    assert database.unpooled_url(same) == DIRECT
+    assert same.unpooled_database_url == DIRECT
     assert database.migration_url(same) == DIRECT and database.engine_url(same) == POOLED
     assert database.migration_url(make(database_url=POOLED)) == POOLED
 

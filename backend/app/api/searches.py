@@ -46,7 +46,8 @@ def list_searches(
         .group_by(OpportunityMatch.search_id, OpportunityMatch.status)
     ).all():
         counts[search_id][st.value] = n
-    return [svc.search_out(db, s, counts[s.id]) for s in rows]
+    slugs = svc.spot_slugs_of(db, rows)
+    return [svc.search_out(db, s, counts[s.id], slugs[s.id]) for s in rows]
 
 
 @router.post("", response_model=SearchOut, status_code=status.HTTP_201_CREATED)

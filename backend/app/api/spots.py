@@ -84,7 +84,7 @@ def public_json(snapshot: snapshots.Snapshot) -> Response:
     return response
 
 
-def _spot(db: Session, slug: str) -> SurfSpot:
+def active_spot(db: Session, slug: str) -> SurfSpot:
     spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == slug, SurfSpot.is_active))
     if spot is None:
         raise NotFound("Surf spot not found.")
@@ -119,7 +119,7 @@ def get_spot(slug: str, request: Request, db: Session = Depends(get_db)) -> Resp
             db,
             "spot",
             slug,
-            lambda now: snapshots.render(SPOT_DETAIL, spot_detail(db, _spot(db, slug), now)),
+            lambda now: snapshots.render(SPOT_DETAIL, spot_detail(db, active_spot(db, slug), now)),
             visitor=client_ip(request),
         )
     )
@@ -132,7 +132,7 @@ def spot_page(db: Session, slug: str, days: int) -> snapshots.Together:
 
     def spot() -> SurfSpot:
         if not found:
-            found.append(_spot(db, slug))
+            found.append(active_spot(db, slug))
         return found[0]
 
     def forecast(now: datetime) -> snapshots.Snapshot:
@@ -170,7 +170,7 @@ def spot_events(slug: str, request: Request, db: Session = Depends(get_db)) -> R
             db,
             "spot-events",
             slug,
-            lambda now: snapshots.render(EVENTS, events_of_spot(db, _spot(db, slug), now)),
+            lambda now: snapshots.render(EVENTS, events_of_spot(db, active_spot(db, slug), now)),
             visitor=client_ip(request),
         )
     )
@@ -183,7 +183,7 @@ def spot_opportunities(
     """The signed-in user's travel opportunities for this spot (empty when signed out)."""
     if user is None:
         return []
-    return list_matches(db, user, spot_id=_spot(db, slug).id)
+    return list_matches(db, user, spot_id=active_spot(db, slug).id)
 
 
 @router.get("/events", response_model=list[EventOut])

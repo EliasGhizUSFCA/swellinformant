@@ -9,6 +9,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.auth.security import constant_time_equals
 from app.core.config import get_settings
+from app.core.http_cache import PRIVATE_NO_STORE
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
 # Endpoints authenticated by their own secret instead of the session cookie.
@@ -80,7 +81,7 @@ class CSRFMiddleware:
 DOC_PATHS = ("/docs", "/redoc", "/openapi.json")
 # Headers only a shared cache (Vercel's CDN) reads, in its order of precedence.
 SHARED_CACHE_HEADERS = (b"vercel-cdn-cache-control", b"cdn-cache-control")
-PRIVATE_NO_STORE = b"private, no-store"
+PRIVATE_NO_STORE_VALUE = PRIVATE_NO_STORE.encode()
 
 
 def _shared_cacheable(headers: list[tuple[bytes, bytes]]) -> bool:
@@ -103,7 +104,7 @@ def _never_share_cookies(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes
         return headers
     dropped = (b"cache-control", *SHARED_CACHE_HEADERS)
     kept = [(k, v) for k, v in headers if k.lower() not in dropped]
-    return [*kept, (b"cache-control", PRIVATE_NO_STORE)]
+    return [*kept, (b"cache-control", PRIVATE_NO_STORE_VALUE)]
 
 
 class SecurityHeadersMiddleware:

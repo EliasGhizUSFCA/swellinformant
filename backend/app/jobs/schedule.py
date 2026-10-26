@@ -66,10 +66,6 @@ BULK_TASK_PATTERNS = (
     "tides.*",
     SYNC_TICK_JOB,
 )
-# GEFS-Wave mean/spread files of a cycle are complete about 7 h after it (ensemble.py).
-# No longer a beat time (the sync acquires the ensemble once it is published); kept for
-# the modules and docs that quote it.
-GEFS_JOB_DELAY = timedelta(hours=7, minutes=40)
 
 
 @dataclass(frozen=True)
@@ -114,13 +110,6 @@ def queue_for(task_name: str) -> str:
 def time_limit_seconds(task_name: str) -> int:
     """Hard Celery time limit of a task (sync.tick has its own, longer one)."""
     return SYNC_TICK_TIME_LIMIT_SECONDS if task_name == SYNC_TICK_JOB else TASK_TIME_LIMIT_SECONDS
-
-
-def map_fields_standalone(settings: Settings) -> bool:
-    # Imported here: app.services.map_fields pulls in the models.
-    from app.services.map_fields import map_fields_mode
-
-    return map_fields_mode(settings) == "standalone"
 
 
 def optional_jobs(settings: Settings) -> dict[str, JobEntry]:

@@ -310,12 +310,9 @@ class Settings(BaseSettings):
     map_fields_enabled: bool | None = None
     map_field_resolution_deg: float = Field(default=0.5, ge=0.25, le=2.0)
     map_field_max_lead_hours: int = Field(default=240, ge=24, le=384)
-    # Deprecated: no longer read. MAP_FIELD_STEPS decides the map hours; kept so that old
-    # .env files that set MAP_FIELD_STEP_HOURS still load.
-    map_field_step_hours: int = Field(default=3, ge=1, le=12)
     # GFS atmosphere grid read for the map's wind and pressure in standalone mode, and its
     # file layout ({grid} is MAP_FIELD_ATMOS_GRID; other placeholders as in
-    # NOAA_GFS_ATMOS_PATH_TEMPLATE). Use map_field_atmos_path() to fill it in.
+    # NOAA_GFS_ATMOS_PATH_TEMPLATE). app.services.forecasts.noaa.GfsPaths fills it in.
     map_field_atmos_grid: Literal["0p25", "0p50", "1p00"] = "0p50"
     map_field_atmos_path_template: str = "gfs.{ymd}/{hh}/atmos/gfs.t{hh}z.pgrb2.{grid}.f{fhour:03d}"
     # Map hours per cycle as "start-end:step" ranges in forecast hours (0..120 3-hourly, then
@@ -367,7 +364,6 @@ class Settings(BaseSettings):
     flight_daily_quota: int = 300
     flight_max_queries_per_match: int = 3
     flight_refresh_hours: float = 12.0
-    flight_offer_max_age_hours: float = 24.0
     flight_max_offers_per_search: int = 50
     # Optional static FX table, e.g. '{"EUR": 1.08, "GBP": 1.27}' = USD per 1 unit.
     # Offers in a currency other than the search currency are discarded unless a rate exists.
@@ -402,7 +398,6 @@ class Settings(BaseSettings):
     alert_price_drop_pct: float = 10.0
     alert_price_drop_min_amount: float = 50.0
     alert_score_improvement: int = 10
-    max_alerts_per_user_per_day: int = 10
     # Development console adapters write here (not used by live providers).
     outbox_dir: str = "/tmp/swell-outbox"  # noqa: S108
 
@@ -455,8 +450,9 @@ class Settings(BaseSettings):
     ops_alert_emails: str | None = None
 
     # ------------------------------------------------------------------ worker and compose
-    # Queues the Celery worker consumes (docker-entrypoint.sh) and the Redis memory cap
-    # (docker-compose.yml); declared here so the health checks can report them.
+    # Queues the Celery worker consumes: mirrors docker-entrypoint.sh's default (the routing
+    # tests check that every task lands on one). The Redis memory cap of docker-compose.yml:
+    # what the Redis health check measures against when Redis runs without a maxmemory.
     worker_queues: str = "celery,bulk"
     redis_maxmemory: str = "256mb"
 
@@ -630,7 +626,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        return _split(self.cors_origins)
 
     @property
     def demo_mode(self) -> bool:
@@ -639,8 +635,7 @@ class Settings(BaseSettings):
 
     @property
     def forecast_provider_list(self) -> list[str]:
-        names = [p.strip() for p in self.forecast_providers.split(",") if p.strip()]
-        return names or ["demo"]
+        return _split(self.forecast_providers) or ["demo"]
 
     @property
     def open_meteo_gfs_wave_model_list(self) -> list[str]:
@@ -677,12 +672,6 @@ class Settings(BaseSettings):
     def map_field_cycle_hours(self) -> list[int]:
         return sorted({int(h) for h in _split(self.map_field_cycles)})
 
-    def map_field_atmos_path(self, ymd: str, hh: str, fhour: int) -> str:
-        """MAP_FIELD_ATMOS_PATH_TEMPLATE filled in (below NOAA_GFS_BASE_URL)."""
-        return self.map_field_atmos_path_template.format(
-            ymd=ymd, hh=hh, fhour=fhour, grid=self.map_field_atmos_grid
-        )
-
     @property
     def tide_provider_list(self) -> list[str]:
         return _split(self.tide_providers)
@@ -697,11 +686,11 @@ class Settings(BaseSettings):
 
     @property
     def observation_provider_list(self) -> list[str]:
-        return [p.strip() for p in self.observation_providers.split(",") if p.strip()]
+        return _split(self.observation_providers)
 
     @property
     def point_forecast_source_list(self) -> list[str]:
-        return [p.strip() for p in self.point_forecast_sources.split(",") if p.strip()]
+        return _split(self.point_forecast_sources)
 
     @property
     def fx_rates_usd(self) -> dict[str, float]:

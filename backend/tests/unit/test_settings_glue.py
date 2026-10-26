@@ -57,7 +57,7 @@ def test_get_settings_never_shows_a_rejected_value(
 
 def test_a_process_that_fails_on_its_settings_logs_no_value() -> None:
     """The whole traceback a process prints (the Vercel function, the daemon, the CLI)."""
-    done = subprocess.run(  # noqa: S603 - fixed interpreter and code
+    done = subprocess.run(
         [sys.executable, "-c", "from app.core.config import get_settings; get_settings()"],
         cwd=BACKEND,
         env={"PATH": "/usr/bin:/bin", "CRON_SECRET": SECRET, "HOME": str(BACKEND)},
