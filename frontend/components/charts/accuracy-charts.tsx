@@ -20,7 +20,7 @@ import {
 import type { AccuracyMetric, AccuracyPairs } from "@/types/api";
 
 /** Categorical slots (validated reference palette), assigned to model versions in a fixed order. */
-export const SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
+const SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
 
 const axisStyle = { fontSize: 11, fill: "var(--muted-foreground)" };
 const gridStroke = "var(--border)";

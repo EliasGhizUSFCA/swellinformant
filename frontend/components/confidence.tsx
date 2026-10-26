@@ -33,7 +33,7 @@ import type { Research } from "@/types/api";
  * "Not assessed yet" = neutral grey.
  */
 
-export type ConfidenceKind = "forecast" | "local" | "research";
+type ConfidenceKind = "forecast" | "local" | "research";
 
 const KIND_LABEL: Record<ConfidenceKind, string> = {
   forecast: "Forecast confidence",
@@ -42,7 +42,7 @@ const KIND_LABEL: Record<ConfidenceKind, string> = {
 };
 
 /** Shorter prefixes for cards (the full name stays in the tooltip and for screen readers). */
-export const SHORT_KIND_LABEL: Record<ConfidenceKind, string> = {
+const SHORT_KIND_LABEL: Record<ConfidenceKind, string> = {
   forecast: "Forecast confidence",
   local: "At the break",
   research: "Spot research",

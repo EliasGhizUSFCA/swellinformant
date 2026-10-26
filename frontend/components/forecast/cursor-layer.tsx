@@ -148,7 +148,7 @@ export function NowMarker({ model, scale, width }: RowProps) {
 }
 
 /** The values of one step in short lines: the hover tooltip and the keyboard readout. */
-export function StepTooltipContent({ step, tz, units, windUnit }: { step: TimelineStep; tz: string; units: HeightUnit; windUnit: WindUnit }) {
+function StepTooltipContent({ step, tz, units, windUnit }: { step: TimelineStep; tz: string; units: HeightUnit; windUnit: WindUnit }) {
   const q = asQuality(step.quality.label);
   const b = step.breaking;
   const drive = drivingPartition(step);

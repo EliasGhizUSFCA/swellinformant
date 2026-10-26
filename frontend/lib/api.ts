@@ -5,7 +5,7 @@
  */
 import type { ApiErrorBody } from "@/types/api";
 
-export const CSRF_COOKIE = "sta_csrf";
+const CSRF_COOKIE = "sta_csrf";
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 export class ApiError extends Error {
@@ -53,7 +53,7 @@ async function ensureCsrf(): Promise<string> {
   return csrfPromise;
 }
 
-export interface RequestOptions {
+interface RequestOptions {
   method?: string;
   body?: unknown;
   signal?: AbortSignal;

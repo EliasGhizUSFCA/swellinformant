@@ -24,10 +24,10 @@ export async function apiGet(request: APIRequestContext, path: string) {
  * mailpit, real SMTP delivery to a local catch-all), otherwise the console provider's
  * capture file exposed by /api/dev/outbox.
  */
-export const MAILPIT_URL = process.env.E2E_MAILPIT_URL?.replace(/\/$/, "") ?? null;
+const MAILPIT_URL = process.env.E2E_MAILPIT_URL?.replace(/\/$/, "") ?? null;
 export const DEV_INBOX = MAILPIT_URL ? "mailpit" : "console-outbox";
 
-export interface DevEmail {
+interface DevEmail {
   to: string;
   subject: string;
   text: string;

@@ -10,7 +10,7 @@ import { modelRunText } from "@/lib/confidence";
 import { cn } from "@/lib/utils";
 import type { MapSnapshot, SwellEvent, SystemStatus } from "@/types/api";
 
-export type ForecastFreshness = { kind: "demo" } | { kind: "fresh" | "stale"; runText: string | null } | { kind: "unknown" };
+type ForecastFreshness = { kind: "demo" } | { kind: "fresh" | "stale"; runText: string | null } | { kind: "unknown" };
 
 /**
  * What the landing page may say about the forecast behind its swells. Model output is a

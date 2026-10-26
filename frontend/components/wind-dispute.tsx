@@ -10,11 +10,10 @@ import { cn } from "@/lib/utils";
  * to the wind it qualifies; it is not a forecast-confidence reason. Older responses only carry
  * it inside the deprecated mixed `confidence_reasons`, word for word.
  */
-const WIND_DISPUTE_REASON = WIND_DISPUTE_TEXT;
 
 /** The API's own note when the reasons carry it, else null (nothing is inferred). */
-export function windDisputeNote(reasons: readonly string[] | null | undefined): string | null {
-  return (reasons ?? []).find((r) => r.trim() === WIND_DISPUTE_REASON) ?? null;
+function windDisputeNote(reasons: readonly string[] | null | undefined): string | null {
+  return (reasons ?? []).find((r) => r.trim() === WIND_DISPUTE_TEXT) ?? null;
 }
 
 /** A small amber note (readable on light cards and on the dark map panel alike). `note` is

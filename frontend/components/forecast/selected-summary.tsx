@@ -43,7 +43,7 @@ const GUST_BELOW_TEXT: Record<string, string> = {
 };
 
 /** A small arrow pointing where something travels (FROM + 180), with the FROM text beside. */
-export function ToArrow({ fromDeg, className }: { fromDeg: number; className?: string }) {
+function ToArrow({ fromDeg, className }: { fromDeg: number; className?: string }) {
   return (
     <svg viewBox="-8 -8 16 16" className={cn("inline-block size-3.5 shrink-0", className)} aria-hidden="true" data-arrow-rotation={arrowRotationDeg(fromDeg)}>
       <path d="M0,-6.5L4.2,-0.8L1.1,-0.8L1.1,6.5L-1.1,6.5L-1.1,-0.8L-4.2,-0.8Z" fill="currentColor" transform={`rotate(${arrowRotationDeg(fromDeg)})`} />

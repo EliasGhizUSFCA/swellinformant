@@ -18,8 +18,8 @@ import type { PartitionOut, QualityLabel, SpotTimeline, TimelineDay, TimelineSte
 
 export { zoneName };
 
-export const HOUR_MS = 3_600_000;
-export const DAY_MS = 24 * HOUR_MS;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 export interface Scale {
   (t: number): number;
@@ -68,27 +68,27 @@ function partsFormat(tz: string): Intl.DateTimeFormat {
 }
 
 /** Offset of `tz` from UTC at instant `t` (ms; local wall clock = t + offset). */
-export function zoneOffsetMs(t: number, tz: string): number {
+function zoneOffsetMs(t: number, tz: string): number {
   const p = Object.fromEntries(partsFormat(tz).formatToParts(new Date(t)).map((x) => [x.type, x.value]));
   const wall = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second));
   return wall - Math.floor(t / 1000) * 1000;
 }
 
 /** Local hour (0-23) and minute at `t` in `tz`. */
-export function localHourMinute(t: number, tz: string): [number, number] {
+function localHourMinute(t: number, tz: string): [number, number] {
   const wall = t + zoneOffsetMs(t, tz);
   const minutes = Math.floor(wall / 60_000);
   return [Math.floor(minutes / 60) % 24, minutes % 60];
 }
 
 /** Hour-tick spacing (local hours) that keeps labels apart at this zoom. */
-export function tickIntervalHours(pxPerHour: number): number {
+function tickIntervalHours(pxPerHour: number): number {
   if (pxPerHour >= 22) return 3;
   if (pxPerHour >= 8) return 6;
   return 12;
 }
 
-export interface HourTick {
+interface HourTick {
   t: number;
   label: string;
   /** Local midnight. */
@@ -246,7 +246,7 @@ export function localMidnights(start: number, end: number, tz: string): number[]
 
 export type PartitionKind = PartitionOut["kind"];
 
-export const PARTITION_ORDER: readonly PartitionKind[] = ["primary_swell", "secondary_swell", "tertiary_swell", "wind_sea"];
+const PARTITION_ORDER: readonly PartitionKind[] = ["primary_swell", "secondary_swell", "tertiary_swell", "wind_sea"];
 
 export const PARTITION_LABEL: Record<PartitionKind, string> = {
   primary_swell: "Primary swell",
@@ -286,7 +286,7 @@ export const RELATION_SHORT: Record<string, string> = {
   unknown: "?",
 };
 
-export interface RelationRun {
+interface RelationRun {
   relation: string;
   from: number;
   to: number;
@@ -353,7 +353,7 @@ const FAMILY_SHORT: Record<string, string> = { ncep_gfs: "GFS", ecmwf_ifs: "ECMW
 
 /** "ECMWF" for a blend member's source code, from the run's members (family names as
  * forecasters say them); the code itself when the member is unknown. */
-export function memberShortName(code: string, members: ReadonlyArray<{ code: string; family: string }> | null | undefined): string {
+function memberShortName(code: string, members: ReadonlyArray<{ code: string; family: string }> | null | undefined): string {
   const m = members?.find((x) => x.code === code);
   return (m && FAMILY_SHORT[m.family]) ?? code;
 }
@@ -392,7 +392,7 @@ export function partitionText(p: PartitionOut, unit: HeightUnit): string {
 
 // --- quality -------------------------------------------------------------------------
 
-export interface QualityRun {
+interface QualityRun {
   label: QualityLabel;
   daylight: boolean;
   from: number;

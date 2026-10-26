@@ -91,7 +91,7 @@ export function writeWindUnit(unit: WindUnit): void {
 }
 
 /** Calls `cb` when the preference changes in this tab or another one. */
-export function subscribeWindUnit(cb: () => void): () => void {
+function subscribeWindUnit(cb: () => void): () => void {
   const onStorage = (e: StorageEvent) => {
     if (e.key === WIND_UNIT_KEY || e.key === null) cb();
   };

@@ -35,7 +35,7 @@ export function tideSourceText(source: string): string {
 }
 
 /** "EOT20 model point near Cloudbreak, 9 km away": where the tide curve is computed. */
-export function tideStationText(tide: TideBlock): string | null {
+function tideStationText(tide: TideBlock): string | null {
   const st = tide.station;
   if (!st) return null;
   return `${st.name}, ${Math.round(st.distance_km)} km away`;

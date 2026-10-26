@@ -72,7 +72,7 @@ function Published({ run, now }: { run: SyncRun | null | undefined; now: Date | 
   );
 }
 
-export function SyncStages({ run }: { run: SyncRun }) {
+function SyncStages({ run }: { run: SyncRun }) {
   const stages = run.stages ?? [];
   if (stages.length === 0) return <p className="text-xs text-muted-foreground">No stage finished yet.</p>;
   return (
