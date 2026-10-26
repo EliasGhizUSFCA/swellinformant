@@ -113,6 +113,7 @@ from app.services.observations.records import (
     StationRef,
     validate_record,
 )
+from app.services.units import ms_to_kmh
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +299,7 @@ def parse_stdmet(
         rec.tm_kind = tm_kind if rec.tm_s is not None else None
         rec.peak_direction_deg = _value("MWD", values.get("MWD"))
         wspd = _value("WSPD", values.get("WSPD"))
-        rec.wind_speed_kmh = None if wspd is None else wspd * 3.6
+        rec.wind_speed_kmh = None if wspd is None else ms_to_kmh(wspd)
         rec.wind_direction_deg = _value("WDIR", values.get("WDIR"))
         if not rec.has_wave_data():
             # Wind-only rows (10-minute met reports between wave reports) are not stored.

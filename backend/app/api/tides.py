@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.database import get_db, utcnow
 from app.core.errors import AppError
 from app.schemas.tides import ObservationsBlockOut, TideBlockOut
+from app.services.map_fields import as_utc
 from app.services.tides.api import spot_observations_block, spot_tide_block
 
 router = APIRouter(prefix="/api/spots", tags=["tides"])
@@ -28,15 +29,11 @@ EARLIEST = datetime(1900, 1, 1, tzinfo=UTC)
 LATEST = datetime(2200, 1, 1, tzinfo=UTC)
 
 
-def _as_utc(when: datetime) -> datetime:
-    return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
-
-
 def _bounded(when: datetime, name: str) -> datetime:
     """``when`` in UTC, or HTTP 400 outside EARLIEST..LATEST (including instants that cannot
     be expressed in UTC at all, e.g. 0001-01-01T00:00+05:00)."""
     try:
-        value = _as_utc(when)
+        value = as_utc(when)
     except OverflowError:
         raise AppError(f"{name} is out of range.") from None
     if not EARLIEST <= value <= LATEST:
