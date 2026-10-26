@@ -190,6 +190,15 @@ Releases: back up (`scripts/backup-db.sh --compose`), `git pull`,
 never delete data. To run pre-built images instead of building on the server, set
 `BACKEND_IMAGE` / `FRONTEND_IMAGE` to your registry tags.
 
+Upgrading a Celery deployment from a build older than 2026-10-10 (before commit b83c454):
+those builds queued verification and password-reset emails as the Celery task
+`notifications.send_email`, which current builds no longer register, so a current worker
+logs "Received unregistered task" and discards such a message. After stopping the old
+worker, check that the broker holds none:
+`docker compose exec redis redis-cli -n 1 LRANGE celery 0 -1 | grep -c notifications.send_email`
+should print 0 (`-n` is the database of `CELERY_BROKER_URL`, 1 in docker-compose.yml). If
+it does not, start the old worker again until the queue is empty, then upgrade.
+
 Images (measured): backend 1.29 GB (Python 3.13, ecCodes, pandas, pyarrow,
 scikit-learn), frontend 343 MB, `postgres:16-alpine` 420 MB, `redis:7-alpine` 58 MB,
 `axllent/mailpit:v1.27` 51 MB. Building both app images from scratch (base images already
