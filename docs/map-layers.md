@@ -1131,8 +1131,9 @@ publication (0.25 GB), about 1,120 spot-page hours a month (37 a day) more; "ste
 spot pages every hour) does not fit (5.37 GB). A spot page key set costs 1.16 MB, most of
 it the 10-day forecast and timeline.
 
-**Neon CU-hours (Free: 100 a month; 0.25 CU by default; compute suspends after 5 minutes
-idle, research-2.json).** Assumptions: the compute runs at 0.25 CU; it is active from a
+**Neon CU-hours (Free: 100 a month; compute suspends after 5 minutes idle: "Scale to zero is
+always enabled (computes suspend after 5 minutes of inactivity)",
+https://neon.com/docs/introduction/plans, re-read 2026-10-26).** Assumptions: the compute runs at 0.25 CU; it is active from a
 wake's first statement until 5 minutes after its last; nothing else wakes it (the daemon's
 checks and kick polls use only Redis, docs/sync.md); wakes never overlap (an upper bound).
 

@@ -664,6 +664,7 @@ Read 2026-10-18 for the design (research) and re-read 2026-10-22 where marked.
 | Neon variables | A table: `DATABASE_URL`, "Pooled connection string (PgBouncer)"; `DATABASE_URL_UNPOOLED`, "Direct connection string" | https://neon.com/docs/guides/vercel-managed-integration (re-read 2026-10-22) |
 | Neon preview branches | "Environment variables for the branch connection are injected via webhook at deployment time" | same |
 | Neon Free | "100 CU-hours/project, 1 GB Postgres storage per project ... and 5 GB of egress per project." | https://neon.com/docs/introduction/plans |
+| Neon scale to zero | "Scale to zero is always enabled (computes suspend after 5 minutes of inactivity)" | same (re-read 2026-10-26) |
 | Neon Launch | "$0.106 per CU-hr $0.35 per GB-month" | https://neon.com/pricing |
 | Upstash Free | "Free tier includes 250MB data size and 500K commands per month." | https://upstash.com/pricing/redis (re-read 2026-10-22 in its `.md` version) |
 | Upstash on Vercel | "redis-cli --tls -u {{KV_URL}}" (2026-10-18). On 2026-10-22 the page's snippets showed only `KV_REST_API_URL` and `KV_REST_API_TOKEN`, so check the variables after connecting (step 4). | https://vercel.com/marketplace/upstash/upstash-kv |
