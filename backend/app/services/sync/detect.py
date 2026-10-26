@@ -1,4 +1,4 @@
-"""Model-run detection: is a sync due? (interface F7; docs/sync.md).
+"""Model-run detection: is a sync due? (docs/sync.md).
 
 * :func:`load_known` reads, per source, the newest run key that is stored *and published*
   (a run stored after the newest publication counts as not stored yet, so a sync that

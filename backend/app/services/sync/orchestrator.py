@@ -1,4 +1,4 @@
-"""One coordinated sync (interface F7; docs/sync.md).
+"""One coordinated sync (docs/sync.md).
 
 :func:`run_sync` takes the lease (a ``sync_runs`` row with status running; the unique
 partial index ``uq_sync_runs_running`` allows one), runs the :data:`STAGES` in order through

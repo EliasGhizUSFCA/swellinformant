@@ -1,6 +1,6 @@
 """Spot scope of a sync: only the requested providers, only the active seeded spots.
 
-``acquire_all(only=)`` (F7) contacts only the FORECAST_PROVIDERS tokens given and keeps
+``acquire_all(only=)`` contacts only the FORECAST_PROVIDERS tokens given and keeps
 their priorities (None: every provider, as before); a sync never asks a provider for a
 spot that is not active (D4).
 """

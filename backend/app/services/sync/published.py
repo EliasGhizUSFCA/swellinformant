@@ -1,4 +1,4 @@
-"""The newest published sync (foundation contract F3; frozen).
+"""The newest published sync.
 
 The publish stage of a sync sets ``sync_runs.published_at`` and ``map_run_id``; the map index
 serves that map run (SYNC_PUBLISH_GATE) and the status page shows the publication.

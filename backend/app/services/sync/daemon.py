@@ -1,4 +1,4 @@
-"""The sync daemon, ``python -m app.cli sync daemon`` (interface F7; docs/sync.md).
+"""The sync daemon, ``python -m app.cli sync daemon`` (docs/sync.md).
 
 :func:`run_daemon` initialises the database when asked (SYNC_DAEMON_INIT_DB: migrate, seed,
 tide catalog; idempotent), loads the known runs from the database (keeping the first

@@ -1,4 +1,4 @@
-"""The publish stage (interface F7; docs/sync.md).
+"""The publish stage (docs/sync.md).
 
 :func:`publish` commits ``published_at``, ``map_run_id`` (the best servable map run,
 ``map_fields.servable_runs(db, limit=1)``, or None) and ``blend_run_id`` (the newest blend

@@ -1,16 +1,13 @@
-"""Cross-package interfaces and contracts declared by the foundation (F7, F8).
+"""Cross-package interfaces of the synced pipeline: the signatures the sync stages and the
+dispatchers call each other by, and the options of ``python -m app.cli sync``.
 
-The signatures and the CLI options are frozen: the packages replace the stub bodies, never
-the parameters, so every assertion here holds before and after they land. Assertions about
-a stub's current behaviour (NotImplementedError, the "not implemented" CLI output, the
-watchdog's 503) live in the test files of the package that replaces it, so that package
-updates them in a file it owns:
+The behaviour behind them is tested where it is implemented:
 
-* sync-core: tests/unit/test_sync_detect.py, tests/unit/test_cli_migrate_on_build.py,
+* sync: tests/unit/test_sync_detect.py, tests/unit/test_cli_migrate_on_build.py,
   tests/integration/test_sync_orchestrator.py, tests/integration/test_sync_daemon.py,
   tests/integration/test_sync_spot_scope.py;
-* api-serverless: tests/unit/test_dispatch_runner.py, tests/integration/test_internal_cron.py;
-* egress-map-serving: tests/integration/test_prune_pass.py.
+* dispatch and cron: tests/unit/test_dispatch_runner.py, tests/integration/test_internal_cron.py;
+* pruning: tests/integration/test_prune_pass.py.
 """
 
 from __future__ import annotations
@@ -37,7 +34,7 @@ def params(fn: Callable[..., Any]) -> list[tuple[str, Any, Any]]:
     return [(p.name, p.kind, p.default) for p in inspect.signature(fn).parameters.values()]
 
 
-# --------------------------------------------------------------------------- F7 signatures
+# --------------------------------------------------------------------------- signatures
 def test_sync_core_signatures() -> None:
     assert params(detect.load_known) == [("db", POS, EMPTY)]
     assert params(detect.plan_sync) == [
@@ -103,7 +100,7 @@ def test_other_package_signatures() -> None:
     assert [n for n, _, _ in params(deliver_sms)] == ["to", "body"]
 
 
-# --------------------------------------------------------------------------- F8 CLI
+# --------------------------------------------------------------------------- sync CLI
 @pytest.fixture
 def parsed(monkeypatch: pytest.MonkeyPatch) -> list[argparse.Namespace]:
     """The namespaces ``python -m app.cli sync ...`` hands to app.services.sync.cli.run."""

@@ -1,4 +1,4 @@
-"""``python -m app.cli sync ...``: the synced data pipeline (contract F8).
+"""``python -m app.cli sync ...``: the synced data pipeline.
 
   sync check [--json]                 print the SyncPlan (exit 0)
   sync run [--force] [--only spots,ensemble,map] [--if-due] [--trigger cli|github]
