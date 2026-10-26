@@ -54,7 +54,7 @@ def _validate_refs(db: Session, data: SearchIn) -> dict[str, int]:
                 SurfSpot.slug.in_(data.destinations.spot_slugs)
             )
         ).all()
-        slugs = {slug: sid for slug, sid in rows}
+        slugs = dict(rows)
         missing = [s for s in data.destinations.spot_slugs if s not in slugs]
         if missing:
             raise AppError(f"Unknown surf spot(s): {', '.join(missing)}.", code="unknown_spot")

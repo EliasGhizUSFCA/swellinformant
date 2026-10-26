@@ -104,7 +104,7 @@ def verify_email(body: TokenIn, db: Session = Depends(get_db)) -> VerifyOut:
 
 @router.post("/resend-verification", response_model=Message)
 def resend_verification(
-    request: Request, auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)
+    auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)
 ) -> Message:
     hit("resend-verification", str(auth.user.id), 5, 3600)
     if auth.user.email_verified_at is None:

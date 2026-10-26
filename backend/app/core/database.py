@@ -96,7 +96,7 @@ def reset_engine() -> None:
     _SessionLocal = None
 
 
-def SessionLocal() -> Session:  # noqa: N802 - factory mimics sessionmaker naming
+def SessionLocal() -> Session:  # factory mimics sessionmaker naming
     get_engine()
     assert _SessionLocal is not None
     return _SessionLocal()

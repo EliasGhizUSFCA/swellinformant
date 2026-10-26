@@ -34,7 +34,7 @@ from tests.unit.test_sync_detect import (  # noqa: F401 (world is a fixture)
     settings,
     state,
     stored_06,
-    world,  # noqa: F401
+    world,
 )
 
 T18 = C18 + timedelta(hours=5, minutes=20)  # Open-Meteo's GFS waves of 18Z appear ~5.3 h on
