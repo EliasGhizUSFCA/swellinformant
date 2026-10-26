@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { systemsIn, waveFamilies } from "@/components/map/map-canvas-layers";
-import { buildLattice, dashBudget, dashCellSize, dashGrid, LATTICE_PX, MAX_CORNER_SPREAD_DEG, type WaveFamilyGrids } from "@/components/map/wavefronts";
+import { buildLattice, dashCellSize, dashGrid, LATTICE_PX, MAX_CORNER_SPREAD_DEG, type WaveFamilyGrids } from "@/components/map/wavefronts";
 import { sampleDirection, type FieldGrid, type Grid } from "@/lib/map-fields";
 import { mercLon } from "@/lib/map-geo";
-import { crestSpacingPx, crestSpeedPxPerS, FAMILY_STYLES } from "@/lib/map-waves";
+import { crestSpacingPx, crestSpeedPxPerS, FAMILY_STYLES, maxDashes } from "@/lib/map-waves";
 
 import { constant, dashesOf, draw, family, globalGrid, installPath2D, orientation, rgbOfQuad, UNBOUNDED, viewAt } from "./map-dash-fixtures";
 
@@ -194,7 +194,7 @@ describe("systems", () => {
   });
 
   it("budgets 8,000 dashes on desktops and 3,000 on phones", () => {
-    expect(dashBudget(1440)).toBe(8000);
-    expect(dashBudget(390)).toBe(3000);
+    expect(maxDashes(1440)).toBe(8000);
+    expect(maxDashes(390)).toBe(3000);
   });
 });

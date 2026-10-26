@@ -842,11 +842,6 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   return stats;
 }
 
-/** Most dashes per frame for a view (MAX_DASHES on desktops, PHONE_MAX_DASHES under 640 px wide). */
-export function dashBudget(width: number): number {
-  return maxDashes(width);
-}
-
 function canvas2d(width: number, height: number): CanvasRenderingContext2D | null {
   if (typeof document === "undefined") return null;
   const c = document.createElement("canvas");
@@ -1081,7 +1076,7 @@ export class WaveAnimator {
     ctx.clearRect(0, 0, view.width, view.height);
     // (The cap this frame drew under: record() below may change it for the next frame.)
     const quadCap = this.budget.cap;
-    const frame = drawDashes(ctx, view, l, { t: still ? 0 : this.time, still, budget: dashBudget(view.width), maxQuads: quadCap, state: this.dashes });
+    const frame = drawDashes(ctx, view, l, { t: still ? 0 : this.time, still, budget: maxDashes(view.width), maxQuads: quadCap, state: this.dashes });
     if (this.mask) {
       ctx.globalCompositeOperation = "destination-in";
       ctx.drawImage(this.mask, 0, 0, view.width, view.height);
