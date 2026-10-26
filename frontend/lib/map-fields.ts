@@ -24,7 +24,6 @@ import type { components } from "@/types/openapi";
  * when storing the served run finished (its forecast run's completed_at).
  */
 export type FieldIndex = components["schemas"]["FieldIndexOut"];
-export type FieldVariable = components["schemas"]["FieldVariableOut"];
 
 export const CORE_FIELD_VARIABLES = ["hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure"] as const;
 export const PARTITION_FIELD_VARIABLES = [
@@ -337,11 +336,7 @@ export const fieldUrl = (variable: string, at: string, run?: string | null) =>
  * date. The field is never shown under the requested time; the caller re-reads the index.
  */
 export class FieldMismatchError extends Error {
-  constructor(
-    message: string,
-    readonly servedValidTime: string | null = null,
-    readonly servedRunKey: string | null = null,
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = "FieldMismatchError";
   }
@@ -352,10 +347,10 @@ export function checkServedMeta(meta: Pick<FieldMeta, "variable" | "valid_time" 
   if (meta.variable !== variable) throw new FieldMismatchError(`Asked for ${variable}, the server sent ${String(meta.variable)}`);
   const served = Date.parse(String(meta.valid_time));
   if (!(served === Date.parse(at))) {
-    throw new FieldMismatchError(`${variable}: asked for ${at}, the server sent ${String(meta.valid_time)}`, String(meta.valid_time), String(meta.run_key));
+    throw new FieldMismatchError(`${variable}: asked for ${at}, the server sent ${String(meta.valid_time)}`);
   }
   if (run && meta.run_key !== run) {
-    throw new FieldMismatchError(`${variable}: asked for run ${run}, the server sent ${String(meta.run_key)}`, String(meta.valid_time), String(meta.run_key));
+    throw new FieldMismatchError(`${variable}: asked for run ${run}, the server sent ${String(meta.run_key)}`);
   }
 }
 

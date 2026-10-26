@@ -199,11 +199,7 @@ describe("served field checks (X-Field-Meta)", () => {
     expect(() => checkServedMeta({ ...meta, valid_time: "2026-10-14T15:00:00Z" }, "hs", "2026-10-14T12:00:00Z")).toThrow(FieldMismatchError);
     expect(() => checkServedMeta({ ...meta, run_key: "gfs-2026101412" }, "hs", "2026-10-14T12:00:00Z", "gfs-2026101406")).toThrow(/run/);
     expect(() => checkServedMeta(meta, "tp", "2026-10-14T12:00:00Z")).toThrow(FieldMismatchError);
-    try {
-      checkServedMeta({ ...meta, valid_time: "2026-10-14T15:00:00Z" }, "hs", "2026-10-14T12:00:00Z");
-    } catch (e) {
-      expect((e as FieldMismatchError).servedValidTime).toBe("2026-10-14T15:00:00Z");
-    }
+    expect(() => checkServedMeta({ ...meta, valid_time: "2026-10-14T15:00:00Z" }, "hs", "2026-10-14T12:00:00Z")).toThrow(/the server sent 2026-10-14T15:00:00Z/);
   });
 
   it("never decodes a mismatched field, and reads a 404 as an out-of-date index", async () => {

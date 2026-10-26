@@ -55,7 +55,6 @@ export type FieldSet = Partial<Record<FieldVariableName, FieldGrid>>;
 interface Loaded {
   key: string;
   at: string;
-  run: string | null;
   grids: FieldSet;
 }
 
@@ -111,7 +110,7 @@ export function useFieldGrids(
       ([pairs, more]) => {
         if (cancelled) return;
         const grids = Object.fromEntries([...pairs, ...more.filter((p): p is NonNullable<typeof p> => !!p)]) as FieldSet;
-        setLoaded({ key, at, run, grids });
+        setLoaded({ key, at, grids });
         setFailed(null);
       },
       (e: unknown) => {
@@ -136,11 +135,10 @@ export function useFieldGrids(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shown, key, prefetchKey]);
 
-  if (!key) return { grids: null, at: null, run: null, loading: false, error: null };
+  if (!key) return { grids: null, at: null, loading: false, error: null };
   return {
     grids: loaded?.grids ?? null,
     at: loaded?.at ?? null,
-    run: loaded?.run ?? null,
     loading: loaded?.key !== key && failed?.key !== key,
     error: failed?.key === key ? failed.message : null,
   };
@@ -153,9 +151,8 @@ export interface MapLayerFields {
   pressure: FieldGrid | null;
   loading: boolean;
   error: string | null;
-  /** Valid time and model run of the fields on screen (the previous step's while the next loads). */
+  /** Valid time of the fields on screen (the previous step's while the next loads). */
   servedValidTime: string | null;
-  servedRunKey: string | null;
 }
 
 /** Wave systems the index offers: "combined" when hs/tp/wave_dir exist, partitions when listed. */
@@ -237,7 +234,6 @@ export function useMapLayerFields({ settings, at, index }: { settings: MapSettin
     loading: layerFields.loading,
     error: layerFields.error,
     servedValidTime: layerFields.at,
-    servedRunKey: layerFields.run,
   };
 }
 
