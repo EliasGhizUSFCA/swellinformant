@@ -220,7 +220,6 @@ class QualityResult:
     label: str
     # Factor fits (0-1) and gates; the full stored contract is ``stored_components``.
     components: dict[str, float]
-    weights_used: dict[str, float]
     breaking: BreakingEstimate
     wind_relation: str
     explanation: str

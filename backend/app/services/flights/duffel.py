@@ -44,7 +44,6 @@ logger = logging.getLogger(__name__)
 
 class DuffelProvider(FlightProvider):
     name = "duffel"
-    supports_revalidation = True
 
     def __init__(
         self,

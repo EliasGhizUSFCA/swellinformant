@@ -40,9 +40,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
-from app.models import ForecastRun, ForecastSource, SurfQualityPrediction, SurfSpot, WaveForecast
+from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, WaveForecast
 from app.models.enums import QualityLabel
-from app.schemas.spots import ForecastSourceOut, RunMemberOut
 from app.schemas.tides import ObservationsBlockOut, TideBlockOut
 from app.schemas.timeline import (
     GustCause,
@@ -69,12 +68,16 @@ from app.services.forecasts.base import EXTRA_GUST_KIND, EXTRA_INTERPOLATED
 from app.services.forecasts.queries import (
     BLEND_CODE,
     is_stale,
-    latest_runs_by_spot,
-    source_attribution_links,
     stale_after_hours,
 )
-from app.services.spot_views import source_attribution, spot_hours
-from app.services.surf_quality.forecast_confidence import STALE_REASON, api_fields
+from app.services.spot_views import (
+    authoritative_run,
+    forecast_source_out,
+    run_members,
+    spot_hours,
+)
+from app.services.surf_quality import breaking
+from app.services.surf_quality.forecast_confidence import api_fields
 from app.services.surf_quality.scoring import min_score_for_label
 from app.services.surf_quality.sun import TWILIGHT_MARGIN, daylight_windows, sun_times
 from app.services.tides.api import spot_observations_block, spot_tide_block
@@ -117,11 +120,8 @@ def driving_partition(pred: SurfQualityPrediction) -> str | None:
     """Name of the partition that drives the surf: the largest predicted breaking height in
     the stored nearshore breakdown, as ``breaking.dominant_component`` picks it. None
     without a breakdown (only bulk parameters were available)."""
-    breakdown = (pred.components or {}).get("breaking") or {}
-    parts = [p for p in breakdown.get("partitions") or [] if (p.get("breaking_m") or 0) > 0]
-    if not parts:
-        return None
-    name = max(parts, key=lambda p: p["breaking_m"]).get("name")
+    best = breaking.driving_partition(pred)
+    name = best.get("name") if best is not None else None
     return str(name) if name else None
 
 
@@ -222,19 +222,12 @@ def _why(pred: SurfQualityPrediction) -> StepWhyOut:
 
 def _quality(pred: SurfQualityPrediction, stale: bool) -> StepQualityOut:
     fields = api_fields(pred, stale=stale)
-    reasons = fields.get("forecast_confidence_reasons")
-    if reasons is None:
-        # Forecast rules only: the combined list also carries the disputed-wind note and
-        # the research sentence, which are not about the offshore forecast.
-        reasons = [str(r) for r in (pred.confidence_inputs or {}).get("reasons") or []]
-        if STALE_REASON in fields.get("confidence_reasons", []) and STALE_REASON not in reasons:
-            reasons = [STALE_REASON, *reasons]
     return StepQualityOut(
         score=pred.score,
         label=pred.label.value,
         forecast_confidence_class=fields["forecast_confidence_class"],
         local_confidence_class=fields["local_confidence_class"],
-        forecast_confidence_reasons=list(reasons),
+        forecast_confidence_reasons=list(fields["forecast_confidence_reasons"]),
         local_confidence_reason=fields["local_confidence_reason"],
     )
 
@@ -348,59 +341,12 @@ def _days(
     return out
 
 
-def run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
-    """The model runs behind ``run``: a blend's members (from its details), otherwise the
-    run itself."""
-    if run.source.code != BLEND_CODE:
-        return [_member(run.source, run.run_key, run.issued_at)]
-    members = [m for m in (run.details or {}).get("members", []) if m.get("code")]
-    codes = [str(m["code"]) for m in members]
-    sources = {
-        s.code: s
-        for s in db.scalars(select(ForecastSource).where(ForecastSource.code.in_(codes))).all()
-    }
-    out: list[RunMemberOut] = []
-    for m in members:
-        source = sources.get(str(m["code"]))
-        if source is None:
-            continue
-        issued = m.get("issued_at")
-        out.append(
-            _member(
-                source,
-                str(m.get("run_key") or ""),
-                datetime.fromisoformat(str(issued)) if issued else None,
-            )
-        )
-    return out
-
-
-def _member(source: ForecastSource, run_key: str, init_time: datetime | None) -> RunMemberOut:
-    return RunMemberOut(
-        code=source.code,
-        name=source.name,
-        family=source.family,
-        run_key=run_key,
-        init_time=init_time,
-        wave_model=source.wave_model,
-        atmosphere_model=source.atmosphere_model,
-    )
-
-
 def _provenance(
     db: Session, spot: SurfSpot, run: ForecastRun, first: SurfQualityPrediction, now: datetime
 ) -> ProvenanceOut:
     source = run.source
     return ProvenanceOut(
-        source=ForecastSourceOut(
-            code=source.code,
-            name=source.name,
-            is_demo=source.is_demo,
-            attribution=source_attribution(db, run),
-            wave_model=source.wave_model,
-            atmosphere_model=source.atmosphere_model,
-            attribution_links=source_attribution_links(db, run),
-        ),
+        source=forecast_source_out(db, run),
         run=TimelineRunOut(
             run_key=run.run_key,
             init_time=run.issued_at,
@@ -453,7 +399,7 @@ def spot_timeline(
 ) -> SpotTimelineOut:
     """The timeline of ``spot`` for the next ``days`` days (see the module docstring)."""
     now = now or utcnow()
-    run = latest_runs_by_spot(db, now).get(spot.id)
+    run = authoritative_run(db, spot.id, now)
     if run is None:
         return _unavailable(db, spot, days, now, NO_FORECAST)
     # The same hours as /forecast's (one read when both are computed together).

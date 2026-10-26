@@ -466,11 +466,23 @@ def _hour_reads(seen: list[str]) -> int:
     )
 
 
+def _run_reads(seen: list[str]) -> int:
+    """How many of ``seen`` read the candidate runs (forecasts.queries.candidate_runs, behind
+    latest_runs_by_spot: scored runs of the authoritative sources, newest first)."""
+    return sum(
+        1
+        for s in seen
+        if "forecast_runs.predictions_computed_at IS NOT NULL" in s
+        and "ORDER BY forecast_runs.issued_at DESC, forecast_runs.id DESC" in s
+    )
+
+
 def test_a_spot_pages_forecast_and_timeline_are_computed_together(
     app_client: ApiClient, published: Session
 ) -> None:
-    """A miss of either computes both from one read of the hours, and the other is then a
-    hit; the bodies are those FastAPI gives for each route on its own."""
+    """A miss of either computes both from one read of the hours (and of the authoritative
+    runs), and the other is then a hit; the bodies are those FastAPI gives for each route on
+    its own."""
     public_cache.note_published(1)  # the sync's hook: a hit then reads no database marker
     expected = expected_bodies(published, public_cache.public_now().isoformat())
     forecast_url = "/api/spots/pipeline/forecast?days=10"
@@ -478,6 +490,9 @@ def test_a_spot_pages_forecast_and_timeline_are_computed_together(
     responses: list[Any] = []
     seen = statements(lambda: responses.append(app_client.get(forecast_url)))
     assert _hour_reads(seen) == 1
+    # The forecast and the timeline share one read of the authoritative runs (the demo tide
+    # curve, tides.api, reads its own).
+    assert _run_reads(seen) <= 2
     public_cache.clear_memo()  # another instance: from Redis
     assert statements(lambda: responses.append(app_client.get(timeline_url))) == []
     assert [r.content for r in responses] == [expected[forecast_url], expected[timeline_url]]

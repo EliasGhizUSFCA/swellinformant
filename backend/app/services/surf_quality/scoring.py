@@ -77,12 +77,9 @@ TIDE_TARGETS = {
     "high": 0.9,
 }
 
-# At or below this the surface is effectively glassy (Beaufort 0-1).
-LIGHT_WIND_KMH = windmod.GLASSY_MAX_KMH
 # The wind gate is 1 from this wind fit up and falls linearly to 0.5 at a fit of 0
 # (heuristic). It starts where the wind stops being favourable (wind.FAVOURABLE_MIN_Q).
 WIND_GATE_FULL_Q = windmod.FAVOURABLE_MIN_Q
-GATES = ("size_gate", "period_gate", "wind_gate")
 
 # Tide research classes under which a tide preference is used for scoring.
 TIDE_SCORED_CLASSES = frozenset({"moderate", "high"})
@@ -207,13 +204,6 @@ def wind_fit(sea: SeaState, spot: SpotParams, gust_scoring: bool = False) -> win
         spot,
         gust_kmh=gust_for_scoring(sea, gust_scoring),
     )
-
-
-def score_wind(speed: float | None, direction: float | None, spot: SpotParams) -> float | None:
-    """Q_wind (wind.q_wind) without gusts; None without a wind speed."""
-    if speed is None:
-        return None
-    return windmod.q_wind(speed, direction, spot)
 
 
 def score_tide(stage: float | None, preference: str | None) -> float | None:
@@ -457,7 +447,6 @@ def evaluate(
         score=score,
         label=label.value,
         components=components,
-        weights_used={k: round(v, 3) for k, v in used.items()},
         breaking=breaking,
         wind_relation=relation,
         explanation=explanation,

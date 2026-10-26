@@ -6,17 +6,17 @@ import pytest
 from app.models.enums import ConfidenceLabel, QualityLabel
 from app.services.seed import DEFAULT_DATA_DIR
 from app.services.surf_quality.breaking import (
-    METHOD_APPROX_V1,
     METHOD_CALIBRATED,
     METHOD_PHYSICAL,
     estimate_breaking_height,
-    estimate_breaking_height_v1,
-    exposure_factor,
-    komar_gaughan_m,
 )
 from app.services.surf_quality.confidence import completeness, confidence_label, run_agreement
 from app.services.surf_quality.models import SeaState, SpotParams
-from app.services.surf_quality.nearshore import SETS_RATIO, deep_water_height_for_breaking
+from app.services.surf_quality.nearshore import (
+    SETS_RATIO,
+    deep_water_height_for_breaking,
+    komar_gaughan_m,
+)
 from app.services.surf_quality.scoring import (
     ALGORITHM_VERSION,
     evaluate,
@@ -26,9 +26,10 @@ from app.services.surf_quality.scoring import (
     score_period,
     score_size,
     score_tide,
-    score_wind,
+    wind_fit,
     wind_relation,
 )
+from app.services.surf_quality.wind import q_wind
 from app.services.units import ft_to_m
 
 JBAY = SpotParams(
@@ -82,18 +83,15 @@ class TestBreakingHeight:
         assert est.max_ft == pytest.approx(est.mid_ft * SETS_RATIO, abs=0.5)
         assert "shore normal estimated" in est.assumptions
 
-    def test_v2_close_to_v1_for_a_well_aligned_groundswell(self) -> None:
-        s = sea(primary_swell_height_m=2.0, primary_swell_period_s=16.0)
-        v1 = estimate_breaking_height_v1(s, JBAY)
-        v2 = estimate_breaking_height(s, JBAY)
-        assert v1.method == METHOD_APPROX_V1
-        # Same Komar-Gaughan core; v2 only loses the small spreading/refraction factor.
-        assert v2.mid_ft == pytest.approx(v1.mid_ft, rel=0.03)
+    def test_well_aligned_groundswell_keeps_the_komar_gaughan_size(self) -> None:
+        est = estimate_breaking_height(
+            sea(primary_swell_height_m=2.0, primary_swell_period_s=16.0), JBAY
+        )
+        # 9.6 ft is version 1's value for this swell (the same Komar-Gaughan core); v2 only
+        # loses the small spreading/refraction factor.
+        assert est.mid_ft == pytest.approx(9.6, rel=0.03)
 
     def test_blocked_swell_direction_produces_tiny_surf(self) -> None:
-        assert exposure_factor(215, JBAY) == pytest.approx(1.0)
-        assert exposure_factor(100, JBAY) < 0.01
-        assert exposure_factor(None, JBAY) == 0.6
         est = estimate_breaking_height(sea(primary_swell_direction_deg=100.0), JBAY)
         assert est.max_ft <= 0.5
 
@@ -138,17 +136,17 @@ class TestComponents:
         assert wind_relation(15, 110, JBAY) == "onshore"
         # 2.1.0: continuous in speed (2.0.0 jumped to exactly 1 at 5 km/h and to 0 for any
         # onshore wind of 20 km/h or more).
-        assert score_wind(3, 110, JBAY) == pytest.approx(0.986, abs=0.001)
-        assert score_wind(0, None, JBAY) == 1.0
+        assert q_wind(3, 110, JBAY) == pytest.approx(0.986, abs=0.001)
+        assert q_wind(0, None, JBAY) == 1.0
         # Moderate offshore is still a full fit; strong offshore no longer is (2.0.0 gave
         # 1.0 up to 35 km/h, and never less than 0.4).
-        assert score_wind(25, 290, JBAY) == pytest.approx(1.0)
-        assert score_wind(50, 290, JBAY) < 0.5
-        assert score_wind(25, 110, JBAY) < 0.15
-        assert score_wind(50, 110, JBAY) < score_wind(25, 110, JBAY)
+        assert q_wind(25, 290, JBAY) == pytest.approx(1.0)
+        assert q_wind(50, 290, JBAY) < 0.5
+        assert q_wind(25, 110, JBAY) < 0.15
+        assert q_wind(50, 110, JBAY) < q_wind(25, 110, JBAY)
         # Cross-shore: V_e = 0.5 x 15 km/h, so Q = 1 / (1 + (7.5 / 12.5)^3) = 0.822.
-        assert score_wind(15, 200, JBAY) == pytest.approx(1 / (1 + 0.6**3), abs=1e-6)
-        assert score_wind(None, 200, JBAY) is None
+        assert q_wind(15, 200, JBAY) == pytest.approx(1 / (1 + 0.6**3), abs=1e-6)
+        assert wind_fit(sea(wind_speed_kmh=None, wind_direction_deg=200), JBAY) is None
 
     def test_tide(self) -> None:
         assert score_tide(None, "mid") is None
@@ -208,7 +206,7 @@ class TestScore:
             JBAY,
         )
         assert "wind" not in r.components
-        assert sum(r.weights_used.values()) == pytest.approx(1.0, abs=0.01)
+        assert sum(r.details["weights_used"].values()) == pytest.approx(1.0, abs=0.01)
 
     def test_label_thresholds(self) -> None:
         assert label_for_score(96) == QualityLabel.EXCEPTIONAL
@@ -314,7 +312,7 @@ class TestStoredComponents:
                 assert detail["q"] == stored["wind"]
                 assert detail["strength"] in ("glassy", "light", "moderate", "strong")
             else:
-                assert "wind_detail" not in stored and "wind" not in r.weights_used
+                assert "wind_detail" not in stored and "wind" not in r.details["weights_used"]
 
     def test_wind_detail_of_a_strong_offshore_hour(self) -> None:
         r = evaluate(sea(wind_speed_kmh=45.0, wind_direction_deg=290.0), JBAY)

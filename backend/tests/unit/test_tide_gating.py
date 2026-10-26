@@ -71,7 +71,7 @@ def test_a_low_research_class_leaves_the_tide_out_and_says_so() -> None:
     rincon = spot("rincon", "low")
     assert rincon.tide_preference == "low_to_mid"
     r = evaluate(sea_for(rincon, 0.2), rincon)
-    assert "tide" not in r.components and "tide" not in r.weights_used
+    assert "tide" not in r.components and "tide" not in r.details["weights_used"]
     stored = r.stored_components()
     assert stored["tide_excluded_reason"] == TIDE_RESEARCH_LOW
     assert "tide_detail" not in stored
