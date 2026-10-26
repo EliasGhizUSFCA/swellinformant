@@ -45,7 +45,10 @@ ENV PATH=/opt/venv/bin:$PATH \
 
 WORKDIR /app
 COPY --from=build /opt/venv /opt/venv
-COPY backend/ ./
+COPY backend/pyproject.toml backend/alembic.ini backend/docker-entrypoint.sh ./
+COPY backend/alembic ./alembic
+COPY backend/app ./app
+COPY backend/ml_models ./ml_models
 COPY data/ /data/
 RUN useradd --create-home --uid 10001 swell \
     && mkdir -p /tmp/swell-outbox /var/lib/swell-ml \

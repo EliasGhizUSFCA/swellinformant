@@ -144,7 +144,6 @@ cmd_psql() {
 cmd_bundle() {
   local py="$ROOT/backend/.venv/bin/python"
   [ -x "$py" ] || py=python3
-  [ -f "$ROOT/scripts/check_api_bundle.py" ] || { echo "scripts/check_api_bundle.py is missing" >&2; exit 1; }
   "$py" "$ROOT/scripts/check_api_bundle.py" "$@"
 }
 
@@ -225,8 +224,8 @@ cmd_smoke() {
   # reach the API. The rate-limit counter of GET /api/health/data (bucket health-data) must
   # belong to the TCP peer the edge saw, the Docker network's gateway for a request from this
   # host. The API keys counters rl:<bucket>:<key>:<window> by a keyed digest of the address
-  # (app.core.ratelimit.limit_key, with the API's SECRET_KEY) or, without that function, by
-  # the address itself, so the expected keys are computed in the api container.
+  # (app.core.ratelimit.limit_key, with the API's SECRET_KEY), so the expected keys are
+  # computed in the api container.
   local network gateway keys expected peer_key forged_keys forged key
   # shellcheck disable=SC2016  # a Go template, not a shell expansion
   network="$(compose ps -q edge | xargs docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' | awk '{ print $1 }' || true)"
@@ -241,9 +240,8 @@ import sys
 
 from app.core import ratelimit
 
-digest = getattr(ratelimit, "limit_key", None)
 for address in sys.argv[1:]:
-    print(f"rl:health-data:{digest('health-data', address) if digest else address}:")
+    print(f"rl:health-data:{ratelimit.limit_key('health-data', address)}:")
 PY
 )"
   peer_key="$(printf '%s\n' "$expected" | sed -n 1p | tr -d '\r')"

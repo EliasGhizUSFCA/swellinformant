@@ -115,6 +115,24 @@ MUTABLE_TABLES = [
 ]
 
 
+# The mutable tables a test left rows in or whose identity sequence it advanced: truncating
+# only these (TRUNCATE costs about the same per table, empty or not) leaves the same state.
+_ADVANCED_SEQUENCES = (
+    "SELECT c.relname FROM pg_class c JOIN pg_depend d ON d.refobjid = c.oid"
+    " JOIN pg_class s ON s.oid = d.objid AND s.relkind = 'S'"
+    " JOIN pg_sequences ps ON ps.schemaname = 'public' AND ps.sequencename = s.relname"
+    " WHERE ps.last_value IS NOT NULL AND c.relname = ANY(:tables)"
+)
+_DIRTY_TABLES = text(
+    " UNION ".join(
+        [
+            *(f"SELECT '{t}' WHERE EXISTS (SELECT 1 FROM {t})" for t in MUTABLE_TABLES),  # noqa: S608
+            _ADVANCED_SEQUENCES,
+        ]
+    )
+).bindparams(tables=MUTABLE_TABLES)
+
+
 def _db_available() -> bool:
     try:
         with get_engine().connect() as conn:
@@ -164,7 +182,9 @@ def db(migrated_db: None) -> Iterator[Session]:
         session.rollback()
         session.close()
         with get_engine().begin() as conn:
-            conn.execute(text(f"TRUNCATE {', '.join(MUTABLE_TABLES)} RESTART IDENTITY CASCADE"))
+            dirty = [row[0] for row in conn.execute(_DIRTY_TABLES)]
+            if dirty:
+                conn.execute(text(f"TRUNCATE {', '.join(dirty)} RESTART IDENTITY CASCADE"))
             conn.execute(text("UPDATE surf_spots SET is_active = true, calibration = NULL"))
         get_redis().flushdb()
         outbox = Path(get_settings().outbox_dir) / "outbox.jsonl"

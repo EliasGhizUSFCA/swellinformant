@@ -6,7 +6,7 @@ numbers); nothing is a real forecast. The files mimic the real layout checked li
 sample, one file per forecast hour with an NCEP-style ``.idx`` sidecar, records in the
 real order (wave files start with WIND/WDIR/UGRD/VGRD fillers; the atmosphere file has
 PRMSL first and LAND near the end) and land as missing values in the wave bitmap. The
-same files feed the map-field tests (``map_settings``, ``add_field_hours``).
+same files feed the map-field tests (``map_settings``, tests.synthetic_map_fields).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import cache
 
 import httpx
 import numpy as np
@@ -47,19 +48,16 @@ def map_settings(
     step: int = 12,
     *,
     map_lead: int = 24,
-    map_step: int = 12,
     providers: str = "noaa_gfs",
     **kw: object,
 ) -> Settings:
     """noaa_settings with map fields: providers "noaa_gfs" = the "with_noaa" mode.
 
-    Map hours run f000..``map_lead`` every ``map_step`` (applied after validation, as in
-    noaa_settings, because MAP_FIELD_MAX_LEAD_HOURS must be >= 24 in production).
+    Map hours run up to ``map_lead`` (applied after validation, as in noaa_settings, because
+    MAP_FIELD_MAX_LEAD_HOURS must be >= 24 in production).
     """
     base = noaa_settings(lead, step, forecast_providers=providers, **kw)
-    return base.model_copy(
-        update={"map_field_max_lead_hours": map_lead, "map_field_step_hours": map_step}
-    )
+    return base.model_copy(update={"map_field_max_lead_hours": map_lead})
 
 
 # Synthetic constant values per wave record (``fhour / 100`` is added to HTSGW so each
@@ -155,6 +153,44 @@ def grib_file(records: list[tuple[str, bytes]], cycle: datetime, fhour: int) -> 
     return b"".join(m for _, m in records), "\n".join(lines) + "\n"
 
 
+def _build_atmos(
+    cycle: datetime, fhour: int, land: Mask | None, uv: tuple[float, float]
+) -> tuple[bytes, str]:
+    g = ATMOS_GRID
+    lat, lon = g.mesh()
+    is_land = np.zeros(lat.shape, dtype=bool) if land is None else land(lat, lon)
+    small = Grid(0.0, 0.0, 1.0, 2, 2)
+    filler = grib2_message(np.zeros((2, 2)), small, cycle, fhour)
+    fields = {
+        "PRMSL:mean sea level": np.full(lat.shape, PRMSL_PA),
+        "GUST:surface": np.where(is_land, LAND_GUST, SEA_GUST),
+        "UGRD:10 m above ground": np.where(is_land, LAND_U, uv[0]),
+        "VGRD:10 m above ground": np.where(is_land, LAND_V, uv[1]),
+        "LAND:surface": is_land.astype("float64"),
+    }
+    order = [
+        "PRMSL:mean sea level",
+        "CLMR:1 hybrid level",
+        "GUST:surface",
+        "HGT:0.01 mb",
+        "UGRD:10 m above ground",
+        "VGRD:10 m above ground",
+        "ICEG:10 m above mean sea level",
+        "LAND:surface",
+        "ICEC:surface",
+    ]
+    records = [
+        (k, grib2_message(fields[k], g, cycle, fhour) if k in fields else filler) for k in order
+    ]
+    return grib_file(records, cycle, fhour)
+
+
+@cache
+def _atmos_file(cycle: datetime, fhour: int, uv: tuple[float, float]) -> tuple[bytes, str]:
+    """The land-free atmosphere file: the same bytes for the same cycle, hour and wind."""
+    return _build_atmos(cycle, fhour, None, uv)
+
+
 @dataclass
 class SyntheticGfs:
     """In-memory bucket: URL path -> bytes, plus per-path failure injection."""
@@ -210,33 +246,10 @@ class SyntheticGfs:
         land: Mask | None = None,
         uv: tuple[float, float] = (SEA_U, SEA_V),
     ) -> None:
-        g = ATMOS_GRID
-        lat, lon = g.mesh()
-        is_land = np.zeros(lat.shape, dtype=bool) if land is None else land(lat, lon)
-        small = Grid(0.0, 0.0, 1.0, 2, 2)
-        filler = grib2_message(np.zeros((2, 2)), small, cycle, fhour)
-        fields = {
-            "PRMSL:mean sea level": np.full(lat.shape, PRMSL_PA),
-            "GUST:surface": np.where(is_land, LAND_GUST, SEA_GUST),
-            "UGRD:10 m above ground": np.where(is_land, LAND_U, uv[0]),
-            "VGRD:10 m above ground": np.where(is_land, LAND_V, uv[1]),
-            "LAND:surface": is_land.astype("float64"),
-        }
-        order = [
-            "PRMSL:mean sea level",
-            "CLMR:1 hybrid level",
-            "GUST:surface",
-            "HGT:0.01 mb",
-            "UGRD:10 m above ground",
-            "VGRD:10 m above ground",
-            "ICEG:10 m above mean sea level",
-            "LAND:surface",
-            "ICEC:surface",
-        ]
-        records = [
-            (k, grib2_message(fields[k], g, cycle, fhour) if k in fields else filler) for k in order
-        ]
-        content, idx = grib_file(records, cycle, fhour)
+        if land is None:
+            content, idx = _atmos_file(cycle, fhour, uv)
+        else:
+            content, idx = _build_atmos(cycle, fhour, land, uv)
         self.add(PATHS.atmos(cycle, fhour), content, idx)
 
     def add_cycle(
@@ -252,12 +265,6 @@ class SyntheticGfs:
             self.add_atmos(cycle, h, land=land)
             for name in grids:
                 self.add_wave(cycle, name, h, valid=(wave_valid or {}).get(name))
-
-    def add_field_hours(self, cycle: datetime, hours: list[int]) -> None:
-        """What the map fields need: the atmosphere file and global.0p25 for each hour."""
-        for h in hours:
-            self.add_atmos(cycle, h)
-            self.add_wave(cycle, "global.0p25", h)
 
     # ------------------------------------------------------------------ serving
     def handler(self, request: httpx.Request) -> httpx.Response:

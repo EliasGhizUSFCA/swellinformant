@@ -205,8 +205,8 @@ jobs:
   e2e:
     name: End-to-end (Playwright, demo backend)
     # On pushes and manual runs (Actions tab -> CI -> Run workflow), not on pull requests.
+    # It uses nothing the other jobs produce, so it runs alongside them (no `needs`).
     if: github.event_name != 'pull_request'
-    needs: [backend, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:

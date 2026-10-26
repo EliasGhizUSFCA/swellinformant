@@ -95,7 +95,6 @@ markers = [
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:celery.*",
-    "ignore::DeprecationWarning:kombu.*",
 ]
 
 [tool.ruff]
