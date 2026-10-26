@@ -195,12 +195,5 @@ class WindyProvider(ForecastProvider):
                 result.records[p.spot_id] = records
             else:
                 result.errors[p.spot_id] = "no wave data returned"
-        responses, wire_bytes, statuses = self.tally.snapshot()
-        result.stats = FetchStats(
-            bytes_downloaded=wire_bytes - before[1],
-            requests=responses - before[0],
-            http_status_counts={
-                k: v - before[2].get(k, 0) for k, v in statuses.items() if v - before[2].get(k, 0)
-            },
-        )
+        result.stats = FetchStats.between(before, self.tally.snapshot())
         return result

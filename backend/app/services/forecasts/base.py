@@ -101,6 +101,23 @@ class FetchStats:
     # Provider-weighted call count where the provider bills that way (Open-Meteo).
     weighted_calls: float | None = None
 
+    @classmethod
+    def between(
+        cls,
+        before: tuple[int, int, dict[str, int]],
+        after: tuple[int, int, dict[str, int]],
+        weighted_calls: float | None = None,
+    ) -> FetchStats:
+        """What an ``HttpTally`` counted between two of its snapshots (responses, bytes,
+        per-status counts; a status whose count did not change is left out)."""
+        counts = {k: v - before[2].get(k, 0) for k, v in after[2].items()}
+        return cls(
+            bytes_downloaded=after[1] - before[1],
+            requests=after[0] - before[0],
+            http_status_counts={k: n for k, n in counts.items() if n},
+            weighted_calls=weighted_calls,
+        )
+
 
 @dataclass
 class FetchResult:

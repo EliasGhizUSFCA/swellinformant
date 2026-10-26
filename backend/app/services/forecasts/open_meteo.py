@@ -955,22 +955,16 @@ class OpenMeteoFamilyProvider(ForecastProvider):
             if p.spot_id in atmos_errors or p.spot_id not in atmos:
                 reason = atmos_errors.get(p.spot_id, "missing")
                 result.errors[p.spot_id] = f"incomplete: wind and pressure unavailable ({reason})"
-        responses, wire_bytes, statuses = self.tally.snapshot()
-        statuses = {
-            k: v - before[2].get(k, 0) for k, v in statuses.items() if v - before[2].get(k, 0)
-        }
-        result.request_count = responses - before[0]
-        result.stats = FetchStats(
-            bytes_downloaded=wire_bytes - before[1],
-            requests=result.request_count,
-            http_status_counts=statuses,
-            weighted_calls=round(state.weighted_calls, 3),
+        result.stats = FetchStats.between(
+            before, self.tally.snapshot(), round(state.weighted_calls, 3)
         )
+        result.request_count = result.stats.requests
         result.warnings.insert(
             0,
             f"Open-Meteo: {state.data_requests} data requests ({state.cache_hits} more served "
             f"from the cache), {state.weighted_calls:.1f} weighted calls, "
-            f"{(wire_bytes - before[1]) / 1e3:.1f} kB in {result.request_count} HTTP responses",
+            f"{result.stats.bytes_downloaded / 1e3:.1f} kB in {result.request_count} HTTP "
+            "responses",
         )
         result.warnings.extend(state.warnings)
         return result

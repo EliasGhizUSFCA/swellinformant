@@ -174,18 +174,10 @@ def failed_fetch_stats(
     after = _counters(provider)
     if before is None or after is None:
         return None
-    statuses = {k: v - before[2].get(k, 0) for k, v in after[2].items() if v - before[2].get(k, 0)}
     weighted = None
     if after[3] is not None and before[3] is not None:
         weighted = round(after[3] - before[3], 3)
-    return asdict(
-        FetchStats(
-            bytes_downloaded=after[1] - before[1],
-            requests=after[0] - before[0],
-            http_status_counts=statuses,
-            weighted_calls=weighted,
-        )
-    )
+    return asdict(FetchStats.between(before[:3], after[:3], weighted))
 
 
 def ensure_source(db: Session, provider: ForecastProvider, priority: int = 100) -> ForecastSource:

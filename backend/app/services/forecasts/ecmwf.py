@@ -652,16 +652,7 @@ class EcmwfIfsProvider(ForecastProvider):
             "seconds": round(time.monotonic() - started, 1),
         }
         self.last_fetch_stats = stats
-        responses, wire_bytes, statuses = self.tally.snapshot()
-        result.stats = FetchStats(
-            bytes_downloaded=wire_bytes - tally_before[1],
-            requests=responses - tally_before[0],
-            http_status_counts={
-                k: v - tally_before[2].get(k, 0)
-                for k, v in statuses.items()
-                if v - tally_before[2].get(k, 0)
-            },
-        )
+        result.stats = FetchStats.between(tally_before, self.tally.snapshot())
         mb = result.stats.bytes_downloaded / 1e6
         result.warnings.insert(
             0,
