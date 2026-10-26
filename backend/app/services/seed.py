@@ -174,26 +174,28 @@ def seed_reference_data(db: Session, data_dir: str | Path | None = None) -> dict
     if problems:
         raise SeedValidationError("; ".join(problems))
 
-    for a in airports_raw:
-        row = {
-            k: a[k]
-            for k in (
-                "iata",
-                "name",
-                "city",
-                "country",
-                "country_code",
-                "latitude",
-                "longitude",
-                "timezone",
+    columns = (
+        "iata",
+        "name",
+        "city",
+        "country",
+        "country_code",
+        "latitude",
+        "longitude",
+        "timezone",
+    )
+    if airports_raw:  # one multi-row upsert
+        stmt = insert(Airport).values([{k: a[k] for k in columns} for a in airports_raw])
+        db.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["iata"], set_={k: stmt.excluded[k] for k in columns}
             )
-        }
-        stmt = insert(Airport).values(row)
-        db.execute(stmt.on_conflict_do_update(index_elements=["iata"], set_=row))
+        )
 
     created = updated = 0
+    existing = {s.slug: s for s in db.scalars(select(SurfSpot))}
     for raw in spots_raw:
-        spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == raw["slug"]))
+        spot = existing.get(raw["slug"])
         if spot is None:
             spot = SurfSpot(slug=raw["slug"])
             db.add(spot)
@@ -210,9 +212,11 @@ def seed_reference_data(db: Session, data_dir: str | Path | None = None) -> dict
                 spot.airports.remove(link)
         db.flush()
         current = {link.airport_iata: link for link in spot.airports}
-        # Clear primary flags first so the "one primary per spot" index never trips mid-update.
-        for link in current.values():
-            link.is_primary = False
+        # Clear the primary flags that change first, so the "one primary per spot" index
+        # never trips mid-update.
+        for iata, link in current.items():
+            if link.is_primary and not wanted[iata].get("is_primary"):
+                link.is_primary = False
         db.flush()
         for iata, a in wanted.items():
             found: SpotAirport | None = current.get(iata)
