@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import cache
 
 import httpx
 import numpy as np
@@ -152,6 +153,44 @@ def grib_file(records: list[tuple[str, bytes]], cycle: datetime, fhour: int) -> 
     return b"".join(m for _, m in records), "\n".join(lines) + "\n"
 
 
+def _build_atmos(
+    cycle: datetime, fhour: int, land: Mask | None, uv: tuple[float, float]
+) -> tuple[bytes, str]:
+    g = ATMOS_GRID
+    lat, lon = g.mesh()
+    is_land = np.zeros(lat.shape, dtype=bool) if land is None else land(lat, lon)
+    small = Grid(0.0, 0.0, 1.0, 2, 2)
+    filler = grib2_message(np.zeros((2, 2)), small, cycle, fhour)
+    fields = {
+        "PRMSL:mean sea level": np.full(lat.shape, PRMSL_PA),
+        "GUST:surface": np.where(is_land, LAND_GUST, SEA_GUST),
+        "UGRD:10 m above ground": np.where(is_land, LAND_U, uv[0]),
+        "VGRD:10 m above ground": np.where(is_land, LAND_V, uv[1]),
+        "LAND:surface": is_land.astype("float64"),
+    }
+    order = [
+        "PRMSL:mean sea level",
+        "CLMR:1 hybrid level",
+        "GUST:surface",
+        "HGT:0.01 mb",
+        "UGRD:10 m above ground",
+        "VGRD:10 m above ground",
+        "ICEG:10 m above mean sea level",
+        "LAND:surface",
+        "ICEC:surface",
+    ]
+    records = [
+        (k, grib2_message(fields[k], g, cycle, fhour) if k in fields else filler) for k in order
+    ]
+    return grib_file(records, cycle, fhour)
+
+
+@cache
+def _atmos_file(cycle: datetime, fhour: int, uv: tuple[float, float]) -> tuple[bytes, str]:
+    """The land-free atmosphere file: the same bytes for the same cycle, hour and wind."""
+    return _build_atmos(cycle, fhour, None, uv)
+
+
 @dataclass
 class SyntheticGfs:
     """In-memory bucket: URL path -> bytes, plus per-path failure injection."""
@@ -207,33 +246,10 @@ class SyntheticGfs:
         land: Mask | None = None,
         uv: tuple[float, float] = (SEA_U, SEA_V),
     ) -> None:
-        g = ATMOS_GRID
-        lat, lon = g.mesh()
-        is_land = np.zeros(lat.shape, dtype=bool) if land is None else land(lat, lon)
-        small = Grid(0.0, 0.0, 1.0, 2, 2)
-        filler = grib2_message(np.zeros((2, 2)), small, cycle, fhour)
-        fields = {
-            "PRMSL:mean sea level": np.full(lat.shape, PRMSL_PA),
-            "GUST:surface": np.where(is_land, LAND_GUST, SEA_GUST),
-            "UGRD:10 m above ground": np.where(is_land, LAND_U, uv[0]),
-            "VGRD:10 m above ground": np.where(is_land, LAND_V, uv[1]),
-            "LAND:surface": is_land.astype("float64"),
-        }
-        order = [
-            "PRMSL:mean sea level",
-            "CLMR:1 hybrid level",
-            "GUST:surface",
-            "HGT:0.01 mb",
-            "UGRD:10 m above ground",
-            "VGRD:10 m above ground",
-            "ICEG:10 m above mean sea level",
-            "LAND:surface",
-            "ICEC:surface",
-        ]
-        records = [
-            (k, grib2_message(fields[k], g, cycle, fhour) if k in fields else filler) for k in order
-        ]
-        content, idx = grib_file(records, cycle, fhour)
+        if land is None:
+            content, idx = _atmos_file(cycle, fhour, uv)
+        else:
+            content, idx = _build_atmos(cycle, fhour, land, uv)
         self.add(PATHS.atmos(cycle, fhour), content, idx)
 
     def add_cycle(
