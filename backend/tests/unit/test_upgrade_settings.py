@@ -40,9 +40,6 @@ def test_defaults_resolve_to_the_documented_values() -> None:
     assert s.map_field_partitions == "on"
     assert s.map_field_step_ranges == [(0, 120, 3), (120, 240, 6)]
     assert s.map_field_cycle_hours == [0, 12] and s.gefs_cycle_hours == [0, 6, 12, 18]
-    assert s.map_field_atmos_path("20261013", "12", 6) == (
-        "gfs.20261013/12/atmos/gfs.t12z.pgrb2.0p50.f006"
-    )
     assert s.ecmwf_wave_param_list == ["swh", "mwd", "pp1d", "mwp"]
     assert s.gefs_stat_field_list == ["HTSGW", "PERPW"]
     assert s.tide_provider_list == ["noaa_coops", "harmonic_model"]

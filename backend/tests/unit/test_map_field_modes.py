@@ -98,10 +98,6 @@ def test_a_0p50_source_keeps_the_target_geometry_and_values() -> None:
 
 
 def test_map_atmosphere_path_and_fallback() -> None:
-    s = Settings()
-    assert s.map_field_atmos_path("20261013", "12", 6) == (
-        "gfs.20261013/12/atmos/gfs.t12z.pgrb2.0p50.f006"
-    )
     urls = PATHS.map_atmos(CYCLE, 6)
     assert [u.rsplit("/", 1)[1] for u in urls] == [
         "gfs.t18z.pgrb2.0p50.f006",

@@ -47,19 +47,16 @@ def map_settings(
     step: int = 12,
     *,
     map_lead: int = 24,
-    map_step: int = 12,
     providers: str = "noaa_gfs",
     **kw: object,
 ) -> Settings:
     """noaa_settings with map fields: providers "noaa_gfs" = the "with_noaa" mode.
 
-    Map hours run f000..``map_lead`` every ``map_step`` (applied after validation, as in
-    noaa_settings, because MAP_FIELD_MAX_LEAD_HOURS must be >= 24 in production).
+    MAP_FIELD_MAX_LEAD_HOURS is ``map_lead`` (applied after validation, as in
+    noaa_settings, because it must be >= 24 in production).
     """
     base = noaa_settings(lead, step, forecast_providers=providers, **kw)
-    return base.model_copy(
-        update={"map_field_max_lead_hours": map_lead, "map_field_step_hours": map_step}
-    )
+    return base.model_copy(update={"map_field_max_lead_hours": map_lead})
 
 
 # Synthetic constant values per wave record (``fhour / 100`` is added to HTSGW so each

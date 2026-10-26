@@ -36,7 +36,7 @@ def field_settings(
     MAP_FIELD_CYCLES (every cycle by default, so the synthetic 18Z cycle is a map cycle),
     ``max_bytes`` MAP_FIELD_MAX_BYTES_PER_RUN. Applied after validation, as in map_settings.
     """
-    base = map_settings(lead, step, map_lead=map_lead, map_step=map_step, providers=providers, **kw)
+    base = map_settings(lead, step, map_lead=map_lead, providers=providers, **kw)
     return base.model_copy(
         update={
             "map_field_steps": f"0-{max(map_lead, map_step)}:{map_step}",
