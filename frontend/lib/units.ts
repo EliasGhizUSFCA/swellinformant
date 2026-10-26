@@ -8,7 +8,6 @@
  */
 import { useSyncExternalStore } from "react";
 
-
 export type WindUnit = "km/h" | "kn" | "mph" | "m/s";
 export type HeightUnit = "ft" | "m";
 
