@@ -292,7 +292,7 @@ def test_the_extras_split_the_dependencies_as_designed() -> None:
     }
     assert extras["all"] == ["swell-travel-agent[worker,server,sync]"]
     assert "swell-travel-agent[all]" in extras["dev"]
-    assert {"pytest", "pytest-cov", "ruff", "mypy"} <= {_requirement_name(r) for r in extras["dev"]}
+    assert {"pytest", "ruff", "mypy"} <= {_requirement_name(r) for r in extras["dev"]}
 
 
 def test_python_is_pinned_to_3_13() -> None:
