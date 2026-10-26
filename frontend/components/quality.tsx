@@ -1,9 +1,7 @@
 import { Plane, Sparkles, Waves } from "lucide-react";
 
-import { ConfidenceBadge as ClassBadge } from "@/components/confidence";
 import { Badge } from "@/components/ui/badge";
-import { legacyIndexText } from "@/lib/confidence";
-import { asQuality, colorForScore, MATCH_STATUS, QUALITY_COLORS, QUALITY_LABELS, QUALITY_TEXT } from "@/lib/quality";
+import { asQuality, MATCH_STATUS, QUALITY_COLORS, QUALITY_LABELS, QUALITY_TEXT } from "@/lib/quality";
 import { score10 } from "@/lib/rating";
 import { cn } from "@/lib/utils";
 
@@ -26,44 +24,41 @@ export function QualityBadge({ label, score, className }: { label: string; score
   );
 }
 
+/**
+ * A 0–100 score as a ring. The ring is a trip-match score, not a surf rating, so it uses the
+ * brand ocean colour, never the surf-quality ramp; the caption sits under the ring (it ran
+ * into the stroke inside a 56 px ring).
+ */
 export function ScoreRing({ score, size = 56, label, caption }: { score: number; size?: number; label?: string; caption?: string }) {
   const r = (size - 8) / 2;
   const c = 2 * Math.PI * r;
-  const color = colorForScore(score);
   return (
-    <div className="relative inline-flex shrink-0 items-center justify-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="-rotate-90" aria-hidden="true">
+    <div className="inline-flex shrink-0 flex-col items-center" aria-label={label ?? `Score ${score} of 100`} role="img">
+      <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
+        <svg width={size} height={size} className="-rotate-90" aria-hidden="true">
         <circle cx={size / 2} cy={size / 2} r={r} stroke="var(--muted)" strokeWidth={6} fill="none" />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
-          stroke={color}
+          stroke="var(--ocean)"
           strokeWidth={6}
           fill="none"
           strokeLinecap="round"
           strokeDasharray={c}
           strokeDashoffset={c * (1 - Math.max(0, Math.min(100, score)) / 100)}
         />
-      </svg>
-      <span className="absolute flex flex-col items-center leading-none" aria-label={label ?? `Score ${score} of 100`}>
-        <span className="text-sm font-bold tabular-nums">{score}</span>
-        {caption && <span className="mt-0.5 text-[9px] font-medium tracking-wide text-muted-foreground uppercase">{caption}</span>}
-      </span>
+        </svg>
+        <span className="absolute text-sm leading-none font-bold tabular-nums" aria-hidden="true">
+          {score}
+        </span>
+      </div>
+      {caption && (
+        <span className="mt-0.5 text-[9px] leading-none font-medium tracking-wide text-muted-foreground uppercase" aria-hidden="true">
+          {caption}
+        </span>
+      )}
     </div>
-  );
-}
-
-/**
- * @deprecated Kept for existing callers; use ConfidenceBadge from components/confidence.
- * ``label`` is the class of the earlier 0–100 confidence index, not the forecast-confidence
- * class, so it is labelled as an index; the number appears only in the tooltip.
- */
-export function ConfidenceBadge({ label, value }: { label: string; value?: number }) {
-  return (
-    <span title={value != null ? `Confidence ${legacyIndexText(value)}` : undefined}>
-      <ClassBadge value={label} kind="forecast" label="Confidence index" data-testid="confidence-index-badge" />
-    </span>
   );
 }
 

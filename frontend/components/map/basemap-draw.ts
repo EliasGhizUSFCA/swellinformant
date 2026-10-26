@@ -1,9 +1,15 @@
 /**
- * Draws the dark vector basemap layers on one canvas, bottom to top: land (opaque, so it
- * also masks the colour field and particles at coastlines), country borders, isobars with
- * value labels, then country and city labels with greedy collision avoidance. Geometry is
- * pre-projected to Mercator units, so a redraw is a scale-and-offset per vertex per visible
- * world copy (the Pacific view needs the copies either side of the antimeridian).
+ * Draws the dark vector basemap layers on one canvas, bottom to top: mid-grey land (opaque, so
+ * it also masks the colour field and the wave dashes at coastlines; translucent on the Wind
+ * layer, where the wind over land matters) with a dark coastline drawn along its edge, country
+ * borders, isobars with value labels, then country and city labels with greedy collision
+ * avoidance. Geometry is pre-projected to Mercator units, so a redraw is a scale-and-offset
+ * per vertex per visible world copy (the Pacific view needs the copies either side of the
+ * antimeridian).
+ *
+ * Rings are not closed with closePath(): fill() closes every subpath itself, and the Natural
+ * Earth rings repeat their first point, so the coastline stroke is unchanged. closePath()
+ * after each of the ~2,500 rings cost 214 ms of a 234 ms redraw at zoom 2 (measured).
  */
 import { mercX, mercY, pathCopies, placeBoxes, worldCopies, type Box, type MercPath, type PixelView, type PlaceLabel } from "@/lib/map-geo";
 
@@ -30,9 +36,29 @@ export interface BasemapDrawOptions {
   isobars: IsobarPath[] | null;
   cities: CityLabel[] | null;
   zoom: number;
+  /** Land at LAND_ALPHA over the colour field (the Wind layer) instead of opaque. */
+  translucentLand?: boolean;
 }
 
-export const LAND_COLOR = "#2b2b2b";
+/**
+ * Land on the dark basemap: the owner's reference's flat mid grey #808080 (L* 53.6, sampled at
+ * every land point of the screenshot), lighter than the ocean colours of seas up to about
+ * 5.5 m (L* 12 to 51.5 up to 5 m) and without their hue, so land never reads as sea. (Upgrade 4
+ * first drew #3a3a3c, then #737376, L* 48.5: darker than the reference side by side.)
+ */
+export const LAND_COLOR = "#808080";
+/** Land opacity with `translucentLand`: the wind colour and particles show through, dimmed. */
+export const LAND_ALPHA = 0.55;
+const TRANSLUCENT_LAND = `rgba(128, 128, 128, ${LAND_ALPHA})`;
+/** The coastline drawn along the land's edge on the dark basemap: a dark line, as in the reference. */
+export const COASTLINE_COLOR = "rgba(24, 24, 28, 0.8)";
+export const COASTLINE_WIDTH_PX = 1;
+/** Country borders on the land, a faint dark line. */
+export const BORDER_COLOR = "rgba(30, 30, 34, 0.35)";
+/** Country and city labels: near-white text on a dark halo, legible on the grey land and on the sea. */
+const COUNTRY_LABEL_COLOR = "#e8e8e8";
+const CITY_LABEL_COLOR = "#f4f4f4";
+const CITY_DOT_COLOR = "#ededed";
 const LABEL_FONT = '500 12px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
 const CITY_FONT = '400 11px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
 const ISOBAR_FONT = '600 10px "Inter Variable", ui-sans-serif, system-ui, sans-serif';
@@ -48,8 +74,7 @@ function visible(p: MercPath, v: PixelView, dx: number, margin = 2): boolean {
 }
 
 /** Adds the paths to the current canvas path, skipping vertices closer than ~0.7 px. */
-function tracePaths(ctx: CanvasRenderingContext2D, paths: MercPath[], v: PixelView, close: boolean): number {
-  let segments = 0;
+export function tracePaths(ctx: Pick<CanvasRenderingContext2D, "moveTo" | "lineTo">, paths: MercPath[], v: PixelView): void {
   const w = v.worldPx;
   for (const k of pathCopies(v)) {
     const dx = k * w;
@@ -66,12 +91,9 @@ function tracePaths(ctx: CanvasRenderingContext2D, paths: MercPath[], v: PixelVi
         ctx.lineTo(x, y);
         lx = x;
         ly = y;
-        segments++;
       }
-      if (close) ctx.closePath();
     }
   }
-  return segments;
 }
 
 const textWidths = new Map<string, number>();
@@ -97,15 +119,15 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
   const g = o.geometry;
   if (o.vector && g) {
     ctx.beginPath();
-    tracePaths(ctx, g.land, v, true);
-    ctx.fillStyle = LAND_COLOR;
+    tracePaths(ctx, g.land, v);
+    ctx.fillStyle = o.translucentLand ? TRANSLUCENT_LAND : LAND_COLOR;
     ctx.fill("evenodd");
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.07)";
-    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = COASTLINE_COLOR;
+    ctx.lineWidth = COASTLINE_WIDTH_PX;
     ctx.stroke();
     ctx.beginPath();
-    tracePaths(ctx, g.borders, v, false);
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+    tracePaths(ctx, g.borders, v);
+    ctx.strokeStyle = BORDER_COLOR;
     ctx.lineWidth = 0.7;
     ctx.stroke();
   }
@@ -116,7 +138,7 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
     const copies = pathCopies(v);
     isobarCount = o.isobars.filter((p) => copies.some((k) => visible(p, v, k * v.worldPx))).length;
     ctx.beginPath();
-    tracePaths(ctx, o.isobars, v, false);
+    tracePaths(ctx, o.isobars, v);
     ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
     ctx.lineWidth = 1;
     ctx.stroke();
@@ -174,13 +196,13 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
     for (const k of worldCopies(v)) {
       for (const c of g.countries) {
         if (c.minZoom > z) continue;
-        candidates.push({ text: c.name, x: mercX(c.lon) * w + k * w - v.originX, y: mercY(c.lat) * w - v.originY, font: LABEL_FONT, color: "#cfcfcf", dot: false });
+        candidates.push({ text: c.name, x: mercX(c.lon) * w + k * w - v.originX, y: mercY(c.lat) * w - v.originY, font: LABEL_FONT, color: COUNTRY_LABEL_COLOR, dot: false });
       }
     }
     if (o.cities && z >= 4) {
       for (const k of worldCopies(v)) {
         for (const c of o.cities) {
-          candidates.push({ text: c.name, x: mercX(c.lon) * w + k * w - v.originX, y: mercY(c.lat) * w - v.originY, font: CITY_FONT, color: "#b3b3b3", dot: true });
+          candidates.push({ text: c.name, x: mercX(c.lon) * w + k * w - v.originX, y: mercY(c.lat) * w - v.originY, font: CITY_FONT, color: CITY_LABEL_COLOR, dot: true });
         }
       }
     }
@@ -192,10 +214,14 @@ export function drawBasemap(ctx: CanvasRenderingContext2D, v: PixelView, o: Base
       const c = candidates[i]!;
       ctx.font = c.font;
       if (c.dot) {
-        ctx.fillStyle = "#9a9a9a";
+        ctx.fillStyle = CITY_DOT_COLOR;
         ctx.beginPath();
         ctx.arc(c.x, c.y, 2.2, 0, Math.PI * 2);
         ctx.fill();
+        // A thin dark ring (the label halo's colour), so the light dot shows on the grey land.
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.lineWidth = 3;
         ctx.textAlign = "left";
         haloText(ctx, c.text, c.x + 6, c.y, c.color);
         ctx.textAlign = "center";

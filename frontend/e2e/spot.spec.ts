@@ -25,14 +25,34 @@ test.describe("spot page forecast", () => {
     expect(fc.models.some((m) => m.role === "authoritative")).toBe(true);
 
     await page.goto("/spots/jeffreys-bay");
-    await expect(page.getByTestId("quality-chart-legend")).toContainText("80% forecast range");
+    // The timeline's legend names the whisker band honestly: an unverified, heuristic range.
+    await expect(page.getByTestId("quality-chart-legend")).toContainText("likely range (p10–p90 of an assumed error model, not yet verified)");
     const hour = page.getByTestId("forecast-hour");
     await expect(hour.getByTestId("raw-model")).toContainText("Significant wave height (offshore)");
     await expect(hour.getByTestId("our-prediction")).toContainText("typical–sets");
-    await expect(hour.getByTestId("uncertainty-range")).toContainText("80% range");
-    await expect(hour.getByTestId("uncertainty-range")).toContainText("not yet verified");
+    // Final copy (confidence-text): an unverified range is a "Likely range … (unverified)" on
+    // screen; "80% range" is only its intent, kept for screen readers with the basis.
+    const range = hour.getByTestId("uncertainty-range");
+    await expect(range).toContainText(/Likely range .+ \(unverified\)/);
+    await expect(range).toContainText("meant as an 80% range");
+    await expect(range).toContainText("not yet verified");
+    // Directions are where wind and swell come FROM.
+    await expect(hour.getByTestId("prediction-inputs")).toContainText(/km\/h from [NESW]{1,3} · /);
+    await expect(hour.getByTestId("prediction-inputs")).toContainText(/swell from [NESW]{1,3}/);
     await expect(page.getByTestId("method-note")).toContainText("Linear wave theory");
     await expect(page.getByTestId("method-note")).not.toContainText("Komar–Gaughan approximation");
+
+    // The best-week summary: forecast reasons only (no research or not-verified sentence), the
+    // break's research kept apart, and the time named with its zone.
+    const outlook = page.getByTestId("surf-outlook");
+    await expect(outlook.getByTestId("forecast-confidence")).not.toContainText("How this break responds to swell");
+    await expect(outlook.getByTestId("research-confidence")).toBeVisible();
+    // Compact research block: its summary sits in "Research details", not on the first screen.
+    await expect(outlook.getByTestId("research-summary")).toHaveCount(0);
+    await expect(outlook.getByRole("button", { name: "Research details" })).toHaveAttribute("aria-expanded", "false");
+    await expect(outlook.getByTestId("best-likely-range")).toContainText(/Likely range .+ \(unverified\)/);
+    // Provenance next to the timeline: the model run with its cycle (demo data has no links).
+    await expect(page.getByTestId("timeline-provenance").getByTestId("provenance-members")).toContainText(/Model runs?: /);
 
     // Choosing a day moves the breakdown to that day's best hour.
     const day = fc.daily[3]!;
@@ -41,9 +61,9 @@ test.describe("spot page forecast", () => {
     await expect(page.getByTestId(`day-${day.date}`)).toHaveAttribute("aria-pressed", "true");
     await expect.poll(() => hour.getByTestId("forecast-breakdown").innerText()).not.toBe(before);
 
-    // Step forward three hours with the arrow control.
+    // Step forward one forecast step (not "three hours": steps are 1, 3 or 6 hours long).
     const atDay = await hour.getByTestId("forecast-breakdown").innerText();
-    await hour.getByRole("button", { name: "Three hours later" }).click();
+    await page.getByRole("button", { name: "Next forecast step" }).click();
     await expect.poll(() => hour.getByTestId("forecast-breakdown").innerText()).not.toBe(atDay);
   });
 

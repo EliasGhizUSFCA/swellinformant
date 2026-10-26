@@ -11,9 +11,15 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.cli import main as cli_main
-from app.models import SpotPhysicalProfile, SpotResearchAssessment, SurfSpot
+from app.models import (
+    SpotPhysicalProfile,
+    SpotResearchAssessment,
+    SpotResearchSource,
+    SurfSpot,
+)
 from app.services.research.assess import seed_research
 from app.services.seed import DEFAULT_DATA_DIR
+from app.services.surf_quality.models import SpotParams
 
 pytestmark = pytest.mark.integration
 
@@ -44,6 +50,27 @@ def test_seeded_profiles_carry_the_measured_bathymetry(db: Session) -> None:
         assert row.controlling_depth_m is None
     # A spot without measurements keeps the derived profile.
     assert _profile(db, "pipeline").data_quality["forecast_point_depth_m"] == "unknown"
+
+
+def test_seeded_profiles_carry_the_researched_wind_profiles(db: Session) -> None:
+    padang = _profile(db, "padang-padang")
+    assert padang.wind_profile is not None
+    assert padang.wind_profile["offshore_tolerance_kmh"] == 39.0
+    assert padang.wind_profile["sources"] == ["isg-padang"]
+    burleigh = _profile(db, "burleigh-heads").wind_profile
+    assert burleigh is not None and burleigh["data_quality"] == "research"
+    assert burleigh["shelter"][0]["sources"] == ["surf-forecast-burleigh"]
+    # Ocean Beach keeps its measured depth and gains the wind profile.
+    ocean_beach = _profile(db, "ocean-beach-sf")
+    assert ocean_beach.forecast_point_depth_m == pytest.approx(36.4)
+    assert ocean_beach.wind_profile is not None
+    assert _profile(db, "pipeline").wind_profile is None
+    spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == "padang-padang"))
+    params = SpotParams.from_orm(spot)
+    assert params.wind_profile is not None
+    assert params.wind_profile.offshore_tolerance_kmh == 39.0
+    assert params.wind_profile.data_quality == "research"
+    assert params.wind_profile.tolerance_provenance == "beaufort"
 
 
 @pytest.fixture
@@ -89,3 +116,45 @@ def test_research_lint_reports_missing_records_and_file_problems(
     assert cli_main(["research", "lint", "--decisions", str(path)]) == 2
     assert "is not the record's" in capsys.readouterr().err
     assert cli_main(["research", "lint", "--decisions", str(tmp_path / "nope.json")]) == 1
+
+
+def test_research_lint_checks_the_stored_wind_profiles(
+    db: Session, assessed: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`research lint` passes the stored wind profiles and the evidence retrievals to the
+    lint: a research wind profile citing an unknown key, or a source that was not read
+    directly, is reported."""
+    padang = _profile(db, "padang-padang")
+    original = dict(padang.wind_profile or {})
+    assert original["data_quality"] == "research" and original["sources"] == ["isg-padang"]
+    # The committed profiles cite only directly read evidence: no wind_profile issue.
+    assert cli_main(["research", "lint"]) == 1  # the one geometry issue (Restaurants)
+    assert "[wind_profile]" not in capsys.readouterr().out
+
+    try:  # the profiles are seeded once per session: always restore this one
+        padang.wind_profile = {**original, "sources": ["no-such-source"]}
+        db.commit()
+        assert cli_main(["research", "lint"]) == 1
+        out = capsys.readouterr().out
+    finally:
+        padang.wind_profile = original
+        db.commit()
+    assert "padang-padang: [wind_profile] cites unknown evidence key 'no-such-source'" in out
+    assert "2 issue(s); 50 spots" in out
+
+    spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == "padang-padang"))
+    assert spot is not None
+    source = db.scalar(
+        select(SpotResearchSource).where(
+            SpotResearchSource.spot_id == spot.id, SpotResearchSource.source_key == "isg-padang"
+        )
+    )
+    assert source is not None and source.retrieval == "fetched"
+    source.retrieval = "web_search"
+    db.commit()
+    assert cli_main(["research", "lint"]) == 1
+    out = capsys.readouterr().out
+    assert (
+        "padang-padang: [wind_profile] cites 'isg-padang', which was not read directly "
+        "(web_search)" in out
+    )

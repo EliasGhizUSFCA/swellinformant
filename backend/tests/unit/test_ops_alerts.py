@@ -1,4 +1,6 @@
-"""Admin data-health alerts: every state transition of the de-duplication (no database).
+"""Admin data-health alerts: every state transition of the de-duplication (no database),
+including the problems of the synced model (sync heartbeat, failed syncs, CPU budget,
+licence).
 
 Problems here are synthetic test inputs, not observations of a real system.
 """
@@ -6,9 +8,6 @@ Problems here are synthetic test inputs, not observations of a real system.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-
-import pytest
-from celery.schedules import crontab
 
 from app.core.config import get_settings
 from app.schemas.health import (
@@ -25,7 +24,7 @@ from app.services.notifications.ops_alerts import (
     plan_alerts,
     render_alert,
 )
-from app.workers.schedule import build_beat_schedule, describe_schedule, max_interval
+from app.workers.schedule import build_beat_schedule
 
 T0 = datetime(2026, 10, 12, 6, 0, tzinfo=UTC)
 REPEAT = timedelta(hours=12)
@@ -239,32 +238,49 @@ def test_overall_status() -> None:
     assert overall_status([STALE, FAILING]) == "failing"
 
 
-@pytest.mark.parametrize(
-    ("sched", "gap", "text"),
-    [
-        (timedelta(minutes=2), timedelta(minutes=2), "every 2 min"),
-        (timedelta(hours=3), timedelta(hours=3), "every 3 h"),
-        (timedelta(hours=1), timedelta(hours=1), "every hour"),
-        (crontab(hour=3, minute=30), timedelta(hours=24), "daily at 03:30 UTC"),
-        (
-            crontab(hour="1,7,13,19", minute=40),
-            timedelta(hours=6),
-            "daily at 01:40, 07:40, 13:40, 19:40 UTC",
-        ),
-        (crontab(hour="0,6", minute=0), timedelta(hours=18), "daily at 00:00, 06:00 UTC"),
-        (crontab(hour=1, minute=0, day_of_week="mon"), timedelta(days=7), None),
-    ],
-)
-def test_schedule_intervals(sched: object, gap: timedelta, text: str | None) -> None:
-    assert max_interval(sched) == gap
-    if text is not None:
-        assert describe_schedule(sched) == text
-
-
 def test_beat_schedule_has_the_data_health_job_at_its_configured_interval() -> None:
     settings = get_settings().model_copy(update={"data_health_check_minutes": 20})
     entry = build_beat_schedule(settings)["data-health"]
     assert entry == {"task": "ops.data_health", "schedule": timedelta(minutes=20)}
+
+
+def test_beat_schedule_floors_the_data_health_job() -> None:
+    settings = get_settings().model_copy(
+        update={"data_health_check_minutes": 20, "job_interval_floor_minutes": 60}
+    )
+    entry = build_beat_schedule(settings)["data-health"]
+    assert entry == {"task": "ops.data_health", "schedule": timedelta(hours=1)}
+
+
+# --------------------------------------------------------------------------- synced model
+# The sync problems of the data-health report (app.services.health) follow the same rules.
+DAEMON = Problem("sync_heartbeat_stale", "failing", "The sync daemon's last check was 40 min ago.")
+SYNCS = Problem("sync_failed", "degraded", "The last 2 syncs failed.", detail="stage map: 503")
+CPU = Problem("sync_cpu_budget", "degraded", "Background jobs used 8.2 CPU-hours (82 %).")
+LICENCE = Problem("licence", "failing", "COMMERCIAL_USE=true with the free Open-Meteo API.")
+
+
+def test_sync_problems_alert_once_and_recover_once() -> None:
+    due, state = step({}, [DAEMON, SYNCS, CPU, LICENCE], T0)
+    assert due == [
+        "new:licence",
+        "new:sync_heartbeat_stale",
+        "new:sync_cpu_budget",
+        "new:sync_failed",
+    ]  # failing first, then by key
+    for minutes in (60, 120, 60 * 11):
+        due, state = step(state, [DAEMON, SYNCS, CPU, LICENCE], T0 + timedelta(minutes=minutes))
+        assert due == [], minutes
+    due, state = step(state, [SYNCS, CPU, LICENCE], T0 + timedelta(hours=11, minutes=30))
+    assert due == ["recovered:sync_heartbeat_stale"]
+    due, _ = step(state, [SYNCS, CPU, LICENCE], T0 + timedelta(hours=12))
+    assert sorted(due) == ["reminder:licence", "reminder:sync_cpu_budget", "reminder:sync_failed"]
+
+
+def test_a_failed_sync_email_carries_the_error_for_admins() -> None:
+    plan = plan_alerts({}, [SYNCS], T0, REPEAT)
+    _, text = render_alert(_report([SYNCS]), plan, get_settings(), REPEAT)
+    assert "The last 2 syncs failed." in text and "last error: stage map: 503" in text
 
 
 def test_ago() -> None:

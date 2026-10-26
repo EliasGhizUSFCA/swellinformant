@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import delete, select
@@ -47,6 +48,7 @@ from app.services.surf_quality.predict import (
     compute_pending_predictions,
     compute_predictions_for_run,
 )
+from app.services.surf_quality.sun import TWILIGHT_MARGIN, sun_times
 from app.services.verification.metrics import LEAD_BUCKETS_H
 from tests.conftest import ApiClient
 from tests.integration.test_pipeline import make_search, make_user, simulate
@@ -285,7 +287,7 @@ def test_every_prediction_stores_both_classes_lead_and_issue_time(
         assert run is not None
         assert p.forecast_confidence_class in CLASSES and p.local_confidence_class in CLASSES
         assert fc.rank(p.local_confidence_class) <= fc.rank(p.forecast_confidence_class)
-        assert p.confidence_method == fc.METHOD == "forecast-v1.1"
+        assert p.confidence_method == fc.METHOD == "forecast-v1.2"
         assert p.issued_at == run.issued_at
         assert p.lead_hours == pytest.approx((p.valid_time - run.issued_at).total_seconds() / 3600)
         inputs = p.confidence_inputs or {}
@@ -443,6 +445,12 @@ def test_events_get_the_read_time_staleness_cap(db: Session, scored: dict[str, A
     detect_events(db, NOW)
     fresh = {e.id: e for e in upcoming_events(db, NOW)}
     assert any(e.forecast_confidence_class == fc.HIGH for e in fresh.values())
+    # Each event carries its run's credit and licence links (every blend member's), so the
+    # cards that show its model values can credit them (review SEC-1).
+    for e in fresh.values():
+        labels = [link.label for link in e.attribution_links]
+        assert any(label.startswith("Copyright ECMWF") for label in labels), labels
+        assert any("NOAA NCEP GFS" in label for label in labels), labels
     later = NOW + timedelta(hours=30)  # the GFS member is stale by then (16 h rule)
     assert queries.is_stale(scored["run"], later)
     events = upcoming_events(db, later)
@@ -717,3 +725,113 @@ def test_demo_data_is_low_in_predictions_events_and_alerts(
     stale_snap = build_snapshot(match, kind, later)
     assert stale_snap["forecast_confidence_class"] == fc.LOW  # demo: Low either way
     assert stale_snap["confidence_reasons"][0] == fc.STALE_REASON
+
+
+# --------------------------------------------------------------------------- freshness, split
+def test_current_is_the_stored_step_nearest_to_now(db: Session, scored: dict[str, Any]) -> None:
+    """The blend is 3-hourly from 00Z: at 04:00 the 03:00 step is current (not 06:00, which
+    the old "first step at or after now - 30 min" rule picked), at 04:31 the 06:00 step,
+    and a tie (04:30) keeps the earlier step."""
+    for at, expected in (
+        (GFS_ISSUED + timedelta(hours=4), GFS_ISSUED + timedelta(hours=3)),
+        (GFS_ISSUED + timedelta(hours=4, minutes=31), GFS_ISSUED + timedelta(hours=6)),
+        (GFS_ISSUED + timedelta(hours=4, minutes=30), GFS_ISSUED + timedelta(hours=3)),
+    ):
+        current = {s.slug: s.current for s in spot_summaries(db, now=at)}
+        assert current["pipeline"] is not None, at
+        assert current["pipeline"].valid_time == expected, at
+    # Beyond the end of the run there is no step within one step of now: no "current".
+    times = sorted(p.valid_time for p in _preds(db, scored["run"].id, "pipeline"))
+    late = {s.slug: s.current for s in spot_summaries(db, now=times[-1] + timedelta(hours=7))}
+    assert late["pipeline"] is None
+    # Before the first step: 2 h ahead is within its 3 h step, 4 h ahead is not.
+    assert times[1] - times[0] == timedelta(hours=3)
+    soon = {s.slug: s.current for s in spot_summaries(db, now=times[0] - timedelta(hours=2))}
+    assert soon["pipeline"] is not None and soon["pipeline"].valid_time == times[0]
+    early = {s.slug: s.current for s in spot_summaries(db, now=times[0] - timedelta(hours=4))}
+    assert early["pipeline"] is None
+
+
+def test_map_snapshot_and_forecast_report_freshness(db: Session, scored: dict[str, Any]) -> None:
+    run = scored["run"]
+    fresh = map_snapshot(db, None, now=NOW)
+    assert fresh.stale is False
+    assert fresh.newest_run_issued_at == run.issued_at
+    assert fresh.last_updated_at == run.completed_at and fresh.last_updated_at is not None
+    # The credit and licence links of the blend's members travel with the snapshot (ECMWF's
+    # CC BY 4.0 notice and NOAA's), so the map can show them next to the model data.
+    hrefs = [link.href for link in fresh.attribution_links]
+    assert fresh.attribution_links == queries.source_attribution_links(db, run)
+    assert "https://www.ecmwf.int/en/forecasts/datasets/open-data" in hrefs
+    assert "https://www.nco.ncep.noaa.gov/pmb/products/gfs/" in hrefs
+    assert len(hrefs) == len(set(hrefs))
+    limit = queries.stale_after_hours(NOAA_GFS_CODE)
+    late = map_snapshot(db, None, now=GFS_ISSUED + timedelta(hours=20))
+    assert limit < 20 and late.stale is True
+
+    spot = _spot(db, "pipeline")
+    now_fc = spot_forecast(db, spot, now=NOW)
+    assert now_fc.stale is False and now_fc.alerts_paused is False
+    # Stale (GFS +20 h) but alerts are only withheld from twice the stale-after age, so
+    # the page must not say they are paused yet; at GFS +34 h both apply.
+    stale = spot_forecast(db, spot, now=GFS_ISSUED + timedelta(hours=20))
+    assert stale.stale is True and stale.alerts_paused is False
+    paused = spot_forecast(db, spot, now=GFS_ISSUED + timedelta(hours=34))
+    assert 2 * limit < 34 and paused.stale is True and paused.alerts_paused is True
+    from app.services.notifications.alerts import STALE_ALERT_FACTOR
+
+    assert STALE_ALERT_FACTOR == 2.0
+
+
+def test_forecast_reasons_are_split_from_research_and_dispute(
+    db: Session, scored: dict[str, Any]
+) -> None:
+    forbidden = {*fc.RESEARCH_REASONS.values(), fc.WIND_DISPUTE_REASON, fc.NOT_VERIFIED_REASON}
+    out = spot_forecast(db, _spot(db, "uluwatu"), now=NOW)
+    assert out.points
+    for p in out.points:
+        assert p.forecast_confidence_reasons
+        assert not forbidden & set(p.forecast_confidence_reasons)
+        assert fc.NO_RESEARCH_REASON in p.confidence_reasons  # the deprecated list is kept
+    stale = spot_forecast(db, _spot(db, "uluwatu"), now=GFS_ISSUED + timedelta(hours=20))
+    assert all(p.forecast_confidence_reasons[0] == fc.STALE_REASON for p in stale.points)
+
+
+def test_blend_members_are_listed_with_their_own_init_times(
+    db: Session, scored: dict[str, Any]
+) -> None:
+    out = spot_forecast(db, _spot(db, "pipeline"), now=NOW)
+    assert out.run is not None
+    members = {m.code: m for m in out.run.members}
+    assert set(members) == {NOAA_GFS_CODE, ECMWF_IFS_CODE}
+    assert members[NOAA_GFS_CODE].init_time == GFS_ISSUED
+    assert members[ECMWF_IFS_CODE].init_time == ECMWF_ISSUED
+    # The blend's own issue time is only its oldest member's.
+    assert out.run.issued_at == ECMWF_ISSUED
+    assert all(m.name.startswith("SYNTHETIC") for m in members.values())
+
+
+def test_good_hours_are_hours_of_light_under_good_steps(
+    db: Session, scored: dict[str, Any]
+) -> None:
+    """Each 3-hourly step stands for t - 1.5 h to t + 1.5 h (nearest valid step): a day's
+    good_hours is the part of first-to-last light under Good or better steps, so it never
+    exceeds the day's light, and a good step well inside the light counts its full 3 h."""
+    spot = _spot(db, "pipeline")
+    out = spot_forecast(db, spot, now=NOW)
+    zone = ZoneInfo(spot.timezone)
+    half = timedelta(hours=1.5)
+    assert out.daily
+    for day in out.daily:
+        rise, set_, state = sun_times(spot.latitude, spot.longitude, day.date)
+        assert state == "normal" and rise is not None and set_ is not None
+        first, last = rise - TWILIGHT_MARGIN, set_ + TWILIGHT_MARGIN
+        assert 0.0 <= day.good_hours <= (last - first).total_seconds() / 3600 + 0.01
+        good = [
+            p
+            for p in out.points
+            if p.score >= 57 and p.valid_time.astimezone(zone).date() == day.date
+        ]
+        assert day.good_hours <= 3.0 * len(good) + 1e-6
+        if good and all(first <= p.valid_time - half and p.valid_time + half <= last for p in good):
+            assert day.good_hours == pytest.approx(3.0 * len(good))

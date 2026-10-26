@@ -53,6 +53,7 @@ export interface paths {
          *     keys, ages, limits, job statuses, reasons written by the service; no personal data,
          *     no raw error text), and an external uptime monitor must be able to read it without
          *     credentials, because a dead worker cannot send its own alert. Rate limited per IP.
+         *     Shared by the CDN for DATA_HEALTH_CDN_SECONDS; with ``strict`` never cached.
          */
         get: operations["data_health_report_api_health_data_get"];
         put?: never;
@@ -459,7 +460,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Spots */
+        /**
+         * List Spots
+         * @description Every active spot with its current conditions (public data, cacheable).
+         */
         get: operations["list_spots_api_spots_get"];
         put?: never;
         post?: never;
@@ -476,7 +480,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Spot */
+        /**
+         * Get Spot
+         * @description One spot's page data (public data, cacheable).
+         */
         get: operations["get_spot_api_spots__slug__get"];
         put?: never;
         post?: never;
@@ -493,7 +500,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Forecast */
+        /**
+         * Get Forecast
+         * @description The spot's forecast hours and model series (public data, cacheable).
+         */
         get: operations["get_forecast_api_spots__slug__forecast_get"];
         put?: never;
         post?: never;
@@ -510,7 +520,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Spot Events */
+        /**
+         * Spot Events
+         * @description The spot's swell events that have not ended (public data, cacheable).
+         */
         get: operations["spot_events_api_spots__slug__events_get"];
         put?: never;
         post?: never;
@@ -547,7 +560,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Events */
+        /**
+         * List Events
+         * @description The best swells that have not ended (public data, cacheable).
+         */
         get: operations["list_events_api_events_get"];
         put?: never;
         post?: never;
@@ -933,7 +949,7 @@ export interface paths {
         };
         /**
          * Fields Index
-         * @description Which global fields exist for the current model run, and their valid times.
+         * @description Which global fields exist for the served model run, and their valid times.
          */
         get: operations["fields_index_api_map_fields_get"];
         put?: never;
@@ -956,6 +972,69 @@ export interface paths {
          * @description One field as zlib-compressed uint8 bytes; decoding parameters in X-Field-Meta.
          */
         get: operations["field_data_api_map_fields__variable__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/spots/{slug}/tides": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Spot Tides
+         * @description Predicted tide heights and high/low waters at the spot's tide station.
+         *
+         *     Astronomical tide predictions (never observed water levels), relative to the stated
+         *     datum; ``status`` says whether they are real, synthetic (demo) or unavailable.
+         */
+        get: operations["spot_tides_api_spots__slug__tides_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/spots/{slug}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Spot Observations
+         * @description Recent measurements at the spot's reference stations (never forecasts).
+         */
+        get: operations["spot_observations_api_spots__slug__observations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/spots/{slug}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Spot Timeline
+         * @description Every chart row of the spot page on one time axis, for the next ``days`` days.
+         */
+        get: operations["spot_timeline_api_spots__slug__timeline_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1101,6 +1180,16 @@ export interface components {
             /** Timezone */
             timezone: string;
         };
+        /**
+         * AttributionLinkOut
+         * @description A credit or licence link the data source asks for (shown next to the data).
+         */
+        AttributionLinkOut: {
+            /** Label */
+            label: string;
+            /** Href */
+            href: string;
+        };
         /** AuthOut */
         AuthOut: {
             user: components["schemas"]["UserOut"];
@@ -1229,6 +1318,19 @@ export interface components {
             lead_hours?: number | null;
             /** Local Confidence Reason */
             local_confidence_reason?: string | null;
+            /**
+             * Forecast Confidence Reasons
+             * @default []
+             */
+            forecast_confidence_reasons: string[];
+            /** Wind Dispute Note */
+            wind_dispute_note?: string | null;
+            /** Wind Strength */
+            wind_strength?: ("glassy" | "light" | "moderate" | "strong") | null;
+            /** Wind Favourability */
+            wind_favourability?: ("favourable" | "workable" | "unfavourable") | null;
+            /** Gust Kind */
+            gust_kind?: ("gfs_instantaneous" | "ecmwf_max_3h" | "ecmwf_max_since_pp" | "unknown") | null;
         };
         /** DailyStat */
         DailyStat: {
@@ -1301,6 +1403,7 @@ export interface components {
             observations: components["schemas"]["ObservationsHealthOut"];
             heartbeat: components["schemas"]["HeartbeatOut"];
             storage: components["schemas"]["StorageOut"];
+            sync?: components["schemas"]["SyncHealthOut"] | null;
         };
         /**
          * DateMode
@@ -1456,6 +1559,29 @@ export interface components {
             confidence_reasons: string[];
             /** Local Confidence Reason */
             local_confidence_reason?: string | null;
+            /**
+             * Forecast Confidence Reasons
+             * @default []
+             */
+            forecast_confidence_reasons: string[];
+            /** Wind Dispute Note */
+            wind_dispute_note?: string | null;
+            /** Wind Strength */
+            wind_strength?: ("glassy" | "light" | "moderate" | "strong") | null;
+            /** Wind Favourability */
+            wind_favourability?: ("favourable" | "workable" | "unfavourable") | null;
+            /** Gust Kind */
+            gust_kind?: ("gfs_instantaneous" | "ecmwf_max_3h" | "ecmwf_max_since_pp" | "unknown") | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
         };
         /** ExperimentSummary */
         ExperimentSummary: {
@@ -1498,6 +1624,24 @@ export interface components {
              * @default []
              */
             variables: components["schemas"]["FieldVariableOut"][];
+            /** Updated At */
+            updated_at?: string | null;
+            /** Age Hours */
+            age_hours?: number | null;
+            /**
+             * Stale After Hours
+             * @default 12
+             */
+            stale_after_hours: number;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Published At */
+            published_at?: string | null;
+            /** Sync Run Id */
+            sync_run_id?: number | null;
         };
         /** FieldSourceOut */
         FieldSourceOut: {
@@ -1522,6 +1666,14 @@ export interface components {
             display_min: number;
             /** Display Max */
             display_max: number;
+            /**
+             * Group
+             * @default core
+             * @enum {string}
+             */
+            group: "core" | "partition";
+            /** System */
+            system?: ("primary" | "secondary" | "windsea") | null;
         };
         /** ForecastPoint */
         ForecastPoint: {
@@ -1623,6 +1775,19 @@ export interface components {
             lead_hours?: number | null;
             /** Local Confidence Reason */
             local_confidence_reason?: string | null;
+            /**
+             * Forecast Confidence Reasons
+             * @default []
+             */
+            forecast_confidence_reasons: string[];
+            /** Wind Dispute Note */
+            wind_dispute_note?: string | null;
+            /** Wind Strength */
+            wind_strength?: ("glassy" | "light" | "moderate" | "strong") | null;
+            /** Wind Favourability */
+            wind_favourability?: ("favourable" | "workable" | "unfavourable") | null;
+            /** Gust Kind */
+            gust_kind?: ("gfs_instantaneous" | "ecmwf_max_3h" | "ecmwf_max_since_pp" | "unknown") | null;
         };
         /** ForecastRunOut */
         ForecastRunOut: {
@@ -1641,6 +1806,11 @@ export interface components {
             atmosphere_model_run_at: string | null;
             /** Status */
             status: string;
+            /**
+             * Members
+             * @default []
+             */
+            members: components["schemas"]["RunMemberOut"][];
         };
         /** ForecastSourceOut */
         ForecastSourceOut: {
@@ -1656,6 +1826,11 @@ export interface components {
             wave_model: string | null;
             /** Atmosphere Model */
             atmosphere_model: string | null;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
         };
         /** ForgotPasswordIn */
         ForgotPasswordIn: {
@@ -1797,6 +1972,20 @@ export interface components {
             step_hours: number;
             /** Spots */
             spots: components["schemas"]["MapSpotOut"][];
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Newest Run Issued At */
+            newest_run_issued_at?: string | null;
+            /** Last Updated At */
+            last_updated_at?: string | null;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
         };
         /** MapSpotOut */
         MapSpotOut: {
@@ -1930,6 +2119,17 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: ("high" | "moderate" | "low") | null;
+            /** Local Confidence Class */
+            local_confidence_class?: ("high" | "moderate" | "low") | null;
+            /** Local Confidence Reason */
+            local_confidence_reason?: string | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
             event: components["schemas"]["EventOut"];
             /** Spot Airports */
             spot_airports: components["schemas"]["SpotAirportOut"][];
@@ -2046,6 +2246,17 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: ("high" | "moderate" | "low") | null;
+            /** Local Confidence Class */
+            local_confidence_class?: ("high" | "moderate" | "low") | null;
+            /** Local Confidence Reason */
+            local_confidence_reason?: string | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
         };
         /** Message */
         Message: {
@@ -2252,6 +2463,12 @@ export interface components {
             window_label: string | null;
             /** Is Demo */
             is_demo: boolean;
+            /** Forecast Confidence Class */
+            forecast_confidence_class?: ("high" | "moderate" | "low") | null;
+            /** Local Confidence Class */
+            local_confidence_class?: ("high" | "moderate" | "low") | null;
+            /** Local Confidence Reason */
+            local_confidence_reason?: string | null;
         };
         /** NotificationPage */
         NotificationPage: {
@@ -2292,6 +2509,51 @@ export interface components {
             /** Sms Service Available */
             sms_service_available: boolean;
         };
+        /** ObservationOut */
+        ObservationOut: {
+            /**
+             * T
+             * Format: date-time
+             */
+            t: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "instrument" | "human_report" | "model_analysis";
+            /** Station Code */
+            station_code: string;
+            /** Station Name */
+            station_name: string;
+            /** Provider */
+            provider: string;
+            /** Relation */
+            relation: string;
+            /** Distance Km */
+            distance_km: number;
+            /** Hs M */
+            hs_m: number | null;
+            /** Hs Kind */
+            hs_kind: string | null;
+            /** Tp S */
+            tp_s: number | null;
+            /** Dir From Deg */
+            dir_from_deg: number | null;
+            /** Wind Kmh */
+            wind_kmh: number | null;
+            /** Qc Flag */
+            qc_flag: string | null;
+            /** Stale */
+            stale: boolean;
+            /** Licence */
+            licence: string | null;
+            /** Attribution */
+            attribution: string | null;
+            /** Provider Name */
+            provider_name?: string | null;
+            /** Licence Url */
+            licence_url?: string | null;
+        };
         /** ObservationProviderHealthOut */
         ObservationProviderHealthOut: {
             /** Provider */
@@ -2312,6 +2574,21 @@ export interface components {
             age_hours?: number | null;
             /** Stale After Hours */
             stale_after_hours: number;
+        };
+        /** ObservationsBlockOut */
+        ObservationsBlockOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "unavailable" | "stale";
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["ObservationOut"][];
         };
         /** ObservationsHealthOut */
         ObservationsHealthOut: {
@@ -2415,6 +2692,27 @@ export interface components {
             /** Daily */
             daily: components["schemas"]["DailyStat"][];
         };
+        /**
+         * PartitionOut
+         * @description One wave system of the model; only systems the model provides are listed.
+         */
+        PartitionOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "primary_swell" | "secondary_swell" | "tertiary_swell" | "wind_sea";
+            /** Height M */
+            height_m: number;
+            /** Period S */
+            period_s: number | null;
+            /** Dir From Deg */
+            dir_from_deg: number | null;
+            /** Breaking Ft */
+            breaking_ft: number | null;
+            /** Drives Surf */
+            drives_surf: boolean;
+        };
         /** PhoneConfirmIn */
         PhoneConfirmIn: {
             /** Code */
@@ -2482,6 +2780,22 @@ export interface components {
             /** Currency */
             currency: string;
         };
+        /** ProvenanceOut */
+        ProvenanceOut: {
+            source: components["schemas"]["ForecastSourceOut"];
+            run: components["schemas"]["TimelineRunOut"];
+            /**
+             * Members
+             * @default []
+             */
+            members: components["schemas"]["RunMemberOut"][];
+            /** Breaking Method */
+            breaking_method: string | null;
+            /** Algorithm Version */
+            algorithm_version: string | null;
+            /** Calibrated */
+            calibrated: boolean;
+        };
         /**
          * QualityLabel
          * @enum {string}
@@ -2492,6 +2806,29 @@ export interface components {
          * @enum {string}
          */
         RankingPriority: "balanced" | "best_waves" | "cheapest" | "shortest";
+        /**
+         * RedisHealthOut
+         * @description Redis (Celery broker, locks, call budgets, provider response cache): memory used
+         *     against its cap. With ``noeviction`` a full Redis refuses writes, so new jobs fail.
+         */
+        RedisHealthOut: {
+            /** Available */
+            available: boolean;
+            /** Used Memory Bytes */
+            used_memory_bytes?: number | null;
+            /** Maxmemory Bytes */
+            maxmemory_bytes?: number | null;
+            /** Maxmemory Policy */
+            maxmemory_policy?: string | null;
+            /** Cap Bytes */
+            cap_bytes?: number | null;
+            /** Cap Source */
+            cap_source?: ("redis" | "setting") | null;
+            /** Used Fraction */
+            used_fraction?: number | null;
+            /** Alert Fraction */
+            alert_fraction: number;
+        };
         /** RegionOut */
         RegionOut: {
             /** Region Group */
@@ -2582,6 +2919,26 @@ export interface components {
             confirm_password: string;
             /** Token */
             token: string;
+        };
+        /**
+         * RunMemberOut
+         * @description One model run behind a forecast (a blend member, or the single source itself).
+         */
+        RunMemberOut: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Family */
+            family: string;
+            /** Run Key */
+            run_key: string;
+            /** Init Time */
+            init_time: string | null;
+            /** Wave Model */
+            wave_model: string | null;
+            /** Atmosphere Model */
+            atmosphere_model: string | null;
         };
         /** ScatterPoint */
         ScatterPoint: {
@@ -3020,6 +3377,13 @@ export interface components {
              */
             ensemble: components["schemas"]["EnsemblePoint"][];
             blend?: components["schemas"]["BlendInfo"] | null;
+            /**
+             * Alerts Paused
+             * @default false
+             */
+            alerts_paused: boolean;
+            /** Generated At */
+            generated_at?: string | null;
         };
         /** SpotMini */
         SpotMini: {
@@ -3095,6 +3459,33 @@ export interface components {
             /** Research Class */
             research_class?: string | null;
         };
+        /** SpotTimelineOut */
+        SpotTimelineOut: {
+            /** Spot Slug */
+            spot_slug: string;
+            /** Timezone */
+            timezone: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Available */
+            available: boolean;
+            /** Message */
+            message?: string | null;
+            /** Stale */
+            stale: boolean;
+            units: components["schemas"]["TimelineUnitsOut"];
+            steps_meta: components["schemas"]["StepsMetaOut"];
+            provenance?: components["schemas"]["ProvenanceOut"] | null;
+            /** Days */
+            days: components["schemas"]["TimelineDayOut"][];
+            /** Steps */
+            steps: components["schemas"]["TimelineStepOut"][];
+            tide: components["schemas"]["TideBlockOut"];
+            observations: components["schemas"]["ObservationsBlockOut"];
+        };
         /** StationSummary */
         StationSummary: {
             /** Code */
@@ -3118,12 +3509,492 @@ export interface components {
             /** Pairs */
             pairs: number;
         };
+        /**
+         * StepBreakingOut
+         * @description Our predicted breaking (face) height at the break, in feet.
+         */
+        StepBreakingOut: {
+            /** Central Ft */
+            central_ft: number;
+            /** Typical Ft */
+            typical_ft: number;
+            /** Sets Ft */
+            sets_ft: number;
+            /** P10 Ft */
+            p10_ft: number | null;
+            /** P90 Ft */
+            p90_ft: number | null;
+            /** Uncertainty Kind */
+            uncertainty_kind: string | null;
+        };
+        /**
+         * StepOffshoreOut
+         * @description Raw offshore model sea state (significant height, not surf height).
+         */
+        StepOffshoreOut: {
+            /** Hs M */
+            hs_m: number | null;
+            /** Tp S */
+            tp_s: number | null;
+            /** Period Kind */
+            period_kind: string | null;
+            /** Dir From Deg */
+            dir_from_deg: number | null;
+        };
+        /** StepQualityOut */
+        StepQualityOut: {
+            /** Score */
+            score: number;
+            /** Label */
+            label: string;
+            /** Forecast Confidence Class */
+            forecast_confidence_class: string | null;
+            /** Local Confidence Class */
+            local_confidence_class: string | null;
+            /** Forecast Confidence Reasons */
+            forecast_confidence_reasons: string[];
+            /** Local Confidence Reason */
+            local_confidence_reason: string | null;
+        };
+        /**
+         * StepSegmentOut
+         * @description A stretch of steps with the same spacing: ``start`` is the first step of the stretch,
+         *     ``end`` its last step plus one step.
+         */
+        StepSegmentOut: {
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /** Step Hours */
+            step_hours: number;
+        };
+        /** StepTideOut */
+        StepTideOut: {
+            /** Height M */
+            height_m: number;
+            /** Rising */
+            rising: boolean | null;
+            /** Stage */
+            stage: number | null;
+        };
+        /**
+         * StepWhyOut
+         * @description What drove the score: factor fits and gates (0..1), points lost per factor.
+         */
+        StepWhyOut: {
+            /** Fits */
+            fits: {
+                [key: string]: number;
+            };
+            /** Gates */
+            gates: {
+                [key: string]: number;
+            };
+            /** Contributions */
+            contributions: {
+                [key: string]: number;
+            } | null;
+            /** Tide Included */
+            tide_included: boolean;
+            /** Explanation */
+            explanation: string;
+        };
+        /** StepWindOut */
+        StepWindOut: {
+            /** Speed Kmh */
+            speed_kmh: number | null;
+            /** Gust Kmh */
+            gust_kmh: number | null;
+            /** Gust Kind */
+            gust_kind: string | null;
+            /** Gust Below Mean */
+            gust_below_mean: boolean;
+            /** Gust Below Mean Cause */
+            gust_below_mean_cause?: ("source" | "blend") | null;
+            /**
+             * Models Disagree
+             * @default []
+             */
+            models_disagree: ("direction" | "speed")[];
+            /** Dir From Deg */
+            dir_from_deg: number | null;
+            /** Relation */
+            relation: string;
+            /** Strength */
+            strength: string | null;
+            /** Favourability */
+            favourability: string | null;
+            /** Fit */
+            fit: number | null;
+            /** Offshore Component Kmh */
+            offshore_component_kmh: number | null;
+            /** Cross Component Kmh */
+            cross_component_kmh: number | null;
+        };
+        /** StepsMetaOut */
+        StepsMetaOut: {
+            /** Segments */
+            segments: components["schemas"]["StepSegmentOut"][];
+            /**
+             * Interpolation
+             * @default none
+             * @enum {string}
+             */
+            interpolation: "none" | "some_steps";
+            /**
+             * Policy
+             * @default nearest-valid-step
+             * @constant
+             */
+            policy: "nearest-valid-step";
+        };
         /** StorageOut */
         StorageOut: {
             /** Database Bytes */
             database_bytes: number;
             /** Database Max Gb */
             database_max_gb?: number | null;
+            redis?: components["schemas"]["RedisHealthOut"] | null;
+        };
+        /** SyncComponentOut */
+        SyncComponentOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "spots" | "ensemble" | "map";
+            /**
+             * Source
+             * @description Forecast source code, e.g. open_meteo_gfs
+             */
+            source: string;
+            /** Source Name */
+            source_name?: string | null;
+            /** Provider */
+            provider: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "current" | "new" | "waiting" | "in_progress" | "failed" | "unknown" | "disabled";
+            /** Stored Run Key */
+            stored_run_key?: string | null;
+            /** Available Run Key */
+            available_run_key?: string | null;
+            /** Available Cycle */
+            available_cycle?: string | null;
+            /** Detail */
+            detail?: string | null;
+        };
+        /** SyncHealthOut */
+        SyncHealthOut: {
+            /**
+             * Runner
+             * @enum {string}
+             */
+            runner: "celery" | "daemon";
+            /** Check Minutes */
+            check_minutes: number;
+            /** Last Check At */
+            last_check_at?: string | null;
+            /**
+             * Heartbeat Stale
+             * @default false
+             */
+            heartbeat_stale: boolean;
+            last_run?: components["schemas"]["SyncRunOut"] | null;
+            last_published?: components["schemas"]["SyncRunOut"] | null;
+            /** Components */
+            components?: components["schemas"]["SyncComponentOut"][];
+            /** Cpu Hours Month */
+            cpu_hours_month?: number | null;
+            /** Cpu Budget Hours */
+            cpu_budget_hours?: number | null;
+            /**
+             * Cpu Alert Fraction
+             * @default 0.8
+             */
+            cpu_alert_fraction: number;
+        };
+        /** SyncRunOut */
+        SyncRunOut: {
+            /** Id */
+            id: number;
+            /**
+             * Trigger
+             * @enum {string}
+             */
+            trigger: "daemon" | "celery" | "cli" | "pipeline" | "github" | "http";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "success" | "partial" | "failed" | "skipped" | "abandoned";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Published At */
+            published_at?: string | null;
+            /** Anchor Cycle */
+            anchor_cycle?: string | null;
+            /** Stages */
+            stages?: components["schemas"]["SyncStageOut"][];
+            /** Stored */
+            stored?: components["schemas"]["SyncStoredRunOut"][];
+        };
+        /** SyncStageOut */
+        SyncStageOut: {
+            /** Name */
+            name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "skipped" | "failed";
+            /** Duration Ms */
+            duration_ms: number;
+            /** Cpu S */
+            cpu_s?: number | null;
+        };
+        /**
+         * SyncStoredRunOut
+         * @description A model run a sync stored (one per component whose acquisition stored data).
+         */
+        SyncStoredRunOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "spots" | "ensemble" | "map";
+            /** Source */
+            source: string;
+            /** Source Name */
+            source_name?: string | null;
+            /** Run Key */
+            run_key?: string | null;
+            /** Cycle */
+            cycle?: string | null;
+        };
+        /** TideBlockOut */
+        TideBlockOut: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "unavailable" | "demo";
+            /** Reason */
+            reason?: string | null;
+            station?: components["schemas"]["TideStationOut"] | null;
+            /** Source */
+            source?: string | null;
+            /** Datum */
+            datum?: ("MLLW" | "MSL" | "LAT" | "model_msl") | null;
+            /**
+             * Units
+             * @default m
+             * @constant
+             */
+            units: "m";
+            /**
+             * Curve
+             * @default []
+             */
+            curve: components["schemas"]["TidePointOut"][];
+            /**
+             * Events
+             * @default []
+             */
+            events: components["schemas"]["TideEventOut"][];
+            preference: components["schemas"]["TidePreferenceOut"];
+            /** Attribution */
+            attribution?: string | null;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
+            /** Fetched At */
+            fetched_at?: string | null;
+        };
+        /** TideEventOut */
+        TideEventOut: {
+            /**
+             * T
+             * Format: date-time
+             */
+            t: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "high" | "low";
+            /** Height M */
+            height_m: number;
+        };
+        /** TidePointOut */
+        TidePointOut: {
+            /**
+             * T
+             * Format: date-time
+             */
+            t: string;
+            /** Height M */
+            height_m: number;
+            /** Interpolated */
+            interpolated: boolean;
+        };
+        /**
+         * TidePreferenceOut
+         * @description The spot's researched tide preference, and how far it can be trusted.
+         */
+        TidePreferenceOut: {
+            /** Value */
+            value: string | null;
+            /** Research Class */
+            research_class: string | null;
+            /** Decision */
+            decision: string | null;
+            /** Text */
+            text: string;
+        };
+        /** TideStationOut */
+        TideStationOut: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "harmonic" | "subordinate" | "model";
+            /** Distance Km */
+            distance_km: number;
+        };
+        /** TimelineDayOut */
+        TimelineDayOut: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /**
+             * Start Utc
+             * Format: date-time
+             */
+            start_utc: string;
+            /**
+             * End Utc
+             * Format: date-time
+             */
+            end_utc: string;
+            /** Sunrise */
+            sunrise: string | null;
+            /** Sunset */
+            sunset: string | null;
+            /** First Light */
+            first_light: string | null;
+            /** Last Light */
+            last_light: string | null;
+            /**
+             * Polar State
+             * @enum {string}
+             */
+            polar_state: "normal" | "polar_day" | "polar_night";
+            /** Best Time */
+            best_time: string | null;
+            /** Best Score */
+            best_score: number | null;
+            /** Best Label */
+            best_label: string | null;
+            /** Good Hours */
+            good_hours: number;
+            /** Forecast Confidence Class */
+            forecast_confidence_class: string | null;
+        };
+        /** TimelineRunOut */
+        TimelineRunOut: {
+            /** Run Key */
+            run_key: string;
+            /** Init Time */
+            init_time: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /** Status */
+            status: string;
+            /** Age Hours */
+            age_hours: number | null;
+            /** Stale After Hours */
+            stale_after_hours: number | null;
+        };
+        /** TimelineStepOut */
+        TimelineStepOut: {
+            /**
+             * T
+             * Format: date-time
+             */
+            t: string;
+            /** Step Hours */
+            step_hours: number;
+            /** Lead Hours */
+            lead_hours: number | null;
+            /** Is Daylight */
+            is_daylight: boolean;
+            /** Interpolated */
+            interpolated: boolean;
+            /**
+             * Interpolated Members
+             * @default []
+             */
+            interpolated_members: string[];
+            quality: components["schemas"]["StepQualityOut"];
+            breaking: components["schemas"]["StepBreakingOut"];
+            offshore: components["schemas"]["StepOffshoreOut"];
+            /** Partitions */
+            partitions: components["schemas"]["PartitionOut"][];
+            wind: components["schemas"]["StepWindOut"] | null;
+            tide: components["schemas"]["StepTideOut"] | null;
+            why: components["schemas"]["StepWhyOut"];
+        };
+        /** TimelineUnitsOut */
+        TimelineUnitsOut: {
+            /**
+             * Breaking
+             * @default ft
+             * @constant
+             */
+            breaking: "ft";
+            /**
+             * Offshore
+             * @default m
+             * @constant
+             */
+            offshore: "m";
+            /**
+             * Wind
+             * @default km/h
+             * @constant
+             */
+            wind: "km/h";
+            /**
+             * Tide
+             * @default m
+             * @constant
+             */
+            tide: "m";
         };
         /** TokenIn */
         TokenIn: {
@@ -4068,7 +4939,7 @@ export interface operations {
     map_conditions_api_map_conditions_get: {
         parameters: {
             query?: {
-                /** @description Forecast time (ISO 8601); default now */
+                /** @description Forecast time (ISO 8601; UTC when it has no offset); default now. Answered for its UTC hour, within 2 days before and 17 days after the current hour */
                 at?: string | null;
             };
             header?: never;
@@ -5002,6 +5873,8 @@ export interface operations {
             query?: {
                 /** @description Valid time (ISO 8601); default now */
                 at?: string | null;
+                /** @description Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the served run. */
+                run?: string | null;
             };
             header?: never;
             path: {
@@ -5019,6 +5892,113 @@ export interface operations {
                 content: {
                     "application/octet-stream": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    spot_tides_api_spots__slug__tides_get: {
+        parameters: {
+            query?: {
+                /** @description Window start (ISO 8601); default now */
+                start?: string | null;
+                /** @description Window end (ISO 8601); default start + TIDE_HORIZON_DAYS */
+                end?: string | null;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TideBlockOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    spot_observations_api_spots__slug__observations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationsBlockOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    spot_timeline_api_spots__slug__timeline_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotTimelineOut"];
+                };
+            };
+            /** @description Not modified (If-None-Match matched the ETag) */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

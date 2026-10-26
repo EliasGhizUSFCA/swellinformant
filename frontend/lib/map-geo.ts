@@ -1,7 +1,8 @@
 /**
- * Geometry for the dark vector basemap and the isobars: Web Mercator maths (the projection
- * Leaflet uses, EPSG:3857 with 256 px tiles), Natural Earth rings prepared for fast canvas
- * drawing, country label positions, greedy label collision and pressure contours.
+ * Geometry for the dark vector basemap and the isobars: Web Mercator maths (lib/map-mercator,
+ * re-exported here; the projection Leaflet uses, EPSG:3857 with 256 px tiles), Natural Earth
+ * rings prepared for fast canvas drawing, country label positions, greedy label collision and
+ * pressure contours.
  *
  * "Mercator units" below are x, y in 0..1 across the whole world (x east from -180°, y south
  * from the top at ~85.05°N); pixel = unit * 256 * 2^zoom.
@@ -9,19 +10,11 @@
 import { contours } from "d3-contour";
 import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 
-import type { FieldGrid } from "@/lib/map-fields";
+import type { Grid } from "@/lib/map-fields";
 import { wrapsLongitude } from "@/lib/map-fields";
+import { mercLat, mercLon, mercX, mercY } from "@/lib/map-mercator";
 
-export const MAX_LAT = 85.0511287798;
-const RAD = Math.PI / 180;
-
-export const mercX = (lon: number) => (lon + 180) / 360;
-export function mercY(lat: number): number {
-  const phi = Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)) * RAD;
-  return 0.5 - Math.log(Math.tan(Math.PI / 4 + phi / 2)) / (2 * Math.PI);
-}
-export const mercLon = (x: number) => x * 360 - 180;
-export const mercLat = (y: number) => (2 * Math.atan(Math.exp(Math.PI * (1 - 2 * y))) - Math.PI / 2) / RAD;
+export { MAX_LAT, mercLat, mercLon, mercX, mercY } from "@/lib/map-mercator";
 
 /** What a canvas covers: global pixel of its top-left CSS pixel, size, world width in px. */
 export interface PixelView {
@@ -68,7 +61,7 @@ export interface MercPath {
   maxY: number;
 }
 
-export function toMercPath(coords: Position[]): MercPath {
+function toMercPath(coords: Position[]): MercPath {
   const pts = new Float64Array(coords.length * 2);
   let minX = Infinity;
   let minY = Infinity;
@@ -298,10 +291,10 @@ export interface IsoLine {
   pts: Float64Array;
 }
 
-const isobarCache = new WeakMap<FieldGrid, IsoLine[]>();
+const isobarCache = new WeakMap<Grid, IsoLine[]>();
 
 /** `isobars(g)`, computed once per decoded grid (contouring a global grid takes a while). */
-export function isobarsFor(g: FieldGrid): IsoLine[] {
+export function isobarsFor(g: Grid): IsoLine[] {
   let lines = isobarCache.get(g);
   if (!lines) {
     lines = isobars(g);
@@ -315,7 +308,7 @@ export function isobarsFor(g: FieldGrid): IsoLine[] {
  * smooth at the scale of isobars, so contouring a 0.5° grid at 1° loses nothing visible and
  * takes about a third of the time (measured in Node: 175–300 ms → 55–70 ms for 720 × 361).
  */
-export function decimate(g: FieldGrid, stride: number): FieldGrid {
+export function decimate(g: Grid, stride: number): Grid {
   if (stride <= 1 || g.nx % stride !== 0) return g;
   const nx = g.nx / stride;
   const ny = Math.floor((g.ny - 1) / stride) + 1;
@@ -331,7 +324,7 @@ export function decimate(g: FieldGrid, stride: number): FieldGrid {
  * along the grid border to close its polygons are dropped, leaving the open isolines. Cells
  * without data are filled with the grid mean first (pressure normally has none).
  */
-export function isobars(full: FieldGrid, interval = 4, maxCells = 140_000): IsoLine[] {
+export function isobars(full: Grid, interval = 4, maxCells = 140_000): IsoLine[] {
   const g = decimate(full, Math.max(1, Math.ceil(Math.sqrt((full.nx * full.ny) / maxCells))));
   const wraps = wrapsLongitude(g);
   const W = wraps ? g.nx + 1 : g.nx;

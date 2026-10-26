@@ -28,27 +28,77 @@ export const QUALITY_LABELS: Record<QualityLabel, string> = {
 };
 
 /**
- * Quality colours (our app's categories, not a surf-forecasting standard): grey = no usable
- * forecast, blue = poor, yellow = fair, green = good, teal = very good, orange = excellent,
- * purple = exceptional. Keep in sync with --q-* in app/globals.css.
+ * Quality colours: one ordinal ramp in the app's ocean hue (OKLCH hue 224-260), so the order
+ * of the classes reads from the colour itself: on light surfaces a deeper blue is better surf;
+ * on dark surfaces (QUALITY_COLORS_DARK) a brighter one is. Every step has at least 3:1
+ * contrast against its surface, lightness is strictly monotone with visible gaps (OKLCH
+ * delta L >= 0.06) and the hue spread stays within 40 degrees (tests/quality-palette.test.ts).
+ * Colour never carries the class alone: every quality mark has its label as text, a tooltip
+ * or a table row next to it. It replaces the earlier hue-per-class legend (blue, yellow,
+ * green, teal, orange, purple), whose "fair" had 1.92:1 contrast on white and whose top three
+ * classes were nearly the same lightness.
  */
 export const QUALITY_COLORS: Record<QualityLabel, string> = {
-  poor: "#2563eb",
-  fair: "#eab308",
-  good: "#16a34a",
-  very_good: "#0f766e",
-  excellent: "#c2410c",
-  exceptional: "#7c3aed",
+  poor: "#6995a7",
+  fair: "#417d98",
+  good: "#25698e",
+  very_good: "#085486",
+  excellent: "#013e77",
+  exceptional: "#002767",
 };
 
-/** Text colour readable on each quality colour. */
+/** The same ramp stepped for dark surfaces (the map's dark panels, #171b20): brighter is
+ * better there. */
+export const QUALITY_COLORS_DARK: Record<QualityLabel, string> = {
+  poor: "#4b869c",
+  fair: "#589bb7",
+  good: "#6dadd2",
+  very_good: "#8bc0e8",
+  excellent: "#acd2fb",
+  exceptional: "#d6e6ff",
+};
+
+/** The surfaces the two ramps are checked against: --card, and the map UI's dark --card. */
+export const QUALITY_SURFACES = { light: "#ffffff", dark: "#171b20" } as const;
+
+/** Text colour readable (>= 4.5:1) on each quality colour. */
 export const QUALITY_TEXT: Record<QualityLabel, string> = {
-  poor: "#ffffff",
-  fair: "#422006",
+  poor: "#0b2233",
+  fair: "#ffffff",
   good: "#ffffff",
   very_good: "#ffffff",
   excellent: "#ffffff",
   exceptional: "#ffffff",
+};
+
+/** Text colour readable (>= 4.5:1) on each dark-surface quality colour. */
+export const QUALITY_TEXT_DARK: Record<QualityLabel, string> = {
+  poor: "#101418",
+  fair: "#101418",
+  good: "#101418",
+  very_good: "#101418",
+  excellent: "#101418",
+  exceptional: "#101418",
+};
+
+/** Short class names for narrow chart segments (the legend spells them out). */
+export const QUALITY_SHORT: Record<QualityLabel, string> = {
+  poor: "P",
+  fair: "F",
+  good: "G",
+  very_good: "VG",
+  excellent: "Ex",
+  exceptional: "Ex+",
+};
+
+/** Rank of each class, 0 (poor) to 5 (exceptional). */
+export const QUALITY_RANK: Record<QualityLabel, number> = {
+  poor: 0,
+  fair: 1,
+  good: 2,
+  very_good: 3,
+  excellent: 4,
+  exceptional: 5,
 };
 
 export const NO_FORECAST_COLOR = "#9ca3af";
@@ -58,8 +108,11 @@ export function labelForScore(score: number): QualityLabel {
   return "poor";
 }
 
-export function colorForScore(score: number | null | undefined): string {
-  return score == null ? NO_FORECAST_COLOR : QUALITY_COLORS[labelForScore(score)];
+/** Marker colour for a 0-100 score (``surface`` "dark" on dark backgrounds such as the dark
+ * map basemap); grey without a forecast. */
+export function colorForScore(score: number | null | undefined, surface: "light" | "dark" = "light"): string {
+  if (score == null) return NO_FORECAST_COLOR;
+  return (surface === "dark" ? QUALITY_COLORS_DARK : QUALITY_COLORS)[labelForScore(score)];
 }
 
 export function asQuality(value: string): QualityLabel {

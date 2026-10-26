@@ -1,8 +1,8 @@
 # Implementation checklist
 
-Status of each part of the product spec. "Verified" means the behaviour was exercised by
-an automated test or by running the stack, not merely that code exists. See README §K for
-limitations.
+Spec checklist of the first build (2026-10-09); counts and test names updated 2026-10-26.
+"Verified" means the behaviour was exercised by an automated test or by running the stack,
+not merely that code exists. Current limitations: README §M.
 
 ## Spec coverage
 
@@ -12,26 +12,26 @@ limitations.
 | 4 | 50 surf spots | `data/surf_spots/spots.json` (50 spots, 153 airports), validated on seed |
 | 5 | Accounts | All of: register, verify email, login/logout, reset/change password, profile, saved airports, notification preferences, phone verification, delete account. Backend ownership checks on every resource |
 | 6 | Saved searches | 6-step wizard, flexible/fixed dates, spots/regions/all, surf/wind/period/direction filters, travel constraints, edit/pause/resume/duplicate/delete |
-| 7 | Forecast acquisition | Open-Meteo (NOAA GFS + GFS-Wave) adapter verified live; Windy adapter (mock-tested), demo provider (default), batching, model-run metadata, idempotent runs, staleness, retention |
+| 7 | Forecast acquisition | Open-Meteo (NOAA GFS + GFS-Wave) adapter verified live; Windy adapter (mock-tested), demo provider (default), batching, model-run metadata, idempotent runs, staleness, retention; later sources: FORECAST_SOURCES.md |
 | 8 | Quality engine | Score, labels, breaking-height estimate, confidence, explanations. See SURF_SCORING.md |
 | 9 | Swell detection | Daylight clustering, multi-day events, update in place / merge / downgrade / pass, overlap exclusion constraint |
 | 10 | Flight search | Duffel and Amadeus adapters (mock-tested), demo provider, shared cache, quotas, travel windows, filters, revalidation |
 | 11 | Matching and ranking | Per-search sub-windows, 5–10 day lead time, opportunity score, ranking profiles |
 | 12 | Email and SMS alerts | Console/SMTP/Resend/SendGrid and console/Twilio, dedup, follow-ups, daily cap, unsubscribe, STOP |
 | 13 | Frontend | Landing, auth, dashboard, wizard, live map, spot detail, opportunity detail, search management, notification history, settings, status |
-| 14 | Database | 41 tables, five Alembic migrations (0001-0005), round-trip tested (upgrade → downgrade → upgrade, plus model/migration diff) |
-| 15 | Background jobs | Jobs A–H, beat schedule, chaining, Redis locks, retries, job log, startup kick-off |
+| 14 | Database | 45 tables, eight Alembic migrations (0001-0008), round-trip tested (upgrade → downgrade → upgrade, plus model/migration diff) |
+| 15 | Background jobs | Jobs A–H, beat schedule, chaining, Redis locks, retries, job log, startup kick-off; since Upgrade 4 the sync daemon: sync.md |
 | 16 | Security | Argon2id, opaque sessions, CSRF, rate limits, lockout, CSP and headers, log redaction, no secrets in client bundle |
 | 18 | Tests | 171 backend (unit + integration), 29 frontend unit, 5 Playwright e2e at the first build (2026-10-09); later counts in UPGRADE_REPORT.md. See below |
 | 19 | Docker | `docker compose up --build` verified: all services healthy, worker runs jobs and delivers alerts, Mailpit profile delivers SMTP |
-| 20 | README | Sections A–K. Every command was run against this repository (Docker and non-Docker paths, from a fresh clone) |
+| 20 | README | Sections A–K at the first build (every command run against this repository, Docker and non-Docker paths, from a fresh clone); sections A–M since the 2026-10 upgrade, with the commands re-run as listed in UPGRADE_REPORT.md §35 |
 
 ## Edge cases → tests
 
 | Edge case (spec §18) | Test(s) |
 |----------------------|---------|
-| Missing forecast data | `test_missing_forecast_data_for_some_spots`, `test_missing_inputs_renormalise_weights`, `test_land_points_with_all_null_waves_are_reported`, `test_missing_sea_level_is_tolerated` |
-| Failed API requests | `test_failed_forecast_provider_is_recorded`, `test_transient_errors_are_retried`, `test_persistent_outage_is_recorded_per_spot`, `test_transient_flight_failure_keeps_match_pending`, `test_permanent_flight_failure_is_reported`, `test_auth_failure_is_permanent_and_5xx_is_transient` |
+| Missing forecast data | `test_missing_forecast_data_for_some_spots`, `test_missing_inputs_renormalise_weights`, `test_land_points_with_all_null_waves_are_reported`, `test_sea_level_is_never_requested` |
+| Failed API requests | `test_failed_forecast_provider_is_recorded`, `test_transient_errors_are_retried`, `test_persistent_outage_fails_the_fetch_transiently`, `test_transient_flight_failure_keeps_match_pending`, `test_permanent_flight_failure_is_reported`, `test_auth_failure_is_permanent_and_5xx_is_transient` |
 | Expired flight offers | `test_expired_offer_rejected`, `test_expired_offer_is_never_alerted_and_triggers_research` |
 | Overnight international flights | `test_overnight_international_flight_accepted_on_real_arrival_time` |
 | International date line | `test_date_line_crossing_eastbound_arrives_before_it_departs`, `test_query_dates_account_for_time_zones` |

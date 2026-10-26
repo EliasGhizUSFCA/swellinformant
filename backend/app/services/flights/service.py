@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, lazyload, selectinload
 
 from app.core.config import get_settings
 from app.core.database import utcnow
@@ -47,6 +47,16 @@ from app.services.http import PermanentProviderError, ProviderError, TransientPr
 from app.services.matching.scoring import opportunity_scores, surf_component
 
 logger = logging.getLogger(__name__)
+
+# Loader options of the matches flights are discovered for: their event and best offer are
+# never read here (the best offer is only replaced), so they are not joined into every row;
+# their current offers are read for all matches in one statement, without the flight offer
+# each one joins (a match's offers are only cleared and replaced).
+MATCH_FOR_FLIGHTS = (
+    lazyload(OpportunityMatch.swell_event),
+    lazyload(OpportunityMatch.best_offer),
+    selectinload(OpportunityMatch.offers).lazyload(OpportunityOffer.offer),
+)
 
 MAX_ORIGINS = 3
 TOP_OFFERS = 5
@@ -286,7 +296,12 @@ def process_match(
     match: OpportunityMatch,
     now: datetime,
     stats: FlightStats,
+    offer_rows: dict[Any, list[FlightOffer]] | None = None,
 ) -> None:
+    """Search (or reuse cached) flights for ``match`` and rank them. ``offer_rows``: the
+    offers already read for a flight search in this run, by its id (a cached search is
+    shared by the matches of every saved search with the same trip, and its offers do not
+    change while flights are discovered)."""
     settings = get_settings()
     search = match.search
     travel = search.travel
@@ -327,9 +342,14 @@ def process_match(
         if fs.status == FlightSearchStatus.FAILED:
             errors.append(fs.error_message or "search failed")
             continue
-        for row in db.scalars(
-            select(FlightOffer).where(FlightOffer.flight_search_id == fs.id)
-        ).all():
+        rows = None if offer_rows is None else offer_rows.get(fs.id)
+        if rows is None:
+            rows = list(
+                db.scalars(select(FlightOffer).where(FlightOffer.flight_search_id == fs.id)).all()
+            )
+            if offer_rows is not None:
+                offer_rows[fs.id] = rows
+        for row in rows:
             offers.append((row_to_offer(row), row))
 
     constraints = OfferConstraints(
@@ -442,7 +462,7 @@ def matches_needing_flights(
     )
     if match_ids:
         stmt = stmt.where(OpportunityMatch.id.in_(match_ids))
-    return list(db.scalars(stmt).unique().all())
+    return list(db.scalars(stmt.options(*MATCH_FOR_FLIGHTS)).unique().all())
 
 
 def discover_flights(
@@ -453,12 +473,13 @@ def discover_flights(
     matches = matches_needing_flights(db, now, limit, match_ids)
     if not matches:
         return stats
-    provider = build_flight_provider(db)
     directory = AirportDirectory(db)
+    provider = build_flight_provider(db, directory=directory)
+    offer_rows: dict[Any, list[FlightOffer]] = {}
     for match in matches:
         stats.matches += 1
         try:
-            process_match(db, provider, directory, match, now, stats)
+            process_match(db, provider, directory, match, now, stats, offer_rows)
             db.commit()
         except QuotaExceeded as exc:
             db.rollback()
@@ -467,12 +488,14 @@ def discover_flights(
             break
         except TransientProviderError as exc:
             db.rollback()
+            offer_rows.clear()  # a rollback expires (or discards) the offers read
             stats.errors += 1
             match.flight_search_error = f"temporary provider error: {exc}"[:1000]
             db.commit()
             logger.warning("Transient flight provider error for match %s: %s", match.id, exc)
         except ProviderError as exc:
             db.rollback()
+            offer_rows.clear()
             stats.errors += 1
             _set_surf_only(match, f"flight provider error: {exc}", now)
             db.commit()
@@ -489,7 +512,7 @@ def revalidate_offer(
         offer.validation_status = OfferValidation.UNAVAILABLE
         offer.last_validated_at = now
         return offer.validation_status
-    if provider.name != offer.provider or not provider.supports_revalidation:
+    if provider.name != offer.provider:
         return offer.validation_status
     result = provider.revalidate(offer.provider_offer_id, offer.provider_payload)
     offer.last_validated_at = now

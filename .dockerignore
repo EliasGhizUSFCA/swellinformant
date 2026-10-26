@@ -10,6 +10,17 @@
 **/test-results
 **/playwright-report
 **/*.rdb
+**/*.tsbuildinfo
+**/*.egg-info
 **/.env
 **/.env.*
 !.env.example
+**/*.dump
+backups
+# The repository-root context (backend/Dockerfile, Containerfile, docker/api-lean): the Vercel
+# CLI's build output, agent worktrees (full copies of the repository) and editor state never
+# belong in an image.
+.vercel
+.claude
+.idea
+.vscode

@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useMe, useSystemStatus } from "@/hooks/queries";
 import { relativeTime, titleCase } from "@/lib/format";
 
-import { DataHealthSummary, JobsCard, LayersAndObservations, SourceFreshness, useDataHealth } from "./data-health";
+import { DataHealthSummary, JobsCard, LayersAndObservations, SourceFreshness, SyncCard, useDataHealth } from "./data-health";
 
 export default function StatusPage() {
   const { data, isLoading } = useSystemStatus();
@@ -27,6 +27,7 @@ export default function StatusPage() {
         </Link>
       )}
       {health && <DataHealthSummary data={health} />}
+      {health && <SyncCard data={health} className="mb-6" />}
       {healthFailed && (
         <Alert variant="warn" className="mb-6">
           <AlertTitle>Data health could not be loaded</AlertTitle>

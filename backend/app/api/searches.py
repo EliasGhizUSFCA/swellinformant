@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import uuid
 from collections import Counter, defaultdict
 
@@ -20,19 +19,15 @@ from app.schemas.opportunities import MatchSummary
 from app.schemas.searches import SearchIn, SearchOut
 from app.services import searches as svc
 from app.services.opportunity_views import list_matches
+from app.workers.dispatch import kick
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/searches", tags=["searches"])
 
 
 def _kick_matching() -> None:
-    """Evaluate searches promptly instead of waiting for the next scheduled run."""
-    try:
-        from app.workers.celery_app import celery_app
-
-        celery_app.signature("matching.match").delay()
-    except Exception:  # broker down: the beat schedule will pick it up
-        logger.warning("Could not enqueue matching; it will run on schedule")
+    """Evaluate searches promptly instead of waiting for the next scheduled run (never
+    raises; under JOB_RUNNER=daemon a Redis kick flag the daemon picks up)."""
+    kick("matching.match")
 
 
 @router.get("", response_model=list[SearchOut])
@@ -51,7 +46,8 @@ def list_searches(
         .group_by(OpportunityMatch.search_id, OpportunityMatch.status)
     ).all():
         counts[search_id][st.value] = n
-    return [svc.search_out(db, s, counts[s.id]) for s in rows]
+    slugs = svc.spot_slugs_of(db, rows)
+    return [svc.search_out(db, s, counts[s.id], slugs[s.id]) for s in rows]
 
 
 @router.post("", response_model=SearchOut, status_code=status.HTTP_201_CREATED)

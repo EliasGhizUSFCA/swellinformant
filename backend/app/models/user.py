@@ -66,10 +66,6 @@ class User(TimestampMixin, Base):
         back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
 
-    @property
-    def is_email_verified(self) -> bool:
-        return self.email_verified_at is not None
-
 
 class UserProfile(TimestampMixin, Base):
     __tablename__ = "user_profiles"

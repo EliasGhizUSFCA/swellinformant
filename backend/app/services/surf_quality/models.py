@@ -7,6 +7,11 @@ from typing import Any
 
 from app.services.geo import window_center
 from app.services.surf_quality.nearshore import Profile
+from app.services.surf_quality.wind import WindProfile, wind_profile_from_dict
+
+# Record extra key naming the gust definition of a forecast hour (forecasts.base
+# EXTRA_GUST_KIND; repeated here so the scoring engine does not import the provider layer).
+EXTRA_GUST_KIND = "gust_kind"
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,14 @@ class SpotParams:
     calibration: dict[str, Any] | None = None
     # Physical description for the nearshore model; None = derived from the fields above.
     profile: Profile | None = None
+    # Researched wind tolerance and shelter (wind.py); None = the heuristic defaults.
+    wind_profile: WindProfile | None = None
+    # Tide research confidence ("high" | "moderate" | "low", None = not assessed) and the
+    # profile decision on the tide preference ("changed" | "kept" | "disputed" | None). The
+    # tide is scored only when the class is moderate or high, the decision is not disputed
+    # and the spot has a preference (scoring.tide_excluded_reason).
+    tide_research_class: str | None = None
+    tide_decision: str | None = None
 
     def physical_profile(self) -> Profile:
         """The stored profile, or one derived from the spot's windows (all estimated)."""
@@ -62,6 +75,7 @@ class SpotParams:
             tide_preference=str(spot.tide_preference) if spot.tide_preference else None,
             calibration=spot.calibration,
             profile=profile_from_orm(spot),
+            wind_profile=wind_profile_from_orm(spot),
         )
 
 
@@ -83,6 +97,11 @@ def profile_from_orm(spot: Any) -> Profile | None:
         spreading_deg=row.spreading_deg,
         data_quality=dict(row.data_quality or {}),
     )
+
+
+def wind_profile_from_orm(spot: Any) -> WindProfile | None:
+    row = getattr(spot, "physical_profile", None)
+    return wind_profile_from_dict(getattr(row, "wind_profile", None)) if row is not None else None
 
 
 # Offshore wave heights of a sea state (an Hs correction scales all of them alike).
@@ -117,7 +136,9 @@ class SeaState:
     wind_speed_kmh: float | None = None
     wind_direction_deg: float | None = None
     wind_gust_kmh: float | None = None
-    # 0 = local low tide, 1 = local high tide (derived from the sea-level series)
+    # The source's gust definition (schemas.spots.GustKind), when it recorded one.
+    wind_gust_kind: str | None = None
+    # 0 at the preceding low water, 1 at the next high water (tides.stage.TideStage).
     tide_stage: float | None = None
 
     def scaled(self, factor: float) -> SeaState:
@@ -150,8 +171,26 @@ class SeaState:
             wind_speed_kmh=row.wind_speed_kmh,
             wind_direction_deg=row.wind_direction_deg,
             wind_gust_kmh=row.wind_gust_kmh,
+            wind_gust_kind=_gust_kind(row),
             tide_stage=tide_stage,
         )
+
+
+def _gust_kind(row: Any) -> str | None:
+    kind = (getattr(row, "extra", None) or {}).get(EXTRA_GUST_KIND)
+    return str(kind) if kind else None
+
+
+@dataclass(frozen=True)
+class PartitionFlux:
+    """One partition's predicted breaking height (unrounded), for the partition-weighted
+    direction and period fits and the consistency term."""
+
+    name: str  # primary_swell | secondary_swell | tertiary_swell | wind_sea | combined
+    height_m: float
+    period_s: float
+    direction_deg: float | None
+    breaking_m: float
 
 
 @dataclass
@@ -171,14 +210,24 @@ class BreakingEstimate:
     partitions: list[dict[str, Any]] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=list)
     depth_limited: bool = False
+    # The same partitions unrounded (physical model only; empty for the calibrated model).
+    flux: list[PartitionFlux] = field(default_factory=list)
 
 
 @dataclass
 class QualityResult:
     score: int
     label: str
+    # Factor fits (0-1) and gates; the full stored contract is ``stored_components``.
     components: dict[str, float]
-    weights_used: dict[str, float]
     breaking: BreakingEstimate
     wind_relation: str
     explanation: str
+    # Algorithm 2.1.0 additions (docs/SURF_SCORING.md section 3a): wind_detail,
+    # weights_used, contributions, direction_partitions and tide_detail or
+    # tide_excluded_reason.
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def stored_components(self) -> dict[str, Any]:
+        """``components`` plus the 2.1.0 keys, as written to the prediction row."""
+        return {**self.components, **self.details}

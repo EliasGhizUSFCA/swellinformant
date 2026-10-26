@@ -143,6 +143,7 @@ dominant period, average period, and wave steepness calculated?*
 | Period | URL | Format |
 | --- | --- | --- |
 | last 45 days | `{NDBC_BASE_URL}/data/realtime2/{ID}.txt` and `{ID}.spec` | text, missing = `MM` (`.spec` also `-99`, and `NO` = no swell found) |
+| last 5 days | `{NDBC_BASE_URL}/data/5day2/{ID}_5day.txt` and `{ID}_5day.spec` | the same rows in the same layout (46026 and 46053 on 2026-10-15: every 5-day row equals the realtime2 row of the same time); read when `NDBC_USE_5DAY` is on and the window starts at most 4.5 days ago |
 | complete years | `{NDBC_BASE_URL}/data/historical/stdmet/{id}h{YYYY}.txt.gz` | gzip (read directly: about 9 times smaller than the `view_text_file.php` answer the adapter used before, 174 KB vs 1.53 MB for 51201 in 2025) |
 | months of the current year | `{NDBC_BASE_URL}/data/stdmet/{Mon}/{id}{m}{YYYY}.txt.gz`, `m` = 1-9 | gzip; quality controlled (Web Data Guide, section 4) |
 | newest month | `{NDBC_BASE_URL}/data/stdmet/{Mon}/{id}.txt` | uncompressed (`Sep/51201.txt` on 2026-10-12) |
@@ -243,11 +244,26 @@ earlier Saildrones SD-1073, SD-1077 and SD-1063), with a watch circle of 20,254 
 moving platform without positions in the data is not comparable with a fixed model
 point, so `ndbc:46012` is kept in the catalog inactive and unpaired.
 
-**Requests**: the adapter downloads `activestations.xml` (273 KB) and the two realtime
-files (150-600 KB each for a 10-minute station) on every run, whatever the window. The
-scheduled 48 h job therefore moves about 5.6 MB per run for the 11 active NDBC stations
-(measured live). NDBC also publishes 5-day files (`data/5day2/`), which would be enough
-for that job; they are not used yet.
+**Requests**: a window that starts at most 4.5 days ago (the scheduled 48 h job always
+does) reads the 5-day files `data/5day2/{ID}_5day.txt` and `_5day.spec` instead of the
+45-day realtime2 files (`NDBC_USE_5DAY`, default on). For 46026 on 2026-10-15 02:40 UTC
+these were 67,210 + 16,871 = 84,081 bytes against 600,190 + 148,961 = 749,151 bytes for the
+realtime2 pair: 8.9 times less. A 404 on `_5day.txt` falls back to the realtime2 file; a
+404 on `_5day.spec` is normal for a buoy that reported no waves in those 5 days (46053
+since 2026-10-06) and is not retried elsewhere. Longer windows (backfills) read realtime2
+and the archives as before. `activestations.xml` (273 KB) is read at most once a day per
+worker process (the parsed positions are cached), not on every hourly run.
+Measured live on 2026-10-15 02:49 UTC (own database, `obs ingest --provider ndbc`, 48 h):
+11 stations, 23 requests, 850,254 bytes, 844 records, 0 errors. The same job read
+5,586,387 bytes from the realtime2 files on 2026-10-12 (below): about 6.6 times more.
+Computed from these two runs, the hourly job in a long-running worker (activestations.xml
+once a day) moves about 0.58 MB per run, about 14 MB a day, instead of about 134 MB
+(5.6 MB x 24).
+These byte counts are the decoded files: NDBC also compresses them on the wire. On a fresh
+database on 2026-10-16 08:17 UTC the same 48 h job (11 stations, 23 requests with
+`activestations.xml`, 864 records) transferred 120,816 bytes for 859,171 bytes of files,
+so the hourly job moves at most about 0.12 MB per run, about 2.9 MB a day (computed). Since
+then `bytes_downloaded` counts the bytes as transferred (its definition in `records.py`).
 
 * A station keeps what its readable files gave: a file that fails to download or parse is
   reported in the station's `errors` while the other files' records are still stored.
@@ -450,11 +466,42 @@ Justifications and caveats (the full text of each is in the catalog `note`):
 Spots without a buoy in a reachable or documented feed have no pairing. No pairing was
 invented to fill a gap.
 
+## Observations on spot pages
+
+`GET /api/spots/{slug}/observations` (and the timeline's `observations` block, schema
+`ObservationsBlockOut` in app/schemas/tides.py, built by
+`app.services.tides.api.spot_observations_block`) shows what the instruments near a spot
+measured, kept apart from every forecast:
+
+* Only stations paired with the spot as `offshore_reference` or `nearshore_reference`
+  are listed, offshore first, then by distance. `upstream_regional` and
+  `historical_reference` stations (hundreds of km away, or retired) are not.
+* One item per station: its newest stored wave reading at or before the end of the window
+  (`OBSERVATION_LOOKBACK_HOURS`, 48 h), with `kind = "instrument"`, station code and name,
+  provider, relation, distance from the break, time, Hs and its definition (`hs_kind`),
+  Tp, the direction the waves come FROM, wind speed, the QC flag, licence and attribution.
+  A station without a reading in the window is still shown with its last reading.
+* `stale` is set when the reading is older than its provider's limit (heuristic: NDBC and
+  Met Office 3 h, AODN 4 h, others 6 h) or older than the window. The block's `status` is
+  `available` when at least one item is fresh, `stale` when all are, `unavailable` (with
+  a reason) when the spot has no reference station or none has a stored reading.
+* Live, 2026-10-15 02:55 UTC (own database, the 48 h NDBC ingest above plus a 10-day
+  backfill of 46053): Rincon `stale` (46053, last wave report 2026-10-06 05:40 UTC,
+  OBS-TIDE-9); Jaws `stale` (51205, last report 2026-10-13 18:56 UTC); Ocean Beach
+  `available` (46026 at 28.6 km and 46237 at 11.1 km); Pipeline and Trestles `available`;
+  Nazare `unavailable` (no reference station).
+* The same day at 20:31 UTC (review, another own database, 48 h NDBC ingest: 11 stations,
+  23 requests, 855,389 bytes, 820 records, 0 errors) 46053 was reporting waves again (16
+  wave readings in the window, the newest 19:40 UTC), so Rincon's block was `available`:
+  the flag follows the stored readings. Jaws was `unavailable` there (51205 had no reading
+  in the 48 h window and no backfill was run).
+
 ## Operation
 
 * Settings (`app/core/config.py`): `OBSERVATIONS_ENABLED`, `OBSERVATION_PROVIDERS`
   (default `aodn,metoffice,ndbc`), `OBSERVATION_LOOKBACK_HOURS` (48), `AODN_BASE_URL`,
-  `METOFFICE_BASE_URL`, `NDBC_BASE_URL`, `VERIFICATION_ENABLED`, `POINT_FORECAST_SOURCES`
+  `METOFFICE_BASE_URL`, `NDBC_BASE_URL`, `NDBC_USE_5DAY` (true: read NDBC's 5-day files
+  when the window fits), `VERIFICATION_ENABLED`, `POINT_FORECAST_SOURCES`
   (`gfswave_bulletin`), `NOAA_GFS_BASE_URL`, `FORECAST_DAYS`.
 * Celery: `observations.ingest` (hourly, when enabled) calls `ingest_all(db)`, and
   `verification.collect_point_forecasts` (00/06/12/18:50 UTC) calls `collect_recent(db)`.
@@ -512,7 +559,8 @@ this table NDBC was verified only with synthetic text; see the next section.)
 Not verified live: the October to December monthly-file codes (`a`, `b`, `c`; those
 directories were empty), a status-200 answer that is not gzip, truncated or oversized
 (never seen live; tested with synthetic bodies), the old yearly layouts with 2-digit years (synthetic fixture
-only; the files read live were 2019-2026), and the 5-day files (not used).
+only; the files read live were 2019-2026). The 5-day files were verified live on 2026-10-15
+(above).
 
 ## Known limitations
 

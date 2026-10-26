@@ -76,19 +76,6 @@ def test_circular_statistics() -> None:
     assert vm.circular_rmse([350, 10], [10, 350]) == pytest.approx(20.0)
     assert vm.circular_mae([350, 10], [10, 350]) == pytest.approx(20.0)
     assert vm.circular_bias([5, 15], [355, 5]) == pytest.approx(10.0)
-    # The mean of 350 and 10 degrees is north, not 180 (never average degrees directly).
-    mean = vm.circular_mean([350, 10])
-    assert min(mean, 360 - mean) == pytest.approx(0.0, abs=1e-9)
-    assert float(np.mean([350, 10])) == 180.0
-    assert vm.circular_mean([80, 100], weights=[1, 3]) == pytest.approx(
-        math.degrees(
-            math.atan2(
-                math.sin(math.radians(80)) + 3 * math.sin(math.radians(100)),
-                math.cos(math.radians(80)) + 3 * math.cos(math.radians(100)),
-            )
-        )
-    )
-    assert math.isnan(vm.circular_mean([90, 270]))
     scores = vm.direction_scores([350, 10], [10, 350])
     assert scores["n"] == 2 and scores["rmse"] == pytest.approx(20.0)
 
@@ -192,7 +179,7 @@ def test_event_scores() -> None:
     ],
 )
 def test_lead_bucket_membership(lead: float, bucket: int | None) -> None:
-    assert vm.lead_bucket(lead) == bucket
+    assert vm.lead_bucket_array([lead])[0] == (bucket or vm.NO_BUCKET)
 
 
 def test_lead_bucket_arrays() -> None:
@@ -238,14 +225,14 @@ def test_bootstrap_is_reproducible_and_seeded() -> None:
     assert a.lower < a.estimate < a.upper
     assert a.estimate == pytest.approx(vm.rmse(m, o))
     diff = vm.rmse_difference_ci(o, m, o, cycles, n_boot=300, seed=1)  # perfect vs noisy
-    assert diff.upper < 0 and diff.excludes(0.0)
+    assert diff.upper < 0
     skill = vm.skill_score_ci(o + 0.01, o, m, cycles, n_boot=100)
     assert skill.lower > 0.9
 
 
 def test_bootstrap_needs_two_blocks() -> None:
     ci = vm.rmse_ci([1.0, 2.0, 3.0], [1.0, 2.5, 2.0], [5, 5, 5])
-    assert not ci.available and not ci.excludes(0.0)
+    assert not ci.available
     assert ci.as_dict()["lower"] is None
     with pytest.raises(ValueError):
         vm.cycle_block_bootstrap(vm.rmse, [1, 2], [1.0, 2.0], [1.0, 2.0], confidence=1.5)

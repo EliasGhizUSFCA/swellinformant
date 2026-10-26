@@ -106,12 +106,24 @@ def _lint(db: Any, path: str | None, max_gap: float | None) -> int:
             else window_center(s.optimal_swell_direction_min, s.optimal_swell_direction_max)
         )
     keys: dict[str, set[str]] = {}
+    # slug -> {evidence key: how it was read}, for the wind-profile citations.
+    evidence: dict[str, dict[str, str]] = {}
     slug_of = {s.id: s.slug for s in rows}
-    for spot_id, key in db.execute(
-        select(SpotResearchSource.spot_id, SpotResearchSource.source_key)
+    for spot_id, key, retrieval in db.execute(
+        select(
+            SpotResearchSource.spot_id,
+            SpotResearchSource.source_key,
+            SpotResearchSource.retrieval,
+        )
     ):
         if spot_id in slug_of:
             keys.setdefault(slug_of[spot_id], set()).add(key)
+            evidence.setdefault(slug_of[spot_id], {})[key] = retrieval
+    wind_profiles = {
+        s.slug: profiles[s.id].wind_profile
+        for s in rows
+        if s.id in profiles and profiles[s.id].wind_profile
+    }
     if raw is not None:
         problems = validate_decisions(raw, spots, keys)
         if problems:
@@ -133,6 +145,8 @@ def _lint(db: Any, path: str | None, max_gap: float | None) -> int:
         assessments,
         decisions,
         GEOMETRY_LINT_DEG if max_gap is None else max_gap,
+        wind_profiles=wind_profiles,
+        evidence=evidence,
     )
     for issue in issues:
         print(f"{issue.slug}: [{issue.kind}] {issue.message}")

@@ -7,11 +7,18 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.database import utcnow
 from app.core.errors import NotFound
-from app.models import FlightOffer, Notification, OpportunityMatch, SwellEvent, User
+from app.models import (
+    FlightOffer,
+    Notification,
+    OpportunityMatch,
+    SurfQualityPrediction,
+    SwellEvent,
+    User,
+)
 from app.models.enums import MatchStatus
 from app.schemas.opportunities import (
     LinkOut,
@@ -27,7 +34,23 @@ from app.schemas.spots import AirportOut, SpotAirportOut
 from app.services.flights.links import inspection_links
 from app.services.flights.registry import provider_label
 from app.services.flights.windows import InfeasibleWindow, compute_travel_window
+from app.services.forecasts.queries import run_id_is_stale
 from app.services.spot_views import daily_summaries, event_out, forecast_points, spot_mini
+from app.services.surf_quality.breaking import (
+    METHOD_APPROX_V1,
+    METHOD_CALIBRATED,
+    METHOD_PHYSICAL,
+)
+from app.services.swell_detection.service import peak_confidence
+
+# Plain-language names of the stored breaking_height_method values.
+METHOD_TEXT = {
+    METHOD_PHYSICAL: "linear wave theory (shoaling, refraction and depth-limited breaking) "
+    "with uncalibrated spot factors",
+    METHOD_APPROX_V1: "Komar–Gaughan shoaling with uncalibrated spot factors",
+    METHOD_CALIBRATED: "a spot model calibrated against observations",
+}
+CONFIDENCE_CLASSES = ("high", "moderate", "low")
 
 
 def get_owned_match(db: Session, user: User, match_id: uuid.UUID) -> OpportunityMatch:
@@ -35,6 +58,25 @@ def get_owned_match(db: Session, user: User, match_id: uuid.UUID) -> Opportunity
     if match is None or match.user_id != user.id:
         raise NotFound("Opportunity not found.")
     return match
+
+
+def event_confidence(event: SwellEvent, now: datetime) -> dict[str, object]:
+    """Forecast and local confidence at the event's peak hour, exactly as EventOut shows
+    them (``peak_confidence`` with the read-time staleness cap), plus ``stale``."""
+    db = object_session(event)
+    stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
+    fields = peak_confidence(event, stale=stale)
+
+    def cls(key: str) -> str | None:
+        value = fields.get(key)
+        return value if value in CONFIDENCE_CLASSES else None
+
+    return {
+        "forecast_confidence_class": cls("forecast_confidence_class"),
+        "local_confidence_class": cls("local_confidence_class"),
+        "local_confidence_reason": fields.get("local_confidence_reason"),
+        "stale": stale,
+    }
 
 
 def match_summary(m: OpportunityMatch, now: datetime | None = None) -> MatchSummary:
@@ -75,6 +117,7 @@ def match_summary(m: OpportunityMatch, now: datetime | None = None) -> MatchSumm
         lead_days=round((m.window_start - now).total_seconds() / 86400, 1),
         created_at=m.created_at,
         updated_at=m.updated_at,
+        **event_confidence(m.swell_event, now),  # type: ignore[arg-type]
     )
 
 
@@ -166,10 +209,31 @@ def offer_out(
     )
 
 
-def limitations(m: OpportunityMatch) -> list[str]:
+def _peak_method(db: Session, event: SwellEvent) -> str | None:
+    """The breaking-height method our prediction at the event's peak actually used."""
+    if event.latest_run_id is None:
+        return None
+    return db.scalar(
+        select(SurfQualityPrediction.breaking_height_method).where(
+            SurfQualityPrediction.run_id == event.latest_run_id,
+            SurfQualityPrediction.spot_id == event.spot_id,
+            SurfQualityPrediction.valid_time == event.peak_time,
+        )
+    )
+
+
+def limitations(
+    m: OpportunityMatch, *, method: str | None = None, forecast_class: str | None = None
+) -> list[str]:
+    """Uncertainty notes for one opportunity. ``method`` is the stored breaking-height
+    method of the peak prediction and ``forecast_class`` the event's forecast-confidence
+    class (with the staleness cap); the low-confidence note follows that class, not the
+    legacy 0-100 index."""
+    how = METHOD_TEXT.get(method or "")
     notes = [
-        "Breaking wave heights are approximate estimates derived from offshore model output "
-        "(Komar–Gaughan shoaling with uncalibrated spot factors), not observations.",
+        "Breaking wave heights are approximate estimates derived from offshore model output"
+        + (f" ({how})" if how else "")
+        + ", not observations.",
         "Quality scores use a documented heuristic and are not statistically calibrated "
         "probabilities.",
         "Forecast skill drops with lead time; swells more than 5 days out often shift in size "
@@ -185,7 +249,7 @@ def limitations(m: OpportunityMatch) -> list[str]:
         notes.insert(
             0, "MOCK FARES: flight offers come from the demo provider and are not real prices."
         )
-    if m.confidence_label.value == "low":
+    if forecast_class == "low":
         notes.append("Forecast confidence is low for this window; treat it as an early heads-up.")
     return notes
 
@@ -204,6 +268,8 @@ def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
                 db, event.latest_run_id, m.spot_id, max(start, now - timedelta(hours=3)), end
             ),
             m.spot.timezone,
+            m.spot.latitude,
+            m.spot.longitude,
         )
     offers = [offer_out(o.offer, o.rank, o.price_converted) for o in m.offers]
     window_out = None
@@ -268,7 +334,11 @@ def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
         offers=offers,
         travel_window=window_out,
         inspection_links=links,
-        limitations=limitations(m),
+        limitations=limitations(
+            m,
+            method=_peak_method(db, event),
+            forecast_class=summary.forecast_confidence_class,
+        ),
         flight_search_error=m.flight_search_error,
     )
 
@@ -282,9 +352,16 @@ def mask_recipient(value: str) -> str:
     return "****"
 
 
-def notification_out(n: Notification) -> NotificationOut:
+def notification_out(n: Notification, now: datetime | None = None) -> NotificationOut:
+    """One alert. Its confidence is the alerted event's current peak-hour confidence (as
+    EventOut and the opportunity show it, with the staleness cap); none once the match is
+    gone. The email itself keeps the classes at sending time."""
     snap = n.snapshot or {}
     match = n.match
+    confidence: dict[str, object] = {}
+    if match is not None:
+        confidence = event_confidence(match.swell_event, now or utcnow())
+        confidence.pop("stale")
     return NotificationOut(
         id=n.id,
         channel=n.channel.value,
@@ -308,6 +385,7 @@ def notification_out(n: Notification) -> NotificationOut:
         peak_label=snap.get("peak_label"),
         window_label=snap.get("window_label"),
         is_demo=bool(snap.get("is_demo_forecast") or snap.get("is_mock_flight")),
+        **confidence,  # type: ignore[arg-type]
     )
 
 
@@ -324,4 +402,5 @@ def list_notifications(
         .limit(limit)
         .offset(offset)
     ).all()
-    return int(total), [notification_out(n) for n in rows]
+    now = utcnow()
+    return int(total), [notification_out(n, now) for n in rows]

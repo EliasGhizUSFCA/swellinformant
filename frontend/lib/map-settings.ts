@@ -3,9 +3,16 @@
  * try/catch: storage can be unavailable (private mode, blocked cookies) or hold anything,
  * and the map must still work with the defaults. Spot filters are deliberately not stored:
  * they are per visit, so a returning user never sees a silently filtered map.
+ *
+ * The wind unit is one preference for the whole site, read and written through lib/units
+ * (storedWindUnit / writeWindUnit: key `swell.windUnit`, same-tab event `swell:wind-unit`,
+ * shared with the spot charts), and mirrored in the map's settings object only for older
+ * pages that read it there.
  */
 import type { Units } from "@/lib/format";
-import { isLayerId, WIND_UNITS, type LayerId, type WindUnit } from "@/lib/map-layers";
+import { isLayerId, type LayerId } from "@/lib/map-layers";
+import { isWindUnit, storedWindUnit, writeWindUnit, type WindUnit } from "@/lib/units";
+import { isWaveSystem, type WaveSystem } from "@/lib/map-waves";
 
 export type Basemap = "dark" | "streets";
 
@@ -15,9 +22,21 @@ export interface MapSettings {
   /** null = follow the account's height units (or ft when signed out). */
   heightUnits: Units | null;
   windUnits: WindUnit;
+  /** Animated flow: wind particles and wave crests (still arrows / still crests with reduced motion). */
   particles: boolean;
   basemap: Basemap;
+  /** Wind particles over the wave layers too (the Wind layer always has them). */
+  windOverlay: boolean;
+  /**
+   * Wave systems drawn as crest dashes on the wave layers. Systems the model run does not have
+   * are skipped; when none of them exists the combined sea is drawn instead (lib/map-waves
+   * effectiveSystems), so the stored choice survives a run without partitions.
+   */
+  waveSystems: WaveSystem[];
 }
+
+/** The combined sea by default (one dash field, like the owner's reference); partitions are selectable. */
+export const DEFAULT_WAVE_SYSTEMS: WaveSystem[] = ["combined"];
 
 export const DEFAULT_SETTINGS: MapSettings = {
   layer: "hs",
@@ -26,37 +45,86 @@ export const DEFAULT_SETTINGS: MapSettings = {
   windUnits: "km/h",
   particles: true,
   basemap: "dark",
+  windOverlay: false,
+  waveSystems: DEFAULT_WAVE_SYSTEMS,
 };
 
-export const SETTINGS_KEY = "swell.map.settings.v1";
+/**
+ * The settings key. v2 came with the crest-dash renderer, whose default wave system is the
+ * combined sea: a v1 object is read once into v2 with every field except `waveSystems`
+ * (which takes the new default), then removed.
+ */
+export const SETTINGS_KEY = "swell.map.settings.v2";
+export const SETTINGS_KEY_V1 = "swell.map.settings.v1";
+/** The site-wide wind unit's key and same-tab event (defined once, in lib/units). */
+export { WIND_UNIT_EVENT, WIND_UNIT_KEY } from "@/lib/units";
 
-/** Keeps only valid fields from stored JSON; anything else falls back to the default. */
-export function parseSettings(raw: string | null | undefined): MapSettings {
-  if (!raw) return DEFAULT_SETTINGS;
-  let data: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
-    data = parsed as Record<string, unknown>;
-  } catch {
-    return DEFAULT_SETTINGS;
+/** A stored wave-system list: known values only, no duplicates, "combined" alone; else the default. */
+export function parseWaveSystems(raw: unknown): WaveSystem[] {
+  if (!Array.isArray(raw)) return DEFAULT_WAVE_SYSTEMS;
+  const known = [...new Set(raw.filter(isWaveSystem))];
+  if (!known.length) return DEFAULT_WAVE_SYSTEMS;
+  return known.includes("combined") && known.length > 1 ? known.filter((s) => s !== "combined") : known;
+}
+
+/**
+ * Keeps only valid fields from stored JSON; anything else falls back to the default.
+ * `sharedWindUnit` (the WIND_UNIT_KEY value) wins over the map's own copy.
+ */
+export function parseSettings(raw: string | null | undefined, sharedWindUnit?: string | null): MapSettings {
+  let data: Record<string, unknown> = {};
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) data = parsed as Record<string, unknown>;
+    } catch {
+      data = {};
+    }
   }
+  const windUnits = isWindUnit(sharedWindUnit) ? sharedWindUnit : isWindUnit(data.windUnits) ? data.windUnits : DEFAULT_SETTINGS.windUnits;
   return {
     layer: isLayerId(data.layer) ? data.layer : DEFAULT_SETTINGS.layer,
     pressure: typeof data.pressure === "boolean" ? data.pressure : DEFAULT_SETTINGS.pressure,
     heightUnits: data.heightUnits === "ft" || data.heightUnits === "m" ? data.heightUnits : null,
-    windUnits: WIND_UNITS.includes(data.windUnits as WindUnit) ? (data.windUnits as WindUnit) : DEFAULT_SETTINGS.windUnits,
+    windUnits,
     particles: typeof data.particles === "boolean" ? data.particles : DEFAULT_SETTINGS.particles,
     basemap: data.basemap === "streets" || data.basemap === "dark" ? data.basemap : DEFAULT_SETTINGS.basemap,
+    windOverlay: typeof data.windOverlay === "boolean" ? data.windOverlay : DEFAULT_SETTINGS.windOverlay,
+    waveSystems: data.waveSystems === undefined ? DEFAULT_WAVE_SYSTEMS : parseWaveSystems(data.waveSystems),
   };
 }
 
-export function readSettings(): MapSettings {
+/** A v1 settings object as v2 JSON: the same fields without `waveSystems` (null when it is not an object). */
+export function migrateV1(raw: string | null): string | null {
+  if (!raw) return null;
   try {
-    return parseSettings(window.localStorage.getItem(SETTINGS_KEY));
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const { waveSystems: _dropped, ...rest } = parsed as Record<string, unknown>;
+    void _dropped;
+    return JSON.stringify(rest);
   } catch {
-    return DEFAULT_SETTINGS;
+    return null;
   }
+}
+
+export function readSettings(): MapSettings {
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (raw === null) {
+      // Once: carry the v1 preferences over (the wave systems take the new default).
+      const v1 = window.localStorage.getItem(SETTINGS_KEY_V1);
+      if (v1 !== null) {
+        raw = migrateV1(v1);
+        if (raw !== null) window.localStorage.setItem(SETTINGS_KEY, raw);
+        window.localStorage.removeItem(SETTINGS_KEY_V1);
+      }
+    }
+  } catch {
+    // Storage unavailable: whatever was read so far, else the defaults.
+  }
+  return parseSettings(raw, storedWindUnit());
 }
 
 export function writeSettings(s: MapSettings): void {
@@ -65,4 +133,6 @@ export function writeSettings(s: MapSettings): void {
   } catch {
     // Storage unavailable or full: the setting still applies for this visit.
   }
+  // The shared preference (tells the spot charts on this page when it changed).
+  writeWindUnit(s.windUnits);
 }

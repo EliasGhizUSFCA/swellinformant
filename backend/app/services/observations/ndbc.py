@@ -15,6 +15,13 @@ Files (every name checked live; station ids in file names are lower case):
 * realtime, last 45 days: ``{base}/data/realtime2/{ID}.txt`` (standard meteorological) and
   ``{ID}.spec`` (detailed wave summary). Missing values are ``MM``; in ``.spec`` also
   ``-99``, and ``NO`` for "no swell could be determined" (wave glossary).
+* realtime, last 5 days: ``{base}/data/5day2/{ID}_5day.txt`` and ``{ID}_5day.spec``, the
+  same rows in the same format (checked live on 2026-10-15: the 46026 5-day files equal
+  the realtime2 rows of the same 5 days), about 9 times smaller. Read instead of realtime2
+  when NDBC_USE_5DAY is on and the window starts within FIVE_DAY_WINDOW of now (the
+  hourly job's 48 h look-back always does). NDBC answers 404 for the ``.spec`` of a buoy
+  without wave data in those days (46053 on 2026-10-15); a 404 on ``_5day.txt`` falls back
+  to realtime2.
 * complete years: ``{base}/data/historical/stdmet/{id}h{YYYY}.txt.gz`` (gzip; about 9
   times smaller than the decompressed ``view_text_file.php`` answer, so the .gz is read).
 * months of the current year, quality controlled (Web Data Guide, section 4):
@@ -73,8 +80,9 @@ Meanings:
 QC: realtime data have passed automated checks only and carry no per-value flags
 (``not_qc``); the yearly and monthly files are NDBC's quality-controlled archive
 (``probably_good``, no per-value flags either). Positions: ``activestations.xml``
-(current deployment of every active station) replaces the catalog position on ingest;
-it holds no water depth (the station pages do).
+(current deployment of every active station, 273 KB) replaces the catalog position on
+ingest; it holds no water depth (the station pages do). It is read at most once a day per
+process (ACTIVE_STATIONS_TTL), not on every hourly run.
 """
 
 from __future__ import annotations
@@ -82,6 +90,8 @@ from __future__ import annotations
 import bisect
 import logging
 import re
+import threading
+import time
 import zlib
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime, timedelta
@@ -103,6 +113,7 @@ from app.services.observations.records import (
     StationRef,
     validate_record,
 )
+from app.services.units import ms_to_kmh
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +127,10 @@ QC_BY_DATASET = {
     MONTHLY_DATASET: "probably_good",
 }
 REALTIME_DAYS = 44  # realtime2 files hold ~45 days
+# 5day2 files hold the last 5 days (2026-10-10 02:30 to 2026-10-15 02:00 UTC at 46026 on
+# 2026-10-15 02:40); a window starting within this much of now is inside them.
+FIVE_DAY_WINDOW = timedelta(days=4, hours=12)
+ACTIVE_STATIONS_TTL_S = 24 * 3600.0
 # NDBC station ids are short alphanumerics (46026, 51201, KIKT1). Ids go into URL paths,
 # so anything else is refused rather than requested.
 STATION_ID_RE = re.compile(r"[A-Za-z0-9]{1,8}")
@@ -284,7 +299,7 @@ def parse_stdmet(
         rec.tm_kind = tm_kind if rec.tm_s is not None else None
         rec.peak_direction_deg = _value("MWD", values.get("MWD"))
         wspd = _value("WSPD", values.get("WSPD"))
-        rec.wind_speed_kmh = None if wspd is None else wspd * 3.6
+        rec.wind_speed_kmh = None if wspd is None else ms_to_kmh(wspd)
         rec.wind_direction_deg = _value("WDIR", values.get("WDIR"))
         if not rec.has_wave_data():
             # Wind-only rows (10-minute met reports between wave reports) are not stored.
@@ -534,6 +549,15 @@ class _File:
     months: list[int] = field(default_factory=list)  # months to read if a yearly file is 404
 
 
+_active_cache: dict[str, tuple[float, dict[str, dict[str, Any]]]] = {}
+_active_lock = threading.Lock()
+
+
+def clear_active_stations_cache() -> None:
+    with _active_lock:
+        _active_cache.clear()
+
+
 class NdbcProvider:
     name = PROVIDER
 
@@ -570,9 +594,24 @@ class NdbcProvider:
             return None
         if response.status_code != 200:
             raise PermanentProviderError(f"ndbc: HTTP {response.status_code} for {path}")
-        body = response.content
-        self.bytes_downloaded += len(body)
-        return body
+        # As transferred (ProviderFetch.bytes_downloaded): NDBC gzips its text files on the
+        # wire, so the decoded body is several times larger. Bodies built in memory (test
+        # transports) report 0 bytes on the wire.
+        self.bytes_downloaded += response.num_bytes_downloaded or len(response.content)
+        return response.content
+
+    def active_stations(self) -> dict[str, dict[str, Any]]:
+        """Parsed ``activestations.xml``, cached for ACTIVE_STATIONS_TTL_S per base URL."""
+        now = time.monotonic()
+        with _active_lock:
+            cached = _active_cache.get(self.base_url)
+            if cached is not None and now - cached[0] < ACTIVE_STATIONS_TTL_S:
+                return cached[1]
+        positions = parse_active_stations(self._get_text("activestations.xml") or "")
+        if positions:
+            with _active_lock:
+                _active_cache[self.base_url] = (now, positions)
+        return positions
 
     def _get_text(self, path: str) -> str | None:
         body = self._get_bytes(path)
@@ -619,9 +658,15 @@ class NdbcProvider:
         sid = station_id.upper()
         plan: list[_File] = []
         if end >= realtime_from:
-            for kind in ("txt", "spec"):
-                path = f"data/realtime2/{sid}.{kind}"
-                plan.append(_File(kind, [path], path, REALTIME_DATASET))
+            if self.settings.ndbc_use_5day and start >= now - FIVE_DAY_WINDOW:
+                txt = f"data/5day2/{sid}_5day.txt"
+                plan.append(_File("txt", [txt, f"data/realtime2/{sid}.txt"], txt, REALTIME_DATASET))
+                spec = f"data/5day2/{sid}_5day.spec"
+                plan.append(_File("spec", [spec], spec, REALTIME_DATASET))
+            else:
+                for kind in ("txt", "spec"):
+                    path = f"data/realtime2/{sid}.{kind}"
+                    plan.append(_File(kind, [path], path, REALTIME_DATASET))
         for year in range(start.year, min(end.year, now.year) + 1):
             if max(start, _month_start(year, 1)) >= realtime_from and end >= realtime_from:
                 continue  # the window's part of this year is all in the realtime file
@@ -725,8 +770,7 @@ class NdbcProvider:
         result = ProviderFetch()
         positions: dict[str, dict[str, Any]] = {}
         try:
-            xml = self._get_text("activestations.xml")
-            positions = parse_active_stations(xml or "")
+            positions = self.active_stations()
         except ProviderError as exc:
             result.warnings.append(f"activestations.xml unavailable: {exc}")
         consecutive_transient = 0

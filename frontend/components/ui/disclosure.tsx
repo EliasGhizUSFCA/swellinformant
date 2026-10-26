@@ -65,7 +65,7 @@ export function Disclosure({
         aria-controls={contentId}
         onClick={toggle}
         className={cn(
-          "group/disclosure inline-flex items-center gap-1.5 rounded-md text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40",
+          "group/disclosure inline-flex items-center gap-1.5 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
           card
             ? "flex w-full justify-between gap-3 px-4 py-3 text-sm font-semibold text-ink hover:bg-muted/40"
             : "text-xs font-medium text-ocean hover:underline",

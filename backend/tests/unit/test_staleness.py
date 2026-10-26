@@ -9,7 +9,13 @@ import pytest
 from app.core.config import Settings, get_settings
 from app.models import ForecastRun, ForecastSource
 from app.services.forecasts import queries
-from app.services.forecasts.registry import ECMWF_IFS_CODE, GEFS_WAVE_CODE, NOAA_GFS_CODE
+from app.services.forecasts.registry import (
+    ECMWF_IFS_CODE,
+    GEFS_WAVE_CODE,
+    NOAA_GFS_CODE,
+    OPEN_METEO_ECMWF_CODE,
+    OPEN_METEO_NOAA_CODE,
+)
 
 NOW = datetime(2026, 10, 11, 8, 30, tzinfo=UTC)
 
@@ -33,8 +39,53 @@ def test_stale_after_hours_per_source_with_default_settings() -> None:
     assert queries.stale_after_hours(NOAA_GFS_CODE, s) == pytest.approx(16.0)  # 6 + 5 + 3 + 2
     assert queries.stale_after_hours(GEFS_WAVE_CODE, s) == pytest.approx(18.5)  # 6 + 7.5 + 3 + 2
     assert queries.stale_after_hours(ECMWF_IFS_CODE, s) == pytest.approx(25.0)  # 12 + 8 + 3 + 2
-    for other in ("demo", "open_meteo_noaa", "windy_gfswave", "blend"):
+    # Open-Meteo families: cycle + Open-Meteo's measured lag + the 10 min wait + 3 + 2.
+    assert queries.stale_after_hours(OPEN_METEO_NOAA_CODE, s) == pytest.approx(6 + 6 + 1 / 6 + 5)
+    assert queries.stale_after_hours(OPEN_METEO_ECMWF_CODE, s) == pytest.approx(
+        12 + 7.5 + 1 / 6 + 5
+    )
+    for other in ("demo", "windy_gfswave", "blend"):
         assert queries.stale_after_hours(other, s) == s.forecast_stale_hours == 18
+
+
+def test_gefs_staleness_follows_gefs_cycles() -> None:
+    assert queries.stale_after_hours(GEFS_WAVE_CODE, Settings(gefs_cycles="00,12")) == (
+        pytest.approx(12 + 7.5 + 3 + 2)
+    )
+
+
+def test_open_meteo_ecmwf_cycle_matches_the_adapter() -> None:
+    from app.services.forecasts.open_meteo_ecmwf import OpenMeteoEcmwfProvider
+
+    hours = sorted(OpenMeteoEcmwfProvider.cycle_hours or ())
+    assert queries.SOURCE_CYCLE_HOURS[OPEN_METEO_ECMWF_CODE] == 24 / len(hours)
+
+
+def test_gust_kind_from_the_record_or_the_source() -> None:
+    assert queries.gust_kind_for("open_meteo_ecmwf", {"gust_kind": "ecmwf_max_3h"}) == (
+        "ecmwf_max_3h"
+    )
+    assert queries.gust_kind_for(NOAA_GFS_CODE, {}) == "gfs_instantaneous"  # documented
+    assert queries.gust_kind_for(NOAA_GFS_CODE, None) == "gfs_instantaneous"
+    assert queries.gust_kind_for("demo", {}) is None
+    assert queries.gust_kind_for("demo", {"gust_kind": "made-up"}) is None
+
+
+def test_attribution_links_per_source() -> None:
+    def links(code: str, wave_model: str = "") -> list[str]:
+        source = ForecastSource(code=code, name=code, provider="t", wave_model=wave_model)
+        return [link.href for link in queries.attribution_links_for(source)]
+
+    assert links(OPEN_METEO_NOAA_CODE)[:2] == [
+        "https://open-meteo.com/",
+        "https://open-meteo.com/en/licence",
+    ]
+    ecmwf = links(OPEN_METEO_ECMWF_CODE)
+    assert "https://creativecommons.org/licenses/by/4.0/" in ecmwf
+    assert "https://www.ecmwf.int/en/forecasts/datasets/open-data" in ecmwf
+    assert links(ECMWF_IFS_CODE) == ecmwf[2:]
+    assert links("demo") == []
+    assert "https://marine.copernicus.eu/" in links(OPEN_METEO_NOAA_CODE, "meteofrance_wave")
 
 
 def test_stale_after_follows_the_lag_and_refresh_settings() -> None:
@@ -52,7 +103,7 @@ def test_cycle_hours_match_the_ingesters() -> None:
 
 
 def test_blend_code_copies_match_the_blend() -> None:
-    """queries and health restate blend.BLEND_CODE instead of importing it."""
+    """queries restates blend.BLEND_CODE instead of importing it; health uses queries'."""
     from app.services import health
     from app.services.forecasts import blend
 

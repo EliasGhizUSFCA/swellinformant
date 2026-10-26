@@ -2,8 +2,8 @@ import { ArrowRight, BellRing, CalendarClock, Compass, Gauge, Plane, Radar, Shie
 import Link from "next/link";
 
 import { Logo } from "@/components/brand/logo";
-import { SiteFooter } from "@/components/layout/app-shell";
-import { LiveSwells } from "@/components/live-swells";
+import { SiteFooter } from "@/components/layout/site-footer";
+import { ForecastHorizon, LiveSwells } from "@/components/live-swells";
 import { Button } from "@/components/ui/button";
 
 const STEPS = [
@@ -15,7 +15,7 @@ const STEPS = [
   {
     icon: Radar,
     title: "We watch 50 breaks around the clock",
-    body: "NOAA GFS winds and WAVEWATCH III swell forecasts are scored for every break, every hour, by background workers.",
+    body: "NOAA GFS and ECMWF wind and wave forecasts are scored for every break at each forecast time step, by background workers.",
   },
   {
     icon: Plane,
@@ -38,12 +38,12 @@ const FEATURES = [
   {
     icon: Compass,
     title: "Spot-specific scoring",
-    body: "Swell window, period, offshore wind, tide and size range for each break, with a transparent 0–100 score.",
+    body: "Swell window, period, offshore wind, tide and size range for each break, rated out of 10 with the reasons shown.",
   },
   {
     icon: ShieldCheck,
     title: "Honest uncertainty",
-    body: "Forecast confidence is shown separately from quality. Breaking heights are labelled as estimates, fares as quotes.",
+    body: "Forecast confidence is shown separately from quality and from how well each break is researched. Breaking heights are labelled as estimates, fares as quotes.",
   },
   {
     icon: Waves,
@@ -59,7 +59,9 @@ export default function LandingPage() {
         <header className="relative z-10 mx-auto flex h-20 max-w-7xl items-center justify-between px-4 sm:px-6">
           <Logo light />
           <nav className="flex items-center gap-2">
-            <Button asChild variant="ghost" className="text-white hover:bg-white/10 hover:text-white">
+            {/* Phones: the hero's "Explore the forecast map" button links the map, so the header
+                keeps only the account actions and fits the width. */}
+            <Button asChild variant="ghost" className="hidden text-white hover:bg-white/10 hover:text-white sm:inline-flex">
               <Link href="/map">Surf map</Link>
             </Button>
             <Button asChild variant="ghost" className="text-white hover:bg-white/10 hover:text-white">
@@ -92,20 +94,19 @@ export default function LandingPage() {
                 </Link>
               </Button>
               <Button asChild size="lg" variant="glass">
-                <Link href="/map">Explore the live map</Link>
+                <Link href="/map">Explore the forecast map</Link>
               </Button>
             </div>
             <dl className="mt-12 grid max-w-lg grid-cols-3 gap-6 border-t border-white/15 pt-6">
-              {[
-                ["50", "monitored breaks"],
-                ["16-day", "wave model horizon"],
-                ["5–10 days", "alert lead time"],
-              ].map(([v, l]) => (
-                <div key={l}>
-                  <dt className="font-display text-2xl font-semibold">{v}</dt>
-                  <dd className="text-xs text-white/65">{l}</dd>
-                </div>
-              ))}
+              <div>
+                <dt className="font-display text-2xl font-semibold">50</dt>
+                <dd className="text-xs text-white/65">monitored breaks</dd>
+              </div>
+              <ForecastHorizon />
+              <div>
+                <dt className="font-display text-2xl font-semibold">5–10 days</dt>
+                <dd className="text-xs text-white/65">alert lead time</dd>
+              </div>
             </dl>
           </div>
           <div className="lg:pt-6">

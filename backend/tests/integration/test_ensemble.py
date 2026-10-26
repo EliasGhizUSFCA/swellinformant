@@ -1,9 +1,9 @@
-"""GEFS-Wave ensemble job against PostgreSQL: run bookkeeping, isolation from the forecast
-pipeline, and the ensemble_for read helper. GRIB data is SYNTHETIC (tests/unit/gefs_synthetic)."""
+"""GEFS-Wave ensemble job against PostgreSQL: run bookkeeping and isolation from the forecast
+pipeline. GRIB data is SYNTHETIC (tests/unit/gefs_synthetic)."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from pydantic import ValidationError
@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.database import utcnow
 from app.models import (
     ForecastEnsembleStat,
     ForecastRun,
@@ -20,11 +21,7 @@ from app.models import (
     WaveForecast,
 )
 from app.models.enums import ForecastRunStatus
-from app.services.forecasts.ensemble import (
-    GefsWaveEnsembleProvider,
-    acquire_ensemble,
-    ensemble_for,
-)
+from app.services.forecasts.ensemble import GefsWaveEnsembleProvider, acquire_ensemble
 from app.services.forecasts.ingestion import acquire_all
 from app.services.forecasts.queries import candidate_runs, latest_runs_by_spot
 from app.services.forecasts.registry import GEFS_WAVE_CODE, SOURCE_CODES, configured_source_codes
@@ -87,7 +84,9 @@ def test_acquire_writes_ensemble_stats_only(
     assert out["status"] == "success", out
     assert out["run_key"] == "gefs-wave:2026101012"
     assert out["records"] == len(few_spots) * 3 and out["spots"] == len(few_spots)
-    assert out["checks"]["partition_order"]["verified"] is True
+    # GEFS_STAT_FIELDS default (HTSGW,PERPW): swell partitions are not read, so there is no
+    # partition-order check (tests/unit/test_ensemble.py covers it with SWELL enabled).
+    assert "partition_order" not in out["checks"]
 
     run = _gefs_run(db)
     db.refresh(run)
@@ -108,8 +107,12 @@ def test_acquire_writes_ensemble_stats_only(
     ).first()
     assert row is not None and row.valid_time == CYCLE + timedelta(hours=12)
     assert row.hs_mean_m == pytest.approx(2.5, abs=1e-3)
-    assert row.wind_speed_mean_kmh == pytest.approx(36.0, abs=0.01)
+    assert row.tp_mean_s == pytest.approx(12.0, abs=1e-3) and row.tp_spread_s is not None
+    assert row.wind_speed_mean_kmh is None and row.swell1_height_mean_m is None  # not read
     assert row.members == 31 and row.extra["period_kind"] == "tp"
+    assert run.details["stat_fields"] == ["HTSGW", "PERPW"]
+    assert run.details["stats"]["bytes_downloaded"] == run.details["bytes_downloaded"]
+    assert run.details["model_runs"][0]["init_time"] == CYCLE.isoformat()
 
 
 def test_rerun_is_idempotent_and_force_refetches(
@@ -134,12 +137,14 @@ def test_stuck_and_failed_runs_are_retried(
     acquire_ensemble(db, now=NOW, provider=provider)
     run = _gefs_run(db)
 
-    run.status, run.started_at = ForecastRunStatus.RUNNING, NOW - timedelta(minutes=10)
+    # started_at is the real start time of the provider's run, so "stuck" is judged on the
+    # real clock, not on the cycle-selecting ``now``.
+    run.status, run.started_at = ForecastRunStatus.RUNNING, utcnow() - timedelta(minutes=10)
     db.commit()
     busy = acquire_ensemble(db, now=NOW, provider=provider)
     assert busy["status"] == "skipped" and busy["message"] == "run in progress"
 
-    run.started_at = NOW - timedelta(hours=2)  # older than STUCK_RUN_AFTER: a dead worker
+    run.started_at = utcnow() - timedelta(hours=2)  # older than STUCK_RUN_AFTER: dead worker
     db.commit()
     assert acquire_ensemble(db, now=NOW, provider=provider)["status"] == "success"
 
@@ -215,100 +220,3 @@ def test_ensemble_runs_are_never_authoritative_or_scored(
     assert GEFS_WAVE_CODE not in configured_source_codes()
     with pytest.raises(ValidationError):
         Settings(forecast_providers="noaa_gefs_wave")
-
-
-# --------------------------------------------------------------------------- ensemble_for
-def _add_run(
-    db: Session,
-    source: ForecastSource,
-    spot: SurfSpot,
-    issued: datetime,
-    leads: list[int],
-    status: ForecastRunStatus = ForecastRunStatus.SUCCESS,
-) -> ForecastRun:
-    run = ForecastRun(
-        source_id=source.id,
-        run_key=f"gefs-wave:{issued:%Y%m%d%H}-{status.value}",
-        issued_at=issued,
-        status=status,
-        predictions_computed_at=issued,
-        details={"spot_ids": [spot.id]},
-    )
-    db.add(run)
-    db.flush()
-    for lead in leads:
-        db.add(
-            ForecastEnsembleStat(
-                run_id=run.id,
-                spot_id=spot.id,
-                valid_time=issued + timedelta(hours=lead),
-                lead_hours=float(lead),
-                members=31,
-                hs_mean_m=float(lead),  # synthetic marker: the lead identifies the row
-                hs_spread_m=0.1,
-                extra={},
-            )
-        )
-    db.commit()
-    return run
-
-
-@pytest.fixture
-def two_runs(db: Session) -> tuple[SurfSpot, ForecastRun, ForecastRun]:
-    source = ForecastSource(
-        code=GEFS_WAVE_CODE, name="GEFS", provider="noaa_nodd", family="ncep_gefs", kind="ensemble"
-    )
-    db.add(source)
-    db.flush()
-    spot = db.scalars(select(SurfSpot).where(SurfSpot.slug == "pipeline")).one()
-    t0 = datetime(2026, 10, 10, 0, tzinfo=UTC)
-    older = _add_run(db, source, spot, t0, list(range(0, 49, 6)))  # 00Z .. 48Z
-    # Newer run (06Z) lacks f018 (a gap) and ends at f036 (= 42Z).
-    newer = _add_run(
-        db, source, spot, t0 + timedelta(hours=6), [0, 6, 12, 24, 30, 36], ForecastRunStatus.PARTIAL
-    )
-    _add_run(db, source, spot, t0 + timedelta(hours=12), [0, 6, 12], ForecastRunStatus.FAILED)
-    return spot, older, newer
-
-
-def test_ensemble_for_prefers_newest_run_nearest_within_gap(
-    db: Session, two_runs: tuple[SurfSpot, ForecastRun, ForecastRun]
-) -> None:
-    spot, older, newer = two_runs
-    t0 = datetime(2026, 10, 10, 0, tzinfo=UTC)
-    h = lambda n: t0 + timedelta(hours=n)  # noqa: E731
-    times = [h(12), h(14), h(15), h(24), h(5), h(43), h(46), h(50)]
-    got = ensemble_for(db, spot.id, times)
-    # 12Z is f006 of the newer run (the FAILED 12Z run is ignored); 14Z -> nearest 12Z.
-    assert (got[h(12)].run_id, got[h(12)].hs_mean_m) == (newer.id, 6.0)
-    assert (got[h(14)].run_id, got[h(14)].valid_time) == (newer.id, h(12))
-    # 15Z is exactly between 12Z and 18Z of the newer run: tie goes to the earlier row.
-    assert got[h(15)].valid_time == h(12)
-    # 24Z: the newer run has no 24Z row (its f018 is missing) and its nearest rows are 6 h
-    # away, so the older run answers.
-    assert (got[h(24)].run_id, got[h(24)].hs_mean_m) == (older.id, 24.0)
-    # 05Z is before the newer run starts (06Z): no extrapolation backwards; older answers.
-    assert (got[h(5)].run_id, got[h(5)].valid_time) == (older.id, h(6))
-    # 43Z is after the newer run's last row (42Z) but inside the older run (to 48Z).
-    assert (got[h(43)].run_id, got[h(43)].valid_time) == (older.id, h(42))
-    assert got[h(46)].valid_time == h(48)
-    # 50Z is past every run's last valid time: not returned (no extrapolation).
-    assert h(50) not in got
-
-
-def test_ensemble_for_edge_cases(
-    db: Session, two_runs: tuple[SurfSpot, ForecastRun, ForecastRun]
-) -> None:
-    spot, _, newer = two_runs
-    t0 = datetime(2026, 10, 10, 0, tzinfo=UTC)
-    assert ensemble_for(db, spot.id, []) == {}
-    other = db.scalars(select(SurfSpot).where(SurfSpot.slug == "nazare")).one()
-    assert ensemble_for(db, other.id, [t0 + timedelta(hours=12)]) == {}
-    # A tighter gap: 14Z is 2 h from the nearest newer row -> nothing within 1 h anywhere.
-    assert ensemble_for(db, spot.id, [t0 + timedelta(hours=14)], max_gap_hours=1.0) == {}
-    with pytest.raises(ValueError, match="timezone-aware"):
-        ensemble_for(db, spot.id, [datetime(2026, 10, 10, 12)])  # noqa: DTZ001
-    newer.status = ForecastRunStatus.FAILED
-    db.commit()
-    got = ensemble_for(db, spot.id, [t0 + timedelta(hours=12)])
-    assert got[t0 + timedelta(hours=12)].run_id != newer.id

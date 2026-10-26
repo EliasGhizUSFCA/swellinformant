@@ -731,3 +731,26 @@ def test_interrupted_forecast_run_is_retried(db: Session, few_spots: list[str]) 
     outcome = acquire_all(db)[0]
     assert outcome.status == "success"
     assert db.scalar(select(func.count(ForecastRun.id))) == 1
+
+
+# ---------------------------------------------------------------- publication
+def test_the_pipeline_publishes_what_it_stored(db: Session, few_spots: list[str]) -> None:
+    """run_pipeline publishes after the predictions (a sync_runs row with trigger
+    "pipeline"), so CLI and developer pipelines move the published data too."""
+    from app.models.sync import SyncRun
+    from app.services.sync.detect import load_known
+    from app.services.sync.published import latest_publication
+
+    result = run_pipeline(db)
+    assert list(result)[:4] == ["acquisition", "blending", "predictions", "publish"]
+    db.expire_all()
+    row = latest_publication(db)
+    assert row is not None and row.trigger == "pipeline" and row.status == "success"
+    assert result["publish"]["sync_run_id"] == row.id
+    assert row.published_at is not None and row.map_run_id is None  # map fields are off
+    assert db.scalar(select(func.count(SyncRun.id))) == 1
+    # Once published, the demo run counts as stored for the sync checks.
+    run = db.scalar(select(ForecastRun))
+    assert run is not None and load_known(db).stored == {"demo": run.run_key}
+    run_pipeline(db, acquire=False)
+    assert db.scalar(select(func.count(SyncRun.id))) == 2  # every pipeline run publishes

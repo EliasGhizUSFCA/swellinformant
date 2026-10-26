@@ -18,6 +18,12 @@ Same family as Open-Meteo `ncep_gfswave*` and Windy `gfsWave`: these sources run
 same model with the same forcing, so their agreement is not independent evidence
 (`forecasts/families.py`).
 
+Since the forecast upgrade the recommended setup reads the spot forecasts from Open-Meteo
+(`FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf`). This ingester stays as an optional,
+key-free fallback and verification source, off by default. The map's ocean layers do not
+depend on it: without `noaa_gfs` they are read on their own (the `standalone` mode, from
+`pgrb2.0p50` and `global.0p25`; see [map-layers.md](map-layers.md)).
+
 ## File layout (GFS v16, as published on 2026-10-10)
 
 Bucket: `NOAA_GFS_BASE_URL`, default `https://noaa-gfs-bdp-pds.s3.amazonaws.com`.
@@ -26,6 +32,7 @@ Bucket: `NOAA_GFS_BASE_URL`, default `https://noaa-gfs-bdp-pds.s3.amazonaws.com`
 |---------|--------------------------------------------------|
 | Waves | `gfs.YYYYMMDD/HH/wave/gridded/gfswave.tHHz.{grid}.fFFF.grib2` (+ `.idx`) |
 | Atmosphere | `gfs.YYYYMMDD/HH/atmos/gfs.tHHz.pgrb2.0p25.fFFF` (+ `.idx`) |
+| Atmosphere for the map fields alone | `gfs.YYYYMMDD/HH/atmos/gfs.tHHz.pgrb2.0p50.fFFF` (+ `.idx`; `MAP_FIELD_ATMOS_PATH_TEMPLATE`, falls back to `pgrb2.0p25` per hour) |
 | Station bulletins (used for the cross-check only) | `gfs.YYYYMMDD/HH/wave/station/bulls.tHHz/gfswave.{ID}.bull` |
 
 * **Cadence.** Both products are published hourly to f120, then every 3 h to f384. f121,
@@ -72,8 +79,8 @@ used. `arctic.9km` is polar stereographic, which `grib.py` does not decode.
 | `sig_wave_height_m` | HTSGW | Offshore Hs of the combined sea state. **Not the breaking (surf) height.** |
 | `wave_period_s` | PERPW | Peak period Tp. `wave_period_kind = "tp"` |
 | `wave_direction_deg` | DIRPW | Direction at the spectral peak |
-| `primary/secondary/tertiary_swell_*` | SWELL / SWPER / SWDIR, 1 to 3 in sequence | Partition height, peak period and direction |
-| `wind_wave_*` | WVHGT / WVPER / WVDIR | Wind-sea partition |
+| `primary/secondary/tertiary_swell_*` | SWELL / SWPER / SWDIR, 1 to 3 in sequence | Partition height, period and direction. NCEP's inventory calls SWPER the "Mean Period of Swell Waves"; the ww3_grib source was not checked for it, so call it "period", not "peak period" |
+| `wind_wave_*` | WVHGT / WVPER / WVDIR | Wind-sea partition (WVPER: "Mean Period of Wind Waves", same caveat) |
 | `wind_speed_kmh` | \|(UGRD, VGRD)\| at 10 m | m/s × 3.6 |
 | `wind_direction_deg` | (270 − atan2(v, u)) mod 360 | Degrees FROM. A calm wind has no direction |
 | `wind_gust_kmh` | GUST × 3.6 | A boundary-layer mixing diagnostic, not an observed gust |
@@ -89,7 +96,8 @@ used. `arctic.9km` is polar stereographic, which `grib.py` does not decode.
   hour, not a swell tracked through time. Indices can swap between hours, runs and
   models. Match swells by period and direction, not by index.
 * **Missing partitions** are missing values in the GRIB bitmap and are stored as NULL,
-  not 0. In the live run, 208 of 450 rows had a third swell partition.
+  not 0. In the live run, 208 of 450 rows had a third swell partition. The map's
+  partition layers (swell 1 and 2 and the wind sea) keep them as nodata (byte 255).
 * **Peak period jumps.** Tp switches between partitions: at Pipeline it went from 10.4 s
   to 19.0 s between f003 and f006 on 2026-10-10 18Z when the long-period NW partition
   became the spectral peak.
@@ -185,6 +193,14 @@ Per forecast hour, independent of the number of spots:
   insert (about 6.4 MB/s through this sandbox's proxy). That projects to about 5 min for
   81 steps, inside the Celery soft time limit of 25 min. This projection was not
   measured.
+* **Map fields** (the `with_noaa` mode, see map-layers.md): only cycles in
+  `MAP_FIELD_CYCLES` (default 00Z and 12Z) carry them, at the `MAP_FIELD_STEPS` hours (61
+  by default, all of them spot hours). Wind and pressure come from the spots'
+  `pgrb2.0p25` records at no extra cost. When no spot uses `global.0p25`, each map hour
+  adds its core wave records (1.82 MB, one range) and, with `MAP_FIELD_PARTITIONS=on`,
+  the swell and wind-sea partitions (5.13 to 5.28 MB, three ranges; from the recorded
+  `.idx` files). With the default 50 spots, Thurso East and Mullaghmore Head already read
+  all 15 records of `global.0p25`, so the map costs nothing extra.
 
 Concurrency: `GRIB_DOWNLOAD_WORKERS` threads over steps share one `httpx.Client`
 (`FORECAST_HTTP_TIMEOUT_SECONDS`). The first step runs alone so that the land-sea mask
@@ -217,12 +233,16 @@ Ingestion keeps only the first 50 warnings, so the summary lines come first.
 GFS v17 is only proposed: PNS 26-29 (2026-04-15) targets October 2026, and EMC lists
 Q1 FY27. It will change directory structure and file names, and WW3 moves to an
 unstructured grid. The 0.5° and 1° atmosphere files are being removed (global-workflow
-PR #5298), so only `pgrb2.0p25` is used.
+PR #5298), so the spot ingester reads only `pgrb2.0p25`. The map fields read the lighter
+`pgrb2.0p50` while it exists (0.86 MB instead of 2.93 MB per hour for 10 m wind and
+pressure) and fall back to `pgrb2.0p25` for any hour whose `pgrb2.0p50` file is not
+published, so its removal costs bytes, not layers (map-layers.md).
 
 * The bucket comes from `NOAA_GFS_BASE_URL`.
-* The path templates are the settings `NOAA_GFS_WAVE_PATH_TEMPLATE` and
-  `NOAA_GFS_ATMOS_PATH_TEMPLATE` (defaults `WAVE_PATH_TEMPLATE` / `ATMOS_PATH_TEMPLATE`
-  in `noaa.py`), with the placeholders `{ymd}`, `{hh}`, `{grid}` and `{fhour:03d}`, so a
+* The path templates are the settings `NOAA_GFS_WAVE_PATH_TEMPLATE`,
+  `NOAA_GFS_ATMOS_PATH_TEMPLATE` and, for the map fields, `MAP_FIELD_ATMOS_PATH_TEMPLATE`
+  (defaults `WAVE_PATH_TEMPLATE`, `ATMOS_PATH_TEMPLATE` and `MAP_ATMOS_PATH_TEMPLATE` in
+  `noaa.py`), with the placeholders `{ymd}`, `{hh}`, `{grid}` and `{fhour:03d}`, so a
   rename is a configuration change.
 * The grid names and latitude ranges are in `WAVE_GRIDS`. A geometry change triggers a
   warning, and missing records or files are reported, never silently filled.

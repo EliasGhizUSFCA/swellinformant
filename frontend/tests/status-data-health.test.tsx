@@ -4,16 +4,21 @@ import { describe, expect, it } from "vitest";
 import {
   ageLine,
   type DataHealth,
+  dataHealthRefetchMs,
   DataHealthSummary,
   formatBytes,
   formatHours,
   freshnessTone,
+  heartbeatLine,
   JobTable,
   LayersAndObservations,
   overallTone,
+  redisLine,
   SourceFreshness,
   type SourceHealth,
+  SyncCard,
 } from "@/app/status/data-health";
+import type { SyncComponent, SyncHealth, SyncRun } from "@/lib/sync";
 
 // SYNTHETIC test data: an invented data-health report that exists only to exercise the
 // status-page components. It does not describe a real run, job or buoy.
@@ -158,6 +163,18 @@ describe("data health components", () => {
     expect(screen.getByTestId("data-health-summary")).toHaveTextContent("All data checks pass");
   });
 
+  it("lets long run keys wrap so phones do not scroll sideways", () => {
+    // Real Open-Meteo run keys are one unbreakable token, e.g. "gfswave016:2026102106|gfswave025:2026102106|gfs013:2026102106|gfs025:2026102106".
+    const key = "synthetic016:2026102106|synthetic025:2026102106|synthetic013:2026102106|synthetic025:2026102106";
+    const message = `Synthetic source: newest run ${key} was issued 20.6 h ago (stale after 17.2 h).`;
+    const data = report({ problems: [{ key: "forecast_stale:synthetic", severity: "degraded", message }] });
+    render(<DataHealthSummary data={data} />);
+    expect(screen.getByTestId("data-health-reasons")).toHaveClass("wrap-anywhere");
+    const [source] = data.forecast_sources as [SourceHealth];
+    render(<SourceFreshness sources={[{ ...source, newest_run_key: key }]} />);
+    expect(screen.getByText(new RegExp(`Run ${key.replace(/\|/g, "\\|")}`))).toHaveClass("wrap-anywhere");
+  });
+
   it("lists sources with their age, limit, role and a failed attempt", () => {
     render(<SourceFreshness sources={report().forecast_sources} />);
     const list = screen.getByTestId("data-health-sources");
@@ -185,5 +202,120 @@ describe("data health components", () => {
     expect(card).toHaveTextContent("NDBC · 0 active stations · none stored");
     expect(card).toHaveTextContent("alarm after 30 min");
     expect(card).toHaveTextContent("Database 184 MB (no size alarm configured)");
+    expect(screen.queryByTestId("data-health-redis")).toBeNull(); // older reports have no Redis block
+  });
+
+  it("renders the Redis memory check against its cap", () => {
+    const redis = {
+      available: true,
+      used_memory_bytes: 230 * 1024 ** 2,
+      maxmemory_bytes: 256 * 1024 ** 2,
+      maxmemory_policy: "noeviction",
+      cap_bytes: 256 * 1024 ** 2,
+      cap_source: "redis" as const,
+      used_fraction: 0.8984,
+      alert_fraction: 0.8,
+    };
+    render(<LayersAndObservations data={report({ storage: { database_bytes: 193_035_287, database_max_gb: 5, redis } })} />);
+    expect(screen.getByTestId("data-health-other")).toHaveTextContent("Database 184 MB (alarm above 5 GB)");
+    expect(screen.getByTestId("data-health-redis")).toHaveTextContent("Redis 230 MB of 256 MB (90 %, alarm above 80 %)");
+  });
+
+  it("labels a cap that is only the configured REDIS_MAXMEMORY, and an unreachable Redis", () => {
+    const uncapped = { available: true, used_memory_bytes: 1024 ** 2, cap_bytes: 256 * 1024 ** 2, cap_source: "setting" as const, used_fraction: 0.0039, alert_fraction: 0.8 };
+    expect(redisLine(uncapped)).toBe("Redis 1 MB of 256 MB (REDIS_MAXMEMORY; Redis itself runs uncapped) (0.4 %, alarm above 80 %)");
+    expect(redisLine({ available: false, alert_fraction: 0.8 })).toBe("Redis is not answering");
+    expect(redisLine({ available: true, used_memory_bytes: 1024 ** 2, alert_fraction: 0.8 })).toBe("Redis 1 MB (no memory cap known, alarm above 80 %)");
+  });
+});
+
+describe("sync section on the status page", () => {
+  // SYNTHETIC sync block (backend app/schemas/sync.py shape); invented run keys and times.
+  const sync: SyncHealth = {
+    runner: "daemon",
+    check_minutes: 10,
+    last_check_at: now,
+    heartbeat_stale: false,
+    last_run: null,
+    last_published: null,
+    components: [
+      {
+        kind: "spots",
+        source: "synthetic",
+        provider: "open_meteo",
+        state: "new",
+        stored_run_key: "synthetic:1",
+        available_run_key: "synthetic:2",
+        available_cycle: "2026-10-18T12:00:00Z",
+        detail: null,
+      },
+    ],
+    cpu_hours_month: 0.5,
+    cpu_budget_hours: null,
+    cpu_alert_fraction: 0.8,
+  };
+
+  it("is absent when the backend sends no sync block (older backends)", () => {
+    const { container, rerender } = render(<SyncCard data={report()} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(<SyncCard data={report({ sync: null })} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("sync-status")).toBeNull();
+  });
+
+  it("never polls under an idle sync daemon; every minute while a sync runs or without the daemon", () => {
+    expect(dataHealthRefetchMs(undefined)).toBe(60_000);
+    expect(dataHealthRefetchMs(report())).toBe(60_000); // older backend: no sync block
+    expect(dataHealthRefetchMs(report({ sync: { ...sync, runner: "celery" } }))).toBe(60_000);
+    expect(dataHealthRefetchMs(report({ sync }))).toBe(false);
+    const run: SyncRun = { id: 3, trigger: "daemon", status: "running", started_at: now, finished_at: null, published_at: null, anchor_cycle: null, stages: [] };
+    expect(dataHealthRefetchMs(report({ sync: { ...sync, last_run: run } }))).toBe(60_000);
+    expect(dataHealthRefetchMs(report({ sync: { ...sync, last_run: { ...run, status: "success", finished_at: now } } }))).toBe(false);
+  });
+
+  it("renders the sync block with the report's source names", () => {
+    render(<SyncCard data={report({ sync })} />);
+    expect(screen.getByTestId("sync-status")).toHaveTextContent("Forecast sync");
+    const row = screen.getByTestId("sync-component-spots-synthetic");
+    expect(row).toHaveTextContent("Synthetic source · newest run 12Z Oct 18");
+    expect(row).toHaveTextContent("New run");
+    expect(screen.getByTestId("sync-published")).toHaveTextContent("Nothing published yet.");
+  });
+
+  it("shows the component states as the backend reports them", () => {
+    // The daemon settles its components after a sync (backend app/services/sync/detect.py
+    // settle_plan), so the page no longer second-guesses them: a "new" component stays new
+    // even when the report lists that run as the source's newest stored run.
+    const map: SyncComponent = {
+      kind: "map",
+      source: "synthetic_fields",
+      source_name: "Synthetic fields",
+      provider: "map_fields",
+      state: "current",
+      stored_run_key: "synthetic-map:1",
+      available_run_key: "synthetic-map:1",
+      available_cycle: "2026-10-18T12:00:00Z",
+      detail: "stored by sync 5",
+    };
+    const done: SyncRun = { id: 5, trigger: "daemon", status: "success", started_at: now, finished_at: now, published_at: now, anchor_cycle: null, stages: [] };
+    const base = report({ sync: { ...sync, components: [...sync.components!, map], last_run: done, last_published: done } });
+    render(<SyncCard data={{ ...base, forecast_sources: base.forecast_sources.map((s) => (s.code === "synthetic" ? { ...s, newest_run_key: "synthetic:2" } : s)) }} />);
+    expect(screen.getByTestId("sync-component-spots-synthetic")).toHaveAttribute("data-state", "new");
+    const row = screen.getByTestId("sync-component-map-synthetic_fields");
+    expect(row).toHaveAttribute("data-state", "current");
+    expect(row).toHaveTextContent("Synthetic fields · newest run 12Z Oct 18");
+    expect(row).toHaveTextContent("stored by sync 5");
+  });
+
+  it("promises no job-silence alarm under the sync daemon, which is judged by its heartbeat", () => {
+    const finished = new Date(Date.now() - 180 * 60_000).toISOString();
+    const celery = { heartbeat: { last_job_finished_at: finished, age_minutes: 180, limit_minutes: 30 }, sync: { ...sync, runner: "celery" as const } };
+    expect(heartbeatLine(celery)).toBe("Last background job finished 3 hours ago (alarm after 30 min of silence)");
+    expect(heartbeatLine({ ...celery, sync: null })).toContain("alarm after 30 min of silence"); // older backend
+    const daemon = { ...celery, sync };
+    expect(heartbeatLine(daemon)).toBe("Last background job finished 3 hours ago (the sync daemon's own heartbeat is checked instead: Forecast sync)");
+    expect(heartbeatLine({ ...daemon, heartbeat: { ...daemon.heartbeat, last_job_finished_at: null } })).not.toContain("alarm");
+    render(<LayersAndObservations data={report({ sync, heartbeat: daemon.heartbeat })} />);
+    expect(screen.getByTestId("data-health-heartbeat")).not.toHaveTextContent("alarm after");
   });
 });

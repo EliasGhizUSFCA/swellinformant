@@ -45,8 +45,18 @@ describe("colour scales", () => {
   });
 
   it("takes the hs / tp display range from the field index when given", () => {
-    const index = { available: true, valid_times: [], variables: [{ name: "hs", label: "Hs", unit: "m", display_min: 0, display_max: 12 }] } as FieldIndex;
+    const index = {
+      available: true,
+      valid_times: [],
+      variables: [{ name: "hs", label: "Hs", unit: "m", display_min: 0, display_max: 12, group: "core" }],
+      stale_after_hours: 12,
+      stale: false,
+    } as FieldIndex;
     expect(layerScale("hs", index).max).toBe(12);
+    // The wave-height colours stay anchored in metres: 10 m keeps its colour on a 0-12 m scale.
+    const wide = layerScale("hs", index);
+    expect(colorAt(wide.stops, 10 / 12)).toEqual(hexToRgb("#f3c4dc"));
+    expect(colorAt(wide.stops, 5 / 12)).toEqual(hexToRgb("#b856a8"));
     expect(layerScale("tp", index).max).toBe(20);
     expect(layerScale("wind", index).max).toBe(30);
   });
@@ -63,15 +73,21 @@ describe("units, ticks and readout", () => {
     expect(formatLayerValue("wind", 10, FT)).toBe("36 km/h");
     expect(formatLayerValue("energy", 45.4, M)).toBe("45 kW/m");
     expect(formatLayerValue("tp", NaN, M)).toBe("—");
+    // Periods are stored up to byte 254 = 25.4 s: that value is a lower bound, not 25 s.
+    expect(formatLayerValue("tp", 25.3, M)).toBe("25 s");
+    expect(formatLayerValue("tp", 25.4, M)).toBe("≥25.4 s");
   });
 
   it("puts legend ticks in the user's units at matching positions", () => {
+    // Wave height: the metre ticks sit on the colour ramp's anchors (D11), feet every 5 ft.
     const m = legendTicks("hs", LAYER_SCALES.hs, M);
-    expect(m.map((t) => t.label)).toEqual(["0", "2", "4", "6", "8", "10"]);
-    expect(m[1]!.pos).toBeCloseTo(0.2);
+    expect(m.map((t) => t.label)).toEqual(["0", "1", "2", "3", "4", "6", "8", "10"]);
+    expect(m[1]!.pos).toBeCloseTo(0.1);
+    expect(m[5]!.pos).toBeCloseTo(0.6);
     const ft = legendTicks("hs", LAYER_SCALES.hs, FT);
-    expect(ft.map((t) => t.label)).toEqual(["0", "10", "20", "30"]);
-    expect(ft[1]!.pos).toBeCloseTo(10 / 3.28084 / 10);
+    expect(ft.map((t) => t.label)).toEqual(["0", "5", "10", "15", "20", "25", "30"]);
+    expect(ft[1]!.pos).toBeCloseTo(5 / 3.28084 / 10);
+    expect(ft[2]!.pos).toBeCloseTo(10 / 3.28084 / 10);
     expect(legendTicks("wind", LAYER_SCALES.wind, FT).map((t) => t.label)).toEqual(["0", "20", "40", "60", "80", "100"]);
     expect(legendTicks("wind", LAYER_SCALES.wind, { height: "m", wind: "kn" }).map((t) => t.label)).toEqual(["0", "10", "20", "30", "40", "50"]);
     const e = legendTicks("energy", LAYER_SCALES.energy, M);

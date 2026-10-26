@@ -5,14 +5,77 @@ import { Settings } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
+import { availableSystems, hasPartitions, useFieldIndex } from "@/hooks/map-fields";
 import type { Units } from "@/lib/format";
 import { WIND_UNITS, type WindUnit } from "@/lib/map-layers";
 import type { Basemap, MapSettings } from "@/lib/map-settings";
+import { FAMILY_STYLES, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
 import { cn } from "@/lib/utils";
 import type { SpotSummary } from "@/types/api";
 
+import { CrestSwatch } from "./legend-drawer";
 import { ACTIVE_PILL, DARK_TOKENS, FOCUS, GLASS } from "./map-ui";
 import { FilterControls, type Filters } from "./spot-filters";
+
+/** The next system choice after pressing `system`: the partitions combine freely (at least one
+ * stays on); the combined sea is an alternative to them. */
+function toggleSystem(chosen: readonly WaveSystem[], system: WaveSystem): WaveSystem[] {
+  if (system === "combined") return ["combined"];
+  const partitions = chosen.filter((s) => s !== "combined");
+  if (!partitions.includes(system)) return [...partitions, system];
+  const rest = partitions.filter((s) => s !== system);
+  return rest.length ? rest : partitions;
+}
+
+/**
+ * Which wave systems are drawn as crest dashes (the combined sea by default). Shown only when
+ * the model run has partitions; a system the run does not have is disabled ("not available
+ * for this model run"). Each button shows the system's dash shape.
+ */
+function WaveSystemChooser({ settings, onChange }: { settings: MapSettings; onChange: (patch: Partial<MapSettings>) => void }) {
+  const { data: index } = useFieldIndex();
+  if (!hasPartitions(index)) return null;
+  const available = availableSystems(index);
+  return (
+    <fieldset className="space-y-1.5" data-testid="wave-systems">
+      <legend className="mb-1.5 text-sm text-white/85">
+        Wave crests
+        <span className="block text-xs text-white/60">Short dashes are wave crests moving with the waves; each system has its own dash shape.</span>
+      </legend>
+      <div className="flex flex-wrap gap-1.5">
+        {WAVE_SYSTEMS.map((system) => {
+          const ok = available.has(system);
+          const on = ok && settings.waveSystems.includes(system);
+          return (
+            <button
+              key={system}
+              type="button"
+              aria-pressed={on}
+              disabled={!ok}
+              title={ok ? undefined : "Not available for this model run"}
+              onClick={() => onChange({ waveSystems: toggleSystem(settings.waveSystems, system) })}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-white/10",
+                on ? "bg-white/15 text-white ring-white/40" : "text-white/75 hover:bg-white/10",
+                !ok && "cursor-not-allowed opacity-45 hover:bg-transparent",
+                FOCUS,
+              )}
+            >
+              <CrestSwatch system={system} className="w-5" />
+              {FAMILY_STYLES[system].label}
+              {!ok && <span className="sr-only">: not available for this model run</span>}
+            </button>
+          );
+        })}
+      </div>
+      {WAVE_SYSTEMS.some((s) => !available.has(s)) && (
+        <p className="text-xs text-white/55">
+          Not available for this model run: {WAVE_SYSTEMS.filter((s) => !available.has(s)).map((s) => FAMILY_STYLES[s].label).join(", ")}.
+        </p>
+      )}
+    </fieldset>
+  );
+}
 
 function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<{ value: T; label: string }>; onChange: (v: T) => void }) {
   return (
@@ -43,12 +106,13 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
 }
 
 /**
- * Settings: units, particles, basemap and every spot filter with the matching count.
- * Display preferences persist per browser (see lib/map-settings.ts); filters do not.
+ * Settings: units, animation, the wind overlay, the wave systems drawn, basemap and every spot
+ * filter with the matching count. Display preferences persist per browser (see
+ * lib/map-settings.ts; the wind unit is shared with the spot charts); filters do not.
  */
 export function SettingsPopover({
   settings,
-  onSettings,
+  onChange,
   heightUnits,
   reducedMotion,
   spots,
@@ -57,7 +121,7 @@ export function SettingsPopover({
   matching,
 }: {
   settings: MapSettings;
-  onSettings: (patch: Partial<MapSettings>) => void;
+  onChange: (patch: Partial<MapSettings>) => void;
   heightUnits: Units;
   reducedMotion: boolean;
   spots: SpotSummary[];
@@ -93,9 +157,9 @@ export function SettingsPopover({
               { value: "ft", label: "ft" },
               { value: "m", label: "m" },
             ]}
-            onChange={(v) => onSettings({ heightUnits: v })}
+            onChange={(v) => onChange({ heightUnits: v })}
           />
-          <Segmented<WindUnit> label="Wind" value={settings.windUnits} options={WIND_UNITS.map((u) => ({ value: u, label: u }))} onChange={(v) => onSettings({ windUnits: v })} />
+          <Segmented<WindUnit> label="Wind" value={settings.windUnits} options={WIND_UNITS.map((u) => ({ value: u, label: u }))} onChange={(v) => onChange({ windUnits: v })} />
           <Segmented<Basemap>
             label="Basemap"
             value={settings.basemap}
@@ -103,17 +167,27 @@ export function SettingsPopover({
               { value: "dark", label: "Dark" },
               { value: "streets", label: "Streets" },
             ]}
-            onChange={(v) => onSettings({ basemap: v })}
+            onChange={(v) => onChange({ basemap: v })}
           />
           <div className="flex items-start justify-between gap-3">
             <label htmlFor="map-particles" className="text-sm text-white/85">
-              Animated particles
-              {reducedMotion && settings.particles && (
-                <span className="block text-xs text-white/60">Your device asks for reduced motion, so the flow is drawn as still arrows.</span>
-              )}
+              Animated flow
+              <span className="block text-xs text-white/60">
+                {reducedMotion && settings.particles
+                  ? "Your device asks for reduced motion, so wind is drawn as still arrows and waves as still crest dashes."
+                  : "Wind particles and wave crest dashes."}
+              </span>
             </label>
-            <Switch id="map-particles" checked={settings.particles} onCheckedChange={(on) => onSettings({ particles: on })} />
+            <Switch id="map-particles" checked={settings.particles} onCheckedChange={(on) => onChange({ particles: on })} />
           </div>
+          <div className="flex items-start justify-between gap-3">
+            <label htmlFor="map-wind-overlay" className="text-sm text-white/85">
+              Wind on wave layers
+              <span className="block text-xs text-white/60">Wind particles over the wave crest dashes.</span>
+            </label>
+            <Switch id="map-wind-overlay" checked={settings.windOverlay} onCheckedChange={(on) => onChange({ windOverlay: on })} />
+          </div>
+          <WaveSystemChooser settings={settings} onChange={onChange} />
         </div>
         <div className="mt-4 border-t border-white/10 pt-3">
           <div className="mb-2 flex items-baseline justify-between gap-2">

@@ -5,11 +5,14 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from app.schemas.spots import DailySummary, EventOut, SpotAirportOut, SpotMini
+
+# Forecast and local confidence classes (documented heuristic classes, not probabilities).
+ConfidenceClass = Literal["high", "moderate", "low"]
 
 
 class SegmentOut(BaseModel):
@@ -105,6 +108,13 @@ class MatchSummary(BaseModel):
     lead_days: float
     created_at: datetime
     updated_at: datetime
+    # Confidence at the event's peak hour: in the offshore forecast, and in our breaking
+    # prediction at this break (with the reason when it is lower). None = not assessed.
+    forecast_confidence_class: ConfidenceClass | None = None
+    local_confidence_class: ConfidenceClass | None = None
+    local_confidence_reason: str | None = None
+    # The forecast run behind the match is older than its source's stale limit.
+    stale: bool = False
 
 
 class TravelWindowOut(BaseModel):
@@ -151,8 +161,7 @@ class NotificationOut(BaseModel):
     peak_label: str | None
     window_label: str | None
     is_demo: bool
-
-
-class Page(BaseModel):
-    total: int
-    items: list[Any]
+    # Confidence at the alerted event's peak hour (see MatchSummary).
+    forecast_confidence_class: ConfidenceClass | None = None
+    local_confidence_class: ConfidenceClass | None = None
+    local_confidence_reason: str | None = None

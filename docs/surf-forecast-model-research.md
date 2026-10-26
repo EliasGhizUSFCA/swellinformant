@@ -82,7 +82,7 @@ Its heuristic prior error correlations are 0.6 between related families and 0.3 
 4. Combine by energy flux: Hb = (Σ Hb_i^2.5)^0.4.
 5. Optionally cap at γ·d, with γ = 0.78 by default.
 
-Sets are 1.27·Hb. When `spot.calibration` holds a, b and c, `calibrated_power_law` is used instead. Version 1 is kept for backtests.
+Sets are 1.27·Hb. When `spot.calibration` holds a, b and c, `calibrated_power_law` is used instead. Version 1 (`komar_gaughan_v1_uncalibrated`) is no longer computed; the label remains for predictions stored with it.
 
 **No `data/surf_spots/physical_profiles.json` exists.** All 50 spots therefore use derived profiles:
 - β is the centre of the optimal window ("estimated").

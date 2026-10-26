@@ -26,16 +26,8 @@ export function heightRange(minFt: number, maxFt: number, units: Units = "ft"): 
   return lo === hi ? `${lo} ${units}` : `${lo}–${hi} ${units}`;
 }
 
-export function metres(value: number | null | undefined, digits = 1): string {
-  return value == null ? "—" : `${value.toFixed(digits)} m`;
-}
-
 export function seconds(value: number | null | undefined): string {
   return value == null ? "—" : `${Math.round(value)} s`;
-}
-
-export function kmh(value: number | null | undefined): string {
-  return value == null ? "—" : `${Math.round(value)} km/h`;
 }
 
 const POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
@@ -59,6 +51,95 @@ export function formatDateTime(iso: string, timeZone: string): string {
     minute: "2-digit",
     hour12: false,
   }).format(new Date(iso));
+}
+
+const part = (parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+
+/**
+ * A forecast time in the spot's own zone: "Thu, Oct 15, 7:00 AM"; with `zone` the zone's own
+ * name is added as the spot timeline writes it (`zoneName`: "… 7:00 AM SAST", "… 1:30 AM
+ * EDT", the offset "GMT+5:45" where no abbreviation exists). `hour12: false` gives "07:00".
+ */
+export function formatSpotDateTime(
+  iso: string,
+  tz: string,
+  opts: { zone?: boolean; hour12?: boolean; weekday?: "short" | "long" } = {},
+): string {
+  const hour12 = opts.hour12 ?? true;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: opts.weekday ?? "short",
+    month: "short",
+    day: "numeric",
+    hour: hour12 ? "numeric" : "2-digit",
+    minute: "2-digit",
+    hourCycle: hour12 ? "h12" : "h23",
+  }).formatToParts(new Date(iso));
+  const time = `${part(parts, "hour")}:${part(parts, "minute")}${hour12 ? ` ${part(parts, "dayPeriod")}` : ""}`;
+  const text = `${part(parts, "weekday")}, ${part(parts, "month")} ${part(parts, "day")}, ${time}`;
+  return opts.zone ? `${text} ${zoneName(Date.parse(iso), tz)}` : text;
+}
+
+/**
+ * A short forecast time in the spot's zone for compact cards: "Thu 7:00 AM SAST" (weekday,
+ * time and zone; no date, so only for times within the coming week). Use
+ * formatSpotDateTime when the date matters.
+ */
+export function formatSpotTime(iso: string, tz: string, opts: { zone?: boolean } = {}): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hourCycle: "h12",
+  }).formatToParts(new Date(iso));
+  const text = `${part(parts, "weekday")} ${part(parts, "hour")}:${part(parts, "minute")} ${part(parts, "dayPeriod")}`;
+  return opts.zone === false ? text : `${text} ${zoneName(Date.parse(iso), tz)}`;
+}
+
+/** Hour-axis label at epoch milliseconds `t` in `tz`: "12 AM", "6 AM", "12 PM", "6 PM" ("6:30 AM"
+ * where the zone's offset is not a whole hour from the tick). */
+export function formatHourTick(t: number, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hourCycle: "h12" }).formatToParts(new Date(t));
+  const minute = part(parts, "minute");
+  return `${part(parts, "hour")}${minute === "00" ? "" : `:${minute}`} ${part(parts, "dayPeriod")}`;
+}
+
+/** Short name of the zone's offset at that instant: "PDT", "EST", "GMT+2", "GMT+5:45". */
+export function zoneAbbrev(iso: string, tz: string): string {
+  return part(new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" }).formatToParts(new Date(iso)), "timeZoneName");
+}
+
+// English locales tried, in order, for a zone's own abbreviation: en-US alone prints "GMT+2"
+// for Johannesburg, en-ZA prints "SAST". Only the zone name comes from these locales; dates
+// and times are always formatted in en-US.
+const ZONE_LOCALES = ["en-US", "en-GB", "en-AU", "en-ZA", "en-IE", "en-NZ", "en-IN", "en-CA"];
+const ZONE_NAME = new Map<string, string>();
+
+/**
+ * The zone's name at instant `t` as people there write it ("SAST", "PDT", "WITA", "AEDT"),
+ * or the offset ("GMT-5", "GMT+5:45") where no locale has an abbreviation. Abbreviations
+ * are ambiguous worldwide ("IST"), so the offset is shown next to them (zoneLabel).
+ */
+export function zoneName(t: number, tz: string): string {
+  const offset = zoneAbbrev(new Date(t).toISOString(), tz);
+  const key = `${tz}|${offset}`;
+  const cached = ZONE_NAME.get(key);
+  if (cached) return cached;
+  let name = offset;
+  for (const locale of ZONE_LOCALES) {
+    try {
+      const v = new Intl.DateTimeFormat(locale, { timeZone: tz, timeZoneName: "short" }).formatToParts(new Date(t)).find((x) => x.type === "timeZoneName")?.value;
+      if (v && !/^(GMT|UTC)/.test(v)) {
+        name = v;
+        break;
+      }
+    } catch {
+      // A runtime without this locale: try the next one.
+    }
+  }
+  ZONE_NAME.set(key, name);
+  return name;
 }
 
 /** Plain calendar dates ("2026-07-10") rendered without any timezone shifting. */

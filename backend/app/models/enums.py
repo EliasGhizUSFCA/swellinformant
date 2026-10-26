@@ -166,12 +166,6 @@ class NotificationStatus(StrEnum):
     SUPPRESSED = "suppressed"
 
 
-# Statuses meaning "handed over and not (yet) known to have failed".
-NOTIFICATION_HANDED_OVER = frozenset(
-    {NotificationStatus.ACCEPTED, NotificationStatus.CAPTURED, NotificationStatus.DELIVERED}
-)
-
-
 class EmailPurpose(StrEnum):
     VERIFY_EMAIL = "verify_email"
     PASSWORD_RESET = "password_reset"  # noqa: S105 - enum value, not a secret

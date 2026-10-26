@@ -6,16 +6,31 @@ from app.core.config import Settings, get_settings
 from app.services.forecasts.base import ForecastProvider
 from app.services.forecasts.demo import DemoForecastProvider, SwellOverride
 from app.services.forecasts.open_meteo import OpenMeteoProvider
+from app.services.forecasts.open_meteo_ecmwf import OpenMeteoEcmwfProvider
 from app.services.forecasts.windy import WindyProvider
+from app.services.http import PermanentProviderError
 
 # Source codes of the direct open-data ingesters (their modules are imported lazily
 # because they pull in ecCodes).
 NOAA_GFS_CODE = "noaa_gfs_direct"
 ECMWF_IFS_CODE = "ecmwf_ifs_open"
 GEFS_WAVE_CODE = "noaa_gefs_wave"
+OPEN_METEO_NOAA_CODE = OpenMeteoProvider.code  # "open_meteo_noaa", family ncep_gfs
+OPEN_METEO_ECMWF_CODE = OpenMeteoEcmwfProvider.code  # "open_meteo_ecmwf", family ecmwf_ifs
 
+# Names of the sources whose providers live in modules that import ecCodes, as their
+# source_info records them (noaa.NoaaGfsFieldsProvider, ensemble.GefsWaveEnsembleProvider),
+# for status pages that name a source before its first run is stored. A test keeps them
+# equal to the providers'.
+KNOWN_SOURCE_NAMES = {
+    "noaa_gfs_fields": "NOAA GFS-Wave + GFS global fields",
+    GEFS_WAVE_CODE: "NOAA GEFS-Wave ensemble mean and spread (direct from NOAA open data)",
+}
+
+# FORECAST_PROVIDERS token -> source code.
 SOURCE_CODES = {
-    "open_meteo": OpenMeteoProvider.code,
+    "open_meteo": OPEN_METEO_NOAA_CODE,
+    "open_meteo_ecmwf": OPEN_METEO_ECMWF_CODE,
     "windy": WindyProvider.code,
     "demo": DemoForecastProvider.code,
     "noaa_gfs": NOAA_GFS_CODE,
@@ -36,7 +51,16 @@ def build_provider(
     settings = settings or get_settings()
     if name == "open_meteo":
         return OpenMeteoProvider(settings)
+    if name == "open_meteo_ecmwf":
+        return OpenMeteoEcmwfProvider(settings)
     if name == "windy":
+        if not settings.windy_terms_acknowledged:
+            # The settings validator refuses this already; kept for settings built elsewhere.
+            raise PermanentProviderError(
+                "Windy's API terms forbid storing its data and building derived databases: set "
+                "WINDY_TERMS_ACKNOWLEDGED=true only with a licence that allows this use "
+                "(docs/API_SETUP_REQUIRED.md)"
+            )
         return WindyProvider(settings)
     if name == "demo":
         return DemoForecastProvider(

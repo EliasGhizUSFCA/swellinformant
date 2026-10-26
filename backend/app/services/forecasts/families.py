@@ -35,7 +35,10 @@ FAMILIES: dict[str, Family] = {
             "WAVEWATCH III (NOAA GFS-Wave)",
             "NOAA GFS atmosphere",
             related_to=("ncep_gefs",),
-            notes="NOAA direct, Open-Meteo ncep_gfswave025/016 and Windy gfsWave.",
+            notes=(
+                "NOAA direct (noaa_gfs_direct), Open-Meteo ncep_gfswave016/025 + GFS "
+                "(open_meteo_noaa) and Windy gfsWave."
+            ),
         ),
         Family(
             "ncep_gefs",
@@ -49,7 +52,10 @@ FAMILIES: dict[str, Family] = {
             "ECMWF ecWAM (IFS HRES wave)",
             "ECMWF IFS atmosphere with altimeter assimilation",
             related_to=("ecmwf_aifs", "mfwam"),
-            notes="Independent of the NOAA chain.",
+            notes=(
+                "ECMWF open data direct (ecmwf_ifs_open) and via Open-Meteo ecmwf_wam025 + "
+                "ecmwf_ifs025 (open_meteo_ecmwf). Independent of the NOAA chain."
+            ),
         ),
         Family(
             "ecmwf_aifs",
@@ -75,31 +81,6 @@ FAMILIES: dict[str, Family] = {
 # assumed more strongly correlated than those of independent systems.
 PRIOR_ERROR_CORRELATION_RELATED = 0.6
 PRIOR_ERROR_CORRELATION_INDEPENDENT = 0.3
-
-
-def family_for_open_meteo_model(model: str | None) -> str:
-    m = (model or "").lower()
-    if m.startswith("ncep_gfswave") or m.startswith("gfs"):
-        return "ncep_gfs"
-    if m.startswith("ncep_gefswave"):
-        return "ncep_gefs"
-    if m.startswith("ecmwf_wam"):
-        return "ecmwf_ifs"
-    if m.startswith("meteofrance") or m.startswith("mfwam"):
-        return "mfwam"
-    if m.startswith("dwd") or m.startswith("ewam") or m.startswith("gwam"):
-        return "dwd_icon"
-    return "unknown"  # e.g. best_match: a model mix, so no single family applies
-
-
-def period_kind_for_open_meteo(model: str | None) -> str | None:
-    """Open-Meteo's ``wave_period`` is GFS PERPW (peak) but ECMWF ``mwp`` (Tm-1,0)."""
-    m = (model or "").lower()
-    if m.startswith("ncep_"):
-        return "tp"
-    if m.startswith("ecmwf_wam"):
-        return "tm10"
-    return None
 
 
 def are_independent(a: str, b: str) -> bool:

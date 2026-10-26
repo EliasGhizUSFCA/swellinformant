@@ -27,17 +27,36 @@ What is blended
   * swell/wind-sea partitions: taken from the highest-priority member that has them
     and scaled by Hs_blend / Hs_member (energy-consistent; directions and periods kept).
     Partition indices are height ranks, so partitions of different models are never
-    matched index by index;
+    matched index by index. A partition the member does not have stays None (never 0);
   * wave direction: from the structure member (GFS-Wave publishes the peak direction,
     ECMWF the mean direction — different quantities, compared but not averaged);
-  * wind: speed and gust as weighted means, direction as the weighted vector mean of unit
-    vectors; pressure as a weighted mean; sea level from the first member that has it.
+  * wind: direction of the weighted mean wind vector (u, v), so each member pulls in
+    proportion to its speed and a calm member barely turns a strong one; speed as the
+    weighted mean of the members' speeds (the vector mean's length would report calm where
+    the members blow from different directions, which neither forecasts). Members of
+    independent families that disagree on the direction by more than
+    WIND_DIRECTION_FLAG_DEG while both blow at least WIND_DIRECTION_FLAG_MIN_KMH are
+    flagged ``wind_direction_disagree`` (forecast confidence is then at most Moderate and
+    the wind is shown with a "models disagree" note); pressure as a weighted mean; sea
+    level from the first member that has it.
+  * gust: members define gusts differently (GFS: an instantaneous diagnostic; ECMWF:
+    a maximum over the preceding 3 h or since the previous post-processing step), so
+    gusts are only averaged over members with the same definition as the highest-weight
+    member that has one; ``extra["gust_kind"]`` names it and ``extra["gust_kinds"]``
+    records every member's definition. When those members are fewer than the members
+    behind the mean wind, ``extra["gust_members"]`` lists them and
+    ``extra["gust_member_mean_kmh"]`` is their own mean wind, so a gust below the blended
+    mean is not mistaken for a source artefact.
   Members are aligned in time by linear interpolation between their own steps (circular
-  for directions) across gaps of at most MAX_INTERP_GAP; never extrapolated.
+  for directions) across gaps of at most MAX_INTERP_GAP; never extrapolated. A blended
+  step that uses such an interpolated member value (or a member value its source marked
+  interpolated) is marked ``extra["interpolated"] = True`` with the members in
+  ``extra["interpolated_members"]``, so it is never presented as all-native model output.
 
 Disagreement
   For every pair of independent families: |ln(Hs_a/Hs_b)|, |ΔTp| (peak periods only),
-  angular Δ direction and |Δ wind speed|. Thresholds (heuristic, documented) raise flags;
+  angular Δ wave direction, |Δ wind speed| and angular Δ wind direction (when both winds
+  are at least WIND_DIRECTION_FLAG_MIN_KMH). Thresholds (heuristic, documented) raise flags;
   ``agreement`` in [0, 1] summarises them. The uncertainty model widens the forecast range
   by the between-model spread, and forecast confidence uses the flags and log ratios
   (``surf_quality.confidence_context``).
@@ -46,9 +65,11 @@ Disagreement
 from __future__ import annotations
 
 import bisect
+import functools
 import hashlib
 import logging
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -68,10 +89,16 @@ from app.models import (
     WaveForecast,
 )
 from app.models.enums import ForecastRunStatus
-from app.services.forecasts.base import FORECAST_FIELDS, ForecastRecord, SourceInfo
+from app.services.forecasts.base import (
+    EXTRA_GUST_KIND,
+    EXTRA_INTERPOLATED,
+    FORECAST_FIELDS,
+    ForecastRecord,
+    SourceInfo,
+)
 from app.services.forecasts.families import are_independent, prior_error_correlation
 from app.services.forecasts.ingestion import AcquisitionOutcome, store_records
-from app.services.forecasts.queries import USABLE, is_stale
+from app.services.forecasts.queries import USABLE, gust_kind_for, is_stale
 from app.services.forecasts.registry import configured_source_codes
 from app.services.ml.hook import RunCorrector, scale_heights, spot_slugs
 from app.services.surf_quality.uncertainty import lead_sigma
@@ -90,6 +117,10 @@ DIRECTION_DIFF_FLAG_DEG = 30.0
 DIRECTION_DIFF_FLAG_MIXED_DEG = 45.0  # peak vs mean direction legitimately differ more
 MEAN_DIRECTION_FAMILIES = frozenset({"ecmwf_ifs", "ecmwf_aifs"})
 WIND_DIFF_FLAG_KMH = 15.0
+# Wind directions this far apart with both winds at least this strong change which side of
+# the beach the wind blows from (offshore vs onshore); below it the direction matters little.
+WIND_DIRECTION_FLAG_DEG = 60.0
+WIND_DIRECTION_FLAG_MIN_KMH = 10.0
 # Two copies of the same model should be close; beyond this one ingestion is suspect.
 SAME_FAMILY_LOG_RATIO_FLAG = math.log(1.2)
 # Scales of the agreement summary (heuristic).
@@ -134,11 +165,51 @@ def blend_source_info() -> SourceInfo:
 
 
 # --------------------------------------------------------------------------- members
+@dataclass(frozen=True, slots=True)
+class MemberStep:
+    """One member forecast hour as the blend reads it: the forecast fields, the period's
+    kind and only the ``extra`` keys the blend reads (the gust definition and the
+    interpolated mark, present only when stored and not null). A whole ``wave_forecasts``
+    row also carries its id, run, issue time, wave power, missing-field list and the rest
+    of ``extra`` (grid cells, model names): the two member reads of the replayed 2026-10-16
+    pass took 7.16 MB whole and take 2.88 MB so (docs/map-layers.md, "Free database
+    budget")."""
+
+    valid_time: datetime
+    sig_wave_height_m: float | None
+    wave_period_s: float | None
+    wave_direction_deg: float | None
+    primary_swell_height_m: float | None
+    primary_swell_period_s: float | None
+    primary_swell_direction_deg: float | None
+    secondary_swell_height_m: float | None
+    secondary_swell_period_s: float | None
+    secondary_swell_direction_deg: float | None
+    tertiary_swell_height_m: float | None
+    tertiary_swell_period_s: float | None
+    tertiary_swell_direction_deg: float | None
+    wind_wave_height_m: float | None
+    wind_wave_period_s: float | None
+    wind_wave_direction_deg: float | None
+    wind_speed_kmh: float | None
+    wind_direction_deg: float | None
+    wind_gust_kmh: float | None
+    pressure_msl_hpa: float | None
+    sea_level_m: float | None
+    wave_period_kind: str | None
+    extra: dict[str, Any]
+
+
+# ``extra`` keys the blend reads: gust_kind_for's definition and the interpolated mark.
+MEMBER_EXTRA_KEYS = (EXTRA_GUST_KIND, EXTRA_INTERPOLATED)
+_MEMBER_COLUMNS = ("valid_time", *FORECAST_FIELDS, "wave_period_kind")
+
+
 @dataclass
 class Member:
     source: ForecastSource
     run: ForecastRun
-    series: dict[int, list[WaveForecast]] = field(default_factory=dict)
+    series: dict[int, list[MemberStep]] = field(default_factory=dict)
 
     @property
     def code(self) -> str:
@@ -180,13 +251,26 @@ def select_members(db: Session, now: datetime) -> tuple[list[Member], list[Membe
 
 
 def _load_series(db: Session, member: Member) -> None:
-    by_spot: dict[int, list[WaveForecast]] = {}
-    for row in db.scalars(
-        select(WaveForecast)
-        .where(WaveForecast.run_id == member.run.id)
-        .order_by(WaveForecast.spot_id, WaveForecast.valid_time)
+    """The member run's forecasts by spot and valid time (:class:`MemberStep`). ``extra``
+    holds a read key only when its stored value is not null: the blend reads it with
+    ``dict.get``, which gives None (or the default) for an absent key and a JSON null
+    alike."""
+    w = WaveForecast
+    extras = [w.extra[key].label(f"extra_{key}") for key in MEMBER_EXTRA_KEYS]
+    by_spot: dict[int, list[MemberStep]] = {}
+    for row in db.execute(
+        select(w.spot_id, *(getattr(w, name) for name in _MEMBER_COLUMNS), *extras)
+        .where(w.run_id == member.run.id)
+        .order_by(w.spot_id, w.valid_time)
     ):
-        by_spot.setdefault(row.spot_id, []).append(row)
+        values = row._mapping
+        extra = {
+            key: values[f"extra_{key}"]
+            for key in MEMBER_EXTRA_KEYS
+            if values[f"extra_{key}"] is not None
+        }
+        step = MemberStep(**{name: values[name] for name in _MEMBER_COLUMNS}, extra=extra)
+        by_spot.setdefault(values["spot_id"], []).append(step)
     member.series = by_spot
 
 
@@ -200,33 +284,57 @@ def _interp_angle(a: float, b: float, frac: float) -> float:
     return math.degrees(math.atan2(y, x)) % 360.0
 
 
-def value_at(
-    rows: list[WaveForecast], times: list[datetime], t: datetime, name: str
-) -> float | None:
-    """Field ``name`` at time t, interpolating between neighbouring steps (no extrapolation)."""
+def row_at(
+    rows: list[MemberStep], times: list[datetime], t: datetime
+) -> tuple[MemberStep | None, bool]:
+    """(the member's own row at t, or the row before t; True when t is not a member step)."""
     i = bisect.bisect_left(times, t)
     if i < len(times) and times[i] == t:
-        return getattr(rows[i], name)
+        return rows[i], False
+    return (rows[i - 1] if i > 0 else None), True
+
+
+def values_at(
+    rows: list[MemberStep], times: list[datetime], t: datetime, names: Sequence[str]
+) -> dict[str, float | None]:
+    """Fields ``names`` at time t, interpolating between neighbouring steps (no
+    extrapolation); one search of ``times`` serves every field."""
+    i = bisect.bisect_left(times, t)
+    if i < len(times) and times[i] == t:
+        row = rows[i]
+        return {name: getattr(row, name) for name in names}
     if i == 0 or i == len(times):
-        return None
+        return dict.fromkeys(names)
     t0, t1 = times[i - 1], times[i]
     if t1 - t0 > MAX_INTERP_GAP:
-        return None
-    v0, v1 = getattr(rows[i - 1], name), getattr(rows[i], name)
-    if v0 is None or v1 is None:
-        return None
+        return dict.fromkeys(names)
+    before, after = rows[i - 1], rows[i]
     frac = (t - t0) / (t1 - t0)
-    if name in DIRECTION_FIELDS:
-        return _interp_angle(v0, v1, frac)
-    return float(v0 + (v1 - v0) * frac)
+    out: dict[str, float | None] = {}
+    for name in names:
+        v0, v1 = getattr(before, name), getattr(after, name)
+        if v0 is None or v1 is None:
+            out[name] = None
+        elif name in DIRECTION_FIELDS:
+            out[name] = _interp_angle(v0, v1, frac)
+        else:
+            out[name] = float(v0 + (v1 - v0) * frac)
+    return out
 
 
 # --------------------------------------------------------------------------- weights
-def correlated_weights(sigmas: list[float], families: list[str]) -> list[float]:
+def correlated_weights(sigmas: Sequence[float], families: Sequence[str]) -> list[float]:
     """BLUE weights for estimators with correlated errors, clipped at zero."""
+    return list(_correlated_weights(tuple(sigmas), tuple(families)))
+
+
+@functools.lru_cache(maxsize=4096)
+def _correlated_weights(sigmas: tuple[float, ...], families: tuple[str, ...]) -> tuple[float, ...]:
+    # The weights depend on the hour's lead times and families, not on the spot, so one
+    # blend solves each system once instead of once per spot.
     n = len(sigmas)
     if n == 1:
-        return [1.0]
+        return (1.0,)
     cov = np.empty((n, n))
     for i in range(n):
         for j in range(n):
@@ -238,8 +346,8 @@ def correlated_weights(sigmas: list[float], families: list[str]) -> list[float]:
     raw = np.clip(raw, 0.0, None)
     total = float(raw.sum())
     if total <= 0:
-        return [1.0 / n] * n
-    return [float(w) / total for w in raw]
+        return (1.0 / n,) * n
+    return tuple(float(w) / total for w in raw)
 
 
 @dataclass
@@ -294,12 +402,56 @@ class HourValues:
     lead_hours: float
     values: dict[str, float | None]
     period_kind: str | None
+    gust_kind: str | None = None
+    # The member's values at this time are interpolated (time alignment or its source).
+    interpolated: bool = False
+
+
+def blend_wind_direction(hours: list[HourValues], weights: dict[str, float]) -> float | None:
+    """Direction (FROM, degrees) of the weighted mean wind vector of the members.
+
+    Each member's velocity is u = -V sin(theta), v = -V cos(theta); the blended direction is
+    the direction the mean (u, v) comes from, so members pull in proportion to w * V. When
+    the vectors cancel exactly (or every member is calm), the direction of the member with
+    the largest weighted speed is kept; members with a direction but no speed count with
+    unit length only if no member has a speed.
+    """
+    with_speed = [
+        h
+        for h in hours
+        if weights.get(h.code, 0.0) > 0
+        and h.values.get("wind_direction_deg") is not None
+        and h.values.get("wind_speed_kmh") is not None
+    ]
+    directed = with_speed or [
+        h
+        for h in hours
+        if weights.get(h.code, 0.0) > 0 and h.values.get("wind_direction_deg") is not None
+    ]
+    if not directed:
+        return None
+
+    def length(h: HourValues) -> float:
+        speed = h.values.get("wind_speed_kmh")
+        scale = max(float(speed), 0.0) if with_speed and speed is not None else 1.0
+        return weights[h.code] * scale
+
+    u = v = 0.0
+    for h in directed:
+        theta = math.radians(float(h.values["wind_direction_deg"] or 0.0))
+        u -= length(h) * math.sin(theta)
+        v -= length(h) * math.cos(theta)
+    if math.hypot(u, v) > 1e-9:
+        return math.degrees(math.atan2(-u, -v)) % 360.0
+    strongest = max(directed, key=length)
+    return float(strongest.values["wind_direction_deg"] or 0.0) % 360.0
 
 
 def blend_hour(
     hours: list[HourValues], skill: SkillTable
-) -> tuple[dict[str, float | None], dict[str, float], str | None]:
-    """(blended values, weight per source code, period kind) for one spot and hour."""
+) -> tuple[dict[str, float | None], dict[str, float], str | None, str | None]:
+    """(blended values, weight per source code, period kind, gust kind) for one spot and
+    hour."""
     with_hs = [h for h in hours if (h.values.get("sig_wave_height_m") or 0) > 0]
     weights: dict[str, float] = {}
     if with_hs:
@@ -316,7 +468,7 @@ def blend_hour(
                 acc += w * v
         return acc / total if total > 0 else None
 
-    out: dict[str, float | None] = {k: None for k in FORECAST_FIELDS}
+    out: dict[str, float | None] = dict.fromkeys(FORECAST_FIELDS)
     structure = next(
         (h for h in hours if h.values.get("primary_swell_height_m") is not None), hours[0]
     )
@@ -346,21 +498,47 @@ def blend_hour(
         out[name] = v * ratio if v is not None and name in PARTITION_HEIGHTS else v
 
     out["wind_speed_kmh"] = wmean("wind_speed_kmh", hours)
-    out["wind_gust_kmh"] = wmean("wind_gust_kmh", hours)
+    gusty = [h for h in hours if h.values.get("wind_gust_kmh") is not None and weights.get(h.code)]
+    gust_kind: str | None = None
+    if gusty:
+        lead = max(gusty, key=lambda h: weights[h.code])
+        gust_kind = lead.gust_kind or "unknown"
+        same = [h for h in gusty if (h.gust_kind or "unknown") == gust_kind]
+        out["wind_gust_kmh"] = wmean("wind_gust_kmh", same)
     out["pressure_msl_hpa"] = wmean("pressure_msl_hpa", hours)
-    vx = vy = 0.0
-    for h in hours:
-        d, w = h.values.get("wind_direction_deg"), weights.get(h.code, 0.0)
-        if d is not None and w > 0:
-            vx += w * math.sin(math.radians(d))
-            vy += w * math.cos(math.radians(d))
-    out["wind_direction_deg"] = (
-        math.degrees(math.atan2(vx, vy)) % 360.0 if math.hypot(vx, vy) > 1e-9 else None
-    )
+    out["wind_direction_deg"] = blend_wind_direction(hours, weights)
     out["sea_level_m"] = next(
         (h.values["sea_level_m"] for h in hours if h.values.get("sea_level_m") is not None), None
     )
-    return out, weights, period_kind
+    return out, weights, period_kind, gust_kind
+
+
+def gust_members(
+    hours: list[HourValues], weights: dict[str, float], gust_kind: str | None
+) -> tuple[list[str], float | None]:
+    """(codes of the members the blended gust came from, their own weighted mean wind) when
+    they are not every member behind the blended mean wind; ([], None) otherwise."""
+    if gust_kind is None:
+        return [], None
+    same = [
+        h
+        for h in hours
+        if weights.get(h.code)
+        and h.values.get("wind_gust_kmh") is not None
+        and (h.gust_kind or "unknown") == gust_kind
+    ]
+    windy = {
+        h.code for h in hours if weights.get(h.code) and h.values.get("wind_speed_kmh") is not None
+    }
+    if not same or {h.code for h in same} == windy:
+        return [], None
+    total = acc = 0.0
+    for h in same:
+        speed = h.values.get("wind_speed_kmh")
+        if speed is not None:
+            total += weights[h.code]
+            acc += weights[h.code] * speed
+    return sorted(h.code for h in same), (acc / total if total > 0 else None)
 
 
 def angular_diff(a: float, b: float) -> float:
@@ -371,7 +549,7 @@ def compare_hour(hours: list[HourValues], duplicates: list[HourValues]) -> dict[
     """Pairwise disagreement between independent families, plus same-family checks."""
     hs_r = tp_d = dir_d = wind_d = None
     flags: list[str] = []
-    direction_flag = False
+    direction_flag = wind_direction_flag = False
     for i, a in enumerate(hours):
         for b in hours[i + 1 :]:
             if not are_independent(a.family, b.family):
@@ -397,6 +575,14 @@ def compare_hour(hours: list[HourValues], duplicates: list[HourValues]) -> dict[
             wa, wb = a.values.get("wind_speed_kmh"), b.values.get("wind_speed_kmh")
             if wa is not None and wb is not None:
                 wind_d = max(wind_d or 0.0, abs(wa - wb))
+                ta, tb = a.values.get("wind_direction_deg"), b.values.get("wind_direction_deg")
+                if (
+                    ta is not None
+                    and tb is not None
+                    and min(wa, wb) >= WIND_DIRECTION_FLAG_MIN_KMH
+                    and angular_diff(ta, tb) > WIND_DIRECTION_FLAG_DEG
+                ):
+                    wind_direction_flag = True
     if hs_r is not None and hs_r > HS_LOG_RATIO_FLAG:
         flags.append("hs_disagree")
     if tp_d is not None and tp_d > TP_DIFF_FLAG_S:
@@ -405,6 +591,8 @@ def compare_hour(hours: list[HourValues], duplicates: list[HourValues]) -> dict[
         flags.append("direction_disagree")
     if wind_d is not None and wind_d > WIND_DIFF_FLAG_KMH:
         flags.append("wind_disagree")
+    if wind_direction_flag:
+        flags.append("wind_direction_disagree")
     by_family = {h.family: h for h in hours}
     for dup in duplicates:
         ref = by_family.get(dup.family)
@@ -505,9 +693,11 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
             dup_hours: list[HourValues] = []
             corrected: dict[str, dict[str, Any]] = {}
             for m, rows, times in aligned:
-                values = {name: value_at(rows, times, t, name) for name in FORECAST_FIELDS}
+                values = values_at(rows, times, t, FORECAST_FIELDS)
                 if all(v is None for v in values.values()):
                     continue
+                own, between_steps = row_at(rows, times, t)
+                own_extra = own.extra if own is not None else None
                 corrector = correctors.get(m.code) if m in members else None
                 if corrector is not None:
                     row = {**values, "wave_period_kind": rows[0].wave_period_kind}
@@ -522,14 +712,33 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
                     (t - m.run.issued_at).total_seconds() / 3600.0,
                     values,
                     rows[0].wave_period_kind,
+                    gust_kind=gust_kind_for(m.code, own_extra),
+                    interpolated=between_steps
+                    or bool((own_extra or {}).get(EXTRA_INTERPOLATED, False)),
                 )
                 (hours if m in members else dup_hours).append(hv)
             if not hours:
                 continue
-            values, weights, kind = blend_hour(hours, skill)
+            values, weights, kind, gust_kind = blend_hour(hours, skill)
             if values["sig_wave_height_m"] is None and values["primary_swell_height_m"] is None:
                 continue
             extra: dict[str, Any] = {"families": len({h.family for h in hours})}
+            used = [h for h in hours if weights.get(h.code)] or hours
+            interpolated = sorted(h.code for h in used if h.interpolated)
+            if interpolated:
+                extra[EXTRA_INTERPOLATED] = True
+                extra["interpolated_members"] = interpolated
+            if values["wind_gust_kmh"] is not None and gust_kind is not None:
+                extra[EXTRA_GUST_KIND] = gust_kind
+                extra["gust_kinds"] = {
+                    h.code: h.gust_kind or "unknown"
+                    for h in hours
+                    if h.values.get("wind_gust_kmh") is not None
+                }
+                codes, member_mean = gust_members(hours, weights, gust_kind)
+                if member_mean is not None:
+                    extra["gust_members"] = codes
+                    extra["gust_member_mean_kmh"] = round(member_mean, 2)
             if corrected:
                 extra["ml_corrections"] = corrected
             out.append(ForecastRecord(t, values, period_kind=kind, extra=extra))
@@ -562,8 +771,10 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
         if out:
             records[spot_id] = out
     count = store_records(db, run, records)
-    stmt = insert(ForecastComparison).on_conflict_do_nothing(
-        index_elements=["blend_run_id", "spot_id", "valid_time"]
+    stmt = (
+        insert(ForecastComparison)
+        .on_conflict_do_nothing(index_elements=["blend_run_id", "spot_id", "valid_time"])
+        .execution_options(render_nulls=True)  # one batched statement per chunk
     )
     for i in range(0, len(comparisons), INSERT_CHUNK):
         db.execute(stmt, comparisons[i : i + INSERT_CHUNK])

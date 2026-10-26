@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.sync import SyncHealthOut
+
 OverallStatus = Literal["ok", "degraded", "failing"]
 Severity = Literal["degraded", "failing"]
 SourceRole = Literal["forecast", "blend", "ensemble"]
@@ -87,10 +89,29 @@ class HeartbeatOut(BaseModel):
     limit_minutes: int
 
 
+class RedisHealthOut(BaseModel):
+    """Redis (Celery broker, locks, call budgets, provider response cache): memory used
+    against its cap. With ``noeviction`` a full Redis refuses writes, so new jobs fail."""
+
+    available: bool
+    used_memory_bytes: int | None = None
+    # Redis's own maxmemory; None when Redis runs without a cap (maxmemory 0).
+    maxmemory_bytes: int | None = None
+    maxmemory_policy: str | None = None
+    # What used_fraction is measured against: Redis's maxmemory, or REDIS_MAXMEMORY (the
+    # cap docker-compose sets) when this Redis has none.
+    cap_bytes: int | None = None
+    cap_source: Literal["redis", "setting"] | None = None
+    used_fraction: float | None = None
+    # DATA_HEALTH_REDIS_MAX_FRACTION.
+    alert_fraction: float
+
+
 class StorageOut(BaseModel):
     database_bytes: int
     # DATA_HEALTH_DATABASE_MAX_GB; None = no limit configured.
     database_max_gb: float | None = None
+    redis: RedisHealthOut | None = None
 
 
 class DataHealthOut(BaseModel):
@@ -105,3 +126,5 @@ class DataHealthOut(BaseModel):
     observations: ObservationsHealthOut
     heartbeat: HeartbeatOut
     storage: StorageOut
+    # The synced pipeline: runner, last check, last and last published sync, components.
+    sync: SyncHealthOut | None = None

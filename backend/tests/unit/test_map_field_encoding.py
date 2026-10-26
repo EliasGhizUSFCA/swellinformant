@@ -15,20 +15,24 @@ import pytest
 
 from app.core.config import Settings
 from app.services.forecasts.fields import (
+    CORE_FIELD_VARIABLES,
     FIELD_VARIABLES,
     NODATA,
+    PARTITION_FIELD_VARIABLES,
     QUANTISATION,
     EncodedField,
     FieldSink,
+    MaskSums,
     TargetGrid,
     complete_times,
     decode_bytes,
     encode_field,
     regrid_mean,
+    regrid_variable,
     summarise,
 )
-from app.services.forecasts.noaa import map_field_hours
-from app.services.map_fields import map_fields_mode
+from app.services.forecasts.noaa import forecast_hours
+from app.services.map_fields import map_field_hours, map_fields_mode
 
 VALID = datetime(2026, 10, 10, 18, tzinfo=UTC)
 T = TargetGrid(0.5)
@@ -192,9 +196,46 @@ def test_factor_converts_units_after_averaging() -> None:
     assert np.allclose(regrid_mean(src, T, factor=0.01), 1013.25)
 
 
+def test_mask_sums_reuse_a_mask_and_give_the_same_grids() -> None:
+    def with_land(fill: float) -> Src:
+        src = gfs_like(fill)
+        src.values[100:200, 300:400] = np.nan  # the same land patch in every field
+        return src
+
+    sums = MaskSums(kept=2)
+    for fill in (2.0, 3.0):  # different values, one valid mask: summed once
+        src = with_land(fill)
+        assert np.array_equal(
+            regrid_mean(src, T, mask_sums=sums), regrid_mean(src, T), equal_nan=True
+        )
+    assert len(sums._sums) == 1
+    # A partition's box area (a second mask) and its mixing guard give the same grid too.
+    sea = ~np.isnan(with_land(1.0).values)
+    sea[:, :720] = False
+    swell = with_land(1.5)
+    assert np.array_equal(
+        regrid_variable("swell1_hs", swell, T, area=sea, mask_sums=sums),
+        regrid_variable("swell1_hs", swell, T, area=sea),
+        equal_nan=True,
+    )
+    assert len(sums._sums) == 2
+    regrid_mean(gfs_like(1.0), T, mask_sums=sums)  # a third mask: the oldest one goes
+    assert len(sums._sums) == 2
+    assert not any(a.flags.writeable for a in sums._sums.values())
+
+
 # --------------------------------------------------------------------------- quantisation
 def test_quantisation_table_is_the_documented_one() -> None:
     table = {k: (q.unit, q.offset, q.scale) for k, q in QUANTISATION.items()}
+    partition = {
+        f"{p}_{v}": spec
+        for p in ("swell1", "swell2", "windsea")
+        for v, spec in (
+            ("hs", ("m", 0.0, 0.1)),
+            ("tp", ("s", 0.0, 0.1)),
+            ("dir", ("deg", 0.0, 1.5)),
+        )
+    }
     assert table == {
         "hs": ("m", 0.0, 0.1),
         "tp": ("s", 0.0, 0.1),
@@ -202,8 +243,23 @@ def test_quantisation_table_is_the_documented_one() -> None:
         "wind_u": ("m/s", -63.5, 0.5),
         "wind_v": ("m/s", -63.5, 0.5),
         "pressure": ("hPa", 860.0, 1.0),
+        **partition,
     }
-    assert FIELD_VARIABLES == ("hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure")
+    # The six core variables first (the served order), then the nine optional partitions.
+    assert CORE_FIELD_VARIABLES == ("hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure")
+    assert PARTITION_FIELD_VARIABLES == (
+        "swell1_hs",
+        "swell1_tp",
+        "swell1_dir",
+        "swell2_hs",
+        "swell2_tp",
+        "swell2_dir",
+        "windsea_hs",
+        "windsea_tp",
+        "windsea_dir",
+    )
+    assert FIELD_VARIABLES == CORE_FIELD_VARIABLES + PARTITION_FIELD_VARIABLES
+    assert all(QUANTISATION[v].cyclic == v.endswith("_dir") for v in FIELD_VARIABLES)
 
 
 @pytest.mark.parametrize(
@@ -215,6 +271,9 @@ def test_quantisation_table_is_the_documented_one() -> None:
         ("wind_u", -63.5, 63.5),
         ("wind_v", -63.5, 63.5),
         ("pressure", 860.0, 1114.0),
+        ("swell1_hs", 0.0, 25.4),
+        ("swell2_tp", 0.0, 25.4),
+        ("windsea_dir", 0.0, 359.99),
     ],
 )
 def test_round_trip_within_half_a_step(variable: str, lo: float, hi: float) -> None:
@@ -249,6 +308,23 @@ def test_directions_wrap_instead_of_clamping() -> None:
     assert raw.max() < NODATA
 
 
+@pytest.mark.parametrize("variable", ["swell1_dir", "swell2_dir", "windsea_dir"])
+def test_partition_directions_wrap_and_absent_partitions_are_nodata(variable: str) -> None:
+    # GRIB SWDIR holds exact 360.0 values (= north): byte 0, like wave_dir.
+    raw = QUANTISATION[variable].encode(np.array([360.0, 225.0, 0.0, np.nan]))
+    assert raw.tolist() == [0, 150, 0, NODATA]
+
+
+@pytest.mark.parametrize("variable", PARTITION_FIELD_VARIABLES)
+def test_an_absent_partition_is_255_never_0(variable: str) -> None:
+    values = np.full((361, 720), np.nan)  # no partition anywhere (as over land, or calm)
+    values[100, 200] = 0.0  # one real zero stays a zero (byte 0)
+    field = encode_field(variable, VALID, Src(values, 90.0, -180.0, -0.5, 0.5), T)
+    raw = np.frombuffer(zlib.decompress(field.data), dtype=np.uint8).reshape(361, 720)
+    assert raw[100, 200] == 0 and np.count_nonzero(raw == NODATA) == 361 * 720 - 1
+    assert np.isnan(field.values()).sum() == 361 * 720 - 1
+
+
 def test_bytes_are_row_major_north_to_south_zlib_level_6() -> None:
     src = gfs_like(1.0)
     src.values[: 4 * 90 + 1] = 5.0  # northern hemisphere and the equator row: 5 m
@@ -270,11 +346,11 @@ def _field(variable: str, when: datetime) -> EncodedField:
 def test_sink_keeps_wanted_hours_and_reports_incomplete_ones() -> None:
     sink = FieldSink(VALID, [0, 3, 6], 0.5)
     assert sink.wants(3) and not sink.wants(4)
-    sink.put([sink.encode(0, v, gfs_like(1.0)) for v in FIELD_VARIABLES])
+    sink.put([sink.encode(0, v, gfs_like(1.0)) for v in CORE_FIELD_VARIABLES])
     sink.put([sink.encode(3, "hs", gfs_like(1.0)), None])
     sink.put([sink.encode(3, "hs", gfs_like(2.0))])  # same key: replaced, not duplicated
     assert len(sink.fields) == 7
-    assert [f.variable for f in sink.fields][:6] == list(FIELD_VARIABLES)
+    assert [f.variable for f in sink.fields][:6] == list(CORE_FIELD_VARIABLES)
     assert complete_times(sink.fields) == [VALID]
     assert np.nanmax(sink.fields[-1].values()) == pytest.approx(2.0)
     assert sink.warnings == [
@@ -291,19 +367,29 @@ def test_sink_encoding_failure_is_a_warning_not_an_exception() -> None:
 
 
 def test_summary_of_a_run() -> None:
-    fields = [_field(v, VALID) for v in FIELD_VARIABLES] + [_field("hs", VALID + timedelta(3))]
+    later = VALID + timedelta(3)
+    fields = [_field(v, VALID) for v in CORE_FIELD_VARIABLES]
+    fields += [_field(v, later) for v in ("hs", *PARTITION_FIELD_VARIABLES)]
     out = summarise(fields, ["w"])
-    assert out["count"] == 7 and out["bytes"] == sum(len(f.data) for f in fields)
+    assert out["count"] == 16 and out["bytes"] == sum(len(f.data) for f in fields)
+    # Complete = the six core variables; the partitions are listed on their own.
     assert out["valid_times"] == [VALID.isoformat()] and out["warnings"] == ["w"]
+    assert out["partition_times"] == [later.isoformat()]
 
 
 # --------------------------------------------------------------------------- settings
-def test_map_hours_are_published_multiples_of_the_step() -> None:
-    assert map_field_hours(12, 3) == [0, 3, 6, 9, 12]
-    default = map_field_hours(240, 3)
-    assert len(default) == 81 and default[-1] == 240
-    assert map_field_hours(150, 4)[-3:] == [120, 132, 144]  # after f120: 3-hourly files only
-    assert map_field_hours(999, 6)[-1] == 384
+def test_map_hours_follow_map_field_steps_on_published_hours() -> None:
+    s = Settings()
+    default = map_field_hours(s)
+    assert len(default) == 61 and default[:3] == [0, 3, 6] and default[-1] == 240
+    assert default[40:43] == [120, 126, 132]  # 120 is in both ranges and counted once
+    assert map_field_hours(s, max_lead_hours=12) == [0, 3, 6, 9, 12]
+    # After f120 only every third hour is published: 122, 124, 128 and 130 do not exist.
+    odd = s.model_copy(update={"map_field_steps": "0-4:2,120-130:2"})
+    assert map_field_hours(odd) == [0, 2, 4, 120, 126]
+    beyond = s.model_copy(update={"map_field_steps": "0-999:24", "map_field_max_lead_hours": 384})
+    assert map_field_hours(beyond)[-1] == 384
+    assert set(map_field_hours(beyond)) <= set(forecast_hours(384, 1))
 
 
 @pytest.mark.parametrize(
@@ -316,6 +402,11 @@ def test_map_hours_are_published_multiples_of_the_step() -> None:
         ("demo", True, "standalone"),
         ("open_meteo", True, "standalone"),
         ("open_meteo", False, "off"),
+        # Unset: standalone whenever live spot data come from anything but noaa_gfs.
+        ("open_meteo", None, "standalone"),
+        ("open_meteo,open_meteo_ecmwf", None, "standalone"),
+        ("ecmwf_ifs", None, "standalone"),
+        ("open_meteo,noaa_gfs", None, "with_noaa"),
     ],
 )
 def test_map_fields_mode(providers: str, enabled: bool | None, mode: str) -> None:

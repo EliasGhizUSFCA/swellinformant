@@ -17,6 +17,7 @@ import type {
   SpotDetail,
   SpotForecast,
   SpotSummary,
+  SpotTimeline,
   SwellEvent,
   SystemStatus,
   User,
@@ -28,6 +29,7 @@ export const qk = {
   spots: ["spots"] as const,
   spot: (slug: string) => ["spot", slug] as const,
   forecast: (slug: string, days: number) => ["forecast", slug, days] as const,
+  timeline: (slug: string, days: number) => ["timeline", slug, days] as const,
   spotEvents: (slug: string) => ["spot-events", slug] as const,
   spotOpportunities: (slug: string) => ["spot-opportunities", slug] as const,
   events: (limit: number, minScore: number) => ["events", limit, minScore] as const,
@@ -36,7 +38,7 @@ export const qk = {
   searchMatches: (id: string) => ["search-matches", id] as const,
   opportunities: (includePast: boolean) => ["opportunities", includePast] as const,
   opportunity: (id: string) => ["opportunity", id] as const,
-  notifications: (offset: number) => ["notifications", offset] as const,
+  notifications: (offset: number, limit: number) => ["notifications", offset, limit] as const,
   airports: (q: string) => ["airports", q] as const,
   regions: ["regions"] as const,
   status: ["system-status"] as const,
@@ -75,6 +77,14 @@ export const useForecast = (slug: string, days = 10) =>
     staleTime: 120_000,
   });
 
+/** Every chart row of the spot page on one time axis (fetched once; selection is client-side). */
+export const useSpotTimeline = (slug: string, days = 10) =>
+  useQuery({
+    queryKey: qk.timeline(slug, days),
+    queryFn: ({ signal }) => get<SpotTimeline>(`/api/spots/${slug}/timeline?days=${days}`, signal),
+    staleTime: 120_000,
+  });
+
 export const useSpotEvents = (slug: string) =>
   useQuery({ queryKey: qk.spotEvents(slug), queryFn: ({ signal }) => get<SwellEvent[]>(`/api/spots/${slug}/events`, signal) });
 
@@ -104,11 +114,15 @@ export const useSearchMatches = (id: string) =>
     queryFn: ({ signal }) => get<MatchSummary[]>(`/api/searches/${id}/matches`, signal),
   });
 
+/** The signed-in user's opportunities (no-store: every read reaches the database). Read on
+ * mount and when the window regains focus (after the 30 s staleTime), never on a timer: a
+ * poll every minute kept a scale-to-zero database (Neon) awake for as long as any dashboard
+ * stayed visible, while matching runs hourly and after syncs anyway. */
 export const useOpportunities = (includePast = false) =>
   useQuery({
     queryKey: qk.opportunities(includePast),
     queryFn: ({ signal }) => get<MatchSummary[]>(`/api/opportunities?include_past=${includePast}`, signal),
-    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
 export const useOpportunity = (id: string) =>
@@ -116,7 +130,7 @@ export const useOpportunity = (id: string) =>
 
 export const useNotifications = (offset = 0, limit = 50) =>
   useQuery({
-    queryKey: qk.notifications(offset),
+    queryKey: qk.notifications(offset, limit),
     queryFn: ({ signal }) => get<NotificationPage>(`/api/notifications?limit=${limit}&offset=${offset}`, signal),
   });
 
@@ -126,13 +140,6 @@ export const useAirports = (q: string) =>
     queryFn: ({ signal }) => get<Airport[]>(`/api/airports?q=${encodeURIComponent(q)}&limit=12`, signal),
     enabled: q.trim().length >= 2,
     staleTime: 600_000,
-  });
-
-export const useAllAirports = () =>
-  useQuery({
-    queryKey: ["airports-all"],
-    queryFn: ({ signal }) => get<Airport[]>("/api/airports?limit=200", signal),
-    staleTime: 3_600_000,
   });
 
 export const useRegions = () =>
@@ -181,7 +188,9 @@ export const useVerificationStatus = (enabled: boolean) =>
   });
 
 /** All spots at one forecast hour (cached predictions). Keeps the previous hour on screen
- * while the next loads so scrubbing the time control never blanks the map. */
+ * while the next loads so scrubbing the time control never blanks the map. The "now" snapshot
+ * (`at` null) is refreshed every 5 minutes and when the window regains focus, so a page left
+ * open picks up new model runs. */
 export const useMapConditions = (at: string | null) =>
   useQuery({
     queryKey: qk.mapConditions(at),
@@ -189,4 +198,6 @@ export const useMapConditions = (at: string | null) =>
       get<MapSnapshot>(at ? `/api/map/conditions?at=${encodeURIComponent(at)}` : "/api/map/conditions", signal),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
+    refetchInterval: at === null ? 300_000 : false,
+    refetchOnWindowFocus: at === null,
   });

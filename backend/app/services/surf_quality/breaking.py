@@ -12,8 +12,9 @@ shoal, refract, focus or lose energy depending on bathymetry and exposure.
    period-dependent focusing prior, energy-flux combination and an optional depth limit.
 
 The reported range runs from the significant breaking height (typical larger waves) to
-the sets (1.27 × Hb). Version 1 (``komar_gaughan_v1_uncalibrated``: root-sum-square of
-partitions, ×0.7 wind sea, 0.8–1.3 × mid) is kept for comparison in backtests.
+the sets (1.27 × Hb). Version 1 (root-sum-square of partitions, ×0.7 wind sea,
+0.8–1.3 × mid) has been removed; its method name ``komar_gaughan_v1_uncalibrated`` is kept
+so older stored predictions still read.
 
 Neither model has been validated against observed surf at these spots; no open surf
 observation dataset exists for them. See docs/SURF_SCORING.md.
@@ -21,23 +22,20 @@ observation dataset exists for them. See docs/SURF_SCORING.md.
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
-from app.services.geo import window_distance
 from app.services.surf_quality import nearshore
-from app.services.surf_quality.models import BreakingEstimate, SeaState, SpotParams
+from app.services.surf_quality.models import (
+    BreakingEstimate,
+    PartitionFlux,
+    SeaState,
+    SpotParams,
+)
 from app.services.units import m_to_ft, round_half
 
-G = nearshore.G
-RANGE_LOW = 0.8  # version 1 only
-RANGE_HIGH = 1.3  # version 1 only
-WIND_SEA_FACTOR = 0.7  # version 1 only
 METHOD_APPROX_V1 = "komar_gaughan_v1_uncalibrated"
 METHOD_PHYSICAL = nearshore.METHOD
 METHOD_CALIBRATED = "calibrated_power_law"
-
-komar_gaughan_m = nearshore.komar_gaughan_m
 
 
 def partitions_from_sea(sea: SeaState) -> list[nearshore.Partition]:
@@ -133,43 +131,19 @@ def estimate_breaking_height(sea: SeaState, spot: SpotParams) -> BreakingEstimat
         ],
         assumptions=result.assumptions,
         depth_limited=result.depth_limited,
+        flux=[
+            PartitionFlux(p.name, p.height_m, p.period_s, p.direction_deg, p.breaking_m)
+            for p in result.partitions
+        ],
     )
 
 
-# --------------------------------------------------------------------------- version 1
-def exposure_factor(direction_deg: float | None, spot: SpotParams) -> float:
-    """Version 1: fraction of a swell's height that reaches the break from a direction."""
-    if direction_deg is None:
-        return 0.6  # unknown direction: conservative
-    d_opt = window_distance(
-        direction_deg, spot.optimal_swell_direction_min, spot.optimal_swell_direction_max
-    )
-    factor = math.sqrt(max(0.0, math.cos(math.radians(min(d_opt, 85.0)))))
-    d_exp = window_distance(direction_deg, spot.swell_window_min, spot.swell_window_max)
-    if d_exp > 0:
-        factor *= math.exp(-((d_exp / 15.0) ** 2))
-    return factor
-
-
-def estimate_breaking_height_v1(sea: SeaState, spot: SpotParams) -> BreakingEstimate:
-    """The version 1 heuristic, kept so backtests can compare it with version 2."""
-    energy = 0.0
-    details: list[dict[str, Any]] = []
-    for p in partitions_from_sea(sea):
-        mult = WIND_SEA_FACTOR if p.wind_sea else 1.0
-        hb_m = komar_gaughan_m(p.height_m, p.period_s) * exposure_factor(p.direction_deg, spot)
-        hb_m *= mult
-        energy += hb_m**2
-        details.append({"name": p.name, "breaking_ft": m_to_ft(hb_m)})
-    mid_ft = m_to_ft(math.sqrt(energy)) * spot.height_factor
-    return BreakingEstimate(
-        min_ft=round_half(mid_ft * RANGE_LOW),
-        max_ft=round_half(mid_ft * RANGE_HIGH),
-        mid_ft=round(mid_ft, 2),
-        method=METHOD_APPROX_V1,
-        calibrated=False,
-        partitions=details,
-    )
+def driving_partition(pred: Any) -> dict[str, Any] | None:
+    """The partition of a stored prediction (``components``) with the largest predicted
+    breaking height in its nearshore breakdown; None without a breakdown."""
+    breakdown = (pred.components or {}).get("breaking") or {}
+    parts = [p for p in breakdown.get("partitions") or [] if (p.get("breaking_m") or 0) > 0]
+    return max(parts, key=lambda p: p["breaking_m"]) if parts else None
 
 
 def dominant_component(pred: Any, fc: Any) -> tuple[float | None, float | None, float | None]:
@@ -178,13 +152,11 @@ def dominant_component(pred: Any, fc: Any) -> tuple[float | None, float | None, 
     ``pred`` is a stored prediction (``components``), ``fc`` its wave_forecasts row.
 
     That is the partition with the largest predicted breaking height in the prediction's
-    nearshore breakdown, which may be the wind sea: WW3 ranks only the swells by height, so
-    "primary swell" can be a 0.2 m remnant under a 2 m wind sea. Without a breakdown, the
-    bulk sea state (Hs, Tp, peak direction) is used.
+    nearshore breakdown (:func:`driving_partition`), which may be the wind sea: WW3 ranks
+    only the swells by height, so "primary swell" can be a 0.2 m remnant under a 2 m wind
+    sea. Without a breakdown, the bulk sea state (Hs, Tp, peak direction) is used.
     """
-    breakdown = (pred.components or {}).get("breaking") or {}
-    parts = [p for p in breakdown.get("partitions") or [] if (p.get("breaking_m") or 0) > 0]
-    if parts:
-        best = max(parts, key=lambda p: p["breaking_m"])
+    best = driving_partition(pred)
+    if best is not None:
         return best.get("height_m"), best.get("period_s"), best.get("direction_deg")
     return fc.sig_wave_height_m, fc.wave_period_s, fc.wave_direction_deg

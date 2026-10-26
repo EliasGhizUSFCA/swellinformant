@@ -71,3 +71,40 @@ def is_daylight(lat: float, lon: float, when: datetime) -> bool:
     if state == "polar_night" or sunrise is None or sunset is None:
         return False
     return sunrise - TWILIGHT_MARGIN <= when <= sunset + TWILIGHT_MARGIN
+
+
+def daylight_windows(
+    lat: float,
+    lon: float,
+    start: datetime,
+    end: datetime,
+    margin: timedelta = TWILIGHT_MARGIN,
+) -> list[tuple[datetime, datetime]]:
+    """First light to last light (sunrise - margin to sunset + margin) within [start, end),
+    merged and in time order: with the default margin the same rule as
+    :func:`is_daylight`, as intervals; ``margin=timedelta(0)`` gives sunrise to sunset. A
+    polar day is light for its whole local solar day, a polar night never."""
+    start, end = start.astimezone(UTC), end.astimezone(UTC)
+    out: list[tuple[datetime, datetime]] = []
+    day = local_solar_date(lon, start) - timedelta(days=1)
+    last = local_solar_date(lon, end) + timedelta(days=1)
+    while day <= last:
+        sunrise, sunset, state = sun_times(lat, lon, day)
+        if state == "polar_day":
+            solar_midnight = datetime(day.year, day.month, day.day, tzinfo=UTC) - timedelta(
+                hours=lon / 15.0
+            )
+            a, b = solar_midnight, solar_midnight + timedelta(days=1)
+        elif sunrise is not None and sunset is not None:
+            a, b = sunrise - margin, sunset + margin
+        else:
+            day += timedelta(days=1)
+            continue
+        a, b = max(a, start), min(b, end)
+        if b > a:
+            if out and a <= out[-1][1]:
+                out[-1] = (out[-1][0], max(out[-1][1], b))
+            else:
+                out.append((a, b))
+        day += timedelta(days=1)
+    return out

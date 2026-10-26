@@ -16,11 +16,12 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.engine import make_url
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine, make_url
 
 from app.core.config import get_settings
 from app.core.database import get_engine
+from tests.conftest import direct_database_url
 
 pytestmark = pytest.mark.integration
 
@@ -52,8 +53,9 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     base = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-        "DATABASE_URL": get_settings().database_url,
-        "HOME": os.environ.get("HOME", "/tmp"),  # noqa: S108
+        # The tools need a session of their own: the direct URL behind a pooler.
+        "DATABASE_URL": direct_database_url(),
+        "HOME": os.environ.get("HOME", "/tmp"),
     }
     return subprocess.run(  # noqa: S603 - our own scripts with fixed arguments
         [str(SCRIPTS / script), *args],
@@ -64,6 +66,12 @@ def run(
         timeout=300,
         check=False,
     )
+
+
+def direct_admin() -> Engine:
+    """An AUTOCOMMIT engine on the direct URL, for CREATE and DROP DATABASE (a pooler in
+    transaction mode keeps idle server connections and refuses the drop)."""
+    return create_engine(direct_database_url(), isolation_level="AUTOCOMMIT")
 
 
 def db_name() -> str:
@@ -142,7 +150,7 @@ def test_backups_are_never_picked_up_by_git(tools: None, tmp_path: Path) -> None
 
 
 def test_failed_backup_leaves_no_file(tools: None, tmp_path: Path) -> None:
-    url = make_url(get_settings().database_url).set(database="swell_no_such_database_ops")
+    url = make_url(direct_database_url()).set(database="swell_no_such_database_ops")
     result = run(
         "backup-db.sh",
         "--dir",
@@ -182,9 +190,10 @@ def test_in_place_restore_refuses_another_schema_revision(tools: None, tmp_path:
     archive = backup.stdout.strip()
     # One scratch database per run: concurrent runs on one server used to share this name.
     scratch = f"{db_name()[:40]}_revcheck_{uuid.uuid4().hex[:8]}"
-    url = make_url(get_settings().database_url)
+    url = make_url(direct_database_url())
     scratch_url = url.set(database=scratch).render_as_string(hide_password=False)
-    with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+    admin = direct_admin()
+    with admin.connect() as conn:
         conn.execute(text(f"DROP DATABASE IF EXISTS {scratch}"))
     try:
         created = run("restore-db.sh", "--yes", "--create", "--target-db", scratch, archive)
@@ -215,13 +224,14 @@ def test_in_place_restore_refuses_another_schema_revision(tools: None, tmp_path:
         assert in_place.returncode == 0, in_place.stderr
         assert f"schema revision: backup {revision}, target {revision}" in in_place.stderr
     finally:
-        with get_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        with admin.connect() as conn:
             conn.execute(text(f"DROP DATABASE IF EXISTS {scratch}"))
+        admin.dispose()
 
 
 def run_cmd(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """A PostgreSQL client tool with the connection settings of ``env``'s DATABASE_URL."""
-    url = make_url((env or {}).get("DATABASE_URL", get_settings().database_url))
+    url = make_url((env or {}).get("DATABASE_URL", direct_database_url()))
     pg = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "PGHOST": url.host or "localhost",

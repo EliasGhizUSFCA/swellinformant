@@ -1,7 +1,35 @@
+import { num } from "@/lib/rating";
 import type { Conditions, ForecastPoint, SpotForecast } from "@/types/api";
+
+interface BreakdownPartition {
+  name?: unknown;
+  height_m?: unknown;
+  period_s?: unknown;
+  direction_deg?: unknown;
+  breaking_m?: unknown;
+}
+
+/**
+ * Height, period and direction of the wave system that drives the surf at this hour: the
+ * partition with the largest predicted breaking height in the stored nearshore breakdown
+ * (``components.breaking.partitions``), exactly as the backend's
+ * ``breaking.dominant_component`` picks it for ``Conditions``. That can be the wind sea or a
+ * secondary swell, not necessarily the "primary" swell (the wave model ranks swells by
+ * offshore height only). Without a breakdown, the bulk sea state (Hs, period, direction).
+ */
+export function drivingComponent(p: ForecastPoint): { height: number | null; period: number | null; direction: number | null } {
+  const breaking = (p.components as Record<string, unknown> | undefined)?.breaking as { partitions?: BreakdownPartition[] } | undefined;
+  const parts = (breaking?.partitions ?? []).filter((x) => (num(x.breaking_m) ?? 0) > 0);
+  if (parts.length) {
+    const best = parts.reduce((a, b) => ((num(b.breaking_m) ?? 0) > (num(a.breaking_m) ?? 0) ? b : a));
+    return { height: num(best.height_m), period: num(best.period_s), direction: num(best.direction_deg) };
+  }
+  return { height: p.sig_wave_height_m ?? null, period: p.wave_period_s ?? null, direction: p.wave_direction_deg ?? null };
+}
 
 /** One hour of a spot forecast in the shape the conditions/breakdown components use. */
 export function pointToConditions(p: ForecastPoint, fc: SpotForecast): Conditions {
+  const drive = drivingComponent(p);
   return {
     valid_time: p.valid_time,
     score: p.score,
@@ -13,9 +41,9 @@ export function pointToConditions(p: ForecastPoint, fc: SpotForecast): Condition
     breaking_p90_ft: p.breaking_p90_ft ?? null,
     uncertainty_kind: p.uncertainty_kind ?? null,
     ml_model_version: p.ml_model_version ?? null,
-    swell_height_m: p.primary_swell_height_m ?? p.sig_wave_height_m ?? null,
-    swell_period_s: p.primary_swell_period_s ?? p.wave_period_s ?? null,
-    swell_direction_deg: p.primary_swell_direction_deg ?? p.wave_direction_deg ?? null,
+    swell_height_m: drive.height,
+    swell_period_s: drive.period,
+    swell_direction_deg: drive.direction,
     wind_speed_kmh: p.wind_speed_kmh ?? null,
     wind_direction_deg: p.wind_direction_deg ?? null,
     wind_relation: p.wind_relation,
@@ -35,6 +63,11 @@ export function pointToConditions(p: ForecastPoint, fc: SpotForecast): Condition
     confidence_reasons: p.confidence_reasons ?? [],
     lead_hours: p.lead_hours ?? null,
     local_confidence_reason: p.local_confidence_reason ?? null,
+    forecast_confidence_reasons: p.forecast_confidence_reasons ?? [],
+    wind_dispute_note: p.wind_dispute_note ?? null,
+    wind_strength: p.wind_strength ?? null,
+    wind_favourability: p.wind_favourability ?? null,
+    gust_kind: p.gust_kind ?? null,
   };
 }
 

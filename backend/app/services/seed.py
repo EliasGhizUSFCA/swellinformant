@@ -22,6 +22,7 @@ from app.models import Airport, SpotAirport, SpotPhysicalProfile, SurfSpot
 from app.models.enums import BreakType, SkillLevel, TidePreference
 from app.models.forecast_engine import PROVENANCE_VALUES
 from app.services.geo import haversine_km, window_center, window_contains_window
+from app.services.surf_quality.wind import validate_wind_profile
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,10 @@ SPOT_FIELDS = (
 #             "provenance": {...}}}
 # ``provenance`` (how the values were measured: source tiles, checksums, method) is
 # validated as an object and kept in the file only; ``notes`` carries its summary into the
-# database (there is no provenance column).
+# database (there is no provenance column). ``wind_profile`` (researched wind tolerance and
+# shelter, surf_quality.wind.WindProfile) carries its own ``data_quality`` ("research" or
+# "heuristic default") and the evidence key of every research value, checked against
+# research_evidence.json: each must exist for the spot and have been read directly.
 PROFILE_FIELDS = (
     "shore_normal_deg",
     "forecast_point_depth_m",
@@ -80,6 +84,7 @@ PROFILE_FIELDS = (
     "spreading_deg",
     "regional_correction",
     "reference_stations",
+    "wind_profile",
 )
 
 
@@ -169,26 +174,28 @@ def seed_reference_data(db: Session, data_dir: str | Path | None = None) -> dict
     if problems:
         raise SeedValidationError("; ".join(problems))
 
-    for a in airports_raw:
-        row = {
-            k: a[k]
-            for k in (
-                "iata",
-                "name",
-                "city",
-                "country",
-                "country_code",
-                "latitude",
-                "longitude",
-                "timezone",
+    columns = (
+        "iata",
+        "name",
+        "city",
+        "country",
+        "country_code",
+        "latitude",
+        "longitude",
+        "timezone",
+    )
+    if airports_raw:  # one multi-row upsert
+        stmt = insert(Airport).values([{k: a[k] for k in columns} for a in airports_raw])
+        db.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["iata"], set_={k: stmt.excluded[k] for k in columns}
             )
-        }
-        stmt = insert(Airport).values(row)
-        db.execute(stmt.on_conflict_do_update(index_elements=["iata"], set_=row))
+        )
 
     created = updated = 0
+    existing = {s.slug: s for s in db.scalars(select(SurfSpot))}
     for raw in spots_raw:
-        spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == raw["slug"]))
+        spot = existing.get(raw["slug"])
         if spot is None:
             spot = SurfSpot(slug=raw["slug"])
             db.add(spot)
@@ -205,9 +212,11 @@ def seed_reference_data(db: Session, data_dir: str | Path | None = None) -> dict
                 spot.airports.remove(link)
         db.flush()
         current = {link.airport_iata: link for link in spot.airports}
-        # Clear primary flags first so the "one primary per spot" index never trips mid-update.
-        for link in current.values():
-            link.is_primary = False
+        # Clear the primary flags that change first, so the "one primary per spot" index
+        # never trips mid-update.
+        for iata, link in current.items():
+            if link.is_primary and not wanted[iata].get("is_primary"):
+                link.is_primary = False
         db.flush()
         for iata, a in wanted.items():
             found: SpotAirport | None = current.get(iata)
@@ -272,7 +281,12 @@ def derived_profile_values(spot: SurfSpot) -> dict[str, Any]:
     }
 
 
-def validate_profile(slug: str, raw: dict[str, Any]) -> list[str]:
+def validate_profile(
+    slug: str, raw: dict[str, Any], evidence: dict[str, str] | None = None
+) -> list[str]:
+    """Problems with one curated profile entry. ``evidence``: the spot's research evidence
+    keys and their retrieval ("fetched" | "web_search"), used to check the sources of a
+    research wind profile (None = not checked)."""
     problems: list[str] = []
     unknown = set(raw) - {*PROFILE_FIELDS, "data_quality", "notes", "provenance"}
     if unknown:
@@ -298,7 +312,27 @@ def validate_profile(slug: str, raw: dict[str, Any]) -> list[str]:
     for field_name, provenance in (raw.get("data_quality") or {}).items():
         if provenance not in PROVENANCE_VALUES:
             problems.append(f"{slug}: data_quality.{field_name} = {provenance!r}")
+    if raw.get("wind_profile") is not None:
+        problems += [
+            f"{slug}: {p}"
+            for p in validate_wind_profile(raw["wind_profile"], evidence, "wind_profile")
+        ]
     return problems
+
+
+def evidence_retrievals(directory: Path) -> dict[str, dict[str, str]] | None:
+    """slug -> {evidence key: retrieval} from research_evidence.json, or None without it."""
+    path = directory / "research_evidence.json"
+    if not path.exists():
+        return None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        slug: {
+            str(src.get("key")): str(src.get("retrieval") or "fetched")
+            for src in (entry or {}).get("sources") or []
+        }
+        for slug, entry in (raw.get("spots") or {}).items()
+    }
 
 
 def seed_physical_profiles(db: Session, directory: Path) -> dict[str, int]:
@@ -309,7 +343,12 @@ def seed_physical_profiles(db: Session, directory: Path) -> dict[str, int]:
     """
     path = directory / "physical_profiles.json"
     curated: dict[str, dict[str, Any]] = json.loads(path.read_text()) if path.exists() else {}
-    problems = [p for slug, raw in curated.items() for p in validate_profile(slug, raw)]
+    evidence = evidence_retrievals(directory)
+    problems = [
+        p
+        for slug, raw in curated.items()
+        for p in validate_profile(slug, raw, None if evidence is None else evidence.get(slug, {}))
+    ]
     if problems:
         raise SeedValidationError("; ".join(problems))
     created = curated_count = 0

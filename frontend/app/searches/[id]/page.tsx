@@ -15,7 +15,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSearch, useSearchMatches } from "@/hooks/queries";
-import { hasField } from "@/lib/confidence";
 import { formatCalendarDate, formatMoney, formatRange, heightRange, titleCase, type Units } from "@/lib/format";
 import { asQuality, QUALITY_LABELS } from "@/lib/quality";
 import type { User } from "@/types/api";
@@ -91,7 +90,7 @@ function Detail({ user, id }: { user: User; id: string }) {
                         <td className="px-4 py-2">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <QualityBadge label={m.peak_label} />
-                            {hasField(m, "forecast_confidence_class") && <ConfidenceBadge value={m.forecast_confidence_class} />}
+                            <ConfidenceBadge value={m.forecast_confidence_class} />
                           </div>
                         </td>
                         <td className="px-4 py-2">

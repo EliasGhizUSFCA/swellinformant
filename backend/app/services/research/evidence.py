@@ -365,7 +365,7 @@ def sync_evidence(db: Session, evidence: EvidenceFile | None) -> dict[str, int]:
     }
     if evidence is None:
         return counts
-    spot_ids = {slug: sid for slug, sid in db.execute(select(SurfSpot.slug, SurfSpot.id))}
+    spot_ids = dict(db.execute(select(SurfSpot.slug, SurfSpot.id)).all())
     existing: dict[tuple[int, str], SpotResearchSource] = {
         (s.spot_id, s.source_key): s for s in db.scalars(select(SpotResearchSource)).all()
     }

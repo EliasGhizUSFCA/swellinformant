@@ -1,6 +1,6 @@
 """The calibrated offshore range (``ndbc-offshore-v1``) is not wired into the prediction job.
 
-docs/decisions.md ADR-018 and docs/ml-evaluation.md 12.2: the prediction job does not pass
+docs/decisions.md ADR-018b and docs/ml-evaluation.md 12.2: the prediction job does not pass
 an ``OffshoreContext`` yet, so no stored prediction carries the calibrated label until a
 pre-registered tail check decides otherwise. This test fails when the wiring appears, so
 that change comes with its own decision and documentation. The forecast run is the

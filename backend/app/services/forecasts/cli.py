@@ -3,6 +3,7 @@
 python -m app.cli engine ensemble [--force] [--members]   # GEFS-Wave mean/spread, prints JSON
 python -m app.cli engine map-fields [--cycle YYYYMMDDHH] [--max-lead-hours N] [--force]
     # global map fields (ocean layers) of the newest complete GFS cycle, prints JSON
+python -m app.cli engine budget   # Open-Meteo weighted calls used per window, cache entries
 
 To add a subcommand, write ``_add_<name>(subparsers)`` that adds its parser and sets
 ``handler`` with ``set_defaults``, then append the function to SUBCOMMANDS.
@@ -36,7 +37,8 @@ def _add_ensemble(sub: SubParsers) -> None:
         "ensemble",
         help="fetch GEFS-Wave ensemble mean/spread for the newest complete cycle",
         description=(
-            "Samples GEFS-Wave mean and spread (Hs, Tp, wind, swell partition 1) at every "
+            "Samples the GEFS-Wave mean and spread of GEFS_STAT_FIELDS (default HTSGW,PERPW: "
+            "Hs and Tp; WIND, SWELL and SWPER add wind and swell partition 1) at every "
             "active spot into forecast_ensemble_stats. Without --force it does nothing "
             "unless GEFS_ENABLED=true, and skips a cycle that is already stored."
         ),
@@ -81,7 +83,7 @@ def _run_map_fields(args: argparse.Namespace) -> int:
                 {
                     "status": "off",
                     "message": "map fields are off: set MAP_FIELDS_ENABLED=true, or leave it "
-                    "unset and add noaa_gfs to FORECAST_PROVIDERS",
+                    "unset with a live FORECAST_PROVIDERS setup",
                 }
             )
         )
@@ -99,11 +101,15 @@ def _add_map_fields(sub: SubParsers) -> None:
         "map-fields",
         help="fetch the global map fields (ocean layers) of the newest complete GFS cycle",
         description=(
-            "Reads HTSGW, PERPW and DIRPW (GFS-Wave global.0p25) and 10 m wind and MSL "
-            "pressure (GFS pgrb2.0p25) for every map hour, regrids them to "
-            "MAP_FIELD_RESOLUTION_DEG and stores them under the source noaa_gfs_fields. "
-            "Works in every map-fields mode except off; skips a cycle whose fields are "
-            "already stored. Prints counts, bytes and the duration as JSON."
+            "Reads HTSGW, PERPW and DIRPW (GFS-Wave global.0p25), plus the primary swell, "
+            "secondary swell and wind-sea partitions when MAP_FIELD_PARTITIONS=on, and 10 m "
+            "wind and MSL pressure (GFS pgrb2.0p50 by default, MAP_FIELD_ATMOS_GRID; falls "
+            "back to pgrb2.0p25 per hour) for every map hour (MAP_FIELD_STEPS) of the "
+            "newest MAP_FIELD_CYCLES cycle, regrids them to MAP_FIELD_RESOLUTION_DEG and "
+            "stores them under the source noaa_gfs_fields. Works in every map-fields mode "
+            "except off (with MAP_FIELDS_ENABLED unset: with_noaa when noaa_gfs is a "
+            "provider, otherwise standalone with any live provider); skips a cycle whose "
+            "fields are already stored. Prints counts, bytes and the duration as JSON."
         ),
     )
     p.add_argument("--cycle", type=_cycle, help="GFS cycle YYYYMMDDHH (default: newest complete)")
@@ -116,11 +122,43 @@ def _add_map_fields(sub: SubParsers) -> None:
     p.set_defaults(handler=_run_map_fields)
 
 
-SUBCOMMANDS: list[Callable[[SubParsers], None]] = [_add_ensemble, _add_map_fields]
+def _run_budget(args: argparse.Namespace) -> int:
+    from app.services.forecasts import provider_cache
+    from app.services.forecasts.quota import open_meteo_budget_usage
+
+    usage = open_meteo_budget_usage()
+    print(
+        json.dumps(
+            {
+                "open_meteo_weighted_calls": usage or "unavailable (Redis not reachable)",
+                "provider_cache_entries": provider_cache.cache_size(),
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _add_budget(sub: SubParsers) -> None:
+    p = sub.add_parser(
+        "budget",
+        help="Open-Meteo weighted calls used in the current minute, hour, day and month",
+        description=(
+            "Reads the call-budget counters in Redis (OPEN_METEO_CALLS_PER_MINUTE/HOUR/DAY/"
+            "MONTH; both Open-Meteo families share them) and the number of cached provider "
+            "responses. Read-only; metadata requests are free and not counted."
+        ),
+    )
+    p.set_defaults(handler=_run_budget)
+
+
+SUBCOMMANDS: list[Callable[[SubParsers], None]] = [_add_ensemble, _add_map_fields, _add_budget]
 
 
 def register(subparsers: SubParsers) -> None:
-    parser = subparsers.add_parser(GROUP, help="ensemble, map fields, blending and spot profiles")
+    parser = subparsers.add_parser(
+        GROUP, help="GEFS-Wave ensemble, map fields and the Open-Meteo call budget"
+    )
     nested = parser.add_subparsers(dest="engine_cmd", required=True)
     for add in SUBCOMMANDS:
         add(nested)

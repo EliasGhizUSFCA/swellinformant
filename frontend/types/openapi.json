@@ -56,7 +56,7 @@
      "system"
     ],
     "summary": "Data Health Report",
-    "description": "Data freshness and background-job health (ok / degraded / failing, with reasons).\n\nPublic on purpose, like /api/system/status: it holds operational metadata only (run\nkeys, ages, limits, job statuses, reasons written by the service; no personal data,\nno raw error text), and an external uptime monitor must be able to read it without\ncredentials, because a dead worker cannot send its own alert. Rate limited per IP.",
+    "description": "Data freshness and background-job health (ok / degraded / failing, with reasons).\n\nPublic on purpose, like /api/system/status: it holds operational metadata only (run\nkeys, ages, limits, job statuses, reasons written by the service; no personal data,\nno raw error text), and an external uptime monitor must be able to read it without\ncredentials, because a dead worker cannot send its own alert. Rate limited per IP.\nShared by the CDN for DATA_HEALTH_CDN_SECONDS; with ``strict`` never cached.",
     "operationId": "data_health_report_api_health_data_get",
     "parameters": [
      {
@@ -881,10 +881,10 @@
          "type": "null"
         }
        ],
-       "description": "Forecast time (ISO 8601); default now",
+       "description": "Forecast time (ISO 8601; UTC when it has no offset); default now. Answered for its UTC hour, within 2 days before and 17 days after the current hour",
        "title": "At"
       },
-      "description": "Forecast time (ISO 8601); default now"
+      "description": "Forecast time (ISO 8601; UTC when it has no offset); default now. Answered for its UTC hour, within 2 days before and 17 days after the current hour"
      }
     ],
     "responses": {
@@ -917,6 +917,7 @@
      "spots"
     ],
     "summary": "List Spots",
+    "description": "Every active spot with its current conditions (public data, cacheable).",
     "operationId": "list_spots_api_spots_get",
     "responses": {
      "200": {
@@ -942,6 +943,7 @@
      "spots"
     ],
     "summary": "Get Spot",
+    "description": "One spot's page data (public data, cacheable).",
     "operationId": "get_spot_api_spots__slug__get",
     "parameters": [
      {
@@ -984,6 +986,7 @@
      "spots"
     ],
     "summary": "Get Forecast",
+    "description": "The spot's forecast hours and model series (public data, cacheable).",
     "operationId": "get_forecast_api_spots__slug__forecast_get",
     "parameters": [
      {
@@ -1038,6 +1041,7 @@
      "spots"
     ],
     "summary": "Spot Events",
+    "description": "The spot's swell events that have not ended (public data, cacheable).",
     "operationId": "spot_events_api_spots__slug__events_get",
     "parameters": [
      {
@@ -1131,6 +1135,7 @@
      "spots"
     ],
     "summary": "List Events",
+    "description": "The best swells that have not ended (public data, cacheable).",
     "operationId": "list_events_api_events_get",
     "parameters": [
      {
@@ -2363,7 +2368,7 @@
      "map"
     ],
     "summary": "Fields Index",
-    "description": "Which global fields exist for the current model run, and their valid times.",
+    "description": "Which global fields exist for the served model run, and their valid times.",
     "operationId": "fields_index_api_map_fields_get",
     "responses": {
      "200": {
@@ -2394,7 +2399,7 @@
       "required": true,
       "schema": {
        "type": "string",
-       "pattern": "^(hs|tp|wave_dir|wind_u|wind_v|pressure)$",
+       "pattern": "^(hs|tp|wave_dir|wind_u|wind_v|pressure|swell1_hs|swell1_tp|swell1_dir|swell2_hs|swell2_tp|swell2_dir|windsea_hs|windsea_tp|windsea_dir)$",
        "title": "Variable"
       }
      },
@@ -2416,6 +2421,25 @@
        "title": "At"
       },
       "description": "Valid time (ISO 8601); default now"
+     },
+     {
+      "name": "run",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 120
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the served run.",
+       "title": "Run"
+      },
+      "description": "Model run (the index's run_key). Served while it is retained, otherwise 404 (run not retained); default the served run."
      }
     ],
     "responses": {
@@ -2424,6 +2448,188 @@
       "content": {
        "application/octet-stream": {}
       }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}/tides": {
+   "get": {
+    "tags": [
+     "tides"
+    ],
+    "summary": "Spot Tides",
+    "description": "Predicted tide heights and high/low waters at the spot's tide station.\n\nAstronomical tide predictions (never observed water levels), relative to the stated\ndatum; ``status`` says whether they are real, synthetic (demo) or unavailable.",
+    "operationId": "spot_tides_api_spots__slug__tides_get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     },
+     {
+      "name": "start",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date-time"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Window start (ISO 8601); default now",
+       "title": "Start"
+      },
+      "description": "Window start (ISO 8601); default now"
+     },
+     {
+      "name": "end",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date-time"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Window end (ISO 8601); default start + TIDE_HORIZON_DAYS",
+       "title": "End"
+      },
+      "description": "Window end (ISO 8601); default start + TIDE_HORIZON_DAYS"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TideBlockOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}/observations": {
+   "get": {
+    "tags": [
+     "tides"
+    ],
+    "summary": "Spot Observations",
+    "description": "Recent measurements at the spot's reference stations (never forecasts).",
+    "operationId": "spot_observations_api_spots__slug__observations_get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ObservationsBlockOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/spots/{slug}/timeline": {
+   "get": {
+    "tags": [
+     "spots"
+    ],
+    "summary": "Spot Timeline",
+    "description": "Every chart row of the spot page on one time axis, for the next ``days`` days.",
+    "operationId": "spot_timeline_api_spots__slug__timeline_get",
+    "parameters": [
+     {
+      "name": "slug",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Slug"
+      }
+     },
+     {
+      "name": "days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 16,
+       "minimum": 1,
+       "default": 10,
+       "title": "Days"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SpotTimelineOut"
+        }
+       }
+      }
+     },
+     "304": {
+      "description": "Not modified (If-None-Match matched the ETag)"
      },
      "422": {
       "description": "Validation Error",
@@ -2791,6 +2997,25 @@
      "timezone"
     ],
     "title": "AirportOut"
+   },
+   "AttributionLinkOut": {
+    "properties": {
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "href": {
+      "type": "string",
+      "title": "Href"
+     }
+    },
+    "type": "object",
+    "required": [
+     "label",
+     "href"
+    ],
+    "title": "AttributionLinkOut",
+    "description": "A credit or licence link the data source asks for (shown next to the data)."
    },
    "AuthOut": {
     "properties": {
@@ -3190,6 +3415,75 @@
        }
       ],
       "title": "Local Confidence Reason"
+     },
+     "forecast_confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Forecast Confidence Reasons",
+      "default": []
+     },
+     "wind_dispute_note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Dispute Note"
+     },
+     "wind_strength": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "glassy",
+         "light",
+         "moderate",
+         "strong"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Strength"
+     },
+     "wind_favourability": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "favourable",
+         "workable",
+         "unfavourable"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Favourability"
+     },
+     "gust_kind": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "gfs_instantaneous",
+         "ecmwf_max_3h",
+         "ecmwf_max_since_pp",
+         "unknown"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kind"
      }
     },
     "type": "object",
@@ -3293,7 +3587,7 @@
       "title": "Avg Wind Kmh"
      },
      "good_hours": {
-      "type": "integer",
+      "type": "number",
       "title": "Good Hours"
      },
      "confidence": {
@@ -3393,6 +3687,16 @@
      },
      "storage": {
       "$ref": "#/components/schemas/StorageOut"
+     },
+     "sync": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SyncHealthOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -3793,6 +4097,88 @@
        }
       ],
       "title": "Local Confidence Reason"
+     },
+     "forecast_confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Forecast Confidence Reasons",
+      "default": []
+     },
+     "wind_dispute_note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Dispute Note"
+     },
+     "wind_strength": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "glassy",
+         "light",
+         "moderate",
+         "strong"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Strength"
+     },
+     "wind_favourability": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "favourable",
+         "workable",
+         "unfavourable"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Favourability"
+     },
+     "gust_kind": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "gfs_instantaneous",
+         "ecmwf_max_3h",
+         "ecmwf_max_since_pp",
+         "unknown"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kind"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",
@@ -3944,6 +4330,62 @@
       "type": "array",
       "title": "Variables",
       "default": []
+     },
+     "updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Updated At"
+     },
+     "age_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Hours"
+     },
+     "stale_after_hours": {
+      "type": "number",
+      "title": "Stale After Hours",
+      "default": 12.0
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "sync_run_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sync Run Id"
      }
     },
     "type": "object",
@@ -4001,6 +4443,31 @@
      "display_max": {
       "type": "number",
       "title": "Display Max"
+     },
+     "group": {
+      "type": "string",
+      "enum": [
+       "core",
+       "partition"
+      ],
+      "title": "Group",
+      "default": "core"
+     },
+     "system": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "primary",
+         "secondary",
+         "windsea"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "System"
      }
     },
     "type": "object",
@@ -4431,6 +4898,75 @@
        }
       ],
       "title": "Local Confidence Reason"
+     },
+     "forecast_confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Forecast Confidence Reasons",
+      "default": []
+     },
+     "wind_dispute_note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Dispute Note"
+     },
+     "wind_strength": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "glassy",
+         "light",
+         "moderate",
+         "strong"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Strength"
+     },
+     "wind_favourability": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "favourable",
+         "workable",
+         "unfavourable"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Favourability"
+     },
+     "gust_kind": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "gfs_instantaneous",
+         "ecmwf_max_3h",
+         "ecmwf_max_since_pp",
+         "unknown"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kind"
      }
     },
     "type": "object",
@@ -4514,6 +5050,14 @@
      "status": {
       "type": "string",
       "title": "Status"
+     },
+     "members": {
+      "items": {
+       "$ref": "#/components/schemas/RunMemberOut"
+      },
+      "type": "array",
+      "title": "Members",
+      "default": []
      }
     },
     "type": "object",
@@ -4566,6 +5110,14 @@
        }
       ],
       "title": "Atmosphere Model"
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",
@@ -4989,6 +5541,43 @@
       },
       "type": "array",
       "title": "Spots"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
+     },
+     "newest_run_issued_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Newest Run Issued At"
+     },
+     "last_updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Updated At"
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",
@@ -5282,6 +5871,54 @@
       "type": "string",
       "format": "date-time",
       "title": "Updated At"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
      },
      "event": {
       "$ref": "#/components/schemas/EventOut"
@@ -5621,6 +6258,54 @@
       "type": "string",
       "format": "date-time",
       "title": "Updated At"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
      }
     },
     "type": "object",
@@ -6296,6 +6981,49 @@
      "is_demo": {
       "type": "boolean",
       "title": "Is Demo"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -6456,6 +7184,178 @@
     ],
     "title": "NotificationPrefsOut"
    },
+   "ObservationOut": {
+    "properties": {
+     "t": {
+      "type": "string",
+      "format": "date-time",
+      "title": "T"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "instrument",
+       "human_report",
+       "model_analysis"
+      ],
+      "title": "Kind"
+     },
+     "station_code": {
+      "type": "string",
+      "title": "Station Code"
+     },
+     "station_name": {
+      "type": "string",
+      "title": "Station Name"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "relation": {
+      "type": "string",
+      "title": "Relation"
+     },
+     "distance_km": {
+      "type": "number",
+      "title": "Distance Km"
+     },
+     "hs_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs M"
+     },
+     "hs_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs Kind"
+     },
+     "tp_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tp S"
+     },
+     "dir_from_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dir From Deg"
+     },
+     "wind_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Kmh"
+     },
+     "qc_flag": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Qc Flag"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale"
+     },
+     "licence": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Licence"
+     },
+     "attribution": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Attribution"
+     },
+     "provider_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider Name"
+     },
+     "licence_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Licence Url"
+     }
+    },
+    "type": "object",
+    "required": [
+     "t",
+     "kind",
+     "station_code",
+     "station_name",
+     "provider",
+     "relation",
+     "distance_km",
+     "hs_m",
+     "hs_kind",
+     "tp_s",
+     "dir_from_deg",
+     "wind_kmh",
+     "qc_flag",
+     "stale",
+     "licence",
+     "attribution"
+    ],
+    "title": "ObservationOut"
+   },
    "ObservationProviderHealthOut": {
     "properties": {
      "provider": {
@@ -6511,6 +7411,43 @@
      "stale_after_hours"
     ],
     "title": "ObservationProviderHealthOut"
+   },
+   "ObservationsBlockOut": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "available",
+       "unavailable",
+       "stale"
+      ],
+      "title": "Status"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/ObservationOut"
+      },
+      "type": "array",
+      "title": "Items",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "status"
+    ],
+    "title": "ObservationsBlockOut"
    },
    "ObservationsHealthOut": {
     "properties": {
@@ -6815,6 +7752,72 @@
     ],
     "title": "PairsOut"
    },
+   "PartitionOut": {
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "primary_swell",
+       "secondary_swell",
+       "tertiary_swell",
+       "wind_sea"
+      ],
+      "title": "Kind"
+     },
+     "height_m": {
+      "type": "number",
+      "title": "Height M"
+     },
+     "period_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Period S"
+     },
+     "dir_from_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dir From Deg"
+     },
+     "breaking_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Ft"
+     },
+     "drives_surf": {
+      "type": "boolean",
+      "title": "Drives Surf"
+     }
+    },
+    "type": "object",
+    "required": [
+     "kind",
+     "height_m",
+     "period_s",
+     "dir_from_deg",
+     "breaking_ft",
+     "drives_surf"
+    ],
+    "title": "PartitionOut",
+    "description": "One wave system of the model; only systems the model provides are listed."
+   },
    "PhoneConfirmIn": {
     "properties": {
      "code": {
@@ -7112,6 +8115,59 @@
     ],
     "title": "ProfileOut"
    },
+   "ProvenanceOut": {
+    "properties": {
+     "source": {
+      "$ref": "#/components/schemas/ForecastSourceOut"
+     },
+     "run": {
+      "$ref": "#/components/schemas/TimelineRunOut"
+     },
+     "members": {
+      "items": {
+       "$ref": "#/components/schemas/RunMemberOut"
+      },
+      "type": "array",
+      "title": "Members",
+      "default": []
+     },
+     "breaking_method": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Breaking Method"
+     },
+     "algorithm_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Algorithm Version"
+     },
+     "calibrated": {
+      "type": "boolean",
+      "title": "Calibrated"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source",
+     "run",
+     "breaking_method",
+     "algorithm_version",
+     "calibrated"
+    ],
+    "title": "ProvenanceOut"
+   },
    "QualityLabel": {
     "type": "string",
     "enum": [
@@ -7133,6 +8189,95 @@
      "shortest"
     ],
     "title": "RankingPriority"
+   },
+   "RedisHealthOut": {
+    "properties": {
+     "available": {
+      "type": "boolean",
+      "title": "Available"
+     },
+     "used_memory_bytes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Used Memory Bytes"
+     },
+     "maxmemory_bytes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Maxmemory Bytes"
+     },
+     "maxmemory_policy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Maxmemory Policy"
+     },
+     "cap_bytes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cap Bytes"
+     },
+     "cap_source": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "redis",
+         "setting"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cap Source"
+     },
+     "used_fraction": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Used Fraction"
+     },
+     "alert_fraction": {
+      "type": "number",
+      "title": "Alert Fraction"
+     }
+    },
+    "type": "object",
+    "required": [
+     "available",
+     "alert_fraction"
+    ],
+    "title": "RedisHealthOut",
+    "description": "Redis (Celery broker, locks, call budgets, provider response cache): memory used\nagainst its cap. With ``noeviction`` a full Redis refuses writes, so new jobs fail."
    },
    "RegionOut": {
     "properties": {
@@ -7405,6 +8550,72 @@
      "token"
     ],
     "title": "ResetPasswordIn"
+   },
+   "RunMemberOut": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "family": {
+      "type": "string",
+      "title": "Family"
+     },
+     "run_key": {
+      "type": "string",
+      "title": "Run Key"
+     },
+     "init_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Init Time"
+     },
+     "wave_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model"
+     },
+     "atmosphere_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Atmosphere Model"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "family",
+     "run_key",
+     "init_time",
+     "wave_model",
+     "atmosphere_model"
+    ],
+    "title": "RunMemberOut",
+    "description": "One model run behind a forecast (a blend member, or the single source itself)."
    },
    "ScatterPoint": {
     "properties": {
@@ -8671,6 +9882,23 @@
         "type": "null"
        }
       ]
+     },
+     "alerts_paused": {
+      "type": "boolean",
+      "title": "Alerts Paused",
+      "default": false
+     },
+     "generated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Generated At"
      }
     },
     "type": "object",
@@ -8898,6 +10126,93 @@
     ],
     "title": "SpotSummary"
    },
+   "SpotTimelineOut": {
+    "properties": {
+     "spot_slug": {
+      "type": "string",
+      "title": "Spot Slug"
+     },
+     "timezone": {
+      "type": "string",
+      "title": "Timezone"
+     },
+     "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Generated At"
+     },
+     "available": {
+      "type": "boolean",
+      "title": "Available"
+     },
+     "message": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Message"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale"
+     },
+     "units": {
+      "$ref": "#/components/schemas/TimelineUnitsOut"
+     },
+     "steps_meta": {
+      "$ref": "#/components/schemas/StepsMetaOut"
+     },
+     "provenance": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ProvenanceOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "days": {
+      "items": {
+       "$ref": "#/components/schemas/TimelineDayOut"
+      },
+      "type": "array",
+      "title": "Days"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/TimelineStepOut"
+      },
+      "type": "array",
+      "title": "Steps"
+     },
+     "tide": {
+      "$ref": "#/components/schemas/TideBlockOut"
+     },
+     "observations": {
+      "$ref": "#/components/schemas/ObservationsBlockOut"
+     }
+    },
+    "type": "object",
+    "required": [
+     "spot_slug",
+     "timezone",
+     "generated_at",
+     "available",
+     "stale",
+     "units",
+     "steps_meta",
+     "days",
+     "steps",
+     "tide",
+     "observations"
+    ],
+    "title": "SpotTimelineOut"
+   },
    "StationSummary": {
     "properties": {
      "code": {
@@ -8974,6 +10289,482 @@
     ],
     "title": "StationSummary"
    },
+   "StepBreakingOut": {
+    "properties": {
+     "central_ft": {
+      "type": "number",
+      "title": "Central Ft"
+     },
+     "typical_ft": {
+      "type": "number",
+      "title": "Typical Ft"
+     },
+     "sets_ft": {
+      "type": "number",
+      "title": "Sets Ft"
+     },
+     "p10_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P10 Ft"
+     },
+     "p90_ft": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P90 Ft"
+     },
+     "uncertainty_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Uncertainty Kind"
+     }
+    },
+    "type": "object",
+    "required": [
+     "central_ft",
+     "typical_ft",
+     "sets_ft",
+     "p10_ft",
+     "p90_ft",
+     "uncertainty_kind"
+    ],
+    "title": "StepBreakingOut",
+    "description": "Our predicted breaking (face) height at the break, in feet."
+   },
+   "StepOffshoreOut": {
+    "properties": {
+     "hs_m": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hs M"
+     },
+     "tp_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tp S"
+     },
+     "period_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Period Kind"
+     },
+     "dir_from_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dir From Deg"
+     }
+    },
+    "type": "object",
+    "required": [
+     "hs_m",
+     "tp_s",
+     "period_kind",
+     "dir_from_deg"
+    ],
+    "title": "StepOffshoreOut",
+    "description": "Raw offshore model sea state (significant height, not surf height)."
+   },
+   "StepQualityOut": {
+    "properties": {
+     "score": {
+      "type": "integer",
+      "title": "Score"
+     },
+     "label": {
+      "type": "string",
+      "title": "Label"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     },
+     "local_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Class"
+     },
+     "forecast_confidence_reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Forecast Confidence Reasons"
+     },
+     "local_confidence_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Local Confidence Reason"
+     }
+    },
+    "type": "object",
+    "required": [
+     "score",
+     "label",
+     "forecast_confidence_class",
+     "local_confidence_class",
+     "forecast_confidence_reasons",
+     "local_confidence_reason"
+    ],
+    "title": "StepQualityOut"
+   },
+   "StepSegmentOut": {
+    "properties": {
+     "start": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Start"
+     },
+     "end": {
+      "type": "string",
+      "format": "date-time",
+      "title": "End"
+     },
+     "step_hours": {
+      "type": "number",
+      "title": "Step Hours"
+     }
+    },
+    "type": "object",
+    "required": [
+     "start",
+     "end",
+     "step_hours"
+    ],
+    "title": "StepSegmentOut",
+    "description": "A stretch of steps with the same spacing: ``start`` is the first step of the stretch,\n``end`` its last step plus one step."
+   },
+   "StepTideOut": {
+    "properties": {
+     "height_m": {
+      "type": "number",
+      "title": "Height M"
+     },
+     "rising": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rising"
+     },
+     "stage": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stage"
+     }
+    },
+    "type": "object",
+    "required": [
+     "height_m",
+     "rising",
+     "stage"
+    ],
+    "title": "StepTideOut"
+   },
+   "StepWhyOut": {
+    "properties": {
+     "fits": {
+      "additionalProperties": {
+       "type": "number"
+      },
+      "type": "object",
+      "title": "Fits"
+     },
+     "gates": {
+      "additionalProperties": {
+       "type": "number"
+      },
+      "type": "object",
+      "title": "Gates"
+     },
+     "contributions": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "number"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Contributions"
+     },
+     "tide_included": {
+      "type": "boolean",
+      "title": "Tide Included"
+     },
+     "explanation": {
+      "type": "string",
+      "title": "Explanation"
+     }
+    },
+    "type": "object",
+    "required": [
+     "fits",
+     "gates",
+     "contributions",
+     "tide_included",
+     "explanation"
+    ],
+    "title": "StepWhyOut",
+    "description": "What drove the score: factor fits and gates (0..1), points lost per factor."
+   },
+   "StepWindOut": {
+    "properties": {
+     "speed_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Speed Kmh"
+     },
+     "gust_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kmh"
+     },
+     "gust_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Kind"
+     },
+     "gust_below_mean": {
+      "type": "boolean",
+      "title": "Gust Below Mean"
+     },
+     "gust_below_mean_cause": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "source",
+         "blend"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gust Below Mean Cause"
+     },
+     "models_disagree": {
+      "items": {
+       "type": "string",
+       "enum": [
+        "direction",
+        "speed"
+       ]
+      },
+      "type": "array",
+      "title": "Models Disagree",
+      "default": []
+     },
+     "dir_from_deg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dir From Deg"
+     },
+     "relation": {
+      "type": "string",
+      "title": "Relation"
+     },
+     "strength": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Strength"
+     },
+     "favourability": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Favourability"
+     },
+     "fit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fit"
+     },
+     "offshore_component_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Offshore Component Kmh"
+     },
+     "cross_component_kmh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cross Component Kmh"
+     }
+    },
+    "type": "object",
+    "required": [
+     "speed_kmh",
+     "gust_kmh",
+     "gust_kind",
+     "gust_below_mean",
+     "dir_from_deg",
+     "relation",
+     "strength",
+     "favourability",
+     "fit",
+     "offshore_component_kmh",
+     "cross_component_kmh"
+    ],
+    "title": "StepWindOut"
+   },
+   "StepsMetaOut": {
+    "properties": {
+     "segments": {
+      "items": {
+       "$ref": "#/components/schemas/StepSegmentOut"
+      },
+      "type": "array",
+      "title": "Segments"
+     },
+     "interpolation": {
+      "type": "string",
+      "enum": [
+       "none",
+       "some_steps"
+      ],
+      "title": "Interpolation",
+      "default": "none"
+     },
+     "policy": {
+      "type": "string",
+      "const": "nearest-valid-step",
+      "title": "Policy",
+      "default": "nearest-valid-step"
+     }
+    },
+    "type": "object",
+    "required": [
+     "segments"
+    ],
+    "title": "StepsMetaOut"
+   },
    "StorageOut": {
     "properties": {
      "database_bytes": {
@@ -8990,6 +10781,16 @@
        }
       ],
       "title": "Database Max Gb"
+     },
+     "redis": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/RedisHealthOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -8997,6 +10798,989 @@
      "database_bytes"
     ],
     "title": "StorageOut"
+   },
+   "SyncComponentOut": {
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "spots",
+       "ensemble",
+       "map"
+      ],
+      "title": "Kind"
+     },
+     "source": {
+      "type": "string",
+      "title": "Source",
+      "description": "Forecast source code, e.g. open_meteo_gfs"
+     },
+     "source_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Name"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "state": {
+      "type": "string",
+      "enum": [
+       "current",
+       "new",
+       "waiting",
+       "in_progress",
+       "failed",
+       "unknown",
+       "disabled"
+      ],
+      "title": "State"
+     },
+     "stored_run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stored Run Key"
+     },
+     "available_run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available Run Key"
+     },
+     "available_cycle": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available Cycle"
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "required": [
+     "kind",
+     "source",
+     "provider",
+     "state"
+    ],
+    "title": "SyncComponentOut"
+   },
+   "SyncHealthOut": {
+    "properties": {
+     "runner": {
+      "type": "string",
+      "enum": [
+       "celery",
+       "daemon"
+      ],
+      "title": "Runner"
+     },
+     "check_minutes": {
+      "type": "integer",
+      "title": "Check Minutes"
+     },
+     "last_check_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Check At"
+     },
+     "heartbeat_stale": {
+      "type": "boolean",
+      "title": "Heartbeat Stale",
+      "default": false
+     },
+     "last_run": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SyncRunOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "last_published": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SyncRunOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "components": {
+      "items": {
+       "$ref": "#/components/schemas/SyncComponentOut"
+      },
+      "type": "array",
+      "title": "Components"
+     },
+     "cpu_hours_month": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cpu Hours Month"
+     },
+     "cpu_budget_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cpu Budget Hours"
+     },
+     "cpu_alert_fraction": {
+      "type": "number",
+      "title": "Cpu Alert Fraction",
+      "default": 0.8
+     }
+    },
+    "type": "object",
+    "required": [
+     "runner",
+     "check_minutes"
+    ],
+    "title": "SyncHealthOut"
+   },
+   "SyncRunOut": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "trigger": {
+      "type": "string",
+      "enum": [
+       "daemon",
+       "celery",
+       "cli",
+       "pipeline",
+       "github",
+       "http"
+      ],
+      "title": "Trigger"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "running",
+       "success",
+       "partial",
+       "failed",
+       "skipped",
+       "abandoned"
+      ],
+      "title": "Status"
+     },
+     "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Started At"
+     },
+     "finished_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Finished At"
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "anchor_cycle": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Anchor Cycle"
+     },
+     "stages": {
+      "items": {
+       "$ref": "#/components/schemas/SyncStageOut"
+      },
+      "type": "array",
+      "title": "Stages"
+     },
+     "stored": {
+      "items": {
+       "$ref": "#/components/schemas/SyncStoredRunOut"
+      },
+      "type": "array",
+      "title": "Stored"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "trigger",
+     "status",
+     "started_at"
+    ],
+    "title": "SyncRunOut"
+   },
+   "SyncStageOut": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "success",
+       "skipped",
+       "failed"
+      ],
+      "title": "Status"
+     },
+     "duration_ms": {
+      "type": "integer",
+      "title": "Duration Ms"
+     },
+     "cpu_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cpu S"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "status",
+     "duration_ms"
+    ],
+    "title": "SyncStageOut"
+   },
+   "SyncStoredRunOut": {
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "spots",
+       "ensemble",
+       "map"
+      ],
+      "title": "Kind"
+     },
+     "source": {
+      "type": "string",
+      "title": "Source"
+     },
+     "source_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Name"
+     },
+     "run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Key"
+     },
+     "cycle": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle"
+     }
+    },
+    "type": "object",
+    "required": [
+     "kind",
+     "source"
+    ],
+    "title": "SyncStoredRunOut",
+    "description": "A model run a sync stored (one per component whose acquisition stored data)."
+   },
+   "TideBlockOut": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "enum": [
+       "available",
+       "unavailable",
+       "demo"
+      ],
+      "title": "Status"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "station": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/TideStationOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "source": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source"
+     },
+     "datum": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "MLLW",
+         "MSL",
+         "LAT",
+         "model_msl"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Datum"
+     },
+     "units": {
+      "type": "string",
+      "const": "m",
+      "title": "Units",
+      "default": "m"
+     },
+     "curve": {
+      "items": {
+       "$ref": "#/components/schemas/TidePointOut"
+      },
+      "type": "array",
+      "title": "Curve",
+      "default": []
+     },
+     "events": {
+      "items": {
+       "$ref": "#/components/schemas/TideEventOut"
+      },
+      "type": "array",
+      "title": "Events",
+      "default": []
+     },
+     "preference": {
+      "$ref": "#/components/schemas/TidePreferenceOut"
+     },
+     "attribution": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Attribution"
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
+     },
+     "fetched_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fetched At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "status",
+     "preference"
+    ],
+    "title": "TideBlockOut"
+   },
+   "TideEventOut": {
+    "properties": {
+     "t": {
+      "type": "string",
+      "format": "date-time",
+      "title": "T"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "high",
+       "low"
+      ],
+      "title": "Kind"
+     },
+     "height_m": {
+      "type": "number",
+      "title": "Height M"
+     }
+    },
+    "type": "object",
+    "required": [
+     "t",
+     "kind",
+     "height_m"
+    ],
+    "title": "TideEventOut"
+   },
+   "TidePointOut": {
+    "properties": {
+     "t": {
+      "type": "string",
+      "format": "date-time",
+      "title": "T"
+     },
+     "height_m": {
+      "type": "number",
+      "title": "Height M"
+     },
+     "interpolated": {
+      "type": "boolean",
+      "title": "Interpolated"
+     }
+    },
+    "type": "object",
+    "required": [
+     "t",
+     "height_m",
+     "interpolated"
+    ],
+    "title": "TidePointOut"
+   },
+   "TidePreferenceOut": {
+    "properties": {
+     "value": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Value"
+     },
+     "research_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Class"
+     },
+     "decision": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Decision"
+     },
+     "text": {
+      "type": "string",
+      "title": "Text"
+     }
+    },
+    "type": "object",
+    "required": [
+     "value",
+     "research_class",
+     "decision",
+     "text"
+    ],
+    "title": "TidePreferenceOut",
+    "description": "The spot's researched tide preference, and how far it can be trusted."
+   },
+   "TideStationOut": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "harmonic",
+       "subordinate",
+       "model"
+      ],
+      "title": "Kind"
+     },
+     "distance_km": {
+      "type": "number",
+      "title": "Distance Km"
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "name",
+     "provider",
+     "kind",
+     "distance_km"
+    ],
+    "title": "TideStationOut"
+   },
+   "TimelineDayOut": {
+    "properties": {
+     "date": {
+      "type": "string",
+      "format": "date",
+      "title": "Date"
+     },
+     "start_utc": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Start Utc"
+     },
+     "end_utc": {
+      "type": "string",
+      "format": "date-time",
+      "title": "End Utc"
+     },
+     "sunrise": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sunrise"
+     },
+     "sunset": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sunset"
+     },
+     "first_light": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "First Light"
+     },
+     "last_light": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Light"
+     },
+     "polar_state": {
+      "type": "string",
+      "enum": [
+       "normal",
+       "polar_day",
+       "polar_night"
+      ],
+      "title": "Polar State"
+     },
+     "best_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Time"
+     },
+     "best_score": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Score"
+     },
+     "best_label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Best Label"
+     },
+     "good_hours": {
+      "type": "number",
+      "title": "Good Hours"
+     },
+     "forecast_confidence_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Forecast Confidence Class"
+     }
+    },
+    "type": "object",
+    "required": [
+     "date",
+     "start_utc",
+     "end_utc",
+     "sunrise",
+     "sunset",
+     "first_light",
+     "last_light",
+     "polar_state",
+     "best_time",
+     "best_score",
+     "best_label",
+     "good_hours",
+     "forecast_confidence_class"
+    ],
+    "title": "TimelineDayOut"
+   },
+   "TimelineRunOut": {
+    "properties": {
+     "run_key": {
+      "type": "string",
+      "title": "Run Key"
+     },
+     "init_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Init Time"
+     },
+     "completed_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Completed At"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "age_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Hours"
+     },
+     "stale_after_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stale After Hours"
+     }
+    },
+    "type": "object",
+    "required": [
+     "run_key",
+     "init_time",
+     "completed_at",
+     "status",
+     "age_hours",
+     "stale_after_hours"
+    ],
+    "title": "TimelineRunOut"
+   },
+   "TimelineStepOut": {
+    "properties": {
+     "t": {
+      "type": "string",
+      "format": "date-time",
+      "title": "T"
+     },
+     "step_hours": {
+      "type": "number",
+      "title": "Step Hours"
+     },
+     "lead_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lead Hours"
+     },
+     "is_daylight": {
+      "type": "boolean",
+      "title": "Is Daylight"
+     },
+     "interpolated": {
+      "type": "boolean",
+      "title": "Interpolated"
+     },
+     "interpolated_members": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Interpolated Members",
+      "default": []
+     },
+     "quality": {
+      "$ref": "#/components/schemas/StepQualityOut"
+     },
+     "breaking": {
+      "$ref": "#/components/schemas/StepBreakingOut"
+     },
+     "offshore": {
+      "$ref": "#/components/schemas/StepOffshoreOut"
+     },
+     "partitions": {
+      "items": {
+       "$ref": "#/components/schemas/PartitionOut"
+      },
+      "type": "array",
+      "title": "Partitions"
+     },
+     "wind": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/StepWindOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "tide": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/StepTideOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "why": {
+      "$ref": "#/components/schemas/StepWhyOut"
+     }
+    },
+    "type": "object",
+    "required": [
+     "t",
+     "step_hours",
+     "lead_hours",
+     "is_daylight",
+     "interpolated",
+     "quality",
+     "breaking",
+     "offshore",
+     "partitions",
+     "wind",
+     "tide",
+     "why"
+    ],
+    "title": "TimelineStepOut"
+   },
+   "TimelineUnitsOut": {
+    "properties": {
+     "breaking": {
+      "type": "string",
+      "const": "ft",
+      "title": "Breaking",
+      "default": "ft"
+     },
+     "offshore": {
+      "type": "string",
+      "const": "m",
+      "title": "Offshore",
+      "default": "m"
+     },
+     "wind": {
+      "type": "string",
+      "const": "km/h",
+      "title": "Wind",
+      "default": "km/h"
+     },
+     "tide": {
+      "type": "string",
+      "const": "m",
+      "title": "Tide",
+      "default": "m"
+     }
+    },
+    "type": "object",
+    "title": "TimelineUnitsOut"
    },
    "TokenIn": {
     "properties": {

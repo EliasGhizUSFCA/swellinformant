@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { RatingHeadline, WhyThisRating } from "@/components/rating";
-import { componentFits, limitingGates, ratingFactors, ratingHeadline, ratingReason, ratingTitle, score10 } from "@/lib/rating";
+import { componentFits, limitingGates, ratingFactors, ratingReason, ratingTitle, score10, windStrengthOf } from "@/lib/rating";
 
 // Factor values below are SYNTHETIC inputs shaped like the API's fields.
 
@@ -21,8 +21,6 @@ describe("score out of ten", () => {
   it("builds the headline from the API label", () => {
     expect(ratingTitle("excellent")).toBe("Excellent Surf");
     expect(ratingTitle("very_good")).toBe("Very Good Surf");
-    expect(ratingHeadline("excellent", 89)).toBe("Excellent Surf — 8.9/10");
-    expect(ratingHeadline("poor", 12)).toBe("Poor Surf — 1.2/10");
   });
 });
 
@@ -44,7 +42,12 @@ describe("one-line reason", () => {
   it("names limiting size and tide only when they hold the rating back", () => {
     const explanation =
       "0.6 m @ 7 s W swell, at the edge of the break's swell window; onshore wind 30 km/h from W; approx. 1–2 ft faces vs. a working range of 3–10 ft; unfavourable tide.";
+    // 30 km/h is "strong" in the backend's wind classes (Beaufort 5 from 29 km/h; the old
+    // frontend-only cut-off was 35 km/h); 25 km/h is moderate, which adds no word.
     expect(ratingReason({ periodS: 7, windRelation: "onshore", windSpeedKmh: 30, explanation })).toBe(
+      "Short-period swell, direction at the edge of the swell window, strong onshore winds, and waves below the break's usual size range.",
+    );
+    expect(ratingReason({ periodS: 7, windRelation: "onshore", windSpeedKmh: 25, explanation })).toBe(
       "Short-period swell, direction at the edge of the swell window, onshore winds, and waves below the break's usual size range.",
     );
     const factors = ratingFactors({ periodS: 7, windRelation: "onshore", windSpeedKmh: 30, explanation });
@@ -63,6 +66,32 @@ describe("one-line reason", () => {
     expect(
       ratingReason({ periodS: 11, windRelation: "glassy", windSpeedKmh: 3, breakingMinFt: 14, breakingMaxFt: 18, spotMinFt: 4, spotMaxFt: 12 }),
     ).toBe("Mid-period swell, glassy, near-calm conditions, and waves above the break's usual size range.");
+  });
+
+  it("uses the backend's wind class and favourability when the API sends them", () => {
+    // The API's class wins over the speed (e.g. a class computed before shelter scaling).
+    expect(ratingReason({ windRelation: "offshore", windSpeedKmh: 8, windStrength: "moderate" })).toBe("Offshore winds.");
+    expect(ratingReason({ windRelation: "offshore", windSpeedKmh: 20, windStrength: "light" })).toBe("Light offshore winds.");
+    expect(ratingReason({ windRelation: "offshore", windSpeedKmh: 40, windStrength: "strong" })).toBe("Strong offshore winds.");
+    // A calm hour has no direction (relation unknown), but the class still names it.
+    expect(ratingReason({ windRelation: "unknown", windSpeedKmh: 0, windStrength: "glassy" })).toBe("Glassy, near-calm conditions.");
+    const wind = (windFavourability: string) => ratingFactors({ windRelation: "cross-shore", windSpeedKmh: 15, windFavourability }).find((f) => f.key === "wind");
+    expect(wind("unfavourable")?.tone).toBe("bad");
+    expect(wind("workable")?.tone).toBe("ok");
+    expect(wind("favourable")?.tone).toBe("good");
+    // The component fit, when present, is the API's own and comes first.
+    expect(ratingFactors({ windRelation: "cross-shore", windSpeedKmh: 15, windFavourability: "unfavourable", components: { wind: 0.9 } }).find((f) => f.key === "wind")?.tone).toBe("good");
+  });
+
+  it("classes older predictions with the backend's own Beaufort bounds", () => {
+    expect(windStrengthOf(null, 5)).toBe("glassy");
+    expect(windStrengthOf(null, 5.1)).toBe("light");
+    expect(windStrengthOf(null, 11.9)).toBe("light");
+    expect(windStrengthOf(null, 12)).toBe("moderate");
+    expect(windStrengthOf(null, 28.9)).toBe("moderate");
+    expect(windStrengthOf(null, 29)).toBe("strong");
+    expect(windStrengthOf(null, null)).toBeNull();
+    expect(windStrengthOf("bogus", 8)).toBe("light");
   });
 
   it("says strong wind and skips unknown factors", () => {

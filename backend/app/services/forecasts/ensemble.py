@@ -45,8 +45,15 @@ period (research notes: ww3_grib writes FP to PERPW and PTP to SWPER), so both a
 direction statistic is read: a published "mean direction" cannot be used as an ordinary
 number and the uncertainty model does not need one.
 
-Bandwidth (record sizes at f168): about 5 MB per step for the 10 statistics records;
-member mode adds 31 HTSGW records of ~0.4 MB (~12 MB per step).
+Records read: GEFS_STAT_FIELDS (default ``HTSGW,PERPW``: Hs and Tp mean and spread, the
+only statistics the uncertainty model and forecast confidence use). ``WIND``, ``SWELL``
+(swell partition 1 height, plus the partition-order check) and ``SWPER`` can be added.
+Cycles: GEFS_CYCLES (default all four).
+
+Bandwidth (record sizes of the 2026-10-13 12Z f024 files): 1.60 MB per step for the four
+HTSGW/PERPW records (about 65 MB for the 41 steps of a 240 h run), against about 4.9 MB per
+step for all ten statistics records; member mode adds 31 HTSGW records of ~0.4 MB
+(~12 MB per step).
 """
 
 from __future__ import annotations
@@ -54,22 +61,21 @@ from __future__ import annotations
 import logging
 import math
 import threading
-from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
 import numpy as np
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
-from app.models import ForecastEnsembleStat, ForecastRun, ForecastSource
+from app.models import ForecastEnsembleStat, ForecastRun
 from app.models.enums import ForecastRunStatus
 from app.services.forecasts.base import (
     FetchResult,
@@ -77,6 +83,7 @@ from app.services.forecasts.base import (
     RunInfo,
     SourceInfo,
     SpotPoint,
+    http_client,
     nominal_gfs_cycle,
 )
 from app.services.forecasts.grib import (
@@ -87,6 +94,7 @@ from app.services.forecasts.grib import (
     IndexEntry,
     PointSampler,
     decode_message,
+    head_published,
     load_eccodes,
     parse_ncep_idx,
 )
@@ -96,8 +104,9 @@ from app.services.http import (
     PermanentProviderError,
     ProviderError,
     TransientProviderError,
-    request_with_retries,
 )
+from app.services.map_fields import as_utc
+from app.services.units import ms_to_kmh
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +120,6 @@ PUBLISHED_STEPS = frozenset((*range(0, 241, 3), *range(246, MAX_LEAD_HOURS + 1, 
 MEMBERS = ("c00", *(f"p{i:02d}" for i in range(1, 31)))
 # .idx description "ens <kind>" and GRIB2 code table 4.7 value (template 4.2) per file.
 STAT_KINDS = {"mean": 0, "spread": 4}
-MS_TO_KMH = 3.6
 # Mean/spread files carry swell partitions 1-2 only, both coded "surface".
 SWELL_PARTITIONS_IN_STATS = 2
 # Partition 1 >= partition 2 (minus one packing step) held on 99.994% of ocean cells in
@@ -127,8 +135,6 @@ ANCHOR_ATTEMPTS = 3
 INSERT_CHUNK = 2000
 PERIOD_KIND = "tp"
 USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
-# ensemble_for() scans at most this many recent runs.
-MAX_RUNS_SCANNED = 60
 
 
 class GefsLayoutError(PermanentProviderError):
@@ -160,6 +166,28 @@ SWPER1 = FieldSpec("swell1_period", "SWPER", (10, 0, 9), "s", partition=1)
 SWELL2 = FieldSpec("swell2_height", "SWELL", (10, 0, 8), "m", partition=2)
 STAT_FIELDS = (HS, TP, WIND, SWELL1, SWPER1)
 SPECS = {s.name: s for s in (*STAT_FIELDS, SWELL2)}
+# GEFS_STAT_FIELDS tokens (.idx abbreviations) -> records; HTSGW is required (its mean
+# fixes each spot's grid cell).
+STAT_FIELD_TOKENS: dict[str, FieldSpec] = {
+    "HTSGW": HS,
+    "PERPW": TP,
+    "WIND": WIND,
+    "SWELL": SWELL1,
+    "SWPER": SWPER1,
+}
+
+
+def stat_fields_for(tokens: Sequence[str]) -> tuple[FieldSpec, ...]:
+    """The records GEFS_STAT_FIELDS asks for, in file order (HTSGW first)."""
+    unknown = sorted(set(tokens) - set(STAT_FIELD_TOKENS))
+    if unknown or "HTSGW" not in tokens:
+        raise PermanentProviderError(
+            f"GEFS_STAT_FIELDS={','.join(tokens)!r}: must include HTSGW and only name "
+            f"{', '.join(STAT_FIELD_TOKENS)}"
+            + (f" (unknown: {', '.join(unknown)})" if unknown else "")
+        )
+    return tuple(spec for spec in STAT_FIELDS if spec.variable in tokens)
+
 
 COLUMNS = {
     ("hs", "mean"): "hs_mean_m",
@@ -218,7 +246,12 @@ def _pick(entries: Sequence[IndexEntry], spec: FieldSpec, where: str) -> IndexEn
 
 
 def select_stat_records(
-    text: str, kind: str, *, with_swell2: bool = False, where: str = "GEFS-Wave"
+    text: str,
+    kind: str,
+    *,
+    with_swell2: bool = False,
+    where: str = "GEFS-Wave",
+    fields: Sequence[FieldSpec] = STAT_FIELDS,
 ) -> dict[str, IndexEntry]:
     """Pick the records of one mean/spread ``.idx``, asserting the layout we depend on.
 
@@ -236,7 +269,7 @@ def select_stat_records(
     other = sorted({descriptions.get(e.number, "") for e in entries} - {expected})
     if other:
         raise GefsLayoutError(f"{where}: {kind} index has records described {other}")
-    specs = [*STAT_FIELDS, SWELL2] if with_swell2 else list(STAT_FIELDS)
+    specs = [*fields, SWELL2] if with_swell2 else list(fields)
     return {spec.name: _pick(entries, spec, where) for spec in specs}
 
 
@@ -494,7 +527,6 @@ class StepValues:
     values: dict[int, dict[str, float | None]] = field(default_factory=dict)
     extras: dict[int, dict[str, Any]] = field(default_factory=dict)
     members_in_stats: int | None = None
-    member_files_read: int | None = None
     failed: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     checks: dict[str, Any] = field(default_factory=dict)
@@ -541,14 +573,14 @@ class GefsWaveEnsembleProvider(ForecastProvider):
         backoff_seconds: float = 1.0,
     ) -> None:
         self.settings = settings or get_settings()
-        self.client = client or httpx.Client(
-            timeout=self.settings.forecast_http_timeout_seconds,
-            headers={"User-Agent": USER_AGENT},
-        )
+        self.client = client or http_client(self.settings.forecast_http_timeout_seconds, USER_AGENT)
         self.read_members = members
         self.backoff_seconds = backoff_seconds
         self.paths = GefsPaths(self.settings.noaa_gefs_base_url)
         self.probe_requests = 0
+        self.stat_fields = stat_fields_for(self.settings.gefs_stat_field_list)
+        # The partition-order check needs swell partition 2, read only with SWELL.
+        self.check_partitions = SWELL1 in self.stat_fields
 
     def source_info(self) -> SourceInfo:
         return SourceInfo(
@@ -578,14 +610,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
     def _published(self, url: str) -> bool:
         """True if ``url`` exists. Network failures raise instead of meaning "not yet"."""
         self.probe_requests += 1
-        response = request_with_retries(
-            self.client, "HEAD", url, provider=HTTP_PROVIDER, backoff_seconds=self.backoff_seconds
-        )
-        if response.status_code == 200:
-            return True
-        if response.status_code in (403, 404):  # S3 answers 403 for some missing keys
-            return False
-        raise PermanentProviderError(f"{HTTP_PROVIDER}: HTTP {response.status_code} for {url}")
+        return head_published(self.client, url, HTTP_PROVIDER, backoff_seconds=self.backoff_seconds)
 
     def current_run(self, now: datetime) -> RunInfo:
         """Newest 00/06/12/18Z cycle whose mean-file ``.idx`` exists for the last needed step.
@@ -597,9 +622,14 @@ class GefsWaveEnsembleProvider(ForecastProvider):
         hours, _ = self.steps()
         last = hours[-1]
         nominal = nominal_gfs_cycle(now, self.settings.gefs_availability_lag_hours)
+        cycles = self.settings.gefs_cycle_hours  # GEFS_CYCLES
+        candidates = [
+            c
+            for back in range(4 * (OLDER_CYCLES_TO_TRY + 1))
+            if (c := nominal - timedelta(hours=CYCLE_HOURS * back)).hour in cycles
+        ][: OLDER_CYCLES_TO_TRY + 1]
         tried: list[str] = []
-        for back in range(OLDER_CYCLES_TO_TRY + 1):
-            cycle = nominal - timedelta(hours=CYCLE_HOURS * back)
+        for cycle in candidates:
             if self._published(self.paths.file(cycle, "mean", last) + ".idx"):
                 return RunInfo(
                     run_key=f"gefs-wave:{cycle:%Y%m%d%H}",
@@ -637,8 +667,9 @@ class GefsWaveEnsembleProvider(ForecastProvider):
             picked = select_stat_records(
                 fetcher.text(url + ".idx"),
                 kind,
-                with_swell2=check_order and kind == "mean",
+                with_swell2=check_order and kind == "mean" and self.check_partitions,
                 where=where,
+                fields=self.stat_fields,
             )
             blobs = fetcher.ranges(url, list(picked.values()))
             for (name, entry), blob in zip(picked.items(), blobs, strict=True):
@@ -674,8 +705,10 @@ class GefsWaveEnsembleProvider(ForecastProvider):
                     if v is not None:
                         if kind == "spread" and v < 0:
                             raise GribError(f"{rec}: negative spread {v} at spot {spot_id}")
-                        v = round(v * MS_TO_KMH, 2) if spec is WIND else round(v, 3)
+                        v = round(ms_to_kmh(v), 2) if spec is WIND else round(v, 3)
                     step.values.setdefault(spot_id, {})[column] = v
+        if SWELL1 not in self.stat_fields and SWPER1 not in self.stat_fields:
+            return
         members = step.members_in_stats or len(MEMBERS)
         for spot_id, vals in step.values.items():
             step.extras.setdefault(spot_id, {})["swell1_complete_certain"] = (
@@ -714,7 +747,6 @@ class GefsWaveEnsembleProvider(ForecastProvider):
                 v = grid.value(cell.choice.j, cell.choice.i)
                 if v is not None:
                     values[spot_id].append(v)
-        step.member_files_read = len(MEMBERS) - len(unreadable)
         if unreadable:
             step.warnings.append(
                 f"f{fhour:03d}: {len(unreadable)} of {len(MEMBERS)} member files unreadable "
@@ -770,7 +802,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
         cycle = run.wave_model_run_at or run.issued_at
         # File paths and the message checks use the cycle's UTC date and hour (a naive time
         # is taken to be UTC already).
-        cycle = cycle.replace(tzinfo=UTC) if cycle.tzinfo is None else cycle.astimezone(UTC)
+        cycle = as_utc(cycle)
         picker = CellPicker(spots, self.settings.grib_max_cell_distance_km)
         # The first readable step fixes the cells and runs the partition-order check.
         steps: list[StepValues] = []
@@ -856,7 +888,8 @@ class GefsWaveEnsembleProvider(ForecastProvider):
         mb = result.bytes_downloaded / 1e6
         result.warnings.append(
             f"downloaded {mb:.1f} MB in {result.request_count} requests for {len(steps)} steps "
-            f"({mb / max(len(steps), 1):.1f} MB per step; members={self.read_members})"
+            f"({mb / max(len(steps), 1):.2f} MB per step; records "
+            f"{','.join(spec.variable for spec in self.stat_fields)}; members={self.read_members})"
         )
         if result.steps_unpublished:
             result.warnings.append(
@@ -868,7 +901,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
                 f"{len(result.steps_failed)} of {len(steps)} steps unreadable: "
                 + ", ".join(result.steps_failed)
             )
-        if not result.checks.get("partition_order", {}).get("verified"):
+        if self.check_partitions and not result.checks.get("partition_order", {}).get("verified"):
             result.warnings.append("partition order could not be checked (no overlapping cells)")
         result.warnings.extend(w for s in steps for w in s.warnings)
         result.warnings.extend(spot_warnings)
@@ -926,7 +959,13 @@ def acquire_ensemble(
         info = provider.current_run(now)
     except ProviderError as exc:
         logger.error("Could not determine current run for %s: %s", source.code, exc)
-        return {**out, "run_key": None, "status": "failed", "message": str(exc)}
+        return {
+            **out,
+            "run_key": None,
+            "status": "failed",
+            "message": str(exc),
+            "retryable": exc.transient,
+        }
     out["run_key"] = info.run_key
 
     run = db.scalar(
@@ -937,7 +976,7 @@ def acquire_ensemble(
     if run is not None and not force:
         if run.status in USABLE:
             return {**out, "status": "skipped", "run_id": run.id, "message": "run already ingested"}
-        if run.status == ForecastRunStatus.RUNNING and now - run.started_at < STUCK_RUN_AFTER:
+        if run.status == ForecastRunStatus.RUNNING and utcnow() - run.started_at < STUCK_RUN_AFTER:
             return {**out, "status": "skipped", "run_id": run.id, "message": "run in progress"}
     if run is None:
         run = ForecastRun(source_id=source.id, run_key=info.run_key, details={})
@@ -945,7 +984,7 @@ def acquire_ensemble(
     run.issued_at = info.issued_at
     run.wave_model_run_at = info.wave_model_run_at
     run.atmosphere_model_run_at = info.atmosphere_model_run_at
-    run.started_at = now
+    run.started_at = utcnow()
     run.completed_at = None
     run.status = ForecastRunStatus.RUNNING
     run.error_message = None
@@ -954,6 +993,9 @@ def acquire_ensemble(
     run.predictions_computed_at = now
     run.details = {
         "metadata_source": info.metadata_source,
+        "model_runs": [
+            {"model": "gefs_wave", "init_time": info.issued_at.isoformat(), "available_at": None}
+        ],
         "kind": "ensemble",
         "members_mode": provider.read_members,
     }
@@ -963,14 +1005,25 @@ def acquire_ensemble(
     points = spot_points(db)
     try:
         fetched = provider.fetch_stats(points, info)
-    except ProviderError as exc:
-        run.status = ForecastRunStatus.FAILED
-        run.error_message = str(exc)[:2000]
-        run.completed_at = utcnow()
-        run.details = {**run.details, "retryable": exc.transient}
-        db.commit()
-        logger.error("GEFS-Wave ensemble fetch failed for %s: %s", info.run_key, exc)
-        return {**out, "status": "failed", "message": str(exc), "retryable": exc.transient}
+    except Exception as exc:  # provider errors and bugs alike end this run, never RUNNING
+        db.rollback()
+        transient = isinstance(exc, ProviderError) and exc.transient
+        message = str(exc) if isinstance(exc, ProviderError) else f"{type(exc).__name__}: {exc}"
+        failed = db.get(ForecastRun, out["run_id"])
+        if failed is not None:
+            failed.status = ForecastRunStatus.FAILED
+            failed.error_message = message[:2000]
+            failed.completed_at = utcnow()
+            failed.details = {**(failed.details or {}), "retryable": transient}
+            db.commit()
+        logger.error("GEFS-Wave ensemble fetch failed for %s: %s", info.run_key, message)
+        return {
+            **out,
+            "status": "failed",
+            "message": message[:2000],
+            "retryable": transient,
+            "retry_after_s": getattr(exc, "retry_after_s", None) if transient else None,
+        }
 
     count = store_stats(db, run, fetched.rows)
     slugs = {p.spot_id: p.slug for p in points}
@@ -987,6 +1040,13 @@ def acquire_ensemble(
         "steps_failed": fetched.steps_failed,
         "steps_unpublished": fetched.steps_unpublished,
         "bytes_downloaded": fetched.bytes_downloaded,
+        "stats": {
+            "bytes_downloaded": fetched.bytes_downloaded,
+            "requests": fetched.request_count + provider.probe_requests,
+            "http_status_counts": {},
+            "weighted_calls": None,
+        },
+        "stat_fields": [spec.variable for spec in provider.stat_fields],
         "probe_requests": provider.probe_requests,
         "checks": fetched.checks,
         "period_kinds": {"tp_mean_s": "tp", "swell1_period_mean_s": "tp (partition peak)"},
@@ -1028,91 +1088,3 @@ def acquire_ensemble(
         "megabytes": round(fetched.bytes_downloaded / 1e6, 1),
         "checks": fetched.checks,
     }
-
-
-# --------------------------------------------------------------------------- reading
-def _nearest(
-    rows: Sequence[ForecastEnsembleStat], stamps: Sequence[datetime], t: datetime
-) -> ForecastEnsembleStat:
-    """Row nearest to ``t`` among time-sorted ``rows`` (ties: the earlier row)."""
-    k = bisect_left(stamps, t)
-    near = rows[max(k - 1, 0) : k + 1]  # the rows either side of t
-    return min(near, key=lambda r: (abs(r.valid_time - t), r.valid_time))
-
-
-def ensemble_for(
-    db: Session,
-    spot_id: int,
-    valid_times: Sequence[datetime],
-    max_gap_hours: float = 3.0,
-) -> dict[datetime, ForecastEnsembleStat]:
-    """Ensemble statistics for ``spot_id`` at each requested (timezone-aware) time.
-
-    For each time, runs are tried newest first (``issued_at``, then id; SUCCESS or
-    PARTIAL only). A run answers a time only if the time lies inside the span of that
-    run's rows for the spot (no extrapolation past its first or last step) and its
-    nearest row is at most ``max_gap_hours`` away (ties go to the earlier row); otherwise
-    an older run is tried (e.g. for a step missing from a partial run). Times nobody
-    covers are absent from the result. Values are not interpolated.
-    """
-    times = list(valid_times)
-    if not times:
-        return {}
-    if any(t.tzinfo is None for t in times):
-        raise ValueError("ensemble_for needs timezone-aware valid_times")
-    gap = timedelta(hours=max_gap_hours)
-    lo, hi = min(times) - gap, max(times) + gap
-    run_ids = list(
-        db.scalars(
-            select(ForecastRun.id)
-            .join(ForecastSource, ForecastSource.id == ForecastRun.source_id)
-            .where(
-                ForecastSource.code == GEFS_WAVE_CODE,
-                ForecastRun.status.in_(USABLE),
-                ForecastRun.issued_at <= hi,
-                ForecastRun.issued_at >= lo - timedelta(hours=MAX_LEAD_HOURS),
-            )
-            .order_by(ForecastRun.issued_at.desc(), ForecastRun.id.desc())
-            .limit(MAX_RUNS_SCANNED)
-        ).all()
-    )
-    if not run_ids:
-        return {}
-    spans = {
-        rid: (first, last)
-        for rid, first, last in db.execute(
-            select(
-                ForecastEnsembleStat.run_id,
-                func.min(ForecastEnsembleStat.valid_time),
-                func.max(ForecastEnsembleStat.valid_time),
-            )
-            .where(
-                ForecastEnsembleStat.run_id.in_(run_ids), ForecastEnsembleStat.spot_id == spot_id
-            )
-            .group_by(ForecastEnsembleStat.run_id)
-        ).all()
-    }
-    series: dict[int, list[ForecastEnsembleStat]] = {}
-    for row in db.scalars(
-        select(ForecastEnsembleStat)
-        .where(
-            ForecastEnsembleStat.run_id.in_(list(spans)),
-            ForecastEnsembleStat.spot_id == spot_id,
-            ForecastEnsembleStat.valid_time.between(lo, hi),
-        )
-        .order_by(ForecastEnsembleStat.run_id, ForecastEnsembleStat.valid_time)
-    ):
-        series.setdefault(row.run_id, []).append(row)
-    stamps = {rid: [r.valid_time for r in rows] for rid, rows in series.items()}
-
-    result: dict[datetime, ForecastEnsembleStat] = {}
-    for t in times:
-        for rid in run_ids:
-            span = spans.get(rid)
-            if span is None or not span[0] <= t <= span[1] or rid not in series:
-                continue
-            best = _nearest(series[rid], stamps[rid], t)
-            if abs(best.valid_time - t) <= gap:
-                result[t] = best
-                break
-    return result

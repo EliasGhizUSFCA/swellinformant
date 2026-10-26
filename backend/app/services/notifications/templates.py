@@ -92,11 +92,59 @@ RANGE_NOTES = {
 
 
 def _height(s: dict[str, Any]) -> str:
+    """Typical-to-sets faces plus the likely range. The range is heuristic: it is meant to
+    hold the breaking height about 8 times in 10 (an intended 80% range) but has not been
+    verified, so it is called a likely range and its intent is stated, not implied as a
+    probability (docs/forecast-confidence.md)."""
     text = f"{s['height_min_ft']:g}–{s['height_max_ft']:g} ft faces"
     if s.get("range_p10_ft") is not None and s.get("range_p90_ft") is not None:
         note = RANGE_NOTES.get(str(s.get("range_kind")), "not yet verified")
-        text += f" (80% range {s['range_p10_ft']:g}–{s['range_p90_ft']:g} ft, {note})"
+        text += (
+            f" (likely range {s['range_p10_ft']:g}–{s['range_p90_ft']:g} ft: meant as an 80% "
+            f"range, {note})"
+        )
     return text
+
+
+def score10(score: int | float) -> str:
+    """85 -> "8.5" (the 0-100 score divided by ten, one decimal, as in the app)."""
+    return f"{max(0, min(100, round(score))) / 10:.1f}"
+
+
+def _provenance(s: dict[str, Any]) -> list[tuple[str, str]]:
+    """'Model runs' (each model's own init time; a blend's issue time is only its oldest
+    member's) and 'Fetched' (when the data arrived). Snapshots built before the model runs
+    were recorded show the run's issue time as 'Model run'."""
+    runs = [r for r in s.get("model_runs") or [] if r.get("name")]
+    if runs:
+        rows = [
+            (
+                "Model runs" if len(runs) > 1 else "Model run",
+                "; ".join(f"{r['name']} ({fmt_utc(r.get('init_time'))})" for r in runs),
+            )
+        ]
+    else:
+        rows = [
+            (
+                "Model run",
+                fmt_utc(s.get("forecast_issued"))
+                + (f" · {s['forecast_source']}" if s.get("forecast_source") else ""),
+            )
+        ]
+    if s.get("forecast_fetched"):
+        rows.append(("Fetched", fmt_utc(s["forecast_fetched"])))
+    return rows
+
+
+def _credits(s: dict[str, Any]) -> list[tuple[str, str]]:
+    """(label, http(s) URL) credits the data sources ask for next to their data (e.g.
+    "Weather data by Open-Meteo.com", "Copyright ECMWF ... (modified)", CC BY 4.0)."""
+    out: list[tuple[str, str]] = []
+    for c in s.get("data_credits") or []:
+        label, href = str(c.get("label") or ""), str(c.get("href") or "")
+        if label and href.startswith(("https://", "http://")):
+            out.append((label, href))
+    return out
 
 
 CONFIDENCE_WORDS = {"high": "High", "moderate": "Moderate", "low": "Low"}
@@ -105,10 +153,11 @@ CONFIDENCE_WORDS = {"high": "High", "moderate": "Moderate", "low": "Low"}
 def _forecast_confidence(s: dict[str, Any]) -> str:
     """'Moderate — about 6 days away' (forecast-v1 class at the event's peak hour, as in
     the API; the distance is from when the alert was built). Older snapshots without the
-    class show the 0-100 index as before."""
+    class say so and show the 0-100 index under its own name."""
     cls = s.get("forecast_confidence_class")
     if not cls:
-        return f"{s['confidence_label'].title()} ({s['confidence']}/100)"
+        # The 0-100 index is not the forecast-confidence class; name it for what it is.
+        return f"Not assessed (offshore spread index {s['confidence']}/100, not a probability)"
     text = CONFIDENCE_WORDS.get(str(cls), str(cls).title())
     ahead = s.get("peak_in_hours")
     lead = lead_phrase(ahead if ahead is not None else s.get("confidence_lead_hours"))
@@ -150,14 +199,10 @@ def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
         ),
         (
             "Predicted quality",
-            f"{LABELS.get(s['peak_label'], s['peak_label'])} ({s['peak_score']}/100)",
+            f"{LABELS.get(s['peak_label'], s['peak_label'])} ({score10(s['peak_score'])}/10)",
         ),
         *confidence,
-        (
-            "Forecast updated",
-            fmt_utc(s.get("forecast_issued"))
-            + (f" · {s['forecast_source']}" if s.get("forecast_source") else ""),
-        ),
+        *_provenance(s),
     ]
     if s.get("price") is not None:
         rows += [
@@ -235,6 +280,12 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
         lines.append(f"Flight offers: {links['flights']}")
     if links.get("dashboard"):
         lines.append(f"Your dashboard: {links['dashboard']}")
+    credits = _credits(s)
+    if credits:
+        lines += [
+            "",
+            "Forecast data: " + " · ".join(f"{label} ({href})" for label, href in credits),
+        ]
     lines += [
         "",
         DISCLAIMER,
@@ -262,6 +313,16 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
         if links.get("flights")
         else ""
     )
+    credits_html = (
+        '<p style="font-size:12px;color:#6b7f8c;margin-top:16px">Forecast data: '
+        + " · ".join(
+            f'<a href="{escape(href)}" style="color:#6b7f8c">{escape(label)}</a>'
+            for label, href in credits
+        )
+        + "</p>"
+        if credits
+        else ""
+    )
     html = f"""<!doctype html><html><body style="margin:0;background:#eef6f8;font-family:Helvetica,Arial,sans-serif">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:14px;overflow:hidden">
@@ -274,6 +335,7 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
 <a href="{escape(links["opportunity"])}" style="display:inline-block;margin:4px 8px 4px 0;padding:10px 16px;border-radius:8px;background:#0e7490;color:#ffffff;text-decoration:none">View opportunity</a>
 <a href="{escape(links["forecast"])}" style="display:inline-block;margin:4px 8px 4px 0;padding:10px 16px;border-radius:8px;border:1px solid #0e7490;color:#0e7490;text-decoration:none">Full forecast</a>
 {flights_btn}
+{credits_html}
 <p style="font-size:12px;color:#6b7f8c;margin-top:20px">{escape(DISCLAIMER)}</p>
 <p style="font-size:12px;color:#6b7f8c"><a href="{escape(links.get("dashboard", links["opportunity"]))}" style="color:#6b7f8c">Dashboard</a> · <a href="{escape(links.get("manage", links["unsubscribe"]))}" style="color:#6b7f8c">Manage alerts</a> · <a href="{escape(links["unsubscribe"])}" style="color:#6b7f8c">Unsubscribe from email alerts</a></p>
 </td></tr></table></td></tr></table></body></html>"""

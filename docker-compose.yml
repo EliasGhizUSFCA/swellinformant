@@ -30,18 +30,82 @@ x-backend-env: &backend-env
   # $proxy_add_x_forwarded_for) in front of the frontend. Without such a proxy the header
   # is whatever the client sent.
   TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
+  # A header a platform in front of the API sets and clients cannot overwrite (Vercel:
+  # x-vercel-forwarded-for); when set, it replaces X-Forwarded-For. Empty = not used.
+  CLIENT_IP_HEADER: ${CLIENT_IP_HEADER:-}
+  # Who runs the jobs. celery (this stack's default): the worker and beat below. daemon: the
+  # optional "sync" service at the end, for the whole stack (see there).
+  JOB_RUNNER: ${JOB_RUNNER:-celery}
+  # Bearer token of GET /api/internal/cron/daily, the daily watchdog Vercel Cron calls (at
+  # least 16 characters). Empty = the route answers 404; the classic stack does not need it.
+  CRON_SECRET: ${CRON_SECRET:-}
+  # true once the site is used commercially (a paywall, ads): the free Open-Meteo API is
+  # non-commercial, so Open-Meteo then needs OPEN_METEO_API_KEY.
+  COMMERCIAL_USE: ${COMMERCIAL_USE:-false}
+  # Database and Redis connections. Empty = the defaults of backend/app/core/config.py, right
+  # for this stack; a pooler in transaction mode (PgBouncer, Neon's pooled URL) needs
+  # DB_PREPARED_STATEMENTS=false.
+  DB_PREPARED_STATEMENTS: ${DB_PREPARED_STATEMENTS:-}
+  DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-}
+  REDIS_CONNECT_TIMEOUT_SECONDS: ${REDIS_CONNECT_TIMEOUT_SECONDS:-}
+  REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-}
+  # The synced data pipeline (docs/sync.md): a sync runs when a new model run is out, under
+  # Celery as the sync.tick job (every SYNC_CHECK_MINUTES), under the daemon as its checks.
+  # Empty = the defaults of backend/app/core/config.py.
+  SYNC_CHECK_MINUTES: ${SYNC_CHECK_MINUTES:-}
+  SYNC_COALESCE_MINUTES: ${SYNC_COALESCE_MINUTES:-}
+  SYNC_TRIGGER_SOURCES: ${SYNC_TRIGGER_SOURCES:-}
+  SYNC_RETRY_MINUTES: ${SYNC_RETRY_MINUTES:-}
+  SYNC_MAX_ATTEMPTS: ${SYNC_MAX_ATTEMPTS:-}
+  SYNC_LEASE_MINUTES: ${SYNC_LEASE_MINUTES:-}
+  SYNC_PUBLISH_GATE: ${SYNC_PUBLISH_GATE:-}
+  SYNC_PRUNE_EACH_PASS: ${SYNC_PRUNE_EACH_PASS:-}
+  # After a publishing sync, compute the public spot list and conditions at once (about
+  # 1.4 MB of database reads per publication) instead of at the first visitor's request.
+  SYNC_PREWARM_PUBLIC_CACHE: ${SYNC_PREWARM_PUBLIC_CACHE:-}
+  SYNC_DAEMON_POLL_SECONDS: ${SYNC_DAEMON_POLL_SECONDS:-}
+  SYNC_DAEMON_INIT_DB: ${SYNC_DAEMON_INIT_DB:-}
+  # Monthly CPU budget in hours (health warns at 80 %); empty = none.
+  SYNC_CPU_BUDGET_HOURS: ${SYNC_CPU_BUDGET_HOURS:-}
+  # Every periodic job runs at most this often (minutes); empty = the schedule as written.
+  JOB_INTERVAL_FLOOR_MINUTES: ${JOB_INTERVAL_FLOOR_MINUTES:-}
+  # Forecast sources (docs/API_SETUP_REQUIRED.md). Recommended live setup:
+  # FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf (point forecasts, two model families).
+  # Empty values below fall back to the defaults in backend/app/core/config.py.
   FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-demo}
   FORECAST_DAYS: ${FORECAST_DAYS:-16}
   FORECAST_REFRESH_MINUTES: ${FORECAST_REFRESH_MINUTES:-180}
+  FORECAST_BATCH_SIZE: ${FORECAST_BATCH_SIZE:-}
   OPEN_METEO_API_KEY: ${OPEN_METEO_API_KEY:-}
+  OPEN_METEO_GFS_WAVE_MODELS: ${OPEN_METEO_GFS_WAVE_MODELS:-}
+  OPEN_METEO_GFS_ATMOS_MODEL: ${OPEN_METEO_GFS_ATMOS_MODEL:-}
+  OPEN_METEO_ECMWF_WAVE_MODEL: ${OPEN_METEO_ECMWF_WAVE_MODEL:-}
+  OPEN_METEO_ECMWF_ATMOS_MODEL: ${OPEN_METEO_ECMWF_ATMOS_MODEL:-}
+  # Deprecated single-model aliases: set only if you mean to override the two above.
+  OPEN_METEO_WAVE_MODEL: ${OPEN_METEO_WAVE_MODEL:-}
+  OPEN_METEO_ATMOS_MODEL: ${OPEN_METEO_ATMOS_MODEL:-}
+  OPEN_METEO_CELL_SELECTION: ${OPEN_METEO_CELL_SELECTION:-}
+  OPEN_METEO_AVAILABILITY_WAIT_MINUTES: ${OPEN_METEO_AVAILABILITY_WAIT_MINUTES:-}
+  OPEN_METEO_NATIVE_STEPS_ONLY: ${OPEN_METEO_NATIVE_STEPS_ONLY:-}
+  OPEN_METEO_CALLS_PER_MINUTE: ${OPEN_METEO_CALLS_PER_MINUTE:-}
+  OPEN_METEO_CALLS_PER_HOUR: ${OPEN_METEO_CALLS_PER_HOUR:-}
+  OPEN_METEO_CALLS_PER_DAY: ${OPEN_METEO_CALLS_PER_DAY:-}
+  OPEN_METEO_CALLS_PER_MONTH: ${OPEN_METEO_CALLS_PER_MONTH:-}
+  PROVIDER_RESPONSE_CACHE_ENABLED: ${PROVIDER_RESPONSE_CACHE_ENABLED:-}
+  PROVIDER_RESPONSE_CACHE_MAX_BYTES: ${PROVIDER_RESPONSE_CACHE_MAX_BYTES:-}
+  PROVIDER_RESPONSE_CACHE_MAX_KEYS: ${PROVIDER_RESPONSE_CACHE_MAX_KEYS:-}
   WINDY_API_KEY: ${WINDY_API_KEY:-}
+  WINDY_TERMS_ACKNOWLEDGED: ${WINDY_TERMS_ACKNOWLEDGED:-false}
   DEMO_NATURAL_SWELLS: ${DEMO_NATURAL_SWELLS:-true}
-  # Live forecast engine (FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs): blend, ensemble, bandwidth.
+  # Blend, ensemble and the optional direct GRIB fallbacks (noaa_gfs, ecmwf_ifs).
   FORECAST_BLEND_ENABLED: ${FORECAST_BLEND_ENABLED:-true}
   GEFS_ENABLED: ${GEFS_ENABLED:-false}
+  GEFS_STAT_FIELDS: ${GEFS_STAT_FIELDS:-}
+  GEFS_CYCLES: ${GEFS_CYCLES:-}
   NOAA_STEP_HOURS: ${NOAA_STEP_HOURS:-3}
   NOAA_MAX_LEAD_HOURS: ${NOAA_MAX_LEAD_HOURS:-240}
   ECMWF_MAX_LEAD_HOURS: ${ECMWF_MAX_LEAD_HOURS:-240}
+  ECMWF_WAVE_PARAMS: ${ECMWF_WAVE_PARAMS:-}
   GRIB_DOWNLOAD_WORKERS: ${GRIB_DOWNLOAD_WORKERS:-6}
   # Buoy observations, verification and ML post-processing (off by default).
   OBSERVATIONS_ENABLED: ${OBSERVATIONS_ENABLED:-false}
@@ -49,21 +113,47 @@ x-backend-env: &backend-env
   VERIFICATION_ENABLED: ${VERIFICATION_ENABLED:-false}
   ML_CORRECTIONS_ENABLED: ${ML_CORRECTIONS_ENABLED:-true}
   ML_ARTIFACT_DIR: /var/lib/swell-ml
-  # Map ocean layers: empty = automatic (on with noaa_gfs), true = standalone, false = off.
+  # Map ocean layers: empty = automatic (docs/map-layers.md), true = standalone, false = off.
   MAP_FIELDS_ENABLED: ${MAP_FIELDS_ENABLED:-}
+  MAP_FIELD_ATMOS_GRID: ${MAP_FIELD_ATMOS_GRID:-}
+  MAP_FIELD_STEPS: ${MAP_FIELD_STEPS:-}
+  MAP_FIELD_MAX_LEAD_HOURS: ${MAP_FIELD_MAX_LEAD_HOURS:-}
+  MAP_FIELD_CYCLES: ${MAP_FIELD_CYCLES:-}
+  MAP_FIELD_PARTITIONS: ${MAP_FIELD_PARTITIONS:-}
+  MAP_FIELD_MAX_BYTES_PER_RUN: ${MAP_FIELD_MAX_BYTES_PER_RUN:-}
+  MAP_FIELD_STALE_AFTER_HOURS: ${MAP_FIELD_STALE_AFTER_HOURS:-}
+  # Tides (docs/tides.md): NOAA CO-OPS for US spots, a harmonic model elsewhere.
+  TIDE_PROVIDERS: ${TIDE_PROVIDERS:-}
+  NOAA_COOPS_APPLICATION: ${NOAA_COOPS_APPLICATION:-}
+  TIDE_MODEL: ${TIDE_MODEL:-}
+  TIDE_HORIZON_DAYS: ${TIDE_HORIZON_DAYS:-}
+  TIDE_RETENTION_PAST_DAYS: ${TIDE_RETENTION_PAST_DAYS:-}
+  NDBC_USE_5DAY: ${NDBC_USE_5DAY:-}
+  WIND_GUST_SCORING: ${WIND_GUST_SCORING:-}
   # Retention (maintenance.cleanup, daily 03:30 UTC); sizes per day in docs/operations.md.
   RETENTION_FORECAST_DAYS: ${RETENTION_FORECAST_DAYS:-10}
   RETENTION_FLIGHT_DAYS: ${RETENTION_FLIGHT_DAYS:-30}
   RETENTION_JOB_LOG_DAYS: ${RETENTION_JOB_LOG_DAYS:-30}
   RETENTION_NOTIFICATION_DAYS: ${RETENTION_NOTIFICATION_DAYS:-365}
   RETENTION_ARCHIVE_DAYS: ${RETENTION_ARCHIVE_DAYS:-730}
+  ARCHIVE_CONFIDENCE_DIGEST: ${ARCHIVE_CONFIDENCE_DIGEST:-}
+  PRUNE_SUPERSEDED_MEMBER_PREDICTIONS: ${PRUNE_SUPERSEDED_MEMBER_PREDICTIONS:-}
+  OBSERVATION_RETENTION_DAYS: ${OBSERVATION_RETENTION_DAYS:-}
   # Data health (GET /api/health/data, job ops.data_health) and the admin email alerts.
   DATA_HEALTH_CHECK_MINUTES: ${DATA_HEALTH_CHECK_MINUTES:-15}
   DATA_HEALTH_ALERTS_ENABLED: ${DATA_HEALTH_ALERTS_ENABLED:-true}
+  # Addresses (comma-separated) the daily watchdog (GET /api/internal/cron/daily) emails when
+  # the database itself cannot be reached; empty = none (the admins are read from the database).
+  OPS_ALERT_EMAILS: ${OPS_ALERT_EMAILS:-}
   DATA_HEALTH_ALERT_REPEAT_HOURS: ${DATA_HEALTH_ALERT_REPEAT_HOURS:-12}
   DATA_HEALTH_HEARTBEAT_MINUTES: ${DATA_HEALTH_HEARTBEAT_MINUTES:-30}
   DATA_HEALTH_OBSERVATION_STALE_HOURS: ${DATA_HEALTH_OBSERVATION_STALE_HOURS:-}
   DATA_HEALTH_DATABASE_MAX_GB: ${DATA_HEALTH_DATABASE_MAX_GB:-}
+  DATA_HEALTH_REDIS_MAX_FRACTION: ${DATA_HEALTH_REDIS_MAX_FRACTION:-}
+  # Reported by the data-health check; keep equal to the redis service's --maxmemory.
+  REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-256mb}
+  # Queues the worker consumes: "celery" (emails, alerts) and "bulk" (data downloads).
+  WORKER_QUEUES: ${WORKER_QUEUES:-celery,bulk}
   DETECTION_LEAD_MIN_DAYS: ${DETECTION_LEAD_MIN_DAYS:-5}
   DETECTION_LEAD_MAX_DAYS: ${DETECTION_LEAD_MAX_DAYS:-10}
   FLIGHT_PROVIDER: ${FLIGHT_PROVIDER:-demo}
@@ -93,7 +183,6 @@ x-backend-env: &backend-env
   TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
   TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
   TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
-  MAX_ALERTS_PER_USER_PER_DAY: ${MAX_ALERTS_PER_USER_PER_DAY:-10}
   OUTBOX_DIR: /tmp/swell-outbox
 
 x-backend: &backend
@@ -133,9 +222,21 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # Broker, locks, quota counters and the small provider response cache. noeviction: a
+  # broker must never lose messages, so a full Redis refuses writes instead; the data-health
+  # check reports used memory against the cap (alert above DATA_HEALTH_REDIS_MAX_FRACTION).
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - noeviction
     ports:
       - "${REDIS_PORT:-6379}:6379"
     healthcheck:
@@ -166,7 +267,11 @@ services:
       retries: 30
       start_period: 20s
 
-  # Celery worker: runs the forecast → detection → matching → flights → alerts → delivery jobs.
+  # Celery worker: runs sync.tick, which syncs everything a new model run brings in one go
+  # (spot forecasts and map layers, blend, predictions, publish, then swell detection,
+  # matching, flights, alerts and delivery; docs/sync.md), plus the periodic jobs beat
+  # schedules (tides, emails, data health, cleanup). The default WORKER_QUEUES=celery,bulk
+  # consumes both queues.
   worker:
     <<: *backend
     command: ["worker"]
@@ -183,7 +288,30 @@ services:
       retries: 3
       start_period: 30s
 
-  # Celery beat: the job scheduler (starts once the schema exists). Run exactly one.
+  # Optional second worker for the "bulk" queue only (downloads), so the main worker's slots
+  # stay free for emails and alerts:
+  #   WORKER_QUEUES=celery docker compose --profile bulk-worker up -d
+  # (WORKER_QUEUES=celery then applies to the main worker; this one always takes "bulk").
+  worker-bulk:
+    <<: *backend
+    profiles: ["bulk-worker"]
+    command: ["worker"]
+    environment:
+      <<: *backend-env
+      WORKER_QUEUES: bulk
+      WORKER_CONCURRENCY: ${BULK_WORKER_CONCURRENCY:-2}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+
+  # Celery beat: the job scheduler (starts once the schema exists). Run exactly one, and never
+  # together with the "sync" service below.
   beat:
     <<: *backend
     command: ["beat"]
@@ -198,6 +326,29 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+
+  # Optional, instead of worker and beat: the sync daemon (`python -m app.cli sync daemon`),
+  # the job runner of the Vercel deployment (docs/sync.md). It checks the providers every
+  # SYNC_CHECK_MINUTES, syncs each new model run, runs the periodic jobs itself and sends
+  # email and SMS inline. Never run it together with beat: both would schedule the jobs.
+  # JOB_RUNNER=daemon must hold for the whole stack, so that the API sends account emails
+  # inline and hands "match my search" to the daemon instead of to Celery:
+  #   echo JOB_RUNNER=daemon >> .env
+  #   docker compose --profile sync up -d --scale worker=0 --scale beat=0
+  # Back to Celery: remove the line from .env, `docker compose stop sync`, `docker compose up -d`.
+  sync:
+    <<: *backend
+    profiles: ["sync"]
+    command: ["sync"]
+    environment:
+      <<: *backend-env
+      JOB_RUNNER: daemon
+    depends_on:
+      backend:
+        condition: service_healthy
+    # SIGTERM stops the daemon after the current sync stage (vercel.json gives it the same
+    # grace period).
+    stop_grace_period: 600s
 
   frontend:
     build:

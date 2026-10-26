@@ -24,7 +24,7 @@ def research_classes(db: Session) -> dict[int, str]:
             SpotResearchAssessment.is_current
         )
     )
-    return {spot_id: cls for spot_id, cls in rows}
+    return dict(rows.all())
 
 
 def _sources(per_variable: dict[str, Any]) -> list[ResearchSourceOut]:

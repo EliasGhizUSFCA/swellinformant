@@ -16,7 +16,8 @@ import { mockFieldsUnavailable } from "./map-fields.mock";
  * * keyboard users reach the map controls before the 50 markers, and Enter on a marker opens
  *   that spot;
  * * long job names on the status page wrap on a phone;
- * * the landing page's forecast panel says "demo forecast" in demo mode.
+ * * the landing page's forecast panel says "demo forecast" in demo mode, and no page labels
+ *   model output "live" or "now".
  *
  * The spot pages and the map use the demo backend as it is (its demo forecasts carry the
  * disputed-wind note at the spots the committed research marks). Signed-in pages, the
@@ -42,6 +43,25 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
 }
 
+/** Model output is a forecast: no visible line is a bare "Now" or "Live" label, and none calls
+ * the forecast, data, conditions, swells or map "live". Chart text (SVG) is left out: a time
+ * axis may mark the current time with "Now", which labels the clock, not a model value. */
+async function expectNoLiveOrNowLabels(page: Page) {
+  const text = await page.locator("body").evaluate((body) => {
+    const charts = [...body.querySelectorAll<SVGSVGElement>("svg")].map((svg) => [svg, svg.style.display] as const);
+    for (const [svg] of charts) svg.style.display = "none";
+    const out = (body as HTMLElement).innerText;
+    for (const [svg, display] of charts) svg.style.display = display;
+    return out;
+  });
+  const lines = text.split("\n").map((l) => l.trim());
+  expect(lines.length).toBeGreaterThan(3);
+  for (const line of lines) {
+    expect(line, `"${line}"`).not.toMatch(/^(now|live)$/i);
+    expect(line, `"${line}"`).not.toMatch(/\blive (forecast|data|conditions|swells?|map)\b/i);
+  }
+}
+
 function overlaps(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
@@ -53,13 +73,17 @@ for (const [device, viewport] of [
   test.describe(`disputed offshore wind · ${device}`, () => {
     test.use({ viewport, hasTouch: device === "mobile", isMobile: device === "mobile" });
 
-    test("the note sits next to the wind on the spot page, without opening any details", async ({ page }) => {
+    test("the note sits next to the wind on the spot page, without opening any details", device === "mobile" ? { tag: "@mobile" } : {}, async ({ page }) => {
       await blockTiles(page);
       const disputed = (await apiGet(page.request, "/api/spots/chicama")) as SpotDetail;
       const calm = (await apiGet(page.request, "/api/spots/pipeline")) as SpotDetail;
       // Precondition from the API itself: Chicama's hours carry the note, Pipeline's do not.
       expect(disputed.best_upcoming?.confidence_reasons).toContain(WIND_NOTE);
       expect(calm.best_upcoming?.confidence_reasons ?? []).not.toContain(WIND_NOTE);
+      // The note has its own field and is not a forecast-confidence reason.
+      expect(disputed.best_upcoming?.wind_dispute_note).toBe(WIND_NOTE);
+      expect(disputed.best_upcoming?.forecast_confidence_reasons).not.toContain(WIND_NOTE);
+      expect(calm.best_upcoming?.wind_dispute_note ?? null).toBeNull();
 
       await page.goto("/spots/chicama");
       const outlook = page.getByTestId("surf-outlook");
@@ -67,38 +91,45 @@ for (const [device, viewport] of [
       await expect(outlook.getByTestId("wind-dispute-note")).toBeVisible();
       // Every confidence detail stays closed: the note is visible on its own.
       for (const toggle of await outlook.getByRole("button", { name: "Confidence details" }).all()) await expect(toggle).toHaveAttribute("aria-expanded", "false");
-      // The hour-by-hour breakdown (next to the model's wind) and the "Now" card show it too.
+      // The hour-by-hour breakdown (next to the model's wind) and the forecast card show it too.
       await expect(page.getByTestId("forecast-breakdown").getByTestId("wind-dispute-note")).toHaveText(WIND_NOTE);
       await expect(page.getByTestId("conditions-summary").getByTestId("wind-dispute-note")).toHaveText(WIND_NOTE);
-      // It is not a second copy of the class: the badge and its first reason are unchanged.
+      // It is not a second copy of the class, nor one of its reasons.
       await expect(outlook.getByTestId("forecast-confidence-badge")).toHaveText(/^Forecast confidence: (High|Moderate|Low|Not assessed yet)$/);
+      for (const fc of await page.getByTestId("forecast-confidence").all()) await expect(fc).not.toContainText(WIND_NOTE);
       await expectNoHorizontalScroll(page);
       await shot(page, `sweep-wind-note-spot-${device}`);
 
       await page.goto("/spots/pipeline");
       await expect(page.getByTestId("surf-outlook")).toBeVisible();
       await expect(page.getByTestId("wind-dispute-note")).toHaveCount(0);
+      // The forecast card is model output: titled "Forecast" with how far away its step is.
+      await expect(page.getByTestId("conditions-title").first()).toContainText("Forecast");
+      await expectNoLiveOrNowLabels(page);
     });
 
     test("the map's spot panel shows the note for a disputed spot", async ({ page }) => {
       await blockTiles(page);
       await page.goto("/map");
       await expect(page.locator("path.spot-marker")).toHaveCount(50);
-      if (device === "mobile") {
-        // On a phone the spot is opened from the list (Cloudbreak is in the demo's top 15).
-        await page.getByRole("button", { name: /Best spots now/ }).tap();
-        await page.getByTestId("top-spots").getByRole("button", { name: /^Cloudbreak/ }).tap();
-      } else {
-        await page.getByTestId("top-spots").getByRole("button", { name: /^Cloudbreak/ }).click();
-      }
+      // The spot is opened from the best-spots list, as a surfer would. The list ranks spots in
+      // daylight first, so Cloudbreak is in its 15 rows only while it is day in Fiji (about
+      // 18:00-06:30 UTC); at other times of day the test opens it from its marker instead (a
+      // click event on the marker: on a phone it lies outside the initial view).
+      if (device === "mobile") await page.getByRole("button", { name: /Best spots now/ }).tap();
+      await expect(page.getByTestId("top-spots").locator("li")).toHaveCount(15);
+      const row = page.getByTestId("top-spots").getByRole("button", { name: /^Cloudbreak/ });
+      if (!(await row.count())) await page.locator("path.spot-cloudbreak").dispatchEvent("click");
+      else if (device === "mobile") await row.tap();
+      else await row.click();
       const panel = page.getByTestId("map-spot-panel");
       await expect(panel.getByTestId("panel-spot-name")).toHaveText("Cloudbreak");
       await expect(panel.getByTestId("forecast-breakdown").getByTestId("wind-dispute-note")).toHaveText(WIND_NOTE);
       await shot(page, `sweep-wind-note-map-${device}`);
     });
 
-    test("dashboard cards and the opportunity show the note with the wind (synthetic)", async ({ page, baseURL }) => {
-      const sc: Scenario = { ...SCENARIOS.highResearchLowForecast, reasons: [...SCENARIOS.highResearchLowForecast.reasons, WIND_NOTE] };
+    test("dashboard cards and the opportunity show the note with the wind (synthetic)", device === "mobile" ? { tag: "@mobile" } : {}, async ({ page, baseURL }) => {
+      const sc: Scenario = { ...SCENARIOS.highResearchLowForecast, windNote: WIND_NOTE };
       await blockTiles(page);
       await page.context().addCookies([{ name: "sta_session", value: "synthetic-test-session", url: baseURL ?? "http://localhost:3000" }]);
       await page.route(/\/api\/auth\/me$/, (r) => r.fulfill({ json: user() }));
@@ -120,11 +151,14 @@ for (const [device, viewport] of [
       await expect(cards.nth(0).getByTestId("wind-dispute-note")).toHaveText(WIND_NOTE);
       await expect(cards.nth(1).getByTestId("wind-dispute-note")).toHaveCount(0);
       await expectNoHorizontalScroll(page);
+      await expectNoLiveOrNowLabels(page);
       await shot(page, `sweep-wind-note-dashboard-${device}`);
 
       await page.goto(`/opportunities/${MATCH_ID}`);
       await expect(page.getByTestId("swell-overview").getByTestId("wind-dispute-note")).toHaveText(WIND_NOTE);
+      await expect(page.getByTestId("swell-overview").getByTestId("forecast-confidence")).not.toContainText(WIND_NOTE);
       await expectNoHorizontalScroll(page);
+      await expectNoLiveOrNowLabels(page);
       await shot(page, `sweep-wind-note-opportunity-${device}`);
     });
   });
@@ -240,12 +274,20 @@ test.describe("status page with degraded data health on a phone (synthetic)", ()
 test.describe("landing page in demo mode", () => {
   test.use({ viewport: DESKTOP });
 
-  test("the forecast panel says demo, not live", async ({ page }) => {
+  test("the forecast panel says demo, never live", async ({ page }) => {
     const status = (await apiGet(page.request, "/api/system/status")) as { mode: { forecast_providers: string[] } };
     expect(status.mode.forecast_providers).toContain("demo");
     await page.goto("/");
     const panel = page.getByRole("heading", { name: "Swells on the radar" }).locator("..");
     await expect(panel).toContainText("demo forecast");
     await expect(panel).not.toContainText("live forecast");
+    await expect(page.getByTestId("forecast-freshness")).toHaveAttribute("data-freshness", "demo");
+    // The map is a forecast map, and the horizon stat comes from the stored predictions (the
+    // demo provider writes FORECAST_DAYS of them; live runs as many as their models provide).
+    await expect(page.getByRole("link", { name: "Explore the forecast map" })).toBeVisible();
+    const snap = (await apiGet(page.request, "/api/map/conditions")) as { range_end: string | null };
+    const days = snap.range_end ? Math.round((Date.parse(snap.range_end) - Date.now()) / 86_400_000) : null;
+    await expect(page.getByTestId("forecast-horizon")).toContainText(days && days > 0 ? `${days}-day` : "—");
+    await expectNoLiveOrNowLabels(page);
   });
 });

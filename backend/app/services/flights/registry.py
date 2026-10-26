@@ -17,9 +17,12 @@ class AirportDirectory:
     """In-memory snapshot of the airports table (small, read-mostly reference data)."""
 
     def __init__(self, db: Session) -> None:
+        # The four columns kept, not whole rows (names, cities and countries are not used).
         self._rows = {
-            a.iata: AirportInfo(a.iata, a.latitude, a.longitude, a.timezone)
-            for a in db.scalars(select(Airport)).all()
+            iata: AirportInfo(iata, latitude, longitude, timezone)
+            for iata, latitude, longitude, timezone in db.execute(
+                select(Airport.iata, Airport.latitude, Airport.longitude, Airport.timezone)
+            )
         }
 
     def get(self, code: str) -> AirportInfo | None:
@@ -33,9 +36,12 @@ class AirportDirectory:
         return list(self._rows.values())
 
 
-def build_flight_provider(db: Session, settings: Settings | None = None) -> FlightProvider:
+def build_flight_provider(
+    db: Session, settings: Settings | None = None, directory: AirportDirectory | None = None
+) -> FlightProvider:
+    """The configured provider, with ``directory`` (read here when not given)."""
     settings = settings or get_settings()
-    directory = AirportDirectory(db)
+    directory = directory or AirportDirectory(db)
     if settings.flight_provider == "duffel":
         return DuffelProvider(directory.tz, settings)
     if settings.flight_provider == "amadeus":

@@ -3,6 +3,16 @@
 https://api.windy.com/point-forecast/docs — requires a paid Point Forecast API key
 (WINDY_API_KEY). Trial keys return randomised data, so never use one for real alerts.
 One request per spot per model: ``gfsWave`` for waves, ``gfs`` for wind/pressure.
+
+Terms: Windy's API terms forbid storing its data, creating databases derived from it and
+redistributing it, which is what this app does with every forecast source (runs, blends,
+archived predictions). The FORECAST_PROVIDERS token ``windy`` is therefore refused unless
+WINDY_TERMS_ACKNOWLEDGED=true (settings validator and registry), which an operator sets only
+with a licence that allows this use (docs/API_SETUP_REQUIRED.md). It is in no recommended
+setup.
+
+Response keys follow the documented names: the ``windWaves`` parameter returns
+``wwaves_height-surface``, ``wwaves_period-surface`` and ``wwaves_direction-surface``.
 """
 
 from __future__ import annotations
@@ -14,16 +24,20 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.services.forecasts.base import (
+    EXTRA_GUST_KIND,
     FetchResult,
+    FetchStats,
     ForecastProvider,
     ForecastRecord,
     RunInfo,
     SourceInfo,
     SpotPoint,
+    http_client,
     nominal_gfs_cycle,
 )
 from app.services.geo import wind_from_uv
 from app.services.http import (
+    HttpTally,
     PermanentProviderError,
     ProviderError,
     request_with_retries,
@@ -42,10 +56,11 @@ WAVE_KEYS = {
     "swell2_height-surface": "secondary_swell_height_m",
     "swell2_period-surface": "secondary_swell_period_s",
     "swell2_direction-surface": "secondary_swell_direction_deg",
-    "windWaves_height-surface": "wind_wave_height_m",
-    "windWaves_period-surface": "wind_wave_period_s",
-    "windWaves_direction-surface": "wind_wave_direction_deg",
+    "wwaves_height-surface": "wind_wave_height_m",
+    "wwaves_period-surface": "wind_wave_period_s",
+    "wwaves_direction-surface": "wind_wave_direction_deg",
 }
+PARTITIONS = ("primary_swell", "secondary_swell", "wind_wave")
 
 
 def _at(payload: dict[str, Any], key: str, index: int) -> float | None:
@@ -66,7 +81,9 @@ class WindyProvider(ForecastProvider):
         self.settings = settings or get_settings()
         if not self.settings.windy_api_key:
             raise PermanentProviderError("WINDY_API_KEY is not configured")
-        self.client = client or httpx.Client(timeout=self.settings.forecast_http_timeout_seconds)
+        self.client = client or http_client(self.settings.forecast_http_timeout_seconds)
+        self.tally = HttpTally()
+        self.tally.install(self.client)
         self.backoff_seconds = backoff_seconds
 
     def source_info(self) -> SourceInfo:
@@ -78,7 +95,11 @@ class WindyProvider(ForecastProvider):
             atmosphere_model="gfs",
             is_demo=False,
             attribution="Forecast data © Windy.com Point Forecast API",
-            license_notes="Requires a paid Windy Point Forecast API key; subject to Windy terms.",
+            license_notes=(
+                "Requires a paid Windy Point Forecast API key. Windy's terms forbid storing the "
+                "data, derived databases and redistribution: only enabled with "
+                "WINDY_TERMS_ACKNOWLEDGED=true under a licence that allows this use."
+            ),
             family="ncep_gfs",
         )
 
@@ -110,6 +131,7 @@ class WindyProvider(ForecastProvider):
 
     def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
         result = FetchResult()
+        before = self.tally.snapshot()
         for p in spots:
             try:
                 waves = self._post(
@@ -141,7 +163,7 @@ class WindyProvider(ForecastProvider):
                 gust, pres = _at(atmos, "gust-surface", i), _at(atmos, "pressure-surface", i)
                 row: dict[str, float | None] = {}
                 if u is not None and v is not None:
-                    speed, direction = wind_from_uv(u, v)
+                    speed, direction = wind_from_uv(u, v)  # m/s; direction None when calm
                     row["wind_speed_kmh"] = ms_to_kmh(speed)
                     row["wind_direction_deg"] = direction
                 if gust is not None:
@@ -156,12 +178,23 @@ class WindyProvider(ForecastProvider):
                     values[field] = _at(waves, key, i)
                 if all(v is None for v in values.values()):
                     continue
+                for prefix in PARTITIONS:  # an absent partition is None, never 0
+                    height = values.get(f"{prefix}_height_m")
+                    if height is not None and height <= 0:
+                        for suffix in ("height_m", "period_s", "direction_deg"):
+                            values[f"{prefix}_{suffix}"] = None
                 epoch = int(ts) // 1000
                 values.update(atmos_by_ts.get(epoch, {}))
+                extra: dict[str, object] = {}
+                if values.get("wind_gust_kmh") is not None:
+                    extra[EXTRA_GUST_KIND] = "unknown"  # Windy does not define its gust
                 # Windy does not document which period definition it returns: leave unknown.
-                records.append(ForecastRecord(datetime.fromtimestamp(epoch, tz=UTC), values))
+                records.append(
+                    ForecastRecord(datetime.fromtimestamp(epoch, tz=UTC), values, extra=extra)
+                )
             if records:
                 result.records[p.spot_id] = records
             else:
                 result.errors[p.spot_id] = "no wave data returned"
+        result.stats = FetchStats.between(before, self.tally.snapshot())
         return result

@@ -12,9 +12,9 @@ partition i (swells 1–3 and the wind sea) with height H_i, peak period T_i and
    water — for long swell over a 50–200 m deep grid point this misstates H0 by up to
    ~9 % (documented limitation).
 2. **Directional factor.** R_i = Σ_θ D(θ; θ_i, σ_i) · max(cos(θ − β), 0) · T(θ) · Δθ,
-   where D is a wrapped Gaussian spreading distribution (σ ≈ 10° for T ≥ 13 s, 15° for
-   9–13 s, 30° for wind sea and short-period swell — assumptions, since GFS-Wave publishes
-   no spread), β is the shore-normal azimuth of the break and T(θ) the *energy*
+   where D is a wrapped Gaussian spreading distribution (σ = 30° up to 8 s and for wind
+   sea, 15° from 10 to 12 s, 10° from 14 s, linear in between — assumptions, since GFS-Wave
+   publishes no spread), β is the shore-normal azimuth of the break and T(θ) the *energy*
    transmission past islands and headlands (the spot's shadow table, or a smooth taper
    outside its swell window). cos(θ − β) carries the refraction loss: straight-contour
    refraction plus depth-limited breaking gives Hb ∝ (H0²·T·cos α0)^(2/5).
@@ -122,15 +122,30 @@ def komar_gaughan_m(h0_m: float, period_s: float) -> float:
 
 
 # --------------------------------------------------------------------------- directions
+# Assumed directional spread (1σ, degrees) by period: 30° up to 8 s, 15° from 10 to 12 s and
+# 10° from 14 s, with linear ramps in between (version 2.0.0 stepped at 9 s and 13 s, which
+# made the breaking height jump by 4-8 %). Wind sea is always 30°. Assumptions: GFS-Wave
+# publishes no spread.
+SPREADING_KNOTS: tuple[tuple[float, float], ...] = (
+    (8.0, 30.0),
+    (10.0, 15.0),
+    (12.0, 15.0),
+    (14.0, 10.0),
+)
+
+
 def spreading_sigma_deg(period_s: float, wind_sea: bool, override: float | None = None) -> float:
-    """Directional spread (1σ) assumed for a partition."""
+    """Directional spread (1σ) assumed for a partition, continuous in the period."""
     if override is not None:
         return override
-    if wind_sea or period_s < 9.0:
-        return 30.0
-    if period_s < 13.0:
-        return 15.0
-    return 10.0
+    if wind_sea:
+        return SPREADING_KNOTS[0][1]
+    if period_s <= SPREADING_KNOTS[0][0]:
+        return SPREADING_KNOTS[0][1]
+    for (t0, s0), (t1, s1) in zip(SPREADING_KNOTS, SPREADING_KNOTS[1:], strict=False):
+        if period_s <= t1:
+            return s0 + (s1 - s0) * (period_s - t0) / (t1 - t0)
+    return SPREADING_KNOTS[-1][1]
 
 
 def taper_transmission(window_distance_deg: float) -> float:
@@ -150,7 +165,13 @@ def table_transmission(table: list[float], direction_deg: float) -> float:
 
 @dataclass(frozen=True)
 class Profile:
-    """Physical parameters of one break (see models.forecast_engine.SpotPhysicalProfile)."""
+    """Physical parameters of one break (see models.forecast_engine.SpotPhysicalProfile).
+
+    ``shore_normal_deg`` (β) is the wave-approach normal used for refraction and spreading,
+    usually the centre of the optimal swell window. It is not the wind normal: offshore and
+    onshore wind are measured against ``offshore_wind_direction`` (wind.py), which differs
+    from β + 180 by more than 60° at points and wrapping reefs.
+    """
 
     shore_normal_deg: float
     swell_window_min: float

@@ -6,14 +6,18 @@
  * (breaking) height at a beach is a different quantity, predicted per spot elsewhere.
  */
 import { compass, type Units } from "@/lib/format";
-import { LAYER_SCALES, scalePosition, type LayerId, type LayerScale } from "@/lib/map-colors";
+import { LAYER_SCALES, metresToStops, scalePosition, WAVE_HEIGHT_RAMP, type LayerId, type LayerScale } from "@/lib/map-colors";
 import type { FieldIndex, FieldVariableName } from "@/lib/map-fields";
+import { FAMILY_STYLES, type WaveSystem } from "@/lib/map-waves";
+import { convertWind, type WindUnit } from "@/lib/units";
+
+/** The wind units offered on the map: the one list, shared with the spot charts (lib/units). */
+export { WIND_UNITS } from "@/lib/units";
 
 export type { LayerId } from "@/lib/map-colors";
-export type WindUnit = "km/h" | "kn" | "m/s";
+export type { WindUnit } from "@/lib/units";
 
-export const WIND_UNITS: WindUnit[] = ["km/h", "kn", "m/s"];
-const PER_MPS: Record<WindUnit, number> = { "m/s": 1, "km/h": 3.6, kn: 1.943844 };
+const KMH_PER_MPS = 3.6;
 const FT_PER_M = 3.28084;
 
 export interface LayerDef {
@@ -36,7 +40,7 @@ export const LAYERS: LayerDef[] = [
     longName: "Wind speed",
     scaleTitle: "Wind speed",
     needs: ["wind_u", "wind_v"],
-    about: "Wind speed from the weather model. Particles drift with the wind; the readout says where the wind blows from.",
+    about: "10 m wind speed from the weather model. Particles drift with the wind; the readout says where the wind blows from.",
   },
   {
     id: "hs",
@@ -71,12 +75,19 @@ export const layerDef = (id: LayerId): LayerDef => LAYERS.find((l) => l.id === i
 
 export const isLayerId = (v: unknown): v is LayerId => typeof v === "string" && LAYERS.some((l) => l.id === v);
 
-/** The layer's scale, with the display range from the field index where it provides one. */
+/**
+ * The layer's scale, with the display range from the field index where it provides one. The
+ * wave-height colours stay anchored in metres (WAVE_HEIGHT_RAMP): another range moves the
+ * stops, never the colour of a given height.
+ */
 export function layerScale(id: LayerId, index?: FieldIndex | null): LayerScale {
   const base = LAYER_SCALES[id];
   const name = id === "hs" ? "hs" : id === "tp" ? "tp" : null;
   const v = name ? index?.variables?.find((x) => x.name === name) : undefined;
   if (v && Number.isFinite(v.display_min) && Number.isFinite(v.display_max) && v.display_max > v.display_min) {
+    if (id === "hs" && (v.display_min !== base.min || v.display_max !== base.max)) {
+      return { ...base, min: v.display_min, max: v.display_max, stops: metresToStops(WAVE_HEIGHT_RAMP, v.display_min, v.display_max) };
+    }
     return { ...base, min: v.display_min, max: v.display_max };
   }
   return base;
@@ -98,24 +109,31 @@ export function layerUnit(id: LayerId, u: DisplayUnits): string {
 /** Base value (m, m/s, s, kW/m) → the user's units. */
 export function toDisplay(id: LayerId, value: number, u: DisplayUnits): number {
   if (id === "hs") return u.height === "ft" ? value * FT_PER_M : value;
-  if (id === "wind") return value * PER_MPS[u.wind];
+  if (id === "wind") return convertWind(value * KMH_PER_MPS, u.wind);
   return value;
 }
 
 /** The user's units → base value. */
 export function fromDisplay(id: LayerId, value: number, u: DisplayUnits): number {
   if (id === "hs") return u.height === "ft" ? value / FT_PER_M : value;
-  if (id === "wind") return value / PER_MPS[u.wind];
+  if (id === "wind") return value / convertWind(KMH_PER_MPS, u.wind);
   return value;
 }
 
-/** "2.4 m", "8 ft", "36 km/h", "12 s", "45 kW/m" (or "—"). */
+/** The largest period a field can carry: periods are stored in 0.1 s steps up to byte 254
+ * (backend services/forecasts/fields.py), so a longer period arrives as exactly this. */
+const PERIOD_CEILING_S = 25.4;
+
+/** "2.4 m", "8 ft", "36 km/h", "22 mph", "3.9 m/s", "12 s", "45 kW/m" (or "—"). */
 export function formatLayerValue(id: LayerId, value: number, u: DisplayUnits): string {
   if (!Number.isFinite(value)) return "—";
+  // A clamped period is a lower bound ("25.4 s or more"), never an exact 25 s.
+  if (id === "tp" && value >= PERIOD_CEILING_S - 0.01) return `≥${PERIOD_CEILING_S} s`;
   const v = toDisplay(id, value, u);
   const unit = layerUnit(id, u);
   if (id === "hs") return `${u.height === "m" || v < 10 ? v.toFixed(1) : Math.round(v)} ${unit}`;
   if (id === "energy") return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${unit}`;
+  if (id === "wind" && u.wind === "m/s") return `${v.toFixed(1)} ${unit}`;
   return `${Math.round(v)} ${unit}`;
 }
 
@@ -130,8 +148,19 @@ export interface LegendTick {
   pos: number;
 }
 
+/** Wave-height legend ticks: in metres where the colour ramp has its anchors, in feet every 5 ft. */
+const HEIGHT_TICKS_M = [0, 1, 2, 3, 4, 6, 8, 10];
+const HEIGHT_TICKS_FT = [0, 5, 10, 15, 20, 25, 30];
+
 /** Legend ticks in the user's units, positioned on the (possibly non-linear) scale. */
 export function legendTicks(id: LayerId, scale: LayerScale, u: DisplayUnits, maxTicks = 7): LegendTick[] {
+  if (id === "hs") {
+    const lo = toDisplay(id, scale.min, u);
+    const hi = toDisplay(id, scale.max, u);
+    return (u.height === "ft" ? HEIGHT_TICKS_FT : HEIGHT_TICKS_M)
+      .filter((v) => v >= lo - 1e-9 && v <= hi + 1e-9)
+      .map((v) => ({ label: String(v), pos: scalePosition(scale, fromDisplay(id, v, u)) }));
+  }
   if (id === "energy") {
     return [0, 10, 25, 50, 100, 150]
       .filter((v) => v >= scale.min && v <= scale.max)
@@ -147,6 +176,14 @@ export function legendTicks(id: LayerId, scale: LayerScale, u: DisplayUnits, max
   return out;
 }
 
+/** One wave system under the cursor (a partition of the wave model, base units). */
+export interface PartitionSample {
+  system: Exclude<WaveSystem, "combined">;
+  hs: number;
+  tp: number;
+  dir: number;
+}
+
 /** Values under the cursor (base units; NaN where the model has no data). */
 export interface PointSample {
   hs?: number;
@@ -156,9 +193,20 @@ export interface PointSample {
   windSpeed?: number;
   windDir?: number;
   pressure?: number;
+  /** Wave partitions on screen at this point, primary first (only systems with data). */
+  partitions?: PartitionSample[];
 }
 
 const fromText = (deg: number | undefined) => (deg != null && Number.isFinite(deg) ? `from ${compass(deg)}` : null);
+
+/** "Primary 1.9 m 14 s from S (195°)" (null when the system has no height here). */
+function partitionText(p: PartitionSample, u: DisplayUnits): string | null {
+  if (!Number.isFinite(p.hs)) return null;
+  const parts = [FAMILY_STYLES[p.system].short, formatLayerValue("hs", p.hs, u)];
+  if (Number.isFinite(p.tp)) parts.push(formatLayerValue("tp", p.tp, u));
+  if (Number.isFinite(p.dir)) parts.push(`from ${compass(p.dir)} (${Math.round(p.dir) % 360}°)`);
+  return parts.join(" ");
+}
 
 /**
  * Readout for the active layer, e.g. title "Offshore waves (Hs)" and text
@@ -185,6 +233,7 @@ export function readout(id: LayerId, s: PointSample, u: DisplayUnits): { title: 
     title = "Offshore wave power";
     parts.push(formatLayerValue("energy", s.energy, u), fromText(s.waveDir));
   }
+  if (id !== "wind") for (const p of s.partitions ?? []) parts.push(partitionText(p, u));
   if (ok(s.pressure)) parts.push(`${Math.round(s.pressure)} hPa`);
   return { title, text: parts.filter(Boolean).join(" · ") };
 }

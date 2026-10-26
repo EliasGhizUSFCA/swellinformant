@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { bubbleLabel, longTimeLabel, nearestStepIndex, stepHours, tickIndices, timelineDays, timelineSteps } from "@/lib/map-time";
+import {
+  bubbleLabel,
+  cycleLabel,
+  leadLabel,
+  longTimeLabel,
+  modelName,
+  nearestStepIndex,
+  stepHours,
+  tickIndices,
+  timelineDays,
+  timelineSteps,
+  timeParam,
+} from "@/lib/map-time";
 
 const every3h = (startIso: string, n: number) => Array.from({ length: n }, (_, i) => new Date(Date.parse(startIso) + i * 3 * 3_600_000).toISOString());
 
@@ -69,5 +81,37 @@ describe("timeline labels", () => {
     expect(timelineDays(steps, "America/Los_Angeles").map((d) => d.key)).toEqual(["2026-10-25"]);
     expect(timelineDays(steps, "Australia/Sydney").map((d) => d.key)).toEqual(["2026-10-26"]);
     expect(timelineDays(steps, "UTC").map((d) => d.key)).toEqual(["2026-10-25", "2026-10-26"]);
+  });
+});
+
+describe("model run and lead time", () => {
+  it("names the cycle in UTC like forecasters do", () => {
+    expect(cycleLabel("2026-10-11T18:00:00Z")).toBe("18Z Oct 11");
+    expect(cycleLabel("2026-10-12T00:00:00+00:00")).toBe("00Z Oct 12");
+    expect(cycleLabel("2026-10-11T23:30:00-02:00")).toBe("01:30Z Oct 12");
+  });
+
+  it("counts the lead time from the cycle; the cycle time itself is the analysis", () => {
+    const cycle = "2026-10-11T18:00:00Z";
+    expect(leadLabel("2026-10-11T18:00:00Z", cycle)).toBe("analysis");
+    expect(leadLabel("2026-10-12T00:00:00Z", cycle)).toBe("+6 h");
+    expect(leadLabel("2026-10-21T18:00:00Z", cycle)).toBe("+240 h");
+    expect(leadLabel("2026-10-11T15:00:00Z", cycle)).toBe("−3 h");
+    expect(leadLabel(null, cycle)).toBeNull();
+    expect(leadLabel("2026-10-12T00:00:00Z", undefined)).toBeNull();
+    expect(leadLabel("not a time", cycle)).toBeNull();
+  });
+
+  it("shortens source names to the model", () => {
+    expect(modelName({ code: "noaa_gfs_direct", name: "NOAA GFS-Wave + GFS (direct from NOAA open data)" })).toBe("GFS");
+    expect(modelName({ code: "ecmwf_ifs_open", name: "ECMWF IFS HRES + ecWAM (open data, 0.25°)" })).toBe("ECMWF");
+    expect(modelName({ code: "synthetic", name: "Synthetic test fields" })).toBe("Synthetic test fields");
+    expect(modelName({ code: "x", name: "Some model (detail)" })).toBe("Some model");
+  });
+
+  it("writes ?t= in UTC whatever the input offset", () => {
+    expect(timeParam("2026-10-12T00:00:00Z")).toBe("2026-10-12T00:00:00Z");
+    expect(timeParam("2026-10-11T20:00:00-04:00")).toBe("2026-10-12T00:00:00Z");
+    expect(timeParam("2026-10-12T00:00:00.000Z")).toBe("2026-10-12T00:00:00Z");
   });
 });

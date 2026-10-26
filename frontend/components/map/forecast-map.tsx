@@ -2,231 +2,46 @@
 
 import "leaflet/dist/leaflet.css";
 
-import type { Map as LeafletMap } from "leaflet";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap, useMapEvents, ZoomControl } from "react-leaflet";
+import { svg, type Map as LeafletMap, type PathOptions } from "leaflet";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CircleMarker, MapContainer, Tooltip, useMap, useMapEvents, ZoomControl } from "react-leaflet";
 
-import { buildLut, type LayerScale } from "@/lib/map-colors";
-import {
-  directionFromUV,
-  sampleDirection,
-  sampleGrid,
-  waveEnergyGrid,
-  waveFlowGrids,
-  windSpeedGrid,
-  type FieldGrid,
-} from "@/lib/map-fields";
+import { minZoomFor, nearestCopy } from "@/lib/map-bounds";
+import type { LayerScale } from "@/lib/map-colors";
+import type { FieldGrid } from "@/lib/map-fields";
 import { mercX, mercY, type IsoLine } from "@/lib/map-geo";
 import { readout, type DisplayUnits, type LayerId, type PointSample } from "@/lib/map-layers";
-import { renderField, type FieldPaint } from "@/lib/map-render";
-import type { Basemap } from "@/lib/map-settings";
-import { tileConfig } from "@/lib/map-tiles";
+import type { MapSettings } from "@/lib/map-settings";
 import { colorForScore } from "@/lib/quality";
 import type { FieldSet } from "@/hooks/map-fields";
 import type { SpotSummary } from "@/types/api";
 
-import { loadBasemap, NATURAL_EARTH_ATTRIBUTION } from "./basemap-data";
-import { drawBasemap, type BasemapGeometry, type CityLabel, type IsobarPath } from "./basemap-draw";
-import { CanvasLayer } from "./canvas-layer";
-import { ParticleAnimator, type Flow } from "./particles";
-import type { MarkerState } from "./surf-map";
+import type { CityLabel, IsobarPath } from "./basemap-draw";
+import { fieldSampler, MapDataLayers, type ParticleMode } from "./map-canvas-layers";
+import { BOUNDED_MAP_OPTIONS, CentreWatcher, flyOrJump, FlyToSpot, MapBounds, TileErrors, TILES, useWrapCentre, type MapCover, type MarkerState } from "./surf-map";
 
-const TILES = tileConfig(process.env.NEXT_PUBLIC_MAP_TILE_URL, process.env.NEXT_PUBLIC_MAP_ATTRIBUTION, process.env.NEXT_PUBLIC_CARTO_API_KEY);
-const FAILED_TILES_BEFORE_NOTICE = 4;
-/** CSS pixels per colour-field pixel: half resolution at 1x, smoothed by the browser. */
-const FIELD_PX = 2;
-const OCEAN_BACKGROUND = "#151a21";
+/** The map's sea colour under the dark basemap (and under the layers while they load). */
+export const OCEAN_BACKGROUND = "#151a21";
 
 /** Natural Earth 1:50m outlines turn visibly angular beyond this zoom; Streets go further. */
 const DARK_MAX_ZOOM = 8;
 
-/** Pane order, bottom to top (Leaflet's tiles are 200, vector overlays/markers 400). */
-const Z = { field: 210, particles: 220, basemap: 230 };
-
-export type ParticleMode = "animated" | "static" | "off";
-
-/** The colour-layer grid for a layer, derived from the downloaded fields. */
-export function layerGrid(layer: LayerId, f: FieldSet | null): FieldGrid | null {
-  if (!f) return null;
-  if (layer === "hs") return f.hs ?? null;
-  if (layer === "tp") return f.tp ?? null;
-  if (layer === "energy") return f.hs && f.tp ? waveEnergyGrid(f.hs, f.tp) : null;
-  return f.wind_u && f.wind_v ? windSpeedGrid(f.wind_u, f.wind_v) : null;
-}
-
-function layerFlow(layer: LayerId, f: FieldSet | null): Flow | null {
-  if (!f) return null;
-  if (layer === "wind") return f.wind_u && f.wind_v ? { u: f.wind_u, v: f.wind_v, speed: 0.2 } : null;
-  if (!f.wave_dir || !f.tp) return null;
-  return { ...waveFlowGrids(f.wave_dir, f.tp), speed: 1.1 };
-}
-
-function FieldCanvas({ grid, scale, basemap, label, at, layer }: { grid: FieldGrid | null; scale: LayerScale; basemap: Basemap; label: string; at: string | null; layer: LayerId }) {
-  const map = useMap();
-  const layerRef = useRef<CanvasLayer | null>(null);
-  const paintRef = useRef<FieldPaint | null>(null);
-  const metaRef = useRef({ label, at, layer });
-
-  useEffect(() => {
-    let img: ImageData | null = null;
-    let draws = 0;
-    const l = new CanvasLayer({
-      pane: "fieldPane",
-      zIndex: Z.field,
-      padding: 0.15,
-      cssPxPerPixel: () => FIELD_PX,
-      className: "map-field-canvas",
-      draw: (ctx, view, canvas) => {
-        canvas.setAttribute("role", "img");
-        canvas.setAttribute("aria-label", metaRef.current.label);
-        canvas.dataset.layer = metaRef.current.layer;
-        canvas.dataset.at = metaRef.current.at ?? "";
-        canvas.dataset.zoom = String(Math.round(Math.log2(view.worldPx / 256) * 100) / 100);
-        const p = paintRef.current;
-        if (!p) {
-          canvas.dataset.painted = "0";
-          return;
-        }
-        const t0 = performance.now();
-        if (!img || img.width !== canvas.width || img.height !== canvas.height) img = ctx.createImageData(canvas.width, canvas.height);
-        const painted = renderField(img, view, FIELD_PX, p);
-        ctx.putImageData(img, 0, 0);
-        draws += 1;
-        canvas.dataset.drawMs = (performance.now() - t0).toFixed(1);
-        canvas.dataset.painted = String(painted);
-        canvas.dataset.draws = String(draws);
-      },
-    });
-    l.addTo(map);
-    layerRef.current = l;
-    return () => {
-      l.remove();
-      layerRef.current = null;
-    };
-  }, [map]);
-
-  const lut = useMemo(() => buildLut(scale.stops), [scale.stops]);
-  useEffect(() => {
-    metaRef.current = { label, at, layer };
-    // On the dark basemap the field may reach slightly under the land mask (no coastal gap);
-    // over street tiles only cells with real data are painted, semi-transparent.
-    paintRef.current = grid ? { grid, scale, lut, minWeight: basemap === "dark" ? 0.01 : 0.5, alpha: basemap === "dark" ? 255 : 150 } : null;
-    layerRef.current?.redraw();
-  }, [grid, scale, lut, basemap, label, at, layer]);
-  return null;
-}
-
-function ParticleCanvas({ flow, mode }: { flow: Flow | null; mode: ParticleMode }) {
-  const map = useMap();
-  const layerRef = useRef<CanvasLayer | null>(null);
-  const modeRef = useRef(mode);
-  const [animator] = useState(() => new ParticleAnimator());
-
-  useEffect(() => {
-    const l = new CanvasLayer({
-      pane: "particlePane",
-      zIndex: Z.particles,
-      cssPxPerPixel: () => 1 / Math.min(2, window.devicePixelRatio || 1),
-      className: "map-particle-canvas",
-      // The trails fade by dimming the previous frame, and 8-bit alpha stops decaying at
-      // 6/255: a faint white veil that covered a quarter of the canvas after ten seconds of
-      // live NOAA winds. A half-float canvas (where supported) fades to nothing.
-      contextSettings: { colorType: "float16" },
-      draw: (ctx, view, canvas) => {
-        animator.stop();
-        canvas.dataset.mode = modeRef.current;
-        canvas.dataset.colorType = (ctx.getContextAttributes?.() as { colorType?: string } | undefined)?.colorType ?? "unorm8";
-        if (modeRef.current === "animated") animator.start(ctx, view);
-        else if (modeRef.current === "static") canvas.dataset.arrows = String(animator.drawArrows(ctx, view));
-      },
-      onMoveStart: () => {
-        animator.stop();
-        const c = layerRef.current?.canvas;
-        const ctx = c?.getContext("2d");
-        if (c && ctx) {
-          ctx.save();
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.clearRect(0, 0, c.width, c.height);
-          ctx.restore();
-        }
-      },
-    });
-    l.addTo(map);
-    layerRef.current = l;
-    return () => {
-      animator.stop();
-      l.remove();
-      layerRef.current = null;
-    };
-  }, [map, animator]);
-
-  useEffect(() => {
-    modeRef.current = flow ? mode : "off";
-    animator.setFlow(flow);
-    layerRef.current?.redraw();
-  }, [flow, mode, animator]);
-  return null;
-}
-
-function BasemapCanvas({ vector, isobars, cities }: { vector: boolean; isobars: IsobarPath[] | null; cities: CityLabel[] | null }) {
-  const map = useMap();
-  const layerRef = useRef<CanvasLayer | null>(null);
-  const [geometry, setGeometry] = useState<BasemapGeometry | null>(null);
-  const stateRef = useRef({ vector, isobars, cities, geometry });
-
-  useEffect(() => {
-    let cancelled = false;
-    loadBasemap().then(
-      (g) => !cancelled && setGeometry(g),
-      () => undefined, // without the land data the map still shows the field and markers
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    const l = new CanvasLayer({
-      pane: "basemapPane",
-      zIndex: Z.basemap,
-      padding: 0.15,
-      className: "map-basemap-canvas",
-      attribution: vector ? NATURAL_EARTH_ATTRIBUTION : undefined,
-      draw: (ctx, view, canvas) => {
-        const s = stateRef.current;
-        const r = drawBasemap(ctx, view, { geometry: s.geometry, vector: s.vector, isobars: s.isobars, cities: s.cities, zoom: map.getZoom() });
-        canvas.dataset.isobars = String(r.isobars);
-        canvas.dataset.labels = String(r.labels);
-        canvas.dataset.land = s.vector && s.geometry ? "1" : "0";
-      },
-    });
-    l.addTo(map);
-    layerRef.current = l;
-    return () => {
-      l.remove();
-      layerRef.current = null;
-    };
-  }, [map, vector]);
-
-  useEffect(() => {
-    stateRef.current = { vector, isobars, cities, geometry };
-    layerRef.current?.redraw();
-  }, [vector, isobars, cities, geometry]);
-  return null;
-}
-
-function FlyTo({ spot }: { spot?: SpotSummary }) {
-  const map = useMap();
-  useEffect(() => {
-    if (spot) map.flyTo([spot.latitude, spot.longitude], Math.max(map.getZoom(), 5), { duration: 0.8 });
-  }, [spot, map]);
-  return null;
-}
+/**
+ * The first view: Atlantic-centred, at one world width (or zoom 2 where that is closer). At
+ * 8°N the spots (43°S to 59°N) sit midway between the layer tabs and the timeline on desktop
+ * screens; at the old 15°N the southern ones crowded the timeline and the zoom buttons.
+ */
+const INITIAL_CENTRE: [number, number] = [8, 10];
+const INITIAL_ZOOM = 2;
+/** Spots open at this zoom or closer. */
+const SPOT_ZOOM = 5;
+/** The user's position marker (one shared object, so a page render does not restyle it). */
+const USER_PATH: PathOptions = { color: "#ffffff", weight: 2.5, fillColor: "#3b82f6", fillOpacity: 1 };
 
 function FlyToUser({ at }: { at: { lat: number; lon: number; key: number } | null }) {
   const map = useMap();
   useEffect(() => {
-    if (at) map.flyTo([at.lat, at.lon], Math.max(map.getZoom(), 7), { duration: 1 });
+    if (at) flyOrJump(map, [at.lat, nearestCopy(at.lon, map.getCenter().lng)], Math.max(map.getZoom(), 7), 1);
   }, [at, map]);
   return null;
 }
@@ -236,17 +51,6 @@ function MaxZoom({ zoom }: { zoom: number }) {
   useEffect(() => {
     map.setMaxZoom(zoom);
   }, [map, zoom]);
-  return null;
-}
-
-/** Leaflet only re-measures on window resize; also follow the container's own size. */
-function InvalidateOnResize() {
-  const map = useMap();
-  useEffect(() => {
-    const observer = new ResizeObserver(() => map.invalidateSize());
-    observer.observe(map.getContainer());
-    return () => observer.disconnect();
-  }, [map]);
   return null;
 }
 
@@ -273,6 +77,10 @@ function Readout({ sample, layer, units }: { sample: ((lat: number, lon: number)
     const c = m.getCenter();
     return { x: size.x / 2, y: size.y / 2, lat: c.lat, lon: c.lng, kind: "keyboard" };
   };
+  const under = (m: LeafletMap, p: ReadoutPoint): ReadoutPoint => {
+    const ll = m.containerPointToLatLng([p.x, p.y]);
+    return { ...p, lat: ll.lat, lon: ll.lng };
+  };
   const map = useMapEvents({
     mousemove(e) {
       if (pointerType.current !== "mouse") return;
@@ -290,8 +98,14 @@ function Readout({ sample, layer, units }: { sample: ((lat: number, lon: number)
     movestart() {
       setPoint((p) => (p?.kind === "touch" ? null : p));
     },
+    // A map moved under a still mouse (the spot list's fly-to, the recentre button, keys)
+    // puts another place under the cursor: read the value there, never the old place's.
+    move() {
+      if (!focused.current) setPoint((p) => (p?.kind === "mouse" ? under(map, p) : p));
+    },
     moveend() {
       if (focused.current) setPoint(centre(map));
+      else setPoint((p) => (p?.kind === "mouse" ? under(map, p) : p));
     },
   });
 
@@ -340,6 +154,8 @@ function Readout({ sample, layer, units }: { sample: ((lat: number, lon: number)
       <div
         role="status"
         data-testid="map-readout"
+        data-lat={point.lat.toFixed(3)}
+        data-lon={point.lon.toFixed(3)}
         className="pointer-events-none absolute z-[1000] max-w-[220px] rounded-lg bg-[#14181c]/90 px-2.5 py-1.5 text-xs text-white shadow-lg ring-1 ring-white/10"
         style={{ left: Math.max(8, left), top }}
       >
@@ -350,36 +166,13 @@ function Readout({ sample, layer, units }: { sample: ((lat: number, lon: number)
   );
 }
 
-function TileErrors({ onFailed }: { onFailed: (failed: boolean) => void }) {
-  const counts = useRef({ loaded: 0, failed: 0 });
-  return (
-    <TileLayer
-      url={TILES.url}
-      attribution={TILES.attribution}
-      maxZoom={TILES.maxZoom}
-      // OpenStreetMap's tile policy requires a Referer; keep it explicit per request.
-      referrerPolicy="strict-origin-when-cross-origin"
-      eventHandlers={{
-        tileload: () => {
-          counts.current.loaded += 1;
-          onFailed(false);
-        },
-        tileerror: () => {
-          counts.current.failed += 1;
-          if (counts.current.loaded === 0 && counts.current.failed >= FAILED_TILES_BEFORE_NOTICE) onFailed(true);
-        },
-      }}
-    />
-  );
-}
-
 export interface ForecastMapProps {
   spots: SpotSummary[];
   markers: Record<string, MarkerState>;
   selected: string | null;
   onSelect: (slug: string) => void;
-  basemap: Basemap;
-  layer: LayerId;
+  /** Display settings (layer, basemap, units, ...): passed whole to the data layers. */
+  settings: MapSettings;
   /** Fields for the active layer at `fieldsAt` (null = no ocean data). */
   fields: FieldSet | null;
   fieldsAt: string | null;
@@ -395,6 +188,12 @@ export interface ForecastMapProps {
   fieldLabel: string;
   /** Short credit for the ocean layers in Leaflet's attribution strip (plain text, escaped here). */
   fieldAttribution?: string;
+  /**
+   * What covers a map of the given size while a spot is open (the top controls, a bottom sheet
+   * on phones, a side sheet in landscape). A selected spot then lands in the middle of the rest
+   * instead of at the map centre.
+   */
+  cover?: (size: { x: number; y: number }) => MapCover;
 }
 
 function ZoomWatcher({ onZoom }: { onZoom?: (z: number) => void }) {
@@ -402,32 +201,104 @@ function ZoomWatcher({ onZoom }: { onZoom?: (z: number) => void }) {
   return null;
 }
 
-function AttributionText({ text }: { text?: string }) {
-  const map = useMap();
-  useEffect(() => {
-    if (!text) return;
-    const control = map.attributionControl;
-    control?.addAttribution(text);
-    return () => {
-      control?.removeAttribution(text);
-    };
-  }, [map, text]);
-  return null;
-}
+/**
+ * One spot marker, an SVG path `path.spot-<slug>` coloured by our surf-quality prediction.
+ * Memoised with stable props, so a new forecast hour restyles only the markers whose colour
+ * changed and a zoom or pan touches none; `lng` is the spot's world copy nearest the view.
+ * `surface` "dark" (the dark basemap) uses the brighter-is-better ramp made for dark
+ * backgrounds (at least 3:1 against them); "light" (the Streets tiles) the default ramp.
+ */
+export const SpotMarker = memo(function SpotMarker({
+  spot,
+  lng,
+  score,
+  tooltip,
+  selected,
+  highlight,
+  onSelect,
+  surface = "light",
+}: {
+  spot: SpotSummary;
+  lng: number;
+  score: number | null;
+  tooltip: string;
+  selected: boolean;
+  highlight: boolean;
+  onSelect: (slug: string) => void;
+  surface?: "light" | "dark";
+}) {
+  const center = useMemo<[number, number]>(() => [spot.latitude, lng], [spot.latitude, lng]);
+  const fill = colorForScore(score, surface);
+  const pathOptions = useMemo(() => ({ color: "#ffffff", weight: selected ? 3 : 1.5, fillColor: fill, fillOpacity: 0.95 }), [selected, fill]);
+  const slug = spot.slug;
+  const eventHandlers = useMemo(
+    () => ({
+      click: () => onSelect(slug),
+      // Leaflet makes markers focusable (their tooltip opens on focus): Enter or Space opens
+      // the spot, as a click does.
+      keydown: (e: { originalEvent: KeyboardEvent }) => {
+        if (e.originalEvent.key === "Enter" || e.originalEvent.key === " ") {
+          e.originalEvent.preventDefault();
+          onSelect(slug);
+        }
+      },
+    }),
+    [onSelect, slug],
+  );
+  return (
+    <CircleMarker
+      center={center}
+      radius={selected ? 11 : highlight ? 8 : 6}
+      pathOptions={pathOptions}
+      // Set at creation (Leaflet ignores className changes in later setStyle calls).
+      className={`spot-marker spot-${slug}`}
+      eventHandlers={eventHandlers}
+    >
+      <Tooltip direction="top" offset={[0, -6]}>
+        <strong>{spot.name}</strong>
+        <br />
+        {tooltip}
+      </Tooltip>
+    </CircleMarker>
+  );
+});
 
-const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+/** The first view for a map of this size: one world wide, or zoom 2 where that is closer. */
+function initialView(el: HTMLElement): { zoom: number; minZoom: number } {
+  const r = el.getBoundingClientRect();
+  const minZoom = minZoomFor(r.width, r.height);
+  return { minZoom, zoom: Math.max(INITIAL_ZOOM, minZoom) };
+}
 
 /**
  * Full-screen forecast map: ocean colour field, flow particles, dark Natural Earth basemap
  * (or OpenStreetMap tiles), isobars, labels and the spot markers on top. Markers stay SVG
  * paths (`path.spot-<slug>`) coloured by our surf-quality prediction and always clickable.
+ *
+ * Navigation (lib/map-bounds.ts): the latitude band 84°N to 78.5°S with a hard edge, a minimum
+ * zoom of one world width for the container's size, endless east-west panning with markers,
+ * flights and the user's position in the world copy nearest the view.
  */
-export default function ForecastMap(props: ForecastMapProps) {
-  const { spots, markers, selected, onSelect, basemap, layer, fields, pressure, isobars, scale, particles, units } = props;
+function ForecastMap(props: ForecastMapProps) {
+  const { spots, markers, selected, onSelect, settings, fields, pressure, isobars, scale, particles, units, cover } = props;
+  const { layer, basemap } = settings;
   const [tilesFailed, setTilesFailed] = useState(false);
   const selectedSpot = spots.find((s) => s.slug === selected);
-  const grid = useMemo(() => layerGrid(layer, fields), [layer, fields]);
-  const flow = useMemo(() => layerFlow(layer, fields), [layer, fields]);
+  const user = props.userLocation;
+  // The user's position changes world copy like a spot does, so it is part of the wrap key.
+  const lons = useMemo(() => (user ? [...spots.map((s) => s.longitude), user.lon] : spots.map((s) => s.longitude)), [spots, user]);
+  const { centreLng, onMove, onRecentre } = useWrapCentre(lons, INITIAL_CENTRE[1]);
+  // Re-placed only when the position or its nearest world copy changes, as the spot markers are.
+  const userLng = user ? nearestCopy(user.lon, centreLng) : null;
+  const userCentre = useMemo<[number, number] | null>(() => (user && userLng != null ? [user.lat, userLng] : null), [user, userLng]);
+  // The container is measured before the map exists, so it opens at its final zoom.
+  const [start, setStart] = useState<{ zoom: number; minZoom: number } | null>(null);
+  const measure = useCallback((el: HTMLDivElement | null) => {
+    if (el) setStart((s) => s ?? initialView(el));
+  }, []);
+  // Leaflet's SVG renderer re-clips its paths only when a move ends; a wider margin keeps
+  // markers from popping in late during long inertial pans.
+  const renderer = useMemo(() => svg({ padding: 0.5 }), []);
   const isobarPaths = useMemo<IsobarPath[] | null>(() => {
     if (!isobars) return null;
     return isobars.map((l) => {
@@ -451,92 +322,70 @@ export default function ForecastMap(props: ForecastMapProps) {
     });
   }, [isobars]);
 
-  const sample = useMemo(() => {
-    if (!fields && !pressure) return null;
-    return (lat: number, lon: number): PointSample => {
-      const s: PointSample = {};
-      if (fields?.hs) s.hs = sampleGrid(fields.hs, lat, lon);
-      if (fields?.tp) s.tp = sampleGrid(fields.tp, lat, lon);
-      if (fields?.wave_dir) s.waveDir = sampleDirection(fields.wave_dir, lat, lon);
-      if (grid && layer === "energy") s.energy = sampleGrid(grid, lat, lon);
-      if (fields?.wind_u && fields?.wind_v) {
-        const u = sampleGrid(fields.wind_u, lat, lon);
-        const v = sampleGrid(fields.wind_v, lat, lon);
-        s.windSpeed = Math.hypot(u, v);
-        s.windDir = directionFromUV(u, v);
-      }
-      if (pressure) s.pressure = sampleGrid(pressure, lat, lon);
-      return s;
-    };
-  }, [fields, pressure, grid, layer]);
+  // The hover readout's sampler is defined with the data layers (map-canvas-layers).
+  const sample = useMemo(() => fieldSampler(layer, fields, pressure), [layer, fields, pressure]);
 
   return (
     // `isolation: isolate` keeps Leaflet's internal z-indexes (400–1000) from painting over
     // the sticky site header and the floating map controls.
-    <div role="region" aria-label="Map of monitored surf spots" className="forecast-map absolute inset-0" style={{ isolation: "isolate" }}>
-      <MapContainer
-        center={[15, 10]}
-        zoom={2}
-        minZoom={2}
-        worldCopyJump
-        scrollWheelZoom
-        zoomControl={false}
-        style={{ height: "100%", width: "100%", background: OCEAN_BACKGROUND }}
-      >
-        {basemap === "streets" && <TileErrors onFailed={setTilesFailed} />}
-        <FieldCanvas grid={grid} scale={scale} basemap={basemap} label={props.fieldLabel} at={props.fieldsAt} layer={layer} />
-        <ParticleCanvas flow={flow} mode={particles} />
-        <BasemapCanvas vector={basemap === "dark"} isobars={isobarPaths} cities={basemap === "dark" ? props.cities : null} />
-        <AttributionText text={fields && props.fieldAttribution ? escapeHtml(props.fieldAttribution) : undefined} />
-        <ZoomControl position="bottomright" />
-        {spots.map((s) => {
-          const m = markers[s.slug];
-          const score = m?.score ?? null;
-          const isSel = s.slug === selected;
-          return (
-            <CircleMarker
-              key={s.slug}
-              center={[s.latitude, s.longitude]}
-              radius={isSel ? 11 : m?.highlight ? 8 : 6}
-              pathOptions={{ color: "#ffffff", weight: isSel ? 3 : 1.5, fillColor: colorForScore(score), fillOpacity: 0.95 }}
-              // Set at creation (Leaflet ignores className changes in later setStyle calls).
-              className={`spot-marker spot-${s.slug}`}
-              eventHandlers={{
-                click: () => onSelect(s.slug),
-                // Leaflet makes markers focusable (their tooltip opens on focus): Enter or Space
-                // opens the spot, as a click does.
-                keydown: (e) => {
-                  if (e.originalEvent.key === "Enter" || e.originalEvent.key === " ") {
-                    e.originalEvent.preventDefault();
-                    onSelect(s.slug);
-                  }
-                },
-              }}
-            >
-              <Tooltip direction="top" offset={[0, -6]}>
-                <strong>{s.name}</strong>
-                <br />
-                {m?.tooltip ?? "No usable forecast"}
-              </Tooltip>
-            </CircleMarker>
-          );
-        })}
-        {props.userLocation && (
-          <CircleMarker
-            center={[props.userLocation.lat, props.userLocation.lon]}
-            radius={7}
-            pathOptions={{ color: "#ffffff", weight: 2.5, fillColor: "#3b82f6", fillOpacity: 1 }}
-            className="user-location-marker"
-            interactive={false}
+    <div ref={measure} role="region" aria-label="Map of monitored surf spots" className="forecast-map absolute inset-0" style={{ isolation: "isolate" }}>
+      {start && (
+        <MapContainer
+          center={INITIAL_CENTRE}
+          zoom={start.zoom}
+          minZoom={start.minZoom}
+          {...BOUNDED_MAP_OPTIONS}
+          // No whole-level snapping: the one-world minimum is usually fractional (2.49 at
+          // 1440x807, 2.91 at 1920x987), and snapping rounded 2.91 up to 3, so zooming out
+          // never got back to it. A wheel notch is still about one level; +/- step by one.
+          zoomSnap={0}
+          renderer={renderer}
+          scrollWheelZoom
+          zoomControl={false}
+          style={{ height: "100%", width: "100%", background: OCEAN_BACKGROUND }}
+        >
+          {basemap === "streets" && <TileErrors onFailed={setTilesFailed} />}
+          <MapDataLayers
+            layer={layer}
+            fields={fields}
+            pressure={pressure}
+            settings={settings}
+            particles={particles}
+            basemap={basemap}
+            scale={scale}
+            fieldLabel={props.fieldLabel}
+            fieldsAt={props.fieldsAt}
+            cities={props.cities}
+            isobarPaths={isobarPaths}
+            fieldAttribution={props.fieldAttribution}
           />
-        )}
-        <Readout sample={sample} layer={layer} units={units} />
-        <FlyTo spot={selectedSpot} />
-        <FlyToUser at={props.userLocation} />
-        <ZoomWatcher onZoom={props.onZoom} />
-        <MaxZoom zoom={basemap === "dark" ? DARK_MAX_ZOOM : TILES.maxZoom} />
-        <InvalidateOnResize />
-      </MapContainer>
+          <ZoomControl position="bottomright" />
+          {spots.map((s) => {
+            const m = markers[s.slug];
+            return (
+              <SpotMarker
+                key={s.slug}
+                spot={s}
+                lng={nearestCopy(s.longitude, centreLng)}
+                score={m?.score ?? null}
+                tooltip={m?.tooltip ?? "No usable forecast"}
+                selected={s.slug === selected}
+                highlight={!!m?.highlight}
+                onSelect={onSelect}
+                surface={basemap === "dark" ? "dark" : "light"}
+              />
+            );
+          })}
+          {userCentre && <CircleMarker center={userCentre} radius={7} pathOptions={USER_PATH} className="user-location-marker" interactive={false} />}
+          <Readout sample={sample} layer={layer} units={units} />
+          <FlyToSpot slug={selected} lat={selectedSpot?.latitude} lon={selectedSpot?.longitude} minZoom={SPOT_ZOOM} cover={cover} />
+          <FlyToUser at={user} />
+          <ZoomWatcher onZoom={props.onZoom} />
+          <MaxZoom zoom={basemap === "dark" ? DARK_MAX_ZOOM : TILES.maxZoom} />
+          <MapBounds onRecentre={onRecentre} />
+          <CentreWatcher onCentre={onMove} />
+        </MapContainer>
+      )}
       {tilesFailed && basemap === "streets" && (
         <div
           role="status"
@@ -549,3 +398,5 @@ export default function ForecastMap(props: ForecastMapProps) {
     </div>
   );
 }
+
+export default memo(ForecastMap);

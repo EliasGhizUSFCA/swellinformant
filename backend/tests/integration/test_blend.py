@@ -50,6 +50,8 @@ class FakeProvider(ForecastProvider):
         partitions: bool = True,
         direction: float = 215.0,
         wind: float = 10.0,
+        gust: float | None = None,
+        gust_kind: str | None = None,
     ) -> None:
         self.code = code
         self.family = family
@@ -59,6 +61,8 @@ class FakeProvider(ForecastProvider):
         self.partitions = partitions
         self.direction = direction
         self.wind = wind
+        self.gust = gust
+        self.gust_kind = gust_kind
 
     def source_info(self) -> SourceInfo:
         return SourceInfo(
@@ -85,11 +89,21 @@ class FakeProvider(ForecastProvider):
                         "primary_swell_height_m": self.hs * 0.9,
                         "primary_swell_period_s": 14.0,
                         "primary_swell_direction_deg": self.direction,
+                        # No secondary or tertiary swell: absent partitions are None.
                         "wind_wave_height_m": self.hs * 0.3,
                         "wind_wave_period_s": 6.0,
                         "wind_wave_direction_deg": 290.0,
                     }
-                recs.append(ForecastRecord(run.issued_at + timedelta(hours=h), v, period_kind="tp"))
+                extra: dict[str, object] = {}
+                if self.gust is not None:
+                    v["wind_gust_kmh"] = self.gust
+                    if self.gust_kind:
+                        extra["gust_kind"] = self.gust_kind
+                recs.append(
+                    ForecastRecord(
+                        run.issued_at + timedelta(hours=h), v, period_kind="tp", extra=extra
+                    )
+                )
             out.records[p.spot_id] = recs
         return out
 
@@ -244,3 +258,110 @@ def test_stale_blend_yields_to_newer_member_run(db: Session, two_families: list[
     assert rebuilt.status == "success" and rebuilt.run_id != blend_run
     compute_pending_predictions(db)
     assert queries.latest_runs_by_spot(db, NOW)[spot].id == rebuilt.run_id
+
+
+def test_open_meteo_families_are_independent_and_noaa_direct_is_a_cross_check(
+    db: Session, few_spots: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf,noaa_gfs: two members, one per family;
+    NOAA direct (same GFS family as open_meteo) is only the same-family integrity check."""
+    from app.core.config import Settings
+    from app.services.forecasts.registry import configured_source_codes
+
+    settings = Settings(forecast_providers="open_meteo,open_meteo_ecmwf,noaa_gfs")
+    codes = configured_source_codes(settings)
+    assert codes == ["open_meteo_noaa", "open_meteo_ecmwf", "noaa_gfs_direct"]
+    monkeypatch.setattr(blend, "configured_source_codes", lambda: codes)
+    monkeypatch.setattr(queries, "configured_source_codes", lambda: codes)
+    issued = NOW - timedelta(hours=6)
+    _ingest(
+        db,
+        FakeProvider("open_meteo_noaa", "ncep_gfs", 2.0, issued=issued),
+        FakeProvider(
+            "open_meteo_ecmwf", "ecmwf_ifs", 2.5, issued=issued, step_hours=3, partitions=False
+        ),
+        FakeProvider("noaa_gfs_direct", "ncep_gfs", 2.02, issued=issued, step_hours=3),
+    )
+    run = db.get(ForecastRun, blend.build_blend(db, NOW).run_id)
+    assert run is not None
+    assert [m["code"] for m in run.details["members"]] == ["open_meteo_noaa", "open_meteo_ecmwf"]
+    assert [m["code"] for m in run.details["cross_checks"]] == ["noaa_gfs_direct"]
+    links = [link.href for link in queries.source_attribution_links(db, run)]
+    assert "https://open-meteo.com/" in links and links.count("https://open-meteo.com/") == 1
+    assert "https://www.ecmwf.int/en/forecasts/datasets/open-data" in links
+
+
+def test_absent_partitions_gusts_and_interpolated_members(
+    db: Session, two_families: list[str]
+) -> None:
+    issued = NOW - timedelta(hours=6)
+    gfs = FakeProvider(
+        "t_gfs", "ncep_gfs", 2.0, issued=issued, gust=20.0, gust_kind="gfs_instantaneous"
+    )
+    ec = FakeProvider(
+        "t_ecmwf",
+        "ecmwf_ifs",
+        3.0,
+        issued=issued,
+        step_hours=3,
+        partitions=False,
+        gust=40.0,
+        gust_kind="ecmwf_max_3h",
+    )
+    _ingest(db, gfs, ec)
+    run = db.get(ForecastRun, blend.build_blend(db, NOW).run_id)
+    assert run is not None
+    rows = db.scalars(
+        select(WaveForecast)
+        .where(WaveForecast.run_id == run.id, WaveForecast.spot_id == _spot_id(db, "pipeline"))
+        .order_by(WaveForecast.valid_time)
+    ).all()
+    first, second = rows[0], rows[1]
+    # A partition the member does not have is not scaled into the blend: it stays None.
+    assert first.primary_swell_height_m == pytest.approx(1.8 * math.sqrt(6.0) / 2.0)
+    for name in ("secondary_swell_height_m", "tertiary_swell_height_m"):
+        assert getattr(first, name) is None, name
+    # Gusts of different definitions are not averaged: equal weights, the GFS member leads.
+    assert first.wind_gust_kmh == pytest.approx(20.0)
+    assert first.extra["gust_kind"] == "gfs_instantaneous"
+    assert first.extra["gust_kinds"] == {"t_gfs": "gfs_instantaneous", "t_ecmwf": "ecmwf_max_3h"}
+    # The gust comes from GFS alone, so its own mean wind is kept for the gust-below-mean check.
+    assert first.extra["gust_members"] == ["t_gfs"]
+    assert first.extra["gust_member_mean_kmh"] == pytest.approx(10.0)
+    # Hour 0 is a step of both members; hour 1 uses ECMWF interpolated between 0 and 3 h.
+    assert "interpolated" not in first.extra
+    assert second.extra["interpolated"] is True
+    assert second.extra["interpolated_members"] == ["t_ecmwf"]
+
+
+def test_event_steps_count_real_daylight_hours(db: Session, two_families: list[str]) -> None:
+    """Swell events and matches count hours, not steps (review PHYS-4): on a 3-hourly run
+    each step lasts 3 h and counts the part of its interval between first and last light."""
+    from app.services.surf_quality.sun import daylight_windows
+    from app.services.swell_detection.service import load_steps
+
+    _ingest(
+        db, FakeProvider("t_gfs", "ncep_gfs", 2.0, issued=NOW - timedelta(hours=6), step_hours=3)
+    )
+    compute_pending_predictions(db)
+    run = queries.latest_runs_by_spot(db, NOW)[_spot_id(db, "nazare")]
+    spot = db.get(SurfSpot, _spot_id(db, "nazare"))
+    assert spot is not None
+    steps = load_steps(db, spot.id, run.id, since=NOW - timedelta(days=1))
+    assert len(steps) > 8
+    assert {s.duration for s in steps} == {timedelta(hours=3)}  # the last keeps the spacing
+    light = daylight_windows(
+        spot.latitude, spot.longitude, NOW - timedelta(days=2), NOW + timedelta(days=5)
+    )
+    for s in steps:
+        assert s.daylight is not None and timedelta(0) <= s.daylight <= s.duration
+        lit = sum(
+            (
+                min(b, s.time + timedelta(hours=1.5)) - max(a, s.time - timedelta(hours=1.5))
+            ).total_seconds()
+            for a, b in light
+            if a < s.time + timedelta(hours=1.5) and b > s.time - timedelta(hours=1.5)
+        )
+        assert s.hours == pytest.approx(lit / 3600, abs=1e-6)
+    # A midday step is wholly in daylight and counts 3 h, not 1.
+    assert max(s.hours for s in steps if s.is_daylight) == pytest.approx(3.0)

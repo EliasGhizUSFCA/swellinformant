@@ -1,9 +1,17 @@
 # Continuous integration: backend (lint, types, migrations, unit and integration tests),
-# frontend (types, lint, unit tests, production build) and the Playwright end-to-end suite.
+# frontend (types, lint, unit tests, production build), the deployment configuration
+# (actionlint, both compose files, the sync daemon and classic images), an offline Vercel
+# build (docs/deploy-vercel.md) and the Playwright end-to-end suite.
 #
 # Unit and integration tests run as separate pytest processes, and every exit code is read
 # directly (no pipes): see docs/debug-audit.md on the ecCodes / psycopg exit-139 crash, which
 # an exit code read through a pipe once hid.
+#
+# Dependencies: backend/uv.lock pins every version (backend/pyproject.toml has the split:
+# [project].dependencies = the lean API set, extras worker / server / sync / all / dev). The
+# jobs install with pip, constrained to the locked versions, so tests run on what the images
+# and the Vercel function install. UV_VERSION matches the Containerfile, docker/api-lean and
+# backend/Dockerfile.
 name: CI
 
 on:
@@ -20,6 +28,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.13"
+  UV_VERSION: "0.11.32"
   NODE_VERSION: "22"
   NEXT_TELEMETRY_DISABLED: "1"
 
@@ -61,9 +70,32 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
-      - name: Install backend with dev extras
-        run: python -m pip install -e ".[dev]"
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/uv.lock
+      - name: Install uv (pinned)
+        run: python -m pip install "uv==${UV_VERSION}"
+      - name: uv lock --check (uv.lock matches pyproject.toml)
+        run: uv lock --check
+      - name: Install backend with dev extras (versions from uv.lock)
+        run: |
+          uv export --locked --no-dev --no-emit-project --no-hashes --extra dev \
+            --output-file "$RUNNER_TEMP/constraints.txt"
+          python -m pip install -e ".[dev]" --constraint "$RUNNER_TEMP/constraints.txt"
+      # The hosted API installs only [project].dependencies (the Vercel builder runs
+      # uv sync --frozen without extras): a lean environment from the lock, as docker/api-lean
+      # builds it, for the lean-import test.
+      - name: Lean API install (uv.lock, no extras)
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/lean-venv
+          UV_PYTHON_DOWNLOADS: never
+        run: uv sync --locked --no-dev --no-install-project
+      - name: Lean-import test (dev install with the extras blocked, then the lean install)
+        env:
+          LEAN_PYTHON: ${{ runner.temp }}/lean-venv/bin/python
+        run: python -m pytest -q tests/unit/test_lean_imports.py
+      - name: API bundle size (lean set from uv.lock, at most 200 MB)
+        run: python ../scripts/check_api_bundle.py --max-mb 200
       - name: PostgreSQL client tools (backup / restore script tests)
         run: |
           command -v pg_dump >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
@@ -76,7 +108,12 @@ jobs:
         run: mypy app
       - name: Shell scripts (shellcheck)
         working-directory: .
-        run: shellcheck -x -s sh scripts/backup-db.sh scripts/restore-db.sh scripts/restore-drill.sh scripts/check-health.sh scripts/lib/pg-env.sh
+        run: |
+          shellcheck -x -s sh scripts/backup-db.sh scripts/restore-db.sh scripts/restore-drill.sh \
+            scripts/check-health.sh scripts/lib/pg-env.sh backend/docker-entrypoint.sh \
+            docker/pgbouncer/entrypoint.sh
+          shellcheck -x scripts/vercel-build-check.sh scripts/vercel-local.sh scripts/run-e2e.sh \
+            scripts/export-openapi.sh
       - name: alembic upgrade head
         run: alembic upgrade head
       - name: alembic check (models and migrations agree)
@@ -112,11 +149,64 @@ jobs:
       - name: next build
         run: npx next build
 
+  deploy-config:
+    name: Deployment config (workflows, compose files, images)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint (workflows; shellcheck on their run scripts)
+        run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
+      # Both stacks' compose files resolve, every profile included, with no .env of a checkout.
+      - name: docker compose config
+        run: |
+          docker compose -f docker-compose.yml --env-file /dev/null \
+            --profile bulk-worker --profile backup --profile sync config -q
+          docker compose -f docker-compose.vercel.yml --env-file /dev/null config -q
+          docker compose -f docker-compose.vercel.yml --env-file .env.vercel.example config -q
+      # The images install from backend/uv.lock; each build fails on a stale lock, a missing
+      # extra or a missing ecCodes C library. Nothing is pushed.
+      - name: Build the sync daemon image (Containerfile, the file Vercel builds)
+        run: docker build -f Containerfile -t swell-ci/sync:test .
+      - name: Build the classic image (backend/Dockerfile)
+        run: docker build -f backend/Dockerfile -t swell-ci/backend:test .
+      - name: Both images start the app's CLI
+        run: |
+          docker run --rm swell-ci/sync:test python -m app.cli --help >/dev/null
+          docker run --rm swell-ci/backend:test python -m app.cli --help >/dev/null
+
+  vercel-build:
+    name: Vercel build (offline, nothing deployed)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Vercel Python builder takes Python 3.13 (backend/.python-version) and uv from PATH.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install uv (pinned)
+        run: python -m pip install "uv==${UV_VERSION}"
+      # `vercel build` (Vercel CLI 64.5.0) of a copy of what a deployment receives: the web
+      # and api services, the api function's size against Vercel's limits, the cron and the
+      # routes. The daemon image is built by the deploy-config job (the CLI refuses daemons).
+      - name: scripts/vercel-build-check.sh --offline
+        run: scripts/vercel-build-check.sh --offline
+
   e2e:
     name: End-to-end (Playwright, demo backend)
     # On pushes and manual runs (Actions tab -> CI -> Run workflow), not on pull requests.
+    # It uses nothing the other jobs produce, so it runs alongside them (no `needs`).
     if: github.event_name != 'pull_request'
-    needs: [backend, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
@@ -148,11 +238,17 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/uv.lock
       - name: Backend virtualenv at backend/.venv (used by run-e2e.sh and the e2e helpers)
         run: |
+          python -m pip install "uv==${UV_VERSION}"
+          uv export --project backend --locked --no-dev --no-emit-project --no-hashes \
+            --extra dev --output-file "$RUNNER_TEMP/constraints.txt"
           python -m venv backend/.venv
-          backend/.venv/bin/python -m pip install -e "backend[dev]"
+          backend/.venv/bin/python -m pip install -e "backend[dev]" \
+            --constraint "$RUNNER_TEMP/constraints.txt"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -178,8 +274,11 @@ jobs:
         if: steps.browsers.outputs.cache-hit == 'true'
         working-directory: frontend
         run: npx playwright install-deps chromium
+      # Both Chromium projects: desktop ("chromium", every test) and Pixel 7 emulation
+      # ("mobile", the tests tagged @mobile). Firefox and WebKit (@cross-browser) need
+      # PLAYWRIGHT_ALL_BROWSERS=1 and their browsers installed; not enabled here.
       - name: Run the end-to-end suite
-        run: ./scripts/run-e2e.sh
+        run: ./scripts/run-e2e.sh --project=chromium --project=mobile
       - name: Upload the Playwright report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

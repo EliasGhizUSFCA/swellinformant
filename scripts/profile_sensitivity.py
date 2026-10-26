@@ -51,17 +51,17 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-from sqlalchemy import create_engine, select  # noqa: E402
-from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, WaveForecast  # noqa: E402
-from app.services.geo import angular_diff  # noqa: E402
-from app.services.ml.hook import RunCorrector  # noqa: E402
-from app.services.research.decisions import DECISIONS_FILENAME  # noqa: E402
-from app.services.surf_quality.models import SeaState, SpotParams  # noqa: E402
-from app.services.surf_quality.nearshore import Profile  # noqa: E402
-from app.services.surf_quality.predict import _row_values, tide_stages  # noqa: E402
-from app.services.surf_quality.scoring import evaluate  # noqa: E402
+from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, WaveForecast
+from app.services.geo import angular_diff
+from app.services.ml.hook import RunCorrector
+from app.services.research.decisions import DECISIONS_FILENAME
+from app.services.surf_quality.models import SeaState, SpotParams
+from app.services.surf_quality.nearshore import Profile
+from app.services.surf_quality.predict import _row_values, tide_stages
+from app.services.surf_quality.scoring import evaluate
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data" / "surf_spots"

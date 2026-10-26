@@ -1,4 +1,14 @@
-"""Alembic environment: the database URL comes from application settings (DATABASE_URL)."""
+"""Alembic environment: the database URL comes from application settings.
+
+Migrations connect through app.core.database.migration_url (settings.migration_database_url):
+DATABASE_URL_UNPOOLED (a direct connection; Vercel's Neon integration sets it) when it is set
+and names the same database as DATABASE_URL, else DATABASE_URL. DDL belongs on a direct
+connection, not on a transaction-mode pooler; and a process that points DATABASE_URL at a
+scratch database (the migration tests do) never migrates the database a leftover unpooled
+URL names. NullPool: one connection for the run, closed at the end. With
+DB_PREPARED_STATEMENTS=false psycopg never prepares statements, as in the application engine
+(app.core.database.connect_args).
+"""
 
 from __future__ import annotations
 
@@ -9,10 +19,11 @@ from sqlalchemy import engine_from_config, pool
 
 import app.models  # noqa: F401  (registers all tables)
 from app.core.config import get_settings
-from app.core.database import Base
+from app.core.database import Base, connect_args, migration_url
 
+settings = get_settings()
 config = context.config
-config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
+config.set_main_option("sqlalchemy.url", migration_url(settings).replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
@@ -37,6 +48,7 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args(settings),
     )
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)

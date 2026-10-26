@@ -9,10 +9,14 @@
  *
  * Thresholds (assumptions of this wording, not of the score):
  * * period: ≥ 13 s "long-period groundswell", ≥ 10 s "mid-period swell", else "short-period";
- * * wind speed: < 12 km/h "light" (Beaufort 2 and below), ≥ 35 km/h "strong" (the score's
- *   strong-wind penalty starts there);
+ * * wind strength: the backend's own class (`wind_strength`, from the prediction's stored
+ *   wind_detail: glassy, light, moderate or strong). Predictions made before it existed are
+ *   classed from the speed with the backend's documented Beaufort bounds (glassy ≤ 5 km/h,
+ *   light < 12, moderate < 29, strong from 29; docs/SURF_SCORING.md), never with other
+ *   cut-offs. "moderate" adds no word to the reason;
  * * fit components (0–1): ≥ 0.75 favourable, ≥ 0.4 workable, else limiting — the same cut-offs
- *   the backend uses for its explanation text.
+ *   the backend uses for its explanation text. Without a wind fit, the backend's
+ *   `wind_favourability` gives the wind's tone.
  *
  * A factor's tone (favourable / workable / limiting) is only ever the backend's own judgement:
  * its component fit, or the cut-off words of its explanation text. The period and wind
@@ -33,7 +37,7 @@ export interface RatingFactor {
   inReason: boolean;
 }
 
-export interface ReasonInput {
+interface ReasonInput {
   periodS?: number | null;
   windRelation?: string | null;
   windSpeedKmh?: number | null;
@@ -48,12 +52,18 @@ export interface ReasonInput {
   breakingMidFt?: number | null;
   spotMinFt?: number | null;
   spotMaxFt?: number | null;
+  /** The backend's wind class (`wind_strength`) and favourability (`wind_favourability`). */
+  windStrength?: string | null;
+  windFavourability?: string | null;
 }
 
-export const LIGHT_WIND_KMH = 12;
-export const STRONG_WIND_KMH = 35;
+type WindStrength = "glassy" | "light" | "moderate" | "strong";
+
+/** The backend's Beaufort bounds for its wind classes (km/h; docs/SURF_SCORING.md, stored
+ * components contract), used only for predictions that carry no `wind_strength`. */
+const WIND_STRENGTH_BOUNDS_KMH = { glassy: 5, light: 12, moderate: 29 } as const;
 export const GROUNDSWELL_PERIOD_S = 13;
-export const MID_PERIOD_S = 10;
+const MID_PERIOD_S = 10;
 
 /** 89 → "8.9" (one decimal of the 0–100 score divided by ten). */
 export function score10(score: number): string {
@@ -66,12 +76,7 @@ export function ratingTitle(label: string): string {
   return `${QUALITY_LABELS[asQuality(label)]} Surf`;
 }
 
-/** "Excellent Surf — 8.9/10". */
-export function ratingHeadline(label: string, score: number): string {
-  return `${ratingTitle(label)} — ${score10(score)}/10`;
-}
-
-function num(v: unknown): number | null {
+export function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
@@ -104,11 +109,25 @@ function directionFactor(components: ReasonInput["components"], explanation: str
   return { key: "direction", phrase, tone, inReason: true };
 }
 
-function windFactor(relation: string | null | undefined, speed: number | null | undefined, components: ReasonInput["components"]): RatingFactor | null {
+/** The backend's wind class, or for older predictions the class its bounds give the speed. */
+export function windStrengthOf(strength: string | null | undefined, speedKmh: number | null | undefined): WindStrength | null {
+  if (strength === "glassy" || strength === "light" || strength === "moderate" || strength === "strong") return strength;
+  if (speedKmh == null || !Number.isFinite(speedKmh)) return null;
+  const b = WIND_STRENGTH_BOUNDS_KMH;
+  return speedKmh <= b.glassy ? "glassy" : speedKmh < b.light ? "light" : speedKmh < b.moderate ? "moderate" : "strong";
+}
+
+const FAVOURABILITY_TONE: Record<string, FactorTone> = { favourable: "good", workable: "ok", unfavourable: "bad" };
+
+function windFactor(input: ReasonInput): RatingFactor | null {
+  const relation = input.windRelation;
+  const strength = windStrengthOf(input.windStrength, input.windSpeedKmh);
+  const tone = componentTone(input.components, "wind") ?? FAVOURABILITY_TONE[input.windFavourability ?? ""] ?? null;
+  // "glassy": at or below the calm threshold, where the score's wind fit is 1 (calm scores
+  // like light offshore wind). A calm hour can have no direction, so no relation either.
+  if (relation === "glassy" || (strength === "glassy" && (!relation || relation === "unknown")))
+    return { key: "wind", phrase: "glassy, near-calm conditions", tone: tone ?? "good", inReason: true };
   if (!relation || relation === "unknown") return null;
-  const tone = componentTone(components, "wind");
-  // "glassy" means at or below the score's calm threshold, where the wind fit is always 1.
-  if (relation === "glassy") return { key: "wind", phrase: "glassy, near-calm conditions", tone: tone ?? "good", inReason: true };
   const PHRASE: Record<string, string> = {
     offshore: "offshore winds",
     "cross-offshore": "cross-offshore winds",
@@ -118,7 +137,7 @@ function windFactor(relation: string | null | undefined, speed: number | null | 
   };
   const phrase = PHRASE[relation];
   if (!phrase) return null;
-  const size = speed != null && speed < LIGHT_WIND_KMH ? "light " : speed != null && speed >= STRONG_WIND_KMH ? "strong " : "";
+  const size = strength === "glassy" || strength === "light" ? "light " : strength === "strong" ? "strong " : "";
   return { key: "wind", phrase: `${size}${phrase}`, tone, inReason: true };
 }
 
@@ -163,7 +182,7 @@ export function ratingFactors(input: ReasonInput): RatingFactor[] {
   return [
     periodFactor(input.periodS, input.components),
     directionFactor(input.components, input.explanation),
-    windFactor(input.windRelation, input.windSpeedKmh, input.components),
+    windFactor(input),
     sizeFactor(input),
     tideFactor(input.components, input.explanation),
   ].filter((f): f is RatingFactor => f != null);
@@ -192,7 +211,7 @@ export function ratingReason(input: ReasonInput): string | null {
   return parts.length ? sentence(parts) : null;
 }
 
-export const COMPONENT_LABEL: Record<string, string> = {
+const COMPONENT_LABEL: Record<string, string> = {
   swell_direction: "Swell direction",
   swell_period: "Swell period",
   wave_size: "Wave size",
@@ -202,6 +221,7 @@ export const COMPONENT_LABEL: Record<string, string> = {
 };
 
 export const TONE_WORD: Record<FactorTone, string> = { good: "Favorable", ok: "Workable", bad: "Limiting" };
+export const TONE_BAR: Record<FactorTone, string> = { good: "bg-emerald-600", ok: "bg-amber-500", bad: "bg-orange-600" };
 
 /** Component fits (0–1) present in the API's `components`, in the documented order. */
 export function componentFits(components: Record<string, unknown> | null | undefined): Array<{ key: string; label: string; value: number; tone: FactorTone }> {

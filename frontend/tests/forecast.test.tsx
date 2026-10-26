@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
-import { pointToConditions } from "@/lib/forecast";
+import { drivingComponent, pointToConditions } from "@/lib/forecast";
 import type { ForecastPoint, SpotForecast } from "@/types/api";
 
 // SYNTHETIC forecast hour and spot forecast: invented values and reasons that exist only to
@@ -38,6 +38,7 @@ function point(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
     forecast_confidence_class: "high",
     local_confidence_class: "low",
     confidence_reasons: ["Synthetic: models agree.", "Synthetic: this break's research is thin."],
+    forecast_confidence_reasons: ["Synthetic: models agree."],
     lead_hours: 18,
     local_confidence_reason: "Synthetic: the API's own reason for this hour.",
     ...overrides,
@@ -54,6 +55,7 @@ const FORECAST = {
   daily: [],
   models: [],
   ensemble: [],
+  alerts_paused: false,
 } as SpotForecast;
 
 describe("pointToConditions", () => {
@@ -72,5 +74,29 @@ describe("pointToConditions", () => {
   it("lets the spot page's breakdown show the API's reason, not one guessed from the list", () => {
     render(<ForecastBreakdown c={pointToConditions(point(), FORECAST)} tz="UTC" units="ft" />);
     expect(screen.getByTestId("local-confidence-reason")).toHaveTextContent("Synthetic: the API's own reason for this hour.");
+  });
+});
+
+describe("the swell that drives the surf (CH-8)", () => {
+  // SYNTHETIC breakdown: a 0.4 m primary swell remnant under a 1.6 m wind sea, as WW3 ranks
+  // swells by offshore height only. The backend picks the largest predicted breaking height.
+  const components = {
+    breaking: {
+      partitions: [
+        { name: "primary_swell", height_m: 0.4, period_s: 13, direction_deg: 210, breaking_m: 0.35 },
+        { name: "wind_sea", height_m: 1.6, period_s: 6, direction_deg: 250, breaking_m: 0.9 },
+        { name: "secondary_swell", height_m: 0.2, period_s: 9, direction_deg: 180, breaking_m: 0 },
+      ],
+    },
+  };
+
+  it("uses the partition with the largest breaking height, not the primary swell", () => {
+    const c = pointToConditions(point({ primary_swell_height_m: 0.4, primary_swell_period_s: 13, primary_swell_direction_deg: 210, components }), FORECAST);
+    expect([c.swell_height_m, c.swell_period_s, c.swell_direction_deg]).toEqual([1.6, 6, 250]);
+  });
+
+  it("falls back to the bulk sea state without a breakdown", () => {
+    expect(drivingComponent(point({ sig_wave_height_m: 2.1, wave_period_s: 11, wave_direction_deg: 230, components: {} }))).toEqual({ height: 2.1, period: 11, direction: 230 });
+    expect(drivingComponent(point({ components: { breaking: { partitions: [{ name: "primary_swell", height_m: 1, breaking_m: 0 }] } } })).height).toBe(2.1);
   });
 });

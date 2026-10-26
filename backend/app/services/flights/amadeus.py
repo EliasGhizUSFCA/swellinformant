@@ -53,7 +53,6 @@ CABINS = {
 
 class AmadeusProvider(FlightProvider):
     name = "amadeus"
-    supports_revalidation = True
 
     def __init__(
         self,

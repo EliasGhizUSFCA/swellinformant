@@ -7,16 +7,6 @@ import type { components } from "./openapi";
 
 type S = components["schemas"];
 
-/**
- * The forecast-confidence class for responses whose API contract does not carry it yet
- * (opportunities and notifications, below; swell events, daily summaries and forecast hours
- * have their confidence fields in the generated schema). An absent field means the API does
- * not provide it; null means "not assessed yet". Classes are "high" | "moderate" | "low".
- */
-export interface ForecastConfidenceFields {
-  forecast_confidence_class?: string | null;
-}
-
 export type User = S["UserOut"];
 export type AuthResponse = S["AuthOut"];
 export type Profile = S["ProfileOut"];
@@ -46,19 +36,31 @@ export type PhysicalProfile = S["PhysicalProfileOut"];
 export type Research = S["ResearchOut"];
 export type ResearchVariable = S["ResearchVariableOut"];
 export type ResearchSource = S["ResearchSourceOut"];
+export type ForecastSourceInfo = S["ForecastSourceOut"];
+export type ForecastRunInfo = S["ForecastRunOut"];
+export type RunMember = S["RunMemberOut"];
+export type AttributionLink = S["AttributionLinkOut"];
+
+// The unified spot timeline (GET /api/spots/{slug}/timeline) and its tide / observation blocks.
+export type SpotTimeline = S["SpotTimelineOut"];
+export type TimelineStep = S["TimelineStepOut"];
+export type TimelineDay = S["TimelineDayOut"];
+export type PartitionOut = S["PartitionOut"];
+export type TideBlock = S["TideBlockOut"];
+export type ObservationsBlock = S["ObservationsBlockOut"];
 
 export type SearchInput = S["SearchIn"];
 export type Search = S["SearchOut"];
 export type TravelInput = S["TravelIn"];
 
-// Opportunities and alerts do not carry a forecast confidence class in the API contract yet;
-// the optional field lets the UI show it as soon as the backend sends it (and nothing until then).
-export type MatchSummary = S["MatchSummary"] & Pick<ForecastConfidenceFields, "forecast_confidence_class">;
-export type MatchDetail = Omit<S["MatchDetail"], "event" | "daily"> &
-  Pick<ForecastConfidenceFields, "forecast_confidence_class"> & { event: SwellEvent; daily: DailySummary[] };
+// Opportunities, matches and alerts carry the event's peak-hour forecast and local confidence
+// (forecast_confidence_class, local_confidence_class, local_confidence_reason; null = not
+// assessed yet) and, for matches, whether the forecast run behind them is stale.
+export type MatchSummary = S["MatchSummary"];
+export type MatchDetail = Omit<S["MatchDetail"], "event" | "daily"> & { event: SwellEvent; daily: DailySummary[] };
 export type Offer = S["OfferOut"];
 export type FlightSlice = S["SliceOut"];
-export type NotificationItem = S["NotificationOut"] & Pick<ForecastConfidenceFields, "forecast_confidence_class">;
+export type NotificationItem = S["NotificationOut"];
 export type NotificationPage = Omit<S["NotificationPage"], "items"> & { items: NotificationItem[] };
 export type VerificationStatus = S["VerificationStatusOut"];
 export type VerifyResult = S["VerifyOut"];

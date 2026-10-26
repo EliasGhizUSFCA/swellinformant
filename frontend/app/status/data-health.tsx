@@ -5,77 +5,57 @@
  *
  * Everything shown is what the backend reports: forecast-source ages against each
  * source's own stale limit, the last result of every scheduled job, map-layer and buoy
- * freshness, and an overall ok / degraded / failing status with plain reasons. The
- * limits are operational heuristics (how late data may be), not forecast accuracy.
+ * freshness, the model-run sync (components/status/sync-status.tsx), and an overall
+ * ok / degraded / failing status with plain reasons. The limits are operational heuristics
+ * (how late data may be), not forecast accuracy.
  */
 import { useQuery } from "@tanstack/react-query";
 import { Activity, AlertTriangle, CheckCircle2, Database, HeartPulse, Map as MapIcon, Radio, XCircle } from "lucide-react";
 
+import { SyncStatus } from "@/components/status/sync-status";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { get } from "@/lib/api";
+import type { BadgeVariant as Tone } from "@/lib/delivery";
 import { relativeTime, titleCase } from "@/lib/format";
+import type { components } from "@/types/openapi";
 
-export type OverallStatus = "ok" | "degraded" | "failing";
-type Freshness = "ok" | "stale" | "missing";
+type Schemas = components["schemas"];
+export type DataHealth = Schemas["DataHealthOut"];
+export type OverallStatus = DataHealth["status"];
+export type SourceHealth = Schemas["SourceHealthOut"];
+export type JobHealth = Schemas["JobHealthOut"];
+/** Redis (job queue, locks, call budgets, provider cache) memory against its cap. */
+export type RedisHealth = Schemas["RedisHealthOut"];
 
-export interface SourceHealth {
-  code: string;
-  name: string;
-  role: "forecast" | "blend" | "ensemble";
-  status: Freshness;
-  newest_run_key: string | null;
-  newest_issued_at: string | null;
-  age_hours: number | null;
-  stale_after_hours: number | null;
-  latest_attempt_status: string | null;
-  latest_attempt_started_at: string | null;
+/** "Redis 1 MB of 256 MB (0.4 %, alarm above 80 %)"; the cap is labelled when it is only the
+ * configured REDIS_MAXMEMORY because this Redis runs without one. */
+export function redisLine(r: RedisHealth): string {
+  if (!r.available) return "Redis is not answering";
+  const used = r.used_memory_bytes ?? null;
+  if (used === null) return "Redis memory unknown";
+  const alarm = `alarm above ${Math.round(r.alert_fraction * 100)} %`;
+  if (!r.cap_bytes || r.used_fraction == null) return `Redis ${formatBytes(used)} (no memory cap known, ${alarm})`;
+  const pct = r.used_fraction * 100;
+  const share = `${pct < 10 ? pct.toFixed(1) : Math.round(pct)} %`;
+  const cap = r.cap_source === "setting" ? `${formatBytes(r.cap_bytes)} (REDIS_MAXMEMORY; Redis itself runs uncapped)` : formatBytes(r.cap_bytes);
+  return `Redis ${formatBytes(used)} of ${cap} (${share}, ${alarm})`;
 }
 
-export interface JobHealth {
-  job: string;
-  schedule: string;
-  status: "ok" | "failed" | "overdue" | "stuck" | "running" | "never_run";
-  last_status: string | null;
-  last_started_at: string | null;
-  last_finished_at: string | null;
-  last_duration_ms: number | null;
-  last_success_at: string | null;
-  consecutive_failures: number;
-  overdue_after_minutes: number | null;
-}
-
-export interface DataHealth {
-  status: OverallStatus;
-  checked_at: string;
-  reasons: string[];
-  problems: Array<{ key: string; severity: "degraded" | "failing"; message: string }>;
-  forecast_sources: SourceHealth[];
-  jobs: JobHealth[];
-  map_fields: {
-    mode: "with_noaa" | "standalone" | "off";
-    status: Freshness | "off";
-    run_key: string | null;
-    cycle_time: string | null;
-    age_hours: number | null;
-    stale_after_hours: number | null;
-    complete_valid_times: number;
-    last_valid_time: string | null;
-  };
-  observations: {
-    enabled: boolean;
-    providers: Array<{
-      provider: string;
-      status: Freshness;
-      active_stations: number;
-      newest_observed_at: string | null;
-      age_hours: number | null;
-      stale_after_hours: number;
-    }>;
-  };
-  heartbeat: { last_job_finished_at: string | null; age_minutes: number | null; limit_minutes: number };
-  storage: { database_bytes: number; database_max_gb: number | null };
+/**
+ * The background-job line. Under Celery a job silence is an alarm (no job finished for
+ * `limit_minutes`: the worker or beat is down). The sync daemon runs its jobs hourly and syncs
+ * only when a model run is new, so silence is no alarm there: its liveness is its heartbeat,
+ * shown in the Forecast sync card.
+ */
+export function heartbeatLine(data: Pick<DataHealth, "heartbeat" | "sync">): string {
+  const finished = data.heartbeat.last_job_finished_at;
+  if (data.sync?.runner === "daemon") {
+    const last = finished ? `Last background job finished ${relativeTime(finished)}` : "No background job has finished yet";
+    return `${last} (the sync daemon's own heartbeat is checked instead: Forecast sync)`;
+  }
+  return finished ? `Last background job finished ${relativeTime(finished)} (alarm after ${data.heartbeat.limit_minutes} min of silence)` : "No background job has finished yet";
 }
 
 /** "184 MB", "12.3 GB" (binary units, as PostgreSQL's pg_size_pretty). */
@@ -84,15 +64,28 @@ export function formatBytes(bytes: number): string {
   return `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
+/** How often an open status page re-reads data health on a timer (TanStack Query skips it while
+ * the tab is hidden), besides the re-read when the tab regains focus (a report older than 30 s).
+ * Every minute while a sync runs (its stages and running time move) and under the Celery runner
+ * or an older backend without a sync block (as before). Under the sync daemon (the hosted
+ * profile) not at all otherwise: each report reads the database (37 statements, measured), and
+ * the CDN keeps it only a minute, so a poll every 5 minutes (Neon's suspend delay) kept a
+ * scale-to-zero database awake for as long as a /status tab stayed visible. */
+export function dataHealthRefetchMs(data: DataHealth | undefined): number | false {
+  const sync = data?.sync;
+  if (!sync || sync.runner !== "daemon" || sync.last_run?.status === "running") return 60_000;
+  return false;
+}
+
 export const useDataHealth = () =>
   useQuery({
     queryKey: ["health", "data"],
     queryFn: ({ signal }) => get<DataHealth>("/api/health/data", signal),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    // The app's default is off (components/providers.tsx); this page re-reads on focus.
+    refetchOnWindowFocus: true,
+    refetchInterval: (q) => dataHealthRefetchMs(q.state.data),
   });
-
-type Tone = "good" | "warn" | "danger" | "muted" | "info";
 
 export function overallTone(status: OverallStatus): { tone: Tone; alert: "success" | "warn" | "danger"; label: string } {
   if (status === "ok") return { tone: "good", alert: "success", label: "All data checks pass" };
@@ -114,16 +107,16 @@ const TONES: Record<string, Tone> = {
 export const freshnessTone = (status: string): Tone => TONES[status] ?? "muted";
 
 /** "3.4 h", "45 min", "2.1 days" for an age in hours. */
-export function formatHours(hours: number | null): string {
-  if (hours === null || Number.isNaN(hours)) return "—";
+export function formatHours(hours: number | null | undefined): string {
+  if (hours == null || Number.isNaN(hours)) return "—";
   if (hours < 1.5) return `${Math.max(0, Math.round(hours * 60))} min`;
   if (hours < 48) return `${hours.toFixed(1)} h`;
   return `${(hours / 24).toFixed(1)} days`;
 }
 
 export function ageLine(s: Pick<SourceHealth, "age_hours" | "stale_after_hours" | "newest_run_key" | "role">): string {
-  if (s.newest_run_key === null || s.age_hours === null) return "No successful run yet";
-  const limit = s.stale_after_hours === null ? "stale when any member is stale" : `stale after ${formatHours(s.stale_after_hours)}`;
+  if (s.newest_run_key == null || s.age_hours == null) return "No successful run yet";
+  const limit = s.stale_after_hours == null ? "stale when any member is stale" : `stale after ${formatHours(s.stale_after_hours)}`;
   return `Run ${s.newest_run_key} · issued ${formatHours(s.age_hours)} ago · ${limit}`;
 }
 
@@ -147,7 +140,9 @@ export function DataHealthSummary({ data }: { data: DataHealth }) {
         {data.reasons.length === 0 ? (
           <p>Every forecast source is within its freshness limit and every scheduled job is running.</p>
         ) : (
-          <ul className="list-disc space-y-1 pl-4" data-testid="data-health-reasons">
+          // wrap-anywhere: Open-Meteo run keys ("gfswave016:2026102106|gfswave025:...") have no
+          // break opportunity and would widen the page on phones.
+          <ul className="list-disc space-y-1 pl-4 wrap-anywhere" data-testid="data-health-reasons">
             {data.problems.map((p) => (
               <li key={p.key}>
                 {p.severity === "failing" && <strong>Failing: </strong>}
@@ -174,7 +169,7 @@ export function SourceFreshness({ sources }: { sources: SourceHealth[] }) {
             <Badge variant={freshnessTone(s.status)}>{s.status === "ok" ? "fresh" : s.status}</Badge>
           </div>
           <div className="mt-1 text-xs text-muted-foreground">{ROLE_LABEL[s.role]}</div>
-          <div className="mt-1 text-xs text-muted-foreground">{ageLine(s)}</div>
+          <div className="mt-1 text-xs text-muted-foreground wrap-anywhere">{ageLine(s)}</div>
           {s.latest_attempt_status === "failed" && s.latest_attempt_started_at && (
             <div className="mt-1 text-xs text-destructive">Latest attempt {relativeTime(s.latest_attempt_started_at)} failed</div>
           )}
@@ -207,7 +202,7 @@ export function JobTable({ jobs }: { jobs: JobHealth[] }) {
             </td>
             <td className="py-2 text-right text-xs text-muted-foreground">
               {j.last_started_at ? relativeTime(j.last_started_at) : "—"}
-              {j.last_duration_ms !== null && <div>{(j.last_duration_ms / 1000).toFixed(1)} s</div>}
+              {j.last_duration_ms != null && <div>{(j.last_duration_ms / 1000).toFixed(1)} s</div>}
             </td>
           </tr>
         ))}
@@ -247,7 +242,7 @@ export function LayersAndObservations({ data }: { data: DataHealth }) {
             <div className="text-xs text-muted-foreground">Not enabled (OBSERVATIONS_ENABLED=false)</div>
           ) : (
             <ul className="mt-1 space-y-1">
-              {data.observations.providers.map((p) => (
+              {(data.observations.providers ?? []).map((p) => (
                 <li key={p.provider} className="flex items-center justify-between gap-2 text-xs">
                   <span>
                     {p.provider.toUpperCase()} · {p.active_stations} active station{p.active_stations === 1 ? "" : "s"} ·{" "}
@@ -261,10 +256,8 @@ export function LayersAndObservations({ data }: { data: DataHealth }) {
         </div>
         <div className="flex items-start gap-2">
           <HeartPulse className="mt-0.5 size-4 text-ocean" />
-          <div className="text-xs text-muted-foreground">
-            {data.heartbeat.last_job_finished_at
-              ? `Last background job finished ${relativeTime(data.heartbeat.last_job_finished_at)} (alarm after ${data.heartbeat.limit_minutes} min of silence)`
-              : "No background job has finished yet"}
+          <div className="text-xs text-muted-foreground" data-testid="data-health-heartbeat">
+            {heartbeatLine(data)}
           </div>
         </div>
         <div className="flex items-start gap-2">
@@ -272,6 +265,7 @@ export function LayersAndObservations({ data }: { data: DataHealth }) {
           <div className="text-xs text-muted-foreground">
             Database {formatBytes(data.storage.database_bytes)}
             {data.storage.database_max_gb !== null ? ` (alarm above ${data.storage.database_max_gb} GB)` : " (no size alarm configured)"}
+            {data.storage.redis && <div data-testid="data-health-redis">{redisLine(data.storage.redis)}</div>}
           </div>
         </div>
       </CardContent>
@@ -292,4 +286,18 @@ export function JobsCard({ jobs }: { jobs: JobHealth[] }) {
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * The sync section; nothing when the backend sends no sync block (older backends). The
+ * component states are the backend's own: after a sync the daemon reports what it stored as
+ * current (app/services/sync/detect.py settle_plan), and data health does the same for a sync
+ * of another trigger since the daemon's last check (app/services/health.py
+ * components_since_check).
+ */
+export function SyncCard({ data, className }: { data: DataHealth; className?: string }) {
+  const { sync } = data;
+  if (!sync) return null;
+  const names = new Map(data.forecast_sources.map((s) => [s.code, s.name] as const));
+  return <SyncStatus sync={sync} sourceNames={names} className={className} />;
 }

@@ -156,7 +156,7 @@ class DemoSeriesGenerator:
         return _Pulse(peak, duration, h0, period, direction)
 
     # ---------------------------------------------------------------- wind
-    def _wind(self, t: datetime) -> tuple[float, float]:
+    def _wind(self, t: datetime) -> tuple[float, float | None]:
         local_hour = (t.hour + t.minute / 60 + self.spot.longitude / 15.0) % 24
         day_rng = random.Random(f"{self.spot.slug}:wind:{t:%Y%m%d}")
         land = day_rng.uniform(4, 10) if local_hour < 9.5 or local_hour > 21 else 0.0
@@ -235,7 +235,9 @@ class DemoSeriesGenerator:
             if any(o.start - timedelta(hours=6) <= t <= o.end + timedelta(hours=6) for o in mine):
                 local_rng = random.Random(f"{self.spot.slug}:ovr:{t.isoformat()}")
                 wind_speed = local_rng.uniform(5, 12)
-                wind_dir = norm_deg(self.spot.offshore_wind_direction + local_rng.uniform(-20, 20))
+                wind_dir: float | None = norm_deg(
+                    self.spot.offshore_wind_direction + local_rng.uniform(-20, 20)
+                )
             else:
                 wind_speed, wind_dir = self._wind(t)
             ww_h = 0.012 * wind_speed**1.15
@@ -258,9 +260,9 @@ class DemoSeriesGenerator:
                 "secondary_swell_direction_deg": round(secondary[2], 0) if secondary else None,
                 "wind_wave_height_m": round(ww_h, 2),
                 "wind_wave_period_s": round(ww_t, 1),
-                "wind_wave_direction_deg": round(wind_dir, 0),
+                "wind_wave_direction_deg": None if wind_dir is None else round(wind_dir, 0),
                 "wind_speed_kmh": round(wind_speed, 1),
-                "wind_direction_deg": round(wind_dir, 0),
+                "wind_direction_deg": None if wind_dir is None else round(wind_dir, 0),
                 "wind_gust_kmh": round(wind_speed * 1.4, 1),
                 "pressure_msl_hpa": round(
                     1013 + 6 * math.sin(2 * math.pi * hours_f / 120 + self.pressure_phase), 1

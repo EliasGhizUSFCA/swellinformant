@@ -12,12 +12,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     accuracy,
     auth,
+    internal,
     map_fields,
     notifications,
     opportunities,
     searches,
     spots,
     system,
+    tides,
+    timeline,
     users,
     webhooks,
 )
@@ -34,9 +37,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     settings = get_settings()
     logger.info(
-        "Starting %s (env=%s, forecasts=%s, flights=%s, email=%s, sms=%s)",
+        "Starting %s (env=%s, jobs=%s, forecasts=%s, flights=%s, email=%s, sms=%s)",
         settings.app_name,
         settings.app_env,
+        settings.job_runner,
         settings.forecast_provider_list,
         settings.flight_provider,
         settings.email_provider,
@@ -82,6 +86,9 @@ def create_app() -> FastAPI:
         webhooks,
         accuracy,
         map_fields,
+        tides,
+        timeline,
+        internal,
     ):
         app.include_router(module.router)
     if settings.enable_dev_endpoints:

@@ -1,7 +1,9 @@
 /**
- * Colour scales for the map's ocean layers, in one place. One shared ramp (deep blue for
- * calm → cyan → green → yellow → orange → red → magenta for the largest values) placed per
- * layer over its display range; values beyond the range saturate at the end colours.
+ * Colour scales for the map's ocean layers, in one place. The Wave Height layer has its own
+ * ramp with anchors in metres (muted navy for calm seas → slate blue → violet → magenta →
+ * pink for the largest waves, WAVE_HEIGHT_RAMP); the other layers share one ramp (deep blue for calm →
+ * cyan → green → yellow → orange → red → magenta for the largest values, RAMP) placed over
+ * their display range. Values beyond a range saturate at the end colours.
  *
  * The scales are a visual aid for reading model output, not categories with a physical
  * meaning (unlike the spot-marker quality colours in lib/quality.ts).
@@ -15,7 +17,7 @@ export interface ColorStop {
   color: string;
 }
 
-/** The shared ramp. */
+/** The shared ramp (Wave Period, Wind Speed, Wave Energy). */
 export const RAMP: ColorStop[] = [
   { at: 0, color: "#1c2a6e" },
   { at: 0.08, color: "#22489c" },
@@ -32,6 +34,74 @@ export const RAMP: ColorStop[] = [
   { at: 1, color: "#9a3dc2" },
 ];
 
+/** A colour anchored at a value in the layer's base unit (metres for the wave height). */
+export interface ValueAnchor {
+  value: number;
+  color: string;
+}
+
+/**
+ * Wave-height ramp, anchors in metres of offshore significant wave height, interpolated
+ * linearly in metres (in sRGB) between anchors and saturating at the end colours (above
+ * 10 m: #f3c4dc). Our own ramp in the spirit of the owner's reference (a smooth, slightly
+ * dusky field): muted navy for calm seas, slate blue at 1 m, blue-violet at 1.5 m, violet at
+ * 2 m, magenta-purple at 2.5-3 m, magenta at 4-5 m, pink at 6-8 m and pale pink at 10 m. The
+ * hue turns steadily from blue to pink with height, CIE L* (sRGB, D65) rises strictly from
+ * 12.2 at 0 m to 83.8 at 10 m and neighbouring anchors differ by ΔE*ab ≥ 7.6, so a larger
+ * sea is always lighter and the scale still reads in grey (tests/map-wave-ramp.test.ts).
+ * (Upgrade 4's first ramp, saturated blue up to 2.5 m, was re-anchored at integration: a
+ * typical 2-3 m sea read electric blue where the reference is violet to magenta.)
+ */
+export const WAVE_HEIGHT_RAMP: readonly ValueAnchor[] = [
+  { value: 0, color: "#151d42" },
+  { value: 0.5, color: "#212f68" },
+  { value: 1, color: "#344790" },
+  { value: 1.5, color: "#4a4ea6" },
+  { value: 2, color: "#614fb0" },
+  { value: 2.5, color: "#7a4eb2" },
+  { value: 3, color: "#8f4db0" },
+  { value: 4, color: "#a64fab" },
+  { value: 5, color: "#b856a8" },
+  { value: 6, color: "#c862a9" },
+  { value: 7, color: "#d572ae" },
+  { value: 8, color: "#df86b8" },
+  { value: 9, color: "#e9a3c7" },
+  { value: 10, color: "#f3c4dc" },
+];
+
+export function rgbToHex([r, g, b]: readonly [number, number, number]): string {
+  return `#${[r, g, b].map((c) => Math.round(Math.min(255, Math.max(0, c))).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Colour of `value` on value-anchored stops (linear in the value and in sRGB; saturating). */
+export function colorAtValue(anchors: readonly ValueAnchor[], value: number): [number, number, number] {
+  const first = anchors[0]!;
+  const last = anchors[anchors.length - 1]!;
+  if (!(value > first.value)) return hexToRgb(first.color);
+  if (value >= last.value) return hexToRgb(last.color);
+  let i = 0;
+  while (i < anchors.length - 2 && value > anchors[i + 1]!.value) i++;
+  const lo = anchors[i]!;
+  const hi = anchors[i + 1]!;
+  const f = (value - lo.value) / (hi.value - lo.value);
+  const a = hexToRgb(lo.color);
+  const b = hexToRgb(hi.color);
+  return [Math.round(a[0] + (b[0] - a[0]) * f), Math.round(a[1] + (b[1] - a[1]) * f), Math.round(a[2] + (b[2] - a[2]) * f)];
+}
+
+/**
+ * Colour stops (0..1 along a linear scale from `min` to `max`) for value-anchored colours:
+ * the colour at `min`, every anchor strictly inside the range at its position, and the
+ * colour at `max`. Over 0..10 m the wave-height stops are exactly its anchors; a wider range
+ * (from the field index) keeps each anchor at its value and saturates beyond the last one.
+ */
+export function metresToStops(anchors: readonly ValueAnchor[], min: number, max: number): ColorStop[] {
+  if (!(max > min)) return [{ at: 0, color: rgbToHex(colorAtValue(anchors, min)) }, { at: 1, color: rgbToHex(colorAtValue(anchors, min)) }];
+  const at = (v: number) => (v - min) / (max - min);
+  const inside = anchors.filter((a) => a.value > min && a.value < max).map((a) => ({ at: at(a.value), color: a.color }));
+  return [{ at: 0, color: rgbToHex(colorAtValue(anchors, min)) }, ...inside, { at: 1, color: rgbToHex(colorAtValue(anchors, max)) }];
+}
+
 export interface LayerScale {
   /** Display range in the layer's base unit (m, s, m/s, kW/m). */
   min: number;
@@ -43,7 +113,7 @@ export interface LayerScale {
 
 /** Default display ranges (the field index may override hs and tp). */
 export const LAYER_SCALES: Record<LayerId, LayerScale> = {
-  hs: { min: 0, max: 10, transform: "linear", stops: RAMP },
+  hs: { min: 0, max: 10, transform: "linear", stops: metresToStops(WAVE_HEIGHT_RAMP, 0, 10) },
   tp: { min: 0, max: 20, transform: "linear", stops: RAMP },
   wind: { min: 0, max: 30, transform: "linear", stops: RAMP },
   energy: { min: 0, max: 150, transform: "sqrt", stops: RAMP },

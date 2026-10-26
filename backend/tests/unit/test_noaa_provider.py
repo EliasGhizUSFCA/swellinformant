@@ -15,7 +15,15 @@ import pytest
 
 from app.core.config import Settings
 from app.services.forecasts.base import RunInfo, SpotPoint
-from app.services.forecasts.fields import EncodedField, FieldSink, TargetGrid, complete_times
+from app.services.forecasts.fields import (
+    FIELD_VARIABLES,
+    PARTITION_FIELD_VARIABLES,
+    EncodedField,
+    FieldSink,
+    TargetGrid,
+    complete_times,
+    partition_times,
+)
 from app.services.forecasts.grib import parse_ncep_idx
 from app.services.forecasts.noaa import (
     GfsPaths,
@@ -26,21 +34,22 @@ from app.services.forecasts.noaa import (
     forecast_hours,
     sample_gfs_points,
     wave_grid_for,
-    wind_from_uv,
 )
 from app.services.forecasts.registry import NOAA_GFS_CODE, build_provider
+from app.services.geo import wind_from_uv
 from app.services.http import PermanentProviderError, TransientProviderError
 from tests.synthetic_gfs import (
     ATMOS_GRID,
     BASE_URL,
     PATHS,
     WAVE_GRID_GEOMETRY,
+    WAVE_VALUES,
     Grid,
     SyntheticGfs,
-    map_settings,
     nearest_cell_mask,
     noaa_settings,
 )
+from tests.synthetic_map_fields import add_map_atmos, add_map_hours, field_settings, map_atmos_url
 
 CYCLE = datetime(2026, 10, 10, 18, tzinfo=UTC)
 RUN = RunInfo("noaa-gfs:2026101018", CYCLE, CYCLE, CYCLE, "noaa-s3-idx")
@@ -478,14 +487,24 @@ def test_sample_gfs_points_at_arbitrary_positions() -> None:
 
 
 # --------------------------------------------------------------------------- map fields
-def field_provider(world: SyntheticGfs, map_lead: int = 24, map_step: int = 12) -> NoaaGfsProvider:
+def field_provider(
+    world: SyntheticGfs, map_lead: int = 24, map_step: int = 12, partitions: str = "off"
+) -> NoaaGfsProvider:
     """Spot provider in the "with_noaa" map-fields mode (spot hours f000-f024 every 12 h)."""
-    s = map_settings(24, 12, map_lead=map_lead, map_step=map_step)
+    s = field_settings(24, 12, map_lead=map_lead, map_step=map_step, partitions=partitions)
     return NoaaGfsProvider(s, client=world.client(), backoff_seconds=0)
 
 
-def fields_only(world: SyntheticGfs, map_lead: int = 24) -> NoaaGfsFieldsProvider:
-    s = map_settings(map_lead=map_lead, providers="demo", map_fields_enabled=True)
+def fields_only(
+    world: SyntheticGfs, map_lead: int = 24, partitions: str = "off", **kw: object
+) -> NoaaGfsFieldsProvider:
+    s = field_settings(
+        map_lead=map_lead,
+        providers="demo",
+        map_fields_enabled=True,
+        partitions=partitions,
+        **kw,  # type: ignore[arg-type]
+    )
     return NoaaGfsFieldsProvider(s, client=world.client(), backoff_seconds=0)
 
 
@@ -532,7 +551,7 @@ def test_map_fields_are_off_by_default_and_an_idle_sink_changes_nothing() -> Non
 
 def test_an_invalid_map_resolution_never_costs_the_spots() -> None:
     # 0.7 deg passes the setting's own range check but does not divide 180.
-    s = map_settings().model_copy(update={"map_field_resolution_deg": 0.7})
+    s = field_settings().model_copy(update={"map_field_resolution_deg": 0.7})
     p = NoaaGfsProvider(s, client=hawaii_break_on_land().client(), backoff_seconds=0)
     result = p.fetch([HAWAII, SOUTH], RUN)
     baseline = provider(hawaii_break_on_land()).fetch([HAWAII, SOUTH], RUN)
@@ -540,7 +559,7 @@ def test_an_invalid_map_resolution_never_costs_the_spots() -> None:
     assert result.fields == [] and len(result.field_warnings) == 1
     assert "must divide 180" in result.field_warnings[0]
 
-    s = map_settings(providers="demo", map_fields_enabled=True)
+    s = field_settings(providers="demo", map_fields_enabled=True)
     fields = NoaaGfsFieldsProvider(
         s.model_copy(update={"map_field_resolution_deg": 0.7}),
         client=SyntheticGfs().client(),
@@ -571,7 +590,7 @@ def test_reader_hands_fields_to_the_sink_for_wanted_hours_only() -> None:
 
 def test_fetch_with_map_fields_reads_three_wave_records_and_extra_hours() -> None:
     world = hawaii_break_on_land()  # f000, f012 and f024 of every grid
-    world.add_field_hours(CYCLE, [36, 48])  # map hours beyond the spots' last hour
+    add_map_hours(world, CYCLE, [36, 48])  # map hours beyond the spots' last hour
     p = field_provider(world, map_lead=48)
     assert p.map_fields is True
     result = p.fetch([HAWAII, SOUTH], RUN)
@@ -589,8 +608,10 @@ def test_fetch_with_map_fields_reads_three_wave_records_and_extra_hours() -> Non
         ranges = [r.headers["Range"] for r in gets(world, url)]
         at = offsets(world, url)
         assert ranges == [f"bytes={at['HTSGW:surface']}-{at['WVHGT:surface'] - 1}"]
-    # Hours for the fields only: PRMSL and UGRD/VGRD, never GUST or LAND.
-    url = PATHS.atmos(CYCLE, 36)
+    # Hours for the fields only: PRMSL and UGRD/VGRD from the map's pgrb2.0p50 file, never
+    # GUST or LAND, and nothing of the spots' pgrb2.0p25 file.
+    url = map_atmos_url(CYCLE, 36)
+    assert gets(world, PATHS.atmos(CYCLE, 36)) == []
     at = offsets(world, url)
     assert sorted(r.headers["Range"] for r in gets(world, url)) == sorted(
         [
@@ -632,8 +653,8 @@ def test_a_spot_on_the_global_grid_shares_its_records_with_the_map() -> None:
 def test_a_failed_map_field_is_a_warning_never_a_spot_error() -> None:
     world = hawaii_break_on_land()
     world.fail_url(PATHS.wave(CYCLE, "global.0p25", 12) + ".idx", 404)
-    world.add_field_hours(CYCLE, [36])
-    world.fail_url(PATHS.atmos(CYCLE, 36), 503)  # still failing after the retries
+    add_map_hours(world, CYCLE, [36])
+    world.fail_url(map_atmos_url(CYCLE, 36), 503)  # still failing after the retries
     result = field_provider(world, map_lead=36).fetch([HAWAII], RUN)
 
     assert result.errors == {} and len(result.records[1]) == 3
@@ -664,7 +685,7 @@ def test_a_hot_cell_lands_on_its_node_through_grib() -> None:
     lat, lon = g.mesh()
     hot = np.isclose(lat, 58.5) & np.isclose(lon, -3.5)
     world = SyntheticGfs()
-    world.add_atmos(CYCLE, 0)
+    add_map_atmos(world, CYCLE, 0)
     world.add_wave(CYCLE, "global.0p25", 0, arrays={"HTSGW:surface": np.where(hot, 9.0, 1.0)})
     p = fields_only(world, map_lead=0)
     hs = by_variable(p.fetch([], p.run_for_cycle(CYCLE)).fields, CYCLE)["hs"]
@@ -678,8 +699,15 @@ def test_a_hot_cell_lands_on_its_node_through_grib() -> None:
     assert t.lons()[columns].tolist() == [-5.0, -4.5, -4.0, -3.5, -3.0, -2.5, -2.0]
 
 
-def _publish(world: SyntheticGfs, cycle: datetime, fhour: int, grids: tuple[str, ...]) -> None:
-    for url in [PATHS.atmos(cycle, fhour)] + [PATHS.wave(cycle, g, fhour) for g in grids]:
+def _publish(
+    world: SyntheticGfs,
+    cycle: datetime,
+    fhour: int,
+    grids: tuple[str, ...],
+    atmos: str = "0p25",
+) -> None:
+    first = PATHS.atmos(cycle, fhour) if atmos == "0p25" else map_atmos_url(cycle, fhour)
+    for url in [first] + [PATHS.wave(cycle, g, fhour) for g in grids]:
         world.files[httpx.URL(url).path + ".idx"] = b""
 
 
@@ -695,11 +723,12 @@ def test_current_run_waits_for_the_last_map_hour() -> None:
 
 def test_fields_provider_source_and_run_discovery() -> None:
     world = SyntheticGfs()
-    _publish(world, CYCLE, 24, ("global.0p25",))  # only what the fields need
+    _publish(world, CYCLE, 24, ("global.0p25",), atmos="0p50")  # only what the fields need
     p = fields_only(world)
     info = p.source_info()
     assert (info.code, info.kind, info.family) == ("noaa_gfs_fields", "fields", "ncep_gfs")
     assert info.name == "NOAA GFS-Wave + GFS global fields" and not info.is_demo
+    assert info.atmosphere_model == "GFS pgrb2.0p50"
     assert info.attribution == NoaaGfsProvider(settings()).source_info().attribution
     assert len(info.name) <= 120 and len(info.wave_model or "") <= 60
 
@@ -707,7 +736,7 @@ def test_fields_provider_source_and_run_discovery() -> None:
     assert run.run_key == "noaa-gfs-fields:2026101018" and run.issued_at == CYCLE
     heads = world.paths_requested("HEAD")
     assert len(heads) == 2 and all("f024" in h for h in heads)
-    assert any("global.0p25" in h for h in heads) and any("atmos" in h for h in heads)
+    assert any("global.0p25" in h for h in heads) and any("pgrb2.0p50" in h for h in heads)
     assert p.run_for_cycle(CYCLE) == run
     with pytest.raises(PermanentProviderError):
         p.run_for_cycle(CYCLE + timedelta(hours=3))
@@ -715,7 +744,7 @@ def test_fields_provider_source_and_run_discovery() -> None:
 
 def test_fields_provider_reads_only_the_six_field_records() -> None:
     world = SyntheticGfs()
-    world.add_field_hours(CYCLE, HOURS)
+    add_map_hours(world, CYCLE, HOURS)
     p = fields_only(world)
     result = p.fetch([HAWAII], p.run_for_cycle(CYCLE))  # spots are ignored
     assert result.records == {} and result.errors == {}
@@ -732,3 +761,176 @@ def test_fields_provider_fails_when_nothing_can_be_read() -> None:
     p = fields_only(SyntheticGfs())
     with pytest.raises(TransientProviderError, match="no NOAA GFS file could be read for any map"):
         p.fetch([], p.run_for_cycle(CYCLE))
+
+
+# --------------------------------------------------------------------------- partitions
+def by_name(fields: list[EncodedField]) -> dict[tuple[datetime, str], EncodedField]:
+    return {(f.valid_time, f.variable): f for f in fields}
+
+
+def test_records_5_to_19_give_six_core_and_nine_partition_fields() -> None:
+    world = SyntheticGfs()
+    values = {**WAVE_VALUES, "SWDIR:1 in sequence": 225.0}
+    add_map_hours(world, CYCLE, [0], values=values)
+    p = fields_only(world, map_lead=0, partitions="on")
+    result = p.fetch([], p.run_for_cycle(CYCLE))
+    assert [f.variable for f in result.fields] == list(FIELD_VARIABLES)  # 6 core + 9
+    assert result.field_warnings == []
+    t = TargetGrid(0.5)
+    v = by_variable(result.fields, CYCLE)
+    node = t.node(58.5, -3.5)  # inside the synthetic global.0p25 band (5W..2W)
+    assert v["swell1_dir"][node] == pytest.approx(225.0, abs=0.75)  # degrees FROM, no +180
+    expected = {
+        "swell1_hs": 1.5,
+        "swell1_tp": 15.0,
+        "swell2_hs": 0.8,
+        "swell2_tp": 11.0,
+        "swell2_dir": 200.0,
+        "windsea_hs": 0.6,
+        "windsea_tp": 6.0,
+        "windsea_dir": 45.0,
+    }
+    for name, value in expected.items():
+        assert v[name][node] == pytest.approx(value, abs=0.75 if name.endswith("_dir") else 0.05)
+    # Where the model has no wave data the partitions are nodata (byte 255), never 0.
+    far = t.node(58.5, 20.0)
+    assert all(np.isnan(v[name][far]) for name in PARTITION_FIELD_VARIABLES)
+    # The wave file: one index and three ranges (5-10, 12-14, 16-18). The third swell
+    # partition (records 11, 15, 19) is never downloaded.
+    url = PATHS.wave(CYCLE, "global.0p25", 0)
+    at = offsets(world, url)
+    ranges = sorted(r.headers["Range"] for r in gets(world, url) if "Range" in r.headers)
+    assert ranges == sorted(
+        [
+            f"bytes={at['HTSGW:surface']}-{at['SWELL:3 in sequence'] - 1}",
+            f"bytes={at['WVPER:surface']}-{at['SWPER:3 in sequence'] - 1}",
+            f"bytes={at['WVDIR:surface']}-{at['SWDIR:3 in sequence'] - 1}",
+        ]
+    )
+    assert result.warnings[1].endswith("; partitions at 1 of 1 map hours")
+
+
+def test_a_missing_partition_record_leaves_the_core_complete() -> None:
+    world = SyntheticGfs()
+    add_map_hours(world, CYCLE, [0])
+    no_swell2 = {k: v for k, v in WAVE_VALUES.items() if k != "SWELL:2 in sequence"}
+    add_map_hours(world, CYCLE, [12], values=no_swell2)
+    p = fields_only(world, map_lead=12, partitions="on")
+    result = p.fetch([], p.run_for_cycle(CYCLE))
+    later = CYCLE + timedelta(hours=12)
+    assert complete_times(result.fields) == [CYCLE, later]
+    stored = by_name(result.fields)
+    assert all((later, f"swell2_{s}") not in stored for s in ("hs", "tp", "dir"))
+    assert all((later, f"swell1_{s}") in stored for s in ("hs", "tp", "dir"))
+    short = PATHS.wave(CYCLE, "global.0p25", 12).removeprefix(f"{BASE_URL}/")
+    assert result.field_warnings == [
+        f"f012: {short} index lacks SWELL:2 in sequence; secondary swell not stored",
+        "f012 map partitions incomplete: missing secondary swell",
+    ]
+    # Nothing of the incomplete partition is downloaded.
+    url = PATHS.wave(CYCLE, "global.0p25", 12)
+    at = offsets(world, url)
+    for r in gets(world, url):
+        if "Range" not in r.headers:
+            continue
+        lo, hi = (int(x) for x in r.headers["Range"].removeprefix("bytes=").split("-"))
+        assert not lo <= at["SWPER:2 in sequence"] <= hi
+        assert not lo <= at["SWDIR:2 in sequence"] <= hi
+
+
+def test_partitions_off_never_widen_the_download() -> None:
+    off, on = hawaii_break_on_land(), hawaii_break_on_land()
+    quiet = field_provider(off, partitions="off").fetch([HAWAII, SOUTH], RUN)
+    full = field_provider(on, partitions="on").fetch([HAWAII, SOUTH], RUN)
+    assert quiet.records == full.records and quiet.errors == full.errors == {}
+    assert len(quiet.fields) == 18 and len(full.fields) == 45
+    for h in HOURS:  # off: one range with HTSGW, PERPW, DIRPW only (no spot uses the grid)
+        url = PATHS.wave(CYCLE, "global.0p25", h)
+        at = offsets(off, url)
+        assert [r.headers.get("Range") for r in gets(off, url)] == [
+            f"bytes={at['HTSGW:surface']}-{at['WVHGT:surface'] - 1}"
+        ]
+        assert len(gets(on, url)) == 3  # on: the core and partition records in 3 ranges
+    assert full.stats is not None and quiet.stats is not None
+    assert full.stats.bytes_downloaded > quiet.stats.bytes_downloaded
+
+
+def test_a_spot_on_the_global_grid_gives_the_partitions_for_free() -> None:
+    world = hawaii_break_on_land()
+    result = field_provider(world, partitions="on").fetch([NORTH], RUN)
+    baseline = provider(hawaii_break_on_land()).fetch([NORTH], RUN)
+    assert result.records == baseline.records
+    assert result.request_count == baseline.request_count  # nothing extra downloaded
+    assert len(partition_times(result.fields)) == 3 and result.field_warnings == []
+    v = by_variable(result.fields, CYCLE)
+    node = TargetGrid(0.5).node(58.5, -3.5)
+    assert v["swell1_dir"][node] == pytest.approx(290.0, abs=0.75)  # synthetic SWDIR 1
+
+
+def coast_with_swapped_swell1(world: SyntheticGfs, fhour: int) -> None:
+    """SYNTHETIC global.0p25 hour: land west of 4.4W (no wave data there), and SWDIR 1 from
+    116 deg in every even column and 199 deg in every odd one, i.e. the primary swell
+    swapping between neighbouring cells; every other record as in WAVE_VALUES."""
+    grid = WAVE_GRID_GEOMETRY["global.0p25"]
+    lat, _ = grid.mesh()
+    swapped = np.broadcast_to(np.where(np.arange(grid.ni) % 2 == 0, 116.0, 199.0), lat.shape)
+    world.add_wave(
+        CYCLE,
+        "global.0p25",
+        fhour,
+        valid=lambda _lat, lon: lon > -4.4,
+        arrays={"SWDIR:1 in sequence": swapped.copy()},
+    )
+
+
+@pytest.mark.parametrize("reader", ["fields only", "spot on global.0p25"])
+def test_both_readers_apply_the_mixing_guard_with_the_sea_area_and_one_joint_mask(
+    reader: str,
+) -> None:
+    world = SyntheticGfs()
+    if reader == "fields only":
+        add_map_atmos(world, CYCLE, 0)
+        coast_with_swapped_swell1(world, 0)
+        p = fields_only(world, map_lead=0, partitions="on")
+        result = p.fetch([], p.run_for_cycle(CYCLE))
+    else:  # the spot reader decodes the partitions anyway and hands them to the sink
+        for h in HOURS:
+            world.add_atmos(CYCLE, h)
+            coast_with_swapped_swell1(world, h)
+        result = field_provider(world, partitions="on").fetch([NORTH], RUN)
+        assert result.records[NORTH.spot_id]
+    v = by_variable(result.fields, CYCLE)
+    t = TargetGrid(0.5)
+    # Open sea: each box mixes the two swell-1 directions (resultant 0.75), so the primary
+    # swell is nodata in height, period and direction alike; the core layers and the
+    # secondary swell are untouched.
+    for lon in (-4.0, -3.5, -3.0, -2.5):
+        node = t.node(58.5, lon)
+        assert all(np.isnan(v[f"swell1_{s}"][node]) for s in ("hs", "tp", "dir")), lon
+        assert v["hs"][node] == pytest.approx(2.0, abs=0.05)
+        assert v["wave_dir"][node] == pytest.approx(280.0, abs=0.75)
+        assert v["swell2_dir"][node] == pytest.approx(200.0, abs=0.75)
+    # Coastal node: sea covers only a quarter of its box, but the secondary swell exists in
+    # all of that sea area, so it is kept (it would be nodata against the whole box).
+    coast = t.node(58.5, -4.5)
+    assert v["hs"][coast] == pytest.approx(2.0, abs=0.05)
+    assert v["swell2_hs"][coast] == pytest.approx(0.8, abs=0.05)
+    assert v["swell2_dir"][coast] == pytest.approx(200.0, abs=0.75)
+    # Land: no core value and no partition.
+    land = t.node(58.5, -5.0)
+    assert all(np.isnan(v[name][land]) for name in ("hs", *PARTITION_FIELD_VARIABLES))
+
+
+def test_a_record_that_fails_half_way_stores_nothing_of_its_file() -> None:
+    world = SyntheticGfs()
+    add_map_hours(world, CYCLE, [0])
+    path = httpx.URL(PATHS.wave(CYCLE, "global.0p25", 0)).path
+    text = world.files[path + ".idx"].decode()
+    entry = next(e for e in parse_ncep_idx(text) if e.key == "SWDIR:2 in sequence")
+    content = bytearray(world.files[path])
+    content[entry.offset : entry.offset + 4] = b"XXXX"  # not a GRIB message any more
+    world.files[path] = bytes(content)
+    p = fields_only(world, map_lead=0, partitions="on")
+    result = p.fetch([], p.run_for_cycle(CYCLE))
+    assert [f.variable for f in result.fields] == ["wind_u", "wind_v", "pressure"]
+    assert any(w.startswith("f000 map fields wave global.0p25:") for w in result.field_warnings)

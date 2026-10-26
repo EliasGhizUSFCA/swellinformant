@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from functools import cache
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
@@ -54,6 +55,15 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password_hash: str, password: str) -> bool:
+    """Argon2 verification; :data:`DUMMY_HASH` verifies against :func:`dummy_hash`.
+
+    The dummy hash is computed on the first verification of the process, whichever path
+    asks first, so the first login of a fresh (serverless) instance costs the same for a
+    known and an unknown email.
+    """
+    dummy = dummy_hash()
+    if password_hash is DUMMY_HASH:
+        password_hash = dummy
     try:
         return _hasher.verify(password_hash, password)
     except (VerifyMismatchError, VerificationError, InvalidHashError):
@@ -67,8 +77,21 @@ def needs_rehash(password_hash: str) -> bool:
         return True
 
 
-# A valid hash computed once, used to equalise timing when the email does not exist.
-DUMMY_HASH = _hasher.hash("timing-equaliser-not-a-real-password")
+@cache
+def dummy_hash() -> str:
+    """A valid hash, used to equalise timing when the email does not exist. Computed on
+    first use, not at import: hashing costs about 250 ms of every cold start of the API
+    (an Argon2id hash with the parameters above)."""
+    return _hasher.hash("timing-equaliser-not-a-real-password")
+
+
+class _DummyHashMarker(str):
+    """The type of :data:`DUMMY_HASH` (a distinct object verify_password recognises)."""
+
+
+# Pass this to verify_password to verify against dummy_hash() (callers keep importing
+# a constant; the hash itself is only computed when a password is first verified).
+DUMMY_HASH: str = _DummyHashMarker("timing-equaliser")
 
 
 def new_token(nbytes: int = 32) -> str:
