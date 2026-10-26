@@ -1,5 +1,10 @@
 # Forecast upgrade audit (Upgrade 3)
 
+> **Historical record.** The pre-implementation audit of Upgrade 3 (2026-10-13). Its plan was
+> carried out as described in UPGRADE_REPORT.md sections 19-37; variables proposed here that
+> are not in .env.example (for example NWS_USER_AGENT, AVISO_USERNAME) were not built.
+> Current docs: README.md, docs/FORECAST_SOURCES.md.
+
 This is the audit the owner asked for in the 2026-10-13 request (map, weather data, wind and wave
 visualization, scoring, forecast charts, confidence, text). For each area it gives the root
 causes, the affected files, the planned changes and the tests required. Nothing in the code has
