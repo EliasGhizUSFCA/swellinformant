@@ -33,7 +33,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
-from sqlalchemy import Boolean, delete, func, literal_column, select, tuple_
+from sqlalchemy import Boolean, delete, literal_column, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -360,13 +360,3 @@ def acquire_tides(
             raise TransientProviderError(message)
         raise ProviderError(message)
     return result
-
-
-def stored_window(db: Session, station_id: int) -> tuple[datetime | None, datetime | None]:
-    """First and last stored prediction time of a station."""
-    first, last = db.execute(
-        select(func.min(TidePrediction.valid_time), func.max(TidePrediction.valid_time)).where(
-            TidePrediction.station_id == station_id
-        )
-    ).one()
-    return first, last

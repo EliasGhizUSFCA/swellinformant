@@ -80,14 +80,6 @@ def in_lead_bucket(lead_hours: ArrayLike, bucket_h: int) -> NDArray[np.bool_]:
     return np.abs(leads - bucket_h) <= bucket_half_width(bucket_h)
 
 
-def lead_bucket(lead_hours: float) -> int | None:
-    """The bucket a single lead belongs to, or None."""
-    for bucket in LEAD_BUCKETS_H:
-        if abs(lead_hours - bucket) <= bucket_half_width(bucket):
-            return bucket
-    return None
-
-
 def lead_bucket_array(lead_hours: ArrayLike) -> NDArray[np.int64]:
     """Bucket of every lead (:data:`NO_BUCKET` where none applies)."""
     leads = np.asarray(lead_hours, dtype=float)
@@ -99,7 +91,11 @@ def lead_bucket_array(lead_hours: ArrayLike) -> NDArray[np.int64]:
 
 # ------------------------------------------------------------------------------ helpers
 def finite_pairs(*arrays: ArrayLike) -> tuple[FloatArray, ...]:
-    """Return the arrays restricted to rows where every value is finite."""
+    """Return the arrays restricted to rows where every value is finite.
+
+    When every row is finite the inputs themselves are returned (as flat float views),
+    so callers must not write into the result.
+    """
     arrs = [np.asarray(a, dtype=float).ravel() for a in arrays]
     if len({a.shape[0] for a in arrs}) > 1:
         raise ValueError("arrays must have the same length")
@@ -108,6 +104,8 @@ def finite_pairs(*arrays: ArrayLike) -> tuple[FloatArray, ...]:
     mask = np.ones(arrs[0].shape[0], dtype=bool)
     for a in arrs:
         mask &= np.isfinite(a)
+    if mask.all():
+        return tuple(arrs)
     return tuple(a[mask] for a in arrs)
 
 
@@ -240,22 +238,6 @@ def wrap_degrees(x: ArrayLike) -> FloatArray:
 def circular_difference(m: ArrayLike, o: ArrayLike) -> FloatArray:
     """Signed smallest difference m - o in degrees, in (-180, 180] (positive = clockwise)."""
     return wrap_degrees(np.asarray(m, dtype=float) - np.asarray(o, dtype=float))
-
-
-def circular_mean(angles_deg: ArrayLike, weights: ArrayLike | None = None) -> float:
-    """Mean direction via unit vectors, in [0, 360); nan when the resultant vanishes."""
-    if weights is None:
-        (a,) = finite_pairs(angles_deg)
-        w = np.ones_like(a)
-    else:
-        a, w = finite_pairs(angles_deg, weights)
-    if not a.size:
-        return math.nan
-    rad = np.deg2rad(a)
-    s, c = float(np.sum(w * np.sin(rad))), float(np.sum(w * np.cos(rad)))
-    if math.hypot(s, c) < 1e-12 * max(1.0, float(np.sum(np.abs(w)))):
-        return math.nan
-    return math.degrees(math.atan2(s, c)) % 360.0
 
 
 def circular_bias(m: ArrayLike, o: ArrayLike) -> float:
@@ -472,10 +454,6 @@ class BootstrapCI:
     def available(self) -> bool:
         return math.isfinite(self.lower) and math.isfinite(self.upper)
 
-    def excludes(self, value: float = 0.0) -> bool:
-        """True when the interval is available and ``value`` lies outside it."""
-        return self.available and not (self.lower <= value <= self.upper)
-
     def as_dict(self) -> dict[str, Any]:
         return {
             "estimate": finite_or_none(self.estimate),
@@ -523,6 +501,7 @@ def cycle_block_bootstrap(
     if n_blocks < 2 or n_boot < 1:
         return BootstrapCI(estimate, math.nan, math.nan, confidence, 0, n_blocks)
     starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    by_block = [a[order] for a in arrs]
     rng = np.random.default_rng(seed)
     replicates = np.empty(n_boot, dtype=float)
     for i in range(n_boot):
@@ -530,8 +509,8 @@ def cycle_block_bootstrap(
         lengths = counts[drawn]
         # Position p of the replicate maps to sorted row starts[b] + (p - first_pos[b]).
         offsets = np.repeat(starts[drawn] - (np.cumsum(lengths) - lengths), lengths)
-        idx = order[np.arange(int(lengths.sum())) + offsets]
-        replicates[i] = statistic(*(a[idx] for a in arrs))
+        idx = np.arange(int(lengths.sum())) + offsets
+        replicates[i] = statistic(*(a[idx] for a in by_block))
     finite = replicates[np.isfinite(replicates)]
     if finite.size < 2:
         return BootstrapCI(estimate, math.nan, math.nan, confidence, n_boot, n_blocks)

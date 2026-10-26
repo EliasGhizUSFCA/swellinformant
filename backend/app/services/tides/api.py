@@ -76,7 +76,6 @@ from app.services.tides import catalog, harmonic_model
 logger = logging.getLogger(__name__)
 
 NO_TIDE_SOURCE = "No tide source configured for this spot."
-NO_OBSERVATIONS = "Observations are not available for this spot yet."
 NOT_STORED = "No tide predictions are stored for this period yet."
 NO_REFERENCE_STATIONS = "No measuring station near this spot is paired with it."
 NO_RECENT_READINGS = "The paired stations have no stored readings yet."

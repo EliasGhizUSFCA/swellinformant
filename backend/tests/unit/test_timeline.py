@@ -27,7 +27,7 @@ from app.services.surf_quality.forecast_confidence import (
     forecast_reasons,
 )
 from app.services.surf_quality.sun import TWILIGHT_MARGIN, is_daylight, sun_times
-from app.services.tides.api import NO_OBSERVATIONS, NO_TIDE_SOURCE
+from app.services.tides.api import NO_REFERENCE_STATIONS, NO_TIDE_SOURCE
 from app.services.tides.stage import TideStage
 from app.services.timeline import (
     NO_FUTURE_DATA,
@@ -49,7 +49,7 @@ PREFERENCE = TidePreferenceOut(
     value=None, research_class=None, decision=None, text=TIDE_PREFERENCE_NOT_ESTABLISHED
 )
 NO_TIDE = TideBlockOut(status="unavailable", reason=NO_TIDE_SOURCE, preference=PREFERENCE)
-NO_OBS = ObservationsBlockOut(status="unavailable", reason=NO_OBSERVATIONS)
+NO_OBS = ObservationsBlockOut(status="unavailable", reason=NO_REFERENCE_STATIONS)
 
 
 def assemble(  # type: ignore[no-untyped-def]

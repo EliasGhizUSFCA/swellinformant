@@ -13,6 +13,8 @@ Tests marked SYNTHETIC build small text that follows the same layout.
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,12 +27,14 @@ from app.services.verification.point_forecasts import (
     FIRST_CYCLE,
     SOURCE_CODE,
     BulletinFormatError,
+    _next_valid_time,
     bulletin_url,
     cycles_between,
     going_to_to_from,
     keep_lead,
     parse_bulletin,
-    parse_cbull,
+    parse_cycle,
+    parse_location,
     point_forecast_rows,
 )
 
@@ -43,6 +47,33 @@ FT_PER_M = 1 / 0.3048
 # to 0.01 m / 0.1 s, so the two can differ by half a unit plus the .bull rounding.
 HS_FT_TOL = 0.5 + 0.005 * FT_PER_M + 1e-9
 TP_S_TOL = 0.5 + 0.05 + 1e-9
+
+
+@dataclass(frozen=True)
+class CompactRow:
+    """A ``.cbull`` row: Hs in whole feet, periods in whole seconds, directions FROM."""
+
+    valid_time: datetime
+    hs_ft: int
+    partitions: tuple[tuple[int, int, int], ...]  # (Hs ft, Tp s, direction from)
+
+
+def parse_cbull(text: str) -> tuple[str, datetime, list[CompactRow]]:
+    """Parse the compact bulletin (used to cross-check the ``.bull`` conventions)."""
+    station_id, _, _ = parse_location(text)
+    cycle = parse_cycle(text)
+    rows: list[CompactRow] = []
+    previous = cycle
+    for line in text.splitlines():
+        tokens = line.split()
+        if not tokens or not re.fullmatch(r"\d{4}", tokens[0]) or (len(tokens) - 2) % 3:
+            continue
+        valid = _next_valid_time(previous, int(tokens[0][:2]), int(tokens[0][2:]))
+        previous = valid
+        values = [int(t) for t in tokens[1:]]
+        parts = tuple((values[i], values[i + 1], values[i + 2]) for i in range(1, len(values), 3))
+        rows.append(CompactRow(valid, values[0], parts))
+    return station_id, cycle, rows
 
 
 def test_header_and_rows() -> None:

@@ -213,33 +213,6 @@ def parse_bulletin(text: str, expected_cycle: datetime | None = None) -> Bulleti
     return bulletin
 
 
-@dataclass(frozen=True)
-class CompactRow:
-    """A ``.cbull`` row: Hs in whole feet, periods in whole seconds, directions FROM."""
-
-    valid_time: datetime
-    hs_ft: int
-    partitions: tuple[tuple[int, int, int], ...]  # (Hs ft, Tp s, direction from)
-
-
-def parse_cbull(text: str) -> tuple[str, datetime, list[CompactRow]]:
-    """Parse the compact bulletin (used to cross-check the ``.bull`` conventions)."""
-    station_id, _, _ = parse_location(text)
-    cycle = parse_cycle(text)
-    rows: list[CompactRow] = []
-    previous = cycle
-    for line in text.splitlines():
-        tokens = line.split()
-        if not tokens or not re.fullmatch(r"\d{4}", tokens[0]) or (len(tokens) - 2) % 3:
-            continue
-        valid = _next_valid_time(previous, int(tokens[0][:2]), int(tokens[0][2:]))
-        previous = valid
-        values = [int(t) for t in tokens[1:]]
-        parts = tuple((values[i], values[i + 1], values[i + 2]) for i in range(1, len(values), 3))
-        rows.append(CompactRow(valid, values[0], parts))
-    return station_id, cycle, rows
-
-
 def bulletin_url(base_url: str, station_id: str, cycle: datetime) -> str:
     if not _BULLETIN_ID_RE.fullmatch(station_id):
         raise ValueError(f"invalid GFS-Wave bulletin id {station_id!r}")

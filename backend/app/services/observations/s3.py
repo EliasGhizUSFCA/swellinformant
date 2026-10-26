@@ -26,7 +26,7 @@ _CONTENTS = re.compile(r"<Contents>(.*?)</Contents>", re.S)
 _PREFIX = re.compile(r"<CommonPrefixes>\s*<Prefix>(.*?)</Prefix>\s*</CommonPrefixes>", re.S)
 _TAG = {
     name: re.compile(rf"<{name}>(.*?)</{name}>", re.S)
-    for name in ("Key", "Size", "LastModified", "NextContinuationToken", "IsTruncated")
+    for name in ("Key", "Size", "NextContinuationToken", "IsTruncated")
 }
 
 MAX_PAGES = 200  # 200 000 keys: a safety stop, far above any listing used here
@@ -36,7 +36,6 @@ MAX_PAGES = 200  # 200 000 keys: a safety stop, far above any listing used here
 class S3Object:
     key: str
     size: int
-    last_modified: str
 
 
 @dataclass
@@ -99,9 +98,7 @@ def list_objects(
             key = _tag("Key", block)
             if key is None:
                 continue
-            objects.append(
-                S3Object(key, int(_tag("Size", block) or 0), _tag("LastModified", block) or "")
-            )
+            objects.append(S3Object(key, int(_tag("Size", block) or 0)))
         prefixes.extend(html.unescape(p) for p in _PREFIX.findall(body))
         truncated = (_tag("IsTruncated", body) or "false").lower() == "true"
         token = _tag("NextContinuationToken", body)

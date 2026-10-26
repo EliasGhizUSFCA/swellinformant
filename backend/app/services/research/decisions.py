@@ -259,12 +259,9 @@ class Proposal:
     field_name: str
     decision: str
     reason: str
-    old_value: Any
     new_value: Any | None
     alternative: Any | None
     candidate: Candidate | None
-    supporting_keys: list[str] = field(default_factory=list)
-    contradicting_keys: list[str] = field(default_factory=list)
     blocking_keys: list[str] = field(default_factory=list)
 
 
@@ -332,7 +329,6 @@ def _rank_candidates(
 def propose(variable: str, entries: Sequence[Entry], profile: dict[str, Any]) -> Proposal | None:
     """The rule's decision for one variable, or None without contradicting evidence."""
     fname = FIELD_OF_VARIABLE[variable]
-    old = profile_field(profile, fname)
     contradicting = [e for e in entries if e.agrees is False]
     if not contradicting:
         return None
@@ -350,12 +346,9 @@ def propose(variable: str, entries: Sequence[Entry], profile: dict[str, Any]) ->
         field_name=fname,
         decision="kept",
         reason="",
-        old_value=old,
         new_value=None,
         alternative=best.value if best else None,
         candidate=best,
-        supporting_keys=sorted({e.source_key for e in supporting}),
-        contradicting_keys=sorted({e.source_key for e in contradicting}),
     )
     if best is not None and len(best.fetched_tiers) >= 2:
         second = best.fetched_tiers[1]
