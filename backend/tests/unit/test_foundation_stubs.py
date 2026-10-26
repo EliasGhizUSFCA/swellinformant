@@ -1,16 +1,15 @@
 """Cross-package interfaces and contracts declared by the foundation (F7, F8).
 
-The signatures and the CLI options are frozen: the packages replace the stub bodies, never
-the parameters, so every assertion here holds before and after they land. Assertions about
-a stub's current behaviour (NotImplementedError, the "not implemented" CLI output, the
-watchdog's 503) live in the test files of the package that replaces it, so that package
-updates them in a file it owns:
+The signatures (F7) and the options of ``python -m app.cli sync`` and ``migrate`` (F8) are
+frozen: other packages call them, so a change here is a change of contract. The behaviour
+behind them is tested in the owning packages' files:
 
-* sync-core: tests/unit/test_sync_detect.py, tests/unit/test_cli_migrate_on_build.py,
+* sync: tests/unit/test_sync_detect.py, tests/unit/test_cli_migrate_on_build.py,
   tests/integration/test_sync_orchestrator.py, tests/integration/test_sync_daemon.py,
   tests/integration/test_sync_spot_scope.py;
-* api-serverless: tests/unit/test_dispatch_runner.py, tests/integration/test_internal_cron.py;
-* egress-map-serving: tests/integration/test_prune_pass.py.
+* dispatch and the internal cron: tests/unit/test_dispatch_runner.py,
+  tests/integration/test_internal_cron.py;
+* pruning: tests/integration/test_prune_pass.py.
 """
 
 from __future__ import annotations

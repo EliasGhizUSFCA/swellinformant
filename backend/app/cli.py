@@ -9,21 +9,22 @@ python -m app.cli seed             # (re)load airports and surf spots from data/
 python -m app.cli pipeline         # run jobs A→G once, synchronously
 python -m app.cli simulate-swell SLUG [--days-ahead 7] [--hours 60]
 python -m app.cli check-config     # list missing credentials for configured live providers
+python -m app.cli make-admin EMAIL # grant admin (developer tools) to an account
 
 Command groups provided by feature packages (``python -m app.cli GROUP --help``):
-  obs     observation stations and buoy data      (app.services.observations.cli)
-  verify  forecast verification and backtests     (app.services.verification.cli)
-  ml      ML experiments and the model registry   (app.services.ml.cli)
-  engine  ensemble, blending and spot profiles     (app.services.forecasts.cli)
-  tides   tide stations and predictions           (app.services.tides.cli)
-  sync    synced data pipeline: check, run, daemon (app.services.sync.cli)
+  obs       observation stations and buoy data        (app.services.observations.cli)
+  verify    forecast verification and backtests       (app.services.verification.cli)
+  ml        ML experiments and the model registry     (app.services.ml.cli)
+  engine    ensemble, blending and spot profiles      (app.services.forecasts.cli)
+  research  research evidence and research confidence (app.services.research.cli)
+  tides     tide stations and predictions             (app.services.tides.cli)
+  sync      synced data pipeline: check, run, daemon  (app.services.sync.cli)
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib
-import importlib.util
 import json
 import sys
 from datetime import timedelta
@@ -110,13 +111,11 @@ PLUGIN_GROUPS = {
     "ml": "app.services.ml.cli",
     "engine": "app.services.forecasts.cli",
     "research": "app.services.research.cli",
-    # Tide stations and predictions (the module is added with the tide providers).
+    # Tide stations and predictions.
     "tides": "app.services.tides.cli",
     # The synced data pipeline: sync check / run / daemon / publish / status.
     "sync": "app.services.sync.cli",
 }
-# Exit code of a command whose implementation has not landed yet (no command uses it now).
-EXIT_NOT_IMPLEMENTED = 4
 # Top-level packages of the optional extras (worker: Celery; sync: the data libraries). A
 # command group that needs one of them is left out of an install without that extra (the
 # lean API install of a hosted deployment), so migrate, init-db and check-config still run
@@ -134,14 +133,6 @@ def _missing_optional(exc: ModuleNotFoundError) -> bool:
 def _plugins() -> dict[str, ModuleType]:
     found: dict[str, ModuleType] = {}
     for group, module in PLUGIN_GROUPS.items():
-        try:
-            spec = importlib.util.find_spec(module)
-        except ModuleNotFoundError as exc:
-            if exc.name and module.startswith(exc.name):
-                continue  # the feature package is not installed
-            raise
-        if spec is None:
-            continue
         try:
             found[group] = importlib.import_module(module)
         except ModuleNotFoundError as exc:
