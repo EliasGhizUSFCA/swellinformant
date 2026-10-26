@@ -165,8 +165,3 @@ class NotificationOut(BaseModel):
     forecast_confidence_class: ConfidenceClass | None = None
     local_confidence_class: ConfidenceClass | None = None
     local_confidence_reason: str | None = None
-
-
-class Page(BaseModel):
-    total: int
-    items: list[Any]

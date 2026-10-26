@@ -42,7 +42,6 @@ from app.models.types import TimestampMixin
 
 # Provenance of one physical parameter (values used in ``data_quality``).
 PROVENANCE_VALUES = ("measured", "literature", "calibrated", "estimated", "unknown")
-UNCERTAINTY_KINDS = ("heuristic", "ensemble_heuristic", "calibrated")
 
 
 class SpotPhysicalProfile(TimestampMixin, Base):

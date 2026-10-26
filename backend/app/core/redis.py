@@ -162,12 +162,6 @@ def consume_quota(provider: str, limit: int, amount: int = 1) -> int:
     return used
 
 
-def quota_usage(provider: str) -> int:
-    day = datetime.now(UTC).strftime("%Y%m%d")
-    value = get_redis().get(f"quota:{provider}:{day}")
-    return int(value) if value else 0
-
-
 # KEYS = one counter per window; ARGV = amount, then (limit, ttl seconds) per key. Nothing is
 # added unless every window has room, so a refused call never uses any budget. Returns 0,
 # or the 1-based index of the first full window.

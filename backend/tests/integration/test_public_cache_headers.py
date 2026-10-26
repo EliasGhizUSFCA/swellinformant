@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
-from app.auth.deps import get_auth, get_current_user, get_optional_user, require_admin
+from app.auth.deps import get_auth, get_current_user, get_optional_user
 from app.core.http_cache import cache_headers
 from app.core.middleware import SecurityHeadersMiddleware
 from app.models import User
@@ -64,7 +64,7 @@ SNAPSHOT_GETS = (
     "/api/events",
 )
 USER_DEPENDENCIES: frozenset[Callable[..., Any]] = frozenset(
-    {get_auth, get_current_user, get_optional_user, require_admin}
+    {get_auth, get_current_user, get_optional_user}
 )
 SHARED_CACHE_HEADERS = ("cdn-cache-control", "vercel-cdn-cache-control")
 
@@ -160,8 +160,9 @@ def test_no_route_with_a_user_dependency_is_shared_cacheable(
     app_client: ApiClient, db: Session
 ) -> None:
     """Signed in as an admin, with a saved search, request every GET route: a route that
-    depends on the user (get_auth, get_current_user, get_optional_user, require_admin) or a
-    response that sets a cookie never carries ``public``, ``s-maxage`` or a CDN header."""
+    depends on the user (get_auth, get_current_user, get_optional_user, or a dependency built
+    on them such as the accuracy routes' require_admin) or a response that sets a cookie never
+    carries ``public``, ``s-maxage`` or a CDN header."""
     user = app_client.register()
     db.execute(update(User).where(User.id == user["id"]).values(is_admin=True))
     db.commit()

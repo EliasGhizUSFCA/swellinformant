@@ -36,10 +36,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base, utcnow
 from app.models.types import TimestampMixin
 
-# Height definitions kept explicit so model Hm0 is never silently compared with H1/3.
-HS_KINDS = ("spectral_hm0", "h_third", "unknown")
-QC_FLAGS = ("good", "probably_good", "not_qc", "bad")
-
 
 class BuoyStation(TimestampMixin, Base):
     __tablename__ = "buoy_stations"
@@ -73,6 +69,7 @@ class BuoyObservation(Base):
         Index("ix_buoy_observations_observed_at", "observed_at"),
         CheckConstraint("hs_m IS NULL OR (hs_m >= 0 AND hs_m < 30)", name="hs_range"),
         CheckConstraint("tp_s IS NULL OR (tp_s > 0 AND tp_s < 40)", name="tp_range"),
+        # Height definitions kept explicit so model Hm0 is never silently compared with H1/3.
         CheckConstraint("hs_kind IN ('spectral_hm0', 'h_third', 'unknown')", name="hs_kind"),
         CheckConstraint("qc_flag IN ('good', 'probably_good', 'not_qc', 'bad')", name="qc_flag"),
     )
