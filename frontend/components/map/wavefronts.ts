@@ -86,8 +86,6 @@ export const BUDGET_SHARE = 0.6;
 export const TINT_LEVELS = 32;
 /** Lattice tint value of a node without a colour under it. */
 const NO_TINT = 255;
-/** Quads one dash takes (a blob, or a whole split bar: its gap is in its fill). */
-const MAX_DASH_QUADS = 1;
 /** Dashes fainter than this (early or late in their life) are not drawn. */
 const MIN_ALPHA = 0.04;
 /** A dash whose clock is this many lives behind is placed afresh (after a long pause elsewhere). */
@@ -646,7 +644,9 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   const state = o.still || !o.state ? new DashState() : o.state;
   state.frame++;
   const t = o.still ? 0 : o.t;
-  const maxQuads = o.maxQuads ?? MAX_FRAME_QUADS;
+  // One quad per dash (a blob, or a whole split bar: its gap is in its fill), so the quad
+  // budget is a cap on the dashes too.
+  const budget = Math.min(o.budget, o.maxQuads ?? MAX_FRAME_QUADS);
   const skipIdle = o.skipIdle ?? true;
   const stats: FrameStats = { crests: 0, quads: 0, vertices: 0, strokes: 0, cells: 0, arrows: 0, trails: 0, families: [] };
   let maxKey = -1;
@@ -664,13 +664,9 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     const { cell, cells } = dashGrid(l, f, view);
     const store = state.store(f.system, l.zoom, cell);
     const last = rank === order.length - 1;
-    const left = o.budget - stats.crests;
+    const left = budget - stats.crests;
     const cap = stats.crests + (last ? left : Math.floor(left * BUDGET_SHARE));
     const before = stats.crests;
-    // The quad budget is shared the same way.
-    const qLeft = maxQuads - stats.quads;
-    const qCap = stats.quads + (last ? qLeft : Math.floor(qLeft * BUDGET_SHARE));
-    const qBefore = stats.quads;
     const arrowsOn = o.still && (f.system === "primary" || f.system === "combined");
     const head = BLOB_HEAD_PX * style.depthFactor;
     const reach = DASH_MAX_PX;
@@ -681,7 +677,7 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     let drawnHere = 0;
     for (const c of cells) {
       if (visited >= f.limit) break;
-      if (stats.crests >= cap || stats.quads + MAX_DASH_QUADS > qCap) {
+      if (stats.crests >= cap) {
         hit = true;
         break;
       }
@@ -779,10 +775,10 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       }
     }
     stats.cells += visited;
-    // The cut only shrinks when a budget (dashes or quads) is hit and grows back one cell a
-    // frame while well under both, so a cell at the margin does not flicker.
+    // The cut only shrinks when the budget is hit and grows back one cell a frame while well
+    // under it, so a cell at the margin does not flicker.
     if (hit) f.limit = visited;
-    else if (f.limit < cells.length && stats.crests - before < 0.75 * (cap - before) && stats.quads - qBefore < 0.75 * (qCap - qBefore)) f.limit++;
+    else if (f.limit < cells.length && stats.crests - before < 0.75 * (cap - before)) f.limit++;
   });
 
   // Per system in drawing order (primary last, on top), per tint and opacity level: one fill

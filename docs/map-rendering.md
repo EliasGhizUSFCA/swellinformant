@@ -459,14 +459,14 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
   views of the combined sea stay under the cap (700 to 1,430 blobs on a Pixel 7); with all
   three partitions a phone view (about 1,950 to 2,650 dashes) can reach it too.
 * The top system (primary, else combined) is planned first and may use 60 % (`BUDGET_SHARE`)
-  of the dashes and of the quads left, the next 60 % of the rest, the last one all of it.
-  Cells are visited in a fixed hashed order, so a frame over budget leaves out an even,
-  random share of the cells, never a region. The number of cells visited only shrinks when a
-  budget is hit and grows back by one cell a frame while under 75 % of both, so the cut is
-  steady; when the adaptive cap grows, every system may visit all its cells again (the next
-  frame finds the new cut). Targets (D11, e2e at 1440 x 900): draw p95 ≤ 5 ms and ≤ 12,000
-  stroked path vertices (now only the arrowheads of reduced motion), plus quads ≤ the cap ≤
-  7,000.
+  of the dashes left under the smaller of the two budgets (one quad per dash), the next 60 %
+  of the rest, the last one all of it. Cells are visited in a fixed hashed order, so a frame
+  over budget leaves out an even, random share of the cells, never a region. The number of
+  cells visited only shrinks when the budget is hit and grows back by one cell a frame while
+  under 75 % of its share, so the cut is steady; when the adaptive cap grows, every system may
+  visit all its cells again (the next frame finds the new cut). Targets (D11, e2e at
+  1440 x 900): draw p95 ≤ 5 ms and ≤ 12,000 stroked path vertices (now only the arrowheads of
+  reduced motion), plus quads ≤ the cap ≤ 7,000.
 
 ### 4.9 Data attributes (tests and diagnostics)
 
