@@ -11,16 +11,15 @@
  * are 3 hours wide, 6-hourly steps 6 hours wide, and a bar's centre is its valid time.
  */
 
-import { compass16 } from "@/lib/directions";
-import { formatHourTick, zoneName } from "@/lib/format";
+import { compass, formatHourTick, zoneName } from "@/lib/format";
 import { asQuality, QUALITY_LABELS } from "@/lib/quality";
-import type { HeightUnit } from "@/lib/units";
+import { M_PER_FT, type HeightUnit } from "@/lib/units";
 import type { PartitionOut, QualityLabel, SpotTimeline, TimelineDay, TimelineStep } from "@/types/api";
 
 export { zoneName };
 
-export const HOUR_MS = 3_600_000;
-export const DAY_MS = 24 * HOUR_MS;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 export interface Scale {
   (t: number): number;
@@ -69,27 +68,27 @@ function partsFormat(tz: string): Intl.DateTimeFormat {
 }
 
 /** Offset of `tz` from UTC at instant `t` (ms; local wall clock = t + offset). */
-export function zoneOffsetMs(t: number, tz: string): number {
+function zoneOffsetMs(t: number, tz: string): number {
   const p = Object.fromEntries(partsFormat(tz).formatToParts(new Date(t)).map((x) => [x.type, x.value]));
   const wall = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second));
   return wall - Math.floor(t / 1000) * 1000;
 }
 
 /** Local hour (0-23) and minute at `t` in `tz`. */
-export function localHourMinute(t: number, tz: string): [number, number] {
+function localHourMinute(t: number, tz: string): [number, number] {
   const wall = t + zoneOffsetMs(t, tz);
   const minutes = Math.floor(wall / 60_000);
   return [Math.floor(minutes / 60) % 24, minutes % 60];
 }
 
 /** Hour-tick spacing (local hours) that keeps labels apart at this zoom. */
-export function tickIntervalHours(pxPerHour: number): number {
+function tickIntervalHours(pxPerHour: number): number {
   if (pxPerHour >= 22) return 3;
   if (pxPerHour >= 8) return 6;
   return 12;
 }
 
-export interface HourTick {
+interface HourTick {
   t: number;
   label: string;
   /** Local midnight. */
@@ -149,11 +148,6 @@ export function dayInfos(days: readonly TimelineDay[]): DayInfo[] {
     polar: d.polar_state,
     day: d,
   }));
-}
-
-/** Local midnights (each day's start), for the day separators. */
-export function dayBoundaries(days: readonly DayInfo[]): Array<{ date: string; t: number }> {
-  return days.map((d) => ({ date: d.date, t: d.start }));
 }
 
 /**
@@ -252,7 +246,7 @@ export function localMidnights(start: number, end: number, tz: string): number[]
 
 export type PartitionKind = PartitionOut["kind"];
 
-export const PARTITION_ORDER: readonly PartitionKind[] = ["primary_swell", "secondary_swell", "tertiary_swell", "wind_sea"];
+const PARTITION_ORDER: readonly PartitionKind[] = ["primary_swell", "secondary_swell", "tertiary_swell", "wind_sea"];
 
 export const PARTITION_LABEL: Record<PartitionKind, string> = {
   primary_swell: "Primary swell",
@@ -292,7 +286,7 @@ export const RELATION_SHORT: Record<string, string> = {
   unknown: "?",
 };
 
-export interface RelationRun {
+interface RelationRun {
   relation: string;
   from: number;
   to: number;
@@ -359,7 +353,7 @@ const FAMILY_SHORT: Record<string, string> = { ncep_gfs: "GFS", ecmwf_ifs: "ECMW
 
 /** "ECMWF" for a blend member's source code, from the run's members (family names as
  * forecasters say them); the code itself when the member is unknown. */
-export function memberShortName(code: string, members: ReadonlyArray<{ code: string; family: string }> | null | undefined): string {
+function memberShortName(code: string, members: ReadonlyArray<{ code: string; family: string }> | null | undefined): string {
   const m = members?.find((x) => x.code === code);
   return (m && FAMILY_SHORT[m.family]) ?? code;
 }
@@ -376,19 +370,19 @@ export function interpolationText(step: TimelineStep, members: ReadonlyArray<{ c
 /** An offshore (model) height given in metres, in the viewer's unit: "1.6 m" / "5.2 ft". */
 export function offshoreHeightText(m: number | null | undefined, unit: HeightUnit): string {
   if (m == null || !Number.isFinite(m)) return "—";
-  return unit === "m" ? `${m.toFixed(1)} m` : `${(m / 0.3048).toFixed(1)} ft`;
+  return unit === "m" ? `${m.toFixed(1)} m` : `${(m / M_PER_FT).toFixed(1)} ft`;
 }
 
 /** A tide height given in metres (relative to its datum, so it can be negative), in the
  * viewer's unit to 0.1: "1.2 m", "-0.4 ft" (never "-0.0"). */
 export function tideHeightText(m: number, unit: HeightUnit): string {
-  const v = Math.round((unit === "m" ? m : m / 0.3048) * 10) / 10;
+  const v = Math.round((unit === "m" ? m : m / M_PER_FT) * 10) / 10;
   return `${(Object.is(v, -0) ? 0 : v).toFixed(1)} ${unit}`;
 }
 
 /** A nautical FROM direction: "SW 225°" (or "—"). */
 export function directionText(fromDeg: number | null | undefined): string {
-  return fromDeg == null || !Number.isFinite(fromDeg) ? "—" : `${compass16(fromDeg)} ${Math.round(fromDeg) % 360}°`;
+  return fromDeg == null || !Number.isFinite(fromDeg) ? "—" : `${compass(fromDeg)} ${Math.round(fromDeg) % 360}°`;
 }
 
 /** "1.6 m · 12 s · SW 225°" for one wave system (height in the viewer's unit). */
@@ -398,7 +392,7 @@ export function partitionText(p: PartitionOut, unit: HeightUnit): string {
 
 // --- quality -------------------------------------------------------------------------
 
-export interface QualityRun {
+interface QualityRun {
   label: QualityLabel;
   daylight: boolean;
   from: number;

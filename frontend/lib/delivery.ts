@@ -5,7 +5,7 @@
  */
 export type BadgeVariant = "good" | "danger" | "info" | "muted" | "warn";
 
-export const DELIVERY_STATUS: Record<string, { label: string; variant: BadgeVariant; help: string }> = {
+const DELIVERY_STATUS: Record<string, { label: string; variant: BadgeVariant; help: string }> = {
   queued: { label: "Queued", variant: "info", help: "Waiting for the background worker." },
   sending: { label: "Sending", variant: "info", help: "The worker is handing it to the email/SMS provider." },
   accepted: { label: "Accepted", variant: "good", help: "Accepted by the provider. Delivery is not confirmed yet." },

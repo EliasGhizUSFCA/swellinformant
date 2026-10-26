@@ -4,13 +4,12 @@ import { memo, useMemo } from "react";
 
 import { RowBackground, TimelineRow, WAVE_H, type RowProps } from "@/components/forecast/timeline-header";
 import { niceTicks } from "@/lib/timeline";
-import { convertHeightFt, type HeightUnit } from "@/lib/units";
+import { convertHeightFt, M_PER_FT, type HeightUnit } from "@/lib/units";
 import type { ObservationsBlock } from "@/types/api";
 
 const TOP = 16;
 const BOTTOM = 4;
 const PLOT_H = WAVE_H - TOP - BOTTOM;
-const M_PER_FT = 0.3048;
 /** Share of a step's width the bar fills (the rest shows the range behind it). */
 const BAR_SHARE = 0.68;
 

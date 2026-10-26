@@ -15,7 +15,7 @@ const BAR_TOP = WIND_ARROW_H;
 const BAR_PAD = 4;
 
 /** Favourability of the wind at this break (the API's, from its wind model) and its fill. */
-export const FAVOURABILITY_FILL: Record<string, string> = {
+const FAVOURABILITY_FILL: Record<string, string> = {
   favourable: "var(--wind-favourable)",
   workable: "var(--wind-workable)",
   unfavourable: "var(--wind-unfavourable)",

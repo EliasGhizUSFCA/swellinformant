@@ -5,13 +5,12 @@ import { memo, useMemo } from "react";
 import { RowBackground, TIDE_H, TimelineRow, type RowProps } from "@/components/forecast/timeline-header";
 import { safeExternalUrl } from "@/lib/confidence";
 import { clockTime, smoothPath } from "@/lib/timeline";
-import { convertHeightFt, type HeightUnit } from "@/lib/units";
+import { convertHeightFt, M_PER_FT, type HeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { TideBlock } from "@/types/api";
 
 const TOP = 22;
 const BOTTOM = 8;
-const M_PER_FT = 0.3048;
 
 export const TIDE_UNAVAILABLE = "Tide data unavailable";
 
@@ -36,7 +35,7 @@ export function tideSourceText(source: string): string {
 }
 
 /** "EOT20 model point near Cloudbreak, 9 km away": where the tide curve is computed. */
-export function tideStationText(tide: TideBlock): string | null {
+function tideStationText(tide: TideBlock): string | null {
   const st = tide.station;
   if (!st) return null;
   return `${st.name}, ${Math.round(st.distance_km)} km away`;

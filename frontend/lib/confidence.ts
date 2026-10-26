@@ -13,13 +13,13 @@
 
 export type ConfidenceClass = "high" | "moderate" | "low";
 
-export const CONFIDENCE_LABEL: Record<ConfidenceClass, string> = {
+const CONFIDENCE_LABEL: Record<ConfidenceClass, string> = {
   high: "High",
   moderate: "Moderate",
   low: "Low",
 };
 
-export const NOT_ASSESSED = "Not assessed yet";
+const NOT_ASSESSED = "Not assessed yet";
 
 /** The owner's wording for what forecast confidence means (shown in every details view). */
 export const FORECAST_CONFIDENCE_MEANING =

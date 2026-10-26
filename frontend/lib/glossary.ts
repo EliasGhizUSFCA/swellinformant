@@ -11,7 +11,7 @@ import { GROUNDSWELL_PERIOD_S } from "@/lib/rating";
 const LIKELY_RANGE_BODY =
   "Meant to contain the real breaking height about 8 times in 10, from an assumed error model (lead time or ensemble spread). It has not been checked against surf observations at the break. Against offshore buoys, the same kind of range held the measured wave height only 53% of the time one day ahead (85–89% beyond 5 days). Treat it as a guide, not a probability.";
 
-export interface GlossaryEntry {
+interface GlossaryEntry {
   title: string;
   body: string;
 }
@@ -27,11 +27,6 @@ export const GLOSSARY = {
   },
   likelyRange: {
     title: "Likely range (unverified)",
-    body: LIKELY_RANGE_BODY,
-  },
-  /** The same range under its earlier name (kept for existing links and tests). */
-  range80: {
-    title: "80% range",
     body: LIKELY_RANGE_BODY,
   },
   groundswell: {

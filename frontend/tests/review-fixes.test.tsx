@@ -1,11 +1,10 @@
 /**
- * Integration review fixes on the spot page and cards (UX-01..13, PHYS-2/5/6/7, SEC-1..3, F1).
+ * Integration review fixes on the spot page and cards (UX-01..13, PHYS-2/5/6/7, SEC-1..3).
  * Every payload here is the recorded J-Bay fixture or a SYNTHETIC variant of it.
  */
 import { act, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LegacyConfidenceBadge } from "@/components/confidence";
 import { AttributionLinks, mergeAttributionLinks } from "@/components/forecast-provenance";
 import { SpotForecastTimeline } from "@/components/forecast/forecast-timeline";
 import { SelectedTimeSummary } from "@/components/forecast/selected-summary";
@@ -204,16 +203,6 @@ describe("SEC-1 to SEC-3 credits next to the data", () => {
     expect(within(credit).getByRole("link", { name: "CC BY 4.0" })).toHaveAttribute("href", "https://creativecommons.org/licenses/by/4.0/");
     expect(credit).toHaveAttribute("title", expect.stringContaining("Integrated Marine Observing System"));
     expect(screen.getByTestId("observations-note")).not.toHaveTextContent("aodn)");
-  });
-});
-
-describe("F1 the deprecated confidence-index badge keeps its test id", () => {
-  it("is labelled as an index, with the number only in the tooltip", () => {
-    render(<LegacyConfidenceBadge label="high" value={72} />);
-    const badge = screen.getByTestId("confidence-index-badge");
-    expect(badge).toHaveTextContent("Confidence index: High");
-    expect(badge.textContent).not.toMatch(/\d/);
-    expect(badge.parentElement).toHaveAttribute("title", "Confidence index 72 / 100 (not a probability)");
   });
 });
 

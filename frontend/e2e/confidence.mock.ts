@@ -37,7 +37,7 @@ export interface Scenario {
 
 /** The deprecated mixed confidence_reasons list, built the way the backend builds it: the
  * forecast reasons, then the disputed-wind note, then the local (research) reason. */
-export function mixedReasons(sc: Scenario): string[] {
+function mixedReasons(sc: Scenario): string[] {
   return [...sc.reasons, ...(sc.windNote ? [sc.windNote] : []), ...(sc.localReason ? [sc.localReason] : [])];
 }
 

@@ -26,14 +26,14 @@ export const WAVE_H = 136;
 export const SWELL_LANE_H = 19;
 export const WIND_ARROW_H = 22;
 export const WIND_BAR_H = 58;
-export const WIND_LABEL_H = 16;
+const WIND_LABEL_H = 16;
 export const WIND_H = WIND_ARROW_H + WIND_BAR_H + WIND_LABEL_H;
 export const TIDE_H = 84;
 
 export const swellHeight = (lanes: number) => Math.max(1, lanes) * SWELL_LANE_H + 8;
 
 /** The separator above every row below the header (TimelineRow's top border). */
-export const ROW_BORDER = 1;
+const ROW_BORDER = 1;
 
 /** Top of each row's plot (px from the top of the header, below the row's 1 px top border)
  * for a timeline with `lanes` swell lanes, and the total height of all rows. */

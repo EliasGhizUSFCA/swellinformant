@@ -561,8 +561,8 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
         <span className="font-semibold text-ink">Wind</span>
         {rated ? (
           (["favourable", "workable", "unfavourable"] as const).map((k) => (
-            <span key={k} className={cn("inline-flex items-center gap-1")}>
-              <Swatch className={cn(`tl-fav-${k}`)} /> {FAVOURABILITY_LABEL[k]}
+            <span key={k} className="inline-flex items-center gap-1">
+              <Swatch className={`tl-fav-${k}`} /> {FAVOURABILITY_LABEL[k]}
             </span>
           ))
         ) : (

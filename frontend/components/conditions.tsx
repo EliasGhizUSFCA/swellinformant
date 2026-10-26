@@ -18,7 +18,7 @@ import type { Conditions } from "@/types/api";
 const WEEK_MS = 6.5 * 24 * 3_600_000;
 
 /** "Thu 6:00 PM SAST" within the coming week, the full date further out (spot's zone). */
-export function spotWhen(iso: string, tz: string, nowMs: number): string {
+function spotWhen(iso: string, tz: string, nowMs: number): string {
   return Math.abs(Date.parse(iso) - nowMs) < WEEK_MS ? formatSpotTime(iso, tz) : formatSpotDateTime(iso, tz, { zone: true });
 }
 

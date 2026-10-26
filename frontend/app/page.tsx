@@ -2,7 +2,7 @@ import { ArrowRight, BellRing, CalendarClock, Compass, Gauge, Plane, Radar, Shie
 import Link from "next/link";
 
 import { Logo } from "@/components/brand/logo";
-import { SiteFooter } from "@/components/layout/app-shell";
+import { SiteFooter } from "@/components/layout/site-footer";
 import { ForecastHorizon, LiveSwells } from "@/components/live-swells";
 import { Button } from "@/components/ui/button";
 

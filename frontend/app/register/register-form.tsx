@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { qk } from "@/hooks/queries";
 import { ApiError, errorMessage, post } from "@/lib/api";
-import { registerSchema, type RegisterValues } from "@/lib/validation";
+import { registerSchema, type RegisterValues } from "@/lib/register-schema";
 import type { AuthResponse } from "@/types/api";
 
 export function RegisterForm() {

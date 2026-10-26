@@ -12,7 +12,7 @@ import { createContext, useContext, useEffect, useState, useSyncExternalStore } 
  * navigation and no scroll jump), so the selected step can be linked.
  */
 
-export interface SelectionState {
+interface SelectionState {
   /** Epoch ms of the selected step's valid time. */
   selectedT: number | null;
   /** Epoch ms under the pointer (snapped to a step by the caller), or null. */
@@ -21,7 +21,7 @@ export interface SelectionState {
   hoverX: number | null;
 }
 
-export interface SelectionActions {
+interface SelectionActions {
   select: (t: number | null) => void;
   hover: (t: number | null, x?: number | null) => void;
 }

@@ -37,7 +37,7 @@ export interface RatingFactor {
   inReason: boolean;
 }
 
-export interface ReasonInput {
+interface ReasonInput {
   periodS?: number | null;
   windRelation?: string | null;
   windSpeedKmh?: number | null;
@@ -57,13 +57,13 @@ export interface ReasonInput {
   windFavourability?: string | null;
 }
 
-export type WindStrength = "glassy" | "light" | "moderate" | "strong";
+type WindStrength = "glassy" | "light" | "moderate" | "strong";
 
 /** The backend's Beaufort bounds for its wind classes (km/h; docs/SURF_SCORING.md, stored
  * components contract), used only for predictions that carry no `wind_strength`. */
-export const WIND_STRENGTH_BOUNDS_KMH = { glassy: 5, light: 12, moderate: 29 } as const;
+const WIND_STRENGTH_BOUNDS_KMH = { glassy: 5, light: 12, moderate: 29 } as const;
 export const GROUNDSWELL_PERIOD_S = 13;
-export const MID_PERIOD_S = 10;
+const MID_PERIOD_S = 10;
 
 /** 89 → "8.9" (one decimal of the 0–100 score divided by ten). */
 export function score10(score: number): string {
@@ -76,12 +76,7 @@ export function ratingTitle(label: string): string {
   return `${QUALITY_LABELS[asQuality(label)]} Surf`;
 }
 
-/** "Excellent Surf — 8.9/10". */
-export function ratingHeadline(label: string, score: number): string {
-  return `${ratingTitle(label)} — ${score10(score)}/10`;
-}
-
-function num(v: unknown): number | null {
+export function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
@@ -216,7 +211,7 @@ export function ratingReason(input: ReasonInput): string | null {
   return parts.length ? sentence(parts) : null;
 }
 
-export const COMPONENT_LABEL: Record<string, string> = {
+const COMPONENT_LABEL: Record<string, string> = {
   swell_direction: "Swell direction",
   swell_period: "Swell period",
   wave_size: "Wave size",
@@ -226,6 +221,7 @@ export const COMPONENT_LABEL: Record<string, string> = {
 };
 
 export const TONE_WORD: Record<FactorTone, string> = { good: "Favorable", ok: "Workable", bad: "Limiting" };
+export const TONE_BAR: Record<FactorTone, string> = { good: "bg-emerald-600", ok: "bg-amber-500", bad: "bg-orange-600" };
 
 /** Component fits (0–1) present in the API's `components`, in the documented order. */
 export function componentFits(components: Record<string, unknown> | null | undefined): Array<{ key: string; label: string; value: number; tone: FactorTone }> {

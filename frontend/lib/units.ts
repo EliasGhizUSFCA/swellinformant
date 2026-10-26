@@ -8,12 +8,11 @@
  */
 import { useSyncExternalStore } from "react";
 
-
 export type WindUnit = "km/h" | "kn" | "mph" | "m/s";
 export type HeightUnit = "ft" | "m";
 
 const KMH_PER_UNIT: Record<WindUnit, number> = { "km/h": 1, kn: 1.852, mph: 1.609344, "m/s": 3.6 };
-const M_PER_FT = 0.3048;
+export const M_PER_FT = 0.3048;
 
 /** A wind speed in km/h, in `unit`. */
 export function convertWind(kmh: number, unit: WindUnit): number {
@@ -91,7 +90,7 @@ export function writeWindUnit(unit: WindUnit): void {
 }
 
 /** Calls `cb` when the preference changes in this tab or another one. */
-export function subscribeWindUnit(cb: () => void): () => void {
+function subscribeWindUnit(cb: () => void): () => void {
   const onStorage = (e: StorageEvent) => {
     if (e.key === WIND_UNIT_KEY || e.key === null) cb();
   };

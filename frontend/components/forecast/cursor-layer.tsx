@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 
+import { useNowMs } from "@/components/forecast-provenance";
 import { HEADER_H, rowOffsets, type RowProps } from "@/components/forecast/timeline-header";
 import { tideScale } from "@/components/forecast/tide-row";
 import { useTimelineSelection } from "@/components/forecast/timeline-selection";
@@ -19,7 +20,7 @@ import type { TimelineStep } from "@/types/api";
  * its time in the header, the tide height at that step, and the hover line.
  */
 export function CursorLayer({ model, scale, width, units }: RowProps & { units: HeightUnit }) {
-  const now = useNow();
+  const now = useNowMs();
   const selectedT = useTimelineSelection((s) => s.selectedT);
   const hoverT = useTimelineSelection((s) => s.hoverT);
   const offsets = rowOffsets(model.kinds.length);
@@ -97,16 +98,6 @@ export function CursorLayer({ model, scale, width, units }: RowProps & { units: 
   );
 }
 
-/** Epoch ms, refreshed every minute. */
-function useNow(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(id);
-  }, []);
-  return now;
-}
-
 function NowLabel({ x, width, hidden }: { x: number; width: number; hidden: boolean }) {
   if (hidden) return null;
   const w = 32;
@@ -137,7 +128,7 @@ function SelectedPill({ x, width, text }: { x: number; width: number; text: stri
 /** The current time across every row (updated each minute), when it lies on the axis; its
  * "Now" label is drawn by the cursor layer, which can merge it with the selected time. */
 export function NowMarker({ model, scale, width }: RowProps) {
-  const now = useNow();
+  const now = useNowMs();
   if (now < model.start || now > model.end) return null;
   const x = scale(now);
   const total = rowOffsets(model.kinds.length).total;
@@ -156,8 +147,8 @@ export function NowMarker({ model, scale, width }: RowProps) {
   );
 }
 
-/** The values of one step in short lines: the hover tooltip and the keyboard readout. */
-export function StepTooltipContent({ step, tz, units, windUnit }: { step: TimelineStep; tz: string; units: HeightUnit; windUnit: WindUnit }) {
+/** The values of one step in short lines, for the hover tooltip. */
+function StepTooltipContent({ step, tz, units, windUnit }: { step: TimelineStep; tz: string; units: HeightUnit; windUnit: WindUnit }) {
   const q = asQuality(step.quality.label);
   const b = step.breaking;
   const drive = drivingPartition(step);

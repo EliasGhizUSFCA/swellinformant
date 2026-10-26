@@ -7,7 +7,6 @@ import { useParams } from "next/navigation";
 import { useEffect } from "react";
 
 import { uncertaintyLabel } from "@/components/charts/forecast-charts";
-import { ModelComparisonChart } from "@/components/charts/model-comparison";
 import { ConditionsSummary } from "@/components/conditions";
 import { ForecastConfidence, LocalConfidence, ResearchConfidence } from "@/components/confidence";
 import { EventCard } from "@/components/event-card";
@@ -38,6 +37,11 @@ import { formatWind, useWindUnit } from "@/lib/units";
 import type { ForecastPoint, SpotDetail, SpotForecast, SpotTimeline } from "@/types/api";
 
 const SurfMap = dynamic(() => import("@/components/map/surf-map"), { ssr: false, loading: () => <Skeleton className="h-56" /> });
+// Recharts loads only when someone opens "Compare forecast models" (a lazy, collapsed disclosure).
+const ModelComparisonChart = dynamic(
+  () => import("@/components/charts/model-comparison").then((m) => m.ModelComparisonChart),
+  { loading: () => <Skeleton className="h-72" /> },
+);
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
