@@ -39,8 +39,7 @@ def test_parse_ncep_idx_lengths_and_keys() -> None:
     assert [e.length for e in entries] == [100, 150, 150, 120, None]
     assert entries[2].key == "HTSGW:surface"
     assert entries[3].key == "SWELL:1 in sequence"
-    assert entries[2].range_header() == "bytes=250-399"
-    assert entries[4].range_header() == "bytes=520-"
+    assert [e.offset for e in entries] == [0, 100, 250, 400, 520]
     picked = select_entries(entries, ["HTSGW:surface", "SWELL:2 in sequence", "SWELL", "NOPE"])
     assert picked["SWELL"].level == "1 in sequence"  # bare variable: first match
     assert "NOPE" not in picked

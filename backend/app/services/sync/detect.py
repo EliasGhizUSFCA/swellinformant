@@ -1,4 +1,4 @@
-"""Model-run detection: is a sync due? (interface F7; docs/sync.md).
+"""Model-run detection: is a sync due? (docs/sync.md).
 
 * :func:`load_known` reads, per source, the newest run key that is stored *and published*
   (a run stored after the newest publication counts as not stored yet, so a sync that
@@ -27,7 +27,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -277,8 +277,6 @@ def refresh_known(db: Session, known: KnownRuns | None) -> KnownRuns:
 
 def newest_cycle(run_key: str | None) -> datetime | None:
     """The newest model cycle named in a run key (its ``YYYYMMDDHH`` stamps), or None."""
-    from datetime import UTC
-
     if not run_key:
         return None
     stamps = _CYCLE_STAMP.findall(run_key)
@@ -293,8 +291,6 @@ def newest_cycle(run_key: str | None) -> datetime | None:
 def domain_cycles(run_key: str | None) -> dict[str, datetime] | None:
     """The cycle of each model domain of a multi-domain run key (Open-Meteo
     ``"gfswave016:2026102118|gfs025:2026102200"``), or None for any other format."""
-    from datetime import UTC
-
     if not run_key:
         return None
     out: dict[str, datetime] = {}
@@ -439,7 +435,7 @@ def plan_sync(
     running: SyncRun | None = None
     if db is not None:
         known = refresh_known(db, known)
-        running = _valid_lease(db)
+        running = valid_lease(db)
     elif known is None:
         known = empty_known(now)
 
@@ -475,7 +471,7 @@ def trigger_kinds(seen: Iterable[_Seen], settings: Settings) -> tuple[frozenset[
     )
 
 
-def _valid_lease(db: Session) -> SyncRun | None:
+def valid_lease(db: Session) -> SyncRun | None:
     row = db.scalar(select(SyncRun).where(SyncRun.status == "running").limit(1))
     if row is None or row.lease_expires_at is None or row.lease_expires_at <= utcnow():
         return None

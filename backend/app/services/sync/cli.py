@@ -1,4 +1,4 @@
-"""``python -m app.cli sync ...``: the synced data pipeline (contract F8).
+"""``python -m app.cli sync ...``: the synced data pipeline.
 
   sync check [--json]                 print the SyncPlan (exit 0)
   sync run [--force] [--only spots,ensemble,map] [--if-due] [--trigger cli|github]
@@ -30,7 +30,6 @@ from app.services.sync.types import ComponentKind
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_BUSY = 3
-EXIT_NOT_IMPLEMENTED = 4
 COMPONENT_KINDS: tuple[ComponentKind, ...] = ("spots", "ensemble", "map")
 
 

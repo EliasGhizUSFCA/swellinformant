@@ -1,4 +1,4 @@
-"""Sync state in Redis (foundation contract F3; frozen): heartbeat, known runs, kicks.
+"""Sync state in Redis: heartbeat, known runs, kicks.
 
 Best effort: a Redis error is logged and swallowed (writers return, readers return None or
 an empty result), so neither the API nor the daemon fails because Redis is briefly down.

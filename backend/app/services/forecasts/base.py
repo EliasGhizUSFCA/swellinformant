@@ -8,12 +8,19 @@ the model does not have at a time is None, never 0. Optional per-record metadata
 
 from __future__ import annotations
 
+import functools
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from app.services.forecasts.fields import EncodedField
 from app.services.surf_quality.models import SpotParams
+
+if TYPE_CHECKING:
+    import ssl
+
+    import httpx
 
 # ForecastRecord.extra keys shared by providers, the blend and the timeline.
 EXTRA_INTERPOLATED = "interpolated"  # bool: the source interpolated this time step
@@ -101,6 +108,23 @@ class FetchStats:
     # Provider-weighted call count where the provider bills that way (Open-Meteo).
     weighted_calls: float | None = None
 
+    @classmethod
+    def between(
+        cls,
+        before: tuple[int, int, dict[str, int]],
+        after: tuple[int, int, dict[str, int]],
+        weighted_calls: float | None = None,
+    ) -> FetchStats:
+        """What an ``HttpTally`` counted between two of its snapshots (responses, bytes,
+        per-status counts; a status whose count did not change is left out)."""
+        counts = {k: v - before[2].get(k, 0) for k, v in after[2].items()}
+        return cls(
+            bytes_downloaded=after[1] - before[1],
+            requests=after[0] - before[0],
+            http_status_counts={k: n for k, n in counts.items() if n},
+            weighted_calls=weighted_calls,
+        )
+
 
 @dataclass
 class FetchResult:
@@ -143,6 +167,33 @@ class ForecastProvider(ABC):
 
     @abstractmethod
     def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult: ...
+
+
+@functools.cache
+def _ssl_context() -> ssl.SSLContext:
+    import httpx
+
+    return httpx.create_ssl_context()  # what httpx.Client() builds by default
+
+
+def http_client(timeout: float, user_agent: str | None = None) -> httpx.Client:
+    """A provider's HTTP client. All of them share one SSL context: loading the CA bundle
+    into a new one costs about 50 ms CPU, and the sync daemon builds the providers for
+    every check."""
+    import httpx
+
+    headers = {"User-Agent": user_agent} if user_agent else None
+    return httpx.Client(timeout=timeout, headers=headers, verify=_ssl_context())
+
+
+def rounded(value: float | None, digits: int) -> float | None:
+    return None if value is None else round(value, digits)
+
+
+def bearing(value: float | None) -> float | None:
+    """Degrees in [0, 360) rounded to 0.1. 359.96 rounds to 360.0, which is 0 (GRIB SWDIR
+    holds 360.0 values, and packing gives e.g. 360.002 for north)."""
+    return None if value is None else round(value % 360.0, 1) % 360.0
 
 
 def nominal_gfs_cycle(now: datetime, availability_lag_hours: float = 5.0) -> datetime:

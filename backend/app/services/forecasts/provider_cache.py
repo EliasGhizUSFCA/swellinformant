@@ -28,7 +28,7 @@ import hashlib
 import logging
 import time
 import zlib
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -121,25 +121,7 @@ def put(key: ProviderCacheKey, body: bytes, ttl_s: int, settings: Settings | Non
     return True
 
 
-def get_or_fetch(
-    key: ProviderCacheKey,
-    fetch: Callable[[], bytes],
-    ttl_s: int,
-    settings: Settings | None = None,
-) -> bytes:
-    """The cached body for ``key``, or ``fetch()``'s body (then cached when allowed).
-
-    ``fetch`` raises for a failed request, so errors are never cached.
-    """
-    cached = get(key, settings)
-    if cached is not None:
-        return cached
-    body = fetch()
-    put(key, body, ttl_s, settings)
-    return body
-
-
-def cache_size(settings: Settings | None = None) -> int:
+def cache_size() -> int:
     """Number of live entries (for tests and the operations docs)."""
     try:
         client = get_redis_bytes()

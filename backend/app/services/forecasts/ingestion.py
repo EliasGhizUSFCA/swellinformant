@@ -41,6 +41,7 @@ from app.services.forecasts.base import (
     FetchResult,
     FetchStats,
     ForecastProvider,
+    ForecastRecord,
     RunInfo,
     SpotPoint,
 )
@@ -174,18 +175,10 @@ def failed_fetch_stats(
     after = _counters(provider)
     if before is None or after is None:
         return None
-    statuses = {k: v - before[2].get(k, 0) for k, v in after[2].items() if v - before[2].get(k, 0)}
     weighted = None
     if after[3] is not None and before[3] is not None:
         weighted = round(after[3] - before[3], 3)
-    return asdict(
-        FetchStats(
-            bytes_downloaded=after[1] - before[1],
-            requests=after[0] - before[0],
-            http_status_counts=statuses,
-            weighted_calls=weighted,
-        )
-    )
+    return asdict(FetchStats.between(before[:3], after[:3], weighted))
 
 
 def ensure_source(db: Session, provider: ForecastProvider, priority: int = 100) -> ForecastSource:
@@ -234,7 +227,7 @@ def _wave_power(values: dict[str, float | None]) -> float | None:
     return round(0.49 * h * h * t, 2)
 
 
-def store_records(db: Session, run: ForecastRun, records: dict[int, list[Any]]) -> int:
+def store_records(db: Session, run: ForecastRun, records: dict[int, list[ForecastRecord]]) -> int:
     rows: list[dict[str, Any]] = []
     for spot_id, items in records.items():
         for rec in items:
@@ -247,13 +240,17 @@ def store_records(db: Session, run: ForecastRun, records: dict[int, list[Any]]) 
                     "issued_at": run.issued_at,
                     **values,
                     "wave_power_kw_m": _wave_power(values),
-                    "wave_period_kind": getattr(rec, "period_kind", None),
+                    "wave_period_kind": rec.period_kind,
                     "missing_fields": [k for k in FORECAST_FIELDS if values[k] is None],
-                    "extra": getattr(rec, "extra", None) or {},
+                    "extra": rec.extra or {},
                 }
             )
-    stmt = insert(WaveForecast).on_conflict_do_nothing(
-        index_elements=["run_id", "spot_id", "valid_time"]
+    # render_nulls: every row has the same columns (a None is sent as NULL instead of
+    # leaving the column out), so each chunk is one batched statement.
+    stmt = (
+        insert(WaveForecast)
+        .on_conflict_do_nothing(index_elements=["run_id", "spot_id", "valid_time"])
+        .execution_options(render_nulls=True)
     )
     for i in range(0, len(rows), INSERT_CHUNK):
         db.execute(stmt, rows[i : i + INSERT_CHUNK])  # executemany: compiled once, batched

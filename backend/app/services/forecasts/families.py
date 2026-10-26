@@ -83,35 +83,6 @@ PRIOR_ERROR_CORRELATION_RELATED = 0.6
 PRIOR_ERROR_CORRELATION_INDEPENDENT = 0.3
 
 
-def family_for_open_meteo_model(model: str | None) -> str:
-    m = (model or "").lower()
-    if m.startswith("ncep_gfswave") or m.startswith("gfs"):
-        return "ncep_gfs"
-    if m.startswith("ncep_gefswave"):
-        return "ncep_gefs"
-    if m.startswith("ecmwf_wam"):
-        return "ecmwf_ifs"
-    if m.startswith("meteofrance") or m.startswith("mfwam"):
-        return "mfwam"
-    if m.startswith("dwd") or m.startswith("ewam") or m.startswith("gwam"):
-        return "dwd_icon"
-    return "unknown"  # e.g. best_match: a model mix, so no single family applies
-
-
-def period_kind_for_open_meteo(model: str | None) -> str | None:
-    """Open-Meteo's ``wave_period`` is GFS PERPW (peak) but ECMWF ``mwp`` (Tm-1,0).
-
-    The ECMWF-family adapter therefore reads ``wave_peak_period`` as its period
-    (open_meteo_ecmwf.py) and keeps ``wave_period`` only as the mean period.
-    """
-    m = (model or "").lower()
-    if m.startswith("ncep_"):
-        return "tp"
-    if m.startswith("ecmwf_wam"):
-        return "tm10"
-    return None
-
-
 def are_independent(a: str, b: str) -> bool:
     """True when two families share neither wave model nor forcing."""
     if a == b or "unknown" in (a, b):

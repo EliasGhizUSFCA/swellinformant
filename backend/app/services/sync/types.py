@@ -1,4 +1,4 @@
-"""Types of the synced data pipeline (foundation contract F3; frozen).
+"""Types of the synced data pipeline.
 
 A *plan* (:class:`SyncPlan`) says, per component (spot forecasts of one source, the GEFS
 ensemble, the map layers), whether a newer model run is available than the one stored, and

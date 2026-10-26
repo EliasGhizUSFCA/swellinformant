@@ -61,22 +61,21 @@ from __future__ import annotations
 import logging
 import math
 import threading
-from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
 import numpy as np
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
-from app.models import ForecastEnsembleStat, ForecastRun, ForecastSource
+from app.models import ForecastEnsembleStat, ForecastRun
 from app.models.enums import ForecastRunStatus
 from app.services.forecasts.base import (
     FetchResult,
@@ -84,6 +83,7 @@ from app.services.forecasts.base import (
     RunInfo,
     SourceInfo,
     SpotPoint,
+    http_client,
     nominal_gfs_cycle,
 )
 from app.services.forecasts.grib import (
@@ -94,6 +94,7 @@ from app.services.forecasts.grib import (
     IndexEntry,
     PointSampler,
     decode_message,
+    head_published,
     load_eccodes,
     parse_ncep_idx,
 )
@@ -103,8 +104,9 @@ from app.services.http import (
     PermanentProviderError,
     ProviderError,
     TransientProviderError,
-    request_with_retries,
 )
+from app.services.map_fields import as_utc
+from app.services.units import ms_to_kmh
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +120,6 @@ PUBLISHED_STEPS = frozenset((*range(0, 241, 3), *range(246, MAX_LEAD_HOURS + 1, 
 MEMBERS = ("c00", *(f"p{i:02d}" for i in range(1, 31)))
 # .idx description "ens <kind>" and GRIB2 code table 4.7 value (template 4.2) per file.
 STAT_KINDS = {"mean": 0, "spread": 4}
-MS_TO_KMH = 3.6
 # Mean/spread files carry swell partitions 1-2 only, both coded "surface".
 SWELL_PARTITIONS_IN_STATS = 2
 # Partition 1 >= partition 2 (minus one packing step) held on 99.994% of ocean cells in
@@ -134,8 +135,6 @@ ANCHOR_ATTEMPTS = 3
 INSERT_CHUNK = 2000
 PERIOD_KIND = "tp"
 USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
-# ensemble_for() scans at most this many recent runs.
-MAX_RUNS_SCANNED = 60
 
 
 class GefsLayoutError(PermanentProviderError):
@@ -528,7 +527,6 @@ class StepValues:
     values: dict[int, dict[str, float | None]] = field(default_factory=dict)
     extras: dict[int, dict[str, Any]] = field(default_factory=dict)
     members_in_stats: int | None = None
-    member_files_read: int | None = None
     failed: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     checks: dict[str, Any] = field(default_factory=dict)
@@ -575,10 +573,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
         backoff_seconds: float = 1.0,
     ) -> None:
         self.settings = settings or get_settings()
-        self.client = client or httpx.Client(
-            timeout=self.settings.forecast_http_timeout_seconds,
-            headers={"User-Agent": USER_AGENT},
-        )
+        self.client = client or http_client(self.settings.forecast_http_timeout_seconds, USER_AGENT)
         self.read_members = members
         self.backoff_seconds = backoff_seconds
         self.paths = GefsPaths(self.settings.noaa_gefs_base_url)
@@ -615,14 +610,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
     def _published(self, url: str) -> bool:
         """True if ``url`` exists. Network failures raise instead of meaning "not yet"."""
         self.probe_requests += 1
-        response = request_with_retries(
-            self.client, "HEAD", url, provider=HTTP_PROVIDER, backoff_seconds=self.backoff_seconds
-        )
-        if response.status_code == 200:
-            return True
-        if response.status_code in (403, 404):  # S3 answers 403 for some missing keys
-            return False
-        raise PermanentProviderError(f"{HTTP_PROVIDER}: HTTP {response.status_code} for {url}")
+        return head_published(self.client, url, HTTP_PROVIDER, backoff_seconds=self.backoff_seconds)
 
     def current_run(self, now: datetime) -> RunInfo:
         """Newest 00/06/12/18Z cycle whose mean-file ``.idx`` exists for the last needed step.
@@ -717,7 +705,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
                     if v is not None:
                         if kind == "spread" and v < 0:
                             raise GribError(f"{rec}: negative spread {v} at spot {spot_id}")
-                        v = round(v * MS_TO_KMH, 2) if spec is WIND else round(v, 3)
+                        v = round(ms_to_kmh(v), 2) if spec is WIND else round(v, 3)
                     step.values.setdefault(spot_id, {})[column] = v
         if SWELL1 not in self.stat_fields and SWPER1 not in self.stat_fields:
             return
@@ -759,7 +747,6 @@ class GefsWaveEnsembleProvider(ForecastProvider):
                 v = grid.value(cell.choice.j, cell.choice.i)
                 if v is not None:
                     values[spot_id].append(v)
-        step.member_files_read = len(MEMBERS) - len(unreadable)
         if unreadable:
             step.warnings.append(
                 f"f{fhour:03d}: {len(unreadable)} of {len(MEMBERS)} member files unreadable "
@@ -815,7 +802,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
         cycle = run.wave_model_run_at or run.issued_at
         # File paths and the message checks use the cycle's UTC date and hour (a naive time
         # is taken to be UTC already).
-        cycle = cycle.replace(tzinfo=UTC) if cycle.tzinfo is None else cycle.astimezone(UTC)
+        cycle = as_utc(cycle)
         picker = CellPicker(spots, self.settings.grib_max_cell_distance_km)
         # The first readable step fixes the cells and runs the partition-order check.
         steps: list[StepValues] = []
@@ -1101,91 +1088,3 @@ def acquire_ensemble(
         "megabytes": round(fetched.bytes_downloaded / 1e6, 1),
         "checks": fetched.checks,
     }
-
-
-# --------------------------------------------------------------------------- reading
-def _nearest(
-    rows: Sequence[ForecastEnsembleStat], stamps: Sequence[datetime], t: datetime
-) -> ForecastEnsembleStat:
-    """Row nearest to ``t`` among time-sorted ``rows`` (ties: the earlier row)."""
-    k = bisect_left(stamps, t)
-    near = rows[max(k - 1, 0) : k + 1]  # the rows either side of t
-    return min(near, key=lambda r: (abs(r.valid_time - t), r.valid_time))
-
-
-def ensemble_for(
-    db: Session,
-    spot_id: int,
-    valid_times: Sequence[datetime],
-    max_gap_hours: float = 3.0,
-) -> dict[datetime, ForecastEnsembleStat]:
-    """Ensemble statistics for ``spot_id`` at each requested (timezone-aware) time.
-
-    For each time, runs are tried newest first (``issued_at``, then id; SUCCESS or
-    PARTIAL only). A run answers a time only if the time lies inside the span of that
-    run's rows for the spot (no extrapolation past its first or last step) and its
-    nearest row is at most ``max_gap_hours`` away (ties go to the earlier row); otherwise
-    an older run is tried (e.g. for a step missing from a partial run). Times nobody
-    covers are absent from the result. Values are not interpolated.
-    """
-    times = list(valid_times)
-    if not times:
-        return {}
-    if any(t.tzinfo is None for t in times):
-        raise ValueError("ensemble_for needs timezone-aware valid_times")
-    gap = timedelta(hours=max_gap_hours)
-    lo, hi = min(times) - gap, max(times) + gap
-    run_ids = list(
-        db.scalars(
-            select(ForecastRun.id)
-            .join(ForecastSource, ForecastSource.id == ForecastRun.source_id)
-            .where(
-                ForecastSource.code == GEFS_WAVE_CODE,
-                ForecastRun.status.in_(USABLE),
-                ForecastRun.issued_at <= hi,
-                ForecastRun.issued_at >= lo - timedelta(hours=MAX_LEAD_HOURS),
-            )
-            .order_by(ForecastRun.issued_at.desc(), ForecastRun.id.desc())
-            .limit(MAX_RUNS_SCANNED)
-        ).all()
-    )
-    if not run_ids:
-        return {}
-    spans = {
-        rid: (first, last)
-        for rid, first, last in db.execute(
-            select(
-                ForecastEnsembleStat.run_id,
-                func.min(ForecastEnsembleStat.valid_time),
-                func.max(ForecastEnsembleStat.valid_time),
-            )
-            .where(
-                ForecastEnsembleStat.run_id.in_(run_ids), ForecastEnsembleStat.spot_id == spot_id
-            )
-            .group_by(ForecastEnsembleStat.run_id)
-        ).all()
-    }
-    series: dict[int, list[ForecastEnsembleStat]] = {}
-    for row in db.scalars(
-        select(ForecastEnsembleStat)
-        .where(
-            ForecastEnsembleStat.run_id.in_(list(spans)),
-            ForecastEnsembleStat.spot_id == spot_id,
-            ForecastEnsembleStat.valid_time.between(lo, hi),
-        )
-        .order_by(ForecastEnsembleStat.run_id, ForecastEnsembleStat.valid_time)
-    ):
-        series.setdefault(row.run_id, []).append(row)
-    stamps = {rid: [r.valid_time for r in rows] for rid, rows in series.items()}
-
-    result: dict[datetime, ForecastEnsembleStat] = {}
-    for t in times:
-        for rid in run_ids:
-            span = spans.get(rid)
-            if span is None or not span[0] <= t <= span[1] or rid not in series:
-                continue
-            best = _nearest(series[rid], stamps[rid], t)
-            if abs(best.valid_time - t) <= gap:
-                result[t] = best
-                break
-    return result

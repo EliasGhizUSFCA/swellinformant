@@ -1,4 +1,4 @@
-"""sync_runs (foundation F2) and the published-sync queries (F3, published.py)."""
+"""sync_runs and the published-sync queries (published.py)."""
 
 from __future__ import annotations
 

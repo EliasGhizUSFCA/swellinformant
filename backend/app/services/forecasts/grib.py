@@ -104,10 +104,6 @@ class IndexEntry:
     def key(self) -> str:
         return f"{self.variable}:{self.level}"
 
-    def range_header(self) -> str:
-        end = "" if self.length is None else str(self.offset + self.length - 1)
-        return f"bytes={self.offset}-{end}"
-
 
 def parse_ncep_idx(text: str) -> list[IndexEntry]:
     """Records of an NCEP ``.idx``; lines that are not records are skipped.
@@ -168,6 +164,29 @@ def select_entries(entries: Iterable[IndexEntry], keys: Iterable[str]) -> dict[s
 
 
 # --------------------------------------------------------------------------- fetching
+def head_published(
+    client: httpx.Client,
+    url: str,
+    provider: str,
+    *,
+    attempts: int = 3,
+    backoff_seconds: float = 1.0,
+    what: str = "",
+) -> bool:
+    """HEAD probe: True for 200, False for 403/404 (S3 answers 403 for some missing keys).
+
+    Any other status raises, and network failures raise instead of meaning "not yet";
+    ``what`` goes before the URL in the error (ECMWF's "HEAD ")."""
+    response = request_with_retries(
+        client, "HEAD", url, provider=provider, attempts=attempts, backoff_seconds=backoff_seconds
+    )
+    if response.status_code == 200:
+        return True
+    if response.status_code in (403, 404):
+        return False
+    raise PermanentProviderError(f"{provider}: HTTP {response.status_code} for {what}{url}")
+
+
 class GribFetcher:
     """Fetches index files and byte ranges with retries, backoff and request counting."""
 
@@ -176,13 +195,11 @@ class GribFetcher:
         client: httpx.Client,
         provider: str,
         *,
-        quota: int | None = None,
         attempts: int = 4,
         backoff_seconds: float = 1.0,
     ) -> None:
         self.client = client
         self.provider = provider
-        self.quota = quota
         self.attempts = attempts
         self.backoff_seconds = backoff_seconds
         self.request_count = 0
@@ -202,7 +219,6 @@ class GribFetcher:
             "GET",
             url,
             provider=self.provider,
-            quota=self.quota,
             attempts=self.attempts,
             backoff_seconds=self.backoff_seconds,
             headers=headers or {},
@@ -215,21 +231,6 @@ class GribFetcher:
             raise PermanentProviderError(f"{self.provider}: HTTP {response.status_code} for {url}")
         self.bytes_downloaded += len(response.content)
         return response
-
-    def exists(self, url: str) -> bool:
-        self.request_count += 1
-        try:
-            response = request_with_retries(
-                self.client,
-                "HEAD",
-                url,
-                provider=self.provider,
-                attempts=self.attempts,
-                backoff_seconds=self.backoff_seconds,
-            )
-        except ProviderError:
-            return False
-        return response.status_code == 200
 
     def text(self, url: str) -> str:
         return self._get(url).text
@@ -289,7 +290,6 @@ class GridField:
     step_hours: float | None = None
     data_date: int | None = None
     data_time: int | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
 
     @property
     def shape(self) -> tuple[int, int]:

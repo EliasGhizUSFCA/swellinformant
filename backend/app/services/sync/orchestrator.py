@@ -1,4 +1,4 @@
-"""One coordinated sync (interface F7; docs/sync.md).
+"""One coordinated sync (docs/sync.md).
 
 :func:`run_sync` takes the lease (a ``sync_runs`` row with status running; the unique
 partial index ``uq_sync_runs_running`` allows one), runs the :data:`STAGES` in order through
@@ -61,15 +61,17 @@ from app.core.logging import redact
 from app.jobs.registry import job_spec
 from app.jobs.runner import cpu_seconds, run_job
 from app.models import BackgroundJobLog, ForecastRun, ForecastSource
-from app.models.enums import ForecastRunStatus, JobStatus
+from app.models.enums import JobStatus
 from app.models.sync import SyncRun
 from app.services.sync import state
 from app.services.sync.detect import (
     BLEND_CODE,
+    USABLE,
     apply_result,
     empty_known,
     plan_sync,
     refresh_known,
+    valid_lease,
 )
 from app.services.sync.types import (
     STAGE_JOB_NAMES,
@@ -96,7 +98,6 @@ logger = logging.getLogger(__name__)
 LEASE_INDEX = "uq_sync_runs_running"
 ACQUISITION_STAGES: tuple[StageName, ...] = ("spots", "ensemble", "map")
 AFTER_PUBLISH: tuple[StageName, ...] = ("detect", "match", "flights", "alerts", "deliver")
-USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
 # Stage details stored in sync_runs.stages are compacted (lists, strings).
 DETAIL_LIST_MAX = 20
 DETAIL_TEXT_MAX = 300
@@ -267,13 +268,6 @@ class _LeaseKeeper:
                 logger.warning("Sync %s lost its lease", self.lease.row_id)
                 return
             self.extended += 1
-
-
-def _valid_lease(db: Session) -> SyncRun | None:
-    row = db.scalar(select(SyncRun).where(SyncRun.status == "running").limit(1))
-    if row is None or row.lease_expires_at is None or row.lease_expires_at <= utcnow():
-        return None
-    return row
 
 
 def _unpublished(db: Session) -> set[str]:
@@ -688,7 +682,7 @@ def run_sync(
     settings = get_settings()
     if plan is None:
         with SessionLocal() as db:
-            running = _valid_lease(db)
+            running = valid_lease(db)
             if running is not None:
                 raise SyncBusy(running.holder, running.lease_expires_at)
             plan = plan_sync(db, settings=settings, now=now, known=state.read_known(), force=force)

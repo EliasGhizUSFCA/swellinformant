@@ -22,11 +22,13 @@ from app.services.forecasts.fields import (
     QUANTISATION,
     EncodedField,
     FieldSink,
+    MaskSums,
     TargetGrid,
     complete_times,
     decode_bytes,
     encode_field,
     regrid_mean,
+    regrid_variable,
     summarise,
 )
 from app.services.forecasts.noaa import forecast_hours
@@ -192,6 +194,34 @@ def test_non_global_source_only_fills_the_boxes_it_overlaps() -> None:
 def test_factor_converts_units_after_averaging() -> None:
     src = gfs_like(101325.0)
     assert np.allclose(regrid_mean(src, T, factor=0.01), 1013.25)
+
+
+def test_mask_sums_reuse_a_mask_and_give_the_same_grids() -> None:
+    def with_land(fill: float) -> Src:
+        src = gfs_like(fill)
+        src.values[100:200, 300:400] = np.nan  # the same land patch in every field
+        return src
+
+    sums = MaskSums(kept=2)
+    for fill in (2.0, 3.0):  # different values, one valid mask: summed once
+        src = with_land(fill)
+        assert np.array_equal(
+            regrid_mean(src, T, mask_sums=sums), regrid_mean(src, T), equal_nan=True
+        )
+    assert len(sums._sums) == 1
+    # A partition's box area (a second mask) and its mixing guard give the same grid too.
+    sea = ~np.isnan(with_land(1.0).values)
+    sea[:, :720] = False
+    swell = with_land(1.5)
+    assert np.array_equal(
+        regrid_variable("swell1_hs", swell, T, area=sea, mask_sums=sums),
+        regrid_variable("swell1_hs", swell, T, area=sea),
+        equal_nan=True,
+    )
+    assert len(sums._sums) == 2
+    regrid_mean(gfs_like(1.0), T, mask_sums=sums)  # a third mask: the oldest one goes
+    assert len(sums._sums) == 2
+    assert not any(a.flags.writeable for a in sums._sums.values())
 
 
 # --------------------------------------------------------------------------- quantisation

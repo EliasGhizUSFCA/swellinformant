@@ -1,4 +1,4 @@
-"""Sync contracts (foundation F3): types, the Redis state helpers and their failure mode.
+"""Sync contracts: types, the Redis state helpers and their failure mode.
 
 Redis: fakeredis when it is installed, else the session's TEST_REDIS_URL Redis (the keys
 used here are deleted before and after each test).
