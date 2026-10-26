@@ -9,7 +9,7 @@ import { availableSystems, hasPartitions, useFieldIndex } from "@/hooks/map-fiel
 import type { Units } from "@/lib/format";
 import { WIND_UNITS, type WindUnit } from "@/lib/map-layers";
 import type { Basemap, MapSettings } from "@/lib/map-settings";
-import { FAMILY_STYLES, type WaveSystem } from "@/lib/map-waves";
+import { FAMILY_STYLES, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
 import { cn } from "@/lib/utils";
 import type { SpotSummary } from "@/types/api";
 
@@ -17,11 +17,9 @@ import { CrestSwatch } from "./legend-drawer";
 import { ACTIVE_PILL, DARK_TOKENS, FOCUS, GLASS } from "./map-ui";
 import { FilterControls, type Filters } from "./spot-filters";
 
-const CHOOSER: WaveSystem[] = ["primary", "secondary", "windsea", "combined"];
-
 /** The next system choice after pressing `system`: the partitions combine freely (at least one
  * stays on); the combined sea is an alternative to them. */
-export function toggleSystem(chosen: readonly WaveSystem[], system: WaveSystem): WaveSystem[] {
+function toggleSystem(chosen: readonly WaveSystem[], system: WaveSystem): WaveSystem[] {
   if (system === "combined") return ["combined"];
   const partitions = chosen.filter((s) => s !== "combined");
   if (!partitions.includes(system)) return [...partitions, system];
@@ -45,7 +43,7 @@ function WaveSystemChooser({ settings, onChange }: { settings: MapSettings; onCh
         <span className="block text-xs text-white/60">Short dashes are wave crests moving with the waves; each system has its own dash shape.</span>
       </legend>
       <div className="flex flex-wrap gap-1.5">
-        {CHOOSER.map((system) => {
+        {WAVE_SYSTEMS.map((system) => {
           const ok = available.has(system);
           const on = ok && settings.waveSystems.includes(system);
           return (
@@ -70,9 +68,9 @@ function WaveSystemChooser({ settings, onChange }: { settings: MapSettings; onCh
           );
         })}
       </div>
-      {CHOOSER.some((s) => !available.has(s)) && (
+      {WAVE_SYSTEMS.some((s) => !available.has(s)) && (
         <p className="text-xs text-white/55">
-          Not available for this model run: {CHOOSER.filter((s) => !available.has(s)).map((s) => FAMILY_STYLES[s].label).join(", ")}.
+          Not available for this model run: {WAVE_SYSTEMS.filter((s) => !available.has(s)).map((s) => FAMILY_STYLES[s].label).join(", ")}.
         </p>
       )}
     </fieldset>

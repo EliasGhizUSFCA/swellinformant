@@ -14,7 +14,6 @@ import { isLayerId, type LayerId } from "@/lib/map-layers";
 import { isWindUnit, storedWindUnit, writeWindUnit, type WindUnit } from "@/lib/units";
 import { isWaveSystem, type WaveSystem } from "@/lib/map-waves";
 
-export type { WaveSystem } from "@/lib/map-waves";
 export type Basemap = "dark" | "streets";
 
 export interface MapSettings {

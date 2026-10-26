@@ -13,7 +13,7 @@ import { useMap, useMapEvents } from "react-leaflet";
 
 import { publishMapFlowStatus, type FieldSet } from "@/hooks/map-fields";
 import { buildLut, type LayerScale } from "@/lib/map-colors";
-import { directionFromUV, sampleDirection, sampleGrid, waveEnergyGrid, windSpeedGrid, type FieldGrid, type Grid } from "@/lib/map-fields";
+import { directionFromUV, sampleDirection, sampleGrid, waveEnergyGrid, type FieldGrid, type Grid } from "@/lib/map-fields";
 import type { LayerId, PartitionSample, PointSample } from "@/lib/map-layers";
 import { fieldPositionAt, renderField, type FieldPaint } from "@/lib/map-render";
 import type { Basemap, MapSettings } from "@/lib/map-settings";
@@ -44,17 +44,14 @@ export type ParticleMode = "animated" | "static" | "off";
 // ask for the same grid, which is computed once.
 const derived = new WeakMap<FieldSet, Map<LayerId, FieldGrid | null>>();
 
-/** The colour-layer grid for a layer, derived from the downloaded fields (wind: node speeds). */
-export function layerGrid(layer: LayerId, f: FieldSet | null): FieldGrid | null {
+/** The colour-layer grid for a scalar layer, derived from the downloaded fields (null for wind). */
+function layerGrid(layer: LayerId, f: FieldSet | null): FieldGrid | null {
   if (!f) return null;
   if (layer === "hs") return f.hs ?? null;
   if (layer === "tp") return f.tp ?? null;
   let cache = derived.get(f);
   if (!cache) derived.set(f, (cache = new Map()));
-  if (!cache.has(layer)) {
-    if (layer === "energy") cache.set(layer, f.hs && f.tp ? waveEnergyGrid(f.hs, f.tp) : null);
-    else cache.set(layer, f.wind_u && f.wind_v ? windSpeedGrid(f.wind_u, f.wind_v) : null);
-  }
+  if (!cache.has(layer)) cache.set(layer, layer === "energy" && f.hs && f.tp ? waveEnergyGrid(f.hs, f.tp) : null);
   return cache.get(layer) ?? null;
 }
 
@@ -93,14 +90,14 @@ export function waveFamilies(layer: LayerId, f: FieldSet | null, chosen: readonl
  */
 export function fieldSampler(layer: LayerId, fields: FieldSet | null, pressure: FieldGrid | null): ((lat: number, lon: number) => PointSample) | null {
   if (!fields && !pressure) return null;
-  const grid = layerGrid(layer, fields);
+  const energy = layer === "energy" ? layerGrid(layer, fields) : null;
   const systems = systemsIn(fields);
   return (lat: number, lon: number): PointSample => {
     const s: PointSample = {};
     if (fields?.hs) s.hs = sampleGrid(fields.hs, lat, lon);
     if (fields?.tp) s.tp = sampleGrid(fields.tp, lat, lon);
     if (fields?.wave_dir) s.waveDir = sampleDirection(fields.wave_dir, lat, lon);
-    if (grid && layer === "energy") s.energy = sampleGrid(grid, lat, lon);
+    if (energy) s.energy = sampleGrid(energy, lat, lon);
     if (fields?.wind_u && fields?.wind_v) {
       const u = sampleGrid(fields.wind_u, lat, lon);
       const v = sampleGrid(fields.wind_v, lat, lon);
@@ -265,7 +262,6 @@ function ParticleCanvas({ flow, mode, overlay }: { flow: Flow | null; mode: Part
         canvas.dataset.mode = modeRef.current;
         canvas.dataset.colorType = colorType;
         canvas.dataset.trails = trails;
-        publishMapFlowStatus({ windMode: modeRef.current, trailMode: trails });
         if (modeRef.current === "animated") animator.start(ctx, view, trails);
         else if (modeRef.current === "static") canvas.dataset.arrows = String(animator.drawArrows(ctx, view));
       },
@@ -287,7 +283,6 @@ function ParticleCanvas({ flow, mode, overlay }: { flow: Flow | null; mode: Part
       animator.stop();
       l.remove();
       layerRef.current = null;
-      publishMapFlowStatus({ windMode: "off", trailMode: null });
     };
   }, [map, animator]);
 
@@ -532,8 +527,8 @@ export function MapDataLayers(props: MapDataLayersProps) {
   const waveMode: WaveMode = particles;
 
   useEffect(() => {
-    publishMapFlowStatus({ systems: families.map((f) => f.system), waveMode: families.length ? waveMode : "off", validTime: props.fieldsAt ?? null });
-  }, [families, waveMode, props.fieldsAt]);
+    publishMapFlowStatus({ systems: families.map((f) => f.system), validTime: props.fieldsAt ?? null });
+  }, [families, props.fieldsAt]);
 
   return (
     <>

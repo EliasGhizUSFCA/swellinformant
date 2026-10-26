@@ -20,7 +20,7 @@ const UNAVAILABLE: FieldIndex = {
   stale: false,
 };
 
-export const FIELD_INDEX_KEY = ["map-fields-index"] as const;
+const FIELD_INDEX_KEY = ["map-fields-index"] as const;
 /** The index is re-read this often while the map is open (a new model run every 6-12 h). */
 export const FIELD_INDEX_REFETCH_MS = 5 * 60_000;
 /** After a field mismatch the index is re-read at most this often (no request loop). */
@@ -55,7 +55,6 @@ export type FieldSet = Partial<Record<FieldVariableName, FieldGrid>>;
 interface Loaded {
   key: string;
   at: string;
-  run: string | null;
   grids: FieldSet;
 }
 
@@ -70,7 +69,7 @@ interface Loaded {
  * not drawn. A field the server answers for another valid time or run (or no longer has)
  * is rejected, and `onMismatch` runs so the caller can re-read the field index.
  */
-export function useFieldGrids(
+function useFieldGrids(
   variables: FieldVariableName[],
   at: string | null,
   prefetch: string[] = [],
@@ -111,7 +110,7 @@ export function useFieldGrids(
       ([pairs, more]) => {
         if (cancelled) return;
         const grids = Object.fromEntries([...pairs, ...more.filter((p): p is NonNullable<typeof p> => !!p)]) as FieldSet;
-        setLoaded({ key, at, run, grids });
+        setLoaded({ key, at, grids });
         setFailed(null);
       },
       (e: unknown) => {
@@ -136,11 +135,10 @@ export function useFieldGrids(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shown, key, prefetchKey]);
 
-  if (!key) return { grids: null, at: null, run: null, loading: false, error: null };
+  if (!key) return { grids: null, at: null, loading: false, error: null };
   return {
     grids: loaded?.grids ?? null,
     at: loaded?.at ?? null,
-    run: loaded?.run ?? null,
     loading: loaded?.key !== key && failed?.key !== key,
     error: failed?.key === key ? failed.message : null,
   };
@@ -153,9 +151,8 @@ export interface MapLayerFields {
   pressure: FieldGrid | null;
   loading: boolean;
   error: string | null;
-  /** Valid time and model run of the fields on screen (the previous step's while the next loads). */
+  /** Valid time of the fields on screen (the previous step's while the next loads). */
   servedValidTime: string | null;
-  servedRunKey: string | null;
 }
 
 /** Wave systems the index offers: "combined" when hs/tp/wave_dir exist, partitions when listed. */
@@ -237,7 +234,6 @@ export function useMapLayerFields({ settings, at, index }: { settings: MapSettin
     loading: layerFields.loading,
     error: layerFields.error,
     servedValidTime: layerFields.at,
-    servedRunKey: layerFields.run,
   };
 }
 
@@ -253,22 +249,18 @@ export const useCityAirports = (enabled: boolean) =>
 // --- what the map canvases show, for the legend --------------------------------------------
 
 /** State of the map's flow layers, published by the canvases (map-canvas-layers) for the
- * legend and settings, which live outside the Leaflet map. */
+ * legend, which lives outside the Leaflet map. */
 export interface MapFlowStatus {
   /** Leaflet zoom and the latitude of the view centre (the stated crest exaggeration). */
   zoom: number;
   centreLat: number;
   /** Wave systems drawn as crests ([] on the Wind layer or without wave data). */
   systems: WaveSystem[];
-  waveMode: "animated" | "static" | "off";
-  windMode: "animated" | "static" | "off";
-  /** "fade" (half-float canvas) or "explicit" (8-bit canvas) wind trails. */
-  trailMode: "fade" | "explicit" | null;
   /** Valid time of the fields on screen. */
   validTime: string | null;
 }
 
-const INITIAL_STATUS: MapFlowStatus = { zoom: 2, centreLat: 15, systems: [], waveMode: "off", windMode: "off", trailMode: null, validTime: null };
+const INITIAL_STATUS: MapFlowStatus = { zoom: 2, centreLat: 15, systems: [], validTime: null };
 let flowStatus = INITIAL_STATUS;
 const flowListeners = new Set<() => void>();
 

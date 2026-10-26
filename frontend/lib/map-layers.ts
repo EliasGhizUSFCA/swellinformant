@@ -120,11 +120,11 @@ export function fromDisplay(id: LayerId, value: number, u: DisplayUnits): number
   return value;
 }
 
-/** "2.4 m", "8 ft", "36 km/h", "22 mph", "3.9 m/s", "12 s", "45 kW/m" (or "—"). */
 /** The largest period a field can carry: periods are stored in 0.1 s steps up to byte 254
  * (backend services/forecasts/fields.py), so a longer period arrives as exactly this. */
-export const PERIOD_CEILING_S = 25.4;
+const PERIOD_CEILING_S = 25.4;
 
+/** "2.4 m", "8 ft", "36 km/h", "22 mph", "3.9 m/s", "12 s", "45 kW/m" (or "—"). */
 export function formatLayerValue(id: LayerId, value: number, u: DisplayUnits): string {
   if (!Number.isFinite(value)) return "—";
   // A clamped period is a lower bound ("25.4 s or more"), never an exact 25 s.
@@ -149,8 +149,8 @@ export interface LegendTick {
 }
 
 /** Wave-height legend ticks: in metres where the colour ramp has its anchors, in feet every 5 ft. */
-export const HEIGHT_TICKS_M = [0, 1, 2, 3, 4, 6, 8, 10];
-export const HEIGHT_TICKS_FT = [0, 5, 10, 15, 20, 25, 30];
+const HEIGHT_TICKS_M = [0, 1, 2, 3, 4, 6, 8, 10];
+const HEIGHT_TICKS_FT = [0, 5, 10, 15, 20, 25, 30];
 
 /** Legend ticks in the user's units, positioned on the (possibly non-linear) scale. */
 export function legendTicks(id: LayerId, scale: LayerScale, u: DisplayUnits, maxTicks = 7): LegendTick[] {
@@ -200,7 +200,7 @@ export interface PointSample {
 const fromText = (deg: number | undefined) => (deg != null && Number.isFinite(deg) ? `from ${compass(deg)}` : null);
 
 /** "Primary 1.9 m 14 s from S (195°)" (null when the system has no height here). */
-export function partitionText(p: PartitionSample, u: DisplayUnits): string | null {
+function partitionText(p: PartitionSample, u: DisplayUnits): string | null {
   if (!Number.isFinite(p.hs)) return null;
   const parts = [FAMILY_STYLES[p.system].short, formatLayerValue("hs", p.hs, u)];
   if (Number.isFinite(p.tp)) parts.push(formatLayerValue("tp", p.tp, u));

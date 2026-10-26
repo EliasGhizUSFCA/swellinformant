@@ -170,7 +170,8 @@ export function FlyToSpot({
   return null;
 }
 
-const TILES = tileConfig(
+/** The street tiles of both world maps (lib/map-tiles). */
+export const TILES = tileConfig(
   process.env.NEXT_PUBLIC_MAP_TILE_URL,
   process.env.NEXT_PUBLIC_MAP_ATTRIBUTION,
   process.env.NEXT_PUBLIC_CARTO_API_KEY,
@@ -179,6 +180,30 @@ const TILES = tileConfig(
 // CARTO key cannot be detected here: CARTO returns HTTP 200 "API KEY REQUIRED" images.
 const FAILED_TILES_BEFORE_NOTICE = 4;
 
+/** The street tile layer; `onFailed(true)` once FAILED_TILES_BEFORE_NOTICE tiles failed before any loaded. */
+export function TileErrors({ onFailed }: { onFailed: (failed: boolean) => void }) {
+  const counts = useRef({ loaded: 0, failed: 0 });
+  return (
+    <TileLayer
+      url={TILES.url}
+      attribution={TILES.attribution}
+      maxZoom={TILES.maxZoom}
+      // OpenStreetMap's tile policy requires a Referer; keep it explicit per request.
+      referrerPolicy="strict-origin-when-cross-origin"
+      eventHandlers={{
+        tileload: () => {
+          counts.current.loaded += 1;
+          onFailed(false);
+        },
+        tileerror: () => {
+          counts.current.failed += 1;
+          if (counts.current.loaded === 0 && counts.current.failed >= FAILED_TILES_BEFORE_NOTICE) onFailed(true);
+        },
+      }}
+    />
+  );
+}
+
 const MiniMarker = memo(function MiniMarker({
   spot,
   lng,
@@ -186,7 +211,6 @@ const MiniMarker = memo(function MiniMarker({
   tooltip,
   selected,
   emphasised,
-  onSelect,
 }: {
   spot: SpotSummary;
   lng: number;
@@ -194,7 +218,6 @@ const MiniMarker = memo(function MiniMarker({
   tooltip: string;
   selected: boolean;
   emphasised: boolean;
-  onSelect?: (slug: string) => void;
 }) {
   const center = useMemo<[number, number]>(() => [spot.latitude, lng], [spot.latitude, lng]);
   const fill = colorForScore(score);
@@ -203,7 +226,6 @@ const MiniMarker = memo(function MiniMarker({
     [selected, fill],
   );
   const slug = spot.slug;
-  const eventHandlers = useMemo(() => ({ click: () => onSelect?.(slug) }), [onSelect, slug]);
   return (
     <CircleMarker
       center={center}
@@ -211,7 +233,6 @@ const MiniMarker = memo(function MiniMarker({
       pathOptions={pathOptions}
       // Set at creation (Leaflet ignores className changes in later setStyle calls).
       className={`spot-marker spot-${slug}`}
-      eventHandlers={eventHandlers}
     >
       <Tooltip direction="top" offset={[0, -6]}>
         <strong>{spot.name}</strong>
@@ -223,28 +244,21 @@ const MiniMarker = memo(function MiniMarker({
 });
 
 /**
- * World map of monitored spots. Marker colour = our predicted quality at the selected
- * forecast time when ``markers`` is given, otherwise the best quality in the next 7 days.
+ * World map of monitored spots (the spot page's mini map). Marker colour = the best quality
+ * in the next 7 days.
  */
 export default function SurfMap({
   spots,
   selected,
-  onSelect,
-  markers,
-  height = "100%",
   zoom = 2,
   center = [15, 10] as [number, number],
 }: {
   spots: SpotSummary[];
   selected?: string | null;
-  onSelect?: (slug: string) => void;
-  markers?: Record<string, MarkerState>;
-  height?: string;
   zoom?: number;
   center?: [number, number];
 }) {
   const selectedSpot = spots.find((s) => s.slug === selected);
-  const tileCounts = useRef({ loaded: 0, failed: 0 });
   const [tilesFailed, setTilesFailed] = useState(false);
   const lons = useMemo(() => spots.map((s) => s.longitude), [spots]);
   const { centreLng, onMove, onRecentre } = useWrapCentre(lons, center[1]);
@@ -254,7 +268,7 @@ export default function SurfMap({
     <div
       role="region"
       aria-label="Map of monitored surf spots"
-      style={{ height, width: "100%", position: "relative", isolation: "isolate" }}
+      style={{ height: "100%", width: "100%", position: "relative", isolation: "isolate" }}
     >
       <MapContainer
         center={center}
@@ -264,44 +278,18 @@ export default function SurfMap({
         scrollWheelZoom
         style={{ height: "100%", width: "100%", borderRadius: "1rem" }}
       >
-        <TileLayer
-          url={TILES.url}
-          attribution={TILES.attribution}
-          maxZoom={TILES.maxZoom}
-          // OpenStreetMap's tile policy requires a Referer; keep it explicit per request.
-          referrerPolicy="strict-origin-when-cross-origin"
-          eventHandlers={{
-            tileload: () => {
-              tileCounts.current.loaded += 1;
-              setTilesFailed(false);
-            },
-            tileerror: () => {
-              tileCounts.current.failed += 1;
-              if (tileCounts.current.loaded === 0 && tileCounts.current.failed >= FAILED_TILES_BEFORE_NOTICE) {
-                setTilesFailed(true);
-              }
-            },
-          }}
-        />
+        <TileErrors onFailed={setTilesFailed} />
         {spots.map((s) => {
-          const m = markers?.[s.slug];
-          const score = markers ? (m?.score ?? null) : (s.best_upcoming?.score ?? s.current?.score ?? null);
+          const score = s.best_upcoming?.score ?? s.current?.score ?? null;
           return (
             <MiniMarker
               key={s.slug}
               spot={s}
               lng={nearestCopy(s.longitude, centreLng)}
               score={score}
-              tooltip={
-                markers
-                  ? (m?.tooltip ?? "No usable forecast")
-                  : score != null
-                    ? `Best next 7 days: ${score10(score)}/10`
-                    : "No usable forecast yet"
-              }
+              tooltip={score != null ? `Best next 7 days: ${score10(score)}/10` : "No usable forecast yet"}
               selected={s.slug === selected}
-              emphasised={markers ? !!m?.highlight : !!s.next_event}
-              onSelect={onSelect}
+              emphasised={!!s.next_event}
             />
           );
         })}

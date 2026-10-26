@@ -1,7 +1,8 @@
 /**
- * Geometry for the dark vector basemap and the isobars: Web Mercator maths (the projection
- * Leaflet uses, EPSG:3857 with 256 px tiles), Natural Earth rings prepared for fast canvas
- * drawing, country label positions, greedy label collision and pressure contours.
+ * Geometry for the dark vector basemap and the isobars: Web Mercator maths (lib/map-mercator,
+ * re-exported here; the projection Leaflet uses, EPSG:3857 with 256 px tiles), Natural Earth
+ * rings prepared for fast canvas drawing, country label positions, greedy label collision and
+ * pressure contours.
  *
  * "Mercator units" below are x, y in 0..1 across the whole world (x east from -180°, y south
  * from the top at ~85.05°N); pixel = unit * 256 * 2^zoom.
@@ -11,17 +12,9 @@ import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
 
 import type { Grid } from "@/lib/map-fields";
 import { wrapsLongitude } from "@/lib/map-fields";
+import { mercLat, mercLon, mercX, mercY } from "@/lib/map-mercator";
 
-export const MAX_LAT = 85.0511287798;
-const RAD = Math.PI / 180;
-
-export const mercX = (lon: number) => (lon + 180) / 360;
-export function mercY(lat: number): number {
-  const phi = Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)) * RAD;
-  return 0.5 - Math.log(Math.tan(Math.PI / 4 + phi / 2)) / (2 * Math.PI);
-}
-export const mercLon = (x: number) => x * 360 - 180;
-export const mercLat = (y: number) => (2 * Math.atan(Math.exp(Math.PI * (1 - 2 * y))) - Math.PI / 2) / RAD;
+export { MAX_LAT, mercLat, mercLon, mercX, mercY } from "@/lib/map-mercator";
 
 /** What a canvas covers: global pixel of its top-left CSS pixel, size, world width in px. */
 export interface PixelView {
@@ -68,7 +61,7 @@ export interface MercPath {
   maxY: number;
 }
 
-export function toMercPath(coords: Position[]): MercPath {
+function toMercPath(coords: Position[]): MercPath {
   const pts = new Float64Array(coords.length * 2);
   let minX = Infinity;
   let minY = Infinity;

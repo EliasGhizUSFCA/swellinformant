@@ -24,9 +24,8 @@ import type { components } from "@/types/openapi";
  * when storing the served run finished (its forecast run's completed_at).
  */
 export type FieldIndex = components["schemas"]["FieldIndexOut"];
-export type FieldVariable = components["schemas"]["FieldVariableOut"];
 
-export const CORE_FIELD_VARIABLES = ["hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure"] as const;
+const CORE_FIELD_VARIABLES = ["hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure"] as const;
 export const PARTITION_FIELD_VARIABLES = [
   "swell1_hs",
   "swell1_tp",
@@ -83,7 +82,7 @@ export interface FieldGrid extends Grid {
 const NUMERIC_KEYS = ["nx", "ny", "lat0", "lon0", "dlat", "dlon", "scale", "offset"] as const;
 
 /** Largest grid accepted (a global 0.1° grid has 6.5 M cells); guards the browser's memory. */
-export const MAX_FIELD_CELLS = 16_000_000;
+const MAX_FIELD_CELLS = 16_000_000;
 
 /** Parses and validates the X-Field-Meta header. Throws on anything unusable. */
 export function parseFieldMeta(header: string | null): FieldMeta {
@@ -194,7 +193,7 @@ export function sampleGrid(g: Grid, lat: number, lon: number, minWeight = 0.5): 
 }
 
 /** Smallest angle between two directions, degrees (0..180). */
-export function angleGap(a: number, b: number): number {
+function angleGap(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
 }
@@ -237,7 +236,7 @@ export function sampleDirection(g: Grid, lat: number, lon: number, minWeight = 0
 }
 
 /** A grid with the same geometry (and metadata) and values mapped cell by cell (NaN stays NaN). */
-export function withValues<T extends Grid>(g: T, f: (v: number, k: number) => number): T {
+function withValues<T extends Grid>(g: T, f: (v: number, k: number) => number): T {
   const out = new Float32Array(g.values.length);
   for (let k = 0; k < out.length; k++) {
     const v = g.values[k]!;
@@ -250,12 +249,6 @@ function sameShape(a: Grid, b: Grid): void {
   if (a.nx !== b.nx || a.ny !== b.ny || a.lat0 !== b.lat0 || a.lon0 !== b.lon0 || a.dlat !== b.dlat || a.dlon !== b.dlon) {
     throw new Error("Fields are on different grids");
   }
-}
-
-/** Wind speed |(u, v)| in m/s, cell by cell. */
-export function windSpeedGrid<T extends Grid>(u: T, v: Grid): T {
-  sameShape(u, v);
-  return withValues(u, (uu, k) => Math.hypot(uu, v.values[k]!));
 }
 
 /**
@@ -343,11 +336,7 @@ export const fieldUrl = (variable: string, at: string, run?: string | null) =>
  * date. The field is never shown under the requested time; the caller re-reads the index.
  */
 export class FieldMismatchError extends Error {
-  constructor(
-    message: string,
-    readonly servedValidTime: string | null = null,
-    readonly servedRunKey: string | null = null,
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = "FieldMismatchError";
   }
@@ -358,10 +347,10 @@ export function checkServedMeta(meta: Pick<FieldMeta, "variable" | "valid_time" 
   if (meta.variable !== variable) throw new FieldMismatchError(`Asked for ${variable}, the server sent ${String(meta.variable)}`);
   const served = Date.parse(String(meta.valid_time));
   if (!(served === Date.parse(at))) {
-    throw new FieldMismatchError(`${variable}: asked for ${at}, the server sent ${String(meta.valid_time)}`, String(meta.valid_time), String(meta.run_key));
+    throw new FieldMismatchError(`${variable}: asked for ${at}, the server sent ${String(meta.valid_time)}`);
   }
   if (run && meta.run_key !== run) {
-    throw new FieldMismatchError(`${variable}: asked for run ${run}, the server sent ${String(meta.run_key)}`, String(meta.valid_time), String(meta.run_key));
+    throw new FieldMismatchError(`${variable}: asked for run ${run}, the server sent ${String(meta.run_key)}`);
   }
 }
 

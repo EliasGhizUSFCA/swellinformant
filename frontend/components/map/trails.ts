@@ -21,7 +21,7 @@ export const HEAD_ALPHA = 0.82;
 /** Trails end here: the fade has reached alpha 0.05 (0.82 x 0.92^33.5). */
 export const TRAIL_MS = 560;
 /** One stored point per particle at most this often (the head point always follows the particle). */
-export const SAMPLE_MS = 32;
+const SAMPLE_MS = 32;
 /** Upper ends of the age buckets, ms; each bucket is stroked at the fade of its mid age. */
 export const AGE_BUCKETS = [60, 140, 250, 390, TRAIL_MS];
 

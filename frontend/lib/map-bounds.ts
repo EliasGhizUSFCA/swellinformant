@@ -13,7 +13,7 @@
  * Zoom: the smallest zoom shows each longitude at most once (the world is at least as wide as
  * the map) and fills the map's height with the band (`minZoomFor`).
  */
-import { mercY } from "@/lib/map-geo";
+import { mercY } from "@/lib/map-mercator";
 
 export const LAT_NORTH = 84;
 export const LAT_SOUTH = -78.5;
@@ -26,7 +26,7 @@ export const MAP_MAX_BOUNDS: [[number, number], [number, number]] = [
 /** Mercator height of the band, in world units (0..1): 0.8347. */
 export const BAND_HEIGHT = mercY(LAT_SOUTH) - mercY(LAT_NORTH);
 /** Leaflet's tile size: a zoom-z world is 256 * 2^z CSS pixels wide. */
-export const WORLD_PX_AT_ZOOM_0 = 256;
+const WORLD_PX_AT_ZOOM_0 = 256;
 /** The view is re-centred on the equivalent longitude in [-180, 180) beyond this. */
 export const RECENTRE_LNG = 540;
 

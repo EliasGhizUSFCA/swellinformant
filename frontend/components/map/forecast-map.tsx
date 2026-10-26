@@ -4,7 +4,7 @@ import "leaflet/dist/leaflet.css";
 
 import { svg, type Map as LeafletMap, type PathOptions } from "leaflet";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap, useMapEvents, ZoomControl } from "react-leaflet";
+import { CircleMarker, MapContainer, Tooltip, useMap, useMapEvents, ZoomControl } from "react-leaflet";
 
 import { minZoomFor, nearestCopy } from "@/lib/map-bounds";
 import type { LayerScale } from "@/lib/map-colors";
@@ -12,17 +12,14 @@ import type { FieldGrid } from "@/lib/map-fields";
 import { mercX, mercY, type IsoLine } from "@/lib/map-geo";
 import { readout, type DisplayUnits, type LayerId, type PointSample } from "@/lib/map-layers";
 import type { MapSettings } from "@/lib/map-settings";
-import { tileConfig } from "@/lib/map-tiles";
 import { colorForScore } from "@/lib/quality";
 import type { FieldSet } from "@/hooks/map-fields";
 import type { SpotSummary } from "@/types/api";
 
 import type { CityLabel, IsobarPath } from "./basemap-draw";
 import { fieldSampler, MapDataLayers, type ParticleMode } from "./map-canvas-layers";
-import { BOUNDED_MAP_OPTIONS, CentreWatcher, flyOrJump, FlyToSpot, MapBounds, useWrapCentre, type MapCover, type MarkerState } from "./surf-map";
+import { BOUNDED_MAP_OPTIONS, CentreWatcher, flyOrJump, FlyToSpot, MapBounds, TileErrors, TILES, useWrapCentre, type MapCover, type MarkerState } from "./surf-map";
 
-const TILES = tileConfig(process.env.NEXT_PUBLIC_MAP_TILE_URL, process.env.NEXT_PUBLIC_MAP_ATTRIBUTION, process.env.NEXT_PUBLIC_CARTO_API_KEY);
-const FAILED_TILES_BEFORE_NOTICE = 4;
 /** The map's sea colour under the dark basemap (and under the layers while they load). */
 export const OCEAN_BACKGROUND = "#151a21";
 
@@ -166,29 +163,6 @@ function Readout({ sample, layer, units }: { sample: ((lat: number, lon: number)
         <div className="font-medium tabular-nums">{r.text}</div>
       </div>
     </>
-  );
-}
-
-function TileErrors({ onFailed }: { onFailed: (failed: boolean) => void }) {
-  const counts = useRef({ loaded: 0, failed: 0 });
-  return (
-    <TileLayer
-      url={TILES.url}
-      attribution={TILES.attribution}
-      maxZoom={TILES.maxZoom}
-      // OpenStreetMap's tile policy requires a Referer; keep it explicit per request.
-      referrerPolicy="strict-origin-when-cross-origin"
-      eventHandlers={{
-        tileload: () => {
-          counts.current.loaded += 1;
-          onFailed(false);
-        },
-        tileerror: () => {
-          counts.current.failed += 1;
-          if (counts.current.loaded === 0 && counts.current.failed >= FAILED_TILES_BEFORE_NOTICE) onFailed(true);
-        },
-      }}
-    />
   );
 }
 

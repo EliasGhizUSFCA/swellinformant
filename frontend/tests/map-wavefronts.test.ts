@@ -1,20 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { systemsIn, waveFamilies } from "@/components/map/map-canvas-layers";
-import { buildLattice, dashBudget, dashCellSize, dashGrid, LATTICE_PX, MAX_CORNER_SPREAD_DEG, type WaveFamilyGrids } from "@/components/map/wavefronts";
+import { buildLattice, dashCellSize, dashGrid, LATTICE_PX, MAX_CORNER_SPREAD_DEG, type WaveFamilyGrids } from "@/components/map/wavefronts";
 import { sampleDirection, type FieldGrid, type Grid } from "@/lib/map-fields";
 import { mercLon } from "@/lib/map-geo";
-import { crestSpacingPx, crestSpeedPxPerS, FAMILY_STYLES } from "@/lib/map-waves";
+import { crestSpacingPx, crestSpeedPxPerS, FAMILY_STYLES, maxDashes } from "@/lib/map-waves";
 
-import { constant, dashesOf, draw, family, globalGrid, installPath2D, orientation, rgbOfQuad, UNBOUNDED, viewAt } from "./map-dash-fixtures";
+import { constant, dashesOf, draw, family, globalGrid, orientation, rgbOfQuad, UNBOUNDED, viewAt } from "./map-dash-fixtures";
 
 // Every grid below is SYNTHETIC test data, not model output. The dash geometry, motion,
 // spacing, masking, budget and reduced-motion checks of D11 are in map-dashes.test.ts.
 
 beforeEach(() => {
-  // jsdom has no 2D canvas (the land and ocean masks are skipped) and no Path2D.
+  // jsdom has no 2D canvas (the land and ocean masks are skipped).
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
-  installPath2D();
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -107,7 +106,7 @@ describe("one crest lattice everywhere", () => {
       }
     }
     // The cells cover the view plus a margin of three crest spacings (how far a dash travels).
-    const g = dashGrid(l, l.families[0]!, a);
+    const g = dashGrid(l.families[0]!, a);
     const xs = g.cells.map((c) => c.ci * g.cell - a.originX);
     expect(Math.min(...xs)).toBeLessThan(-3 * crestSpacingPx(12) + 1);
     expect(Math.max(...xs)).toBeGreaterThan(a.width + 3 * crestSpacingPx(12) - g.cell - 1);
@@ -122,7 +121,7 @@ describe("one crest lattice everywhere", () => {
     const grid = (originX: number, originY: number) => {
       const view = { originX, originY, width: 400, height: 300, worldPx };
       const l = buildLattice(view, [family("combined", 2, 10, 250)]);
-      return dashGrid(l, l.families[0]!, view);
+      return dashGrid(l.families[0]!, view);
     };
     const a = grid(0.3 * worldPx, 0.25 * worldPx);
     const b = grid(0.3 * worldPx + cell, 0.25 * worldPx + 2 ** 21 * cell);
@@ -194,7 +193,7 @@ describe("systems", () => {
   });
 
   it("budgets 8,000 dashes on desktops and 3,000 on phones", () => {
-    expect(dashBudget(1440)).toBe(8000);
-    expect(dashBudget(390)).toBe(3000);
+    expect(maxDashes(1440)).toBe(8000);
+    expect(maxDashes(390)).toBe(3000);
   });
 });

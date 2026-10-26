@@ -7,8 +7,8 @@
  * the scales and every dash constant are in lib/map-waves.ts and docs/map-rendering.md.
  *
  * Per view (after a pan or zoom, or new fields) a screen LATTICE is built every LATTICE_PX
- * on a grid fixed in world pixels: for each system the propagation vector (TOWARD), crest
- * spacing, crest speed, height and a validity flag, plus the tint level of the colour field
+ * on a grid fixed in world pixels: for each system the propagation vector (TOWARD), height
+ * and a validity flag (and the largest crest spacing), plus the tint level of the colour field
  * under each node. A node is invalid without data, below MIN_DRAW_HS_M, where the four grid
  * corners of the direction disagree by more than MAX_CORNER_SPREAD_DEG (a partition swap
  * between cells: no averaged direction is invented), or over land.
@@ -79,21 +79,19 @@ const INV_LATTICE_PX = 1 / LATTICE_PX;
 /** Largest disagreement of the four grid corners of a direction before the node is invalid. */
 export const MAX_CORNER_SPREAD_DEG = 60;
 /** Animation frame interval (30 fps cap: dashes move a few px per second). */
-export const FRAME_INTERVAL_MS = 1000 / 30;
+const FRAME_INTERVAL_MS = 1000 / 30;
 /** Share of the remaining dash budget each system may use, top system first. */
-export const BUDGET_SHARE = 0.6;
+const BUDGET_SHARE = 0.6;
 /** Tint levels: the colour field's scale (0..1) in this many steps, one gradient per level and system. */
 export const TINT_LEVELS = 32;
 /** Lattice tint value of a node without a colour under it. */
 const NO_TINT = 255;
-/** Quads one dash takes (a blob, or a whole split bar: its gap is in its fill). */
-const MAX_DASH_QUADS = 1;
 /** Dashes fainter than this (early or late in their life) are not drawn. */
 const MIN_ALPHA = 0.04;
 /** A dash whose clock is this many lives behind is placed afresh (after a long pause elsewhere). */
 const MAX_CATCH_UP_LIVES = 64;
 /** Hashed places tried in a cell for a new dash before the cell stays empty for a life. */
-export const BIRTH_TRIES = 4;
+const BIRTH_TRIES = 4;
 /** Reference period for the first epoch of a cell without data at its centre, s. */
 const REFERENCE_PERIOD_S = 10;
 
@@ -107,8 +105,6 @@ export interface FamilyLattice {
   /** Propagation unit vector (screen, x east, y down). */
   px: Float32Array;
   py: Float32Array;
-  spacing: Float32Array;
-  speed: Float32Array;
   hs: Float32Array;
   valid: Uint8Array;
   /** 1 where all four nodes of the lattice cell (i, j)..(i + 1, j + 1) are valid (index of node (i, j)). */
@@ -179,8 +175,6 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
       grids: f,
       px: new Float32Array(n),
       py: new Float32Array(n),
-      spacing: new Float32Array(n),
-      speed: new Float32Array(n),
       hs: new Float32Array(n),
       valid: new Uint8Array(n),
       cellValid: new Uint8Array(n),
@@ -204,8 +198,6 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
         const s = crestSpacingPx(tp, mpp[j]);
         fl.px[k] = -Math.sin(from * RAD);
         fl.py[k] = Math.cos(from * RAD);
-        fl.spacing[k] = s;
-        fl.speed[k] = crestSpeedPxPerS(tp, s);
         fl.hs[k] = hs;
         fl.valid[k] = 1;
         fl.validCount++;
@@ -348,7 +340,7 @@ const gridCache = new WeakMap<FamilyLattice, DashGrid>();
  * (how far a dash travels in its life), so dashes born just outside the view drift into it.
  * Cached per lattice.
  */
-export function dashGrid(l: Lattice, f: FamilyLattice, view: PixelView): DashGrid {
+export function dashGrid(f: FamilyLattice, view: PixelView): DashGrid {
   const hit = gridCache.get(f);
   if (hit) return hit;
   const cell = dashCellSize(f.style, view);
@@ -531,7 +523,7 @@ const PER_SYSTEM = TINT_LEVELS + 1;
  * 0.039), so a batch sets it once: one canvas call fewer per dash. A step is about 6 grey
  * levels of the tint, finer than the life fade moves in two frames.
  */
-export const ALPHA_LEVELS = 24;
+const ALPHA_LEVELS = 24;
 export const ALPHA_STEP = DASH_ALPHA_MAX / (ALPHA_LEVELS - 1);
 /** The opacity a dash of opacity `alpha` is drawn at (rounded to its level). */
 export const drawnAlpha = (alpha: number): number => Math.round(alpha / ALPHA_STEP) * ALPHA_STEP;
@@ -652,7 +644,9 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   const state = o.still || !o.state ? new DashState() : o.state;
   state.frame++;
   const t = o.still ? 0 : o.t;
-  const maxQuads = o.maxQuads ?? MAX_FRAME_QUADS;
+  // One quad per dash (a blob, or a whole split bar: its gap is in its fill), so the quad
+  // budget is a cap on the dashes too.
+  const budget = Math.min(o.budget, o.maxQuads ?? MAX_FRAME_QUADS);
   const skipIdle = o.skipIdle ?? true;
   const stats: FrameStats = { crests: 0, quads: 0, vertices: 0, strokes: 0, cells: 0, arrows: 0, trails: 0, families: [] };
   let maxKey = -1;
@@ -667,16 +661,12 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   order.reverse().forEach(({ f, sys }, rank) => {
     const style = f.style;
     const blob = style.shape === "blob";
-    const { cell, cells } = dashGrid(l, f, view);
+    const { cell, cells } = dashGrid(f, view);
     const store = state.store(f.system, l.zoom, cell);
     const last = rank === order.length - 1;
-    const left = o.budget - stats.crests;
+    const left = budget - stats.crests;
     const cap = stats.crests + (last ? left : Math.floor(left * BUDGET_SHARE));
     const before = stats.crests;
-    // The quad budget is shared the same way.
-    const qLeft = maxQuads - stats.quads;
-    const qCap = stats.quads + (last ? qLeft : Math.floor(qLeft * BUDGET_SHARE));
-    const qBefore = stats.quads;
     const arrowsOn = o.still && (f.system === "primary" || f.system === "combined");
     const head = BLOB_HEAD_PX * style.depthFactor;
     const reach = DASH_MAX_PX;
@@ -687,7 +677,7 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
     let drawnHere = 0;
     for (const c of cells) {
       if (visited >= f.limit) break;
-      if (stats.crests >= cap || stats.quads + MAX_DASH_QUADS > qCap) {
+      if (stats.crests >= cap) {
         hit = true;
         break;
       }
@@ -744,8 +734,12 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
         // at its back corners too (else only its head is drawn, if that is).
         const full = blobDepth(hs, f.system, d.v, d.s);
         let depth = o.still ? full : Math.min(full, head + d.v * (t - d.tb));
-        if (depth > head && (!nodesValid(l, f, cx - px * depth - ex, cy - py * depth - ey) || !nodesValid(l, f, cx - px * depth + ex, cy - py * depth + ey))) depth = Math.min(depth, head);
-        if (!nodesValid(l, f, cx - px * depth - ex, cy - py * depth - ey) || !nodesValid(l, f, cx - px * depth + ex, cy - py * depth + ey)) continue;
+        let back = nodesValid(l, f, cx - px * depth - ex, cy - py * depth - ey) && nodesValid(l, f, cx - px * depth + ex, cy - py * depth + ey);
+        if (!back && depth > head) {
+          depth = head;
+          back = nodesValid(l, f, cx - px * depth - ex, cy - py * depth - ey) && nodesValid(l, f, cx - px * depth + ex, cy - py * depth + ey);
+        }
+        if (!back) continue;
         // Unit rectangle x in [-0.5, 0.5] (along the crest), y in [0, 1] (back against the travel).
         q[n] = tx * length;
         q[n + 1] = ty * length;
@@ -781,10 +775,10 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
       }
     }
     stats.cells += visited;
-    // The cut only shrinks when a budget (dashes or quads) is hit and grows back one cell a
-    // frame while well under both, so a cell at the margin does not flicker.
+    // The cut only shrinks when the budget is hit and grows back one cell a frame while well
+    // under it, so a cell at the margin does not flicker.
     if (hit) f.limit = visited;
-    else if (f.limit < cells.length && stats.crests - before < 0.75 * (cap - before) && stats.quads - qBefore < 0.75 * (qCap - qBefore)) f.limit++;
+    else if (f.limit < cells.length && stats.crests - before < 0.75 * (cap - before)) f.limit++;
   });
 
   // Per system in drawing order (primary last, on top), per tint and opacity level: one fill
@@ -848,11 +842,6 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   return stats;
 }
 
-/** Most dashes per frame for a view (MAX_DASHES on desktops, PHONE_MAX_DASHES under 640 px wide). */
-export function dashBudget(width: number): number {
-  return maxDashes(width);
-}
-
 function canvas2d(width: number, height: number): CanvasRenderingContext2D | null {
   if (typeof document === "undefined") return null;
   const c = document.createElement("canvas");
@@ -867,7 +856,7 @@ function canvas2d(width: number, height: number): CanvasRenderingContext2D | nul
  * land (dark basemap) or the ocean mask (streets) clips them exactly. Null without a 2D
  * canvas (tests).
  */
-export function landAtNodes(view: PixelView, grid: Pick<Lattice, "nx" | "ny" | "x0" | "y0">, land: MercPath[]): Uint8Array | null {
+function landAtNodes(view: PixelView, grid: Pick<Lattice, "nx" | "ny" | "x0" | "y0">, land: MercPath[]): Uint8Array | null {
   const ctx = canvas2d(grid.nx, grid.ny);
   if (!ctx) return null;
   // View px (x0 + i * LATTICE_PX) lands on the centre of pixel i.
@@ -886,7 +875,7 @@ export function landAtNodes(view: PixelView, grid: Pick<Lattice, "nx" | "ny" | "
  * The ocean mask for a view (CSS px): where any system has data (soft-edged from the
  * lattice) AND not Natural Earth land (crisp). Applied each frame with "destination-in".
  */
-export function oceanMask(view: PixelView, l: Lattice, land: MercPath[] | null): HTMLCanvasElement | null {
+function oceanMask(view: PixelView, l: Lattice, land: MercPath[] | null): HTMLCanvasElement | null {
   const ctx = canvas2d(view.width, view.height);
   const small = canvas2d(l.nx, l.ny);
   if (!ctx || !small) return null;
@@ -977,6 +966,8 @@ export class WaveAnimator {
   /** Animation time, ms. */
   private clock = 0;
   private times: number[] = [];
+  /** The same draw times, kept sorted (for the percentiles without a sort per frame). */
+  private sortedTimes: number[] = [];
   private framesDrawn = 0;
   private readonly dashes = new DashState();
   private readonly budget = new QuadBudget();
@@ -1087,7 +1078,7 @@ export class WaveAnimator {
     ctx.clearRect(0, 0, view.width, view.height);
     // (The cap this frame drew under: record() below may change it for the next frame.)
     const quadCap = this.budget.cap;
-    const frame = drawDashes(ctx, view, l, { t: still ? 0 : this.time, still, budget: dashBudget(view.width), maxQuads: quadCap, state: this.dashes });
+    const frame = drawDashes(ctx, view, l, { t: still ? 0 : this.time, still, budget: maxDashes(view.width), maxQuads: quadCap, state: this.dashes });
     if (this.mask) {
       ctx.globalCompositeOperation = "destination-in";
       ctx.drawImage(this.mask, 0, 0, view.width, view.height);
@@ -1098,8 +1089,9 @@ export class WaveAnimator {
     // visit all its cells again (the next frame finds the new cut).
     if (!still && ++this.sinceStart > BUDGET_WARMUP_FRAMES && this.budget.record(ms, frame.quads)) for (const f of l.families) f.limit = Infinity;
     this.times.push(ms);
-    if (this.times.length > 120) this.times.shift();
-    const sorted = [...this.times].sort((a, b) => a - b);
+    const sorted = this.sortedTimes;
+    sorted.splice(lowerBound(sorted, ms), 0, ms);
+    if (this.times.length > 120) sorted.splice(lowerBound(sorted, this.times.shift()!), 1);
     this.framesDrawn++;
     this.stats = { ...frame, quadCap, drawMs: ms, drawMsP50: sorted[Math.floor(sorted.length / 2)]!, drawMsP95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!, latticeMs: l.buildMs, frames: this.framesDrawn };
     this.listener?.(this.stats);
@@ -1108,3 +1100,15 @@ export class WaveAnimator {
 
 /** Longest clock step of one frame (after a stall the dashes do not jump). */
 const MAX_STEP_MS = 100;
+
+/** First index of ascending `sorted` whose value is not below `x` (binary search). */
+function lowerBound(sorted: readonly number[], x: number): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid]! < x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}

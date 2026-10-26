@@ -4,10 +4,10 @@
  * While the zoom changes (animated zoom, flyTo, pinch) the last frame is CSS-scaled like
  * Leaflet's own canvas renderer.
  *
- * Used for the ocean colour field, the particles and the dark vector basemap. Leaflet's
- * L.Canvas renderer was measured at ~165 ms per zoom step for the Natural Earth land and
- * borders with the three world copies the Pacific needs (it reprojects every vertex), so
- * the basemap is drawn here from pre-projected Mercator coordinates instead.
+ * Used for the ocean colour field, the wave crest dashes, the particles and the dark vector
+ * basemap. Leaflet's L.Canvas renderer was measured at ~165 ms per zoom step for the Natural
+ * Earth land and borders with the three world copies the Pacific needs (it reprojects every
+ * vertex), so the basemap is drawn here from pre-projected Mercator coordinates instead.
  */
 import L from "leaflet";
 
@@ -82,23 +82,12 @@ export class CanvasLayer extends L.Layer {
     };
   }
 
-  /** The current view of the canvas (null before the first draw). */
-  get currentView(): PixelView | null {
-    return this.view;
-  }
-
   /** Redraw on the next animation frame (calls within one frame coalesce). */
   redraw(): void {
     cancelAnimationFrame(this.frame);
     this.frame = requestAnimationFrame(() => {
       if (this._map) this.reset(this._map);
     });
-  }
-
-  /** Redraw now, synchronously. */
-  redrawNow(): void {
-    cancelAnimationFrame(this.frame);
-    if (this._map) this.reset(this._map);
   }
 
   private reset(map: L.Map): void {

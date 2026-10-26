@@ -6,7 +6,6 @@ import {
   blobDepth,
   crestSpacingPx,
   crestSpeedPxPerS,
-  crestTangent,
   DASH_CELL_PX,
   dashAlpha,
   dashFade,
@@ -15,13 +14,10 @@ import {
   dashTint,
   dashWidth,
   DRAW_TARGET_MS,
-  drawnHeight,
   effectiveSystems,
-  envelopeSpeedPxPerS,
   exaggeration,
   FAMILY_STYLES,
   formatFactor,
-  groupSpeed,
   MAX_DASHES,
   MAX_FRAME_QUADS,
   MAX_SPACING_PX,
@@ -29,68 +25,22 @@ import {
   MIN_FRAME_QUADS,
   MIN_SPACING_PX,
   PHONE_MAX_DASHES,
-  phaseSpeed,
-  propagation,
   scaleStatement,
   SMEAR_MAX_SHARE,
   SMEAR_SECONDS,
   TIME_SCALE,
   TINT_HEADROOM,
   TINT_LIFT,
-  toward,
   wavelengthM,
   WAVE_SYSTEMS,
   type WaveSystem,
 } from "@/lib/map-waves";
 
-describe("wave directions (nautical degrees FROM -> screen propagation, x east, y down)", () => {
-  it("turns FROM into TOWARD", () => {
-    expect(toward(225)).toBe(45); // a SW swell travels NE
-    expect(toward(0)).toBe(180);
-    expect(toward(360)).toBe(180);
-    expect(toward(90)).toBe(270);
-    expect(toward(NaN)).toBeNaN();
-  });
-
-  it("gives the screen vector of the travel direction", () => {
-    const sw = propagation(225)!;
-    expect(sw[0]).toBeCloseTo(Math.SQRT1_2, 4); // east
-    expect(sw[1]).toBeCloseTo(-Math.SQRT1_2, 4); // north is up the screen
-    const w = propagation(270)!;
-    expect(w[0]).toBeCloseTo(1, 12); // from the west: travels east
-    expect(w[1]).toBeCloseTo(0, 12);
-    const n = propagation(0)!;
-    expect(n[0]).toBeCloseTo(0, 12);
-    expect(n[1]).toBeCloseTo(1, 12); // from the north: travels down the screen
-    expect(propagation(NaN)).toBeNull();
-    expect(propagation(Infinity)).toBeNull();
-    expect(crestTangent(NaN)).toBeNull();
-  });
-
-  it("draws crests perpendicular to the travel direction for every bearing", () => {
-    for (let d = 0; d < 360; d++) {
-      const p = propagation(d)!;
-      const t = crestTangent(d)!;
-      expect(Math.abs(p[0] * t[0] + p[1] * t[1])).toBeLessThan(1e-12);
-      expect(Math.hypot(...t)).toBeCloseTo(1, 12);
-    }
-    // From the west the crests are vertical; from the SW they run NW-SE, along (0.707, 0.707).
-    const w = crestTangent(270)!;
-    expect(Math.abs(w[0])).toBeLessThan(1e-12);
-    expect(Math.abs(w[1])).toBeCloseTo(1, 12);
-    const sw = crestTangent(225)!;
-    expect(sw[0]).toBeCloseTo(Math.SQRT1_2, 6);
-    expect(sw[1]).toBeCloseTo(Math.SQRT1_2, 6);
-  });
-});
-
 describe("deep-water physics and the stated scales", () => {
-  it("uses L = g T^2 / (2 pi), c = L / T and cg = c / 2", () => {
+  it("uses L = g T^2 / (2 pi)", () => {
     // g = 9.80665 m/s^2 (standard gravity)
     expect(wavelengthM(10)).toBeCloseTo(156.1, 1);
     expect(wavelengthM(16)).toBeCloseTo(399.56, 1);
-    expect(phaseSpeed(10)).toBeCloseTo(wavelengthM(10) / 10, 10);
-    expect(groupSpeed(10)).toBeCloseTo(phaseSpeed(10) / 2, 10);
   });
 
   it("spaces crests at 0.12 px per metre of wavelength, clamped to 8..64 px", () => {
@@ -116,11 +66,10 @@ describe("deep-water physics and the stated scales", () => {
       const s = crestSpacingPx(t);
       const v = crestSpeedPxPerS(t, s);
       expect(s / v).toBeCloseTo(t / TIME_SCALE, 10);
-      expect(envelopeSpeedPxPerS(t, s)).toBeCloseTo(v / 2, 10); // group speed: half the crest speed
     }
     expect(TIME_SCALE).toBe(4);
-    // Unclamped, the crest speed is S x c x tau: 7.5 px/s for a 10 s swell.
-    expect(crestSpeedPxPerS(10, crestSpacingPx(10))).toBeCloseTo(0.12 * phaseSpeed(10) * 4, 6);
+    // Unclamped, the crest speed is S x c x tau (c = L / T): 7.5 px/s for a 10 s swell.
+    expect(crestSpeedPxPerS(10, crestSpacingPx(10))).toBeCloseTo(0.12 * (wavelengthM(10) / 10) * 4, 6);
     expect(crestSpeedPxPerS(0, 10)).toBeNaN();
   });
 
@@ -186,10 +135,6 @@ describe("height and drawing styles", () => {
     expect(dashLength(4, "windsea")).toBeCloseTo(0.65 * dashLength(4, "primary"), 10);
     expect(blobDepth(4, "windsea", v, sp)).toBeCloseTo(0.8 * Math.min(BLOB_HEAD_PX + v * SMEAR_SECONDS, SMEAR_MAX_SHARE * sp, BLOB_MAX_DEPTH_SHARE * dashLength(4, "windsea")), 12);
     expect(blobDepth(4, "combined", v, sp)).toBe(blobDepth(4, "primary", v, sp));
-    expect(drawnHeight(0.1)).toBe(false);
-    expect(drawnHeight(0.19)).toBe(false);
-    expect(drawnHeight(0.2)).toBe(true);
-    expect(drawnHeight(NaN)).toBe(false);
   });
 
   it("smears each blob by the way its crest moved over the last SMEAR_SECONDS of animation (a display choice)", () => {

@@ -4,11 +4,12 @@ import { apiGet } from "./helpers";
 import { mockFields, type FieldMock } from "./map-fields.mock";
 
 /**
- * Shared helpers of the map specs (map.spec.ts, map-layers.spec.ts): opening the map with
- * stubbed tiles, with or without route-mocked SYNTHETIC ocean fields, and reading the map's
- * canvases and geometry. Tile servers are not reachable from CI sandboxes, so by default tile
- * requests are answered with a local PNG; E2E_REAL_TILES=1 loads the real OpenStreetMap tiles
- * (requires network). MAP_SCREENSHOT_DIR saves screenshots of the main states.
+ * Shared helpers of the map specs (map.spec.ts, map-layers.spec.ts, map-navigation.spec.ts,
+ * map-performance.spec.ts): opening the map with stubbed tiles, with or without route-mocked
+ * SYNTHETIC ocean fields, and reading the map's canvases and geometry. Tile servers are not
+ * reachable from CI sandboxes, so by default tile requests are answered with a local PNG;
+ * E2E_REAL_TILES=1 loads the real OpenStreetMap tiles (requires network). MAP_SCREENSHOT_DIR
+ * saves screenshots of the main states.
  */
 export const REAL_TILES = process.env.E2E_REAL_TILES === "1";
 const SHOTS = process.env.MAP_SCREENSHOT_DIR;
@@ -70,7 +71,7 @@ export async function openMapWithFields(page: Page, opts?: Parameters<typeof moc
   return { ...opened, mock, nowIndex, now: mock.validTimes[nowIndex]! };
 }
 
-export const nearestIndex = (times: string[], iso: string) => {
+const nearestIndex = (times: string[], iso: string) => {
   const t = Date.parse(iso);
   let best = 0;
   times.forEach((v, i) => {

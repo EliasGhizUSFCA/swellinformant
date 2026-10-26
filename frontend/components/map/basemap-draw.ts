@@ -74,8 +74,7 @@ function visible(p: MercPath, v: PixelView, dx: number, margin = 2): boolean {
 }
 
 /** Adds the paths to the current canvas path, skipping vertices closer than ~0.7 px. */
-export function tracePaths(ctx: Pick<CanvasRenderingContext2D, "moveTo" | "lineTo">, paths: MercPath[], v: PixelView): number {
-  let segments = 0;
+export function tracePaths(ctx: Pick<CanvasRenderingContext2D, "moveTo" | "lineTo">, paths: MercPath[], v: PixelView): void {
   const w = v.worldPx;
   for (const k of pathCopies(v)) {
     const dx = k * w;
@@ -92,11 +91,9 @@ export function tracePaths(ctx: Pick<CanvasRenderingContext2D, "moveTo" | "lineT
         ctx.lineTo(x, y);
         lx = x;
         ly = y;
-        segments++;
       }
     }
   }
-  return segments;
 }
 
 const textWidths = new Map<string, number>();

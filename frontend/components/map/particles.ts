@@ -42,7 +42,7 @@ interface Particle {
 }
 
 /** Longest step one frame may take (a frame after a stall, a background tab). */
-export const MAX_DT_MS = 50;
+const MAX_DT_MS = 50;
 /** Particle lifetime, ms (between 50 and 110 frames at 60 Hz, as before). */
 const MIN_AGE_MS = 50 * FRAME_MS;
 const AGE_SPREAD_MS = 60 * FRAME_MS;

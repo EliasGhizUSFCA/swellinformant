@@ -264,11 +264,11 @@ resolution and drawn onto the canvas with `imageSmoothingQuality = "high"` (sect
 ### 4.6 Crest dashes
 
 * **Lattice**: per view, values are sampled every `LATTICE_PX = 8` px on a grid fixed in world
-  pixels: per system the travel vector p (TOWARD = FROM + 180°), spacing, speed, height and a
-  validity flag, and for the dash tint the level of the colour field at the node. A node is
-  invalid without data (NaN height, period or direction), with `Hs < MIN_DRAW_HS_M = 0.2 m`,
-  where the direction corners disagree (section 4.1) or over land (4.7). Sampling between
-  nodes is bilinear and needs all four nodes valid.
+  pixels: per system the travel vector p (TOWARD = FROM + 180°), height and a validity flag
+  (and the largest crest spacing), and for the dash tint the level of the colour field at the
+  node. A node is invalid without data (NaN height, period or direction), with
+  `Hs < MIN_DRAW_HS_M = 0.2 m`, where the direction corners disagree (section 4.1) or over land
+  (4.7). Sampling between nodes is bilinear and needs all four nodes valid.
 * **Cells**: one dash per cell of a grid fixed in world pixels, `DASH_CELL_PX` on screen (12 px
   for the combined sea and the primary swell, 13 for the secondary, 18 for the wind sea) at
   every zoom, so the density on screen is the same at every zoom (the cell is adjusted so that
@@ -459,14 +459,14 @@ central United States (40°N 100°W), the Sahara (23°N 10°E), central Africa a
   views of the combined sea stay under the cap (700 to 1,430 blobs on a Pixel 7); with all
   three partitions a phone view (about 1,950 to 2,650 dashes) can reach it too.
 * The top system (primary, else combined) is planned first and may use 60 % (`BUDGET_SHARE`)
-  of the dashes and of the quads left, the next 60 % of the rest, the last one all of it.
-  Cells are visited in a fixed hashed order, so a frame over budget leaves out an even,
-  random share of the cells, never a region. The number of cells visited only shrinks when a
-  budget is hit and grows back by one cell a frame while under 75 % of both, so the cut is
-  steady; when the adaptive cap grows, every system may visit all its cells again (the next
-  frame finds the new cut). Targets (D11, e2e at 1440 x 900): draw p95 ≤ 5 ms and ≤ 12,000
-  stroked path vertices (now only the arrowheads of reduced motion), plus quads ≤ the cap ≤
-  7,000.
+  of the dashes left under the smaller of the two budgets (one quad per dash), the next 60 %
+  of the rest, the last one all of it. Cells are visited in a fixed hashed order, so a frame
+  over budget leaves out an even, random share of the cells, never a region. The number of
+  cells visited only shrinks when the budget is hit and grows back by one cell a frame while
+  under 75 % of its share, so the cut is steady; when the adaptive cap grows, every system may
+  visit all its cells again (the next frame finds the new cut). Targets (D11, e2e at
+  1440 x 900): draw p95 ≤ 5 ms and ≤ 12,000 stroked path vertices (now only the arrowheads of
+  reduced motion), plus quads ≤ the cap ≤ 7,000.
 
 ### 4.9 Data attributes (tests and diagnostics)
 

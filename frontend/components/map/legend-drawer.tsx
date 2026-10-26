@@ -11,6 +11,7 @@ import { colorAtValue, cssGradient, rgbToHex, WAVE_HEIGHT_RAMP, type LayerScale 
 import type { FieldIndex } from "@/lib/map-fields";
 import { layerDef, layerUnit, legendTicks, type DisplayUnits } from "@/lib/map-layers";
 import type { MapSettings } from "@/lib/map-settings";
+import { leadLabel } from "@/lib/map-time";
 import { BLOB_PROFILE, dashAlpha, dashTint, FAMILY_STYLES, scaleStatement, WAVE_SYSTEMS, type WaveSystem } from "@/lib/map-waves";
 import { NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_COLORS_DARK, QUALITY_LABELS } from "@/lib/quality";
 import { cn } from "@/lib/utils";
@@ -77,15 +78,6 @@ export function CrestSwatch({ system, className }: { system: WaveSystem; classNa
   );
 }
 
-/** "+30 h" after the model cycle, or "analysis" at the cycle time itself. */
-export function leadText(validTime: string | null | undefined, cycleTime: string | null | undefined): string | null {
-  if (!validTime || !cycleTime) return null;
-  const h = Math.round((Date.parse(validTime) - Date.parse(cycleTime)) / 3_600_000);
-  if (!Number.isFinite(h)) return null;
-  if (h === 0) return "analysis";
-  return h > 0 ? `+${h} h` : `${h} h`;
-}
-
 /** Vertical "Legend" tab on the left edge. */
 export function LegendTab({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
@@ -127,7 +119,7 @@ export function LegendDrawer({
   const windShown = layer === "wind" || settings.windOverlay;
   const crests = layer !== "wind" ? WAVE_SYSTEMS.filter((s) => status.systems.includes(s)) : [];
   const validTime = status.validTime;
-  const lead = leadText(validTime, index?.cycle_time);
+  const lead = leadLabel(validTime, index?.cycle_time);
   const flowOn = particles !== "off" && available;
   return (
     <aside

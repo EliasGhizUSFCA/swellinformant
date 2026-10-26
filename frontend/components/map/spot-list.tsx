@@ -10,7 +10,7 @@ import type { AttributionLink, Conditions, SpotSummary } from "@/types/api";
 import { FOCUS, GLASS } from "./map-ui";
 
 /** Sort key for the "best at the selected time" list: daylight hours above night ones. */
-export function rankKey(c: Conditions | null | undefined): number {
+function rankKey(c: Conditions | null | undefined): number {
   if (!c) return -1;
   return (c.is_daylight ? 1000 : 0) + c.score;
 }

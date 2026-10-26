@@ -21,7 +21,7 @@ export interface Filters {
 
 export const NO_FILTERS: Filters = { region: "All", country: "All", breakType: "any", minHeight: "", minQuality: "", eventsOnly: false };
 
-export const isFiltered = (f: Filters) => JSON.stringify(f) !== JSON.stringify(NO_FILTERS);
+const isFiltered = (f: Filters) => JSON.stringify(f) !== JSON.stringify(NO_FILTERS);
 
 /** Whether a spot passes the filters at the selected time (height = our breaking-height prediction). */
 export function passes(s: SpotSummary, m: MapSpot | undefined, f: Filters, units: Units): boolean {

@@ -19,7 +19,6 @@ import {
   sampleGrid,
   waveEnergyGrid,
   waveEnergyKwPerM,
-  windSpeedGrid,
   wrapsLongitude,
   type FieldGrid,
   type FieldMeta,
@@ -132,13 +131,7 @@ describe("bilinear sampling", () => {
 });
 
 describe("derived quantities", () => {
-  it("wind speed is |(u, v)| and direction FROM follows the meteorological convention", () => {
-    const u = grid([3, 0, NaN, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    const v = grid([4, -5, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    const s = windSpeedGrid(u, v);
-    expect(s.values[0]).toBe(5);
-    expect(s.values[1]).toBe(5);
-    expect(s.values[2]).toBeNaN();
+  it("wind direction FROM follows the meteorological convention", () => {
     expect(directionFromUV(0, -5)).toBeCloseTo(0); // blowing south = from the north
     expect(directionFromUV(5, 0)).toBeCloseTo(270); // blowing east = from the west
     expect(directionFromUV(0, 5)).toBeCloseTo(180);
@@ -206,11 +199,7 @@ describe("served field checks (X-Field-Meta)", () => {
     expect(() => checkServedMeta({ ...meta, valid_time: "2026-10-14T15:00:00Z" }, "hs", "2026-10-14T12:00:00Z")).toThrow(FieldMismatchError);
     expect(() => checkServedMeta({ ...meta, run_key: "gfs-2026101412" }, "hs", "2026-10-14T12:00:00Z", "gfs-2026101406")).toThrow(/run/);
     expect(() => checkServedMeta(meta, "tp", "2026-10-14T12:00:00Z")).toThrow(FieldMismatchError);
-    try {
-      checkServedMeta({ ...meta, valid_time: "2026-10-14T15:00:00Z" }, "hs", "2026-10-14T12:00:00Z");
-    } catch (e) {
-      expect((e as FieldMismatchError).servedValidTime).toBe("2026-10-14T15:00:00Z");
-    }
+    expect(() => checkServedMeta({ ...meta, valid_time: "2026-10-14T15:00:00Z" }, "hs", "2026-10-14T12:00:00Z")).toThrow(/the server sent 2026-10-14T15:00:00Z/);
   });
 
   it("never decodes a mismatched field, and reads a 404 as an out-of-date index", async () => {
