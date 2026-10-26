@@ -408,7 +408,7 @@ def train_candidates(
     results: list[CandidateResult] = []
     for kind in kinds:
         grid_results: list[dict[str, Any]] = []
-        best: tuple[float, dict[str, Any], float] | None = None
+        best: tuple[float, dict[str, Any], float, TrainedCorrection] | None = None
         for params in grids[kind]:
             model = fit_correction(kind, params, split.train, feature_names, seed=seed)
             unscaled = model.correct(val)
@@ -423,12 +423,10 @@ def train_candidates(
                 }
             )
             if math.isfinite(val_rmse) and (best is None or val_rmse < best[0]):
-                best = (val_rmse, params, scale)
+                best = (val_rmse, params, scale, model)
         if best is None:
             raise InsufficientDataError(f"{kind}: no finite validation score")
-        val_rmse, params, scale = best
-        selected = fit_correction(kind, params, split.train, feature_names, seed=seed)
-        selected.metre_scale = scale
+        val_rmse, params, scale, selected = best
         validation_scores = score_hs(val, selected.correct(val))
         # Refit on train + validation; the guard is re-checked right before fitting.
         guards.append(assert_no_leakage(development, split.test, split.gap, label=f"{kind} refit"))
