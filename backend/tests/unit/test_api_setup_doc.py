@@ -18,10 +18,8 @@ ROOT = Path(__file__).resolve().parents[3]
 DOC = ROOT / "docs" / "API_SETUP_REQUIRED.md"
 ENV_EXAMPLE = ROOT / ".env.example"
 
-# Read by docker-compose.yml, the Docker entrypoint or the Next.js build, not by Settings.
+# Read by the Next.js build (frontend/next.config.ts, frontend/lib/map-tiles.ts), not by Settings.
 NOT_SETTINGS = {
-    "WORKER_CONCURRENCY",
-    "REDIS_PORT",
     "BACKEND_URL",
     "MAP_TILE_HOSTS",
     # The Next.js build (frontend/next.config.ts): proxy or platform /api routing.
@@ -36,8 +34,6 @@ NOT_SETTINGS = {
     "VERCEL_LOCAL_REDIS_URL",
 }
 DEPRECATED = {"OPEN_METEO_WAVE_MODEL", "OPEN_METEO_ATMOS_MODEL"}
-# Literal values and model names that look like variables but are not.
-NOT_VARIABLES = {"HTSGW", "PERPW", "DIRPW", "UGRD", "VGRD", "PRMSL", "WIND", "SWELL", "SWPER"}
 
 
 def named_variables() -> set[str]:
@@ -45,7 +41,7 @@ def named_variables() -> set[str]:
     names = set(re.findall(r"`([A-Z][A-Z0-9_]{2,})(?:=[^`]*)?`", text))
     # Names inside the fenced env block (KEY=value lines).
     names |= set(re.findall(r"^([A-Z][A-Z0-9_]{2,})=", text, flags=re.M))
-    return names - NOT_VARIABLES
+    return names
 
 
 def env_example_names() -> set[str]:
