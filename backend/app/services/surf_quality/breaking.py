@@ -138,19 +138,25 @@ def estimate_breaking_height(sea: SeaState, spot: SpotParams) -> BreakingEstimat
     )
 
 
+def driving_partition(pred: Any) -> dict[str, Any] | None:
+    """The partition of a stored prediction (``components``) with the largest predicted
+    breaking height in its nearshore breakdown; None without a breakdown."""
+    breakdown = (pred.components or {}).get("breaking") or {}
+    parts = [p for p in breakdown.get("partitions") or [] if (p.get("breaking_m") or 0) > 0]
+    return max(parts, key=lambda p: p["breaking_m"]) if parts else None
+
+
 def dominant_component(pred: Any, fc: Any) -> tuple[float | None, float | None, float | None]:
     """Height, period and direction of the offshore component that drives the surf.
 
     ``pred`` is a stored prediction (``components``), ``fc`` its wave_forecasts row.
 
     That is the partition with the largest predicted breaking height in the prediction's
-    nearshore breakdown, which may be the wind sea: WW3 ranks only the swells by height, so
-    "primary swell" can be a 0.2 m remnant under a 2 m wind sea. Without a breakdown, the
-    bulk sea state (Hs, Tp, peak direction) is used.
+    nearshore breakdown (:func:`driving_partition`), which may be the wind sea: WW3 ranks
+    only the swells by height, so "primary swell" can be a 0.2 m remnant under a 2 m wind
+    sea. Without a breakdown, the bulk sea state (Hs, Tp, peak direction) is used.
     """
-    breakdown = (pred.components or {}).get("breaking") or {}
-    parts = [p for p in breakdown.get("partitions") or [] if (p.get("breaking_m") or 0) > 0]
-    if parts:
-        best = max(parts, key=lambda p: p["breaking_m"])
+    best = driving_partition(pred)
+    if best is not None:
         return best.get("height_m"), best.get("period_s"), best.get("direction_deg")
     return fc.sig_wave_height_m, fc.wave_period_s, fc.wave_direction_deg

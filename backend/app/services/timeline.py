@@ -74,6 +74,7 @@ from app.services.forecasts.queries import (
     stale_after_hours,
 )
 from app.services.spot_views import source_attribution, spot_hours
+from app.services.surf_quality import breaking
 from app.services.surf_quality.forecast_confidence import api_fields
 from app.services.surf_quality.scoring import min_score_for_label
 from app.services.surf_quality.sun import TWILIGHT_MARGIN, daylight_windows, sun_times
@@ -117,11 +118,8 @@ def driving_partition(pred: SurfQualityPrediction) -> str | None:
     """Name of the partition that drives the surf: the largest predicted breaking height in
     the stored nearshore breakdown, as ``breaking.dominant_component`` picks it. None
     without a breakdown (only bulk parameters were available)."""
-    breakdown = (pred.components or {}).get("breaking") or {}
-    parts = [p for p in breakdown.get("partitions") or [] if (p.get("breaking_m") or 0) > 0]
-    if not parts:
-        return None
-    name = max(parts, key=lambda p: p["breaking_m"]).get("name")
+    best = breaking.driving_partition(pred)
+    name = best.get("name") if best is not None else None
     return str(name) if name else None
 
 
