@@ -73,7 +73,7 @@ def test_env_example_matches_the_integration_defaults() -> None:
     assert values["MAP_FIELD_STALE_AFTER_HOURS"] in ("", "21")
     assert values["PRUNE_SUPERSEDED_MEMBER_PREDICTIONS"] == "true"
     assert values["DATA_HEALTH_DATABASE_MAX_GB"] == ""
-    assert "MAP_FIELD_STEP_HOURS" not in values  # deprecated: documented as a comment only
+    assert "MAP_FIELD_STEP_HOURS" not in values  # removed: no longer read
     assert "FORECAST_PROVIDERS=" in env and "open_meteo,open_meteo_ecmwf" in env
 
 

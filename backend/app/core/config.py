@@ -92,7 +92,8 @@ class Settings(BaseSettings):
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
     celery_task_always_eager: bool = False
-    # Queue one full pipeline run when celery beat starts (instead of waiting an interval).
+    # When celery beat starts, queue the sync check (sync.tick) and, with TIDE_PROVIDERS, the
+    # tide job (instead of waiting an interval).
     beat_run_on_start: bool = True
     db_pool_size: int = 5
     db_max_overflow: int = 10
