@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { RatingHeadline, WhyThisRating } from "@/components/rating";
-import { componentFits, limitingGates, ratingFactors, ratingHeadline, ratingReason, ratingTitle, score10, windStrengthOf } from "@/lib/rating";
+import { componentFits, limitingGates, ratingFactors, ratingReason, ratingTitle, score10, windStrengthOf } from "@/lib/rating";
 
 // Factor values below are SYNTHETIC inputs shaped like the API's fields.
 
@@ -21,8 +21,6 @@ describe("score out of ten", () => {
   it("builds the headline from the API label", () => {
     expect(ratingTitle("excellent")).toBe("Excellent Surf");
     expect(ratingTitle("very_good")).toBe("Very Good Surf");
-    expect(ratingHeadline("excellent", 89)).toBe("Excellent Surf — 8.9/10");
-    expect(ratingHeadline("poor", 12)).toBe("Poor Surf — 1.2/10");
   });
 });
 

@@ -29,11 +29,6 @@ export const GLOSSARY = {
     title: "Likely range (unverified)",
     body: LIKELY_RANGE_BODY,
   },
-  /** The same range under its earlier name (kept for existing links and tests). */
-  range80: {
-    title: "80% range",
-    body: LIKELY_RANGE_BODY,
-  },
   groundswell: {
     title: "Groundswell",
     body: `Swell from distant storms that has travelled far from where it formed. Long periods (here ${GROUNDSWELL_PERIOD_S} s or more) carry more energy and usually give more powerful, organised surf than short-period swell.`,

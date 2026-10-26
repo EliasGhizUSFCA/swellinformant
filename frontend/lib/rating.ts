@@ -76,11 +76,6 @@ export function ratingTitle(label: string): string {
   return `${QUALITY_LABELS[asQuality(label)]} Surf`;
 }
 
-/** "Excellent Surf — 8.9/10". */
-export function ratingHeadline(label: string, score: number): string {
-  return `${ratingTitle(label)} — ${score10(score)}/10`;
-}
-
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }

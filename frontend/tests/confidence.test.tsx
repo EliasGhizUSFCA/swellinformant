@@ -121,7 +121,6 @@ describe("ForecastConfidence", () => {
         validTime="2026-10-12T06:00:00Z"
         runIssuedAt="2026-10-11T12:00:00Z"
         nowMs={Date.parse("2026-10-12T04:00:00Z")}
-        leadHours={170}
         legacyIndex={61}
       />,
     );

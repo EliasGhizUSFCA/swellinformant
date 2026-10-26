@@ -26,16 +26,8 @@ export function heightRange(minFt: number, maxFt: number, units: Units = "ft"): 
   return lo === hi ? `${lo} ${units}` : `${lo}–${hi} ${units}`;
 }
 
-export function metres(value: number | null | undefined, digits = 1): string {
-  return value == null ? "—" : `${value.toFixed(digits)} m`;
-}
-
 export function seconds(value: number | null | undefined): string {
   return value == null ? "—" : `${Math.round(value)} s`;
-}
-
-export function kmh(value: number | null | undefined): string {
-  return value == null ? "—" : `${Math.round(value)} km/h`;
 }
 
 const POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];

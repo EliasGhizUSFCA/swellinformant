@@ -151,11 +151,6 @@ export function dayInfos(days: readonly TimelineDay[]): DayInfo[] {
   }));
 }
 
-/** Local midnights (each day's start), for the day separators. */
-export function dayBoundaries(days: readonly DayInfo[]): Array<{ date: string; t: number }> {
-  return days.map((d) => ({ date: d.date, t: d.start }));
-}
-
 /**
  * Night as [from, to] intervals: from each day's last light to the next day's first light
  * (sun.py times from the API, not the per-step daylight flags), before the first day's

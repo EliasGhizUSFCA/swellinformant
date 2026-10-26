@@ -91,8 +91,8 @@ describe("Disclosure", () => {
 
 describe("InfoPopover", () => {
   it("has an accessible trigger and opens its explanation on click", () => {
-    render(<InfoPopover term="range80" />);
-    const trigger = screen.getByRole("button", { name: "Learn more: 80% range" });
+    render(<InfoPopover term="likelyRange" />);
+    const trigger = screen.getByRole("button", { name: "Learn more: Likely range (unverified)" });
     expect(screen.queryByText(/about 8 times in 10/)).toBeNull();
     fireEvent.click(trigger);
     expect(screen.getByText(/about 8 times in 10/)).toBeInTheDocument();

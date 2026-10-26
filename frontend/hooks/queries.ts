@@ -142,13 +142,6 @@ export const useAirports = (q: string) =>
     staleTime: 600_000,
   });
 
-export const useAllAirports = () =>
-  useQuery({
-    queryKey: ["airports-all"],
-    queryFn: ({ signal }) => get<Airport[]>("/api/airports?limit=200", signal),
-    staleTime: 3_600_000,
-  });
-
 export const useRegions = () =>
   useQuery({ queryKey: qk.regions, queryFn: ({ signal }) => get<Region[]>("/api/regions", signal), staleTime: 3_600_000 });
 
