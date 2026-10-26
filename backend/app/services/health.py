@@ -114,7 +114,7 @@ from app.schemas.sync import (
     SyncStoredRunOut,
 )
 from app.services.forecasts.open_meteo import free_api_refused
-from app.services.forecasts.queries import USABLE, is_stale, stale_after_hours
+from app.services.forecasts.queries import BLEND_CODE, USABLE, is_stale, stale_after_hours
 from app.services.forecasts.registry import (
     GEFS_WAVE_CODE,
     KNOWN_SOURCE_NAMES,
@@ -127,7 +127,6 @@ from app.services.sync.published import latest_publication
 from app.services.sync.types import STAGE_JOB_NAMES, SYNC_OWNED_TASKS, SYNC_TICK_JOB
 from app.services.tides.health import constants_file_present, tide_freshness
 
-BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: ecCodes)
 # Jobs that (re)build the blend: forecasts.acquire, then the chained forecasts.blend stage.
 BLEND_BUILDERS = frozenset({"forecasts.acquire", "forecasts.blend"})
 OVERDUE_FACTOR = 2  # missed runs tolerated before a job counts as overdue

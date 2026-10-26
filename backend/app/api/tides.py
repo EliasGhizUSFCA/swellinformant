@@ -8,14 +8,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.spots import public_cache
+from app.api.spots import active_spot, public_cache
 from app.core.config import get_settings
 from app.core.database import get_db, utcnow
-from app.core.errors import AppError, NotFound
-from app.models import SurfSpot
+from app.core.errors import AppError
 from app.schemas.tides import ObservationsBlockOut, TideBlockOut
 from app.services.tides.api import spot_observations_block, spot_tide_block
 
@@ -28,13 +26,6 @@ MAX_WINDOW = timedelta(days=31)
 # margins, the default horizon) stays far from the calendar's limits (year 1 and 9999).
 EARLIEST = datetime(1900, 1, 1, tzinfo=UTC)
 LATEST = datetime(2200, 1, 1, tzinfo=UTC)
-
-
-def active_spot(db: Session, slug: str) -> SurfSpot:
-    spot = db.scalar(select(SurfSpot).where(SurfSpot.slug == slug, SurfSpot.is_active))
-    if spot is None:
-        raise NotFound("Surf spot not found.")
-    return spot
 
 
 def _as_utc(when: datetime) -> datetime:

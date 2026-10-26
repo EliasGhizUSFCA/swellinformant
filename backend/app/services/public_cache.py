@@ -79,7 +79,7 @@ from sqlalchemy.orm import Session
 from app.core import ratelimit
 from app.core.config import get_settings
 from app.core.database import utcnow
-from app.core.redis import get_redis_bytes
+from app.core.redis import RELEASE_SCRIPT, get_redis_bytes
 from app.models import ForecastRun, SpotResearchAssessment, SurfSpot, SwellEvent
 from app.models.forecast_engine import MapField
 from app.models.sync import SyncRun
@@ -310,15 +310,6 @@ def cache_key(epoch: str, marker: str, hour: datetime, route: str, params: str) 
     return key
 
 
-# Deletes the lock only while it is still ours (a lock that expired may be another's now).
-_RELEASE_SCRIPT = """
-if redis.call('get', KEYS[1]) == ARGV[1] then
-    return redis.call('del', KEYS[1])
-end
-return 0
-"""
-
-
 def _computed_once(
     client: redis.Redis,
     key: str,
@@ -340,7 +331,7 @@ def _computed_once(
             return built[key]
         finally:
             try:
-                client.eval(_RELEASE_SCRIPT, 1, lock, token)
+                client.eval(RELEASE_SCRIPT, 1, lock, token)
             except redis.RedisError as exc:  # it expires after LOCK_TTL_SECONDS anyway
                 logger.warning("Public snapshot lock not released: %s", type(exc).__name__)
     for pause in WAIT_PAUSES_SECONDS:

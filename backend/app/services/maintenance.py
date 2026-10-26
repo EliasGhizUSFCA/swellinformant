@@ -56,10 +56,15 @@ from app.models import (
     UserSession,
     UserToken,
 )
-from app.models.enums import ForecastRunStatus, MatchStatus
+from app.models.enums import MatchStatus
 from app.models.forecast_engine import MapField
 from app.models.sync import SyncRun
-from app.services.forecasts.queries import PREDICTIONS_PRUNED_KEY, latest_runs_by_spot
+from app.services.forecasts.queries import (
+    BLEND_CODE,
+    PREDICTIONS_PRUNED_KEY,
+    USABLE,
+    latest_runs_by_spot,
+)
 from app.services.map_fields import servable_runs_query
 from app.services.tides.maintenance import prune_tide_predictions
 
@@ -67,8 +72,6 @@ logger = logging.getLogger(__name__)
 
 MAP_FIELD_RUNS_KEPT = 2
 QC_PASSED = ("good", "probably_good")
-BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: cycle)
-USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
 
 
 def prune_superseded_predictions(db: Session, now: datetime | None = None) -> int:
@@ -165,7 +168,7 @@ def prune_forecast_runs(db: Session, now: datetime) -> int:
                 select(ForecastRun.id)
                 .where(
                     ForecastRun.source_id == source_id,
-                    ForecastRun.status.in_((ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)),
+                    ForecastRun.status.in_(USABLE),
                 )
                 .order_by(ForecastRun.issued_at.desc())
                 .limit(2)
