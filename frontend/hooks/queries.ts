@@ -38,7 +38,7 @@ export const qk = {
   searchMatches: (id: string) => ["search-matches", id] as const,
   opportunities: (includePast: boolean) => ["opportunities", includePast] as const,
   opportunity: (id: string) => ["opportunity", id] as const,
-  notifications: (offset: number) => ["notifications", offset] as const,
+  notifications: (offset: number, limit: number) => ["notifications", offset, limit] as const,
   airports: (q: string) => ["airports", q] as const,
   regions: ["regions"] as const,
   status: ["system-status"] as const,
@@ -130,7 +130,7 @@ export const useOpportunity = (id: string) =>
 
 export const useNotifications = (offset = 0, limit = 50) =>
   useQuery({
-    queryKey: qk.notifications(offset),
+    queryKey: qk.notifications(offset, limit),
     queryFn: ({ signal }) => get<NotificationPage>(`/api/notifications?limit=${limit}&offset=${offset}`, signal),
   });
 
