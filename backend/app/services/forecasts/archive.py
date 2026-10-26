@@ -264,6 +264,7 @@ def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str,
                 index_elements=["source_code", "run_key", "spot_id", "valid_time"]
             )
             .returning(PredictionArchive.id)
+            .execution_options(render_nulls=True)  # one batched statement per chunk
         )
         for i in range(0, len(rows), INSERT_CHUNK):
             inserted += len(db.execute(stmt, rows[i : i + INSERT_CHUNK]).all())

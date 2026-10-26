@@ -753,8 +753,10 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
         if out:
             records[spot_id] = out
     count = store_records(db, run, records)
-    stmt = insert(ForecastComparison).on_conflict_do_nothing(
-        index_elements=["blend_run_id", "spot_id", "valid_time"]
+    stmt = (
+        insert(ForecastComparison)
+        .on_conflict_do_nothing(index_elements=["blend_run_id", "spot_id", "valid_time"])
+        .execution_options(render_nulls=True)  # one batched statement per chunk
     )
     for i in range(0, len(comparisons), INSERT_CHUNK):
         db.execute(stmt, comparisons[i : i + INSERT_CHUNK])
