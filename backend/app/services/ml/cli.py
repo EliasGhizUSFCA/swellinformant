@@ -178,7 +178,7 @@ def run(args: argparse.Namespace) -> int:
                 return 0
             if args.ml_cmd == "restrict":
                 v = registry.restrict_applicability(
-                    db, args.version_id, {slug: args.reason for slug in args.exclude_spot}
+                    db, args.version_id, dict.fromkeys(args.exclude_spot, args.reason)
                 )
                 _print({**registry.version_summary(v), "applicability": v.applicability})
                 return 0
