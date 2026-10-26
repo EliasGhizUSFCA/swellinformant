@@ -253,22 +253,18 @@ export const useCityAirports = (enabled: boolean) =>
 // --- what the map canvases show, for the legend --------------------------------------------
 
 /** State of the map's flow layers, published by the canvases (map-canvas-layers) for the
- * legend and settings, which live outside the Leaflet map. */
+ * legend, which lives outside the Leaflet map. */
 export interface MapFlowStatus {
   /** Leaflet zoom and the latitude of the view centre (the stated crest exaggeration). */
   zoom: number;
   centreLat: number;
   /** Wave systems drawn as crests ([] on the Wind layer or without wave data). */
   systems: WaveSystem[];
-  waveMode: "animated" | "static" | "off";
-  windMode: "animated" | "static" | "off";
-  /** "fade" (half-float canvas) or "explicit" (8-bit canvas) wind trails. */
-  trailMode: "fade" | "explicit" | null;
   /** Valid time of the fields on screen. */
   validTime: string | null;
 }
 
-const INITIAL_STATUS: MapFlowStatus = { zoom: 2, centreLat: 15, systems: [], waveMode: "off", windMode: "off", trailMode: null, validTime: null };
+const INITIAL_STATUS: MapFlowStatus = { zoom: 2, centreLat: 15, systems: [], validTime: null };
 let flowStatus = INITIAL_STATUS;
 const flowListeners = new Set<() => void>();
 

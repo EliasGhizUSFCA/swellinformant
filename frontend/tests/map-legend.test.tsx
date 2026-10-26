@@ -36,12 +36,12 @@ const legend = (index: FieldIndex, layer: "hs" | "wind" = "hs", windOverlay = fa
   );
 
 afterEach(() => {
-  act(() => publishMapFlowStatus({ systems: [], waveMode: "off", validTime: null, zoom: 2, centreLat: 15 }));
+  act(() => publishMapFlowStatus({ systems: [], validTime: null, zoom: 2, centreLat: 15 }));
 });
 
 describe("map legend", () => {
   it("keys the crest systems drawn, primary first, with the stated scales and conventions", () => {
-    act(() => publishMapFlowStatus({ systems: ["secondary", "primary"], waveMode: "animated", validTime: "2026-10-14T12:00:00Z", zoom: 2, centreLat: 0 }));
+    act(() => publishMapFlowStatus({ systems: ["secondary", "primary"], validTime: "2026-10-14T12:00:00Z", zoom: 2, centreLat: 0 }));
     legend(INDEX);
     const items = screen.getByRole("list", { name: "Wave systems drawn" }).querySelectorAll("li");
     expect([...items].map((li) => li.textContent)).toEqual(["Primary swell (light tinted blobs)", "Secondary swell (split amber bars)"]);
@@ -78,7 +78,7 @@ describe("map legend", () => {
   });
 
   it("explains the wind streaks on the Wind layer and with the overlay, in the chosen unit", () => {
-    act(() => publishMapFlowStatus({ systems: [], waveMode: "off", validTime: "2026-10-14T06:00:00Z" }));
+    act(() => publishMapFlowStatus({ systems: [], validTime: "2026-10-14T06:00:00Z" }));
     legend(INDEX, "wind");
     expect(screen.getByTestId("legend-title").textContent).toBe("Wind speed (mph)");
     expect(screen.getByTestId("legend-wind").textContent).toContain("visual speed (not ground speed)");

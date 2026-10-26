@@ -262,7 +262,6 @@ function ParticleCanvas({ flow, mode, overlay }: { flow: Flow | null; mode: Part
         canvas.dataset.mode = modeRef.current;
         canvas.dataset.colorType = colorType;
         canvas.dataset.trails = trails;
-        publishMapFlowStatus({ windMode: modeRef.current, trailMode: trails });
         if (modeRef.current === "animated") animator.start(ctx, view, trails);
         else if (modeRef.current === "static") canvas.dataset.arrows = String(animator.drawArrows(ctx, view));
       },
@@ -284,7 +283,6 @@ function ParticleCanvas({ flow, mode, overlay }: { flow: Flow | null; mode: Part
       animator.stop();
       l.remove();
       layerRef.current = null;
-      publishMapFlowStatus({ windMode: "off", trailMode: null });
     };
   }, [map, animator]);
 
@@ -529,8 +527,8 @@ export function MapDataLayers(props: MapDataLayersProps) {
   const waveMode: WaveMode = particles;
 
   useEffect(() => {
-    publishMapFlowStatus({ systems: families.map((f) => f.system), waveMode: families.length ? waveMode : "off", validTime: props.fieldsAt ?? null });
-  }, [families, waveMode, props.fieldsAt]);
+    publishMapFlowStatus({ systems: families.map((f) => f.system), validTime: props.fieldsAt ?? null });
+  }, [families, props.fieldsAt]);
 
   return (
     <>
