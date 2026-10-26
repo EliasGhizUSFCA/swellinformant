@@ -363,11 +363,10 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("rescore", "decisions", "wind"):
         p = sub.add_parser(name)
         p.add_argument("--json", type=Path, default=None)
+        p.add_argument("--spots", type=Path, default=DATA_DIR / "spots.json")
+        p.add_argument("--decisions", type=Path, default=DATA_DIR / DECISIONS_FILENAME)
         if name in ("rescore", "decisions"):
-            p.add_argument("--spots", type=Path, default=DATA_DIR / "spots.json")
             p.add_argument("--run-id", type=int, required=True)
-        if name in ("decisions", "wind"):
-            p.add_argument("--decisions", type=Path, default=DATA_DIR / DECISIONS_FILENAME)
         if name == "rescore":
             p.add_argument("--set", action="append")
             p.add_argument("--physical", type=Path, default=None)
