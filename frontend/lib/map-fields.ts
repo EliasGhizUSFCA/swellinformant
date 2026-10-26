@@ -252,12 +252,6 @@ function sameShape(a: Grid, b: Grid): void {
   }
 }
 
-/** Wind speed |(u, v)| in m/s, cell by cell. */
-export function windSpeedGrid<T extends Grid>(u: T, v: Grid): T {
-  sameShape(u, v);
-  return withValues(u, (uu, k) => Math.hypot(uu, v.values[k]!));
-}
-
 /**
  * Deep-water wave power per metre of wave crest, kW/m: P = rho g^2 Hs^2 Te / (64 pi)
  * ~= 0.49 Hs^2 Te, with the energy period approximated as Te ~= 0.9 Tp (a standard
