@@ -680,8 +680,8 @@ runs the daemon instead of worker and beat.
 **As built.** It installs the `sync` extra from `uv.lock`; credentials only from secrets;
 `backend/tests/unit/test_vercel_deploy.py` asserts that no schedule is committed. CI gained
 a `deploy-config` job (actionlint, compose files, Docker builds of the `Containerfile` and
-`backend/Dockerfile`) and a `vercel-build` job. The steps were run locally; the first run
-on GitHub is still to come.
+`backend/Dockerfile`) and a `vercel-build` job. The steps were first run locally; all five
+jobs have run on GitHub since 2026-10-23.
 
 ## ADR-036 (D16) The register of behaviour and test changes
 

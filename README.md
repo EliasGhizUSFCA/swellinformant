@@ -1158,8 +1158,8 @@ bundle check, `alembic upgrade head` + `alembic check`, then `pytest tests/unit`
 `vitest`, `next build`), a `deploy-config` job (actionlint, both compose files, a Docker
 build of the daemon's `Containerfile` and of `backend/Dockerfile`) and a `vercel-build` job
 (`scripts/vercel-build-check.sh --offline`). The end-to-end job runs on pushes and on demand
-(Actions → CI → Run workflow). These jobs were run locally, step by step; their first run
-on GitHub itself is still to come.
+(Actions → CI → Run workflow). These jobs were first run locally, step by step; all five
+have run on GitHub since 2026-10-23 (for example run 40062509283 on 15a2754, all passed).
 
 **Tools added in Upgrade 4.** `scripts/vercel-build-check.sh --offline` (above; section E.6),
 `scripts/vercel-local.sh` (the local Vercel-style stack; `up`, `sync`, `check`, `status`,
