@@ -186,7 +186,6 @@ const MiniMarker = memo(function MiniMarker({
   tooltip,
   selected,
   emphasised,
-  onSelect,
 }: {
   spot: SpotSummary;
   lng: number;
@@ -194,7 +193,6 @@ const MiniMarker = memo(function MiniMarker({
   tooltip: string;
   selected: boolean;
   emphasised: boolean;
-  onSelect?: (slug: string) => void;
 }) {
   const center = useMemo<[number, number]>(() => [spot.latitude, lng], [spot.latitude, lng]);
   const fill = colorForScore(score);
@@ -203,7 +201,6 @@ const MiniMarker = memo(function MiniMarker({
     [selected, fill],
   );
   const slug = spot.slug;
-  const eventHandlers = useMemo(() => ({ click: () => onSelect?.(slug) }), [onSelect, slug]);
   return (
     <CircleMarker
       center={center}
@@ -211,7 +208,6 @@ const MiniMarker = memo(function MiniMarker({
       pathOptions={pathOptions}
       // Set at creation (Leaflet ignores className changes in later setStyle calls).
       className={`spot-marker spot-${slug}`}
-      eventHandlers={eventHandlers}
     >
       <Tooltip direction="top" offset={[0, -6]}>
         <strong>{spot.name}</strong>
@@ -223,23 +219,17 @@ const MiniMarker = memo(function MiniMarker({
 });
 
 /**
- * World map of monitored spots. Marker colour = our predicted quality at the selected
- * forecast time when ``markers`` is given, otherwise the best quality in the next 7 days.
+ * World map of monitored spots (the spot page's mini map). Marker colour = the best quality
+ * in the next 7 days.
  */
 export default function SurfMap({
   spots,
   selected,
-  onSelect,
-  markers,
-  height = "100%",
   zoom = 2,
   center = [15, 10] as [number, number],
 }: {
   spots: SpotSummary[];
   selected?: string | null;
-  onSelect?: (slug: string) => void;
-  markers?: Record<string, MarkerState>;
-  height?: string;
   zoom?: number;
   center?: [number, number];
 }) {
@@ -254,7 +244,7 @@ export default function SurfMap({
     <div
       role="region"
       aria-label="Map of monitored surf spots"
-      style={{ height, width: "100%", position: "relative", isolation: "isolate" }}
+      style={{ height: "100%", width: "100%", position: "relative", isolation: "isolate" }}
     >
       <MapContainer
         center={center}
@@ -284,24 +274,16 @@ export default function SurfMap({
           }}
         />
         {spots.map((s) => {
-          const m = markers?.[s.slug];
-          const score = markers ? (m?.score ?? null) : (s.best_upcoming?.score ?? s.current?.score ?? null);
+          const score = s.best_upcoming?.score ?? s.current?.score ?? null;
           return (
             <MiniMarker
               key={s.slug}
               spot={s}
               lng={nearestCopy(s.longitude, centreLng)}
               score={score}
-              tooltip={
-                markers
-                  ? (m?.tooltip ?? "No usable forecast")
-                  : score != null
-                    ? `Best next 7 days: ${score10(score)}/10`
-                    : "No usable forecast yet"
-              }
+              tooltip={score != null ? `Best next 7 days: ${score10(score)}/10` : "No usable forecast yet"}
               selected={s.slug === selected}
-              emphasised={markers ? !!m?.highlight : !!s.next_event}
-              onSelect={onSelect}
+              emphasised={!!s.next_event}
             />
           );
         })}
