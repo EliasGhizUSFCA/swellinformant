@@ -26,6 +26,12 @@ export function family(system: WaveSystem, hs: number | Grid, tp: number | Grid,
   return { system, hs: g(hs), tp: g(tp), dir: g(dir) };
 }
 
+/** Unit screen vector (x east, y down) of the travel of waves FROM `fromDeg`: (-sin F, cos F). */
+export function propagation(fromDeg: number): [number, number] {
+  const f = (fromDeg * Math.PI) / 180;
+  return [-Math.sin(f) + 0, Math.cos(f) + 0];
+}
+
 /** A world view at zoom `z`, `width` x `height` CSS px, centred on (lat, lon). */
 export function viewAt(z: number, lat: number, lon: number, width = 1440, height = 900): PixelView {
   const worldPx = 256 * 2 ** z;

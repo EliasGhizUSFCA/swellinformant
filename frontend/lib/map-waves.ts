@@ -54,46 +54,9 @@ export const PARTITION_SYSTEMS: readonly Exclude<WaveSystem, "combined">[] = ["p
 
 export const isWaveSystem = (v: unknown): v is WaveSystem => typeof v === "string" && (WAVE_SYSTEMS as readonly string[]).includes(v);
 
-const norm360 = (deg: number) => ((deg % 360) + 360) % 360;
-
-/** Bearing (degrees TOWARD, [0, 360)) of waves coming FROM `fromDeg`; NaN stays NaN. */
-export function toward(fromDeg: number): number {
-  return Number.isFinite(fromDeg) ? norm360(fromDeg + 180) : NaN;
-}
-
-/**
- * Unit screen vector (x east, y down) of the direction waves from `fromDeg` travel:
- * (sin a, -cos a) for a = toward(from), i.e. (-sin F, cos F). Null without a direction.
- */
-export function propagation(fromDeg: number): [number, number] | null {
-  if (!Number.isFinite(fromDeg)) return null;
-  const f = fromDeg * RAD;
-  return [-Math.sin(f) + 0, Math.cos(f) + 0];
-}
-
-/**
- * Unit screen vector along a crest line: perpendicular to `propagation` (a quarter turn
- * clockwise of it on screen). Waves from the west (270) have vertical crests (0, 1); from
- * the SW (225) the crests run NW-SE, along (0.707, 0.707).
- */
-export function crestTangent(fromDeg: number): [number, number] | null {
-  const p = propagation(fromDeg);
-  return p ? [-p[1] + 0, p[0] + 0] : null;
-}
-
 /** Deep-water wavelength L = g T^2 / (2 pi), m (156.1 m at 10 s). */
 export function wavelengthM(periodS: number): number {
   return (G * periodS * periodS) / (2 * Math.PI);
-}
-
-/** Deep-water phase speed c = g T / (2 pi), m/s: how fast crests move. */
-export function phaseSpeed(periodS: number): number {
-  return (G * periodS) / (2 * Math.PI);
-}
-
-/** Deep-water group speed cg = c / 2, m/s: how fast the wave energy (a packet) moves. */
-export function groupSpeed(periodS: number): number {
-  return phaseSpeed(periodS) / 2;
 }
 
 /** Ground metres per screen pixel at `zoom` and latitude (256 px Web Mercator tiles). */
@@ -130,11 +93,6 @@ export function crestSpacingPx(periodS: number, metresPerPx?: number): number {
  */
 export function crestSpeedPxPerS(periodS: number, spacingPx: number): number {
   return periodS > 0 ? (spacingPx * TIME_SCALE) / periodS : NaN;
-}
-
-/** Packet (envelope) speed on screen: half the crest speed, as cg = c / 2 in deep water. */
-export function envelopeSpeedPxPerS(periodS: number, spacingPx: number): number {
-  return crestSpeedPxPerS(periodS, spacingPx) / 2;
 }
 
 /**
@@ -302,9 +260,6 @@ export function dashFade(age: number): number {
 
 /** Most dashes per frame for a view `widthPx` CSS px wide. */
 export const maxDashes = (widthPx: number): number => (widthPx < PHONE_WIDTH_PX ? PHONE_MAX_DASHES : MAX_DASHES);
-
-/** Whether a system of this height is drawn at all (missing or below MIN_DRAW_HS_M: no). */
-export const drawnHeight = (hsM: number): boolean => Number.isFinite(hsM) && hsM >= MIN_DRAW_HS_M;
 
 export interface FamilyStyle {
   label: string;

@@ -21,11 +21,10 @@ import {
   MAX_FRAME_QUADS,
   MIN_FRAME_QUADS,
   PHONE_MAX_DASHES,
-  propagation,
   SMEAR_SECONDS,
 } from "@/lib/map-waves";
 
-import { blobsOf, constant, dashesOf, draw, family, globalGrid, installPath2D, orientation, recorder, UNBOUNDED, viewAt, type Dash } from "./map-dash-fixtures";
+import { blobsOf, constant, dashesOf, draw, family, globalGrid, installPath2D, orientation, propagation, recorder, UNBOUNDED, viewAt, type Dash } from "./map-dash-fixtures";
 
 // Every grid below is SYNTHETIC test data (made-up uniform or patterned seas), not model output.
 
