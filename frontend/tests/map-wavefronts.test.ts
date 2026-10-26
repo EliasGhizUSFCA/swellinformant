@@ -6,15 +6,14 @@ import { sampleDirection, type FieldGrid, type Grid } from "@/lib/map-fields";
 import { mercLon } from "@/lib/map-geo";
 import { crestSpacingPx, crestSpeedPxPerS, FAMILY_STYLES, maxDashes } from "@/lib/map-waves";
 
-import { constant, dashesOf, draw, family, globalGrid, installPath2D, orientation, rgbOfQuad, UNBOUNDED, viewAt } from "./map-dash-fixtures";
+import { constant, dashesOf, draw, family, globalGrid, orientation, rgbOfQuad, UNBOUNDED, viewAt } from "./map-dash-fixtures";
 
 // Every grid below is SYNTHETIC test data, not model output. The dash geometry, motion,
 // spacing, masking, budget and reduced-motion checks of D11 are in map-dashes.test.ts.
 
 beforeEach(() => {
-  // jsdom has no 2D canvas (the land and ocean masks are skipped) and no Path2D.
+  // jsdom has no 2D canvas (the land and ocean masks are skipped).
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
-  installPath2D();
 });
 afterEach(() => {
   vi.restoreAllMocks();

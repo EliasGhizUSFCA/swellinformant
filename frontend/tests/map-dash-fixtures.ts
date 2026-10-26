@@ -4,8 +4,6 @@
  * context stand-in that records every filled quad (the unit rectangle under its transform,
  * with its fill and opacity) and every stroked polyline (the reduced-motion arrowheads).
  */
-import { vi } from "vitest";
-
 import { buildLattice, drawDashes, type DashState, type DashTintSource, type WaveFamilyGrids } from "@/components/map/wavefronts";
 import type { Grid } from "@/lib/map-fields";
 import type { PixelView } from "@/lib/map-geo";
@@ -62,6 +60,7 @@ export interface Quad {
   alpha: number;
 }
 
+/** The current path of the recorder: its subpaths. */
 class RecordedPath {
   polys: Array<Array<[number, number]>> = [];
   moveTo(x: number, y: number) {
@@ -70,11 +69,6 @@ class RecordedPath {
   lineTo(x: number, y: number) {
     this.polys[this.polys.length - 1]!.push([x, y]);
   }
-}
-
-/** Path2D for jsdom (which has none): records its subpaths. */
-export function installPath2D(): void {
-  vi.stubGlobal("Path2D", RecordedPath);
 }
 
 /** A 2D context stand-in that records every filled quad and every stroked polyline with its style. */
@@ -96,9 +90,8 @@ export function recorder() {
     },
     moveTo: (x: number, y: number) => path.moveTo(x, y),
     lineTo: (x: number, y: number) => path.lineTo(x, y),
-    setLineDash: () => undefined,
-    stroke: (p?: RecordedPath) => {
-      for (const pts of (p ?? path).polys) lines.push({ style: ctx.strokeStyle, width: ctx.lineWidth, cap: ctx.lineCap, pts });
+    stroke: () => {
+      for (const pts of path.polys) lines.push({ style: ctx.strokeStyle, width: ctx.lineWidth, cap: ctx.lineCap, pts });
     },
     getTransform: () => ({ a: m[0], b: m[1], c: m[2], d: m[3], e: m[4], f: m[5] }),
     setTransform: (a: number, b: number, c: number, d: number, e: number, f: number) => {
@@ -125,10 +118,6 @@ const rgbPart = (color: string) => {
 };
 /** Opacity of an rgba() colour (1 for rgb()). */
 export const alphaOfColor = (color: string) => (color.startsWith("rgba(") ? Number(color.slice(color.lastIndexOf(",") + 1, -1)) : 1);
-/** Opacity of an rgba() stroke style. */
-export const alphaOf = (l: Polyline) => alphaOfColor(l.style);
-/** Colour (r, g, b) of a stroke style. */
-export const rgbOf = (l: Polyline) => rgbPart(l.style);
 /** Colour (r, g, b) of a quad's fill (a gradient's first stop). */
 export const rgbOfQuad = (q: Quad) => rgbPart(typeof q.fill === "string" ? q.fill : q.fill.stops[0]!.color);
 
