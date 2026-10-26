@@ -99,7 +99,11 @@ def lead_bucket_array(lead_hours: ArrayLike) -> NDArray[np.int64]:
 
 # ------------------------------------------------------------------------------ helpers
 def finite_pairs(*arrays: ArrayLike) -> tuple[FloatArray, ...]:
-    """Return the arrays restricted to rows where every value is finite."""
+    """Return the arrays restricted to rows where every value is finite.
+
+    When every row is finite the inputs themselves are returned (as flat float views),
+    so callers must not write into the result.
+    """
     arrs = [np.asarray(a, dtype=float).ravel() for a in arrays]
     if len({a.shape[0] for a in arrs}) > 1:
         raise ValueError("arrays must have the same length")
@@ -108,6 +112,8 @@ def finite_pairs(*arrays: ArrayLike) -> tuple[FloatArray, ...]:
     mask = np.ones(arrs[0].shape[0], dtype=bool)
     for a in arrs:
         mask &= np.isfinite(a)
+    if mask.all():
+        return tuple(arrs)
     return tuple(a[mask] for a in arrs)
 
 
@@ -523,6 +529,7 @@ def cycle_block_bootstrap(
     if n_blocks < 2 or n_boot < 1:
         return BootstrapCI(estimate, math.nan, math.nan, confidence, 0, n_blocks)
     starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    by_block = [a[order] for a in arrs]
     rng = np.random.default_rng(seed)
     replicates = np.empty(n_boot, dtype=float)
     for i in range(n_boot):
@@ -530,8 +537,8 @@ def cycle_block_bootstrap(
         lengths = counts[drawn]
         # Position p of the replicate maps to sorted row starts[b] + (p - first_pos[b]).
         offsets = np.repeat(starts[drawn] - (np.cumsum(lengths) - lengths), lengths)
-        idx = order[np.arange(int(lengths.sum())) + offsets]
-        replicates[i] = statistic(*(a[idx] for a in arrs))
+        idx = np.arange(int(lengths.sum())) + offsets
+        replicates[i] = statistic(*(a[idx] for a in by_block))
     finite = replicates[np.isfinite(replicates)]
     if finite.size < 2:
         return BootstrapCI(estimate, math.nan, math.nan, confidence, n_boot, n_blocks)
