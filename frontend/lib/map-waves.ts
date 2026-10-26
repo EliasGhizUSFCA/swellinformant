@@ -21,15 +21,15 @@
 import { hexToRgb } from "@/lib/map-colors";
 
 /** Standard gravity, m/s^2. */
-export const G = 9.80665;
+const G = 9.80665;
 
 /** Screen pixels per metre of wavelength (the spacing scale S). */
-export const SPACING_PX_PER_M = 0.12;
+const SPACING_PX_PER_M = 0.12;
 /** Crest spacing limits on screen, px (very short and very long periods stay readable). */
 export const MIN_SPACING_PX = 8;
 export const MAX_SPACING_PX = 64;
 /** Upper limit for the true-scale spacing used when the map is zoomed in beyond the scale S. */
-export const MAX_TRUE_SPACING_PX = 256;
+const MAX_TRUE_SPACING_PX = 256;
 
 /**
  * Time scale tau: the animation runs this many times faster than real time, in crest
@@ -39,7 +39,7 @@ export const MAX_TRUE_SPACING_PX = 256;
 export const TIME_SCALE = 4;
 
 /** Equatorial circumference of the EPSG:3857 sphere, m (Leaflet's Web Mercator). */
-export const EARTH_CIRCUMFERENCE_M = 40075016.686;
+const EARTH_CIRCUMFERENCE_M = 40075016.686;
 
 /** Systems lower than this (significant height, m) are not drawn. */
 export const MIN_DRAW_HS_M = 0.2;
@@ -107,14 +107,14 @@ export function crestSpeedPxPerS(periodS: number, spacingPx: number): number {
  * (docs/map-rendering.md section 4.6). Length along the crest: 4 px + 0.7 px per metre,
  * 4.5..7.2 px (5 px at 1.5 m, the reference's), before the system's length factor.
  */
-export const DASH_BASE_PX = 4;
-export const DASH_PX_PER_M = 0.7;
-export const DASH_MIN_PX = 4.5;
+const DASH_BASE_PX = 4;
+const DASH_PX_PER_M = 0.7;
+const DASH_MIN_PX = 4.5;
 export const DASH_MAX_PX = 7.2;
 /** Width of a bar (the secondary swell's split dashes): 1.8 px + 0.3 px per metre, 1.8..3.4 px, times its depth factor. */
-export const DASH_WIDTH_BASE_PX = 1.8;
-export const DASH_WIDTH_PX_PER_M = 0.3;
-export const DASH_WIDTH_MAX_PX = 3.4;
+const DASH_WIDTH_BASE_PX = 1.8;
+const DASH_WIDTH_PX_PER_M = 0.3;
+const DASH_WIDTH_MAX_PX = 3.4;
 /**
  * Dash opacity: 0.40 + 0.14 per metre, 0.40..0.95. (D11's 0.40 + 0.09 Hs, 0.40..0.90, made
  * steeper at the final review with the smaller blobs, whose depth no longer grows with the
@@ -122,8 +122,8 @@ export const DASH_WIDTH_MAX_PX = 3.4;
  * on screen, D11's rule; e2e "higher waves draw more ink" measured 2.14 to 2.22 times. The
  * review's 0.45 + 0.13 Hs with blobs of 4.2 + 0.55 Hs px measured 1.97 and 2.02, on the edge.)
  */
-export const DASH_ALPHA_BASE = 0.4;
-export const DASH_ALPHA_PER_M = 0.14;
+const DASH_ALPHA_BASE = 0.4;
+const DASH_ALPHA_PER_M = 0.14;
 export const DASH_ALPHA_MAX = 0.95;
 /**
  * Depth of a blob across its crest (along its travel), px: a bright head of BLOB_HEAD_PX plus
@@ -195,14 +195,14 @@ export function dashTint(field: readonly [number, number, number] | null, system
 /** A dash lives this many crest passages (3 T / tau seconds: 7.5 s for a 10 s swell). */
 export const DASH_LIFE_PASSAGES = 3;
 /** Fade-in over the first 20 % of the life, fade-out over the last 30 % (smoothstep): a display choice. */
-export const DASH_FADE_IN = 0.2;
-export const DASH_FADE_OUT_FROM = 0.7;
+const DASH_FADE_IN = 0.2;
+const DASH_FADE_OUT_FROM = 0.7;
 /** Dash cells, px (one dash per cell of a grid fixed in world pixels: the same density at every zoom). */
 export const DASH_CELL_PX = { primary: 12, combined: 12, secondary: 13, windsea: 18 } as const satisfies Record<string, number>;
 /** Most dashes per frame: desktop, and phones (views narrower than PHONE_WIDTH_PX). */
 export const MAX_DASHES = 8000;
 export const PHONE_MAX_DASHES = 3000;
-export const PHONE_WIDTH_PX = 640;
+const PHONE_WIDTH_PX = 640;
 /**
  * Most filled quads per frame (one per dash: a blob, or a bar whose gap is in its fill). A
  * frame stops placing dashes when the next one could pass it (the same even, hashed cut as
@@ -248,7 +248,7 @@ export function dashLifeSeconds(periodS: number): number {
 }
 
 /** 0 -> 0, 1 -> 1, smooth in between (clamped). */
-export const smoothstep = (x: number): number => {
+const smoothstep = (x: number): number => {
   const c = clamp(x, 0, 1);
   return c * c * (3 - 2 * c);
 };

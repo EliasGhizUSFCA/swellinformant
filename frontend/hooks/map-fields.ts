@@ -20,7 +20,7 @@ const UNAVAILABLE: FieldIndex = {
   stale: false,
 };
 
-export const FIELD_INDEX_KEY = ["map-fields-index"] as const;
+const FIELD_INDEX_KEY = ["map-fields-index"] as const;
 /** The index is re-read this often while the map is open (a new model run every 6-12 h). */
 export const FIELD_INDEX_REFETCH_MS = 5 * 60_000;
 /** After a field mismatch the index is re-read at most this often (no request loop). */
@@ -69,7 +69,7 @@ interface Loaded {
  * not drawn. A field the server answers for another valid time or run (or no longer has)
  * is rejected, and `onMismatch` runs so the caller can re-read the field index.
  */
-export function useFieldGrids(
+function useFieldGrids(
   variables: FieldVariableName[],
   at: string | null,
   prefetch: string[] = [],

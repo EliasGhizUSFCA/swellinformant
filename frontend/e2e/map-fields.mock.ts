@@ -39,7 +39,7 @@ const ENCODING: Record<string, { unit: string; offset: number; scale: number; la
 /** The six core variables (the default index). */
 export const VARIABLES = ["hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure"];
 /** The nine partition variables and the wave system each belongs to. */
-export const PARTITION_SYSTEM: Record<string, "primary" | "secondary" | "windsea"> = {
+const PARTITION_SYSTEM: Record<string, "primary" | "secondary" | "windsea"> = {
   swell1_hs: "primary",
   swell1_tp: "primary",
   swell1_dir: "primary",
@@ -141,12 +141,12 @@ export interface SyntheticFields {
   value: (variable: string, lat: number, lon: number, t: number) => number | null;
 }
 
-export const DEFAULT_FIELDS: SyntheticFields = { name: "default", value: syntheticValue };
+const DEFAULT_FIELDS: SyntheticFields = { name: "default", value: syntheticValue };
 
 const encoded = new Map<string, Buffer>();
 
 /** zlib-compressed uint8 bytes for one synthetic field, per the wire format. */
-export function syntheticFieldBytes(variable: string, t: number, grid: GridSpec, fields: SyntheticFields = DEFAULT_FIELDS): Buffer {
+function syntheticFieldBytes(variable: string, t: number, grid: GridSpec, fields: SyntheticFields = DEFAULT_FIELDS): Buffer {
   const key = `${fields.name}|${variable}|${t}|${grid.nx}x${grid.ny}`;
   const hit = encoded.get(key);
   if (hit) return hit;

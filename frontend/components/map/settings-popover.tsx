@@ -19,7 +19,7 @@ import { FilterControls, type Filters } from "./spot-filters";
 
 /** The next system choice after pressing `system`: the partitions combine freely (at least one
  * stays on); the combined sea is an alternative to them. */
-export function toggleSystem(chosen: readonly WaveSystem[], system: WaveSystem): WaveSystem[] {
+function toggleSystem(chosen: readonly WaveSystem[], system: WaveSystem): WaveSystem[] {
   if (system === "combined") return ["combined"];
   const partitions = chosen.filter((s) => s !== "combined");
   if (!partitions.includes(system)) return [...partitions, system];

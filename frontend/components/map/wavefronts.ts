@@ -79,9 +79,9 @@ const INV_LATTICE_PX = 1 / LATTICE_PX;
 /** Largest disagreement of the four grid corners of a direction before the node is invalid. */
 export const MAX_CORNER_SPREAD_DEG = 60;
 /** Animation frame interval (30 fps cap: dashes move a few px per second). */
-export const FRAME_INTERVAL_MS = 1000 / 30;
+const FRAME_INTERVAL_MS = 1000 / 30;
 /** Share of the remaining dash budget each system may use, top system first. */
-export const BUDGET_SHARE = 0.6;
+const BUDGET_SHARE = 0.6;
 /** Tint levels: the colour field's scale (0..1) in this many steps, one gradient per level and system. */
 export const TINT_LEVELS = 32;
 /** Lattice tint value of a node without a colour under it. */
@@ -91,7 +91,7 @@ const MIN_ALPHA = 0.04;
 /** A dash whose clock is this many lives behind is placed afresh (after a long pause elsewhere). */
 const MAX_CATCH_UP_LIVES = 64;
 /** Hashed places tried in a cell for a new dash before the cell stays empty for a life. */
-export const BIRTH_TRIES = 4;
+const BIRTH_TRIES = 4;
 /** Reference period for the first epoch of a cell without data at its centre, s. */
 const REFERENCE_PERIOD_S = 10;
 
@@ -523,7 +523,7 @@ const PER_SYSTEM = TINT_LEVELS + 1;
  * 0.039), so a batch sets it once: one canvas call fewer per dash. A step is about 6 grey
  * levels of the tint, finer than the life fade moves in two frames.
  */
-export const ALPHA_LEVELS = 24;
+const ALPHA_LEVELS = 24;
 export const ALPHA_STEP = DASH_ALPHA_MAX / (ALPHA_LEVELS - 1);
 /** The opacity a dash of opacity `alpha` is drawn at (rounded to its level). */
 export const drawnAlpha = (alpha: number): number => Math.round(alpha / ALPHA_STEP) * ALPHA_STEP;
@@ -856,7 +856,7 @@ function canvas2d(width: number, height: number): CanvasRenderingContext2D | nul
  * land (dark basemap) or the ocean mask (streets) clips them exactly. Null without a 2D
  * canvas (tests).
  */
-export function landAtNodes(view: PixelView, grid: Pick<Lattice, "nx" | "ny" | "x0" | "y0">, land: MercPath[]): Uint8Array | null {
+function landAtNodes(view: PixelView, grid: Pick<Lattice, "nx" | "ny" | "x0" | "y0">, land: MercPath[]): Uint8Array | null {
   const ctx = canvas2d(grid.nx, grid.ny);
   if (!ctx) return null;
   // View px (x0 + i * LATTICE_PX) lands on the centre of pixel i.
@@ -875,7 +875,7 @@ export function landAtNodes(view: PixelView, grid: Pick<Lattice, "nx" | "ny" | "
  * The ocean mask for a view (CSS px): where any system has data (soft-edged from the
  * lattice) AND not Natural Earth land (crisp). Applied each frame with "destination-in".
  */
-export function oceanMask(view: PixelView, l: Lattice, land: MercPath[] | null): HTMLCanvasElement | null {
+function oceanMask(view: PixelView, l: Lattice, land: MercPath[] | null): HTMLCanvasElement | null {
   const ctx = canvas2d(view.width, view.height);
   const small = canvas2d(l.nx, l.ny);
   if (!ctx || !small) return null;

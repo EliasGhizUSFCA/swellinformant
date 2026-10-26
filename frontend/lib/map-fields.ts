@@ -25,7 +25,7 @@ import type { components } from "@/types/openapi";
  */
 export type FieldIndex = components["schemas"]["FieldIndexOut"];
 
-export const CORE_FIELD_VARIABLES = ["hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure"] as const;
+const CORE_FIELD_VARIABLES = ["hs", "tp", "wave_dir", "wind_u", "wind_v", "pressure"] as const;
 export const PARTITION_FIELD_VARIABLES = [
   "swell1_hs",
   "swell1_tp",
@@ -82,7 +82,7 @@ export interface FieldGrid extends Grid {
 const NUMERIC_KEYS = ["nx", "ny", "lat0", "lon0", "dlat", "dlon", "scale", "offset"] as const;
 
 /** Largest grid accepted (a global 0.1° grid has 6.5 M cells); guards the browser's memory. */
-export const MAX_FIELD_CELLS = 16_000_000;
+const MAX_FIELD_CELLS = 16_000_000;
 
 /** Parses and validates the X-Field-Meta header. Throws on anything unusable. */
 export function parseFieldMeta(header: string | null): FieldMeta {
@@ -193,7 +193,7 @@ export function sampleGrid(g: Grid, lat: number, lon: number, minWeight = 0.5): 
 }
 
 /** Smallest angle between two directions, degrees (0..180). */
-export function angleGap(a: number, b: number): number {
+function angleGap(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
 }
@@ -236,7 +236,7 @@ export function sampleDirection(g: Grid, lat: number, lon: number, minWeight = 0
 }
 
 /** A grid with the same geometry (and metadata) and values mapped cell by cell (NaN stays NaN). */
-export function withValues<T extends Grid>(g: T, f: (v: number, k: number) => number): T {
+function withValues<T extends Grid>(g: T, f: (v: number, k: number) => number): T {
   const out = new Float32Array(g.values.length);
   for (let k = 0; k < out.length; k++) {
     const v = g.values[k]!;

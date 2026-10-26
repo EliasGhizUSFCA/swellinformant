@@ -45,7 +45,7 @@ export type ParticleMode = "animated" | "static" | "off";
 const derived = new WeakMap<FieldSet, Map<LayerId, FieldGrid | null>>();
 
 /** The colour-layer grid for a scalar layer, derived from the downloaded fields (null for wind). */
-export function layerGrid(layer: LayerId, f: FieldSet | null): FieldGrid | null {
+function layerGrid(layer: LayerId, f: FieldSet | null): FieldGrid | null {
   if (!f) return null;
   if (layer === "hs") return f.hs ?? null;
   if (layer === "tp") return f.tp ?? null;

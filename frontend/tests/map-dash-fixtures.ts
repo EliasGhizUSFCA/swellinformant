@@ -117,7 +117,7 @@ const rgbPart = (color: string) => {
   return `${m[1]}, ${m[2]}, ${m[3]}`;
 };
 /** Opacity of an rgba() colour (1 for rgb()). */
-export const alphaOfColor = (color: string) => (color.startsWith("rgba(") ? Number(color.slice(color.lastIndexOf(",") + 1, -1)) : 1);
+const alphaOfColor = (color: string) => (color.startsWith("rgba(") ? Number(color.slice(color.lastIndexOf(",") + 1, -1)) : 1);
 /** Colour (r, g, b) of a quad's fill (a gradient's first stop). */
 export const rgbOfQuad = (q: Quad) => rgbPart(typeof q.fill === "string" ? q.fill : q.fill.stops[0]!.color);
 

@@ -71,7 +71,7 @@ export async function openMapWithFields(page: Page, opts?: Parameters<typeof moc
   return { ...opened, mock, nowIndex, now: mock.validTimes[nowIndex]! };
 }
 
-export const nearestIndex = (times: string[], iso: string) => {
+const nearestIndex = (times: string[], iso: string) => {
   const t = Date.parse(iso);
   let best = 0;
   times.forEach((v, i) => {

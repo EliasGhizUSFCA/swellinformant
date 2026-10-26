@@ -61,7 +61,7 @@ export interface MercPath {
   maxY: number;
 }
 
-export function toMercPath(coords: Position[]): MercPath {
+function toMercPath(coords: Position[]): MercPath {
   const pts = new Float64Array(coords.length * 2);
   let minX = Infinity;
   let minY = Infinity;
