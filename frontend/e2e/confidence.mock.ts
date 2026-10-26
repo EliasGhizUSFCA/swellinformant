@@ -379,6 +379,7 @@ export function swellEvent(sc: Scenario, opts: { id: string; name: string; start
     forecast_confidence_reasons: sc.reasons,
     local_confidence_reason: sc.localReason,
     wind_dispute_note: sc.windNote ?? null,
+    attribution_links: [],
     ...windFields(8),
     stale: false,
   };
