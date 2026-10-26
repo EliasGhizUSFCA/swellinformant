@@ -72,11 +72,7 @@ def test_other_package_signatures() -> None:
     from app.services.health import data_health
     from app.services.maintenance import prune_pass
     from app.services.notifications.ops_alerts import run_data_health_check
-    from app.services.notifications.transactional import (
-        deliver_account_email,
-        deliver_email,
-        deliver_sms,
-    )
+    from app.services.notifications.transactional import deliver_account_email, deliver_sms
 
     assert params(acquire_all) == [
         ("db", POS, EMPTY),
@@ -96,7 +92,6 @@ def test_other_package_signatures() -> None:
         "final_attempt",
         "now",
     ]
-    assert [n for n, _, _ in params(deliver_email)] == ["to", "subject", "text", "html", "tag"]
     assert [n for n, _, _ in params(deliver_sms)] == ["to", "body"]
 
 

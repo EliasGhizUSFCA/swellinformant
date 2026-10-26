@@ -352,8 +352,8 @@ def test_kick_under_the_daemon_writes_a_redis_flag(monkeypatch: pytest.MonkeyPat
 
 
 def test_the_inline_senders_need_no_celery() -> None:
-    """deliver_account_email / deliver_email / deliver_sms (the inline path) import
-    neither Celery nor kombu, and the Celery send_sms task sends through the same function."""
+    """deliver_account_email / deliver_sms (the inline path) import neither Celery nor
+    kombu, and the Celery send_sms task sends through the same function."""
     code = textwrap.dedent(
         """
         import sys
@@ -366,7 +366,7 @@ def test_the_inline_senders_need_no_celery() -> None:
 
         sys.meta_path.insert(0, Blocker())
         from app.services.notifications.transactional import (
-            deliver_account_email, deliver_email, deliver_sms,
+            deliver_account_email, deliver_sms,
         )
         import app.workers.dispatch
         print("ok")
@@ -382,9 +382,7 @@ def test_the_inline_senders_need_no_celery() -> None:
     assert tasks.deliver_sms is transactional.deliver_sms
 
 
-def test_inline_sms_and_email_use_the_configured_providers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_inline_sms_uses_the_configured_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.notifications import providers, transactional
 
     sent: list[tuple[str, ...]] = []
@@ -394,19 +392,9 @@ def test_inline_sms_and_email_use_the_configured_providers(
             sent.append(("sms", to, body))
             return providers.SendResult(provider="fake", message_id="sms-1")
 
-    class Email:
-        def send(self, message: providers.EmailMessageData) -> providers.SendResult:
-            sent.append(("email", message.to, message.subject, message.tag))
-            return providers.SendResult(provider="fake", message_id="mail-1")
-
     monkeypatch.setattr(providers, "build_sms_provider", lambda: Sms())
-    monkeypatch.setattr(providers, "build_email_provider", lambda: Email())
     assert transactional.deliver_sms("+15550100", "code 123456") == "sms-1"
-    assert transactional.deliver_email("a@example.com", "Hi", "text", None, "test") == "mail-1"
-    assert sent == [
-        ("sms", "+15550100", "code 123456"),
-        ("email", "a@example.com", "Hi", "test"),
-    ]
+    assert sent == [("sms", "+15550100", "code 123456")]
 
 
 # --------------------------------------------------------------------------- kick bounds
