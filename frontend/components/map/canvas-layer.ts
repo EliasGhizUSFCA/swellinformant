@@ -82,23 +82,12 @@ export class CanvasLayer extends L.Layer {
     };
   }
 
-  /** The current view of the canvas (null before the first draw). */
-  get currentView(): PixelView | null {
-    return this.view;
-  }
-
   /** Redraw on the next animation frame (calls within one frame coalesce). */
   redraw(): void {
     cancelAnimationFrame(this.frame);
     this.frame = requestAnimationFrame(() => {
       if (this._map) this.reset(this._map);
     });
-  }
-
-  /** Redraw now, synchronously. */
-  redrawNow(): void {
-    cancelAnimationFrame(this.frame);
-    if (this._map) this.reset(this._map);
   }
 
   private reset(map: L.Map): void {

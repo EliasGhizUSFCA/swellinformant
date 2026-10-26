@@ -107,7 +107,7 @@ describe("one crest lattice everywhere", () => {
       }
     }
     // The cells cover the view plus a margin of three crest spacings (how far a dash travels).
-    const g = dashGrid(l, l.families[0]!, a);
+    const g = dashGrid(l.families[0]!, a);
     const xs = g.cells.map((c) => c.ci * g.cell - a.originX);
     expect(Math.min(...xs)).toBeLessThan(-3 * crestSpacingPx(12) + 1);
     expect(Math.max(...xs)).toBeGreaterThan(a.width + 3 * crestSpacingPx(12) - g.cell - 1);
@@ -122,7 +122,7 @@ describe("one crest lattice everywhere", () => {
     const grid = (originX: number, originY: number) => {
       const view = { originX, originY, width: 400, height: 300, worldPx };
       const l = buildLattice(view, [family("combined", 2, 10, 250)]);
-      return dashGrid(l, l.families[0]!, view);
+      return dashGrid(l.families[0]!, view);
     };
     const a = grid(0.3 * worldPx, 0.25 * worldPx);
     const b = grid(0.3 * worldPx + cell, 0.25 * worldPx + 2 ** 21 * cell);

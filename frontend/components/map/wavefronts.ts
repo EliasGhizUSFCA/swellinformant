@@ -340,7 +340,7 @@ const gridCache = new WeakMap<FamilyLattice, DashGrid>();
  * (how far a dash travels in its life), so dashes born just outside the view drift into it.
  * Cached per lattice.
  */
-export function dashGrid(l: Lattice, f: FamilyLattice, view: PixelView): DashGrid {
+export function dashGrid(f: FamilyLattice, view: PixelView): DashGrid {
   const hit = gridCache.get(f);
   if (hit) return hit;
   const cell = dashCellSize(f.style, view);
@@ -661,7 +661,7 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
   order.reverse().forEach(({ f, sys }, rank) => {
     const style = f.style;
     const blob = style.shape === "blob";
-    const { cell, cells } = dashGrid(l, f, view);
+    const { cell, cells } = dashGrid(f, view);
     const store = state.store(f.system, l.zoom, cell);
     const last = rank === order.length - 1;
     const left = budget - stats.crests;
