@@ -742,7 +742,8 @@ MAP_FIELD_MAX_LEAD_HOURS=240
 from the `noaa_gfs` files when that provider is configured, off with demo only; `true`
 forces real layers next to demo spot forecasts, `false` turns them off. The values above are
 the defaults. The hosted free-database profile reads `MAP_FIELD_CYCLES=06,18` (section F.2).
-`MAP_FIELD_STEP_HOURS` is deprecated and no longer read. Fetch a cycle now with
+`MAP_FIELD_STEP_HOURS` is no longer read; an old `.env` that sets it still loads (unknown
+keys are ignored). Fetch a cycle now with
 `python -m app.cli engine map-fields [--cycle YYYYMMDDHH] [--max-lead-hours N] [--force]`.
 Encoding, sources, licence and measurements: [`docs/map-layers.md`](docs/map-layers.md).
 

@@ -130,7 +130,7 @@ wave layers: the map no longer depends on a GRIB spot provider.
 | `MAP_FIELD_STALE_AFTER_HOURS` | 21 | The index (and the data-health page) flags the layers `stale` once the served model cycle is older than this. 21 h because with cycles 00,12 a cycle is normally 17 to 20 h old before the next one replaces it, so the badge means a late or missed cycle (see Limitations) |
 | `MAP_FIELD_RESOLUTION_DEG` | 0.5 | Output grid spacing. Must divide 180 (0.25, 0.5, 1, …). Otherwise (e.g. 0.7) a NOAA spot run stores no fields and says why in `details.map_fields.warnings`, and the standalone job fails with that message; spot forecasts are unaffected |
 | `MAP_FIELD_MAX_LEAD_HOURS` | 240 | Caps `MAP_FIELD_STEPS` (the CLI's `--max-lead-hours` overrides it for one run) |
-| `MAP_FIELD_STEP_HOURS` | 3 | **Deprecated**, not read: `MAP_FIELD_STEPS` decides the map hours. Still accepted so old `.env` files load |
+| `MAP_FIELD_STEP_HOURS` | (removed) | **Deprecated**, not read: `MAP_FIELD_STEPS` decides the map hours. Ignored if an old `.env` still sets it (unknown keys are ignored) |
 
 The read side serves whatever is stored, whatever the mode. Retention removes old fields.
 
