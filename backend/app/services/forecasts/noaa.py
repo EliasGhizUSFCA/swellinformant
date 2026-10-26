@@ -126,6 +126,7 @@ from app.services.forecasts.grib import (
     NotPublishedError,
     PointSampler,
     decode_message,
+    head_published,
     parse_ncep_idx,
     select_entries,
 )
@@ -135,7 +136,6 @@ from app.services.http import (
     PermanentProviderError,
     ProviderError,
     TransientProviderError,
-    request_with_retries,
 )
 from app.services.map_fields import is_map_cycle, map_field_hours, map_fields_mode
 
@@ -1117,14 +1117,7 @@ class NoaaGfsProvider(ForecastProvider):
     # ------------------------------------------------------------------ run discovery
     def _published(self, url: str) -> bool:
         """True if ``url`` exists. Network failures raise instead of meaning "not yet"."""
-        response = request_with_retries(
-            self.client, "HEAD", url, provider=HTTP_PROVIDER, backoff_seconds=self.backoff_seconds
-        )
-        if response.status_code == 200:
-            return True
-        if response.status_code in (403, 404):  # S3 can answer 403 for a missing key
-            return False
-        raise PermanentProviderError(f"{HTTP_PROVIDER}: HTTP {response.status_code} for {url}")
+        return head_published(self.client, url, HTTP_PROVIDER, backoff_seconds=self.backoff_seconds)
 
     def current_run(self, now: datetime) -> RunInfo:
         """Newest cycle whose last needed step exists for the atmosphere and every wave grid.

@@ -164,6 +164,29 @@ def select_entries(entries: Iterable[IndexEntry], keys: Iterable[str]) -> dict[s
 
 
 # --------------------------------------------------------------------------- fetching
+def head_published(
+    client: httpx.Client,
+    url: str,
+    provider: str,
+    *,
+    attempts: int = 3,
+    backoff_seconds: float = 1.0,
+    what: str = "",
+) -> bool:
+    """HEAD probe: True for 200, False for 403/404 (S3 answers 403 for some missing keys).
+
+    Any other status raises, and network failures raise instead of meaning "not yet";
+    ``what`` goes before the URL in the error (ECMWF's "HEAD ")."""
+    response = request_with_retries(
+        client, "HEAD", url, provider=provider, attempts=attempts, backoff_seconds=backoff_seconds
+    )
+    if response.status_code == 200:
+        return True
+    if response.status_code in (403, 404):
+        return False
+    raise PermanentProviderError(f"{provider}: HTTP {response.status_code} for {what}{url}")
+
+
 class GribFetcher:
     """Fetches index files and byte ranges with retries, backoff and request counting."""
 

@@ -97,6 +97,7 @@ from app.services.forecasts.grib import (
     NotPublishedError,
     PointSampler,
     decode_message,
+    head_published,
     load_eccodes,
     parse_ecmwf_index,
     select_entries,
@@ -107,7 +108,6 @@ from app.services.http import (
     HttpTally,
     PermanentProviderError,
     TransientProviderError,
-    request_with_retries,
 )
 
 logger = logging.getLogger(__name__)
@@ -395,19 +395,14 @@ class EcmwfIfsProvider(ForecastProvider):
     def _published(self, url: str) -> bool:
         """HEAD probe: True = 200, False = not published (403/404); throttling raises."""
         self.probe_request_count += 1
-        response = request_with_retries(
+        return head_published(
             self.client,
-            "HEAD",
             url,
-            provider=PROVIDER,
+            PROVIDER,
             attempts=self.attempts,
             backoff_seconds=self.backoff_seconds,
+            what="HEAD ",
         )
-        if response.status_code == 200:
-            return True
-        if response.status_code in (403, 404):
-            return False
-        raise PermanentProviderError(f"{PROVIDER}: HTTP {response.status_code} for HEAD {url}")
 
     def current_run(self, now: datetime) -> RunInfo:
         """Newest 00/12Z cycle whose last needed step is published for waves and atmosphere.

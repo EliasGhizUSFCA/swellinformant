@@ -93,6 +93,7 @@ from app.services.forecasts.grib import (
     IndexEntry,
     PointSampler,
     decode_message,
+    head_published,
     load_eccodes,
     parse_ncep_idx,
 )
@@ -102,7 +103,6 @@ from app.services.http import (
     PermanentProviderError,
     ProviderError,
     TransientProviderError,
-    request_with_retries,
 )
 
 logger = logging.getLogger(__name__)
@@ -611,14 +611,7 @@ class GefsWaveEnsembleProvider(ForecastProvider):
     def _published(self, url: str) -> bool:
         """True if ``url`` exists. Network failures raise instead of meaning "not yet"."""
         self.probe_requests += 1
-        response = request_with_retries(
-            self.client, "HEAD", url, provider=HTTP_PROVIDER, backoff_seconds=self.backoff_seconds
-        )
-        if response.status_code == 200:
-            return True
-        if response.status_code in (403, 404):  # S3 answers 403 for some missing keys
-            return False
-        raise PermanentProviderError(f"{HTTP_PROVIDER}: HTTP {response.status_code} for {url}")
+        return head_published(self.client, url, HTTP_PROVIDER, backoff_seconds=self.backoff_seconds)
 
     def current_run(self, now: datetime) -> RunInfo:
         """Newest 00/06/12/18Z cycle whose mean-file ``.idx`` exists for the last needed step.
