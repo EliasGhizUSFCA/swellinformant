@@ -275,12 +275,10 @@ def research_inputs(assessments: dict[int, AssessmentInputs]) -> dict[int, Resea
 
 @dataclass
 class RunConfidenceContext:
-    run: ForecastRun
     stale: bool
     stale_after_hours: float | None
     families: tuple[str, ...]
     comparisons: dict[tuple[int, datetime], HourComparison]
-    previous_run: ForecastRun | None
     # (spot_id, valid_time) -> (offshore Hs, primary swell height) of the previous run
     previous: dict[tuple[int, datetime], tuple[float | None, float | None]]
     verification: VerificationIndex
@@ -313,14 +311,12 @@ class RunConfidenceContext:
         if research is None:
             research = research_inputs(scoring_assessments(db))
         return cls(
-            run=run,
             stale=is_stale(run, now),
             stale_after_hours=None
             if run.source.code == BLEND_CODE
             else stale_after_hours(run.source.code),
             families=families,
             comparisons=_comparisons(db, run),
-            previous_run=prev,
             previous=previous,
             verification=VerificationIndex.load(db, codes),
             research=research,

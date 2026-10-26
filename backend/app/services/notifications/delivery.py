@@ -97,7 +97,6 @@ class _Providers:
     def __init__(self) -> None:
         self._email: EmailProvider | None = None
         self._sms: SmsProvider | None = None
-        self.sms_error: str | None = None
 
     def email(self) -> EmailProvider:
         if self._email is None:
