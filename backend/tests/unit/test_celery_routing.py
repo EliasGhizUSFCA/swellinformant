@@ -20,6 +20,8 @@ from app.jobs.schedule import (
     Every,
     JobEntry,
     build_schedule,
+    max_interval,
+    optional_jobs,
 )
 from app.models.enums import JobStatus
 from app.workers import tasks
@@ -29,7 +31,6 @@ from app.workers.schedule import (
     DEFAULT_QUEUE,
     build_beat_schedule,
     celery_beat_schedule,
-    max_interval,
     queue_for,
 )
 
@@ -90,10 +91,11 @@ def test_a_worker_without_queue_options_consumes_both_queues() -> None:
 
 def test_every_beat_entry_expires_after_its_interval() -> None:
     schedule = celery_beat_schedule(every_job_settings())
-    assert set(schedule) == set(build_beat_schedule(every_job_settings()))
+    plain = build_schedule(every_job_settings())
+    assert set(schedule) == set(build_beat_schedule(every_job_settings())) == set(plain)
     for name, entry in schedule.items():
         expires = entry["options"]["expires"]
-        assert expires == max_interval(entry["schedule"]).total_seconds() > 0, name
+        assert expires == max_interval(plain[name].schedule).total_seconds() > 0, name
     assert schedule["notification-delivery"]["options"]["expires"] == 120.0
     # The configured app carries the same options.
     assert all("expires" in e["options"] for e in celery_app.conf.beat_schedule.values())
@@ -266,7 +268,7 @@ def test_job_specs_keep_the_task_options() -> None:
 
 
 # Moved from tests/integration/test_map_fields.py: the beat entry belongs to the schedule.
-def test_beat_never_runs_the_map_field_job_on_a_timer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_beat_never_runs_the_map_field_job_on_a_timer() -> None:
     """D14: in standalone mode the sync acquires the map layers with the spot forecasts of
     the same GFS cycle (was: a beat entry every FORECAST_REFRESH_MINUTES); with NOAA the
     acquisition stores them. The task stays callable by hand."""
@@ -279,11 +281,9 @@ def test_beat_never_runs_the_map_field_job_on_a_timer(monkeypatch: pytest.Monkey
         {"map_fields_enabled": True},
         {"map_fields_enabled": True, "forecast_providers": "noaa_gfs"},
     ):
-        monkeypatch.setattr(module, "settings", base.model_copy(update=update))
-        assert "map-fields" not in module._optional_schedule(), update
-        assert not any(
-            e["task"] == "forecasts.map_fields" for e in module._optional_schedule().values()
-        )
+        optional = optional_jobs(base.model_copy(update=update))
+        assert "map-fields" not in optional, update
+        assert not any(e.task == "forecasts.map_fields" for e in optional.values())
     standalone = base.model_copy(update={"map_fields_enabled": True})
     assert build_beat_schedule(standalone)["sync-tick"]["schedule"] == timedelta(
         minutes=standalone.sync_check_minutes

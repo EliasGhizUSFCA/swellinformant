@@ -9,9 +9,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
-from celery.schedules import crontab
-
 from app.core.config import get_settings
 from app.schemas.health import (
     DataHealthOut,
@@ -27,7 +24,7 @@ from app.services.notifications.ops_alerts import (
     plan_alerts,
     render_alert,
 )
-from app.workers.schedule import build_beat_schedule, describe_schedule, max_interval
+from app.workers.schedule import build_beat_schedule
 
 T0 = datetime(2026, 10, 12, 6, 0, tzinfo=UTC)
 REPEAT = timedelta(hours=12)
@@ -239,28 +236,6 @@ def test_overall_status() -> None:
     assert overall_status([]) == "ok"
     assert overall_status([STALE]) == "degraded"
     assert overall_status([STALE, FAILING]) == "failing"
-
-
-@pytest.mark.parametrize(
-    ("sched", "gap", "text"),
-    [
-        (timedelta(minutes=2), timedelta(minutes=2), "every 2 min"),
-        (timedelta(hours=3), timedelta(hours=3), "every 3 h"),
-        (timedelta(hours=1), timedelta(hours=1), "every hour"),
-        (crontab(hour=3, minute=30), timedelta(hours=24), "daily at 03:30 UTC"),
-        (
-            crontab(hour="1,7,13,19", minute=40),
-            timedelta(hours=6),
-            "daily at 01:40, 07:40, 13:40, 19:40 UTC",
-        ),
-        (crontab(hour="0,6", minute=0), timedelta(hours=18), "daily at 00:00, 06:00 UTC"),
-        (crontab(hour=1, minute=0, day_of_week="mon"), timedelta(days=7), None),
-    ],
-)
-def test_schedule_intervals(sched: object, gap: timedelta, text: str | None) -> None:
-    assert max_interval(sched) == gap
-    if text is not None:
-        assert describe_schedule(sched) == text
 
 
 def test_beat_schedule_has_the_data_health_job_at_its_configured_interval() -> None:

@@ -111,8 +111,8 @@ def test_beat_gets_the_floored_intervals_and_matching_expiry() -> None:
     assert beat_entries["notification-delivery"]["schedule"] == timedelta(hours=1)
     assert beat_entries["notification-delivery"]["options"]["expires"] == 3600.0
     assert beat_entries[SYNC_TICK_ENTRY]["task"] == SYNC_TICK_JOB
-    assert beat.describe_schedule(beat_entries["user-matching"]["schedule"]) == "every hour"
-    assert beat.max_interval(beat_entries["maintenance-cleanup"]["schedule"]) == timedelta(hours=24)
+    assert beat_entries["user-matching"]["schedule"] == timedelta(hours=1)
+    assert beat_entries["maintenance-cleanup"]["options"]["expires"] == 24 * 3600.0
 
 
 @pytest.mark.parametrize("runner", ["celery", "daemon"])

@@ -149,8 +149,6 @@ def test_the_beat_adapter_matches_the_plain_schedule(settings: Settings) -> None
         converted = celery_shaped[name]
         assert converted["task"] == entry.task
         assert converted["schedule"] == beat.to_celery(entry.schedule)
-        assert beat.max_interval(converted["schedule"]) == max_interval(entry.schedule)
-        assert beat.describe_schedule(converted["schedule"]) == describe_schedule(entry.schedule)
 
 
 @pytest.mark.parametrize(
@@ -178,7 +176,6 @@ def test_plain_schedules(sched: Every | DailyAt, gap: timedelta, text: str, cele
     assert max_interval(sched) == gap
     assert describe_schedule(sched) == text
     assert beat.to_celery(sched) == celery
-    assert beat.max_interval(sched) == gap and beat.describe_schedule(sched) == text
 
 
 # --------------------------------------------------------------------------- registry
