@@ -13,9 +13,7 @@ const buttonVariants = cva(
         coral: "bg-coral text-white shadow-sm hover:bg-coral/90",
         destructive: "bg-destructive text-white shadow-sm hover:bg-destructive/90",
         outline: "border bg-card shadow-xs hover:bg-accent hover:text-accent-foreground",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
-        link: "text-primary underline-offset-4 hover:underline",
         glass: "bg-white/10 text-white border border-white/25 backdrop-blur hover:bg-white/20",
       },
       size: {

@@ -7,8 +7,6 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 const Dialog = DialogPrimitive.Root;
-const DialogTrigger = DialogPrimitive.Trigger;
-const DialogClose = DialogPrimitive.Close;
 
 function DialogContent({ className, children, ...props }: React.ComponentProps<typeof DialogPrimitive.Content>) {
   return (
@@ -47,4 +45,4 @@ function DialogDescription({ className, ...props }: React.ComponentProps<typeof 
   return <DialogPrimitive.Description className={cn("text-sm text-muted-foreground", className)} {...props} />;
 }
 
-export { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger };
+export { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle };
