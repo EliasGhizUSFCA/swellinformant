@@ -39,16 +39,12 @@ def _print(obj: Any) -> None:
 def _list(db: Any) -> list[dict[str, Any]]:
     from app.models import SpotTideStation, SurfSpot, TidePrediction, TideStation
 
-    counts = dict(
-        db.execute(
-            select(TidePrediction.station_id, func.count()).group_by(TidePrediction.station_id)
-        ).all()
-    )
-    spans = {
-        sid: (lo, hi)
-        for sid, lo, hi in db.execute(
+    stored = {
+        sid: (n, lo, hi)
+        for sid, n, lo, hi in db.execute(
             select(
                 TidePrediction.station_id,
+                func.count(),
                 func.min(TidePrediction.valid_time),
                 func.max(TidePrediction.valid_time),
             ).group_by(TidePrediction.station_id)
@@ -63,7 +59,7 @@ def _list(db: Any) -> list[dict[str, Any]]:
         spots.setdefault(sid, []).append(f"{slug} ({relation})")
     out = []
     for s in db.scalars(select(TideStation).order_by(TideStation.provider, TideStation.code)):
-        lo, hi = spans.get(s.id, (None, None))
+        n, lo, hi = stored.get(s.id, (0, None, None))
         out.append(
             {
                 "provider": s.provider,
@@ -71,7 +67,7 @@ def _list(db: Any) -> list[dict[str, Any]]:
                 "name": s.name,
                 "kind": s.kind,
                 "spots": sorted(spots.get(s.id, [])),
-                "predictions": counts.get(s.id, 0),
+                "predictions": n,
                 "first": lo,
                 "last": hi,
                 "last_error": (s.metadata_ or {}).get("last_error"),
