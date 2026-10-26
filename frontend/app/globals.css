@@ -1,7 +1,5 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:is(.dark *));
-
 /* Design tokens: an ocean / travel palette (ink navy, deep ocean, seafoam, sand, coral). */
 :root {
   --radius: 0.85rem;
@@ -20,7 +18,6 @@
   --accent: #e3f2f4;
   --accent-foreground: #0b2233;
   --destructive: #d93a3a;
-  --destructive-foreground: #ffffff;
   --border: #d9e6eb;
   --input: #cddde4;
   --ring: #0e7490;
@@ -43,7 +40,6 @@
   --chart-hover: #587080;
   --chart-now: #b4532a;
   --chart-wave: #2a9d8f;
-  --chart-wave-selected: #146c63;
   --chart-wave-range: #0b3a4d;
   --chart-wave-band: rgba(42, 157, 143, 0.17);
   --chart-offshore: #8a6d3b;
@@ -89,7 +85,6 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -130,17 +125,10 @@
 }
 
 @layer utilities {
-  .font-display {
-    font-family: var(--font-display);
-    font-optical-sizing: auto;
-  }
   .bg-ocean-gradient {
     background-image: radial-gradient(1200px 600px at 10% -10%, rgba(43, 179, 163, 0.35), transparent 60%),
       radial-gradient(900px 500px at 100% 0%, rgba(14, 116, 144, 0.45), transparent 60%),
       linear-gradient(160deg, #06263a 0%, #0b3a52 45%, #0e5a73 100%);
-  }
-  .text-balance {
-    text-wrap: balance;
   }
   .scrollbar-thin {
     scrollbar-width: thin;
@@ -209,9 +197,6 @@
 .leaflet-container {
   font-family: var(--font-sans);
   background: #dceef2;
-}
-.leaflet-popup-content-wrapper {
-  border-radius: 12px;
 }
 
 /* Leaflet markers: keep the focus ring for keyboard users, hide it after a mouse click. */
