@@ -80,14 +80,6 @@ def in_lead_bucket(lead_hours: ArrayLike, bucket_h: int) -> NDArray[np.bool_]:
     return np.abs(leads - bucket_h) <= bucket_half_width(bucket_h)
 
 
-def lead_bucket(lead_hours: float) -> int | None:
-    """The bucket a single lead belongs to, or None."""
-    for bucket in LEAD_BUCKETS_H:
-        if abs(lead_hours - bucket) <= bucket_half_width(bucket):
-            return bucket
-    return None
-
-
 def lead_bucket_array(lead_hours: ArrayLike) -> NDArray[np.int64]:
     """Bucket of every lead (:data:`NO_BUCKET` where none applies)."""
     leads = np.asarray(lead_hours, dtype=float)
@@ -246,22 +238,6 @@ def wrap_degrees(x: ArrayLike) -> FloatArray:
 def circular_difference(m: ArrayLike, o: ArrayLike) -> FloatArray:
     """Signed smallest difference m - o in degrees, in (-180, 180] (positive = clockwise)."""
     return wrap_degrees(np.asarray(m, dtype=float) - np.asarray(o, dtype=float))
-
-
-def circular_mean(angles_deg: ArrayLike, weights: ArrayLike | None = None) -> float:
-    """Mean direction via unit vectors, in [0, 360); nan when the resultant vanishes."""
-    if weights is None:
-        (a,) = finite_pairs(angles_deg)
-        w = np.ones_like(a)
-    else:
-        a, w = finite_pairs(angles_deg, weights)
-    if not a.size:
-        return math.nan
-    rad = np.deg2rad(a)
-    s, c = float(np.sum(w * np.sin(rad))), float(np.sum(w * np.cos(rad)))
-    if math.hypot(s, c) < 1e-12 * max(1.0, float(np.sum(np.abs(w)))):
-        return math.nan
-    return math.degrees(math.atan2(s, c)) % 360.0
 
 
 def circular_bias(m: ArrayLike, o: ArrayLike) -> float:
@@ -477,10 +453,6 @@ class BootstrapCI:
     @property
     def available(self) -> bool:
         return math.isfinite(self.lower) and math.isfinite(self.upper)
-
-    def excludes(self, value: float = 0.0) -> bool:
-        """True when the interval is available and ``value`` lies outside it."""
-        return self.available and not (self.lower <= value <= self.upper)
 
     def as_dict(self) -> dict[str, Any]:
         return {
