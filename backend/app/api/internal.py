@@ -1,4 +1,4 @@
-"""Internal routes for the platform, not for browsers (foundation contract F8).
+"""Internal routes for the platform, not for browsers.
 
 ``GET /api/internal/cron/daily`` is the daily watchdog Vercel Cron calls with
 ``Authorization: Bearer $CRON_SECRET``:

@@ -1,5 +1,4 @@
-"""GET /api/internal/cron/daily, the daily watchdog (contract F8). Owned by the
-api-serverless package.
+"""GET /api/internal/cron/daily, the daily watchdog. Owned by the api-serverless package.
 
 404 without CRON_SECRET (the body of an unknown route), 401 for a wrong token, otherwise
 200 ``{status, problems, alerts_sent, heartbeat_age_minutes}`` with ``Cache-Control:

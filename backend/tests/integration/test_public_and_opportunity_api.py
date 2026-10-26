@@ -78,7 +78,7 @@ def test_system_status(app_client: ApiClient) -> None:
     assert status["detection"]["lead_min_days"] == 5.0
     assert {j["job"] for j in status["jobs"]} >= {"forecasts.acquire", "notifications.deliver"}
     # The status page's fallback job list names every scheduled task, with every optional
-    # job switched on (tides.acquire and forecasts.map_fields were missing, review F3).
+    # job switched on (tides.acquire and forecasts.map_fields were once missing).
     every = Settings(
         map_fields_enabled=True,
         gefs_enabled=True,

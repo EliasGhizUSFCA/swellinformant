@@ -5,7 +5,7 @@ package.
   pauses after a TransientProviderError, the last attempt final) without importing Celery;
   kicks are Redis flags.
 * JOB_RUNNER=celery: any exception from ``.delay()`` falls back to the inline delivery.
-* :func:`dispatch.kick` (F7) never raises and returns within 2 s.
+* :func:`dispatch.kick` never raises and returns within 2 s.
 
 Provider failures and slow brokers here are synthetic test doubles.
 """

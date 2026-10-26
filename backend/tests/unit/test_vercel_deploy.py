@@ -1,4 +1,4 @@
-"""The Vercel deployment files keep the layout contract (design F8/F9, D10, D15).
+"""The Vercel deployment files keep the layout contract (design D10, D15).
 
 vercel.json: the web and api services, /api routed to the api and everything else to the web,
 the sync daemon, and one daily cron on the watchdog route. .vercelignore keeps what the

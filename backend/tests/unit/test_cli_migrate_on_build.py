@@ -1,4 +1,4 @@
-"""``python -m app.cli migrate --on-build`` (contract F8; D9).
+"""``python -m app.cli migrate --on-build`` (D9).
 
 MIGRATE_ON_BUILD=off never migrates; production migrates only production builds
 (VERCEL_ENV=production), so preview builds and Neon preview branches are left alone; all

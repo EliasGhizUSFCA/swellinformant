@@ -1,5 +1,5 @@
-"""maintenance.prune_pass, the prune after every sync (F7, SYNC_PRUNE_EACH_PASS). Owned by
-the egress-map-serving package.
+"""maintenance.prune_pass, the prune after every sync (SYNC_PRUNE_EACH_PASS). Owned by the
+egress-map-serving package.
 
 prune_pass deletes derived data the sync can recompute: the predictions of superseded member
 runs (when PRUNE_SUPERSEDED_MEMBER_PREDICTIONS) and the map fields of runs that are neither

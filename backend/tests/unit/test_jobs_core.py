@@ -193,7 +193,7 @@ def test_every_celery_job_has_a_registry_spec() -> None:
 
 def test_every_sync_stage_and_scheduled_job_has_a_registry_spec() -> None:
     """The orchestrator runs JOB_SPECS[STAGE_JOB_NAMES[stage]] and the daemon runs
-    JOB_SPECS[entry.task] for every schedule entry (contracts F3, F5, F7)."""
+    JOB_SPECS[entry.task] for every schedule entry."""
     assert set(STAGE_JOB_NAMES.values()) <= set(registry.JOB_SPECS)
     for settings in (Settings(_env_file=None), every_job_settings()):  # type: ignore[call-arg]
         tasks = {entry.task for entry in build_schedule(settings).values()}
