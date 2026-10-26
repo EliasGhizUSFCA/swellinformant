@@ -65,9 +65,11 @@ Disagreement
 from __future__ import annotations
 
 import bisect
+import functools
 import hashlib
 import logging
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -292,31 +294,47 @@ def row_at(
     return (rows[i - 1] if i > 0 else None), True
 
 
-def value_at(rows: list[MemberStep], times: list[datetime], t: datetime, name: str) -> float | None:
-    """Field ``name`` at time t, interpolating between neighbouring steps (no extrapolation)."""
+def values_at(
+    rows: list[MemberStep], times: list[datetime], t: datetime, names: Sequence[str]
+) -> dict[str, float | None]:
+    """Fields ``names`` at time t, interpolating between neighbouring steps (no
+    extrapolation); one search of ``times`` serves every field."""
     i = bisect.bisect_left(times, t)
     if i < len(times) and times[i] == t:
-        return getattr(rows[i], name)
+        row = rows[i]
+        return {name: getattr(row, name) for name in names}
     if i == 0 or i == len(times):
-        return None
+        return dict.fromkeys(names)
     t0, t1 = times[i - 1], times[i]
     if t1 - t0 > MAX_INTERP_GAP:
-        return None
-    v0, v1 = getattr(rows[i - 1], name), getattr(rows[i], name)
-    if v0 is None or v1 is None:
-        return None
+        return dict.fromkeys(names)
+    before, after = rows[i - 1], rows[i]
     frac = (t - t0) / (t1 - t0)
-    if name in DIRECTION_FIELDS:
-        return _interp_angle(v0, v1, frac)
-    return float(v0 + (v1 - v0) * frac)
+    out: dict[str, float | None] = {}
+    for name in names:
+        v0, v1 = getattr(before, name), getattr(after, name)
+        if v0 is None or v1 is None:
+            out[name] = None
+        elif name in DIRECTION_FIELDS:
+            out[name] = _interp_angle(v0, v1, frac)
+        else:
+            out[name] = float(v0 + (v1 - v0) * frac)
+    return out
 
 
 # --------------------------------------------------------------------------- weights
-def correlated_weights(sigmas: list[float], families: list[str]) -> list[float]:
+def correlated_weights(sigmas: Sequence[float], families: Sequence[str]) -> list[float]:
     """BLUE weights for estimators with correlated errors, clipped at zero."""
+    return list(_correlated_weights(tuple(sigmas), tuple(families)))
+
+
+@functools.lru_cache(maxsize=4096)
+def _correlated_weights(sigmas: tuple[float, ...], families: tuple[str, ...]) -> tuple[float, ...]:
+    # The weights depend on the hour's lead times and families, not on the spot, so one
+    # blend solves each system once instead of once per spot.
     n = len(sigmas)
     if n == 1:
-        return [1.0]
+        return (1.0,)
     cov = np.empty((n, n))
     for i in range(n):
         for j in range(n):
@@ -328,8 +346,8 @@ def correlated_weights(sigmas: list[float], families: list[str]) -> list[float]:
     raw = np.clip(raw, 0.0, None)
     total = float(raw.sum())
     if total <= 0:
-        return [1.0 / n] * n
-    return [float(w) / total for w in raw]
+        return (1.0 / n,) * n
+    return tuple(float(w) / total for w in raw)
 
 
 @dataclass
@@ -450,7 +468,7 @@ def blend_hour(
                 acc += w * v
         return acc / total if total > 0 else None
 
-    out: dict[str, float | None] = {k: None for k in FORECAST_FIELDS}
+    out: dict[str, float | None] = dict.fromkeys(FORECAST_FIELDS)
     structure = next(
         (h for h in hours if h.values.get("primary_swell_height_m") is not None), hours[0]
     )
@@ -675,7 +693,7 @@ def build_blend(db: Session, now: datetime | None = None) -> AcquisitionOutcome:
             dup_hours: list[HourValues] = []
             corrected: dict[str, dict[str, Any]] = {}
             for m, rows, times in aligned:
-                values = {name: value_at(rows, times, t, name) for name in FORECAST_FIELDS}
+                values = values_at(rows, times, t, FORECAST_FIELDS)
                 if all(v is None for v in values.values()):
                     continue
                 own, between_steps = row_at(rows, times, t)
