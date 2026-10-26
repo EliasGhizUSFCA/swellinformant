@@ -76,7 +76,7 @@ export function ratingTitle(label: string): string {
   return `${QUALITY_LABELS[asQuality(label)]} Surf`;
 }
 
-function num(v: unknown): number | null {
+export function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
@@ -221,6 +221,7 @@ export const COMPONENT_LABEL: Record<string, string> = {
 };
 
 export const TONE_WORD: Record<FactorTone, string> = { good: "Favorable", ok: "Workable", bad: "Limiting" };
+export const TONE_BAR: Record<FactorTone, string> = { good: "bg-emerald-600", ok: "bg-amber-500", bad: "bg-orange-600" };
 
 /** Component fits (0–1) present in the API's `components`, in the documented order. */
 export function componentFits(components: Record<string, unknown> | null | undefined): Array<{ key: string; label: string; value: number; tone: FactorTone }> {

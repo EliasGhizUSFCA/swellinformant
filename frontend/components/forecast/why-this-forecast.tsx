@@ -2,12 +2,10 @@
 
 import { InfoPopover } from "@/components/info-popover";
 import { Disclosure } from "@/components/ui/disclosure";
-import { componentFits, score10, TONE_WORD, type FactorTone } from "@/lib/rating";
+import { componentFits, score10, TONE_BAR, TONE_WORD } from "@/lib/rating";
 import { explanationText, type HeightUnit, type WindUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { TimelineStep } from "@/types/api";
-
-const TONE_BAR: Record<FactorTone, string> = { good: "bg-emerald-600", ok: "bg-amber-500", bad: "bg-orange-600" };
 
 // The score's gates (multipliers <= 1 the scoring engine applies when a factor is outside the
 // break's working range), by the short names of the timeline contract.

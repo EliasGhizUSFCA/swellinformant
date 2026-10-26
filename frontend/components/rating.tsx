@@ -3,7 +3,7 @@
 import { InfoPopover } from "@/components/info-popover";
 import { Disclosure } from "@/components/ui/disclosure";
 import { asQuality, QUALITY_COLORS, QUALITY_COLORS_DARK } from "@/lib/quality";
-import { componentFits, limitingGates, ratingTitle, score10, TONE_WORD, type FactorTone, type RatingFactor } from "@/lib/rating";
+import { componentFits, limitingGates, ratingTitle, score10, TONE_BAR, TONE_WORD, type FactorTone, type RatingFactor } from "@/lib/rating";
 import { explanationText, useWindUnit, type HeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 
@@ -50,7 +50,6 @@ export function RatingHeadline({
   );
 }
 
-const TONE_BAR: Record<FactorTone, string> = { good: "bg-emerald-600", ok: "bg-amber-500", bad: "bg-orange-600" };
 const TONE_TEXT: Record<FactorTone, string> = { good: "text-emerald-800", ok: "text-amber-900", bad: "text-orange-800" };
 
 const FACTOR_LABEL: Record<RatingFactor["key"], string> = {

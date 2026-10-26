@@ -7,8 +7,9 @@
  * what the backend reports: run keys, model cycles, timestamps, stage durations and states.
  * Older backends send no `sync` block; callers then show nothing.
  */
-import { cycleLabel } from "@/lib/map-time";
+import type { BadgeVariant as Tone } from "@/lib/delivery";
 import { titleCase } from "@/lib/format";
+import { cycleLabel } from "@/lib/map-time";
 import type { components } from "@/types/openapi";
 
 /** A model run a sync stored, per component; `cycle` is the newest model cycle of that run. */
@@ -21,8 +22,6 @@ export type SyncHealth = components["schemas"]["SyncHealthOut"];
 export type SyncStage = components["schemas"]["SyncStageOut"];
 export type SyncComponentState = SyncComponent["state"];
 export type SyncRunStatus = SyncRun["status"];
-
-type Tone = "good" | "warn" | "danger" | "muted" | "info";
 
 const DAY_MS = 86_400_000;
 

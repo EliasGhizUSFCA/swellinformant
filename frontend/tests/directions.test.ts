@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { ARROW_CONVENTION_TEXT, arrowRotationDeg, compass16, uvFromWind } from "@/lib/directions";
+import { ARROW_CONVENTION_TEXT, arrowRotationDeg, uvFromWind } from "@/lib/directions";
+import { compass } from "@/lib/format";
 
 describe("arrow convention", () => {
   it("points arrows where the wind or waves go (FROM + 180°)", () => {
@@ -41,16 +42,16 @@ describe("uvFromWind", () => {
   });
 });
 
-describe("compass16", () => {
+describe("compass", () => {
   it("names the 16 points and wraps", () => {
-    expect(compass16(0)).toBe("N");
-    expect(compass16(11.2)).toBe("N");
-    expect(compass16(11.25)).toBe("NNE");
-    expect(compass16(225)).toBe("SW");
-    expect(compass16(290)).toBe("WNW");
-    expect(compass16(359)).toBe("N");
-    expect(compass16(-45)).toBe("NW");
-    expect(compass16(720 + 90)).toBe("E");
-    expect(compass16(Number.NaN)).toBe("—");
+    expect(compass(0)).toBe("N");
+    expect(compass(11.2)).toBe("N");
+    expect(compass(11.25)).toBe("NNE");
+    expect(compass(225)).toBe("SW");
+    expect(compass(290)).toBe("WNW");
+    expect(compass(359)).toBe("N");
+    expect(compass(-45)).toBe("NW");
+    expect(compass(720 + 90)).toBe("E");
+    expect(compass(Number.NaN)).toBe("—");
   });
 });

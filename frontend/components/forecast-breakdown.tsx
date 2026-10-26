@@ -4,7 +4,7 @@ import { Bot, Waves, Wind } from "lucide-react";
 
 import { uncertaintyLabel } from "@/components/charts/forecast-charts";
 import { ForecastConfidence, LocalConfidence } from "@/components/confidence";
-import { cycleLabel, ForecastProvenance, useNowMs } from "@/components/forecast-provenance";
+import { ForecastProvenance, useNowMs } from "@/components/forecast-provenance";
 import { InfoPopover } from "@/components/info-popover";
 import { DemoBadge } from "@/components/quality";
 import { RatingHeadline, WhyThisRating } from "@/components/rating";
@@ -12,6 +12,7 @@ import { Disclosure } from "@/components/ui/disclosure";
 import { WindDisputeNote } from "@/components/wind-dispute";
 import { forecastReasonsOf, modelRunText, rangeWords, validInText } from "@/lib/confidence";
 import { compass, formatSpotDateTime, heightRange, seconds, type Units } from "@/lib/format";
+import { cycleLabel } from "@/lib/map-time";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors, ratingReason } from "@/lib/rating";
 import { offshoreHeightText } from "@/lib/timeline";

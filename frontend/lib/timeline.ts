@@ -11,10 +11,9 @@
  * are 3 hours wide, 6-hourly steps 6 hours wide, and a bar's centre is its valid time.
  */
 
-import { compass16 } from "@/lib/directions";
-import { formatHourTick, zoneName } from "@/lib/format";
+import { compass, formatHourTick, zoneName } from "@/lib/format";
 import { asQuality, QUALITY_LABELS } from "@/lib/quality";
-import type { HeightUnit } from "@/lib/units";
+import { M_PER_FT, type HeightUnit } from "@/lib/units";
 import type { PartitionOut, QualityLabel, SpotTimeline, TimelineDay, TimelineStep } from "@/types/api";
 
 export { zoneName };
@@ -371,19 +370,19 @@ export function interpolationText(step: TimelineStep, members: ReadonlyArray<{ c
 /** An offshore (model) height given in metres, in the viewer's unit: "1.6 m" / "5.2 ft". */
 export function offshoreHeightText(m: number | null | undefined, unit: HeightUnit): string {
   if (m == null || !Number.isFinite(m)) return "—";
-  return unit === "m" ? `${m.toFixed(1)} m` : `${(m / 0.3048).toFixed(1)} ft`;
+  return unit === "m" ? `${m.toFixed(1)} m` : `${(m / M_PER_FT).toFixed(1)} ft`;
 }
 
 /** A tide height given in metres (relative to its datum, so it can be negative), in the
  * viewer's unit to 0.1: "1.2 m", "-0.4 ft" (never "-0.0"). */
 export function tideHeightText(m: number, unit: HeightUnit): string {
-  const v = Math.round((unit === "m" ? m : m / 0.3048) * 10) / 10;
+  const v = Math.round((unit === "m" ? m : m / M_PER_FT) * 10) / 10;
   return `${(Object.is(v, -0) ? 0 : v).toFixed(1)} ${unit}`;
 }
 
 /** A nautical FROM direction: "SW 225°" (or "—"). */
 export function directionText(fromDeg: number | null | undefined): string {
-  return fromDeg == null || !Number.isFinite(fromDeg) ? "—" : `${compass16(fromDeg)} ${Math.round(fromDeg) % 360}°`;
+  return fromDeg == null || !Number.isFinite(fromDeg) ? "—" : `${compass(fromDeg)} ${Math.round(fromDeg) % 360}°`;
 }
 
 /** "1.6 m · 12 s · SW 225°" for one wave system (height in the viewer's unit). */

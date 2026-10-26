@@ -1,3 +1,4 @@
+import { num } from "@/lib/rating";
 import type { Conditions, ForecastPoint, SpotForecast } from "@/types/api";
 
 interface BreakdownPartition {
@@ -7,8 +8,6 @@ interface BreakdownPartition {
   direction_deg?: unknown;
   breaking_m?: unknown;
 }
-
-const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 /**
  * Height, period and direction of the wave system that drives the surf at this hour: the

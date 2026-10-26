@@ -17,6 +17,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { get } from "@/lib/api";
+import type { BadgeVariant as Tone } from "@/lib/delivery";
 import { relativeTime, titleCase } from "@/lib/format";
 import type { SyncHealth } from "@/lib/sync";
 
@@ -152,8 +153,6 @@ export const useDataHealth = () =>
     refetchOnWindowFocus: true,
     refetchInterval: (q) => dataHealthRefetchMs(q.state.data),
   });
-
-type Tone = "good" | "warn" | "danger" | "muted" | "info";
 
 export function overallTone(status: OverallStatus): { tone: Tone; alert: "success" | "warn" | "danger"; label: string } {
   if (status === "ok") return { tone: "good", alert: "success", label: "All data checks pass" };

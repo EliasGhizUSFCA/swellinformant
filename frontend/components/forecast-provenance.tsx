@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { DemoBadge } from "@/components/quality";
 import { safeExternalUrl } from "@/lib/confidence";
 import { relativeTime } from "@/lib/format";
+import { cycleLabel } from "@/lib/map-time";
 import { cn } from "@/lib/utils";
 import type { AttributionLink, RunMember } from "@/types/api";
 
@@ -19,13 +20,6 @@ export function useNowMs(): number {
     return () => window.clearInterval(id);
   }, []);
   return now;
-}
-
-/** "18Z Oct 11": a model cycle in the convention forecasters use (cycles are UTC). */
-export function cycleLabel(iso: string): string {
-  const d = new Date(iso);
-  const month = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short" }).format(d);
-  return `${String(d.getUTCHours()).padStart(2, "0")}Z ${month} ${d.getUTCDate()}`;
 }
 
 /**

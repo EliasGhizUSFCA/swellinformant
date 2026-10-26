@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConditionsSummary } from "@/components/conditions";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
-import { AttributionLinks, cycleLabel, ForecastProvenance } from "@/components/forecast-provenance";
+import { AttributionLinks, ForecastProvenance } from "@/components/forecast-provenance";
 import { ageText, StaleBanner, StaleBadge } from "@/components/stale-banner";
+import { cycleLabel } from "@/lib/map-time";
 import type { Conditions, RunMember, SwellEvent, SystemStatus } from "@/types/api";
 
 // SYNTHETIC test data: invented forecast hours, runs and swells that exist only to exercise

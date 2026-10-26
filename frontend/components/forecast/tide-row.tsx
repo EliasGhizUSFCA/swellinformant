@@ -5,13 +5,12 @@ import { memo, useMemo } from "react";
 import { RowBackground, TIDE_H, TimelineRow, type RowProps } from "@/components/forecast/timeline-header";
 import { safeExternalUrl } from "@/lib/confidence";
 import { clockTime, smoothPath } from "@/lib/timeline";
-import { convertHeightFt, type HeightUnit } from "@/lib/units";
+import { convertHeightFt, M_PER_FT, type HeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { TideBlock } from "@/types/api";
 
 const TOP = 22;
 const BOTTOM = 8;
-const M_PER_FT = 0.3048;
 
 export const TIDE_UNAVAILABLE = "Tide data unavailable";
 
