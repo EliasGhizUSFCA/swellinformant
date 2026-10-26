@@ -55,7 +55,7 @@ def run(
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         # The tools need a session of their own: the direct URL behind a pooler.
         "DATABASE_URL": direct_database_url(),
-        "HOME": os.environ.get("HOME", "/tmp"),  # noqa: S108
+        "HOME": os.environ.get("HOME", "/tmp"),
     }
     return subprocess.run(  # noqa: S603 - our own scripts with fixed arguments
         [str(SCRIPTS / script), *args],

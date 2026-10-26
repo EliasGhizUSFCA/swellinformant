@@ -336,7 +336,7 @@ def send_alert(recipients: list[str], subject: str, text: str) -> dict[str, int]
         try:
             provider.send(EmailMessageData(to=to, subject=subject, text=text, tag="ops_alert"))
             sent += 1
-        except Exception as exc:  # noqa: BLE001 - one failing address must not stop the rest
+        except Exception as exc:  # one failing address must not stop the rest
             failed += 1
             logger.warning("Data-health alert not sent to one admin: %s", type(exc).__name__)
     return {"sent": sent, "failed": failed}
