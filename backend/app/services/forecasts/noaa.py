@@ -632,7 +632,7 @@ class GfsPointReader:
         out.request_count = fetcher.request_count
         out.bytes_downloaded = fetcher.bytes_downloaded
         out.seconds = time.monotonic() - started
-        sink.count_download(out.request_count, out.bytes_downloaded)
+        sink.count_download(out.bytes_downloaded)
         for message in out.warnings:
             sink.warn(message)
         for failure in out.failed:

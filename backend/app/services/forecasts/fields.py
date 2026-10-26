@@ -78,7 +78,6 @@ import functools
 import logging
 import math
 import threading
-import time
 import zlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -512,10 +511,8 @@ class FieldSink:
         self._fields: dict[tuple[datetime, str], EncodedField] = {}
         self._staged: dict[int, dict[str, np.ndarray]] = {}
         self._warnings: list[str] = []
-        # Requests and bytes made only for the map fields (not needed by any spot).
-        self.request_count = 0
+        # Bytes downloaded only for the map fields (not needed by any spot).
         self.bytes_downloaded = 0
-        self.encode_seconds = 0.0
         # Download budget: bytes reserved for ranges plus index files already read.
         self.budget_used = 0
         self.stopped: str | None = None  # why the map fields stopped (byte budget)
@@ -531,26 +528,18 @@ class FieldSink:
     def valid_time(self, fhour: int) -> datetime:
         return self.cycle + timedelta(hours=fhour)
 
-    def _timed(self, started: float) -> None:
-        with self._lock:
-            self.encode_seconds += time.perf_counter() - started
-
     def encode(
         self, fhour: int, variable: str, source: GridLike, *, factor: float = 1.0
     ) -> EncodedField | None:
         """The encoded field, or None (and a warning) if it could not be encoded."""
-        started = time.perf_counter()
         try:
-            field = encode_field(
+            return encode_field(
                 variable, self.valid_time(fhour), source, self.target, factor=factor
             )
         except Exception as exc:  # numpy raises many error types; never fail the step
             logger.warning("map field %s f%03d could not be encoded: %s", variable, fhour, exc)
             self.warn(f"f{fhour:03d} {variable}: could not encode ({type(exc).__name__}: {exc})")
             return None
-        finally:
-            self._timed(started)
-        return field
 
     def stage(
         self, fhour: int, variable: str, source: GridLike, *, area: np.ndarray | None = None
@@ -559,15 +548,12 @@ class FieldSink:
 
         ``area``: the source cells that count as the box's sea area (where the total wave
         height of the same file is valid)."""
-        started = time.perf_counter()
         try:
             grid = regrid_variable(variable, source, self.target, area=area).astype("float32")
         except Exception as exc:  # as in encode: never fail the step
             logger.warning("map field %s f%03d could not be regridded: %s", variable, fhour, exc)
             self.warn(f"f{fhour:03d} {variable}: could not encode ({type(exc).__name__}: {exc})")
             return
-        finally:
-            self._timed(started)
         with self._lock:
             self._staged.setdefault(fhour, {})[variable] = grid
 
@@ -578,24 +564,18 @@ class FieldSink:
             staged = self._staged.pop(fhour, {})
         if not staged:
             return
-        started = time.perf_counter()
         out: list[EncodedField | None] = []
-        try:
-            for system in PARTITION_SYSTEMS:
-                grids = {v: staged[v] for v in system.variables if v in staged}
-                if not grids:
-                    continue
-                if len(grids) < len(system.variables):
-                    missing = [v for v in system.variables if v not in grids]
-                    self.warn(
-                        f"f{fhour:03d} {system.label} not stored: {', '.join(missing)} missing"
-                    )
-                    continue
-                joint_mask(grids)
-                for variable, grid in grids.items():
-                    out.append(self._encode_grid(fhour, variable, grid))
-        finally:
-            self._timed(started)
+        for system in PARTITION_SYSTEMS:
+            grids = {v: staged[v] for v in system.variables if v in staged}
+            if not grids:
+                continue
+            if len(grids) < len(system.variables):
+                missing = [v for v in system.variables if v not in grids]
+                self.warn(f"f{fhour:03d} {system.label} not stored: {', '.join(missing)} missing")
+                continue
+            joint_mask(grids)
+            for variable, grid in grids.items():
+                out.append(self._encode_grid(fhour, variable, grid))
         self.put(out)
 
     def discard(self, fhour: int) -> None:
@@ -621,9 +601,8 @@ class FieldSink:
         with self._lock:
             self._warnings.append(message)
 
-    def count_download(self, requests: int, nbytes: int) -> None:
+    def count_download(self, nbytes: int) -> None:
         with self._lock:
-            self.request_count += requests
             self.bytes_downloaded += nbytes
 
     # ------------------------------------------------------------------ byte budget
