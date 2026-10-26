@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 from app.models import BuoyObservation, BuoyStation, ForecastRun, PointForecast, SurfSpot
 from app.services.ml.apply import Correction, build_features, load_active_correction
 from app.services.ml.features import floored_log
-from app.services.ml.registry import paired_spots
+from app.services.ml.registry import transferable_slugs
 from app.services.surf_quality.models import HEIGHT_FIELDS
 from app.services.verification.pairing import PERSISTENCE_MAX_AGE
 
@@ -80,7 +80,7 @@ class RunCorrector:
         station_for_spot: dict[str, str] = {}
         context: dict[str, tuple[float | None, float | None]] = {}
         for st in stations:
-            for slug in paired_spots(db, [st.code]):
+            for slug in sorted(transferable_slugs(st.metadata_)):
                 if slug in correction.spot_slugs:
                     station_for_spot.setdefault(slug, st.code)
             context[st.code] = _station_context(db, st, cycle, correction.sources)

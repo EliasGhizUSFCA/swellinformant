@@ -402,25 +402,34 @@ def list_versions(db: Session, name: str | None = None) -> list[MLModelVersion]:
     return list(db.scalars(stmt))
 
 
+def transferable_slugs(
+    metadata: dict[str, Any] | None, excluded: dict[str, str] | None = None
+) -> set[str]:
+    """Spot slugs in one station's ``metadata.paired_spots`` (strings or {"slug"}) whose
+    relation is in :data:`TRANSFERABLE_RELATIONS`. Pairings with another relation are
+    left out and, when ``excluded`` is given, recorded there (slug -> relation)."""
+    slugs: set[str] = set()
+    for item in (metadata or {}).get("paired_spots") or []:
+        slug = item.get("slug") if isinstance(item, dict) else item
+        relation = item.get("relation") if isinstance(item, dict) else None
+        if not isinstance(slug, str) or not slug:
+            continue
+        if relation is None or relation in TRANSFERABLE_RELATIONS:
+            slugs.add(slug)
+        elif excluded is not None:
+            excluded[slug] = str(relation)
+    return slugs
+
+
 def paired_spots(
     db: Session, station_codes: list[str], *, excluded: dict[str, str] | None = None
 ) -> list[str]:
-    """Spot slugs listed in buoy_stations.metadata.paired_spots (strings or {"slug"})
-    whose relation is in :data:`TRANSFERABLE_RELATIONS`. Pairings with another relation
-    are left out and, when ``excluded`` is given, recorded there (slug -> relation)."""
+    """Transferable spot slugs (:func:`transferable_slugs`) of the given stations."""
     slugs: set[str] = set()
     for meta in db.scalars(
         select(BuoyStation.metadata_).where(BuoyStation.code.in_(station_codes))
     ):
-        for item in (meta or {}).get("paired_spots") or []:
-            slug = item.get("slug") if isinstance(item, dict) else item
-            relation = item.get("relation") if isinstance(item, dict) else None
-            if not isinstance(slug, str) or not slug:
-                continue
-            if relation is None or relation in TRANSFERABLE_RELATIONS:
-                slugs.add(slug)
-            elif excluded is not None:
-                excluded[slug] = str(relation)
+        slugs |= transferable_slugs(meta, excluded)
     if excluded is not None:
         for slug in slugs:
             excluded.pop(slug, None)  # transferable through another training station
