@@ -32,7 +32,6 @@ CELERY = ("celery", "kombu")
 # Celery tasks that are not background jobs (they deliver one message each).
 MESSAGING_TASKS = {
     "notifications.send_account_email",
-    "notifications.send_email",
     "notifications.send_sms",
 }
 

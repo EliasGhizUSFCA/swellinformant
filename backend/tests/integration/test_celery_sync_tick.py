@@ -168,10 +168,9 @@ def refused_broker(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     "send",
     [
         lambda: tasks.send_account_email.delay("00000000-0000-0000-0000-000000000000", "t", None),
-        lambda: tasks.send_email.delay("synthetic@example.com", "s", "t", None, "synthetic"),
         lambda: tasks.send_sms.delay("+15550000000", "synthetic"),
     ],
-    ids=["account_email", "email", "sms"],
+    ids=["account_email", "sms"],
 )
 def test_a_messaging_task_fails_fast_with_the_broker_refused(
     refused_broker: None, send: Any

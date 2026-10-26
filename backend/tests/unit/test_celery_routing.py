@@ -75,7 +75,7 @@ def test_every_scheduled_task_is_consumed_by_the_default_worker() -> None:
     consumed = set(settings.worker_queue_list)
     assert consumed == {"celery", "bulk"}
     names = {entry["task"] for entry in build_beat_schedule(settings).values()}
-    names |= {"forecasts.blend", "notifications.send_account_email", "notifications.send_email"}
+    names |= {"forecasts.blend", "notifications.send_account_email"}
     for name in names:
         assert name in celery_app.tasks, name
         assert routed(name) in consumed, name
@@ -116,17 +116,17 @@ def outcome(status: str, **kw: Any) -> dict[str, Any]:
 
 
 def test_an_all_failed_acquisition_is_a_failed_job() -> None:
-    status, error = tasks.judge_acquisition(
+    status, error = judge_acquisition(
         {"outcomes": [outcome("failed", message="quota"), outcome("failed", message="503")]}
     )
     assert status == JobStatus.FAILED and error is not None and "quota" in error
-    assert tasks.judge_acquisition({"outcomes": [outcome("failed"), outcome("success")]}) == (
+    assert judge_acquisition({"outcomes": [outcome("failed"), outcome("success")]}) == (
         JobStatus.SUCCESS,
         None,
     )
-    assert tasks.judge_acquisition({"outcomes": [outcome("skipped")]})[0] == JobStatus.SUCCESS
-    assert tasks.judge_single({"status": "failed", "message": "x"})[0] == JobStatus.FAILED
-    assert tasks.judge_single({"skipped": "mode is off"})[0] == JobStatus.SUCCESS
+    assert judge_acquisition({"outcomes": [outcome("skipped")]})[0] == JobStatus.SUCCESS
+    assert judge_single({"status": "failed", "message": "x"})[0] == JobStatus.FAILED
+    assert judge_single({"skipped": "mode is off"})[0] == JobStatus.SUCCESS
 
 
 def test_retry_countdown() -> None:
@@ -228,7 +228,7 @@ def test_the_sync_tick_task_has_its_own_time_limits() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["notifications.send_account_email", "notifications.send_email", "notifications.send_sms"],
+    ["notifications.send_account_email", "notifications.send_sms"],
 )
 def test_messaging_tasks_ignore_their_result(name: str) -> None:
     """Without a result, .delay() does not subscribe to the result backend (the 19 s
