@@ -115,8 +115,8 @@ shore normal 13° towards the west, which favours SW swells and disfavours S one
 **Calibrated model** (only when `surf_spots.calibration` has `a`, `b`, `c`):
 `Hb_ft = a·H0^b·T^c·R^d` (d defaults to 0.4).
 
-Version 1 (`komar_gaughan_v1_uncalibrated`) is kept in `breaking.py` for backtest
-comparison only.
+Version 1 (`komar_gaughan_v1_uncalibrated`) is no longer computed; the label remains for
+predictions stored with it.
 
 ## 2a. Forecast uncertainty of the breaking height
 
