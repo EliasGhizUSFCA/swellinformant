@@ -225,25 +225,6 @@ def step_window_hours(message: bytes) -> float | None:
         eccodes.codes_release(handle)
 
 
-def choose_cell(
-    sampler: PointSampler,
-    grid: GridField,
-    point_key: Any,
-    lat: float,
-    lon: float,
-    *,
-    valid: np.ndarray | None = None,
-    mask_name: str = "values",
-) -> CellChoice | None:
-    """``PointSampler.cell`` for the ECMWF grids, which start at longitude -180°.
-
-    A point in [179.875°, 180°) lies in the last half column and wraps to column 0
-    (-180°): ``grib.GridField.contains`` treats a grid that is global in longitude as
-    covering every longitude, so no special seam handling is needed here.
-    """
-    return sampler.cell(grid, point_key, lat, lon, valid=valid, mask_name=mask_name)
-
-
 def _round(value: float | None, digits: int) -> float | None:
     return None if value is None else round(value, digits)
 
@@ -505,8 +486,10 @@ class EcmwfIfsProvider(ForecastProvider):
                 state.wave_geometry = geometry
                 for p in spots:
                     # Nearest cell with a valid swh (wave fields are masked over land).
-                    state.wave_cells[p.spot_id] = choose_cell(
-                        state.sampler,
+                    # The ECMWF grids start at -180 deg: a point in the last half column
+                    # wraps to column 0, as GridField.contains treats a grid that is
+                    # global in longitude as covering every longitude.
+                    state.wave_cells[p.spot_id] = state.sampler.cell(
                         swh,
                         ("wave", p.spot_id),
                         p.forecast_latitude,
@@ -547,8 +530,7 @@ class EcmwfIfsProvider(ForecastProvider):
             sea = np.nan_to_num(lsm.values, nan=1.0) < SEA_MAX_LAND_FRACTION
             for p in spots:
                 # Wind at the break: nearest cell the IFS land-sea mask calls sea.
-                choice = choose_cell(
-                    state.sampler,
+                choice = state.sampler.cell(
                     lsm,
                     ("wind", p.spot_id),
                     p.latitude,

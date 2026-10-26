@@ -25,7 +25,6 @@ from app.services.forecasts.ecmwf import (
     EcmwfIfsProvider,
     _RunState,
     candidate_cycles,
-    choose_cell,
     combined_band_height,
     cycle_steps,
     file_url,
@@ -319,20 +318,20 @@ def test_synthetic_minus_180_grid_wraps_longitude() -> None:
     # 179.7 lies in the last half column; the grid wraps, so it belongs to column 0
     # (grib.GridField.contains treats a global grid as covering every longitude).
     for n, lon in enumerate((179.7, 179.95, -179.7, 180.0, -180.0)):
-        cell = choose_cell(sampler, grid, n, -16.0, lon)
+        cell = sampler.cell(grid, n, -16.0, lon)
         assert cell is not None and (cell.j, cell.i) == ij(-16.0, -180.0), lon
         assert cell.longitude == pytest.approx(-180.0)
         assert sampler.sample(grid, cell) == pytest.approx(3.3, abs=1e-3)
-    seam = choose_cell(sampler, grid, "seam", -16.0, 179.7)
+    seam = sampler.cell(grid, "seam", -16.0, 179.7)
     assert seam is not None and seam.distance_km == pytest.approx(
         haversine_km(-16.0, 179.7, -16.0, -180.0)
     )
-    nazare = choose_cell(sampler, grid, "nazare", 39.65, -9.28)
+    nazare = sampler.cell(grid, "nazare", 39.65, -9.28)
     assert nazare is not None and nazare.longitude == pytest.approx(-10.0)
     # The seam search honours the validity mask too (column 0 masked as land here).
     vals[ij(-16.0, -180.0)] = np.nan
     land = decode_message(grib(vals))
-    cell = choose_cell(PointSampler(max_distance_km=300), land, "seam-land", -16.0, 179.7)
+    cell = PointSampler(max_distance_km=300).cell(land, "seam-land", -16.0, 179.7)
     assert cell is not None and (cell.j, cell.i) == ij(-16.0, 178.0)
     assert land.value(cell.j, cell.i) == pytest.approx(1.1, abs=1e-3)
 
