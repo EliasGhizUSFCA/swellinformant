@@ -272,8 +272,9 @@ docker compose up --build
 On first start the `backend` container waits for PostgreSQL and Redis, applies the Alembic
 migrations, seeds the 50 spots, 153 airports, the research evidence and the tide station
 catalog (`python -m app.cli init-db`, idempotent) and reports healthy. Then `worker`,
-`beat` and `frontend` start, and beat immediately queues a full pipeline run (plus the map
-layers in standalone mode and the tide job). No manual database or seeding step is needed.
+`beat` and `frontend` start, and beat immediately queues the sync check (`sync.tick`, which
+starts a sync as soon as a model run is due; docs/sync.md) and, with `TIDE_PROVIDERS`, the
+tide job. No manual database or seeding step is needed.
 
 Measured on 2026-10-16 on a 4-CPU Linux machine (demo mode, base images already pulled):
 `docker compose up --build -d` took 3 min 11 s including both image builds; every service
