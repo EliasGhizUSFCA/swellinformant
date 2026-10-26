@@ -264,11 +264,11 @@ resolution and drawn onto the canvas with `imageSmoothingQuality = "high"` (sect
 ### 4.6 Crest dashes
 
 * **Lattice**: per view, values are sampled every `LATTICE_PX = 8` px on a grid fixed in world
-  pixels: per system the travel vector p (TOWARD = FROM + 180°), spacing, speed, height and a
-  validity flag, and for the dash tint the level of the colour field at the node. A node is
-  invalid without data (NaN height, period or direction), with `Hs < MIN_DRAW_HS_M = 0.2 m`,
-  where the direction corners disagree (section 4.1) or over land (4.7). Sampling between
-  nodes is bilinear and needs all four nodes valid.
+  pixels: per system the travel vector p (TOWARD = FROM + 180°), height and a validity flag
+  (and the largest crest spacing), and for the dash tint the level of the colour field at the
+  node. A node is invalid without data (NaN height, period or direction), with
+  `Hs < MIN_DRAW_HS_M = 0.2 m`, where the direction corners disagree (section 4.1) or over land
+  (4.7). Sampling between nodes is bilinear and needs all four nodes valid.
 * **Cells**: one dash per cell of a grid fixed in world pixels, `DASH_CELL_PX` on screen (12 px
   for the combined sea and the primary swell, 13 for the secondary, 18 for the wind sea) at
   every zoom, so the density on screen is the same at every zoom (the cell is adjusted so that

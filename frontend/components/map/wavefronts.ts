@@ -7,8 +7,8 @@
  * the scales and every dash constant are in lib/map-waves.ts and docs/map-rendering.md.
  *
  * Per view (after a pan or zoom, or new fields) a screen LATTICE is built every LATTICE_PX
- * on a grid fixed in world pixels: for each system the propagation vector (TOWARD), crest
- * spacing, crest speed, height and a validity flag, plus the tint level of the colour field
+ * on a grid fixed in world pixels: for each system the propagation vector (TOWARD), height
+ * and a validity flag (and the largest crest spacing), plus the tint level of the colour field
  * under each node. A node is invalid without data, below MIN_DRAW_HS_M, where the four grid
  * corners of the direction disagree by more than MAX_CORNER_SPREAD_DEG (a partition swap
  * between cells: no averaged direction is invented), or over land.
@@ -107,8 +107,6 @@ export interface FamilyLattice {
   /** Propagation unit vector (screen, x east, y down). */
   px: Float32Array;
   py: Float32Array;
-  spacing: Float32Array;
-  speed: Float32Array;
   hs: Float32Array;
   valid: Uint8Array;
   /** 1 where all four nodes of the lattice cell (i, j)..(i + 1, j + 1) are valid (index of node (i, j)). */
@@ -179,8 +177,6 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
       grids: f,
       px: new Float32Array(n),
       py: new Float32Array(n),
-      spacing: new Float32Array(n),
-      speed: new Float32Array(n),
       hs: new Float32Array(n),
       valid: new Uint8Array(n),
       cellValid: new Uint8Array(n),
@@ -204,8 +200,6 @@ export function buildLattice(view: PixelView, families: WaveFamilyGrids[], land?
         const s = crestSpacingPx(tp, mpp[j]);
         fl.px[k] = -Math.sin(from * RAD);
         fl.py[k] = Math.cos(from * RAD);
-        fl.spacing[k] = s;
-        fl.speed[k] = crestSpeedPxPerS(tp, s);
         fl.hs[k] = hs;
         fl.valid[k] = 1;
         fl.validCount++;
