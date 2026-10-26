@@ -19,82 +19,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { get } from "@/lib/api";
 import type { BadgeVariant as Tone } from "@/lib/delivery";
 import { relativeTime, titleCase } from "@/lib/format";
-import type { SyncHealth } from "@/lib/sync";
+import type { components } from "@/types/openapi";
 
-export type OverallStatus = "ok" | "degraded" | "failing";
-type Freshness = "ok" | "stale" | "missing";
-
-export interface SourceHealth {
-  code: string;
-  name: string;
-  role: "forecast" | "blend" | "ensemble";
-  status: Freshness;
-  newest_run_key: string | null;
-  newest_issued_at: string | null;
-  age_hours: number | null;
-  stale_after_hours: number | null;
-  latest_attempt_status: string | null;
-  latest_attempt_started_at: string | null;
-}
-
-export interface JobHealth {
-  job: string;
-  schedule: string;
-  status: "ok" | "failed" | "overdue" | "stuck" | "running" | "never_run";
-  last_status: string | null;
-  last_started_at: string | null;
-  last_finished_at: string | null;
-  last_duration_ms: number | null;
-  last_success_at: string | null;
-  consecutive_failures: number;
-  overdue_after_minutes: number | null;
-}
-
-export interface DataHealth {
-  status: OverallStatus;
-  checked_at: string;
-  reasons: string[];
-  problems: Array<{ key: string; severity: "degraded" | "failing"; message: string }>;
-  forecast_sources: SourceHealth[];
-  jobs: JobHealth[];
-  map_fields: {
-    mode: "with_noaa" | "standalone" | "off";
-    status: Freshness | "off";
-    run_key: string | null;
-    cycle_time: string | null;
-    age_hours: number | null;
-    stale_after_hours: number | null;
-    complete_valid_times: number;
-    last_valid_time: string | null;
-  };
-  observations: {
-    enabled: boolean;
-    providers: Array<{
-      provider: string;
-      status: Freshness;
-      active_stations: number;
-      newest_observed_at: string | null;
-      age_hours: number | null;
-      stale_after_hours: number;
-    }>;
-  };
-  heartbeat: { last_job_finished_at: string | null; age_minutes: number | null; limit_minutes: number };
-  storage: { database_bytes: number; database_max_gb: number | null; redis?: RedisHealth | null };
-  /** The synced pipeline (runner, last check, syncs, components, CPU); absent from older backends. */
-  sync?: SyncHealth | null;
-}
-
+type Schemas = components["schemas"];
+export type DataHealth = Schemas["DataHealthOut"];
+export type OverallStatus = DataHealth["status"];
+export type SourceHealth = Schemas["SourceHealthOut"];
+export type JobHealth = Schemas["JobHealthOut"];
 /** Redis (job queue, locks, call budgets, provider cache) memory against its cap. */
-export interface RedisHealth {
-  available: boolean;
-  used_memory_bytes?: number | null;
-  maxmemory_bytes?: number | null;
-  maxmemory_policy?: string | null;
-  cap_bytes?: number | null;
-  cap_source?: "redis" | "setting" | null;
-  used_fraction?: number | null;
-  alert_fraction: number;
-}
+export type RedisHealth = Schemas["RedisHealthOut"];
 
 /** "Redis 1 MB of 256 MB (0.4 %, alarm above 80 %)"; the cap is labelled when it is only the
  * configured REDIS_MAXMEMORY because this Redis runs without one. */
@@ -174,16 +107,16 @@ const TONES: Record<string, Tone> = {
 export const freshnessTone = (status: string): Tone => TONES[status] ?? "muted";
 
 /** "3.4 h", "45 min", "2.1 days" for an age in hours. */
-export function formatHours(hours: number | null): string {
-  if (hours === null || Number.isNaN(hours)) return "—";
+export function formatHours(hours: number | null | undefined): string {
+  if (hours == null || Number.isNaN(hours)) return "—";
   if (hours < 1.5) return `${Math.max(0, Math.round(hours * 60))} min`;
   if (hours < 48) return `${hours.toFixed(1)} h`;
   return `${(hours / 24).toFixed(1)} days`;
 }
 
 export function ageLine(s: Pick<SourceHealth, "age_hours" | "stale_after_hours" | "newest_run_key" | "role">): string {
-  if (s.newest_run_key === null || s.age_hours === null) return "No successful run yet";
-  const limit = s.stale_after_hours === null ? "stale when any member is stale" : `stale after ${formatHours(s.stale_after_hours)}`;
+  if (s.newest_run_key == null || s.age_hours == null) return "No successful run yet";
+  const limit = s.stale_after_hours == null ? "stale when any member is stale" : `stale after ${formatHours(s.stale_after_hours)}`;
   return `Run ${s.newest_run_key} · issued ${formatHours(s.age_hours)} ago · ${limit}`;
 }
 
@@ -269,7 +202,7 @@ export function JobTable({ jobs }: { jobs: JobHealth[] }) {
             </td>
             <td className="py-2 text-right text-xs text-muted-foreground">
               {j.last_started_at ? relativeTime(j.last_started_at) : "—"}
-              {j.last_duration_ms !== null && <div>{(j.last_duration_ms / 1000).toFixed(1)} s</div>}
+              {j.last_duration_ms != null && <div>{(j.last_duration_ms / 1000).toFixed(1)} s</div>}
             </td>
           </tr>
         ))}
@@ -309,7 +242,7 @@ export function LayersAndObservations({ data }: { data: DataHealth }) {
             <div className="text-xs text-muted-foreground">Not enabled (OBSERVATIONS_ENABLED=false)</div>
           ) : (
             <ul className="mt-1 space-y-1">
-              {data.observations.providers.map((p) => (
+              {(data.observations.providers ?? []).map((p) => (
                 <li key={p.provider} className="flex items-center justify-between gap-2 text-xs">
                   <span>
                     {p.provider.toUpperCase()} · {p.active_stations} active station{p.active_stations === 1 ? "" : "s"} ·{" "}
