@@ -120,7 +120,6 @@ USER_AGENT = (
     "SwellTravelAgent/1.0 (forecast ingestion; +https://github.com/eliasghizusfca/swellinformant)"
 )
 HostKind = Literal["marine", "api"]
-NO_DATA_REASON = "No data is available for this location"
 DEFAULT_UPDATE_INTERVAL_S = 6 * 3600
 
 # Wave variables of the GFS family (GFS-Wave's wave_period is its peak period PERPW).
@@ -439,7 +438,6 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         }
         self.wait = timedelta(minutes=self.settings.open_meteo_availability_wait_minutes)
         self.days = min(self.settings.forecast_days, self.max_forecast_days)
-        self.request_count = 0
         # Weighted calls charged by this instance, failed fetches included (ingestion
         # records the share of a fetch that raised).
         self.weighted_calls_total = 0.0
@@ -458,7 +456,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         """Values of a wave row that go to ``extra`` instead of ``values``."""
         return {}
 
-    def gust_kind_at(self, lead_hours: float) -> str:
+    def gust_kind_at(self) -> str:
         return self.gust_kind
 
     def attribution(self) -> str:
@@ -913,7 +911,6 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         """Waves and wind for every spot, for exactly the run ``run`` names."""
         require_commercial_licence(self.settings)
         result = FetchResult()
-        self.request_count = 0
         before = self.tally.snapshot()
         if not run.model_runs:
             raise PermanentProviderError(
@@ -963,7 +960,6 @@ class OpenMeteoFamilyProvider(ForecastProvider):
             k: v - before[2].get(k, 0) for k, v in statuses.items() if v - before[2].get(k, 0)
         }
         result.request_count = responses - before[0]
-        self.request_count = result.request_count
         result.stats = FetchStats(
             bytes_downloaded=wire_bytes - before[1],
             requests=result.request_count,
@@ -1040,7 +1036,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
                 if not is_native_step(atmos_model, a_lead, atmos_res):
                     interpolated += [k for k in ATMOS_FIELDS if values.get(k) is not None]
                 if values.get("wind_gust_kmh") is not None:
-                    extra[EXTRA_GUST_KIND] = self.gust_kind_at(a_lead)
+                    extra[EXTRA_GUST_KIND] = self.gust_kind_at()
             step = native_step_hours(wave.model, lead, wave_res)
             if step is not None:
                 extra[EXTRA_NATIVE_STEP_S] = step * 3600
@@ -1089,7 +1085,7 @@ class OpenMeteoProvider(OpenMeteoFamilyProvider):
     def wave_variables(self, optional: bool) -> dict[str, str]:
         return {**GFS_WAVE_CORE, **(GFS_WAVE_OPTIONAL if optional else {})}
 
-    def gust_kind_at(self, lead_hours: float) -> str:
+    def gust_kind_at(self) -> str:
         # GFS GUST is an instantaneous surface diagnostic; HRRR (gfs_seamless) is not.
         model = self.atmos_model()
         return "gfs_instantaneous" if model in ("gfs_global", "gfs025", "gfs013") else "unknown"
