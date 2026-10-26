@@ -74,7 +74,7 @@ from app.services.forecasts.queries import (
     stale_after_hours,
 )
 from app.services.spot_views import source_attribution, spot_hours
-from app.services.surf_quality.forecast_confidence import STALE_REASON, api_fields
+from app.services.surf_quality.forecast_confidence import api_fields
 from app.services.surf_quality.scoring import min_score_for_label
 from app.services.surf_quality.sun import TWILIGHT_MARGIN, daylight_windows, sun_times
 from app.services.tides.api import spot_observations_block, spot_tide_block
@@ -222,19 +222,12 @@ def _why(pred: SurfQualityPrediction) -> StepWhyOut:
 
 def _quality(pred: SurfQualityPrediction, stale: bool) -> StepQualityOut:
     fields = api_fields(pred, stale=stale)
-    reasons = fields.get("forecast_confidence_reasons")
-    if reasons is None:
-        # Forecast rules only: the combined list also carries the disputed-wind note and
-        # the research sentence, which are not about the offshore forecast.
-        reasons = [str(r) for r in (pred.confidence_inputs or {}).get("reasons") or []]
-        if STALE_REASON in fields.get("confidence_reasons", []) and STALE_REASON not in reasons:
-            reasons = [STALE_REASON, *reasons]
     return StepQualityOut(
         score=pred.score,
         label=pred.label.value,
         forecast_confidence_class=fields["forecast_confidence_class"],
         local_confidence_class=fields["local_confidence_class"],
-        forecast_confidence_reasons=list(reasons),
+        forecast_confidence_reasons=list(fields["forecast_confidence_reasons"]),
         local_confidence_reason=fields["local_confidence_reason"],
     )
 
