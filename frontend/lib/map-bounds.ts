@@ -13,7 +13,7 @@
  * Zoom: the smallest zoom shows each longitude at most once (the world is at least as wide as
  * the map) and fills the map's height with the band (`minZoomFor`).
  */
-import { mercY } from "@/lib/map-geo";
+import { mercY } from "@/lib/map-mercator";
 
 export const LAT_NORTH = 84;
 export const LAT_SOUTH = -78.5;
