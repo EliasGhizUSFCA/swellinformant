@@ -272,8 +272,9 @@ docker compose up --build
 On first start the `backend` container waits for PostgreSQL and Redis, applies the Alembic
 migrations, seeds the 50 spots, 153 airports, the research evidence and the tide station
 catalog (`python -m app.cli init-db`, idempotent) and reports healthy. Then `worker`,
-`beat` and `frontend` start, and beat immediately queues a full pipeline run (plus the map
-layers in standalone mode and the tide job). No manual database or seeding step is needed.
+`beat` and `frontend` start, and beat immediately queues the sync check (`sync.tick`, which
+starts a sync as soon as a model run is due; docs/sync.md) and, with `TIDE_PROVIDERS`, the
+tide job. No manual database or seeding step is needed.
 
 Measured on 2026-10-16 on a 4-CPU Linux machine (demo mode, base images already pulled):
 `docker compose up --build -d` took 3 min 11 s including both image builds; every service
@@ -503,7 +504,8 @@ only on Vercel's website; step 4 runs on your machine):
 Free now: no payments, no ads (Vercel Hobby and the free Open-Meteo API are
 non-commercial). What each service costs now and after a paywall:
 [`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md), section 1.4; the checklist for
-both phases: [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Owner checklist".
+both phases: [`docs/deploy-vercel.md`](docs/deploy-vercel.md) sections 2 and 4, and
+[`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Owner checklist".
 Email to other people needs a domain you own verified with the email provider. Before you
 have one: `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` from a free Resend account and
 `EMAIL_FROM=Swell Travel Agent <onboarding@resend.dev>`. Resend then delivers only to the
@@ -742,7 +744,8 @@ MAP_FIELD_MAX_LEAD_HOURS=240
 from the `noaa_gfs` files when that provider is configured, off with demo only; `true`
 forces real layers next to demo spot forecasts, `false` turns them off. The values above are
 the defaults. The hosted free-database profile reads `MAP_FIELD_CYCLES=06,18` (section F.2).
-`MAP_FIELD_STEP_HOURS` is deprecated and no longer read. Fetch a cycle now with
+`MAP_FIELD_STEP_HOURS` is no longer read; an old `.env` that sets it still loads (unknown
+keys are ignored). Fetch a cycle now with
 `python -m app.cli engine map-fields [--cycle YYYYMMDDHH] [--max-lead-hours N] [--force]`.
 Encoding, sources, licence and measurements: [`docs/map-layers.md`](docs/map-layers.md).
 

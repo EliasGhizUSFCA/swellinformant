@@ -318,7 +318,7 @@ cell has two values, they are the two days.
 | Daemon idle check (3 in a row) | 0.17-0.18, 0.29-0.32 | **0** | the same, 0 data requests |
 | Daemon kick poll without a kick (10 in a row) | < 0.01 in total | 0 | none |
 | Hourly periodic batch (6 jobs, no users) | 0.13, 0.22 | 62-64 statements | none |
-| Daily `tides.acquire` | 13.6, 23.3 | 283 statements | 140 kB (16 GRIB ranges) |
+| Daily `tides.acquire` | 13.6, 23.3 | 283 statements | 140 kB (16 NOAA CO-OPS requests; EOT20 tides are computed locally) |
 | Daily `maintenance.cleanup` | 0.04, 0.05 | 21-22 statements | none |
 
 ### Syncs

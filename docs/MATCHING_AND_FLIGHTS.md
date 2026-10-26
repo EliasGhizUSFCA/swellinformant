@@ -138,7 +138,8 @@ it (Duffel: `GET /air/offers/{id}`):
 * unavailable → the cached search is expired and the match is re-searched;
 * price changed → the new price is stored.
 
-Alerts are not generated while forecast data is stale.
+Alerts pause once the forecast run is older than twice its source's stale-after age
+(`STALE_ALERT_FACTOR`; docs/FORECAST_SOURCES.md, "Staleness").
 
 | Kind | When |
 |------|------|
@@ -159,9 +160,11 @@ label, price bucket, travel dates and origin. Consequences:
 * two overlapping saved searches of one user that find the same swell produce one alert,
   not two.
 
-`MAX_ALERTS_PER_USER_PER_DAY` caps the volume. Pausing or deleting a search marks its
-queued notifications `skipped`. Delivery also re-checks at send time that the
-opportunity still exists and its search is active.
+Each user's "Maximum alerts per day" notification preference (default 10; the Settings
+page offers 1, 3, 5, 10 or 20, the API accepts 1-100) caps the volume; capped alerts are
+recorded as suppressed. Pausing or deleting a search marks its queued notifications
+`skipped`. Delivery also re-checks at send time that the opportunity still exists and its
+search is active.
 
 ## 5. Delivery (job G, `notifications.deliver`)
 

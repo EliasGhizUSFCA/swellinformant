@@ -257,7 +257,9 @@ what to do:
 | `sync_failed` | degraded | the last two syncs failed; the email has the error | `python -m app.cli sync status`, then the provider's runbook |
 | `sync_cpu_budget` | degraded | above 80 % of `SYNC_CPU_BUDGET_HOURS` this month | "Daemon quota reached" |
 | `licence` | failing | commercial use with the free Open-Meteo API | set `OPEN_METEO_API_KEY`, or `COMMERCIAL_USE=false` if the site is not commercial |
-| `tides_stale:<provider>`, `tides_missing:<provider>`, `tides_constants:harmonic_model` | degraded | no future tide predictions; none ever acquired 3 h after the tide catalog was loaded; the model's constants file unreadable | check outbound access to `api.tidesandcurrents.noaa.gov`; run `python -m app.cli tides acquire` |
+| `tides_missing:<provider>` | degraded | none of the provider's linked stations was tried 3 h after the tide catalog was loaded | check outbound access to `api.tidesandcurrents.noaa.gov`; run `python -m app.cli tides acquire` |
+| `tides_stale:<provider>` | degraded, or failing when no linked station has a future prediction | predictions run out within 2 days | check outbound access to `api.tidesandcurrents.noaa.gov`; run `python -m app.cli tides acquire` |
+| `tides_constants:harmonic_model` | failing | the tide model's constants file cannot be read (model tides unavailable) | check `data/tides/` (`TIDE_CONSTANTS_PATH`) in the daemon or worker image |
 | `observations_missing:<provider>`, `observations_stale:<provider>` | degraded | a buoy provider has no recent observation | the provider's status; `python -m app.cli obs ingest` |
 | `database_size` | degraded | above `DATA_HEALTH_DATABASE_MAX_GB` (0.85 on Neon Free) | "Database or disk full"; on Neon Free, "Neon suspended" |
 | `redis_unavailable`, `redis_memory`, `redis_eviction_policy` | degraded | Redis not answering, near its cap, or evicting | "Redis memory high" |

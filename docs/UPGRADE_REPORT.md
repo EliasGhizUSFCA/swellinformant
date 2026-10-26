@@ -1,5 +1,8 @@
 # Upgrade report: debugging, research and forecasting
 
+> Chronological record: each section describes the state on its date. Current setup:
+> README.md and docs/deploy-vercel.md; the owner checklist is section 44.
+
 Branch `claude/funny-hamilton-49k2m3`, 2026-10-11. Details live in the linked documents;
 everything stated as verified below was run, with the results shown.
 
@@ -113,7 +116,7 @@ Not verified: real Resend/SendGrid/Twilio/Duffel/Amadeus delivery (no credential
 cp .env.example .env                 # optional; demo defaults work
 docker compose up --build            # web :3000, API :8000, Mailpit :8025
 # live forecasts instead of demo (in .env):
-#   FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs
+#   FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs   (since Upgrade 3: open_meteo,open_meteo_ecmwf, README F.5)
 #   GEFS_ENABLED=true
 docker compose exec backend python -m app.cli make-admin you@example.com   # accuracy dashboard
 ```

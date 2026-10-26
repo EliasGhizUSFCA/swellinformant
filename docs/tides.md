@@ -138,7 +138,10 @@ days at all 50 points.
 High and low waters: the curve sampled every 2 minutes, each local extremum refined with
 the parabola through it and its neighbours, rounded to the minute and the millimetre.
 
-### Daily job (`tides.acquire`, 02:20 UTC, and at worker start)
+### Daily job (`tides.acquire`, 02:20 UTC, and at start-up)
+
+The job also runs once when Celery beat starts, and in the sync daemon's start-up catch-up
+when it has not succeeded in the last 24 h (docs/operations.md, section 1).
 
 For yesterday 00:00 UTC to TIDE_HORIZON_DAYS (16) + 1 day ahead, every station linked to
 an active spot: CO-OPS events and curves, EOT20 curves (30 minutes) and events. Rows are
@@ -213,9 +216,11 @@ the source and datum (the note is not repeated). The selected-time summary adds 
 Health (`tide_freshness`, in the data-health report): `tides_stale:<provider>` is
 "degraded" when some linked stations have predictions for less than 2 more days and
 "failing" when none has a future prediction. Stations the job has not tried yet are not
-counted (the job schedule check covers a new deployment). With `harmonic_model` in
-TIDE_PROVIDERS, an unreadable constants file is `tides_constants:harmonic_model`,
-"failing".
+counted (the job schedule check covers a new deployment). When none of a provider's linked
+stations has been tried 3 h after the tide catalog was loaded, data health reports
+`tides_missing:<provider>` ("degraded"). With `harmonic_model` in TIDE_PROVIDERS, an
+unreadable constants file is `tides_constants:harmonic_model`, "failing". docs/operations.md
+lists all problems.
 
 ## Validation
 
