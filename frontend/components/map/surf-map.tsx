@@ -170,7 +170,8 @@ export function FlyToSpot({
   return null;
 }
 
-const TILES = tileConfig(
+/** The street tiles of both world maps (lib/map-tiles). */
+export const TILES = tileConfig(
   process.env.NEXT_PUBLIC_MAP_TILE_URL,
   process.env.NEXT_PUBLIC_MAP_ATTRIBUTION,
   process.env.NEXT_PUBLIC_CARTO_API_KEY,
@@ -178,6 +179,30 @@ const TILES = tileConfig(
 // Shown when tiles keep failing and none has loaded (blocked network or wrong URL). A missing
 // CARTO key cannot be detected here: CARTO returns HTTP 200 "API KEY REQUIRED" images.
 const FAILED_TILES_BEFORE_NOTICE = 4;
+
+/** The street tile layer; `onFailed(true)` once FAILED_TILES_BEFORE_NOTICE tiles failed before any loaded. */
+export function TileErrors({ onFailed }: { onFailed: (failed: boolean) => void }) {
+  const counts = useRef({ loaded: 0, failed: 0 });
+  return (
+    <TileLayer
+      url={TILES.url}
+      attribution={TILES.attribution}
+      maxZoom={TILES.maxZoom}
+      // OpenStreetMap's tile policy requires a Referer; keep it explicit per request.
+      referrerPolicy="strict-origin-when-cross-origin"
+      eventHandlers={{
+        tileload: () => {
+          counts.current.loaded += 1;
+          onFailed(false);
+        },
+        tileerror: () => {
+          counts.current.failed += 1;
+          if (counts.current.loaded === 0 && counts.current.failed >= FAILED_TILES_BEFORE_NOTICE) onFailed(true);
+        },
+      }}
+    />
+  );
+}
 
 const MiniMarker = memo(function MiniMarker({
   spot,
@@ -234,7 +259,6 @@ export default function SurfMap({
   center?: [number, number];
 }) {
   const selectedSpot = spots.find((s) => s.slug === selected);
-  const tileCounts = useRef({ loaded: 0, failed: 0 });
   const [tilesFailed, setTilesFailed] = useState(false);
   const lons = useMemo(() => spots.map((s) => s.longitude), [spots]);
   const { centreLng, onMove, onRecentre } = useWrapCentre(lons, center[1]);
@@ -254,25 +278,7 @@ export default function SurfMap({
         scrollWheelZoom
         style={{ height: "100%", width: "100%", borderRadius: "1rem" }}
       >
-        <TileLayer
-          url={TILES.url}
-          attribution={TILES.attribution}
-          maxZoom={TILES.maxZoom}
-          // OpenStreetMap's tile policy requires a Referer; keep it explicit per request.
-          referrerPolicy="strict-origin-when-cross-origin"
-          eventHandlers={{
-            tileload: () => {
-              tileCounts.current.loaded += 1;
-              setTilesFailed(false);
-            },
-            tileerror: () => {
-              tileCounts.current.failed += 1;
-              if (tileCounts.current.loaded === 0 && tileCounts.current.failed >= FAILED_TILES_BEFORE_NOTICE) {
-                setTilesFailed(true);
-              }
-            },
-          }}
-        />
+        <TileErrors onFailed={setTilesFailed} />
         {spots.map((s) => {
           const score = s.best_upcoming?.score ?? s.current?.score ?? null;
           return (
