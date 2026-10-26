@@ -4,10 +4,10 @@
  * While the zoom changes (animated zoom, flyTo, pinch) the last frame is CSS-scaled like
  * Leaflet's own canvas renderer.
  *
- * Used for the ocean colour field, the particles and the dark vector basemap. Leaflet's
- * L.Canvas renderer was measured at ~165 ms per zoom step for the Natural Earth land and
- * borders with the three world copies the Pacific needs (it reprojects every vertex), so
- * the basemap is drawn here from pre-projected Mercator coordinates instead.
+ * Used for the ocean colour field, the wave crest dashes, the particles and the dark vector
+ * basemap. Leaflet's L.Canvas renderer was measured at ~165 ms per zoom step for the Natural
+ * Earth land and borders with the three world copies the Pacific needs (it reprojects every
+ * vertex), so the basemap is drawn here from pre-projected Mercator coordinates instead.
  */
 import L from "leaflet";
 

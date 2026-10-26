@@ -120,11 +120,11 @@ export function fromDisplay(id: LayerId, value: number, u: DisplayUnits): number
   return value;
 }
 
-/** "2.4 m", "8 ft", "36 km/h", "22 mph", "3.9 m/s", "12 s", "45 kW/m" (or "—"). */
 /** The largest period a field can carry: periods are stored in 0.1 s steps up to byte 254
  * (backend services/forecasts/fields.py), so a longer period arrives as exactly this. */
 export const PERIOD_CEILING_S = 25.4;
 
+/** "2.4 m", "8 ft", "36 km/h", "22 mph", "3.9 m/s", "12 s", "45 kW/m" (or "—"). */
 export function formatLayerValue(id: LayerId, value: number, u: DisplayUnits): string {
   if (!Number.isFinite(value)) return "—";
   // A clamped period is a lower bound ("25.4 s or more"), never an exact 25 s.
