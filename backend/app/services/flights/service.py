@@ -512,7 +512,7 @@ def revalidate_offer(
         offer.validation_status = OfferValidation.UNAVAILABLE
         offer.last_validated_at = now
         return offer.validation_status
-    if provider.name != offer.provider or not provider.supports_revalidation:
+    if provider.name != offer.provider:
         return offer.validation_status
     result = provider.revalidate(offer.provider_offer_id, offer.provider_payload)
     offer.last_validated_at = now

@@ -146,13 +146,12 @@ class RevalidationResult:
 class FlightProvider(ABC):
     name: str
     is_mock: bool = False
-    supports_revalidation: bool = False
 
     @abstractmethod
     def search(self, query: FlightQuery) -> list[NormalizedOffer]: ...
 
-    def revalidate(self, offer_id: str, payload: dict[str, Any] | None) -> RevalidationResult:
-        return RevalidationResult(OfferValidation.UNVALIDATED)
+    @abstractmethod
+    def revalidate(self, offer_id: str, payload: dict[str, Any] | None) -> RevalidationResult: ...
 
 
 def local_to_utc(local_iso: str, tz_name: str) -> datetime:

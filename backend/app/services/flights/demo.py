@@ -111,7 +111,6 @@ def _leg_minutes(km: float) -> int:
 class DemoFlightProvider(FlightProvider):
     name = "demo"
     is_mock = True
-    supports_revalidation = True
 
     def __init__(
         self, airport_lookup: AirportLookup, now: Callable[[], datetime] | None = None
