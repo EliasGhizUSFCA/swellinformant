@@ -79,6 +79,7 @@ import logging
 import math
 import threading
 import zlib
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -300,6 +301,40 @@ def _cached_plan(
     return _Plan(row_plan, col_plan)
 
 
+class MaskSums:
+    """Box sums (``_Plan.reduce``) of boolean source masks, each distinct mask summed once.
+
+    The fields of one GRIB file mostly share their valid (land) mask, the weight of every
+    mean, and the nine partition fields of a file share one sea area (``area``). A sum is
+    keyed by the source geometry, the target and the packed mask itself (exact, no digest);
+    the ``kept`` most recently used sums are kept (2.1 MB each at 0.5 deg). Thread-safe;
+    the sums are read-only."""
+
+    def __init__(self, kept: int = 8) -> None:
+        self.kept = kept
+        self._sums: OrderedDict[tuple[object, ...], np.ndarray] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def reduce(
+        self, plan: _Plan, source: GridLike, target: TargetGrid, mask: np.ndarray
+    ) -> np.ndarray:
+        nj, ni = mask.shape
+        packed = np.packbits(mask).tobytes()
+        key = (nj, ni, source.lat0, source.lon0, source.dlat, source.dlon, target.d, packed)
+        with self._lock:
+            out = self._sums.get(key)
+            if out is not None:
+                self._sums.move_to_end(key)
+                return out
+        out = plan.reduce(mask.astype("float64"))
+        out.setflags(write=False)
+        with self._lock:
+            self._sums[key] = out
+            while len(self._sums) > self.kept:
+                self._sums.popitem(last=False)
+        return out
+
+
 def regrid_mean(
     source: GridLike,
     target: TargetGrid,
@@ -309,6 +344,7 @@ def regrid_mean(
     min_resultant: float = MIN_RESULTANT,
     present_fraction: float | None = None,
     area: np.ndarray | None = None,
+    mask_sums: MaskSums | None = None,
 ) -> np.ndarray:
     """Area-weighted mean of the valid source cells in each target box (NaN = nodata).
 
@@ -322,16 +358,24 @@ def regrid_mean(
     fraction of the box's area, counted over the source cells that ``area`` marks (a boolean
     array of the source's shape, e.g. the sea cells of the total wave height; default every
     cell). The mean itself is still taken over the valid cells only.
+
+    ``mask_sums``: reuse the box sums of masks seen before (:class:`MaskSums`).
     """
     plan = _plan(source, target)
+
+    def mask_sum(mask: np.ndarray) -> np.ndarray:
+        if mask_sums is None or mask.dtype != np.bool_:
+            return plan.reduce(mask.astype("float64"))
+        return mask_sums.reduce(plan, source, target, mask)
+
     values = source.values
     valid = ~np.isnan(values)
-    weight = plan.reduce(valid.astype("float64"))
+    weight = mask_sum(valid)
     empty = weight <= 0.0
     if present_fraction is not None:
         if area is not None and area.shape != values.shape:
             raise ValueError(f"area mask {area.shape} does not match the source {values.shape}")
-        base = plan.reduce(np.ones(values.shape) if area is None else area.astype("float64"))
+        base = mask_sum(np.ones(values.shape, dtype=bool) if area is None else area)
         empty |= weight < present_fraction * base - MIN_WEIGHT
     with np.errstate(invalid="ignore", divide="ignore"):
         if directional:
@@ -354,12 +398,15 @@ def regrid_variable(
     *,
     factor: float = 1.0,
     area: np.ndarray | None = None,
+    mask_sums: MaskSums | None = None,
 ) -> np.ndarray:
     """:func:`regrid_mean` with the rules of ``variable``: directions as unit vectors, and
     for a partition variable the mixing guard (module docs; ``area`` = the sea cells)."""
     directional = variable in DIRECTIONAL
     if variable not in SYSTEM_OF:
-        return regrid_mean(source, target, directional=directional, factor=factor)
+        return regrid_mean(
+            source, target, directional=directional, factor=factor, mask_sums=mask_sums
+        )
     return regrid_mean(
         source,
         target,
@@ -368,6 +415,7 @@ def regrid_variable(
         min_resultant=PARTITION_MIN_RESULTANT if directional else MIN_RESULTANT,
         present_fraction=PARTITION_PRESENT_FRACTION,
         area=area,
+        mask_sums=mask_sums,
     )
 
 
@@ -424,12 +472,13 @@ def encode_field(
     *,
     factor: float = 1.0,
     area: np.ndarray | None = None,
+    mask_sums: MaskSums | None = None,
 ) -> EncodedField:
     """Regrid ``source`` to ``target``, quantise it and compress it (see module docs).
 
     A partition variable gets the mixing guard but no joint mask here (that needs the other
     two variables of its partition: :meth:`FieldSink.stage`)."""
-    grid = regrid_variable(variable, source, target, factor=factor, area=area)
+    grid = regrid_variable(variable, source, target, factor=factor, area=area, mask_sums=mask_sums)
     return encode_grid(variable, valid_time, grid, target)
 
 
@@ -508,6 +557,7 @@ class FieldSink:
         self.partitions = partitions
         self.max_bytes = max_bytes
         self._lock = threading.Lock()
+        self._mask_sums = MaskSums()  # shared by the steps; dropped with the sink
         self._fields: dict[tuple[datetime, str], EncodedField] = {}
         self._staged: dict[int, dict[str, np.ndarray]] = {}
         self._warnings: list[str] = []
@@ -534,7 +584,12 @@ class FieldSink:
         """The encoded field, or None (and a warning) if it could not be encoded."""
         try:
             return encode_field(
-                variable, self.valid_time(fhour), source, self.target, factor=factor
+                variable,
+                self.valid_time(fhour),
+                source,
+                self.target,
+                factor=factor,
+                mask_sums=self._mask_sums,
             )
         except Exception as exc:  # numpy raises many error types; never fail the step
             logger.warning("map field %s f%03d could not be encoded: %s", variable, fhour, exc)
@@ -549,7 +604,9 @@ class FieldSink:
         ``area``: the source cells that count as the box's sea area (where the total wave
         height of the same file is valid)."""
         try:
-            grid = regrid_variable(variable, source, self.target, area=area).astype("float32")
+            grid = regrid_variable(
+                variable, source, self.target, area=area, mask_sums=self._mask_sums
+            ).astype("float32")
         except Exception as exc:  # as in encode: never fail the step
             logger.warning("map field %s f%03d could not be regridded: %s", variable, fhour, exc)
             self.warn(f"f{fhour:03d} {variable}: could not encode ({type(exc).__name__}: {exc})")
