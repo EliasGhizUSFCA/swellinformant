@@ -36,7 +36,7 @@ export const QUALITY_LABELS: Record<QualityLabel, string> = {
  * Colour never carries the class alone: every quality mark has its label as text, a tooltip
  * or a table row next to it. It replaces the earlier hue-per-class legend (blue, yellow,
  * green, teal, orange, purple), whose "fair" had 1.92:1 contrast on white and whose top three
- * classes were nearly the same lightness. Keep in sync with --q-* in app/globals.css.
+ * classes were nearly the same lightness.
  */
 export const QUALITY_COLORS: Record<QualityLabel, string> = {
   poor: "#6995a7",

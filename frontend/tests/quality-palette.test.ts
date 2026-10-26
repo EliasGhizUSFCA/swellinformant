@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import { colorForScore, NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_COLORS_DARK, QUALITY_RANK, QUALITY_SURFACES, QUALITY_TEXT, QUALITY_TEXT_DARK } from "@/lib/quality";
@@ -17,9 +14,6 @@ function contrast(a: string, b: string): number {
 }
 
 const ORDER = (Object.keys(QUALITY_RANK) as QualityLabel[]).sort((a, b) => QUALITY_RANK[a] - QUALITY_RANK[b]);
-// Vitest runs from frontend/ (vitest.config.mts).
-const CSS = readFileSync(join(process.cwd(), "app/globals.css"), "utf8");
-const cssVar = (block: string, name: string) => new RegExp(`--q-${name}:\\s*(#[0-9a-f]{6})`, "i").exec(block)?.[1]?.toLowerCase();
 
 describe("surf quality palette", () => {
   it("is ordered: poor to exceptional", () => {
@@ -46,16 +40,6 @@ describe("surf quality palette", () => {
     for (const q of ORDER) {
       expect(contrast(QUALITY_TEXT[q], QUALITY_COLORS[q]), q).toBeGreaterThanOrEqual(4.5);
       expect(contrast(QUALITY_TEXT_DARK[q], QUALITY_COLORS_DARK[q]), q).toBeGreaterThanOrEqual(4.5);
-    }
-  });
-
-  it("matches the --q-* tokens in globals.css", () => {
-    const root = CSS.slice(CSS.indexOf(":root"), CSS.indexOf("}", CSS.indexOf(":root")));
-    const dark = CSS.slice(CSS.indexOf(".dark {"), CSS.indexOf("}", CSS.indexOf(".dark {")));
-    for (const q of ORDER) {
-      const name = q.replace("_", "-");
-      expect(cssVar(root, name), q).toBe(QUALITY_COLORS[q].toLowerCase());
-      expect(cssVar(dark, name), q).toBe(QUALITY_COLORS_DARK[q].toLowerCase());
     }
   });
 

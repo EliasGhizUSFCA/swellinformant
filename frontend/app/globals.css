@@ -26,14 +26,6 @@
   --seafoam: #2bb3a3;
   --sand: #f6efe2;
   --coral: #f26b5b;
-  /* Surf quality: one ordinal ocean ramp, deeper = better on light surfaces (lib/quality.ts). */
-  --q-none: #9ca3af;
-  --q-poor: #6995a7;
-  --q-fair: #417d98;
-  --q-good: #25698e;
-  --q-very-good: #085486;
-  --q-excellent: #013e77;
-  --q-exceptional: #002767;
   /* Forecast charts (components/forecast): the selected time, marks and backgrounds. */
   --chart-select: #d9472f;
   --chart-select-band: rgba(217, 71, 47, 0.07);
@@ -54,17 +46,6 @@
   --wind-unrated: #8fa3b1;
   --tide-line: #6d5ba3;
   --tide-fill: rgba(109, 91, 163, 0.12);
-}
-
-/* The ramp stepped for dark surfaces (brighter = better), for dark containers such as the
-   map's panels; nothing in the app sets the class yet. */
-.dark {
-  --q-poor: #4b869c;
-  --q-fair: #589bb7;
-  --q-good: #6dadd2;
-  --q-very-good: #8bc0e8;
-  --q-excellent: #acd2fb;
-  --q-exceptional: #d6e6ff;
 }
 
 @theme inline {
@@ -93,12 +74,6 @@
   --color-seafoam: var(--seafoam);
   --color-sand: var(--sand);
   --color-coral: var(--coral);
-  --color-q-poor: var(--q-poor);
-  --color-q-fair: var(--q-fair);
-  --color-q-good: var(--q-good);
-  --color-q-very-good: var(--q-very-good);
-  --color-q-excellent: var(--q-excellent);
-  --color-q-exceptional: var(--q-exceptional);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

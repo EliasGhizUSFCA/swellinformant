@@ -144,8 +144,8 @@ settings alike.
 
 **Surf quality.** The class is the API's (our spot-specific scoring engine,
 `quality.label`), never derived from wave height in the client. Colours are one ordinal ocean
-ramp, deeper = better (`--q-*` in `app/globals.css`, `QUALITY_COLORS` in `lib/quality.ts`):
-every class has at least 3:1 contrast against the card, lightness is strictly ordered, and
+ramp, deeper = better (`QUALITY_COLORS` in `lib/quality.ts`): every class has at least 3:1
+contrast against the card, lightness is strictly ordered, and
 the labels on the colours have 4.5:1 (`tests/quality-palette.test.ts`). It replaces the
 earlier blue / yellow / green / teal / orange / purple legend, whose "fair" had 1.92:1 on
 white and whose top classes were nearly the same lightness (CH-13). Colour never carries the
