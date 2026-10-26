@@ -30,7 +30,6 @@ from app.services.sync.types import ComponentKind
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_BUSY = 3
-EXIT_NOT_IMPLEMENTED = 4
 COMPONENT_KINDS: tuple[ComponentKind, ...] = ("spots", "ensemble", "map")
 
 

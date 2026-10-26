@@ -156,7 +156,9 @@ SUBCOMMANDS: list[Callable[[SubParsers], None]] = [_add_ensemble, _add_map_field
 
 
 def register(subparsers: SubParsers) -> None:
-    parser = subparsers.add_parser(GROUP, help="ensemble, map fields, blending and spot profiles")
+    parser = subparsers.add_parser(
+        GROUP, help="GEFS-Wave ensemble, map fields and the Open-Meteo call budget"
+    )
     nested = parser.add_subparsers(dest="engine_cmd", required=True)
     for add in SUBCOMMANDS:
         add(nested)
