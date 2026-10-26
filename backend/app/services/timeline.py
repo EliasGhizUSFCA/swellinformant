@@ -40,9 +40,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import utcnow
-from app.models import ForecastRun, ForecastSource, SurfQualityPrediction, SurfSpot, WaveForecast
+from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, WaveForecast
 from app.models.enums import QualityLabel
-from app.schemas.spots import ForecastSourceOut, RunMemberOut
 from app.schemas.tides import ObservationsBlockOut, TideBlockOut
 from app.schemas.timeline import (
     GustCause,
@@ -69,11 +68,14 @@ from app.services.forecasts.base import EXTRA_GUST_KIND, EXTRA_INTERPOLATED
 from app.services.forecasts.queries import (
     BLEND_CODE,
     is_stale,
-    latest_runs_by_spot,
-    source_attribution_links,
     stale_after_hours,
 )
-from app.services.spot_views import source_attribution, spot_hours
+from app.services.spot_views import (
+    authoritative_run,
+    forecast_source_out,
+    run_members,
+    spot_hours,
+)
 from app.services.surf_quality import breaking
 from app.services.surf_quality.forecast_confidence import api_fields
 from app.services.surf_quality.scoring import min_score_for_label
@@ -339,59 +341,12 @@ def _days(
     return out
 
 
-def run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
-    """The model runs behind ``run``: a blend's members (from its details), otherwise the
-    run itself."""
-    if run.source.code != BLEND_CODE:
-        return [_member(run.source, run.run_key, run.issued_at)]
-    members = [m for m in (run.details or {}).get("members", []) if m.get("code")]
-    codes = [str(m["code"]) for m in members]
-    sources = {
-        s.code: s
-        for s in db.scalars(select(ForecastSource).where(ForecastSource.code.in_(codes))).all()
-    }
-    out: list[RunMemberOut] = []
-    for m in members:
-        source = sources.get(str(m["code"]))
-        if source is None:
-            continue
-        issued = m.get("issued_at")
-        out.append(
-            _member(
-                source,
-                str(m.get("run_key") or ""),
-                datetime.fromisoformat(str(issued)) if issued else None,
-            )
-        )
-    return out
-
-
-def _member(source: ForecastSource, run_key: str, init_time: datetime | None) -> RunMemberOut:
-    return RunMemberOut(
-        code=source.code,
-        name=source.name,
-        family=source.family,
-        run_key=run_key,
-        init_time=init_time,
-        wave_model=source.wave_model,
-        atmosphere_model=source.atmosphere_model,
-    )
-
-
 def _provenance(
     db: Session, spot: SurfSpot, run: ForecastRun, first: SurfQualityPrediction, now: datetime
 ) -> ProvenanceOut:
     source = run.source
     return ProvenanceOut(
-        source=ForecastSourceOut(
-            code=source.code,
-            name=source.name,
-            is_demo=source.is_demo,
-            attribution=source_attribution(db, run),
-            wave_model=source.wave_model,
-            atmosphere_model=source.atmosphere_model,
-            attribution_links=source_attribution_links(db, run),
-        ),
+        source=forecast_source_out(db, run),
         run=TimelineRunOut(
             run_key=run.run_key,
             init_time=run.issued_at,
@@ -444,7 +399,7 @@ def spot_timeline(
 ) -> SpotTimelineOut:
     """The timeline of ``spot`` for the next ``days`` days (see the module docstring)."""
     now = now or utcnow()
-    run = latest_runs_by_spot(db, now).get(spot.id)
+    run = authoritative_run(db, spot.id, now)
     if run is None:
         return _unavailable(db, spot, days, now, NO_FORECAST)
     # The same hours as /forecast's (one read when both are computed together).

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Hashable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
-from typing import Any, get_args
+from typing import Any, cast, get_args
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Row, Select, func, select, tuple_
@@ -271,9 +271,10 @@ HourRows = list[tuple[SurfQualityPrediction, WaveForecast]]
 
 @contextmanager
 def shared_hour_reads(db: Session) -> Iterator[None]:
-    """Within the block, :func:`spot_hours` reads each run, spot and window once: a spot
-    page's forecast and timeline, computed together (app.services.public_cache), read the
-    same hours with their forecasts (about 0.8 MB for a 10-day blend, docs/map-layers.md)."""
+    """Within the block, :func:`spot_hours` reads each run, spot and window once, and the
+    authoritative runs, a run's source and its members are built once: a spot page's
+    forecast and timeline, computed together (app.services.public_cache), read the same
+    hours with their forecasts (about 0.8 MB for a 10-day blend, docs/map-layers.md)."""
     if _SHARED_HOURS in db.info:
         yield
         return
@@ -284,27 +285,34 @@ def shared_hour_reads(db: Session) -> Iterator[None]:
         db.info.pop(_SHARED_HOURS, None)
 
 
+def _shared[T](db: Session, key: tuple[Hashable, ...], build: Callable[[], T]) -> T:
+    """``build()`` once per key inside :func:`shared_hour_reads`, every time outside it."""
+    memo: dict[tuple[Hashable, ...], Any] | None = db.info.get(_SHARED_HOURS)
+    if memo is None:
+        return build()
+    if key not in memo:
+        memo[key] = build()
+    return cast(T, memo[key])
+
+
 def spot_hours(db: Session, run_id: int, spot_id: int, start: datetime, end: datetime) -> HourRows:
     """The run's predictions for the spot from ``start`` to ``end`` (both included) with
     their forecasts, in time order (read once per window inside :func:`shared_hour_reads`)."""
-    memo: dict[tuple[int, int, datetime, datetime], HourRows] | None = db.info.get(_SHARED_HOURS)
-    key = (run_id, spot_id, start, end)
-    if memo is not None and key in memo:
-        return memo[key]
-    rows = [
-        (p, f)
-        for p, f in db.execute(
-            predictions_with_forecasts(
-                SurfQualityPrediction.run_id == run_id,
-                SurfQualityPrediction.spot_id == spot_id,
-                SurfQualityPrediction.valid_time >= start,
-                SurfQualityPrediction.valid_time <= end,
-            ).order_by(SurfQualityPrediction.valid_time)
-        )
-    ]
-    if memo is not None:
-        memo[key] = rows
-    return rows
+
+    def read() -> HourRows:
+        return [
+            (p, f)
+            for p, f in db.execute(
+                predictions_with_forecasts(
+                    SurfQualityPrediction.run_id == run_id,
+                    SurfQualityPrediction.spot_id == spot_id,
+                    SurfQualityPrediction.valid_time >= start,
+                    SurfQualityPrediction.valid_time <= end,
+                ).order_by(SurfQualityPrediction.valid_time)
+            )
+        ]
+
+    return _shared(db, ("hours", run_id, spot_id, start, end), read)
 
 
 def _predictions_by_id(
@@ -805,10 +813,39 @@ def _member_out(
     )
 
 
+def authoritative_run(db: Session, spot_id: int, now: datetime) -> ForecastRun | None:
+    """The spot's authoritative run (``latest_runs_by_spot``, read once per ``now`` inside
+    :func:`shared_hour_reads`)."""
+    return _shared(db, ("runs", now), lambda: latest_runs_by_spot(db, now)).get(spot_id)
+
+
+def forecast_source_out(db: Session, run: ForecastRun) -> ForecastSourceOut:
+    """The run's source with its attribution (built once per run inside
+    :func:`shared_hour_reads`)."""
+
+    def build() -> ForecastSourceOut:
+        source = run.source
+        return ForecastSourceOut(
+            code=source.code,
+            name=source.name,
+            is_demo=source.is_demo,
+            attribution=source_attribution(db, run),
+            wave_model=source.wave_model,
+            atmosphere_model=source.atmosphere_model,
+            attribution_links=source_attribution_links(db, run),
+        )
+
+    return _shared(db, ("source", run.id), build)
+
+
 def run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
     """The model runs behind ``run`` with their own init times: a blend's members (from its
     details; the blend's ``issued_at`` is only the oldest member's), otherwise the run
-    itself."""
+    itself (built once per run inside :func:`shared_hour_reads`)."""
+    return _shared(db, ("members", run.id), lambda: _run_members(db, run))
+
+
+def _run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
     if run.source.kind != "blend":
         return [_member_out(run.source, run.run_key, run.issued_at)]
     members = [m for m in (run.details or {}).get("members", []) if m.get("code")]
@@ -837,7 +874,7 @@ def spot_forecast(
     db: Session, spot: SurfSpot, days: int = 10, now: datetime | None = None
 ) -> SpotForecastOut:
     now = now or utcnow()
-    run: ForecastRun | None = latest_runs_by_spot(db, now).get(spot.id)
+    run = authoritative_run(db, spot.id, now)
     if run is None:
         return SpotForecastOut(
             spot_slug=spot.slug,
@@ -849,7 +886,6 @@ def spot_forecast(
     end = now + timedelta(days=days)
     stale = is_stale(run, now)
     points = forecast_points(db, run.id, spot.id, start, end, stale=stale)
-    source = run.source
     # Report the method the stored predictions actually used.
     method = points[0].breaking_height_method if points else None
     return SpotForecastOut(
@@ -857,15 +893,7 @@ def spot_forecast(
         timezone=spot.timezone,
         available=bool(points),
         message=None if points else "The latest model run has no future data for this spot.",
-        source=ForecastSourceOut(
-            code=source.code,
-            name=source.name,
-            is_demo=source.is_demo,
-            attribution=source_attribution(db, run),
-            wave_model=source.wave_model,
-            atmosphere_model=source.atmosphere_model,
-            attribution_links=source_attribution_links(db, run),
-        ),
+        source=forecast_source_out(db, run),
         run=ForecastRunOut(
             run_key=run.run_key,
             issued_at=run.issued_at,
