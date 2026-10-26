@@ -744,8 +744,12 @@ export function drawDashes(ctx: CanvasRenderingContext2D, view: PixelView, l: La
         // at its back corners too (else only its head is drawn, if that is).
         const full = blobDepth(hs, f.system, d.v, d.s);
         let depth = o.still ? full : Math.min(full, head + d.v * (t - d.tb));
-        if (depth > head && (!nodesValid(l, f, cx - px * depth - ex, cy - py * depth - ey) || !nodesValid(l, f, cx - px * depth + ex, cy - py * depth + ey))) depth = Math.min(depth, head);
-        if (!nodesValid(l, f, cx - px * depth - ex, cy - py * depth - ey) || !nodesValid(l, f, cx - px * depth + ex, cy - py * depth + ey)) continue;
+        let back = nodesValid(l, f, cx - px * depth - ex, cy - py * depth - ey) && nodesValid(l, f, cx - px * depth + ex, cy - py * depth + ey);
+        if (!back && depth > head) {
+          depth = head;
+          back = nodesValid(l, f, cx - px * depth - ex, cy - py * depth - ey) && nodesValid(l, f, cx - px * depth + ex, cy - py * depth + ey);
+        }
+        if (!back) continue;
         // Unit rectangle x in [-0.5, 0.5] (along the crest), y in [0, 1] (back against the travel).
         q[n] = tx * length;
         q[n + 1] = ty * length;
