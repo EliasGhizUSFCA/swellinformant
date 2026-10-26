@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { ApiError, readCookie } from "@/lib/api";
 import { colorForScore, labelForScore, NO_FORECAST_COLOR, QUALITY_COLORS, QUALITY_LABELS, QUALITY_OPTIONS, QUALITY_THRESHOLDS } from "@/lib/quality";
-import { defaultWizardState, registerSchema, safeNext, toSearchInput, validateStep } from "@/lib/validation";
+import { registerSchema } from "@/lib/register-schema";
+import { defaultWizardState, safeNext, toSearchInput, validateStep } from "@/lib/validation";
 
 describe("quality scale (mirrors backend thresholds)", () => {
   it.each([
