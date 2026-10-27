@@ -120,6 +120,7 @@ def test_plan_and_result_dicts_are_json_safe() -> None:
         "kind": "spots",
         "source_code": "src_spots",
         "provider": "open_meteo",
+        "component": None,
         "state": "new",
         "stored_run_key": "old",
         "available_run_key": "new",
@@ -128,6 +129,7 @@ def test_plan_and_result_dicts_are_json_safe() -> None:
         "detail": "waiting for the map",
         "retry_after_s": 60.0,
         "attempts": 2,
+        "retry_spot_ids": [],
     }
     p = plan(c, component("map", "current"))
     d = p.as_dict()

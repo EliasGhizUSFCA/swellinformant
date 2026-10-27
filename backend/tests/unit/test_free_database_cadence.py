@@ -82,9 +82,10 @@ def test_a_map_cycle_brings_the_newest_spot_runs_of_both_families(world: World) 
     world.runs[ECMWF] = ecmwf_run(C06 + timedelta(hours=6))  # waiting since its 12Z run
     world.runs[GFS] = gfs_run(C18)
     k = stored_06()
-    # The 18Z GFS run is the spot run of a map cycle: it waits for the map, no trigger.
+    # The 18Z GFS run is new but no trigger here: it is taken by the next map sync. (Swell
+    # 2.0 removed the spot/map coalescing wait, design D6: it no longer waits for the map.)
     early = plan_sync(None, settings=free(), now=T18, known=k)
-    assert not early.due and state(early, GFS) == "waiting"
+    assert not early.due and state(early, GFS) == "new"
     world.runs[MAP] = map_run(C18)
     plan = plan_sync(None, settings=free(), now=T18 + timedelta(minutes=10), known=k)
     assert plan.due and plan.anchor_cycle == C18
