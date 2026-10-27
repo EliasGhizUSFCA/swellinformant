@@ -175,12 +175,13 @@ def heartbeat_age_minutes() -> float | None:
     return None if heartbeat is None else round(heartbeat.age_seconds() / 60, 1)
 
 
-def run_refresh() -> dict[str, Any]:
-    """One refresh check (``orchestrator.refresh_check``), JSON-safe."""
+def run_refresh(caller: str = "refresh") -> dict[str, Any]:
+    """One refresh check (``orchestrator.refresh_check``), JSON-safe; ``caller`` is
+    recorded with it (``refresh`` or ``cron_daily``)."""
     from app.services.sync.orchestrator import refresh_check
     from app.services.sync.types import jsonable
 
-    out = jsonable(refresh_check(trigger="http"))
+    out = jsonable(refresh_check(trigger="http", caller=caller))
     return out if isinstance(out, dict) else {"status": "error"}
 
 
@@ -209,7 +210,7 @@ def _refresh_backstop() -> dict[str, Any]:
     """The daily cron's refresh check, summarised; never raises (the watchdog's answer
     does not depend on it)."""
     try:
-        out = run_refresh()
+        out = run_refresh("cron_daily")
     except Exception as exc:
         logger.exception("Daily refresh backstop failed")
         return {"status": "error", "error": f"refresh_failed:{type(exc).__name__}"}

@@ -953,7 +953,9 @@ def tick(*, trigger: SyncTrigger) -> dict[str, Any]:
     }
 
 
-def refresh_check(*, trigger: SyncTrigger = "http", now: datetime | None = None) -> dict[str, Any]:
+def refresh_check(
+    *, trigger: SyncTrigger = "http", now: datetime | None = None, caller: str = "refresh"
+) -> dict[str, Any]:
     """The refresh endpoint's run (``/api/internal/refresh``, and the daily cron's
     backstop): a spot-only check and, when a spot component is due, a spot-only sync (the
     map/GRIB stage never runs here). Idempotent and safe to call concurrently: another sync
@@ -962,12 +964,38 @@ def refresh_check(*, trigger: SyncTrigger = "http", now: datetime | None = None)
     The check reads the known runs from Redis and the providers' metadata only (the database
     only when Redis has no known runs), so a check with nothing due leaves a scale-to-zero
     database asleep. Returns ``{status: disabled | not_due | busy | <sync status>, plan,
-    sync_run_id, version_ids, published_at, stages, refreshes, timings}``.
+    sync_run_id, version_ids, published_at, stages, refreshes, timings}``; every call is
+    recorded in Redis (``state.write_refresh_check``, with ``caller``: ``refresh`` for the
+    endpoint, ``cron_daily`` for the backstop) for the scheduler-silence alert.
     """
     started, cpu0 = time.monotonic(), cpu_seconds()
     settings = get_settings()
     if refresh_disabled(settings):
+        state.write_refresh_check(
+            {"caller": caller, "trigger": trigger, "status": "disabled", "due": False}
+        )
         return {"status": "disabled", "reason": DISABLED_REASON}
+    out = _refresh_check(trigger, now, settings, started, cpu0)
+    state.write_refresh_check(
+        {
+            "caller": caller,
+            "trigger": trigger,
+            "status": out.get("status"),
+            "due": bool(out.get("due")),
+            "sync_run_id": out.get("sync_run_id"),
+            "version_ids": list(out.get("version_ids") or []),
+        }
+    )
+    return out
+
+
+def _refresh_check(
+    trigger: SyncTrigger,
+    now: datetime | None,
+    settings: Settings,
+    started: float,
+    cpu0: float,
+) -> dict[str, Any]:
     known = state.read_known()
     if known is None:
         with SessionLocal() as db:

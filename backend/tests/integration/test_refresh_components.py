@@ -476,6 +476,10 @@ def test_the_refresh_route_needs_the_cron_secret(
     assert body["refreshes"][0]["spots_updated"] == 5
     again = client.get(REFRESH_PATH, headers=AUTH)
     assert again.status_code == 200 and again.json()["status"] == "not_due"
+    # Every check is recorded for the scheduler-silence alert (design D12).
+    last = state.read_refresh_check()
+    assert last is not None and last["status"] == "not_due" and last["caller"] == "refresh"
+    assert datetime.fromisoformat(last["at"]) >= utcnow() - timedelta(minutes=1)
 
 
 def test_the_kill_switch_stops_every_runner(
@@ -494,6 +498,8 @@ def test_the_kill_switch_stops_every_runner(
     # The refresh endpoint.
     resp = client.post(REFRESH_PATH, headers=AUTH)
     assert resp.status_code == 200 and resp.json()["status"] == "disabled"
+    last = state.read_refresh_check()
+    assert last is not None and last["status"] == "disabled"
     # The daily cron's backstop.
     daily = client.get(CRON_DAILY_PATH, headers=AUTH).json()
     assert daily["refresh"]["status"] == "disabled"
@@ -545,6 +551,8 @@ def test_the_daily_cron_runs_one_refresh_check(
     assert body["status"] in {"ok", "degraded", "failing"}
     assert body["refresh"]["status"] == "success" and len(body["refresh"]["version_ids"]) == 1
     assert published(db).id == body["refresh"]["version_ids"][0]
+    last = state.read_refresh_check()
+    assert last is not None and last["caller"] == "cron_daily" and last["status"] == "success"
 
 
 # --------------------------------------------------------------------------- simulation (C6)

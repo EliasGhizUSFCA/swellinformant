@@ -11,6 +11,10 @@ Keys:
   API function, deployed without data/, reports these instead of its own.
 * :data:`KNOWN_KEY` ``sync:known``: :meth:`KnownRuns.to_json` (expires after 7 days), so a
   restarted daemon can check without reading the database.
+* :data:`REFRESH_CHECK_KEY` ``sync:refresh-check``: JSON of the last refresh check of the
+  refresh endpoint or the daily backstop (``orchestrator.refresh_check``: when, its trigger,
+  status, sync run and versions; expires after 7 days), so monitoring sees a scheduler that
+  stopped calling (design D12, ``refresh_scheduler_silent``).
 * :data:`KICK_PREFIX` ``sync:kick:<job>``: requests from the API for the daemon (expire
   after 1 day): ``sync:kick:matching.match`` holds the ISO time of the newest request,
   ``sync:kick:flights.discover`` is a set of match ids (:data:`ALL_MATCHES` = every match).
@@ -36,9 +40,11 @@ logger = logging.getLogger(__name__)
 
 HEARTBEAT_KEY = "sync:heartbeat"
 KNOWN_KEY = "sync:known"
+REFRESH_CHECK_KEY = "sync:refresh-check"
 KICK_PREFIX = "sync:kick:"
 HEARTBEAT_TTL_SECONDS = 21600
 KNOWN_TTL_SECONDS = 7 * 86400
+REFRESH_CHECK_TTL_SECONDS = 7 * 86400
 KICK_TTL_SECONDS = 86400
 
 KickJob = Literal["matching.match", "flights.discover"]
@@ -154,6 +160,34 @@ def read_known() -> KnownRuns | None:
     except (ValueError, KeyError, TypeError) as exc:
         logger.warning("Known sync runs unreadable: %s", type(exc).__name__)
         return None
+
+
+def write_refresh_check(record: dict[str, Any]) -> None:
+    """Record the last refresh check (``at`` is added: now). Best effort."""
+    payload = {"at": utcnow().isoformat(), **record}
+    try:
+        get_redis().set(
+            REFRESH_CHECK_KEY, json.dumps(payload, default=str), ex=REFRESH_CHECK_TTL_SECONDS
+        )
+    except redis.RedisError as exc:
+        logger.warning("Refresh check not recorded: %s", type(exc).__name__)
+
+
+def read_refresh_check() -> dict[str, Any] | None:
+    """The last refresh check ({at, trigger, status, due, sync_run_id, version_ids}), or None
+    (none recorded, expired, unreadable or Redis down)."""
+    try:
+        raw = get_redis().get(REFRESH_CHECK_KEY)
+    except redis.RedisError as exc:
+        logger.warning("Refresh check not read: %s", type(exc).__name__)
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) and data.get("at") else None
 
 
 def request_kick(job: KickJob, match_ids: Iterable[str] = ()) -> bool:
