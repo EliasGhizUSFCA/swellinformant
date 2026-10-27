@@ -41,7 +41,13 @@ pytestmark = pytest.mark.integration
 
 
 def test_prune_pass_on_an_empty_database(db: Session) -> None:
-    assert prune_pass(db) == {"superseded_predictions": 0, "map_fields": 0, "forecast_runs": 0}
+    # forecast_versions: superseded versions past retention are pruned too (Swell 2.0, C2).
+    assert prune_pass(db) == {
+        "superseded_predictions": 0,
+        "map_fields": 0,
+        "forecast_runs": 0,
+        "forecast_versions": 0,
+    }
 
 
 @pytest.mark.parametrize("prune_predictions", [True, False])
@@ -66,6 +72,7 @@ def test_prune_pass_runs_both_prunes_and_commits(
         "superseded_predictions": 4 if prune_predictions else 0,
         "map_fields": 7,
         "forecast_runs": 2,
+        "forecast_versions": 0,  # no forecast version exists (Swell 2.0, C2 retention)
     }
     assert calls == (["fields", "runs", "predictions"] if prune_predictions else ["fields", "runs"])
     assert committed == [True]
@@ -136,6 +143,7 @@ def test_a_pass_prunes_superseded_predictions_and_unserved_fields(
         "superseded_predictions": superseded if prune_predictions else 0,
         "map_fields": 5,  # the stray run's five variables
         "forecast_runs": 0,  # every run is younger than RETENTION_FORECAST_DAYS
+        "forecast_versions": 0,  # no forecast version exists (Swell 2.0, C2 retention)
     }
     with SessionLocal() as other:  # committed: another session sees the result
         runs = set(other.scalars(select(MapField.run_id).distinct()))
@@ -148,4 +156,9 @@ def test_a_pass_prunes_superseded_predictions_and_unserved_fields(
         assert kept == (0 if prune_predictions else superseded)
     assert all(_predictions(db, r) > 0 for r in (new, ec, blend_run))  # never pruned here
     again = prune_pass(db, NOW)  # idempotent
-    assert again == {"superseded_predictions": 0, "map_fields": 0, "forecast_runs": 0}
+    assert again == {
+        "superseded_predictions": 0,
+        "map_fields": 0,
+        "forecast_runs": 0,
+        "forecast_versions": 0,
+    }

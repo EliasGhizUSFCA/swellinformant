@@ -1,14 +1,20 @@
 """Job H — retention policy and housekeeping.
 
 * forecast runs older than RETENTION_FORECAST_DAYS are deleted (their wave forecasts and
-  predictions cascade), always keeping the two newest usable runs per source
+  predictions cascade), always keeping the two newest usable runs per source and every run
+  a forecast version still needs: the published version, the previous published one and
+  any staging one (their ``forecast_run_id`` and every run their ``spot_runs`` serve, so a
+  stale spot never loses its previous run; :func:`version_run_ids`)
   (:func:`prune_forecast_runs`, daily and also by every sync's prune stage, so the free
   database profile's 1-day retention holds between the daily cleanups);
+* superseded and failed forecast versions older than RETENTION_FORECAST_DAYS are deleted,
+  except the previous published one (:func:`prune_versions`);
 * the surf-quality predictions of superseded runs of the blend's member sources are
   deleted (:func:`prune_superseded_predictions`): derived, recomputable data, about 2 kB
   per row and every member run scored as well as the blend. The newest usable run of every
-  source and every run that is authoritative for some spot keep theirs; blend predictions
-  are never pruned here;
+  source, every run that is authoritative for some spot and every run the published, the
+  previous published or a staging forecast version references keep theirs; blend
+  predictions are never pruned here;
 * map fields (the map's ocean layers, about 0.1 MB per field and 0.5 deg) are kept for the
   two best servable runs and the run of the newest sync publication (the run the map
   serves under SYNC_PUBLISH_GATE) only (:func:`prune_map_fields`, also run after every
@@ -59,6 +65,7 @@ from app.models import (
 from app.models.enums import MatchStatus
 from app.models.forecast_engine import MapField
 from app.models.sync import SyncRun
+from app.models.version import ForecastVersion
 from app.services.forecasts.queries import (
     BLEND_CODE,
     PREDICTIONS_PRUNED_KEY,
@@ -74,6 +81,55 @@ MAP_FIELD_RUNS_KEPT = 2
 QC_PASSED = ("good", "probably_good")
 
 
+def _protected_versions(db: Session, *, previous: bool = True) -> list[ForecastVersion]:
+    """The forecast versions whose runs are never pruned: the published one, the previous
+    published one (the newest superseded; with ``previous``) and every staging one."""
+    rows = list(
+        db.scalars(
+            select(ForecastVersion).where(ForecastVersion.status.in_(("published", "staging")))
+        )
+    )
+    if previous:
+        before = db.scalars(
+            select(ForecastVersion)
+            .where(ForecastVersion.status == "superseded")
+            .order_by(ForecastVersion.superseded_at.desc().nulls_last(), ForecastVersion.id.desc())
+            .limit(1)
+        ).first()
+        if before is not None:
+            rows.append(before)
+    return rows
+
+
+def version_run_ids(db: Session, *, previous: bool = True) -> set[int]:
+    """Every forecast run a protected version (:func:`_protected_versions`) references: its
+    ``forecast_run_id`` and the run of each spot in ``spot_runs`` (stale spots included)."""
+    ids: set[int] = set()
+    for version in _protected_versions(db, previous=previous):
+        if version.forecast_run_id is not None:
+            ids.add(int(version.forecast_run_id))
+        for entry in (version.spot_runs or {}).values():
+            run_id = entry.get("run_id") if isinstance(entry, dict) else None
+            if run_id is not None:
+                ids.add(int(run_id))
+    return ids
+
+
+def prune_versions(db: Session, now: datetime) -> int:
+    """Delete the superseded and failed forecast versions created more than
+    RETENTION_FORECAST_DAYS before ``now``, except the previous published one (the newest
+    superseded). The caller commits; returns the rows deleted."""
+    cutoff = now - timedelta(days=get_settings().retention_forecast_days)
+    keep = [v.id for v in _protected_versions(db)]
+    stmt = delete(ForecastVersion).where(
+        ForecastVersion.status.in_(("superseded", "failed")),
+        ForecastVersion.created_at < cutoff,
+    )
+    if keep:
+        stmt = stmt.where(ForecastVersion.id.notin_(keep))
+    return db.execute(stmt).rowcount or 0  # type: ignore[attr-defined]
+
+
 def prune_superseded_predictions(db: Session, now: datetime | None = None) -> int:
     """Delete the predictions of superseded non-blend runs; returns the rows deleted.
 
@@ -84,6 +140,8 @@ def prune_superseded_predictions(db: Session, now: datetime | None = None) -> in
     the prediction job score it again. The caller commits.
     """
     keep = {run.id for run in latest_runs_by_spot(db, now).values()}
+    # Every run the published, the previous published or a staging version references.
+    keep |= version_run_ids(db)
     ranked = (
         select(
             ForecastRun.id,
@@ -160,8 +218,10 @@ def prune_map_fields(db: Session, keep: int = MAP_FIELD_RUNS_KEPT) -> int:
 def prune_forecast_runs(db: Session, now: datetime) -> int:
     """Delete the forecast runs started more than RETENTION_FORECAST_DAYS before ``now``
     (their forecasts, predictions and map fields cascade), keeping the two newest usable
-    runs of every source whatever their age. Returns the runs deleted; the caller commits."""
-    keep_ids: set[int] = set()
+    runs of every source whatever their age and every run the published, the previous
+    published or a staging forecast version references (:func:`version_run_ids`). Returns
+    the runs deleted; the caller commits."""
+    keep_ids: set[int] = version_run_ids(db)
     for source_id in db.scalars(select(ForecastRun.source_id).distinct()).all():
         keep_ids.update(
             db.scalars(
@@ -191,12 +251,14 @@ def prune_pass(db: Session, now: datetime | None = None) -> dict[str, int]:
     predictions of superseded member runs (:func:`prune_superseded_predictions`, when
     PRUNE_SUPERSEDED_MEMBER_PREDICTIONS). The rest of the retention policy stays with the
     daily :func:`cleanup`. Commits; returns the rows deleted,
-    ``{"superseded_predictions", "map_fields", "forecast_runs"}`` (``forecast_runs`` counts
-    runs, added by the egress integration)."""
+    ``{"superseded_predictions", "map_fields", "forecast_runs", "forecast_versions"}``
+    (``forecast_runs`` counts runs, added by the egress integration; the superseded and
+    failed versions past retention, :func:`prune_versions`)."""
     out = {
         "superseded_predictions": 0,
         "map_fields": prune_map_fields(db),
         "forecast_runs": prune_forecast_runs(db, now or utcnow()),
+        "forecast_versions": prune_versions(db, now or utcnow()),
     }
     if get_settings().prune_superseded_member_predictions:
         out["superseded_predictions"] = prune_superseded_predictions(db, now)
@@ -224,6 +286,7 @@ def cleanup(db: Session, now: datetime | None = None) -> dict[str, int]:
 
     out["map_fields"] = prune_map_fields(db)
     out["forecast_runs"] = prune_forecast_runs(db, now)
+    out["forecast_versions"] = prune_versions(db, now)
     if s.prune_superseded_member_predictions:
         out["superseded_predictions"] = prune_superseded_predictions(db, now)
 
