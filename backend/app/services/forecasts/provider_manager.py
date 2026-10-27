@@ -507,14 +507,18 @@ def provider_check_report(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """The ``forecast provider-check`` report: selection, eligibility, recorded health and
-    the health check of ``providers`` (default: the active primary and its fallback).
+    the health check of ``providers`` (default: the configured primary and its fallback,
+    so a Windy primary is checked even while Open-Meteo stands in). ``unchecked`` names the
+    configured providers without a health check (the ECMWF family, the GRIB ingesters).
     Never contains a key's value; stores nothing."""
     s = settings or get_settings()
     at = (now or utcnow()).astimezone(UTC)
     active = active_provider(s, at)
+    checkable = (OPEN_METEO, WINDY, DEMO)
+    unchecked = [p for p in active.configured if p not in checkable]
     if providers is None:
-        providers = list(dict.fromkeys([active.primary, *(p for p in [active.fallback] if p)]))
-        providers = [p for p in providers if p in (OPEN_METEO, WINDY, DEMO)]
+        wanted = [active.configured[0], *(p for p in [active.fallback] if p)]
+        providers = [p for p in dict.fromkeys(wanted) if p in checkable]
     from app.services.forecasts.open_meteo import free_api_refused
 
     eligibility = {
@@ -540,6 +544,7 @@ def provider_check_report(
         "eligibility": eligibility,
         "recorded_health": recorded,
         "health_checks": [c.as_dict() for c in checks],
+        "unchecked": unchecked,
         "ok": all(c.ok for c in checks),
         "stored": "nothing (provider-check stores no forecast data and records no health)",
     }

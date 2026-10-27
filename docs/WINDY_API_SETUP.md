@@ -141,9 +141,10 @@ fallback to run lawfully (docs/FORECAST_SOURCES.md, "Open-Meteo: free and commer
    Other statuses: `testing_key` (a trial key, section 2), `credentials` (invalid key: Windy
    answers HTTP 400 `{"message":"Invalid API key"}` according to a user report, or 401/403),
    `quota` (HTTP 429 or a "limit" message, or our own counter), `unavailable` (timeouts,
-   5xx), `not_configured` (no key). Without `--provider` the command checks the active primary
-   and its fallback (`python -m app.cli forecast provider-check`); `--provider open_meteo`
-   reads one Open-Meteo `meta.json`. Exit status 0 only when every checked provider is ok.
+   5xx), `not_configured` (no key). Without `--provider` the command checks the configured
+   primary and its fallback (`python -m app.cli forecast provider-check`; Windy is checked
+   even while Open-Meteo stands in); `--provider open_meteo` reads one Open-Meteo
+   `meta.json`. Exit status 0 only when every checked provider is ok.
 
 ## 6. Trigger a test refresh
 

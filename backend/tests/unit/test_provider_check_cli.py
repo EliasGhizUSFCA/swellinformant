@@ -43,8 +43,10 @@ def test_provider_check_prints_the_selection_and_never_the_key(
         "storage_authorized": True,
     }
     assert report["recorded_health"]["windy"]["last_failure_kind"] == pm.TESTING_KEY
-    # Without --provider: the active primary and its fallback (here the same: Open-Meteo).
-    assert [c["provider"] for c in report["health_checks"]] == ["open_meteo"]
+    # Without --provider: the configured primary (Windy, checked although Open-Meteo stands
+    # in) and its fallback.
+    assert [c["provider"] for c in report["health_checks"]] == ["windy", "open_meteo"]
+    assert report["unchecked"] == []
     assert WINDY_KEY not in out
     monkeypatch.setattr(
         pm, "health_check", lambda p, st, **kw: pm.HealthCheckResult(p, "credentials", "no", NOW)
@@ -56,3 +58,17 @@ def test_provider_check_prints_the_selection_and_never_the_key(
 def test_provider_check_rejects_an_unknown_provider() -> None:
     with pytest.raises(SystemExit):
         cli_main(["forecast", "provider-check", "--provider", "surfline"])
+
+
+def test_provider_check_names_the_providers_it_cannot_check(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    s = Settings(_env_file=None, forecast_providers="open_meteo,open_meteo_ecmwf")  # type: ignore[call-arg]
+    monkeypatch.setattr("app.core.config.get_settings", lambda: s)
+    monkeypatch.setattr(
+        pm, "health_check", lambda p, st, **kw: pm.HealthCheckResult(p, "ok", "mocked", NOW)
+    )
+    assert cli_main(["forecast", "provider-check"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert [c["provider"] for c in report["health_checks"]] == ["open_meteo"]
+    assert report["unchecked"] == ["open_meteo_ecmwf"]

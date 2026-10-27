@@ -41,8 +41,9 @@ def _add_provider_check(sub: SubParsers) -> None:
             "fallback to Open-Meteo and until when) and a live health check: Open-Meteo reads "
             "one meta.json, Windy sends one sentinel request (it detects a testing key, an "
             "invalid key and a used-up quota, and counts against WINDY_DAILY_REQUEST_LIMIT). "
-            "Without --provider it checks the active primary and its fallback. Stores no "
-            "forecast data and records no health; never prints a key."
+            "Without --provider it checks the configured primary and its fallback (Windy too "
+            "while Open-Meteo stands in). Stores no forecast data and records no health; "
+            "never prints a key."
         ),
     )
     p.add_argument("--provider", choices=CHECKABLE, help="check only this provider")
