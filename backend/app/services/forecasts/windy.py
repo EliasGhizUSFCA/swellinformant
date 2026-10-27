@@ -129,7 +129,12 @@ class WindyProvider(ForecastProvider):
         data: dict[str, Any] = resp.json()
         return data
 
-    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+    def fetch(
+        self,
+        spots: list[SpotPoint],
+        run: RunInfo,
+        components: frozenset[str] | None = None,
+    ) -> FetchResult:
         result = FetchResult()
         before = self.tally.snapshot()
         for p in spots:

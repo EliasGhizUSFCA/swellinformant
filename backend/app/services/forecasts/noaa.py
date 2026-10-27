@@ -1165,7 +1165,12 @@ class NoaaGfsProvider(ForecastProvider):
         )
 
     # ------------------------------------------------------------------ data
-    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+    def fetch(
+        self,
+        spots: list[SpotPoint],
+        run: RunInfo,
+        components: frozenset[str] | None = None,
+    ) -> FetchResult:
         result = FetchResult()
         self.last_cells, self.last_hours, self.last_bytes_downloaded = {}, [], 0
         self.last_step_bytes = {}
@@ -1387,7 +1392,12 @@ class NoaaGfsFieldsProvider(NoaaGfsProvider):
 
         return self._newest_cycle(now, self.RUN_KEY_PREFIX, needs, last)
 
-    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+    def fetch(
+        self,
+        spots: list[SpotPoint],
+        run: RunInfo,
+        components: frozenset[str] | None = None,
+    ) -> FetchResult:
         """The global fields of ``run``'s cycle; ``spots`` are ignored (no records)."""
         result = FetchResult()
         cycle = run.wave_model_run_at or run.issued_at

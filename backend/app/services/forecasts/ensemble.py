@@ -643,7 +643,12 @@ class GefsWaveEnsembleProvider(ForecastProvider):
             f"no GEFS-Wave cycle has its mean f{last:03d} published (tried {', '.join(tried)})"
         )
 
-    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+    def fetch(
+        self,
+        spots: list[SpotPoint],
+        run: RunInfo,
+        components: frozenset[str] | None = None,
+    ) -> FetchResult:
         raise TypeError(
             "GEFS-Wave statistics are not wave forecasts; use fetch_stats()/acquire_ensemble()"
         )

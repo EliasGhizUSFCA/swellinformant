@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.core.config import get_settings
 from app.services.forecasts.base import (
     FetchResult,
     ForecastProvider,
@@ -295,11 +296,14 @@ class DemoForecastProvider(ForecastProvider):
 
     def __init__(
         self,
-        forecast_days: int = 16,
+        forecast_days: int | None = None,
         overrides: list[SwellOverride] | None = None,
         run_key: str | None = None,
         natural_swells: bool = True,
     ) -> None:
+        # None = FORECAST_DAYS (the rolling horizon every provider follows).
+        if forecast_days is None:
+            forecast_days = get_settings().forecast_days
         self.forecast_days = forecast_days
         self.overrides = overrides or []
         self.run_key_override = run_key
@@ -330,7 +334,12 @@ class DemoForecastProvider(ForecastProvider):
             metadata_source="demo",
         )
 
-    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+    def fetch(
+        self,
+        spots: list[SpotPoint],
+        run: RunInfo,
+        components: frozenset[str] | None = None,
+    ) -> FetchResult:
         result = FetchResult()
         for p in spots:
             if p.params is None:

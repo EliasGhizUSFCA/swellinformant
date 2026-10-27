@@ -905,7 +905,12 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         return series, errors
 
     # ---------------------------------------------------------------- fetch
-    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+    def fetch(
+        self,
+        spots: list[SpotPoint],
+        run: RunInfo,
+        components: frozenset[str] | None = None,
+    ) -> FetchResult:
         """Waves and wind for every spot, for exactly the run ``run`` names."""
         require_commercial_licence(self.settings)
         result = FetchResult()
