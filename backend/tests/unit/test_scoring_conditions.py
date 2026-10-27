@@ -450,7 +450,8 @@ class TestReasons:
         old = SimpleNamespace(
             components={"wind": 0.9}, wind_relation="offshore", algorithm_version="2.0.0"
         )
-        assert hour_outputs(old)["favourable"] == [] and hour_outputs(old)["offshore_class"]
+        assert hour_outputs(old)["favourable"] is None  # scored before 2.2.0
+        assert hour_outputs(old)["offshore_class"] == "offshore"
 
 
 # ------------------------------------------------------------------ confidence separation

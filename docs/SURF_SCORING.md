@@ -633,8 +633,8 @@ Measured on the real run (section 3h), most frequent favourable phrases: good si
 25,000 hours), well-aligned swell (16,784), moderate offshore wind (4,401); unfavourable:
 period too short for this reef (7,116) or point (4,346), too small (3,648), onshore wind
 (2,244). 668 hours had no favourable phrase and 6,738 no unfavourable one. Rows scored
-before 2.2.0 have empty lists until they are rescored (the served runs are rescored after
-the upgrade).
+before 2.2.0 have no lists (`null` in the API) until they are rescored (the served runs are
+rescored after the upgrade).
 
 ## 3h. 2.2.0 on the real run
 

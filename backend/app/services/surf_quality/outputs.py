@@ -3,7 +3,7 @@
 Read from a stored prediction only (no database access):
 
 * ``favourable`` / ``unfavourable``: the hour's main conditions (``reasons.py``), stored with
-  the score; empty for rows scored before 2.2.0;
+  the score; None for rows scored before 2.2.0 (they have no such lists);
 * ``offshore_class``: the offshore-wind classification, the strength and relation classes
   of ``wind.py`` in one phrase ("light offshore", "strong onshore", "glassy"); None without
   wind data;
@@ -43,9 +43,10 @@ def hour_outputs(prediction: Any) -> dict[str, Any]:
     components = prediction.components or {}
     detail = components.get("wind_detail")
     strength = detail.get("strength") if isinstance(detail, dict) else None
+    favourable, unfavourable = components.get("favourable"), components.get("unfavourable")
     return {
-        "favourable": [str(r) for r in components.get("favourable") or []],
-        "unfavourable": [str(r) for r in components.get("unfavourable") or []],
+        "favourable": None if favourable is None else [str(r) for r in favourable],
+        "unfavourable": None if unfavourable is None else [str(r) for r in unfavourable],
         "offshore_class": offshore_class(prediction.wind_relation, strength),
         "model_version": prediction.algorithm_version,
     }

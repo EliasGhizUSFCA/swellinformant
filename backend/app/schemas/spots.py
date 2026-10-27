@@ -49,10 +49,10 @@ class HourOutputs(BaseModel):
     """Per-hour outputs of the quality model (algorithm 2.2.0; docs/SURF_SCORING.md 3a)."""
 
     # Main favourable and unfavourable conditions, short plain phrases from the score's
-    # component fits ("well-aligned swell", "light offshore wind", "onshore wind 25 km/h");
-    # empty for hours scored before 2.2.0.
-    favourable: list[str] = []
-    unfavourable: list[str] = []
+    # component fits ("well-aligned swell", "light offshore wind", "onshore wind 25 km/h"):
+    # at most three each, [] when none; None for hours scored before 2.2.0.
+    favourable: list[str] | None = None
+    unfavourable: list[str] | None = None
     # Offshore-wind classification: strength + relation ("light offshore", "strong
     # onshore", "glassy"); offshore = wind from the land to the sea at this break.
     offshore_class: str | None = None
