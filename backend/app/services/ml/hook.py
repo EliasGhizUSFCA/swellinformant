@@ -20,6 +20,11 @@ valid time plus, when the paired station has them, the station's spectral Hm0 at
 before the cycle time (within ``PERSISTENCE_MAX_AGE``) and the analysis error against the
 archived lead-0 point forecast of the same cycle. A feature the model requires but that
 is unavailable leaves the value raw (Correction.correct_hs).
+
+The ML modules (``ml.apply``, ``ml.registry``, ``verification.pairing``: pandas,
+scikit-learn, joblib) are imported only by the functions that use a correction, so this
+module, and the blend and prediction jobs that import it, load without the data libraries.
+ML corrections are optional and off by default (ML_CORRECTIONS_ENABLED=false).
 """
 
 from __future__ import annotations
@@ -27,17 +32,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import BuoyObservation, BuoyStation, ForecastRun, PointForecast, SurfSpot
-from app.services.ml.apply import Correction, build_features, load_active_correction
-from app.services.ml.features import floored_log
-from app.services.ml.registry import transferable_slugs
 from app.services.surf_quality.models import HEIGHT_FIELDS
-from app.services.verification.pairing import PERSISTENCE_MAX_AGE
+
+if TYPE_CHECKING:
+    from app.services.ml.apply import Correction
 
 
 def scale_heights(values: Mapping[str, Any], factor: float) -> dict[str, Any]:
@@ -67,6 +71,9 @@ class RunCorrector:
     @classmethod
     def for_run(cls, db: Session, run: ForecastRun) -> RunCorrector | None:
         """None unless a correction is active and was trained on this run's family."""
+        from app.services.ml.apply import load_active_correction
+        from app.services.ml.registry import transferable_slugs
+
         correction = load_active_correction(db)
         if correction is None or run.source is None:
             return None
@@ -90,6 +97,8 @@ class RunCorrector:
         self, spot_slug: str, values: Mapping[str, Any], valid_time: datetime
     ) -> tuple[float, dict[str, Any]] | None:
         """(multiplicative factor, info) when the correction applies to this value."""
+        from app.services.ml.apply import build_features
+
         lead = (valid_time - self.cycle_time).total_seconds() / 3600.0
         raw = values.get("sig_wave_height_m")
         if not raw or not self.correction.applies_to(spot_slug, lead, family=self.family):
@@ -116,6 +125,9 @@ def _station_context(
     db: Session, station: BuoyStation, cycle: datetime, sources: frozenset[str]
 ) -> tuple[float | None, float | None]:
     """Spectral Hm0 observed at or before ``cycle`` and the lead-0 analysis log error."""
+    from app.services.ml.features import floored_log
+    from app.services.verification.pairing import PERSISTENCE_MAX_AGE
+
     obs = db.scalar(
         select(BuoyObservation.hs_m)
         .where(

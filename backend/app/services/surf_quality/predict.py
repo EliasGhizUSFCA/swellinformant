@@ -27,19 +27,26 @@ are read with the columns and ``extra`` keys scoring uses (:class:`ScoringForeca
 :func:`compute_pending_predictions` reads what every run of the pass shares once
 (:class:`PassReads`: the spots, research inputs, profile decisions and each spot's tide
 predictions, ``tides.stage.shared_tide_reads``). The scores are unchanged.
+
+Lean imports (Swell 2.0, design D8): the job runs in the refresh Function, whose install has
+no pandas, scikit-learn, SciPy, pyarrow, joblib or ecCodes. The demo tide stages are plain
+Python (value for value the pandas rolling window they replaced) and the optional ML
+correction (``ml.hook``) is imported only when ML_CORRECTIONS_ENABLED and an ACTIVE model
+version exist (:func:`run_corrector`); tests/unit/test_lean_imports.py and
+tests/integration/test_lean_predict.py check it.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -49,13 +56,13 @@ from app.models import (
     ForecastEnsembleStat,
     ForecastRun,
     ForecastSource,
+    MLModelVersion,
     SpotResearchAssessment,
     SurfQualityPrediction,
     SurfSpot,
     WaveForecast,
 )
-from app.models.enums import ForecastRunStatus
-from app.services.ml.hook import RunCorrector
+from app.models.enums import ForecastRunStatus, MLModelStatus
 from app.services.research.decisions import (
     DecisionValidationError,
     WindDispute,
@@ -98,30 +105,63 @@ from app.services.surf_quality.uncertainty import (
 )
 from app.services.tides.stage import TideStage, shared_tide_reads, tide_stages_for
 
+if TYPE_CHECKING:
+    from app.services.ml.hook import RunCorrector
+
 logger = logging.getLogger(__name__)
 
 INSERT_CHUNK = 2000
 MIN_TIDAL_RANGE_M = 0.15
+# A demo run's tide stage: the level against the lowest and highest level within half this
+# window either side, given at least this many known levels.
+TIDE_WINDOW = timedelta(hours=25)
+TIDE_WINDOW_MIN_LEVELS = 6
 # An ensemble row is used for a forecast hour only if it is this close in time, and only
 # from an ensemble run issued within ENSEMBLE_RUN_WINDOW of the forecast run.
 ENSEMBLE_MAX_GAP = timedelta(hours=3)
 ENSEMBLE_RUN_WINDOW = timedelta(hours=24)
 
 
+def _missing(value: float | None) -> bool:
+    return value is None or math.isnan(value)
+
+
 def tide_stages(times: list[datetime], levels: list[float | None]) -> list[float | None]:
-    """Position in the local tidal cycle: 0 = low, 1 = high (±12.5 h rolling window)."""
-    if not times or all(v is None for v in levels):
+    """Position in the local tidal cycle: 0 = low, 1 = high, against the lowest and highest
+    level within ±12.5 h.
+
+    The window of a time t is ``(t - 12.5 h, t + 12.5 h]`` and needs at least
+    TIDE_WINDOW_MIN_LEVELS known levels; a stage is None without its own level, without
+    enough levels or when the window's range is below MIN_TIDAL_RANGE_M. This is, value for
+    value, the pandas rolling window it replaced (``rolling("25h", center=True,
+    min_periods=6)`` min and max, closed on the right), in plain Python so that scoring
+    imports no data library (tests/unit/test_tide_stages.py compares the two)."""
+    if not times or all(_missing(v) for v in levels):
         return [None] * len(times)
-    series = pd.Series(levels, index=pd.DatetimeIndex(times), dtype="float64").sort_index()
-    window = pd.Timedelta(hours=25)
-    lo = series.rolling(window, center=True, min_periods=6).min()
-    hi = series.rolling(window, center=True, min_periods=6).max()
-    span = hi - lo
-    stage = (series - lo) / span
-    stage[(span < MIN_TIDAL_RANGE_M) | series.isna()] = float("nan")
-    return [
-        None if pd.isna(v) else round(float(v), 3) for v in stage.reindex(pd.DatetimeIndex(times))
-    ]
+    order = sorted(range(len(times)), key=times.__getitem__)
+    at = [times[i] for i in order]
+    known: list[float | None] = []
+    for i in order:
+        v = levels[i]
+        known.append(None if v is None or math.isnan(v) else float(v))
+    half = TIDE_WINDOW / 2
+    stages: list[float | None] = [None] * len(times)
+    first = last = 0
+    for k, t in enumerate(at):
+        while at[first] <= t - half:
+            first += 1
+        while last < len(at) and at[last] <= t + half:
+            last += 1
+        level = known[k]
+        window = [v for v in known[first:last] if v is not None]
+        if level is None or len(window) < TIDE_WINDOW_MIN_LEVELS:
+            continue
+        lo, hi = min(window), max(window)
+        span = hi - lo
+        if span < MIN_TIDAL_RANGE_M:
+            continue
+        stages[order[k]] = round((level - lo) / span, 3)
+    return stages
 
 
 DEMO_TIDE_SOURCE = "demo"
@@ -272,6 +312,24 @@ def _profile_decisions() -> dict[str, list[dict[str, Any]]]:
         return {}
 
 
+def run_corrector(db: Session, run: ForecastRun) -> RunCorrector | None:
+    """The ML correction of offshore Hs for this run (``ml.hook``), or None.
+
+    ML corrections are optional and off by default (ML_CORRECTIONS_ENABLED=false). The ML
+    code (scikit-learn, joblib, pandas) is imported only when the setting is on AND an ACTIVE
+    model version exists, so scoring imports and runs without the data libraries otherwise;
+    ``RunCorrector.for_run`` then decides as before whether that model applies to this run.
+    """
+    if not get_settings().ml_corrections_enabled:
+        return None
+    active = exists().where(MLModelVersion.status == MLModelStatus.ACTIVE)
+    if not db.scalar(select(active)):
+        return None
+    from app.services.ml.hook import RunCorrector
+
+    return RunCorrector.for_run(db, run)
+
+
 def spot_wind_dispute(
     spot: SurfSpot,
     research: ResearchBasisInput | None,
@@ -403,7 +461,7 @@ def compute_predictions_for_run(
     ensembles = _ensemble_index(db, run, reads.ensembles)
     # An active ML correction of offshore Hs (ml.hook). A blend's members were already
     # corrected before blending, so a blend run is never corrected again here.
-    corrector = None if run.source.kind == "blend" else RunCorrector.for_run(db, run)
+    corrector = None if run.source.kind == "blend" else run_corrector(db, run)
     spots = reads.spots
     decisions = reads.decisions
     tide_classes = reads.tide_classes
