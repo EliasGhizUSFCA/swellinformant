@@ -56,9 +56,9 @@ function usePublicReads() {
   useOpportunities();
 }
 
-function countReads(get: ReturnType<typeof vi.spyOn>) {
+function countReads(get: { mock: { calls: ReadonlyArray<readonly unknown[]> } }) {
   const counts = new Map<string, number>();
-  for (const [path] of get.mock.calls as Array<[string]>) counts.set(path, (counts.get(path) ?? 0) + 1);
+  for (const [path] of get.mock.calls) counts.set(String(path), (counts.get(String(path)) ?? 0) + 1);
   return counts;
 }
 
