@@ -127,7 +127,7 @@ x-backend-env: &backend-env
   OBSERVATIONS_ENABLED: ${OBSERVATIONS_ENABLED:-false}
   OBSERVATION_PROVIDERS: ${OBSERVATION_PROVIDERS:-aodn,metoffice,ndbc}
   VERIFICATION_ENABLED: ${VERIFICATION_ENABLED:-false}
-  ML_CORRECTIONS_ENABLED: ${ML_CORRECTIONS_ENABLED:-true}
+  ML_CORRECTIONS_ENABLED: ${ML_CORRECTIONS_ENABLED:-false}
   PREDICTION_ARCHIVE_ENABLED: ${PREDICTION_ARCHIVE_ENABLED:-}
   ML_ARTIFACT_DIR: /var/lib/swell-ml
   # Map ocean layers: empty = automatic (docs/map-layers.md), true = standalone, false = off.

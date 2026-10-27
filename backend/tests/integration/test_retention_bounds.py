@@ -37,6 +37,13 @@ from app.services.surf_quality.predict import compute_pending_predictions
 
 pytestmark = pytest.mark.integration
 
+@pytest.fixture(autouse=True)
+def _prediction_archive_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The prediction archive is optional and off by default since Swell 2.0
+    (PREDICTION_ARCHIVE_ENABLED); these tests check what it archives, so it is on."""
+    monkeypatch.setattr(get_settings(), "prediction_archive_enabled", True)
+
+
 NOW = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
 
 

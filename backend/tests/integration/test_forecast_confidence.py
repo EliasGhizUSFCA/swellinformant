@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import (
     ForecastAccuracyMetric,
     ForecastEnsembleStat,
@@ -54,6 +55,13 @@ from tests.conftest import ApiClient
 from tests.integration.test_pipeline import make_search, make_user, simulate
 
 pytestmark = pytest.mark.integration
+
+@pytest.fixture(autouse=True)
+def _prediction_archive_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The prediction archive is optional and off by default since Swell 2.0
+    (PREDICTION_ARCHIVE_ENABLED); these tests check what it archives, so it is on."""
+    monkeypatch.setattr(get_settings(), "prediction_archive_enabled", True)
+
 
 NOW = datetime(2026, 10, 11, 8, 30, tzinfo=UTC)
 GFS_ISSUED = datetime(2026, 10, 11, 0, 0, tzinfo=UTC)  # 8.5 h old at NOW

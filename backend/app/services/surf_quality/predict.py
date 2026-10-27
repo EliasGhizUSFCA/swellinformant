@@ -647,12 +647,14 @@ def outdated_authoritative_runs(db: Session, now: datetime | None = None) -> lis
 
     After an algorithm upgrade the live forecast is rescored at once instead of waiting
     for the next model cycle; likewise after new research evidence (``research load`` or a
-    seed), so local confidence follows the current assessment. Older runs keep the version
-    they were issued with (the prediction archive is the record of what was forecast).
+    seed), so the stored research confidence follows the current assessment. Older runs
+    keep the version they were issued with (the prediction archive, when enabled, is the
+    record of what was forecast). "Shown to users" is the published forecast version's runs
+    (``versions.serving_runs``; before any version, the legacy selection of the public reads).
     """
-    from app.services.forecasts.queries import latest_runs_by_spot
+    from app.services.forecasts.versions import serving_runs
 
-    run_ids = sorted({r.id for r in latest_runs_by_spot(db, now).values()})
+    run_ids = sorted(set(serving_runs(db, now=now).values()))
     if not run_ids:
         return []
     # Each spot's current research assessment; no row = never assessed (NULL on both sides).
@@ -715,14 +717,18 @@ def compute_pending_predictions(db: Session, now: datetime | None = None) -> dic
         for run_id in rescored:
             reads = reads or PassReads.load(db)
             total += compute_predictions_for_run(db, run_id, force=True, now=now, shared=reads)
-    from app.services.forecasts.archive import archive_authoritative
+    archived = 0
+    # The prediction archive (verification and ML training data) is optional: off by
+    # default, on in the full-retention profile (PREDICTION_ARCHIVE_ENABLED).
+    if get_settings().prediction_archive_enabled:
+        from app.services.forecasts.archive import archive_authoritative
 
-    archived = archive_authoritative(db, now)
+        archived = archive_authoritative(db, now)["archived"]
     return {
         "runs": len(pending),
         "rescored_runs": len(rescored),
         "predictions": total,
-        "archived": archived["archived"],
+        "archived": archived,
     }
 
 

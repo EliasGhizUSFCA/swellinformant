@@ -365,8 +365,9 @@ class Settings(BaseSettings):
     # Forecast sources archived at observation stations for verification.
     point_forecast_sources: str = "gfswave_bulletin"
     ml_artifact_dir: str = "/tmp/swell-ml"  # noqa: S108  (use a persistent volume in production)
-    # Apply ACTIVE ML corrections (only models that passed the deployment criteria).
-    ml_corrections_enabled: bool = True
+    # Optional, off by default (spec 2: no ML in the default path): apply an ACTIVE ML
+    # correction (only models that passed the deployment criteria).
+    ml_corrections_enabled: bool = False
     # Archive every published prediction at each lead time (verification and ML training
     # data; app.services.forecasts.archive). Off by default (design D5); the full-retention
     # profile turns it on.

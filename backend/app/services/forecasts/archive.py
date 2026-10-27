@@ -1,8 +1,10 @@
 """Prediction archive: an immutable record of every forecast issued to users.
 
 Forecast runs (and their hourly rows) are deleted after RETENTION_FORECAST_DAYS, and the
-values a model forecast at a given lead time cannot be reconstructed later. So after each
-prediction job, the authoritative run of every spot is copied into ``prediction_archive``
+values a model forecast at a given lead time cannot be reconstructed later. So, when
+PREDICTION_ARCHIVE_ENABLED is on (off by default, design D5; on in the full-retention
+profile), after each prediction job the served run of every spot (the published forecast
+version's, ``versions.serving_runs``) is copied into ``prediction_archive``
 at 3-hourly valid times up to ARCHIVE_MAX_LEAD_HOURS ahead, with the offshore inputs, our
 breaking-height estimate and its uncertainty, the score and confidence, and the versions
 that produced them. Both confidence assessments are archived as issued: the forecast and
@@ -45,8 +47,8 @@ from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import PredictionArchive, SurfQualityPrediction, WaveForecast
-from app.services.forecasts.queries import latest_runs_by_spot
+from app.models import ForecastRun, PredictionArchive, SurfQualityPrediction, WaveForecast
+from app.services.forecasts.versions import serving_runs
 
 logger = logging.getLogger(__name__)
 
@@ -215,9 +217,20 @@ def _archived_rows(
     )
 
 
+def served_runs(db: Session, now: datetime | None = None) -> dict[int, ForecastRun]:
+    """{spot_id: run} of the published forecast version (``versions.serving_runs``; before
+    any version, the legacy selection ``latest_runs_by_spot``, whose runs are then already
+    in the session)."""
+    by_spot = serving_runs(db, now=now)
+    runs = {run_id: db.get(ForecastRun, run_id) for run_id in set(by_spot.values())}
+    return {spot: run for spot, run_id in by_spot.items() if (run := runs[run_id]) is not None}
+
+
 def archive_authoritative(db: Session, now: datetime | None = None) -> dict[str, int]:
+    """Archive the served run of every spot (the caller decides whether the archive is on:
+    PREDICTION_ARCHIVE_ENABLED, ``surf_quality.predict.compute_pending_predictions``)."""
     use_digest = get_settings().archive_confidence_digest
-    chosen = latest_runs_by_spot(db, now)
+    chosen = served_runs(db, now)
     by_run: dict[int, list[int]] = {}
     runs = {}
     for spot_id, run in chosen.items():
