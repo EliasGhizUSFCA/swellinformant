@@ -87,6 +87,9 @@ LIGHT_JOB_MODULES = [
     "app.services.notifications.ops_alerts",
     "app.services.swell_detection.service",
 ]
+# Forecast versions (Swell 2.0, contract C3): staged, published and served by the refresh
+# Function and the API, so lean like them.
+VERSIONS_MODULE = "app.services.forecasts.versions"
 # Distributions that must never be in the lean closure of uv.lock.
 NOT_LEAN = {
     "celery",
@@ -234,6 +237,16 @@ def test_the_deferred_import_scan_finds_imports_inside_functions(tmp_path: Path)
 
 def test_the_light_jobs_import_without_celery_or_the_data_libraries() -> None:
     assert_imported(import_without(LIGHT_JOB_MODULES, CELERY + DATA_LIBRARIES))
+
+
+def test_the_forecast_versions_module_imports_lean() -> None:
+    """versions.py and the modules its functions import when called (the legacy run
+    selection, the public cache namespace) load with every extra missing."""
+    path = BACKEND.joinpath(*VERSIONS_MODULE.split(".")).with_suffix(".py")
+    deferred = deferred_app_imports([path])
+    assert {"app.services.forecasts.queries", "app.services.public_cache"} <= set(deferred)
+    missing = CELERY + DATA_LIBRARIES + SERVER_EXTRAS
+    assert_imported(import_without([VERSIONS_MODULE, *deferred], missing))
 
 
 def test_the_blocker_catches_a_heavy_import() -> None:
@@ -485,7 +498,7 @@ def test_the_lean_install_imports_the_api_and_the_light_jobs() -> None:
     done = _lean(
         f"""
         import importlib
-        for module in {["app.main", *API_MODULES, *LIGHT_JOB_MODULES]!r}:
+        for module in {["app.main", *API_MODULES, *LIGHT_JOB_MODULES, VERSIONS_MODULE]!r}:
             importlib.import_module(module)
         print("ok")
         """
