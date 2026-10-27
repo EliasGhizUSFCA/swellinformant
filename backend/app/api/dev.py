@@ -4,13 +4,20 @@ Production refuses to start with dev endpoints enabled (see Settings validation)
 
 The pipeline is imported inside the endpoints: it loads the blend's data libraries
 (pandas, scikit-learn), which a lean API install does not have.
+
+``POST /api/dev/simulate-model-run?component=wave|atmosphere|both`` (contract C6) makes the
+DEMO provider offer a new simulated model run of that component (a counter in Redis, so the
+planner of every process sees it), with visibly different values; the next refresh check
+(``/api/internal/refresh`` with CRON_SECRET, or any runner) detects it, fetches only that
+component, carries the other one forward and publishes a new forecast version.
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 
+import redis
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -66,6 +73,38 @@ def simulate(
 
         result["pipeline"] = run_pipeline(db, acquire=False, deliver=body.deliver)
     return result
+
+
+@router.post("/simulate-model-run")
+def simulate_model_run(
+    component: Literal["wave", "atmosphere", "both"] = Query(
+        "both", description="The demo component that gets a new simulated model run"
+    ),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Advance the demo provider's available run of ``component`` (developer tool, C6)."""
+    from app.services.forecasts.base import COMPONENTS
+    from app.services.forecasts.demo import DemoForecastProvider, advance_demo_run
+
+    if "demo" not in get_settings().forecast_provider_list:
+        raise AppError("Model-run simulation requires the demo provider.", code="not_demo")
+    components = COMPONENTS if component == "both" else frozenset({component})
+    try:
+        advances = advance_demo_run(components)
+    except redis.RedisError as exc:
+        raise AppError(
+            "Redis is unavailable: the simulated run cannot be shared.",
+            code="redis_unavailable",
+            status_code=503,
+        ) from exc
+    run = DemoForecastProvider(advances=advances).current_run(utcnow())
+    return {
+        "component": component,
+        "advances": advances,
+        "run_key": run.run_key,
+        "component_keys": dict(run.component_keys),
+        "next": "call /api/internal/refresh (Bearer CRON_SECRET) to refresh and publish",
+    }
 
 
 @router.post("/run-pipeline")

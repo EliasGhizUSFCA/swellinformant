@@ -1,20 +1,33 @@
-"""Internal routes for the platform, not for browsers.
+"""Internal routes for the platform and its schedulers, not for browsers.
+
+``GET|POST /api/internal/refresh`` is the forecast refresh a scheduler calls (Upstash
+QStash every 5 minutes on Vercel Hobby, a Vercel Cron entry on Pro, docs/sync.md) with
+``Authorization: Bearer $CRON_SECRET`` (404 without CRON_SECRET, 401 for a wrong token, as
+below). It runs ``orchestrator.refresh_check``: the free metadata check of the spot
+components and, when one is due, a spot-only sync (never the map/GRIB stage) inside the
+Function's time budget, and answers 200 with a JSON summary: ``status`` (``disabled`` with
+the FORECAST_REFRESH_ENABLED kill switch, ``not_due``, ``busy`` when another sync holds
+the lease, else the sync's status), the plan, the sync run, the version ids published and
+the timings. A busy or failed refresh is still a 200 (the scheduler must not retry: the next
+check retries on its own, with backoff), an unexpected error a 503. Idempotent: duplicate
+deliveries find nothing due or the lease taken.
 
 ``GET /api/internal/cron/daily`` is the daily watchdog Vercel Cron calls with
 ``Authorization: Bearer $CRON_SECRET``:
 
 * 404 (the same body as an unknown route) when CRON_SECRET is not set;
 * 401 when the bearer token does not match (constant-time comparison);
-* 200 ``{status, problems, alerts_sent, heartbeat_age_minutes}`` otherwise, with
+* 200 ``{status, problems, alerts_sent, heartbeat_age_minutes, refresh}`` otherwise, with
   ``Cache-Control: private, no-store``.
 
-The watchdog runs the ``ops.data_health`` job (app.services.notifications.ops_alerts:
-the data-health report, and an email to the admins when a problem appears, rises, repeats
-or clears) through the job runner, so its log row carries the alert state the next run
-reads and a problem is not reported twice. It is independent of the sync daemon: it still
-alerts when the daemon has stopped (its heartbeat goes stale) or when Redis refuses
-commands (the job then runs without its Redis lock, and the report names
-``redis_unavailable``). ``status`` is the report's overall
+The watchdog runs the ``ops.data_health`` job (app.services.notifications.ops_alerts: the
+data-health report, and an email to the admins when a problem appears, rises, repeats or
+clears) through the job runner, so its log row carries the alert state the next run reads
+and a problem is not reported twice. It is independent of the sync daemon: it still alerts
+when the daemon has stopped (its heartbeat goes stale) or when Redis refuses commands (the
+job then runs without its Redis lock, and the report names ``redis_unavailable``). After the
+watchdog it also runs one refresh check (the backstop for a scheduler that stopped calling
+the refresh route) and adds its summary as ``refresh``. ``status`` is the report's overall
 status (ok, degraded, failing), or ``skipped`` when another run of the job held its lock;
 ``alerts_sent`` lists the alerts (``<reason>:<problem key>``) the admins were emailed;
 ``heartbeat_age_minutes`` is the age of the daemon's last check (None when there is no
@@ -44,6 +57,7 @@ from app.core.http_cache import PRIVATE_NO_STORE
 logger = logging.getLogger(__name__)
 
 CRON_DAILY_PATH = "/api/internal/cron/daily"
+REFRESH_PATH = "/api/internal/refresh"
 
 router = APIRouter(tags=["internal"], include_in_schema=False)
 
@@ -161,6 +175,51 @@ def heartbeat_age_minutes() -> float | None:
     return None if heartbeat is None else round(heartbeat.age_seconds() / 60, 1)
 
 
+def run_refresh() -> dict[str, Any]:
+    """One refresh check (``orchestrator.refresh_check``), JSON-safe."""
+    from app.services.sync.orchestrator import refresh_check
+    from app.services.sync.types import jsonable
+
+    out = jsonable(refresh_check(trigger="http"))
+    return out if isinstance(out, dict) else {"status": "error"}
+
+
+@router.api_route(REFRESH_PATH, methods=["GET", "POST"])
+def refresh(authorization: str | None = Header(default=None)) -> JSONResponse:
+    _authorize(authorization)
+    try:
+        body = run_refresh()
+    except Exception as exc:
+        logger.exception("Refresh check failed")
+        return JSONResponse(
+            {"status": "error", "error": f"refresh_failed:{type(exc).__name__}"},
+            status_code=503,
+            headers={"Cache-Control": PRIVATE_NO_STORE},
+        )
+    logger.info(
+        "Refresh check: %s (sync %s, versions %s)",
+        body.get("status"),
+        body.get("sync_run_id"),
+        body.get("version_ids"),
+    )
+    return JSONResponse(body, headers={"Cache-Control": PRIVATE_NO_STORE})
+
+
+def _refresh_backstop() -> dict[str, Any]:
+    """The daily cron's refresh check, summarised; never raises (the watchdog's answer
+    does not depend on it)."""
+    try:
+        out = run_refresh()
+    except Exception as exc:
+        logger.exception("Daily refresh backstop failed")
+        return {"status": "error", "error": f"refresh_failed:{type(exc).__name__}"}
+    return {
+        k: out.get(k)
+        for k in ("status", "reason", "sync_run_id", "version_ids", "published_at")
+        if k in out
+    }
+
+
 @router.get(CRON_DAILY_PATH)
 def cron_daily(authorization: str | None = Header(default=None)) -> JSONResponse:
     _authorize(authorization)
@@ -184,6 +243,7 @@ def cron_daily(authorization: str | None = Header(default=None)) -> JSONResponse
         "problems": list(result.get("problems") or []),
         "alerts_sent": list(result.get("alerts") or []) if email.get("sent") else [],
         "heartbeat_age_minutes": heartbeat_age_minutes(),
+        "refresh": _refresh_backstop(),
     }
     logger.info(
         "Daily watchdog: %s, %d problem(s), %d alert(s) sent",

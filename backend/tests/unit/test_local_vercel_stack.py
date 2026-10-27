@@ -273,7 +273,8 @@ def test_edge_routes_like_vercel_services_and_overwrites_client_ip_headers() -> 
     for header in ("X-Vercel-Forwarded-For", "X-Real-IP", "X-Forwarded-For"):
         assert f"header_up {header} {{remote_host}}" in text
     assert "max_size 4500KB" in text
-    assert "response_header_timeout 60s" in text
+    # The api function's maxDuration (vercel.json: 300 s since Swell 2.0's refresh route).
+    assert "response_header_timeout 300s" in text
     # Vercel's responses carry no Via; Caddy's proxy adds one unless it is deleted.
     assert re.search(r"^\theader -Via$", text, flags=re.M)
 

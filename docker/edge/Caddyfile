@@ -39,7 +39,7 @@
 		reverse_proxy api:8000 {
 			import vercel_request_headers
 			transport http {
-				response_header_timeout 60s
+				response_header_timeout 300s
 			}
 		}
 	}
