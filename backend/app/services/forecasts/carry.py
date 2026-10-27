@@ -43,10 +43,11 @@ PHYSICAL_RANGES: Mapping[str, tuple[float, float]] = {
     "pressure_msl_hpa": (850.0, 1100.0),
     "sea_level_m": (-30.0, 30.0),
 }
-# ForecastRecord.extra keys that belong to one component (copied with it when carried).
+# ForecastRecord.extra keys that belong to one component (copied with it when carried;
+# ``pressure_kind`` is the Windy adapter's label of its pressure series).
 COMPONENT_EXTRA_KEYS: Mapping[str, tuple[str, ...]] = {
     WAVE: ("wave_cell", "wave_model", "native_step_seconds"),
-    ATMOSPHERE: ("gust_kind", "wind_cell"),
+    ATMOSPHERE: ("gust_kind", "wind_cell", "pressure_kind"),
 }
 # Columns derived from the wave component.
 WAVE_DERIVED = ("wave_power_kw_m", "wave_period_kind")

@@ -141,6 +141,10 @@ HELD_MESSAGE = "stored, not published: predict did not complete"
 DISABLED_REASON = "FORECAST_REFRESH_ENABLED=false: automatic forecast refreshes are off"
 # The component kinds the refresh endpoint syncs (never the map/GRIB stage).
 REFRESH_KINDS: frozenset[ComponentKind] = frozenset({"spots"})
+# The lease of a sync the refresh endpoint runs, at most: the Function is stopped after
+# its maxDuration (300 s on Vercel), so a lease left by a stopped Function expires within
+# about 13 minutes (the keeper's last extension plus this) instead of SYNC_LEASE_MINUTES.
+HTTP_LEASE_MINUTES = 10
 
 
 def refresh_disabled(settings: Settings | None = None) -> bool:
@@ -183,6 +187,8 @@ class _Lease:
         (marked abandoned) or raise SyncBusy."""
         holder = _holder()
         minutes = settings.sync_lease_minutes
+        if trigger == "http":
+            minutes = min(minutes, HTTP_LEASE_MINUTES)
         for _ in range(3):
             with SessionLocal() as db:
                 now = utcnow()

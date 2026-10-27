@@ -287,6 +287,37 @@ def test_a_one_component_update_keeps_the_other_components_values_and_model_time
     assert r2.predictions_computed_at is not None
 
 
+def test_a_carried_component_keeps_its_own_extra_keys(
+    db: Session, few_spots: list[str], split: type[SplitDemo]
+) -> None:
+    assert refresh()["status"] == "success"
+    r1 = run_of(db, published(db))
+    # The provider labels of the first run (SYNTHETIC values, the keys real adapters write).
+    labels = {
+        "gust_kind": "gfs_instantaneous",
+        "wind_cell": {"lat": 1.0, "lon": 2.0, "distance_km": 3.0},
+        "pressure_kind": "msl",
+        "wave_cell": {"lat": 4.0, "lon": 5.0, "distance_km": 6.0},
+    }
+    db.execute(
+        text("UPDATE wave_forecasts SET extra = extra || CAST(:labels AS jsonb) WHERE run_id = :r"),
+        {"labels": json.dumps(labels), "r": r1.id},
+    )
+    db.commit()
+    split.cycles["wave"] = C06  # a new wave run: the atmosphere is carried
+    assert refresh()["status"] == "success"
+    r2 = run_of(db, published(db))
+    assert r2.id != r1.id
+    extras = db.scalars(select(WaveForecast.extra).where(WaveForecast.run_id == r2.id)).all()
+    assert extras and all(
+        {k: (e or {}).get(k) for k in ("gust_kind", "wind_cell", "pressure_kind")}
+        == {k: labels[k] for k in ("gust_kind", "wind_cell", "pressure_kind")}
+        for e in extras
+    )
+    # The wave labels belong to the fetched component: never copied from the old run.
+    assert not any("wave_cell" in (e or {}) for e in extras)
+
+
 def test_an_unchanged_run_is_not_refreshed_and_the_check_reads_no_database(
     db: Session, few_spots: list[str], split: type[SplitDemo]
 ) -> None:
@@ -436,6 +467,15 @@ def test_two_refresh_calls_at_once_make_one_sync_and_the_other_is_busy(
     try:
         assert split.entered.wait(30)  # the first refresh holds the lease, mid-fetch
         split.entered = None
+        # Its lease is the endpoint's short one (a stopped Function's lease expires soon).
+        assert get_settings().sync_lease_minutes > orchestrator.HTTP_LEASE_MINUTES
+        db.expire_all()
+        running = db.scalar(select(SyncRun).where(SyncRun.status == "running"))
+        assert running is not None and running.trigger == "http"
+        assert running.lease_expires_at is not None
+        assert running.lease_expires_at <= utcnow() + timedelta(
+            minutes=orchestrator.HTTP_LEASE_MINUTES
+        )
         results["second"] = refresh()
     finally:
         split.gate.set()
