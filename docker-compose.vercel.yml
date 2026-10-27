@@ -22,10 +22,12 @@
 #   Upstash Redis (KV_URL)                       redis
 #   email provider (Resend, SMTP)                mailpit  every email lands in its inbox
 #
-# Defaults: demo forecasts (FORECAST_PROVIDERS=demo, synthetic data) and no map layers
+# Defaults: demo forecasts (WEATHER_PROVIDER=demo, synthetic data) and no map layers
 # (MAP_FIELDS_ENABLED=false), so no forecast or map provider is called until you choose
-# live sources in .env.vercel.local (copy .env.vercel.example); the daily tide job still asks
-# NOAA CO-OPS. The other ${...} defaults are the
+# live sources in .env.vercel.local (copy .env.vercel.example: WEATHER_PROVIDER=auto); the
+# daily tide job still asks NOAA CO-OPS. The sync daemon refreshes everything here
+# (SYNC_DAEMON_KINDS=spots,ensemble,map): the stack has no external scheduler calling the
+# refresh endpoint as the hosted setup does. The other ${...} defaults are the
 # hosted free profile (app.core.profiles: profile_env("hosted", "free-database")).
 # Host ports listen on 127.0.0.1 only.
 
@@ -74,9 +76,13 @@ x-app-env: &app-env
   EMAIL_FROM: ${EMAIL_FROM:-Swell Travel Agent <alerts@localhost>}
   SMS_PROVIDER: console
   FLIGHT_PROVIDER: ${FLIGHT_PROVIDER:-demo}
-  # Weather sources: demo (synthetic) by default, see the header.
-  FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-demo}
+  # Weather sources: demo (synthetic) by default, see the header. FORECAST_PROVIDERS is the
+  # advanced override (empty = derived from WEATHER_PROVIDER).
+  WEATHER_PROVIDER: ${WEATHER_PROVIDER:-demo}
+  FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-}
   MAP_FIELDS_ENABLED: ${MAP_FIELDS_ENABLED:-false}
+  # No external scheduler here: the daemon refreshes the spots too (see the header).
+  SYNC_DAEMON_KINDS: ${SYNC_DAEMON_KINDS:-spots,ensemble,map}
   # The hosted profile (app.core.profiles.HOSTED_PROFILE).
   MIGRATE_ON_BUILD: ${MIGRATE_ON_BUILD:-production}
   DB_POOL_SIZE: ${DB_POOL_SIZE:-2}
@@ -87,9 +93,11 @@ x-app-env: &app-env
   REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-2}
   PROVIDER_RESPONSE_CACHE_ENABLED: ${PROVIDER_RESPONSE_CACHE_ENABLED:-false}
   GEFS_ENABLED: ${GEFS_ENABLED:-false}
+  FORECAST_DAYS: ${FORECAST_DAYS:-10}
+  FORECAST_BLEND_ENABLED: ${FORECAST_BLEND_ENABLED:-false}
   JOB_INTERVAL_FLOOR_MINUTES: ${JOB_INTERVAL_FLOOR_MINUTES:-60}
   DATA_HEALTH_CHECK_MINUTES: ${DATA_HEALTH_CHECK_MINUTES:-60}
-  SYNC_CPU_BUDGET_HOURS: ${SYNC_CPU_BUDGET_HOURS:-10}
+  SYNC_CPU_BUDGET_HOURS: ${SYNC_CPU_BUDGET_HOURS:-5}
   COMMERCIAL_USE: ${COMMERCIAL_USE:-false}
   # The free database profile (app.core.profiles.FREE_DATABASE_PROFILE).
   RETENTION_FORECAST_DAYS: ${RETENTION_FORECAST_DAYS:-1}
@@ -97,12 +105,10 @@ x-app-env: &app-env
   RETENTION_JOB_LOG_DAYS: ${RETENTION_JOB_LOG_DAYS:-7}
   SYNC_PRUNE_EACH_PASS: ${SYNC_PRUNE_EACH_PASS:-true}
   DATA_HEALTH_DATABASE_MAX_GB: ${DATA_HEALTH_DATABASE_MAX_GB:-0.85}
-  # Hosted: a sync only for a new map cycle (SYNC_TRIGGER_SOURCES=map). The stack's map
-  # layers are off until .env.vercel.local turns them on, so here a new spot run triggers
-  # too (set SYNC_TRIGGER_SOURCES=map there with MAP_FIELDS_ENABLED=true to test the
-  # hosted cadence).
-  SYNC_TRIGGER_SOURCES: ${SYNC_TRIGGER_SOURCES:-spots,map}
+  # A sync for every new spot model run; the optional map layers keep the 06Z and 18Z cycles.
+  SYNC_TRIGGER_SOURCES: ${SYNC_TRIGGER_SOURCES:-spots}
   MAP_FIELD_CYCLES: ${MAP_FIELD_CYCLES:-06,18}
+  PREDICTION_ARCHIVE_ENABLED: ${PREDICTION_ARCHIVE_ENABLED:-false}
 
 x-env-file: &env-file
   - path: ${VERCEL_LOCAL_ENV_FILE:-.env.vercel.local}

@@ -40,8 +40,10 @@ x-backend-env: &backend-env
   # least 16 characters). Empty = the route answers 404; the classic stack does not need it.
   CRON_SECRET: ${CRON_SECRET:-}
   # true once the site is used commercially (a paywall, ads): the free Open-Meteo API is
-  # non-commercial, so Open-Meteo then needs OPEN_METEO_API_KEY.
+  # non-commercial, so Open-Meteo then needs OPEN_METEO_API_KEY. OPEN_METEO_COMMERCIAL is the
+  # same setting under its Swell 2.0 name (it wins when set).
   COMMERCIAL_USE: ${COMMERCIAL_USE:-false}
+  OPEN_METEO_COMMERCIAL: ${OPEN_METEO_COMMERCIAL:-}
   # Database and Redis connections. Empty = the defaults of backend/app/core/config.py, right
   # for this stack; a pooler in transaction mode (PgBouncer, Neon's pooled URL) needs
   # DB_PREPARED_STATEMENTS=false.
@@ -55,6 +57,7 @@ x-backend-env: &backend-env
   SYNC_CHECK_MINUTES: ${SYNC_CHECK_MINUTES:-}
   SYNC_COALESCE_MINUTES: ${SYNC_COALESCE_MINUTES:-}
   SYNC_TRIGGER_SOURCES: ${SYNC_TRIGGER_SOURCES:-}
+  SYNC_DAEMON_KINDS: ${SYNC_DAEMON_KINDS:-}
   SYNC_RETRY_MINUTES: ${SYNC_RETRY_MINUTES:-}
   SYNC_MAX_ATTEMPTS: ${SYNC_MAX_ATTEMPTS:-}
   SYNC_LEASE_MINUTES: ${SYNC_LEASE_MINUTES:-}
@@ -69,11 +72,19 @@ x-backend-env: &backend-env
   SYNC_CPU_BUDGET_HOURS: ${SYNC_CPU_BUDGET_HOURS:-}
   # Every periodic job runs at most this often (minutes); empty = the schedule as written.
   JOB_INTERVAL_FLOOR_MINUTES: ${JOB_INTERVAL_FLOOR_MINUTES:-}
-  # Forecast sources (docs/API_SETUP_REQUIRED.md). Recommended live setup:
-  # FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf (point forecasts, two model families).
-  # Empty values below fall back to the defaults in backend/app/core/config.py.
-  FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-demo}
-  FORECAST_DAYS: ${FORECAST_DAYS:-16}
+  # Forecast sources (docs/API_SETUP_REQUIRED.md). This stack's default is demo (synthetic
+  # data, no provider is called); live: WEATHER_PROVIDER=auto (Windy once it is eligible,
+  # else Open-Meteo) or open_meteo. FORECAST_PROVIDERS is the advanced override (empty =
+  # derived from WEATHER_PROVIDER). Empty values below fall back to the defaults in
+  # backend/app/core/config.py.
+  WEATHER_PROVIDER: ${WEATHER_PROVIDER:-demo}
+  FORECAST_PROVIDERS: ${FORECAST_PROVIDERS:-}
+  FORECAST_DAYS: ${FORECAST_DAYS:-10}
+  FORECAST_REFRESH_ENABLED: ${FORECAST_REFRESH_ENABLED:-}
+  FORECAST_STALE_THRESHOLD_MINUTES: ${FORECAST_STALE_THRESHOLD_MINUTES:-}
+  FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL: ${FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL:-}
+  FORECAST_MIN_VALID_FRACTION: ${FORECAST_MIN_VALID_FRACTION:-}
+  FORECAST_VERSION_CDN_SECONDS: ${FORECAST_VERSION_CDN_SECONDS:-}
   FORECAST_REFRESH_MINUTES: ${FORECAST_REFRESH_MINUTES:-180}
   FORECAST_BATCH_SIZE: ${FORECAST_BATCH_SIZE:-}
   OPEN_METEO_API_KEY: ${OPEN_METEO_API_KEY:-}
@@ -95,7 +106,12 @@ x-backend-env: &backend-env
   PROVIDER_RESPONSE_CACHE_MAX_BYTES: ${PROVIDER_RESPONSE_CACHE_MAX_BYTES:-}
   PROVIDER_RESPONSE_CACHE_MAX_KEYS: ${PROVIDER_RESPONSE_CACHE_MAX_KEYS:-}
   WINDY_API_KEY: ${WINDY_API_KEY:-}
-  WINDY_TERMS_ACKNOWLEDGED: ${WINDY_TERMS_ACKNOWLEDGED:-false}
+  # A key is not a licence: Windy data are used only with WINDY_STORAGE_AUTHORIZED=true (its
+  # old name WINDY_TERMS_ACKNOWLEDGED is still read). Empty = false.
+  WINDY_STORAGE_AUTHORIZED: ${WINDY_STORAGE_AUTHORIZED:-}
+  WINDY_TERMS_ACKNOWLEDGED: ${WINDY_TERMS_ACKNOWLEDGED:-}
+  WINDY_CHECK_MINUTES: ${WINDY_CHECK_MINUTES:-}
+  WINDY_DAILY_REQUEST_LIMIT: ${WINDY_DAILY_REQUEST_LIMIT:-}
   DEMO_NATURAL_SWELLS: ${DEMO_NATURAL_SWELLS:-true}
   # Blend, ensemble and the optional direct GRIB fallbacks (noaa_gfs, ecmwf_ifs).
   FORECAST_BLEND_ENABLED: ${FORECAST_BLEND_ENABLED:-true}
@@ -112,6 +128,7 @@ x-backend-env: &backend-env
   OBSERVATION_PROVIDERS: ${OBSERVATION_PROVIDERS:-aodn,metoffice,ndbc}
   VERIFICATION_ENABLED: ${VERIFICATION_ENABLED:-false}
   ML_CORRECTIONS_ENABLED: ${ML_CORRECTIONS_ENABLED:-true}
+  PREDICTION_ARCHIVE_ENABLED: ${PREDICTION_ARCHIVE_ENABLED:-}
   ML_ARTIFACT_DIR: /var/lib/swell-ml
   # Map ocean layers: empty = automatic (docs/map-layers.md), true = standalone, false = off.
   MAP_FIELDS_ENABLED: ${MAP_FIELDS_ENABLED:-}
@@ -130,6 +147,7 @@ x-backend-env: &backend-env
   TIDE_RETENTION_PAST_DAYS: ${TIDE_RETENTION_PAST_DAYS:-}
   NDBC_USE_5DAY: ${NDBC_USE_5DAY:-}
   WIND_GUST_SCORING: ${WIND_GUST_SCORING:-}
+  SCORING_WEIGHTS_JSON: ${SCORING_WEIGHTS_JSON:-}
   # Retention (maintenance.cleanup, daily 03:30 UTC); sizes per day in docs/operations.md.
   RETENTION_FORECAST_DAYS: ${RETENTION_FORECAST_DAYS:-10}
   RETENTION_FLIGHT_DAYS: ${RETENTION_FLIGHT_DAYS:-30}
@@ -150,18 +168,25 @@ x-backend-env: &backend-env
   DATA_HEALTH_OBSERVATION_STALE_HOURS: ${DATA_HEALTH_OBSERVATION_STALE_HOURS:-}
   DATA_HEALTH_DATABASE_MAX_GB: ${DATA_HEALTH_DATABASE_MAX_GB:-}
   DATA_HEALTH_REDIS_MAX_FRACTION: ${DATA_HEALTH_REDIS_MAX_FRACTION:-}
+  QUOTA_ALERT_FRACTION: ${QUOTA_ALERT_FRACTION:-}
+  REFRESH_SCHEDULER_EXPECTED_MINUTES: ${REFRESH_SCHEDULER_EXPECTED_MINUTES:-}
   # Reported by the data-health check; keep equal to the redis service's --maxmemory.
   REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-256mb}
   # Queues the worker consumes: "celery" (emails, alerts) and "bulk" (data downloads).
   WORKER_QUEUES: ${WORKER_QUEUES:-celery,bulk}
-  DETECTION_LEAD_MIN_DAYS: ${DETECTION_LEAD_MIN_DAYS:-5}
+  DETECTION_LEAD_MIN_DAYS: ${DETECTION_LEAD_MIN_DAYS:-1}
   DETECTION_LEAD_MAX_DAYS: ${DETECTION_LEAD_MAX_DAYS:-10}
+  ALERT_LEAD_DEFAULT_MIN_DAYS: ${ALERT_LEAD_DEFAULT_MIN_DAYS:-}
+  ALERT_LEAD_DEFAULT_MAX_DAYS: ${ALERT_LEAD_DEFAULT_MAX_DAYS:-}
+  SHORT_NOTICE_MIN_DAYS: ${SHORT_NOTICE_MIN_DAYS:-}
+  SHORT_NOTICE_MAX_DAYS: ${SHORT_NOTICE_MAX_DAYS:-}
   FLIGHT_PROVIDER: ${FLIGHT_PROVIDER:-demo}
   DUFFEL_ACCESS_TOKEN: ${DUFFEL_ACCESS_TOKEN:-}
   AMADEUS_CLIENT_ID: ${AMADEUS_CLIENT_ID:-}
   AMADEUS_CLIENT_SECRET: ${AMADEUS_CLIENT_SECRET:-}
   AMADEUS_BASE_URL: ${AMADEUS_BASE_URL:-https://api.amadeus.com}
   FLIGHT_DAILY_QUOTA: ${FLIGHT_DAILY_QUOTA:-300}
+  FLIGHT_USER_DAILY_QUOTA: ${FLIGHT_USER_DAILY_QUOTA:-}
   FX_RATES_USD_JSON: ${FX_RATES_USD_JSON:-}
   # mailpit = capture every email in the local dev inbox (http://localhost:8025). Set
   # smtp / resend / sendgrid in .env for real delivery.

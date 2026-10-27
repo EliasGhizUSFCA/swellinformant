@@ -260,32 +260,40 @@ DB_POOL_RECYCLE_SECONDS=240
 DB_PREPARED_STATEMENTS=false
 REDIS_CONNECT_TIMEOUT_SECONDS=1.5
 REDIS_SOCKET_TIMEOUT_SECONDS=2
-FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf
+WEATHER_PROVIDER=auto
+FORECAST_DAYS=10
+FORECAST_BLEND_ENABLED=false
 MAP_FIELDS_ENABLED=true
 PROVIDER_RESPONSE_CACHE_ENABLED=false
 GEFS_ENABLED=false
 JOB_INTERVAL_FLOOR_MINUTES=60
 DATA_HEALTH_CHECK_MINUTES=60
-SYNC_CPU_BUDGET_HOURS=10
+SYNC_DAEMON_KINDS=map
+SYNC_CPU_BUDGET_HOURS=5
 COMMERCIAL_USE=false
 RETENTION_FORECAST_DAYS=1
 RETENTION_ARCHIVE_DAYS=7
 RETENTION_JOB_LOG_DAYS=7
 SYNC_PRUNE_EACH_PASS=true
 DATA_HEALTH_DATABASE_MAX_GB=0.85
-SYNC_TRIGGER_SOURCES=map
+SYNC_TRIGGER_SOURCES=spots
 MAP_FIELD_CYCLES=06,18
+PREDICTION_ARCHIVE_ENABLED=false
 ```
 
-`GEFS_ENABLED=false` protects the daemon's 10 CPU-hours; set it to `true` to show the GEFS
-ensemble spread. After moving Neon to Launch, change the last seven to the full-retention
-profile: `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`,
-`RETENTION_JOB_LOG_DAYS=30`, `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`,
-`SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12`. The last two keep the
-database inside Neon Free's 5 GB of egress a month: a sync only for a new map cycle (06Z
-and 18Z), which also brings the newest spot runs of both model families
-(docs/map-layers.md, "Free database budget", has the measured budget and the freshness
-this costs).
+Swell 2.0 (docs/architecture_audit.md): one weather provider, `WEATHER_PROVIDER=auto` (Windy
+once `WINDY_API_KEY` is set and `WINDY_STORAGE_AUTHORIZED=true`, else Open-Meteo GFS and
+GFS-Wave; `FORECAST_PROVIDERS` stays unset), no blend, a 10-day horizon. The spot refreshes
+run in a Vercel Function called by a scheduler; the optional sync daemon only refreshes the
+GRIB map layers (`SYNC_DAEMON_KINDS=map`) within Hobby's 5 Active CPU-hours a month.
+`GEFS_ENABLED=false` protects that budget; set it to `true` to show the GEFS ensemble
+spread. After moving Neon to Launch, change the last eight to the full-retention profile:
+`RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`, `RETENTION_JOB_LOG_DAYS=30`,
+`SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`,
+`SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12`, `PREDICTION_ARCHIVE_ENABLED=true`.
+`SYNC_TRIGGER_SOURCES=map` instead of `spots` is the Upgrade 4 cadence (a sync only for a
+new 06Z or 18Z map cycle, about 1.9 GB of egress a month measured; docs/map-layers.md, "Free
+database budget").
 
 **Yours to set.** `<project>` is your `*.vercel.app` name.
 

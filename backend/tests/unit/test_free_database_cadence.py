@@ -1,11 +1,14 @@
-"""The sync cadence of the free-database profile (round 2 of the Upgrade 4 egress
-integration; docs/map-layers.md, "Free database budget").
+"""The sync cadence of the free-database profile and the map-cycle cadence (round 2 of the
+Upgrade 4 egress integration; docs/map-layers.md, "Free database budget").
 
-On Neon Free the profile syncs only for a new map cycle (SYNC_TRIGGER_SOURCES=map) of the
-06Z and 18Z cycles (MAP_FIELD_CYCLES=06,18): two syncs a day, each acquiring the newest spot
-runs of both families with the map layers. The full-retention profile restores a sync for
-every new model run. The runs below are SYNTHETIC test inputs of tests/unit/test_sync_detect.py
-(made-up run keys and cycles), planned without a database as the daemon's check does.
+Swell 2.0 (design B, spec section 9): the free-database profile syncs for every new spot
+model run (SYNC_TRIGGER_SOURCES=spots) and keeps the 06Z and 18Z map cycles
+(MAP_FIELD_CYCLES=06,18) for the optional overlay. The Upgrade 4 cadence it replaced, a sync
+only for a new map cycle (SYNC_TRIGGER_SOURCES=map: two syncs a day, each acquiring the
+newest spot runs of both families with the map layers), stays available and is tested
+below with that setting. The runs below are SYNTHETIC test inputs of
+tests/unit/test_sync_detect.py (made-up run keys and cycles), planned without a database as
+the daemon's check does.
 """
 
 from __future__ import annotations
@@ -45,11 +48,13 @@ def _hosted_free() -> Settings:
     return Settings(_env_file=None, **env)  # type: ignore[arg-type]
 
 
-def test_the_free_database_profile_syncs_for_the_06z_and_18z_map_cycles_only() -> None:
+def test_the_free_database_profile_syncs_for_every_spot_run_and_keeps_two_map_cycles() -> None:
+    # Swell 2.0 changed this profile from SYNC_TRIGGER_SOURCES=map (Upgrade 4: a sync only
+    # for a new map cycle) to spots: the website follows every new spot model run.
     s = _hosted_free()
-    assert s.sync_trigger_list == frozenset({"map"})
+    assert s.sync_trigger_list == frozenset({"spots"})
     assert s.map_field_cycle_hours == [6, 18]
-    assert s.map_fields_enabled is True  # the hosted profile's map layers, the trigger
+    assert s.map_fields_enabled is True  # the hosted profile's optional map overlay
     # Restored after upgrading the database: a sync for every new model run.
     assert FULL_RETENTION_PROFILE["SYNC_TRIGGER_SOURCES"] == "spots,map"
     assert FULL_RETENTION_PROFILE["MAP_FIELD_CYCLES"] == "00,12"
@@ -57,6 +62,7 @@ def test_the_free_database_profile_syncs_for_the_06z_and_18z_map_cycles_only() -
 
 
 def free(**update: object) -> Settings:
+    """The map-cycle cadence (the Upgrade 4 free-database profile, still available)."""
     return settings(sync_trigger_sources="map", map_field_cycles="06,18", **update)
 
 

@@ -44,7 +44,31 @@ PASSED_THROUGH = {
     "MAP_FIELD_MAX_LEAD_HOURS",
     "SYNC_PREWARM_PUBLIC_CACHE",
     "OPS_ALERT_EMAILS",
+    # Swell 2.0 (design B).
+    "FORECAST_PROVIDERS",
+    "FORECAST_DAYS",
+    "FORECAST_REFRESH_ENABLED",
+    "FORECAST_STALE_THRESHOLD_MINUTES",
+    "FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL",
+    "FORECAST_MIN_VALID_FRACTION",
+    "FORECAST_VERSION_CDN_SECONDS",
+    "WINDY_STORAGE_AUTHORIZED",
+    "WINDY_CHECK_MINUTES",
+    "WINDY_DAILY_REQUEST_LIMIT",
+    "SYNC_DAEMON_KINDS",
+    "PREDICTION_ARCHIVE_ENABLED",
+    "SCORING_WEIGHTS_JSON",
+    "DETECTION_LEAD_MIN_DAYS",
+    "ALERT_LEAD_DEFAULT_MIN_DAYS",
+    "ALERT_LEAD_DEFAULT_MAX_DAYS",
+    "SHORT_NOTICE_MIN_DAYS",
+    "SHORT_NOTICE_MAX_DAYS",
+    "FLIGHT_USER_DAILY_QUOTA",
+    "QUOTA_ALERT_FRACTION",
+    "REFRESH_SCHEDULER_EXPECTED_MINUTES",
 }
+# Old names still read through an alias (AliasChoices), passed through empty.
+ALIASES_PASSED_THROUGH = {"OPEN_METEO_COMMERCIAL", "WINDY_TERMS_ACKNOWLEDGED"}
 
 
 def backend_env_defaults() -> dict[str, str]:
@@ -88,6 +112,20 @@ def test_the_new_settings_are_passed_through_with_todays_defaults(
     assert composed.job_runner == "celery"
     assert composed.cron_secret is None
     assert composed.client_ip_header is None
+    assert ALIASES_PASSED_THROUGH <= set(defaults)
+    assert all(defaults[name] == "" for name in ALIASES_PASSED_THROUGH)
+
+
+def test_the_classic_stack_keeps_demo_forecasts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Settings default to WEATHER_PROVIDER=auto (Open-Meteo without Windy); this stack keeps
+    synthetic demo data until .env chooses live sources, so nothing calls a provider."""
+    defaults = backend_env_defaults()
+    assert defaults["WEATHER_PROVIDER"] == "demo" and defaults["FORECAST_PROVIDERS"] == ""
+    forecasts = {name: defaults[name] for name in ("WEATHER_PROVIDER", "FORECAST_PROVIDERS")}
+    assert _settings(monkeypatch, forecasts).forecast_provider_list == ["demo"]
+    # A live choice in .env reaches the containers.
+    live = _settings(monkeypatch, forecasts | {"WEATHER_PROVIDER": "open_meteo"})
+    assert live.forecast_provider_list == ["open_meteo"]
 
 
 def test_worker_and_beat_stay_the_default_runner(compose: dict[str, Any]) -> None:

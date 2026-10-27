@@ -55,7 +55,8 @@ configuration" below) uses only these.
 
 Not needed and not recommended: **Windy** (2.9). Its terms forbid storing the data and
 building derived databases, which is what this app does; the provider is refused unless
-`WINDY_TERMS_ACKNOWLEDGED=true`, and it costs 990 EUR a year. Copernicus Marine (2.5) is not
+`WINDY_STORAGE_AUTHORIZED=true` (old name WINDY_TERMS_ACKNOWLEDGED, still read), and it costs
+990 EUR a year. Copernicus Marine (2.5) is not
 implemented.
 
 ### 1.3 The commercial-use question for Open-Meteo
@@ -316,10 +317,10 @@ constants; the credentials are used only by that script, never by the running ap
 | Docs | <https://api.windy.com/point-forecast/docs> |
 | Account / key | Paid key, `WINDY_API_KEY` |
 | Free tier / limits | None used by this app (paid plan, see Cost) |
-| Terms | "Redistribution of any part of the API or the included data to any third party is forbidden." ([terms](https://account.windy.com/agreements/windy-api-map-and-point-forecast-terms-of-use)); the same terms forbid storing the data and building derived databases. This app stores runs, blends them and archives predictions, so the token `windy` is refused unless `WINDY_TERMS_ACKNOWLEDGED=true`, which should be set only with a written licence that allows this use |
+| Terms | "Redistribution of any part of the API or the included data to any third party is forbidden." ([terms](https://account.windy.com/agreements/windy-api-map-and-point-forecast-terms-of-use)); the same terms forbid storing the data and building derived databases. This app stores runs, blends them and archives predictions, so Windy is refused unless `WINDY_STORAGE_AUTHORIZED=true` (old name WINDY_TERMS_ACKNOWLEDGED, still read), which should be set only with a written licence that allows this use |
 | Cost | 990 EUR per year for the professional plan ([pricing](https://api.windy.com/point-forecast/pricing)) |
-| Env vars | `WINDY_API_KEY`, `WINDY_TERMS_ACKNOWLEDGED` |
-| Setup | Only with a written licence that allows storing and deriving: set `WINDY_API_KEY`, `WINDY_TERMS_ACKNOWLEDGED=true` and add `windy` to `FORECAST_PROVIDERS` |
+| Env vars | `WINDY_API_KEY`, `WINDY_STORAGE_AUTHORIZED`, `WEATHER_PROVIDER`, `WINDY_CHECK_MINUTES`, `WINDY_DAILY_REQUEST_LIMIT` |
+| Setup | Only with a written licence that allows storing and deriving: set `WINDY_API_KEY` and `WINDY_STORAGE_AUTHORIZED=true`; `WEATHER_PROVIDER=auto` (the hosted default) then uses Windy, or set `WEATHER_PROVIDER=windy` |
 | Test | Mock only: `pytest tests/unit/test_forecast_providers.py -k windy` |
 
 ### 2.10 Flight providers
@@ -417,6 +418,33 @@ contract pricing respectively; `docs/forecast_upgrade_audit.md`, section 4.3).
 
 ## 5. Hosting, runner and sync settings (Upgrade 4)
 
+**Swell 2.0 settings** (`backend/app/core/config.py`, design B of the Swell 2.0 upgrade;
+every one is also in `.env.example` and `.env.vercel.example`)
+
+| Setting | Default | Hosted | What it does |
+|---|---|---|---|
+| `WEATHER_PROVIDER` | `auto` | `auto` | The weather provider: `auto` = Windy when `WINDY_API_KEY` is set and `WINDY_STORAGE_AUTHORIZED=true`, else Open-Meteo (GFS and GFS-Wave); `open_meteo`; `windy` (production refuses it until both Windy settings are in place); `demo` (synthetic data, the local default of `.env.example` and both compose stacks) |
+| `FORECAST_PROVIDERS` | empty: derived from `WEATHER_PROVIDER` | empty | Advanced override, an ordered list (for example `open_meteo,open_meteo_ecmwf` with `FORECAST_BLEND_ENABLED=true`) |
+| `WINDY_STORAGE_AUTHORIZED` (old name WINDY_TERMS_ACKNOWLEDGED) | `false` | `false` until a licence allows storing Windy data | A key is not a licence: Windy data are stored, scored and published only when this is true |
+| `WINDY_CHECK_MINUTES`, `WINDY_DAILY_REQUEST_LIMIT` | 15, 10000 | the defaults | Windy's sentinel check interval and its requests a UTC day |
+| `OPEN_METEO_COMMERCIAL` (alias of `COMMERCIAL_USE`) | `false` | `false` now, `true` with a paywall | The same setting as `COMMERCIAL_USE`; it wins when both are set. Production refuses `true` without `OPEN_METEO_API_KEY` |
+| `FORECAST_DAYS` | 10 | 10 | The rolling forecast horizon (3-16 days) |
+| `FORECAST_REFRESH_ENABLED` | `true` | `true` | Kill switch of every refresh runner |
+| `FORECAST_STALE_THRESHOLD_MINUTES`, `FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL` | 360, empty | the defaults | A spot is stale once its data are older than the model's update interval plus this; per-model overrides as a JSON object |
+| `FORECAST_MIN_VALID_FRACTION` | 0.8 | 0.8 | A spot passes validation only when this fraction of its hours carry a wave height and wind |
+| `FORECAST_VERSION_CDN_SECONDS` | 15 | 15 | CDN cache of `GET /api/forecasts/version` |
+| `NEXT_PUBLIC_APP_URL` (alias of `APP_BASE_URL`) | empty | the site's URL | The web build's metadataBase; the backend reads it when `APP_BASE_URL` is empty |
+| `NEXT_PUBLIC_FORECAST_VERSION_POLL_MS` (frontend build) | 20000 | 20000 | How often an open page asks for a new forecast version (only while visible) |
+| `SYNC_DAEMON_KINDS` | `spots,ensemble,map` | `map` | What the sync daemon refreshes itself; hosted, the spot refreshes run in a Vercel Function |
+| `PREDICTION_ARCHIVE_ENABLED` | `false` | `false` (full-retention profile: `true`) | Archive every published prediction at each lead time |
+| `SCORING_WEIGHTS_JSON` | empty | empty | Optional JSON object overriding the quality score's component weights |
+| `FLIGHT_USER_DAILY_QUOTA` | 20 | 20 | Provider flight searches a day for one user |
+| `ALERT_LEAD_DEFAULT_MIN_DAYS`, `ALERT_LEAD_DEFAULT_MAX_DAYS` | 2, 10 | the defaults | Default alert lead times of a new saved search |
+| `SHORT_NOTICE_MIN_DAYS`, `SHORT_NOTICE_MAX_DAYS` | 3, 7 | the defaults | The short-notice ranking window |
+| `DETECTION_LEAD_MIN_DAYS` | 1 (was 5) | 1 | The global lead-time floor of detection and matching |
+| `QUOTA_ALERT_FRACTION` | 0.8 | 0.8 | Admin alert once an API quota reaches this fraction |
+| `REFRESH_SCHEDULER_EXPECTED_MINUTES` | 30 | 30 | Admin alert when no refresh check ran for this long (0 = off) |
+
 Every setting Upgrade 4 added, with its default (`backend/app/core/config.py`) and the value
 of the hosted profile (`backend/app/core/profiles.py`, `profile_env("hosted",
 "free-database")`, the block to paste into Vercel in `docs/deploy-vercel.md` step 5 and the
@@ -460,9 +488,9 @@ Compose stack, so a deployment that sets nothing behaves as before. Each one is 
 | Setting | Default | Hosted | What it does |
 |---|---|---|---|
 | `SYNC_CHECK_MINUTES` | 10 | 10 | Model-run checks (provider metadata only, no database access in the daemon) |
-| `SYNC_TRIGGER_SOURCES` | `spots,map` | `map` (free-database profile) | Component kinds whose new run starts a sync. `map` = a sync only for a new map cycle, which brings the newest spot runs of both families with it; when the setup has no map component, new spot runs trigger instead |
+| `SYNC_TRIGGER_SOURCES` | `spots,map` | `spots` (free-database profile; `map` until Swell 2.0) | Component kinds whose new run starts a sync. `map` = a sync only for a new map cycle, which brings the newest spot runs of both families with it; when the setup has no map component, new spot runs trigger instead |
 | `MAP_FIELD_CYCLES` | `00,12` | `06,18` (free-database profile) | The GFS cycles whose map layers are read (and, with `map` triggers, when syncs run) |
-| `SYNC_COALESCE_MINUTES` | 90 | 90 | How long a GFS spot run and the map layers of the same cycle (or late model domains) wait for each other |
+| `SYNC_COALESCE_MINUTES` | 0 (90 until Swell 2.0) | 0 | How long the late model domains of one component wait for each other (within a component only) |
 | `SYNC_RETRY_MINUTES`, `SYNC_MAX_ATTEMPTS` | 15, 6 | 15, 6 | Wait after a failed acquisition; failed attempts per model run before waiting for the next run |
 | `SYNC_LEASE_MINUTES` | 45; 15 under `JOB_RUNNER=daemon` when not set | 15 (not set) | The one-sync-at-a-time lease, renewed after every stage and extended while a stage runs; a lapsed lease is taken over |
 | `SYNC_PUBLISH_GATE` | `true` | `true` | The map serves the map run of the newest publication, so the map and the spots switch together |
@@ -471,7 +499,7 @@ Compose stack, so a deployment that sets nothing behaves as before. Each one is 
 | `SYNC_DAEMON_POLL_SECONDS` | 60 | 60 | How often the daemon picks up the API's kicks |
 | `SYNC_DAEMON_INIT_DB` | `true` | `true` | The daemon runs `init-db` (migrate, seed, tide catalog; idempotent) at every start |
 | `SYNC_DAEMON_CATCH_UP` | `true` | `true` | At start the daemon runs, once, every periodic job without a success within its longest gap (a new deployment's tide predictions at once, not at the next 02:20 UTC); a job started within the last hour is skipped |
-| `SYNC_CPU_BUDGET_HOURS` | none | 10 | Monthly CPU budget of the sync runner; health warns above 80 % (`sync_cpu_budget`) |
+| `SYNC_CPU_BUDGET_HOURS` | none | 5 | Monthly CPU budget of the sync runner; health warns above 80 % (`sync_cpu_budget`) |
 | `JOB_INTERVAL_FLOOR_MINUTES` | 0 | 60 | Every periodic job runs at most this often, so a scale-to-zero database is woken at most hourly between syncs |
 
 The public snapshot cache (the anonymous spot list, map conditions, spot pages, status and
@@ -485,10 +513,10 @@ of one client IP an hour that miss the cache and so read the database; more answ
 
 | Setting | Default | Hosted | Why |
 |---|---|---|---|
-| `FORECAST_PROVIDERS` | `demo` | `open_meteo,open_meteo_ecmwf` | point forecasts for the 50 surf spots only, two model families |
+| `FORECAST_PROVIDERS` | empty (derived from `WEATHER_PROVIDER`) | empty (`WEATHER_PROVIDER=auto`; `open_meteo,open_meteo_ecmwf` until Swell 2.0) | point forecasts for the 50 surf spots only, one provider |
 | `MAP_FIELDS_ENABLED` | empty (automatic) | `true` | the worldwide map layers, synced with the spot forecasts |
 | `MAP_FIELD_STEPS`, `MAP_FIELD_MAX_LEAD_HOURS` | `0-120:3,120-240:6`, 240 (61 map hours) | the defaults | `MAP_FIELD_STEPS=0-24:3` with `MAP_FIELD_MAX_LEAD_HOURS=24` (9 map hours) for a short local test |
-| `GEFS_ENABLED` | `false` | `false` | protects the daemon's 10 Active CPU-hours; `true` turns the ensemble spread on |
+| `GEFS_ENABLED` | `false` | `false` | protects the daemon's 5 Active CPU-hours; `true` turns the ensemble spread on |
 | `PROVIDER_RESPONSE_CACHE_ENABLED` | `true` | `false` | Upstash Free stores 250 MB |
 | `RETENTION_FORECAST_DAYS`, `RETENTION_ARCHIVE_DAYS`, `RETENTION_JOB_LOG_DAYS` | 10, 730, 30 | 1, 7, 7 (free-database profile) | Neon Free's 1 GB; the full-retention profile restores 10, 730, 30 |
 | `DATA_HEALTH_CHECK_MINUTES` | 15 | 60 | at most one database wake an hour for the check |
@@ -498,8 +526,9 @@ of one client IP an hour that miss the cache and so read the database; more answ
 
 **Full-retention profile** (after moving Neon to Launch): `RETENTION_FORECAST_DAYS=10`,
 `RETENTION_ARCHIVE_DAYS=730`, `RETENTION_JOB_LOG_DAYS=30`, `SYNC_PRUNE_EACH_PASS=false`,
-`DATA_HEALTH_DATABASE_MAX_GB=20`, `SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12`
-(the full-retention profile of `backend/app/core/profiles.py`, equal to the Settings defaults).
+`DATA_HEALTH_DATABASE_MAX_GB=20`, `SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12`,
+`PREDICTION_ARCHIVE_ENABLED=true` (the full-retention profile of `backend/app/core/profiles.py`,
+equal to the Settings defaults except the prediction archive, off by default since Swell 2.0).
 
 **The local Vercel-style stack's own variables** (`scripts/vercel-local.sh` and
 `docker-compose.vercel.yml`, never read by the app; `docs/local-vercel-stack.md`):

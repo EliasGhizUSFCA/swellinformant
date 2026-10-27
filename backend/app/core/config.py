@@ -8,11 +8,20 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import AliasChoices, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_core import InitErrorDetails
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,17 +31,26 @@ FlightProviderName = Literal["duffel", "amadeus", "demo"]
 # Who runs the background jobs: "celery" (worker + beat, classic docker compose) or "daemon"
 # (one long-lived `python -m app.cli sync daemon` process, e.g. a Vercel Daemon).
 JobRunnerName = Literal["celery", "daemon"]
-# Components whose new model run makes a sync due (SYNC_TRIGGER_SOURCES).
+# Components whose new model run makes a sync due (SYNC_TRIGGER_SOURCES), and the kinds the
+# sync daemon refreshes itself (SYNC_DAEMON_KINDS).
 SYNC_TRIGGER_TOKENS = frozenset({"spots", "map", "ensemble"})
 # Open-Meteo providers: their free API is for non-commercial use only (COMMERCIAL_USE).
 OPEN_METEO_PROVIDER_TOKENS = frozenset({"open_meteo", "open_meteo_ecmwf"})
 _HEADER_NAME = re.compile(r"^[a-z0-9-]+$")
 EmailProviderName = Literal["console", "mailpit", "smtp", "resend", "sendgrid"]
 # FORECAST_PROVIDERS tokens. "open_meteo" is the Open-Meteo GFS family, "open_meteo_ecmwf"
-# the Open-Meteo ECMWF family; "windy" also needs WINDY_TERMS_ACKNOWLEDGED.
+# the Open-Meteo ECMWF family; "windy" also needs WINDY_STORAGE_AUTHORIZED (formerly
+# WINDY_TERMS_ACKNOWLEDGED).
 FORECAST_PROVIDER_TOKENS = frozenset(
     {"demo", "noaa_gfs", "ecmwf_ifs", "open_meteo", "open_meteo_ecmwf", "windy"}
 )
+# WEATHER_PROVIDER: the simple provider choice (design D2). FORECAST_PROVIDERS, when set, is
+# the advanced override; otherwise Settings.forecast_provider_list is derived from this.
+WeatherProviderName = Literal["auto", "open_meteo", "windy", "demo"]
+# Where the effective provider list came from (ProviderSelection.source).
+SelectionSource = Literal["FORECAST_PROVIDERS", "WEATHER_PROVIDER"]
+# The provider a Windy primary falls back to at runtime (design D4).
+WINDY_FALLBACK_PROVIDER = "open_meteo"
 # Providers that capture mail locally for development: nothing reaches a real mailbox.
 CAPTURE_EMAIL_PROVIDERS = frozenset({"console", "mailpit"})
 SmsProviderName = Literal["console", "twilio", "disabled"]
@@ -56,8 +74,13 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     app_name: str = "Swell Travel Agent"
     log_level: str = "INFO"
-    # Public URL of the web app (used in email links). No trailing slash.
-    app_base_url: str = "http://localhost:3000"
+    # Public URL of the web app (used in email links). No trailing slash. NEXT_PUBLIC_APP_URL
+    # (the name the frontend build reads for its metadataBase) is read too; APP_BASE_URL wins
+    # when both are set.
+    app_base_url: str = Field(
+        default="http://localhost:3000",
+        validation_alias=AliasChoices("APP_BASE_URL", "NEXT_PUBLIC_APP_URL"),
+    )
     # Public URL of the API (used for webhook signature validation). No trailing slash.
     api_base_url: str = "http://localhost:8000"
     secret_key: str = Field(default="dev-insecure-secret-change-me", min_length=16)
@@ -113,15 +136,21 @@ class Settings(BaseSettings):
     # VERCEL_ENV=production; all = every build (also Neon preview branches).
     migrate_on_build: Literal["off", "production", "all"] = "off"
     # true once the site is used commercially (a paywall, ads): the free Open-Meteo API is
-    # non-commercial, so an Open-Meteo provider then needs OPEN_METEO_API_KEY.
-    commercial_use: bool = False
+    # non-commercial, so an Open-Meteo provider then needs OPEN_METEO_API_KEY (production
+    # refuses to start without it). OPEN_METEO_COMMERCIAL is the same setting and wins when
+    # both names are set.
+    commercial_use: bool = Field(
+        default=False, validation_alias=AliasChoices("OPEN_METEO_COMMERCIAL", "COMMERCIAL_USE")
+    )
 
     # ------------------------------------------------------------------ sync
     # Model-run checks of the sync daemon (provider metadata only, no database access).
     sync_check_minutes: int = Field(default=10, ge=5, le=180)
-    # A new GFS spot run and the map layers of the same cycle wait for each other this long
-    # after the first sighting, then whatever is available is synced.
-    sync_coalesce_minutes: int = Field(default=90, ge=0, le=360)
+    # Late model domains of one component (e.g. the second wave grid of a family) are waited
+    # for this long after the first sighting, then whatever is available is synced. Applies
+    # within a component only: a new wave run never waits for the atmosphere or the map
+    # (design D6). 0 = no waiting.
+    sync_coalesce_minutes: int = Field(default=0, ge=0, le=360)
     # The sync lease (a sync_runs row with status running), renewed after every stage and
     # extended every third of it while a stage runs, so it lapses only when the process
     # holding it died; the next sync then takes it over. Not set: DAEMON_LEASE_MINUTES (15)
@@ -135,6 +164,10 @@ class Settings(BaseSettings):
     # Components whose new model run makes a sync due: a non-empty subset of spots, map,
     # ensemble (sync_trigger_list).
     sync_trigger_sources: str = "spots,map"
+    # Component kinds the sync daemon refreshes itself: a non-empty subset of spots, ensemble,
+    # map (sync_daemon_kind_list). The hosted profile: map (the spot refreshes run in a Vercel
+    # Function, GET|POST /api/internal/refresh, called by a scheduler).
+    sync_daemon_kinds: str = "spots,ensemble,map"
     # Prune superseded predictions and map fields after every sync, not only daily.
     sync_prune_each_pass: bool = False
     # After a publishing sync, compute the public spot list and conditions at once (about
@@ -152,8 +185,8 @@ class Settings(BaseSettings):
     # longest gap (or never): a new deployment gets tide predictions at once instead of at
     # the next 02:20 UTC, and frequent restarts never starve the hourly jobs.
     sync_daemon_catch_up: bool = True
-    # Monthly CPU budget of the sync runner in hours (e.g. 10 = Vercel Hobby's daemon
-    # quota); health warns near it. None = no budget.
+    # Monthly CPU budget of the sync runner in hours (e.g. 5 = Vercel Hobby's daemon quota);
+    # health warns near it. None = no budget.
     sync_cpu_budget_hours: float | None = Field(default=None, gt=0)
     # Every periodic job runs at most this often (minutes; 0 = the schedule as written), so
     # a scale-to-zero database is woken at most this often between syncs.
@@ -180,12 +213,32 @@ class Settings(BaseSettings):
     trusted_proxy_count: int = 1
 
     # ------------------------------------------------------------------ forecasts
-    # Comma separated, in priority order. The first provider is the primary source. Tokens
-    # (FORECAST_PROVIDER_TOKENS): demo, noaa_gfs, ecmwf_ifs, open_meteo (Open-Meteo, GFS
-    # family), open_meteo_ecmwf (Open-Meteo, ECMWF family) and windy (only with
-    # WINDY_TERMS_ACKNOWLEDGED, see the validator).
-    forecast_providers: str = "demo"
-    forecast_days: int = Field(default=16, ge=3, le=16)
+    # The weather provider (design D2): auto = Windy when it is eligible (WINDY_API_KEY set
+    # and WINDY_STORAGE_AUTHORIZED=true), else Open-Meteo; open_meteo; windy (production
+    # refuses it until Windy is eligible; elsewhere Open-Meteo is used until then); demo =
+    # synthetic data. Settings.provider_selection() says what was chosen and why.
+    weather_provider: WeatherProviderName = "auto"
+    # ADVANCED override, comma separated, in priority order (the first provider is the primary
+    # source). Tokens (FORECAST_PROVIDER_TOKENS): demo, noaa_gfs, ecmwf_ifs, open_meteo
+    # (Open-Meteo, GFS family), open_meteo_ecmwf (Open-Meteo, ECMWF family) and windy (only
+    # with WINDY_STORAGE_AUTHORIZED, see the validator). None = derived from WEATHER_PROVIDER
+    # (forecast_provider_list).
+    forecast_providers: str | None = None
+    # The rolling forecast horizon (days); providers with a shorter one are capped.
+    forecast_days: int = Field(default=10, ge=3, le=16)
+    # Kill switch of every refresh runner (the refresh endpoint, the daemon, Celery): false =
+    # nothing is acquired, the published data stay as they are.
+    forecast_refresh_enabled: bool = True
+    # A spot or component is stale once its last successful update is older than its model's
+    # update interval plus this grace (minutes; design D10). Per-model overrides:
+    # FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL, a JSON object {"<model>": minutes}.
+    forecast_stale_threshold_minutes: int = Field(default=360, ge=0, le=10_080)
+    forecast_stale_threshold_minutes_by_model: str | None = None
+    # A spot passes validation before staging only when at least this fraction of its hours
+    # carry a wave height and a wind speed (design D9).
+    forecast_min_valid_fraction: float = Field(default=0.8, gt=0, le=1)
+    # CDN cache of GET /api/forecasts/version (s-maxage seconds; browsers never cache it).
+    forecast_version_cdn_seconds: int = Field(default=15, ge=0, le=300)
     forecast_refresh_minutes: int = 180
     forecast_stale_hours: int = 18
     # Spots per Open-Meteo request (one weighted call per location either way; 50 = every
@@ -221,9 +274,18 @@ class Settings(BaseSettings):
     open_meteo_calls_per_hour: int = Field(default=5000, ge=1)
     open_meteo_calls_per_day: int = Field(default=10000, ge=1)
     open_meteo_calls_per_month: int = Field(default=300000, ge=1)
-    # Windy's terms forbid storing its data and derived databases: the provider token is refused
-    # unless the operator confirms a licence that allows this use (docs/API_SETUP_REQUIRED.md).
-    windy_terms_acknowledged: bool = False
+    # Windy's terms forbid storing its data and derived databases: Windy data are stored,
+    # scored and published only once the operator confirms a licence that allows this use
+    # (docs/API_SETUP_REQUIRED.md). WINDY_TERMS_ACKNOWLEDGED is the old name, still read (the
+    # new name wins when both are set); Settings.windy_terms_acknowledged still answers.
+    windy_storage_authorized: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("WINDY_STORAGE_AUTHORIZED", "WINDY_TERMS_ACKNOWLEDGED"),
+    )
+    # Minutes between Windy's sentinel-spot checks for a new run (Windy has no run metadata).
+    windy_check_minutes: int = Field(default=15, ge=5, le=360)
+    # Windy Point Forecast requests a UTC day (Redis counter, reset 00:00 UTC).
+    windy_daily_request_limit: int = Field(default=10_000, ge=1)
     # Provider HTTP response cache in Redis (TTL = the model update interval). Bodies larger
     # than the byte limit are not cached; at most MAX_KEYS entries.
     provider_response_cache_enabled: bool = True
@@ -305,6 +367,10 @@ class Settings(BaseSettings):
     ml_artifact_dir: str = "/tmp/swell-ml"  # noqa: S108  (use a persistent volume in production)
     # Apply ACTIVE ML corrections (only models that passed the deployment criteria).
     ml_corrections_enabled: bool = True
+    # Archive every published prediction at each lead time (verification and ML training
+    # data; app.services.forecasts.archive). Off by default (design D5); the full-retention
+    # profile turns it on.
+    prediction_archive_enabled: bool = False
     # Map ocean layers (downsampled GFS-Wave + GFS global grids). None = automatic, decided by
     # app.services.map_fields.map_fields_mode (docs/map-layers.md); True = always fetch them;
     # False = off.
@@ -341,10 +407,23 @@ class Settings(BaseSettings):
     # Wind gusts: "off" = shown only; "scored" = used by the wind score where the source's gust
     # definition is documented (ForecastRecord.extra["gust_kind"]).
     wind_gust_scoring: Literal["off", "scored"] = "off"
+    # Optional JSON object overriding the component weights of the quality score, e.g.
+    # {"wind": 0.35, "tide": 0.0}: non-negative numbers, at least one above 0. The names are
+    # checked against the scoring components by app.services.surf_quality.
+    scoring_weights_json: str | None = None
 
     # ------------------------------------------------------------------ detection
-    detection_lead_min_days: float = 5.0
+    # The global lead-time window of swell detection and matching (days ahead). Each saved
+    # search narrows it with its own alert lead times (saved_searches.alert_lead_min_days /
+    # _max_days, defaults ALERT_LEAD_DEFAULT_MIN_DAYS / _MAX_DAYS).
+    detection_lead_min_days: float = 1.0
     detection_lead_max_days: float = 10.0
+    # Default alert lead times of a new saved search (whole days, 0 <= min <= max <= 16).
+    alert_lead_default_min_days: int = Field(default=2, ge=0, le=16)
+    alert_lead_default_max_days: int = Field(default=10, ge=0, le=16)
+    # Short-notice ranking boost: swells starting this many days ahead rank higher (spec 28).
+    short_notice_min_days: float = Field(default=3.0, ge=0, le=16)
+    short_notice_max_days: float = Field(default=7.0, ge=0, le=16)
     # Permissive on purpose (= the 'Fair' threshold) so every user threshold is satisfiable.
     swell_event_min_score: int = Field(default=40, ge=0, le=100)
     swell_event_min_hours: int = 3
@@ -366,6 +445,8 @@ class Settings(BaseSettings):
     flight_max_queries_per_match: int = 3
     flight_refresh_hours: float = 12.0
     flight_max_offers_per_search: int = 50
+    # Provider flight searches a day for one user (all of their saved searches).
+    flight_user_daily_quota: int = Field(default=20, ge=1, le=10_000)
     # Optional static FX table, e.g. '{"EUR": 1.08, "GBP": 1.27}' = USD per 1 unit.
     # Offers in a currency other than the search currency are discarded unless a rate exists.
     fx_rates_usd_json: str | None = None
@@ -444,6 +525,12 @@ class Settings(BaseSettings):
     data_health_database_max_gb: float | None = Field(default=20.0, gt=0)
     # Degraded once Redis uses more than this fraction of its maxmemory.
     data_health_redis_max_fraction: float = Field(default=0.8, gt=0, le=1)
+    # Admin alert once an API quota (Open-Meteo day/month, Windy day, flights day) reaches
+    # this fraction.
+    quota_alert_fraction: float = Field(default=0.8, gt=0, le=1)
+    # Admin alert when no refresh check ran for this many minutes (the external scheduler or
+    # the daemon is silent); 0 = no such alert.
+    refresh_scheduler_expected_minutes: int = Field(default=30, ge=0, le=1440)
     # Comma-separated addresses the daily watchdog emails when the database itself cannot
     # be reached (e.g. Neon's compute suspended after its quota): the admin recipients are
     # read from the users table, so they cannot be told then. Optional; validated; logs
@@ -499,17 +586,53 @@ class Settings(BaseSettings):
                 ) from None
         return ",".join(out)
 
-    @field_validator("sync_trigger_sources")
+    @field_validator("sync_trigger_sources", "sync_daemon_kinds")
     @classmethod
-    def _check_sync_trigger_sources(cls, v: str) -> str:
+    def _check_component_kinds(cls, v: str, info: ValidationInfo) -> str:
+        name = str(info.field_name).upper()
         tokens = set(_split(v))
         if not tokens:
-            raise ValueError("SYNC_TRIGGER_SOURCES must name at least one of spots, map, ensemble")
+            raise ValueError(f"{name} must name at least one of spots, map, ensemble")
         unknown = tokens - SYNC_TRIGGER_TOKENS
         if unknown:
-            raise ValueError(
-                f"Unknown SYNC_TRIGGER_SOURCES entries {sorted(unknown)}: use spots, map, ensemble"
-            )
+            raise ValueError(f"Unknown {name} entries {sorted(unknown)}: use spots, map, ensemble")
+        return v
+
+    @field_validator("forecast_stale_threshold_minutes_by_model")
+    @classmethod
+    def _check_stale_by_model(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return None
+        for model, minutes in _json_object(v, "FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL").items():
+            if not model.strip():
+                raise ValueError(
+                    "FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL has an empty model name"
+                )
+            if isinstance(minutes, bool) or not isinstance(minutes, int) or minutes < 0:
+                raise ValueError(
+                    f"FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL[{model!r}] must be a whole "
+                    "number of minutes >= 0"
+                )
+        return v
+
+    @field_validator("scoring_weights_json")
+    @classmethod
+    def _check_scoring_weights(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return None
+        weights = _json_object(v, "SCORING_WEIGHTS_JSON")
+        if not weights:
+            raise ValueError("SCORING_WEIGHTS_JSON must name at least one component")
+        for name, weight in weights.items():
+            if (
+                isinstance(weight, bool)
+                or not isinstance(weight, int | float)
+                or not math.isfinite(weight)
+                or weight < 0
+            ):
+                raise ValueError(f"SCORING_WEIGHTS_JSON[{name!r}] must be a number >= 0")
+        if not any(weight > 0 for weight in weights.values()):
+            raise ValueError("SCORING_WEIGHTS_JSON needs at least one weight above 0")
         return v
 
     @field_validator("map_field_steps")
@@ -540,7 +663,24 @@ class Settings(BaseSettings):
                     f"EMAIL_PROVIDER={self.email_provider} only captures mail locally; "
                     "use smtp, resend or sendgrid in production"
                 )
+            if self.weather_provider == "windy" and not self.windy_eligible:
+                raise ValueError(
+                    "WEATHER_PROVIDER=windy needs "
+                    + " and ".join(self.windy_ineligibility())
+                    + " (a Windy key is not a licence to store its data): set both, or use "
+                    "WEATHER_PROVIDER=auto or open_meteo until then (docs/WINDY_API_SETUP.md)"
+                )
         providers = self.forecast_provider_list
+        if (
+            self.app_env == "production"
+            and self.commercial_use
+            and not self.open_meteo_api_key
+            and OPEN_METEO_PROVIDER_TOKENS & set(providers)
+        ):
+            raise ValueError(
+                "OPEN_METEO_COMMERCIAL=true (COMMERCIAL_USE) needs OPEN_METEO_API_KEY: the free "
+                "Open-Meteo API is for non-commercial use only (docs/API_SETUP_REQUIRED.md)"
+            )
         if "demo" in providers and len(providers) > 1:
             raise ValueError(
                 "FORECAST_PROVIDERS cannot mix 'demo' with live providers: synthetic data "
@@ -549,16 +689,20 @@ class Settings(BaseSettings):
         unknown = set(providers) - FORECAST_PROVIDER_TOKENS
         if unknown:
             raise ValueError(f"Unknown FORECAST_PROVIDERS entries: {sorted(unknown)}")
-        if "windy" in providers and not self.windy_terms_acknowledged:
+        if "windy" in providers and not self.windy_storage_authorized:
             raise ValueError(
                 "FORECAST_PROVIDERS contains 'windy', but Windy's API terms forbid storing its "
                 "data, building databases derived from it and redistributing it, which this app "
                 "does (forecast runs, blends, archived predictions). Remove 'windy', or set "
-                "WINDY_TERMS_ACKNOWLEDGED=true once a licence that allows this use is in place "
-                "(docs/API_SETUP_REQUIRED.md)."
+                "WINDY_STORAGE_AUTHORIZED=true (formerly WINDY_TERMS_ACKNOWLEDGED) once a "
+                "licence that allows this use is in place (docs/API_SETUP_REQUIRED.md)."
             )
         if self.detection_lead_min_days > self.detection_lead_max_days:
             raise ValueError("DETECTION_LEAD_MIN_DAYS must be <= DETECTION_LEAD_MAX_DAYS")
+        if self.alert_lead_default_min_days > self.alert_lead_default_max_days:
+            raise ValueError("ALERT_LEAD_DEFAULT_MIN_DAYS must be <= ALERT_LEAD_DEFAULT_MAX_DAYS")
+        if self.short_notice_min_days > self.short_notice_max_days:
+            raise ValueError("SHORT_NOTICE_MIN_DAYS must be <= SHORT_NOTICE_MAX_DAYS")
         if self.job_runner == "daemon" and "sync_lease_minutes" not in self.model_fields_set:
             self.sync_lease_minutes = DAEMON_LEASE_MINUTES
         return self
@@ -621,6 +765,11 @@ class Settings(BaseSettings):
         return frozenset(_split(self.sync_trigger_sources))
 
     @property
+    def sync_daemon_kind_list(self) -> frozenset[str]:
+        """SYNC_DAEMON_KINDS as a set of component kinds (spots, ensemble, map)."""
+        return frozenset(_split(self.sync_daemon_kinds))
+
+    @property
     def runs_celery(self) -> bool:
         """True when Celery worker and beat run the jobs (JOB_RUNNER=celery)."""
         return self.job_runner == "celery"
@@ -635,8 +784,105 @@ class Settings(BaseSettings):
         return "demo" in self.forecast_provider_list or self.flight_provider == "demo"
 
     @property
+    def windy_terms_acknowledged(self) -> bool:
+        """The old name of :attr:`windy_storage_authorized` (read-only)."""
+        return self.windy_storage_authorized
+
+    def windy_ineligibility(self) -> list[str]:
+        """Why Windy may not be the primary provider (empty = eligible): a key and the
+        storage authorization are both required (design D3). Never names the key's value."""
+        missing: list[str] = []
+        if not self.windy_api_key:
+            missing.append("WINDY_API_KEY")
+        if not self.windy_storage_authorized:
+            missing.append("WINDY_STORAGE_AUTHORIZED=true")
+        return missing
+
+    @property
+    def windy_eligible(self) -> bool:
+        """WINDY_API_KEY is set and WINDY_STORAGE_AUTHORIZED=true."""
+        return not self.windy_ineligibility()
+
+    def provider_selection(self) -> ProviderSelection:
+        """The effective forecast providers and why (design D2): FORECAST_PROVIDERS when set
+        (advanced override), else derived from WEATHER_PROVIDER. The provider manager, the
+        CLI's provider check and the admin dashboard show :attr:`ProviderSelection.reasons`."""
+        explicit = _split(self.forecast_providers or "")
+        missing = self.windy_ineligibility()
+        eligible = not missing
+        windy_state = (
+            "Windy is eligible (WINDY_API_KEY set, WINDY_STORAGE_AUTHORIZED=true)"
+            if eligible
+            else "Windy is not eligible (" + " and ".join(missing) + " missing)"
+        )
+        reasons: list[str]
+        source: SelectionSource
+        if explicit:
+            providers = tuple(explicit)
+            source = "FORECAST_PROVIDERS"
+            reasons = [
+                f"FORECAST_PROVIDERS={','.join(explicit)} (advanced override; "
+                f"WEATHER_PROVIDER={self.weather_provider} is not used)"
+            ]
+        else:
+            source = "WEATHER_PROVIDER"
+            choice = self.weather_provider
+            if choice == "demo":
+                providers = ("demo",)
+                reasons = ["WEATHER_PROVIDER=demo: synthetic demo forecasts, not real data"]
+            elif choice == "open_meteo":
+                providers = ("open_meteo",)
+                reasons = ["WEATHER_PROVIDER=open_meteo: Open-Meteo (NOAA GFS and GFS-Wave)"]
+            elif eligible:
+                providers = ("windy",)
+                reasons = [f"WEATHER_PROVIDER={choice}: {windy_state}, so Windy is the primary"]
+            else:
+                providers = (WINDY_FALLBACK_PROVIDER,)
+                reasons = [f"WEATHER_PROVIDER={choice}: {windy_state}, so Open-Meteo is used"]
+                if choice == "windy":
+                    reasons.append(
+                        "production refuses WEATHER_PROVIDER=windy until Windy is eligible"
+                    )
+        fallback = WINDY_FALLBACK_PROVIDER if providers[0] == "windy" else None
+        if fallback:
+            reasons.append(
+                f"runtime fallback: {fallback} when a Windy refresh fails (credentials, testing "
+                "key, quota or availability)"
+            )
+        return ProviderSelection(
+            providers=providers,
+            source=source,
+            weather_provider=self.weather_provider,
+            windy_eligible=eligible,
+            fallback=fallback,
+            reasons=tuple(reasons),
+        )
+
+    @property
     def forecast_provider_list(self) -> list[str]:
-        return _split(self.forecast_providers) or ["demo"]
+        """The effective FORECAST_PROVIDERS tokens in priority order (first = primary):
+        :meth:`provider_selection`. Every reader of the provider list uses this."""
+        return list(self.provider_selection().providers)
+
+    @property
+    def forecast_stale_threshold_by_model(self) -> dict[str, int]:
+        """FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL as {model: minutes} (empty when unset)."""
+        raw = self.forecast_stale_threshold_minutes_by_model
+        return {str(k): int(v) for k, v in json.loads(raw).items()} if raw else {}
+
+    def stale_threshold_minutes(self, model: str | None) -> int:
+        """The grace (minutes) past a model's update interval before its data are stale: the
+        per-model override when there is one, else FORECAST_STALE_THRESHOLD_MINUTES."""
+        overrides = self.forecast_stale_threshold_by_model
+        if model is not None and model in overrides:
+            return overrides[model]
+        return self.forecast_stale_threshold_minutes
+
+    @property
+    def scoring_weights(self) -> dict[str, float] | None:
+        """SCORING_WEIGHTS_JSON as {component: weight}; None when unset (the defaults)."""
+        raw = self.scoring_weights_json
+        return {str(k): float(v) for k, v in json.loads(raw).items()} if raw else None
 
     @property
     def open_meteo_gfs_wave_model_list(self) -> list[str]:
@@ -738,9 +984,10 @@ class Settings(BaseSettings):
             missing.append("WINDY_API_KEY")
         if self.job_runner == "daemon" and self.app_env == "production" and not self.cron_secret:
             missing.append("CRON_SECRET (daily watchdog)")
+        selection = self.provider_selection()
         if (
             self.commercial_use
-            and OPEN_METEO_PROVIDER_TOKENS & set(self.forecast_provider_list)
+            and OPEN_METEO_PROVIDER_TOKENS & {*selection.providers, selection.fallback or ""}
             and not self.open_meteo_api_key
         ):
             missing.append(
@@ -748,6 +995,40 @@ class Settings(BaseSettings):
                 "non-commercial)"
             )
         return missing
+
+
+@dataclass(frozen=True)
+class ProviderSelection:
+    """What :meth:`Settings.provider_selection` chose.
+
+    * ``providers``: the effective FORECAST_PROVIDERS tokens, first = primary;
+    * ``source``: ``FORECAST_PROVIDERS`` (the explicit override) or ``WEATHER_PROVIDER``;
+    * ``windy_eligible``: WINDY_API_KEY set and WINDY_STORAGE_AUTHORIZED=true;
+    * ``fallback``: the provider a Windy primary falls back to at runtime, else None;
+    * ``reasons``: plain sentences for operators (never a credential's value).
+    """
+
+    providers: tuple[str, ...]
+    source: SelectionSource
+    weather_provider: str
+    windy_eligible: bool
+    fallback: str | None
+    reasons: tuple[str, ...]
+
+    @property
+    def primary(self) -> str:
+        return self.providers[0]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "providers": list(self.providers),
+            "primary": self.primary,
+            "source": self.source,
+            "weather_provider": self.weather_provider,
+            "windy_eligible": self.windy_eligible,
+            "fallback": self.fallback,
+            "reasons": list(self.reasons),
+        }
 
 
 def normalize_database_url(url: str) -> str:
@@ -772,6 +1053,17 @@ def _database_name(url: str) -> str | None:
         return make_url(url).database
     except ArgumentError:
         return None
+
+
+def _json_object(value: str, name: str) -> dict[str, Any]:
+    """A setting that holds a JSON object (the value itself is never quoted in the error)."""
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError:
+        raise ValueError(f"{name} is not valid JSON") from None
+    if not isinstance(data, dict):
+        raise ValueError(f"{name} must be a JSON object")
+    return data
 
 
 def _split(value: str) -> list[str]:

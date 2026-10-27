@@ -33,12 +33,13 @@ VERCEL_JSON = ROOT / "vercel.json"
 
 HOSTED_FREE = profile_env("hosted", "free-database")
 # The stack's documented departures from the hosted profile: no forecast or map provider
-# is called until .env.vercel.local chooses live sources, and without map layers a new spot
-# run triggers a sync (the hosted free-database profile syncs for new map cycles only).
+# is called until .env.vercel.local chooses live sources, and the sync daemon refreshes the
+# spots too (the stack has no external scheduler calling the refresh endpoint; the hosted
+# daemon refreshes the map layers only).
 LOCAL_DEFAULTS = {
-    "FORECAST_PROVIDERS": "demo",
+    "WEATHER_PROVIDER": "demo",
     "MAP_FIELDS_ENABLED": "false",
-    "SYNC_TRIGGER_SOURCES": "spots,map",
+    "SYNC_DAEMON_KINDS": "spots,ensemble,map",
 }
 # Read by docker-compose.vercel.yml or the Next.js build, not by Settings.
 STACK_ONLY = {
@@ -53,6 +54,7 @@ STACK_ONLY = {
     "NEXT_PUBLIC_MAP_TILE_URL",
     "NEXT_PUBLIC_MAP_ATTRIBUTION",
     "NEXT_PUBLIC_CARTO_API_KEY",
+    "NEXT_PUBLIC_FORECAST_VERSION_POLL_MS",
     "MAP_TILE_HOSTS",
 }
 # Foundation F9: the stack's host ports.
@@ -157,7 +159,10 @@ def test_env_example_is_a_valid_production_configuration(monkeypatch: pytest.Mon
     assert settings.engine_database_url.startswith("postgresql+psycopg://u:p@ep-test-pooler.")
     assert settings.migration_database_url.startswith("postgresql+psycopg://u:p@ep-test.example")
     assert settings.redis_url == "rediss://default:test-token@test.upstash.io:6379"
-    assert settings.forecast_provider_list == ["open_meteo", "open_meteo_ecmwf"]
+    # Swell 2.0 (design D2/D5): one provider, WEATHER_PROVIDER=auto without Windy, instead of
+    # the two blended Open-Meteo families of Upgrade 4.
+    assert settings.weather_provider == "auto" and settings.forecast_providers is None
+    assert settings.forecast_provider_list == ["open_meteo"]
     assert settings.map_fields_enabled is True
     assert settings.missing_live_credentials() == []
 
