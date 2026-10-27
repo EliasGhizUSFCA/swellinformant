@@ -391,7 +391,7 @@ Backend paths are relative to `backend/app/` unless they start with `backend/`; 
 | 26, 27 | Search only on request, a new match or a material change; never requery for an unchanged forecast | conflicts | `flights.discover` every 60 min (jobs/schedule.py:157); re-search after 12 h (flights/service.py:426-443); every flight-found candidate re-validated before `decide_kind` (notifications/alerts.py:611 vs 614) and expired offers reset to `PENDING_FLIGHTS` (alerts.py:466-473); probe: `flight_searches` 3 → 4 → 5 over three hourly cycles, forecast unchanged | — |
 | 26 | Explicit user request | partial | `POST /api/opportunities/{id}/refresh-flights`, 6 per hour (api/opportunities.py:51-63) | Only for an existing opportunity; inside the 6 h cache it returns cached, possibly expired offers |
 | 26 | Material change | partial | matching re-queues on new dates or airport (matching/service.py:249-253,274-291) | Price changes noticed only through the timer paths |
-| 26 | Research commercially usable flight APIs | partial | Duffel adapter matches current docs (flights/duffel.py:62-115); Amadeus Self-Service closed (flights/amadeus.py:3-9) | Duffel terms never reviewed (docs/API_SETUP_REQUIRED.md:333); see 4.8 |
+| 26 | Research commercially usable flight APIs | partial | Duffel adapter matches current docs (flights/duffel.py:62-115); Amadeus Self-Service closed (flights/amadeus.py:3-9) | Duffel terms never reviewed (docs/API_SETUP_REQUIRED.md:333); see 4.9 |
 | 26 | Never fabricate availability or prices | exists | demo offers `is_mock` (models/flight.py:64,121), "MOCK FARE — not a real price" (notifications/templates.py:217,269); revalidation never invents a price (flights/service.py:507-510) | — |
 | 26 | Preferences: origin, destinations, wave range, minimum quality, budget, fixed and flexible dates, flight time, buffers, travellers | exists | models/search.py; schemas/searches.py; fe/components/search/search-wizard.tsx | Adults only; `wave_preferred_ft` unused |
 | 26 | Multiple origins | partial | schema accepts 5 (schemas/searches.py:87) | `MAX_ORIGINS`=3 (flights/service.py:61,231) drops origins 4-5 silently |
@@ -448,7 +448,7 @@ Backend paths are relative to `backend/app/` unless they start with `backend/`; 
 | 2 | Works before a Windy key | exists | 3.2 §5 |
 | 3 | Windy configured without code changes | partial | 3.2 §6 |
 | 4 | Open-Meteo fallback | missing | 3.2 §5 |
-| 5 | Licensing respected | partial | Windy testing guard and attribution (3.2); Duffel metasearch clause (4.8) |
+| 5 | Licensing respected | partial | Windy testing guard and attribution (3.2); Duffel metasearch clause (4.9) |
 | 6 | All 50 spots monitored centrally | exists | 3.3 §8 |
 | 7 | No per-visitor fetching | exists | 3.1 §2 |
 | 8 | Rolling 10-day horizon | partial | 3.1 §2 |
@@ -511,13 +511,13 @@ Backend paths are relative to `backend/app/` unless they start with `backend/`; 
 
 **D1. Stack.**
 *Decision:* keep FastAPI + SQLAlchemy 2 + Alembic + Neon Postgres + Upstash Redis + the existing
-Argon2id / opaque-session auth. The spec's TypeScript layout maps to Python modules (4.10).
+Argon2id / opaque-session auth. The spec's TypeScript layout maps to Python modules (4.11).
 *Reason:* about 54k lines of Python, much of it numeric (numpy in the API; pandas, scikit-learn and
 ecCodes in the sync), and 41k lines of tests; Vercel deploys FastAPI as a Function in Services mode; Python
 became generally available on Vercel on 2026-10-15; Vercel Cron and external schedulers call any
 HTTP route.
 *Alternatives:* Next.js route handlers (4.3), Prisma (4.4), Supabase or Prisma Postgres (4.5),
-Auth.js / Better Auth / Clerk (4.9).
+Auth.js / Better Auth / Clerk (4.10).
 *Cost:* none new.
 *Risks:* Vercel Services is still Beta; the API function is 127.2 MiB of the 500 MB Python limit;
 any module the refresh path imports must not import pandas, scikit-learn, scipy, pyarrow, joblib
@@ -532,7 +532,8 @@ auto → `windy` only when `WINDY_API_KEY` is set and `WINDY_STORAGE_AUTHORIZED=
 auto.
 *Reason:* spec §5 names and semantics; exactly one primary provider.
 *Alternatives:* keep only `FORECAST_PROVIDERS` (rejected: listed providers are all fetched and
-stored); select Windy whenever a key exists (rejected: a key is not a licence).
+stored); select Windy whenever a key exists (rejected: a key is not a licence); Windy vs
+Open-Meteo as the provider: 4.8.
 *Risk:* auto silently stays on Open-Meteo while the flag is false. That is intended; the
 provider-check command prints the reasons.
 
@@ -792,7 +793,7 @@ carrier names shown. The labelled demo provider stays the default; the Duffel ad
 with a documented warning about the metasearch clause (written confirmation needed); Amadeus
 Self-Service is closed (secondary sources), Enterprise only, untested.
 *Reason:* spec §26-28; measured re-search loop and short-notice gap (6.4).
-*Alternatives:* 4.8.
+*Alternatives:* 4.9.
 *Cost:* with Duffel and no orders, (9,000 − 1,500) × $0.005 ≈ $37.50 a month at the 300-a-day
 quota (research reading of the Services Agreement; the travel audit's $45 assumed no free
 allowance).
@@ -876,7 +877,45 @@ at most about 15 minutes.
 | Managed realtime service | not evaluated in this audit | not used |
 | CDN purge by cache tag | `Vercel-Cache-Tag` + purge, all plans, Hobby 50 purge calls/s per team; invalidation marks the tag stale, so one stale answer is still served | not needed with versioned URLs |
 
-### 4.8 Flight APIs
+### 4.8 Weather provider: Windy vs Open-Meteo
+
+The spec (§5) makes Windy the preferred future provider and Open-Meteo the current provider and the
+fallback. For this app both serve the same NOAA models (GFS and GFS-Wave). The choice therefore
+turns on licence, request shape, time step and update detection. Forecast skill was not compared:
+no live Windy call was made in this audit.
+
+| Criterion | Open-Meteo | Windy Point Forecast API |
+|---|---|---|
+| Models used | GFS: `ncep_gfs013` (10 m wind) and `ncep_gfs025` (gust, MSLP) under `gfs_global`; GFS-Wave `ncep_gfswave025`; ECMWF IFS and WAM also offered (opt-in family) | `gfs` (wind, windGust, pressure) and `gfsWave` (waves, windWaves, swell1, swell2); ECMWF is excluded from Point Forecast "due to licensing conditions" |
+| Requests for 50 spots | comma-separated locations: 3 data requests per GFS-family refresh; 125.0 weighted calls at 10 days (wave 75, atmosphere 50) | the body takes one `lat`/`lon`: one request per model per spot, 100 per full refresh, 50 per one-component refresh |
+| Time step | hourly (the API interpolates to 1 h; the underlying model may be 3- or 6-hourly) | fixed 3 h (Windy staff, 2026); a staff example response has 80 steps 3 h apart, 10 days of `gfs` |
+| Horizon | 16 days; GFS-Wave returned 384 hourly steps for `forecast_days=16` (6.1); the plan uses 10 | each response carries the whole available forecast |
+| Run metadata | `meta.json` per domain: init, availability, modification time, update interval; metadata calls do not count against the limits | none: the response schema has only `ts`, `units` and an optional `warning`; no metadata endpoint or webhook is documented |
+| Detection in the plan | metadata check every 5 min, then the 10 min wait (D6, D8) | one sentinel spot per model every 15 min inside the expected window, fingerprint comparison, run time labelled `estimated` (D3) |
+| Publication delay | 2026-10-26 18Z: GFS-Wave +317 min, GFS 0.13 +322, GFS 0.25 +363 to +424 (6.1) | undocumented; staff: "the same times as the standard version"; gfsWave at most every 6 h |
+| Free tier | under 10,000 calls a day, 5,000 an hour, 600 a minute; non-commercial only; apps on Vercel may be rate-limited earlier | Testing: free, 500 requests a day, "randomly shuffled and slightly modified data", development only |
+| Paid tier | Standard 1M calls a month ($29 a month in 2023; the 2026 price could not be read); customer endpoint with `apikey` | Professional 990 EUR a year (annual, auto-renewing), 10,000 requests a day, more by agreement |
+| Storing and showing the data to every user | CC BY 4.0: allowed with attribution; commercial use needs a subscription | the standard terms forbid storing, derived databases, redistribution and paywall-only use: a written licence is needed |
+| Attribution | a link next to the data ("Weather data by Open-Meteo.com") | the Windy logo (unscaled, clickable, 100 % opacity) and "Contains data from the Windy database" |
+| Errors | HTTP 429 with daily or monthly limit messages (handled: open_meteo.py:705-722) | documented: 200, 204, 400, 500; an invalid key reportedly returns HTTP 400 `{"message":"Invalid API key"}`; the quota-exceeded response is undocumented |
+| Keys | free hosts take no key; customer hosts take `OPEN_METEO_API_KEY` | Point Forecast keys are separate from Map Forecast keys; public-application keys work only from the registered User Domains |
+| State at 18a5bee | hosted default; live acquisitions on 2026-10-16 and 2026-10-20/21 | adapter present, gated by `WINDY_TERMS_ACKNOWLEDGED`, 3 mock-only tests; never called live |
+
+*Decision:* Open-Meteo stays the default and the fallback. The Windy adapter is completed per D3
+and selected only when `WEATHER_PROVIDER` is `windy`, or `auto` with `WINDY_API_KEY` set and
+`WINDY_STORAGE_AUTHORIZED=true` (D2). One primary provider at a time: the two are never fetched
+together and never cross-referenced (D4, spec §2).
+*Alternatives:* switch to Windy now (rejected: the standard terms forbid what the app does with the
+data, and a testing key returns modified data); fetch both and choose at read time (rejected: double
+requests and cross-referencing, D4); drop Windy (rejected: spec §5 makes it the preferred provider).
+*Cost:* Windy Professional 990 EUR a year once licensed. The forecast audit's Windy budget is at
+most 688 requests a day (sentinel probes every 10 min all day plus four full refreshes) against
+10,000. The plan's 15-minute probes inside the availability windows stay below that.
+*Risks:* the time step changes between 3 h (Windy) and 1 h (Open-Meteo) when the fallback runs, so
+each version names its provider; Windy's delay after a GFS cycle is undocumented; whether paid
+responses are deterministic enough for fingerprints is unknown; the licence may never be granted.
+
+### 4.9 Flight APIs
 
 | Provider | Access | Data | Cost | Terms | Plan |
 |---|---|---|---|---|---|
@@ -890,7 +929,7 @@ at most about 15 minutes.
 | Google Flights API | none since QPX Express closed on 2018-04-10 | — | — | — | user-clicked route links only |
 | Ignav | self-serve | round-trip fares and booking links | 1,000 free, then $2 per 1,000 | terms not readable | not evaluated further |
 
-### 4.9 Authentication
+### 4.10 Authentication
 
 Keep the current scheme (Argon2id, opaque server-side sessions, CSRF, rate limits, lockout,
 single-use hashed tokens). A move to Auth.js or Better Auth (TypeScript; Better Auth hashes with
@@ -901,7 +940,7 @@ vendor ids to the UUID foreign keys of nine tables. No security gap was found th
 would close; the missing pieces are features (MFA, social login). Revisit if those become
 requirements. The comment at auth/security.py:13 should cite RFC 9106, not OWASP.
 
-### 4.10 The spec's TypeScript layout mapped to Python modules
+### 4.11 The spec's TypeScript layout mapped to Python modules
 
 | Spec file (§5) | Python module(s) | Notes |
 |---|---|---|
@@ -925,7 +964,7 @@ requirements. The comment at auth/security.py:13 should cite RFC 9106, not OWASP
 | `GET /api/forecasts/status` | new (D11); `/api/health/data` and `/api/system/status` stay |
 | `GET /api/opportunities` | `GET /api/opportunities` |
 
-### 4.11 New or aliased settings (plan)
+### 4.12 New or aliased settings (plan)
 
 | Env | Default | Meaning |
 |---|---|---|
@@ -1184,6 +1223,8 @@ cut inside the source text, as recorded).
 | Wait after availability | "To ensure all API calls use the most recent data, please wait 10 minutes after the availability time." | https://open-meteo.com/en/docs/model-updates |
 | Eventual consistency | "Data across all Open-Meteo servers is eventually consistent, meaning there may be instances where the API indicates a weather model has been updated, but not all servers have been fully updated yet." | https://open-meteo.com/en/docs/model-updates |
 | Metadata calls are free | "Note that API calls to the metadata API are not counted toward daily or monthly request limits." | https://open-meteo.com/en/docs/model-updates |
+| Hourly output is interpolated | "By default, the API interpolates the data to a 1-hour resolution. However, the underlying model may only provide data in 3 or 6-hourly steps." | https://open-meteo.com/en/docs/model-updates |
+| Multi-location requests | "Multiple coordinates can be comma separated. E.g. &latitude=52.52,48.85&longitude=13.41,2.35. To return data for multiple locations the JSON output changes to a list of structures." | https://open-meteo.com/en/docs |
 | Free-tier limits and use | "Less than 10'000 API calls per day, 5'000 per hour and 600 per minute. ... You may only use the free API services for non-commercial purposes." | https://open-meteo.com/en/terms |
 | Free tier on Vercel | "If you are using providers like Vercel, Netlify, Render, or Google Sheets you might be rate-limited earlier then expected." | https://open-meteo.com/en/terms |
 | Commercial subscription | "A subscription grants a commercial use licence and an API key for the dedicated customer endpoint at customer-api.open-meteo.com." | https://open-meteo.com/en/pricing |
@@ -1210,6 +1251,10 @@ cut inside the source text, as recorded).
 | Attribution | "The publication of the following text “Contains data from the Windy database” ... is deemed to be the indication of the source of the weather data." | https://account.windy.com/agreements/windy-api-map-and-point-forecast-terms-of-use |
 | Trial warning in responses (staff example) | "The trial API version is for development purposes only. This data is randomly shuffled and slightly modified." | https://community.windy.com/topic/36428/point-forecast-api-404-client-error-not-found-for-url |
 | Fixed 3 h steps (staff, 2026) | "API offer 3 hours intervals/steps and we talk about the fixed interval." | https://community.windy.com/topic/44845/what-is-the-forecast-time-interval-returned-by-the-point-forecast-api |
+| Update times follow windy.com (staff) | "each model has different update times. The forecast gets updated at the same times as the standard version." | https://community.windy.com/topic/22943/point-forecast-api-data-update-timings |
+| Point Forecast keys are separate | "Keys generated for other services, e.g. Map Forecast or Webcams, are a distinct category, and do not work for the Point Forecast API." | https://api.windy.com/point-forecast/docs |
+| Public keys only from registered domains | "API Keys for Public Applications may be used only from User Domains. Using an API Key from any other Domain will be refused." | https://account.windy.com/agreements/windy-api-map-and-point-forecast-terms-of-use |
+| Annual auto-renewing subscription | "they authorize the Provider to charge them automatically each year until they cancel" | https://account.windy.com/agreements/windy-api-map-and-point-forecast-terms-of-use |
 | gfsWave updates at most every 6 h (staff) | "unfortunately, more frequent updates of wave height are not possible, as new calculations are simply not available more often." | https://community.windy.com/topic/40284/live-wave-data |
 | Daily counter reset (staff) | "The reset of counter is at 0:00 UTC." | https://community.windy.com/topic/28724/daily-limit-exceeded |
 | Invalid key (user report, not official) | "{"message":"Invalid API key","error":"Bad Request","statusCode":400}" | https://community.windy.com/topic/43988/invalid-api-key-test-api |
