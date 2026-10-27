@@ -112,7 +112,7 @@ def test_the_new_settings_are_passed_through_with_todays_defaults(
     assert composed.job_runner == "celery"
     assert composed.cron_secret is None
     assert composed.client_ip_header is None
-    assert ALIASES_PASSED_THROUGH <= set(defaults)
+    assert set(defaults) >= ALIASES_PASSED_THROUGH
     assert all(defaults[name] == "" for name in ALIASES_PASSED_THROUGH)
 
 
