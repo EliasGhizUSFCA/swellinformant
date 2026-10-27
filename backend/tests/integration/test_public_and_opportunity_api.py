@@ -75,7 +75,9 @@ def test_reference_data(app_client: ApiClient) -> None:
 def test_system_status(app_client: ApiClient) -> None:
     status = app_client.get("/api/system/status").json()
     assert status["mode"]["forecast_providers"] == ["demo"]
-    assert status["detection"]["lead_min_days"] == 5.0
+    # DETECTION_LEAD_MIN_DAYS: 1 since Swell 2.0 (design B; it was 5): each saved search
+    # narrows the window with its own alert lead times.
+    assert status["detection"]["lead_min_days"] == 1.0
     assert {j["job"] for j in status["jobs"]} >= {"forecasts.acquire", "notifications.deliver"}
     # The status page's fallback job list names every scheduled task, with every optional
     # job switched on (tides.acquire and forecasts.map_fields were once missing).
