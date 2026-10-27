@@ -2,7 +2,8 @@
 
 Everything the spot page's synchronised chart rows draw, read from stored data only:
 
-* the authoritative run is the one ``/forecast`` uses (``latest_runs_by_spot``), over the
+* the authoritative run is the one ``/forecast`` uses (``queries.served_runs_by_spot``: the
+  published forecast version's run for the spot), and ``freshness`` is the same, over the
   same window (from 3 hours ago to ``days`` ahead), so every step's score and label equal
   the forecast's for the same valid time;
 * steps are the stored valid times at the model's native spacing; the timeline adds
@@ -74,6 +75,7 @@ from app.services.spot_views import (
     authoritative_run,
     forecast_source_out,
     run_members,
+    served_freshness,
     spot_hours,
 )
 from app.services.surf_quality import breaking
@@ -397,8 +399,15 @@ def _unavailable(
 def spot_timeline(
     db: Session, spot: SurfSpot, days: int = 10, now: datetime | None = None
 ) -> SpotTimelineOut:
-    """The timeline of ``spot`` for the next ``days`` days (see the module docstring)."""
+    """The timeline of ``spot`` for the next ``days`` days (see the module docstring), with
+    the served forecast's ``freshness``."""
     now = now or utcnow()
+    timeline = _spot_timeline(db, spot, days, now)
+    timeline.freshness = served_freshness(db, spot.id, now)
+    return timeline
+
+
+def _spot_timeline(db: Session, spot: SurfSpot, days: int, now: datetime) -> SpotTimelineOut:
     run = authoritative_run(db, spot.id, now)
     if run is None:
         return _unavailable(db, spot, days, now, NO_FORECAST)
@@ -579,6 +588,17 @@ def timeline_etag(timeline: SpotTimelineOut, days: int) -> str:
         timeline.steps[0].t.isoformat() if timeline.steps else "",
         timeline.steps[-1].t.isoformat() if timeline.steps else "",
         timeline.stale,
+        # The served forecast's freshness (a spot whose refresh failed keeps its run but is
+        # now stale; its age turns it stale too): never a 304 for an outdated label.
+        *(
+            (
+                timeline.freshness.last_updated_at,
+                timeline.freshness.stale,
+                timeline.freshness.reason,
+            )
+            if timeline.freshness
+            else ()
+        ),
         timeline.available,
         days,
         max((o.t for o in timeline.observations.items), default=None),

@@ -18,10 +18,20 @@ read on 2026-10-14: GFS 5.3-6.0 h, ECMWF 7.0-7.2 h) plus OPEN_METEO_AVAILABILITY
 ``open_meteo_ecmwf`` (it reads the 00Z and 12Z runs only). Sources without a known cycle
 (demo, Windy) keep FORECAST_STALE_HOURS. A blend is stale when any of its members is stale
 by its own source's rule.
+
+Which run the public reads serve per spot (:func:`served_runs_by_spot`): the runs of the
+published forecast version (``versions.serving_runs``: a spot whose latest refresh failed is
+served from its previous run and flagged stale), and before any version exists the legacy
+selection of :func:`latest_runs_by_spot`. The public snapshot cache pins the version a
+payload is computed for (:func:`serving_version`), so a payload stored under a version's key
+holds that version's data.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -30,9 +40,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
-from app.models import ForecastRun, ForecastSource
+from app.models import ForecastRun, ForecastSource, ForecastVersion
 from app.models.enums import ForecastRunStatus
 from app.schemas.spots import AttributionLinkOut
+from app.services.forecasts import versions
 from app.services.forecasts.base import EXTRA_GUST_KIND
 from app.services.forecasts.registry import (
     ECMWF_IFS_CODE,
@@ -305,6 +316,86 @@ def latest_runs_by_spot(
         for spot_id in run.details.get("spot_ids", []):
             chosen.setdefault(int(spot_id), run)
     return chosen
+
+
+# --------------------------------------------------------------------------- serving
+_SERVED = "forecasts.served_version"
+
+
+@dataclass
+class _Pin:
+    """The version the public reads of one session serve inside :func:`serving_version`
+    (``version_id`` None: the published one), resolved once."""
+
+    version_id: int | None
+    resolved: ForecastVersion | None = None
+    done: bool = False
+
+
+@contextmanager
+def serving_version(db: Session, version_id: int | None) -> Iterator[None]:
+    """Within the block, the public reads of ``db`` serve forecast version ``version_id``
+    (the published version a public snapshot is keyed on; it is served even if a newer one
+    was published meanwhile, so a payload stored under a version's key holds that
+    version's data) or, with None, the published version; either is read at most once in
+    the block. A version that is no longer retained (or was never published) falls back to
+    the published one. Nested blocks for the same version share the outer one."""
+    outer = db.info.get(_SERVED)
+    if isinstance(outer, _Pin) and outer.version_id == version_id:
+        yield
+        return
+    db.info[_SERVED] = _Pin(version_id)
+    try:
+        yield
+    finally:
+        if outer is None:
+            db.info.pop(_SERVED, None)
+        else:
+            db.info[_SERVED] = outer
+
+
+def _resolve(db: Session, version_id: int | None) -> ForecastVersion | None:
+    if version_id is not None:
+        found = db.get(ForecastVersion, version_id)
+        if found is not None and found.status in (versions.PUBLISHED, versions.SUPERSEDED):
+            return found
+    return versions.current_version(db)
+
+
+def served_version(db: Session) -> ForecastVersion | None:
+    """The forecast version the public reads serve: the one :func:`serving_version` pins,
+    else the published one; None before the first publication (the legacy selection)."""
+    pin = db.info.get(_SERVED)
+    if not isinstance(pin, _Pin):
+        return versions.current_version(db)
+    if not pin.done:
+        pin.resolved, pin.done = _resolve(db, pin.version_id), True
+    return pin.resolved
+
+
+def served_runs_by_spot(
+    db: Session, now: datetime | None = None, *, version: ForecastVersion | None = None
+) -> dict[int, ForecastRun]:
+    """The run every public read serves per spot (design D7): the runs ``version`` maps the
+    spots to (default: :func:`served_version`; a stale spot keeps its previous run, a
+    missing one is left out, as is a run no longer stored), else, before any version is
+    published, :func:`latest_runs_by_spot` at ``now`` (the selection of the public reads
+    before forecast versions existed). The spot list, a spot's page (detail, forecast,
+    timeline, demo tide curve), the map conditions and swell detection (whose events feed
+    the opportunities) all read through it."""
+    chosen = version if version is not None else served_version(db)
+    if chosen is None:
+        return latest_runs_by_spot(db, now)
+    by_spot = versions.serving_runs(db, chosen)
+    if not by_spot:
+        return {}
+    runs = {
+        run.id: run
+        for run in db.scalars(
+            select(ForecastRun).where(ForecastRun.id.in_(sorted(set(by_spot.values()))))
+        )
+    }
+    return {spot: runs[run_id] for spot, run_id in by_spot.items() if run_id in runs}
 
 
 def forecast_status(db: Session, now: datetime | None = None) -> dict[str, Any]:
