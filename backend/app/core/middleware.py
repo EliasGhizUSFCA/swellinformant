@@ -17,6 +17,7 @@ CSRF_EXEMPT_PREFIXES = (
     "/api/webhooks/",
     "/api/notifications/unsubscribe",
     "/api/health",
+    "/api/forecasts/seen",  # navigator.sendBeacon (no header); anonymous, no account state
 )
 
 
