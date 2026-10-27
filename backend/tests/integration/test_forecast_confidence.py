@@ -56,6 +56,7 @@ from tests.integration.test_pipeline import make_search, make_user, simulate
 
 pytestmark = pytest.mark.integration
 
+
 @pytest.fixture(autouse=True)
 def _prediction_archive_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """The prediction archive is optional and off by default since Swell 2.0

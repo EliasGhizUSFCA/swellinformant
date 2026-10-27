@@ -37,6 +37,7 @@ from app.services.surf_quality.predict import compute_pending_predictions
 
 pytestmark = pytest.mark.integration
 
+
 @pytest.fixture(autouse=True)
 def _prediction_archive_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """The prediction archive is optional and off by default since Swell 2.0
