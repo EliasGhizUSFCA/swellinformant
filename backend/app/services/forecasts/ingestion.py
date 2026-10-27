@@ -339,6 +339,31 @@ def active_demo_overrides(db: Session, now: datetime) -> list[SwellOverride]:
     return list(seen.values())
 
 
+def _store_result_fields(
+    db: Session, run: ForecastRun, result: FetchResult, run_key: str
+) -> dict[str, Any] | None:
+    """Store the map fields a fetch read with its spot run (the "with_noaa" map mode,
+    docs/map-layers.md) in a SAVEPOINT, so the map fields never cost the spot records.
+    Returns the ``details["map_fields"]`` summary, or None when the fetch read none."""
+    if not (result.fields or result.field_warnings):
+        return None
+    fields, field_warnings = result.fields, list(result.field_warnings)
+    try:
+        with db.begin_nested():
+            store_map_fields(db, run, fields)
+            if fields:
+                prune_map_fields(db)  # bound storage now, not only at the daily cleanup
+    except SQLAlchemyError as exc:
+        # The first line of the driver's message only: the statement's parameters and
+        # PostgreSQL's DETAIL line repeat the row, field bytes included.
+        message = str(getattr(exc, "orig", None) or exc).strip().splitlines() or [""]
+        reason = f"{type(exc).__name__}: {message[0][:300]}"
+        logger.error("Map fields of %s not stored: %s", run_key, reason)
+        field_warnings.append(f"map fields not stored ({reason})")
+        fields = []
+    return summarise(fields, field_warnings)
+
+
 def acquire_from_provider(
     db: Session,
     provider: ForecastProvider,
@@ -453,22 +478,9 @@ def acquire_from_provider(
         "warnings": result.warnings[:50],
         "stats": fetch_stats_detail(result, provider),
     }
-    if result.fields or result.field_warnings:
-        fields, field_warnings = result.fields, list(result.field_warnings)
-        try:
-            with db.begin_nested():  # a SAVEPOINT: the map fields never cost the spot records
-                store_map_fields(db, run, fields)
-                if fields:
-                    prune_map_fields(db)  # bound storage now, not only at the daily cleanup
-        except SQLAlchemyError as exc:
-            # The first line of the driver's message only: the statement's parameters and
-            # PostgreSQL's DETAIL line repeat the row, field bytes included.
-            message = str(getattr(exc, "orig", None) or exc).strip().splitlines() or [""]
-            reason = f"{type(exc).__name__}: {message[0][:300]}"
-            logger.error("Map fields of %s not stored: %s", info.run_key, reason)
-            field_warnings.append(f"map fields not stored ({reason})")
-            fields = []
-        run.details = {**run.details, "map_fields": summarise(fields, field_warnings)}
+    fields_summary = _store_result_fields(db, run, result, info.run_key)
+    if fields_summary is not None:
+        run.details = {**run.details, "map_fields": fields_summary}
     if not result.records:
         run.status = ForecastRunStatus.FAILED
         run.error_message = "no spot returned usable data"
@@ -904,6 +916,7 @@ def refresh_source(
     warnings: list[str] = []
     stats: list[dict[str, Any] | None] = []
     group_failures: list[BaseException] = []
+    fields_summary: dict[str, Any] | None = None
     slugs = {p.spot_id: p.slug for p in spot_points(db)}
     for parts, group in sorted(groups.items(), key=lambda g: (-len(g[1]), sorted(g[0]))):
         components = None if parts == COMPONENTS else parts
@@ -919,6 +932,7 @@ def refresh_source(
                 for spot_id, recs in result.records.items()
             }
             count += store_records(db, run, records)
+            fields_summary = _store_result_fields(db, run, result, run_key) or fields_summary
             db.commit()
         except Exception as exc:
             db.rollback()
@@ -970,6 +984,7 @@ def refresh_source(
         "stats": total,
         "fetch_groups": {"+".join(sorted(g)): len(ps) for g, ps in groups.items()},
         "retryable": retryable,
+        **({"map_fields": fields_summary} if fields_summary is not None else {}),
     }
     for c in sorted(COMPONENTS):
         if c in changed:

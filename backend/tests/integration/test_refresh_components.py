@@ -632,3 +632,30 @@ def test_prune_keeps_every_run_a_version_needs(
     assert {r1.id, r2.id, v3.forecast_run_id} <= remaining
     versions = set(db.scalars(select(ForecastVersion.id)).all())
     assert versions == {v2.id, v3.id} and out["forecast_versions"] == 1  # v1 pruned
+
+
+# --------------------------------------------------------------------------- map layers
+def test_a_component_refresh_stores_the_map_fields_a_noaa_run_reads(db: Session) -> None:
+    """The "with_noaa" map mode (FORECAST_PROVIDERS=noaa_gfs, one provider, so the spot stage
+    is a component refresh): the map fields the direct GRIB ingester reads with its spot run
+    are stored with that run, as by the family-level acquisition (SYNTHETIC GRIB files)."""
+    from app.services.forecasts.base import COMPONENTS
+    from app.services.forecasts.noaa import NoaaGfsProvider
+    from tests.integration.test_map_fields import HOURS, KEEP, NOW, keep_spots, stored
+    from tests.synthetic_gfs import SyntheticGfs
+    from tests.synthetic_map_fields import field_settings
+
+    keep_spots(db, KEEP)
+    world = SyntheticGfs()
+    world.add_cycle(datetime(2026, 10, 10, 18, tzinfo=UTC), HOURS)
+    provider = NoaaGfsProvider(field_settings(), client=world.client(), backoff_seconds=0)
+    assert provider.map_fields
+    outcome = ingestion.refresh_source(
+        db, provider, token="noaa_gfs", due=COMPONENTS, stored={}, serving={}, now=NOW
+    )
+    assert outcome.status == "success", outcome
+    assert outcome.changed == COMPONENTS and len(outcome.updated_spots) == len(KEEP)
+    rows = stored(db)
+    assert len(rows) == 18 and {r.run_id for r in rows} == {outcome.run_id}
+    run = db.get(ForecastRun, outcome.run_id)
+    assert run is not None and run.details["map_fields"]["count"] == 18
