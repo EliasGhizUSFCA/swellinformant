@@ -15,7 +15,7 @@ BACKEND_PORT="${E2E_BACKEND_PORT:-8100}"
 FRONTEND_PORT="${E2E_FRONTEND_PORT:-3100}"
 export DATABASE_URL="${E2E_DATABASE_URL:-postgresql+psycopg://swell:swell@localhost:5432/swell_e2e}"
 export REDIS_URL="${E2E_REDIS_URL:-redis://localhost:6379/14}"
-export APP_ENV=development FORECAST_PROVIDERS=demo FLIGHT_PROVIDER=demo EMAIL_PROVIDER=console SMS_PROVIDER=console
+export APP_ENV=development WEATHER_PROVIDER=demo FORECAST_PROVIDERS=demo FLIGHT_PROVIDER=demo EMAIL_PROVIDER=console SMS_PROVIDER=console
 export ENABLE_DEV_ENDPOINTS=true CELERY_TASK_ALWAYS_EAGER=true DEMO_NATURAL_SWELLS=false RATE_LIMIT_ENABLED=false
 OUTBOX_DIR="$(mktemp -d)"  # assigned first, so a mktemp failure stops the script (set -e)
 export OUTBOX_DIR

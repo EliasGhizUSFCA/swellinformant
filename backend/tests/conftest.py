@@ -34,7 +34,11 @@ os.environ.update(
             "TEST_DATABASE_URL", "postgresql+psycopg://swell:swell@localhost:5432/swell_test"
         ),
         "REDIS_URL": os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15"),
+        # Synthetic forecasts only: the explicit provider list, and the simple choice under
+        # it for a test that clears FORECAST_PROVIDERS (the Settings default, auto, would
+        # call Open-Meteo).
         "FORECAST_PROVIDERS": "demo",
+        "WEATHER_PROVIDER": "demo",
         "FORECAST_DAYS": "12",
         "FLIGHT_PROVIDER": "demo",
         "EMAIL_PROVIDER": "console",
