@@ -5,10 +5,14 @@
 run with predictions) on ``sync_run``, or on a new ``sync_runs`` row with status success
 when ``sync_run`` is None (the CLI and dev pipelines), and returns that row.
 
-The map index serves the newest publication's map run (SYNC_PUBLISH_GATE); spot pages
-switch when the new predictions commit, in the stage just before. A run stored after the
-newest publication counts as not stored yet for the next check (detect.load_known), so
-data a sync stored but did not publish is published by the next sync.
+The map index serves the newest publication's map run (SYNC_PUBLISH_GATE). The spot
+forecasts are served from the published forecast version (design D7): a sync stages and
+publishes its versions just before (``refresh.stage_refresh_version``); outside a sync
+(``sync_run`` None: the developer pipeline and ``sync publish``) :func:`publish` also
+publishes the run selection as a version (``refresh.publish_selection_version``), so what
+those paths store is served as before. A run stored after the newest publication counts as
+not stored yet for the next check (detect.load_known), so data a sync stored but did not
+publish is published by the next sync.
 """
 
 from __future__ import annotations
@@ -50,16 +54,22 @@ def publish(
     sync_run: SyncRun | None = None,
     trigger: SyncTrigger = "pipeline",
     now: datetime | None = None,
+    selection: bool | None = None,
 ) -> SyncRun:
     """Publish what is stored now: one commit sets the publication on ``sync_run`` (or on
     a new ``sync_runs`` row with status success, ``trigger`` and ``plan.published_by``).
 
     ``now`` is the publication time; the default, the wall clock, is what the synced
     pipeline always uses (load_known compares it with the runs' ``completed_at``).
+    ``selection``: also publish the run selection as a forecast version first (default:
+    when ``sync_run`` is None); the version marker in Redis follows either way.
     """
     from app.services.map_fields import servable_runs
+    from app.services.sync.refresh import publish_selection_version, write_marker
 
     at = now or utcnow()
+    if selection if selection is not None else sync_run is None:
+        publish_selection_version(db, timings={"published_by": trigger})
     if sync_run is None:
         sync_run = SyncRun(
             trigger=trigger,
@@ -75,6 +85,7 @@ def publish(
     sync_run.map_run_id = best[0].run_id if best else None
     sync_run.blend_run_id = newest_blend_run_id(db)
     db.commit()
+    write_marker(db)
     return sync_run
 
 

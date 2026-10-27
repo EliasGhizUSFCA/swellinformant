@@ -14,18 +14,31 @@ provider's run FAILED with a message, and the next provider still runs.
 The map's global ocean-layer fields (``map_fields``, docs/map-layers.md) are stored with
 the run they were read with (``FetchResult.fields``), or by :func:`acquire_map_fields`
 under their own source in the standalone mode.
+
+Component refreshes (design D6, D9; :func:`refresh_source`, the synced pipeline's spot
+stage): only the due components of a spot source are fetched (a new wind run fetches the
+atmosphere only); the other component is carried forward, in the database, from the run each
+spot is served from, with its ORIGINAL model run (``forecast_runs.wave_model_run_at`` /
+``atmosphere_model_run_at``, ``details.model_runs`` per domain with its component,
+``details.components``, ``details.component_keys``). Every spot is then validated
+(``carry.validate_spots``); a spot whose data failed is left out of the run and keeps its
+previous run. A retry of only the failed spots stores a run of its own (run key
+``<key>#retry<n>``).
 """
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
-from collections.abc import Collection
+from collections import Counter
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -36,14 +49,20 @@ from app.core.logging import redact
 from app.models import ForecastRun, ForecastSource, SurfSpot, WaveForecast
 from app.models.enums import ForecastRunStatus
 from app.models.forecast_engine import CORE_MAP_FIELD_VARIABLES, MapField
+from app.services.forecasts import carry
 from app.services.forecasts.base import (
+    ATMOSPHERE,
+    COMPONENTS,
     FORECAST_FIELDS,
+    WAVE,
     FetchResult,
     FetchStats,
     ForecastProvider,
     ForecastRecord,
+    ModelRunRef,
     RunInfo,
     SpotPoint,
+    component_of,
 )
 from app.services.forecasts.demo import DemoForecastProvider, SwellOverride
 from app.services.forecasts.fields import EncodedField, summarise
@@ -54,6 +73,7 @@ from app.services.surf_quality.models import SpotParams
 
 if TYPE_CHECKING:
     from app.services.forecasts.noaa import NoaaGfsFieldsProvider
+    from app.services.forecasts.versions import ComponentRun
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +148,7 @@ def model_runs_detail(info: RunInfo, provider: ForecastProvider) -> list[dict[st
                 "model": r.model,
                 "init_time": r.init_time.isoformat(),
                 "available_at": r.available_at.isoformat() if r.available_at else None,
+                **({"component": r.component} if r.component else {}),
             }
             for r in info.model_runs
         ]
@@ -391,6 +412,7 @@ def acquire_from_provider(
     run.details = {
         "metadata_source": info.metadata_source,
         "model_runs": model_runs_detail(info, provider),
+        **({"component_keys": dict(info.component_keys)} if info.component_keys else {}),
         **(extra_details or {}),
     }
     db.commit()
@@ -475,6 +497,629 @@ def acquire_from_provider(
         records=count,
         spot_errors=len(result.errors),
         errors=run.details["spot_errors"],
+    )
+
+
+# --------------------------------------------------------------------------- components
+RETRY_SUFFIX = "#retry"
+
+
+@dataclass
+class RefreshOutcome:
+    """One spot source's component refresh (:func:`refresh_source`).
+
+    ``status``: success, partial (some spots failed), failed (nothing usable: a provider or
+    whole-component failure, nothing to publish), or skipped (``message``: "run already
+    ingested" = the target is stored, "run in progress", or the provider does not serve the
+    run unmixed yet). ``changed``: the components fetched as new; ``component_keys`` the run
+    key of each component in the run; ``components`` the version's ``ComponentRun`` dicts;
+    ``updated_spots`` / ``failed_spots`` the spots this refresh handled (a failed spot keeps
+    its previous run, D9); ``retry`` names the attempt of a retry of failed spots only.
+    """
+
+    source_code: str
+    provider: str
+    run_key: str | None
+    status: str
+    run_id: int | None = None
+    message: str = ""
+    records: int = 0
+    changed: frozenset[str] = frozenset()
+    component_keys: dict[str, str] = field(default_factory=dict)
+    components: dict[str, dict[str, Any]] = field(default_factory=dict)
+    updated_spots: list[int] = field(default_factory=list)
+    failed_spots: dict[int, str] = field(default_factory=dict)
+    retry: dict[str, Any] | None = None
+    retryable: bool = False
+    retry_after_s: float | None = None
+    acquired_at: datetime | None = None
+    estimated: bool = False
+    fallback_from: str | None = None
+    reused: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source_code,
+            "provider": self.provider,
+            "run_key": self.run_key,
+            "status": self.status,
+            "run_id": self.run_id,
+            "records": self.records,
+            "spot_errors": len(self.failed_spots),
+            "message": self.message,
+            "retryable": self.retryable,
+            "retry_after_s": self.retry_after_s,
+            "changed": sorted(self.changed),
+            "component_keys": dict(self.component_keys),
+            "spots_updated": len(self.updated_spots),
+            "failed_spot_ids": sorted(self.failed_spots),
+            "retry": self.retry,
+            "reused": self.reused,
+        }
+
+
+def _accepts_components(fn: Callable[..., Any]) -> bool:
+    try:
+        return "components" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _component_refs(info: RunInfo, component: str) -> list[ModelRunRef]:
+    """The model runs of one component (refs without a component feed both)."""
+    return [
+        r if r.component else ModelRunRef(r.model, r.init_time, r.available_at, component)
+        for r in info.model_runs
+        if r.component in (None, component)
+    ]
+
+
+def _component_init(info: RunInfo, component: str) -> datetime | None:
+    inits = [r.init_time for r in _component_refs(info, component)]
+    if inits:
+        return min(inits)
+    return info.wave_model_run_at if component == WAVE else info.atmosphere_model_run_at
+
+
+def _keep_components(record: ForecastRecord, components: frozenset[str]) -> ForecastRecord:
+    """A copy of ``record`` with the values of other components emptied (they are carried)."""
+    values = {
+        k: (v if component_of(k) in components else None)
+        for k, v in record.values.items()
+        if k in FORECAST_FIELDS
+    }
+    return ForecastRecord(
+        valid_time=record.valid_time,
+        values=values,
+        period_kind=record.period_kind if WAVE in components else None,
+        extra=dict(record.extra),
+    )
+
+
+def _retry_attempt(db: Session, source_id: int, base_key: str) -> int:
+    count = db.scalar(
+        select(func.count(ForecastRun.id)).where(
+            ForecastRun.source_id == source_id,
+            ForecastRun.run_key.like(f"{base_key}{RETRY_SUFFIX}%"),
+        )
+    )
+    return int(count or 0) + 1
+
+
+def refresh_source(
+    db: Session,
+    provider: ForecastProvider,
+    *,
+    token: str,
+    due: Collection[str],
+    stored: Mapping[str, ComponentRun],
+    serving: Mapping[int, int],
+    retry_spot_ids: Collection[int] | None = None,
+    now: datetime | None = None,
+    priority: int = 100,
+    extra_details: dict[str, Any] | None = None,
+) -> RefreshOutcome:
+    """Refresh the due components of one spot source (design D6, D9); never raises for a
+    provider problem.
+
+    * ``due``: the components the plan found new (all of them for a provider without
+      component keys); a component whose available key equals the stored one is current.
+    * ``stored``: the published component runs of this source (``versions.ComponentRun`` by
+      component: their run keys, model runs and retrieval times); a component not in it is
+      fetched.
+    * ``serving``: spot id -> the run it is served from (``versions.serving_runs``); a
+      carried component is copied from that run when the run holds the carried key, else
+      that spot fetches the component too (when the provider still serves the stored run),
+      else the spot fails and keeps its previous run.
+    * ``retry_spot_ids``: with nothing due, refresh only these spots (a retry of the spots
+      that failed; run key ``<key>#retry<n>``).
+
+    Spots are fetched in at most three groups by the components they need (normally one:
+    the due components for every spot), each one batched request per model. Then the
+    carried components are filled in the database, every spot is validated
+    (FORECAST_MIN_VALID_FRACTION, physical ranges) and the spots that failed are left out.
+    """
+    settings = get_settings()
+    now = now or utcnow()
+    source = ensure_source(db, provider, priority)
+    db.commit()
+    try:
+        available = provider.current_run(now)
+    except Exception as exc:
+        logger.error("Could not determine current run for %s: %s", source.code, _error_text(exc))
+        no_run = _failure(source.code, None, exc)
+        return RefreshOutcome(
+            source.code,
+            token,
+            None,
+            "failed",
+            message=no_run.message,
+            retryable=no_run.retryable,
+            retry_after_s=no_run.retry_after_s,
+        )
+    if available.testing:
+        # A testing key's data are modified on purpose: never stored or published (D3).
+        return RefreshOutcome(
+            source.code,
+            token,
+            available.run_key,
+            "failed",
+            message="windy_testing_key: the provider answered with testing data; not stored",
+        )
+    split = bool(available.component_keys)
+    avail = (
+        {c: str(available.component_keys[c]) for c in COMPONENTS}
+        if split
+        else dict.fromkeys(COMPONENTS, available.run_key)
+    )
+    stored_keys = {c: stored[c].run_key for c in COMPONENTS if c in stored}
+    wanted = set(due) & COMPONENTS
+    changed = {
+        c
+        for c in COMPONENTS
+        if c in wanted
+        and avail[c] != stored_keys.get(c)
+        and not carry.older_than_stored(avail[c], stored_keys.get(c))
+    }
+    if not split and changed:
+        changed = set(COMPONENTS)  # one run key: both parts or nothing
+    # A part without a published run is fetched with the due ones.
+    if changed:
+        changed |= {c for c in COMPONENTS if not stored_keys.get(c)}
+    retry = bool(retry_spot_ids) and not changed
+    if not changed and not retry:
+        return RefreshOutcome(
+            source.code,
+            token,
+            available.run_key,
+            "skipped",
+            message="run already ingested",
+            component_keys=avail,
+        )
+    target = {c: (avail[c] if c in changed else str(stored_keys[c])) for c in COMPONENTS}
+    base_key = carry.combined_run_key(target) if split else available.run_key
+    carried = COMPONENTS - changed
+
+    # Which spots need which components: the due ones, plus a carried one whose served
+    # run does not hold the carried key.
+    points = spot_points(db)
+    if retry:
+        wanted_spots = {int(s) for s in retry_spot_ids or ()}
+        points = [p for p in points if p.spot_id in wanted_spots]
+    runs = {
+        rid: (sid, carry.run_component_keys(details))
+        for rid, sid, details in db.execute(
+            select(ForecastRun.id, ForecastRun.source_id, ForecastRun.details).where(
+                ForecastRun.id.in_(sorted(set(serving.values())))
+            )
+        ).all()
+    }
+    groups: dict[frozenset[str], list[SpotPoint]] = {}
+    sources: dict[str, dict[int, int]] = {c: {} for c in carried}
+    failed: dict[int, str] = {}
+    for p in points:
+        need = set(changed)
+        served = serving.get(p.spot_id)
+        source_id, keys = runs.get(served, (None, {})) if served is not None else (None, {})
+        for c in carried:
+            if served is not None and source_id == source.id and keys.get(c) == target[c]:
+                sources[c][p.spot_id] = served
+            else:
+                need.add(c)
+        if not need:
+            continue  # a retry of a spot that is up to date already
+        unserved = sorted(c for c in need if target[c] != avail[c])
+        if unserved:
+            failed[p.spot_id] = (
+                f"no stored {unserved[0]} data of run {target[unserved[0]]} to carry, and the "
+                "provider no longer serves that run"
+            )
+            continue
+        groups.setdefault(frozenset(need), []).append(p)
+    for c in carried:
+        for spot_id in list(sources[c]):
+            if not any(p.spot_id == spot_id for g, ps in groups.items() if c not in g for p in ps):
+                sources[c].pop(spot_id)
+
+    run_key = base_key
+    attempt = None
+    if retry:
+        attempt = _retry_attempt(db, source.id, base_key)
+        run_key = f"{base_key}{RETRY_SUFFIX}{attempt}"
+    if not groups:
+        message = "; ".join(sorted(set(failed.values())))[:2000] or "nothing to refresh"
+        run_id = None
+        if retry and failed:
+            # The attempt is recorded (a FAILED retry run), so the next retry waits longer
+            # and SYNC_MAX_ATTEMPTS bounds them, as for a retry whose requests failed.
+            at = utcnow()
+            attempt_run = ForecastRun(
+                source_id=source.id,
+                run_key=run_key,
+                issued_at=available.issued_at,
+                started_at=at,
+                completed_at=at,
+                status=ForecastRunStatus.FAILED,
+                error_message=redact(message)[:2000],
+                details={
+                    "retry": {"attempt": attempt, "base_run_key": base_key},
+                    "failed_spot_ids": sorted(failed),
+                    "spot_ids": [],
+                },
+            )
+            db.add(attempt_run)
+            db.commit()
+            run_id = attempt_run.id
+        return RefreshOutcome(
+            source.code,
+            token,
+            run_key,
+            "failed" if failed else "skipped",
+            run_id,
+            message=message,
+            component_keys=target,
+            failed_spots=failed,
+            retry={"attempt": attempt, "base_run_key": base_key} if retry else None,
+        )
+
+    # The run as stored: each component's own model runs and times (a carried component
+    # keeps the published ones; never the new run's).
+    refs: list[ModelRunRef] = []
+    inits: dict[str, datetime | None] = {}
+    for c in (WAVE, ATMOSPHERE):
+        if c in carried and c in stored:
+            comp = stored[c]
+            refs += [
+                ModelRunRef(d.model, d.init_time, d.available_at, c)
+                for d in comp.domains
+                if d.init_time is not None
+            ]
+            inits[c] = comp.init_time or _component_init(available, c)
+        else:
+            refs += _component_refs(available, c) if split else []
+            inits[c] = _component_init(available, c)
+    if not split:
+        refs = list(available.model_runs)
+    known_inits = [t for t in inits.values() if t is not None]
+    info = RunInfo(
+        run_key=run_key,
+        issued_at=min(known_inits) if known_inits else available.issued_at,
+        wave_model_run_at=inits.get(WAVE) if split else available.wave_model_run_at,
+        atmosphere_model_run_at=inits.get(ATMOSPHERE)
+        if split
+        else available.atmosphere_model_run_at,
+        metadata_source=available.metadata_source,
+        model_runs=tuple(refs),
+        component_keys=MappingProxyType(dict(target)) if split else MappingProxyType({}),
+        estimated=available.estimated,
+    )
+    fetched = frozenset().union(*groups)
+    servable = getattr(provider, "ensure_servable", None)
+    if callable(servable):
+        try:
+            if split and _accepts_components(servable):
+                servable(info, components=fetched)
+            else:
+                servable(available)
+        except RunNotServedError as exc:
+            logger.info("%s run %s not served yet: %s", source.code, run_key, exc)
+            return RefreshOutcome(
+                source.code,
+                token,
+                run_key,
+                "skipped",
+                message=_error_text(exc),
+                component_keys=target,
+                retryable=exc.retry_after_s is not None,
+                retry_after_s=exc.retry_after_s,
+            )
+        except Exception as exc:
+            failure = _failure(source.code, run_key, exc)
+            return RefreshOutcome(
+                source.code,
+                token,
+                run_key,
+                "failed",
+                message=failure.message,
+                component_keys=target,
+                retryable=failure.retryable,
+                retry_after_s=failure.retry_after_s,
+            )
+
+    run = db.scalar(
+        select(ForecastRun).where(
+            ForecastRun.source_id == source.id, ForecastRun.run_key == run_key
+        )
+    )
+    if run is not None:
+        if run.status in (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL):
+            return _reused(run, source.code, token, target, changed)
+        if run.status == ForecastRunStatus.RUNNING and utcnow() - run.started_at < STUCK_RUN_AFTER:
+            return RefreshOutcome(
+                source.code, token, run_key, "skipped", run.id, message="run in progress"
+            )
+        db.execute(delete(WaveForecast).where(WaveForecast.run_id == run.id))
+    else:
+        run = ForecastRun(source_id=source.id, run_key=run_key, details={})
+        db.add(run)
+    started = utcnow()
+    retrieved: dict[str, str | None] = {}
+    for c in COMPONENTS:
+        old_time = stored[c].retrieved_at if c in carried and c in stored else None
+        retrieved[c] = old_time.isoformat() if old_time is not None else None
+    main_source = {
+        c: Counter(sources[c].values()).most_common(1)[0][0] if sources.get(c) else None
+        for c in COMPONENTS
+    }
+    run.issued_at = info.issued_at
+    run.wave_model_run_at = info.wave_model_run_at
+    run.atmosphere_model_run_at = info.atmosphere_model_run_at
+    run.started_at = started
+    run.completed_at = None
+    run.status = ForecastRunStatus.RUNNING
+    run.error_message = None
+    run.predictions_computed_at = None
+    run.details = {
+        "metadata_source": info.metadata_source,
+        "model_runs": model_runs_detail(info, provider),
+        **({"component_keys": dict(target)} if split else {}),
+        "components": {
+            c: {
+                "changed": c in changed,
+                "run_key": target[c],
+                "retrieved_at": retrieved[c],
+                "carried_from_run_id": main_source[c],
+            }
+            for c in sorted(COMPONENTS)
+        },
+        **({"retry": {"attempt": attempt, "base_run_key": base_key}} if retry else {}),
+        **(extra_details or {}),
+    }
+    db.commit()
+    run_id = run.id
+
+    counters = _counters(provider)
+    count = 0
+    errors: dict[int, str] = {}
+    warnings: list[str] = []
+    stats: list[dict[str, Any] | None] = []
+    group_failures: list[BaseException] = []
+    slugs = {p.spot_id: p.slug for p in spot_points(db)}
+    for parts, group in sorted(groups.items(), key=lambda g: (-len(g[1]), sorted(g[0]))):
+        components = None if parts == COMPONENTS else parts
+        try:
+            if not split:
+                result = provider.fetch(group, available)
+            elif components is not None and _accepts_components(provider.fetch):
+                result = provider.fetch(group, info, components)
+            else:
+                result = provider.fetch(group, info)
+            records = {
+                spot_id: [_keep_components(r, parts) for r in recs]
+                for spot_id, recs in result.records.items()
+            }
+            count += store_records(db, run, records)
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            group_failures.append(exc)
+            for p in group:
+                errors[p.spot_id] = _error_text(exc)
+            if isinstance(exc, ProviderError):
+                logger.error("Forecast fetch failed for %s: %s", source.code, _error_text(exc))
+            else:
+                logger.exception("Forecast refresh of %s failed unexpectedly", source.code)
+            continue
+        errors.update({k: v for k, v in result.errors.items() if k not in result.records})
+        for k, v in result.errors.items():
+            if k in result.records:
+                errors.setdefault(k, v)
+        warnings += result.warnings
+        stats.append(fetch_stats_detail(result, provider))
+    acquired = utcnow()
+    refreshed = db.get(ForecastRun, run_id)
+    assert refreshed is not None
+    run = refreshed
+    for c in carried:
+        carry.carry_component(db, run_id=run_id, component=c, sources=sources[c])
+    scope = [p.spot_id for g in groups.values() for p in g]
+    verdicts = carry.validate_spots(db, run_id, settings.forecast_min_valid_fraction, scope)
+    for spot_id, reason in verdicts.items():
+        if reason is not None:
+            failed[spot_id] = errors.get(spot_id) or reason
+    carry.drop_spots(db, run_id, [s for s in failed if s in verdicts])
+    updated = sorted(s for s, reason in verdicts.items() if reason is None)
+    total = _sum_stats(stats) if stats else failed_fetch_stats(provider, counters)
+    if total is None:
+        total = asdict(FetchStats())
+    retryable = any(isinstance(e, ProviderError) and e.transient for e in group_failures)
+    retry_after = max(
+        (float(getattr(e, "retry_after_s", 0.0) or 0.0) for e in group_failures), default=0.0
+    )
+    run.record_count = int(
+        db.scalar(select(func.count(WaveForecast.id)).where(WaveForecast.run_id == run_id)) or 0
+    )
+    run.spot_count = len(updated)
+    run.request_count = int(total.get("requests") or 0)
+    run.details = {
+        **run.details,
+        "spot_ids": updated,
+        "spot_errors": {slugs.get(k, str(k)): v for k, v in sorted(failed.items())},
+        "failed_spot_ids": sorted(failed),
+        "warnings": warnings[:50],
+        "stats": total,
+        "fetch_groups": {"+".join(sorted(g)): len(ps) for g, ps in groups.items()},
+        "retryable": retryable,
+    }
+    for c in sorted(COMPONENTS):
+        if c in changed:
+            run.details["components"][c]["retrieved_at"] = acquired.isoformat()
+    if not updated:
+        run.status = ForecastRunStatus.FAILED
+        reasons = "; ".join(sorted(set(failed.values())))[:1500]
+        run.error_message = redact(f"no spot returned usable data ({reasons})")[:2000]
+    elif failed:
+        run.status = ForecastRunStatus.PARTIAL
+    else:
+        run.status = ForecastRunStatus.SUCCESS
+    run.completed_at = utcnow()
+    run.details = dict(run.details)
+    db.commit()
+    logger.info(
+        "Refreshed %s run %s (%s): %d spots updated, %d failed, %s bytes",
+        source.code,
+        run_key,
+        "+".join(sorted(changed)) or "retry",
+        len(updated),
+        len(failed),
+        total.get("bytes_downloaded"),
+    )
+    components_out = _version_components(
+        info, available, stored, target, changed, main_source, acquired, split
+    )
+    return RefreshOutcome(
+        source.code,
+        token,
+        run_key,
+        run.status.value,
+        run_id,
+        message=run.error_message or "",
+        records=run.record_count,
+        changed=frozenset(changed),
+        component_keys=target,
+        components=components_out,
+        updated_spots=updated,
+        failed_spots=failed,
+        retry={"attempt": attempt, "base_run_key": base_key} if retry else None,
+        retryable=retryable and not updated,
+        retry_after_s=retry_after or None,
+        acquired_at=acquired,
+        estimated=available.estimated,
+        fallback_from=getattr(provider, "fallback_from", None),
+    )
+
+
+def _sum_stats(parts: list[dict[str, Any] | None]) -> dict[str, Any]:
+    """The FetchStats of several fetches of one refresh, added up."""
+    known = [x for x in parts if x]
+    downloaded = [x["bytes_downloaded"] for x in known if x.get("bytes_downloaded") is not None]
+    weighted = [x["weighted_calls"] for x in known if x.get("weighted_calls") is not None]
+    statuses: Counter[str] = Counter()
+    for x in known:
+        statuses.update(x.get("http_status_counts") or {})
+    requests: int = sum(int(x.get("requests") or 0) for x in known)
+    return {
+        "bytes_downloaded": sum(int(b) for b in downloaded) if downloaded else None,
+        "requests": requests,
+        "http_status_counts": dict(statuses),
+        "weighted_calls": round(sum(float(w) for w in weighted), 3) if weighted else None,
+    }
+
+
+def _version_components(
+    info: RunInfo,
+    available: RunInfo,
+    stored: Mapping[str, ComponentRun],
+    target: Mapping[str, str],
+    changed: Collection[str],
+    main_source: Mapping[str, int | None],
+    acquired: datetime,
+    split: bool,
+) -> dict[str, dict[str, Any]]:
+    """The version's ``components`` for a refresh: a fetched component from the provider's
+    run, a carried one with its ORIGINAL model run and retrieval time."""
+    from app.services.forecasts.versions import ComponentRun
+
+    out: dict[str, dict[str, Any]] = {}
+    for c in sorted(COMPONENTS):
+        if c in changed or c not in stored:
+            refs = _component_refs(info, c) if split else list(available.model_runs)
+            comp = ComponentRun.from_model_runs(
+                c,
+                refs,
+                run_key=target[c],
+                retrieved_at=acquired,
+                changed=c in changed,
+                estimated=available.estimated,
+            )
+            if comp.init_time is None:
+                init = _component_init(available, c)
+                comp = ComponentRun(
+                    c,
+                    model=comp.model,
+                    run_key=comp.run_key,
+                    init_time=init,
+                    retrieved_at=acquired,
+                    changed=c in changed,
+                    estimated=available.estimated,
+                )
+        else:
+            old = stored[c]
+            comp = ComponentRun(
+                c,
+                model=old.model,
+                run_key=target[c],
+                init_time=old.init_time,
+                available_at=old.available_at,
+                retrieved_at=old.retrieved_at,
+                changed=False,
+                carried_from_run_id=main_source.get(c) or old.carried_from_run_id,
+                estimated=old.estimated,
+                update_interval_seconds=old.update_interval_seconds,
+                domains=old.domains,
+            )
+        out[c] = comp.as_dict()
+    return out
+
+
+def _reused(
+    run: ForecastRun,
+    source_code: str,
+    token: str,
+    target: Mapping[str, str],
+    changed: Collection[str],
+) -> RefreshOutcome:
+    """A run of the target key is stored already (a sync stopped before publishing it):
+    nothing is fetched (status skipped, "run already ingested"); the sync publishes it as it
+    is (``reused``, with its run id)."""
+    details = run.details or {}
+    failed_ids = [int(s) for s in details.get("failed_spot_ids") or []]
+    errors = details.get("spot_errors") or {}
+    return RefreshOutcome(
+        source_code,
+        token,
+        run.run_key,
+        "skipped",
+        run.id,
+        message="run already ingested",
+        records=run.record_count,
+        changed=frozenset(changed),
+        component_keys=dict(target),
+        updated_spots=[int(s) for s in details.get("spot_ids") or []],
+        failed_spots={s: str(next(iter(errors.values()), "failed")) for s in failed_ids},
+        retry=details.get("retry"),
+        acquired_at=run.completed_at,
+        reused=True,
     )
 
 

@@ -13,16 +13,28 @@ killed deploy, at most SYNC_LEASE_MINUTES later: 15 under the daemon by default)
 
 Stage rules:
 
-* ``spots``: ``acquire_all(only=...)`` with the FORECAST_PROVIDERS tokens of the new spot
-  components (every configured one when forced); ``ensemble`` and ``map`` only when new
-  (or forced). Acquisitions are idempotent: a run key already stored is skipped.
-* ``blend``: only with new member data (spot runs or the ensemble), or unpublished member
-  data, or forced. ``predict`` always runs (it scores pending runs only). Either one
-  whose job lock another holder has (e.g. a daemon killed mid-stage: the lock outlives it
-  by its TTL) did not run: the stage is failed, not skipped.
-* ``publish``: when an acquisition stored new data, data stored earlier is unpublished, or
-  forced; but never after a failed ``predict`` (unless forced), so the map and the spot
-  pages never switch to runs that were not scored. The runs then stay unpublished, and
+* ``spots``: with one provider, the due components of its spot source only
+  (``refresh.refresh_spots``: a new wind run fetches the atmosphere and carries the waves
+  forward, design D6), or a retry of only the spots that failed in the published version
+  (D9); with several providers (the blend path), ``acquire_all(only=...)`` with the
+  FORECAST_PROVIDERS tokens of the new spot components. Every configured one when forced.
+  ``ensemble`` and ``map`` only when new (or forced). Acquisitions are idempotent: a run
+  key already stored is skipped.
+* ``blend``: only with several providers and FORECAST_BLEND_ENABLED (with one provider there
+  is nothing to blend, and the refresh Function does not import the blend's data
+  libraries), and new member data (spot runs or the ensemble), or unpublished member data,
+  or forced. ``predict`` always runs (it scores pending runs only). Either one whose job
+  lock another holder has (e.g. a daemon killed mid-stage: the lock outlives it by its TTL)
+  did not run: the stage is failed, not skipped.
+* ``publish``: stages a forecast version per stored refresh and publishes it in one
+  transaction (``versions.publish_version``; with several providers, the run selection as
+  a version), then sets the publication on the ``sync_runs`` row (the map pointer,
+  ``map_run_id``; map layers create no version) and writes the version marker
+  (``versions.write_version_marker``). It runs when an acquisition stored new data, data
+  stored earlier is unpublished, or forced; but never after a failed ``predict`` (unless
+  forced), so the map and the spot pages never switch to runs that were not scored. A
+  version that cannot be published is marked failed and the previous one stays published.
+  The runs then stay unpublished, and
   the components this sync acquired or found stored count as failed attempts: the next
   check retries after SYNC_RETRY_MINUTES, at most SYNC_MAX_ATTEMPTS times per run (a
   predict that fails every time does not re-sync forever). ``detect``, ``match``,
@@ -31,10 +43,13 @@ Stage rules:
 * ``stop`` (SIGTERM in the daemon) is checked between stages: the current stage finishes,
   the rest is recorded as skipped and the lease is released.
 
-Status: success; partial (some component or stage failed, or the sync was stopped);
+Status: success; partial (some component, spot or stage failed, or the sync was stopped);
 failed (nothing published, and something failed); skipped (nothing new after all);
 abandoned (the lease was lost). :func:`tick` plans with the database and syncs when one is
-due (Celery's ``sync.tick`` and ``python -m app.cli sync run --if-due``).
+due (Celery's ``sync.tick`` and ``python -m app.cli sync run --if-due``);
+:func:`refresh_check` is the refresh endpoint's spot-only check (``/api/internal/refresh``,
+the daily cron's backstop). Every runner honours the FORECAST_REFRESH_ENABLED kill switch
+(:func:`refresh_disabled`).
 """
 
 from __future__ import annotations
@@ -68,7 +83,10 @@ from app.services.sync.detect import (
     BLEND_CODE,
     USABLE,
     apply_result,
+    component_split,
     empty_known,
+    limit_plan,
+    load_known,
     plan_sync,
     refresh_known,
     valid_lease,
@@ -91,7 +109,7 @@ from app.services.sync.types import (
     jsonable,
 )
 
-__all__ = ["SyncBusy", "remember", "run_sync", "tick"]
+__all__ = ["SyncBusy", "refresh_check", "refresh_disabled", "remember", "run_sync", "tick"]
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +137,15 @@ _STAGE_KIND: dict[StageName, ComponentKind] = {
 REQUIRED_STAGES: frozenset[StageName] = frozenset({"blend", "predict"})
 PUBLISH_HELD = "predict did not complete"
 HELD_MESSAGE = "stored, not published: predict did not complete"
+# The kill switch's answer (every runner).
+DISABLED_REASON = "FORECAST_REFRESH_ENABLED=false: automatic forecast refreshes are off"
+# The component kinds the refresh endpoint syncs (never the map/GRIB stage).
+REFRESH_KINDS: frozenset[ComponentKind] = frozenset({"spots"})
+
+
+def refresh_disabled(settings: Settings | None = None) -> bool:
+    """The kill switch: FORECAST_REFRESH_ENABLED=false stops every runner's syncs."""
+    return not (settings or get_settings()).forecast_refresh_enabled
 
 
 def _holder() -> str:
@@ -302,6 +329,12 @@ class _Sync:
     predict_ok: bool = True
     # The acquisition stages' component outcomes (the dicts in their stage details).
     components: list[dict[str, Any]] = field(default_factory=list)
+    # The spot refreshes this sync stored (refresh.refresh_spots outcomes), the versions it
+    # published, when its predictions were scored and its stages so far.
+    refreshes: list[dict[str, Any]] = field(default_factory=list)
+    version_ids: list[int] = field(default_factory=list)
+    scored_at: datetime | None = None
+    stages: list[StageResult] = field(default_factory=list)
 
     def wanted(self, kind: ComponentKind) -> list[ComponentStatus]:
         if self.only is not None and kind not in self.only:
@@ -355,17 +388,43 @@ def _components(
                 "run_key": o.get("run_key"),
                 "retry_after_s": o.get("retry_after_s"),
             }
+            if c.kind == "spots" and "changed" in o:
+                entry = _component_entry(c, o, entry)
         entry = {
             "source_code": c.source_code,
             "provider": c.provider,
+            "component": c.component,
             **entry,
             "run_key": entry.get("run_key") or c.available_run_key,
         }
         if entry["outcome"] == "stored":
             ctx.stored.add(c.kind)
         elif entry["outcome"] == "failed":
-            ctx.failed.append(f"{c.source_code}: {entry['message'] or 'failed'}")
+            name = c.source_code if c.component is None else f"{c.source_code} {c.component}"
+            ctx.failed.append(f"{name}: {entry['message'] or 'failed'}")
         out.append(entry)
+    return out
+
+
+def _component_entry(
+    c: ComponentStatus, o: dict[str, Any], entry: dict[str, Any]
+) -> dict[str, Any]:
+    """One planned spot component's outcome of a component refresh (refresh_spots): the
+    refresh's own outcome for a component it fetched, or for the retry it made; "current"
+    for a component it carried (nothing newer to fetch). Its run key is the component's."""
+    keys = o.get("component_keys") or {}
+    run_key = keys.get(c.component) if c.component else o.get("run_key")
+    changed = set(o.get("changed") or [])
+    retry = o.get("retry")
+    out = {**entry, "run_key": run_key or entry.get("run_key")}
+    if c.retry_spot_ids and retry:
+        out["retry"] = True
+        return out
+    if c.component is not None and c.component not in changed:
+        if entry["outcome"] in ("stored", "current"):
+            return {**out, "outcome": "current", "message": "carried: no newer run"}
+        if c.state != "new":
+            return {**out, "outcome": "current", "message": ""}
     return out
 
 
@@ -428,17 +487,26 @@ def _stage(name: StageName, ctx: _Sync) -> StageResult:
         comps = ctx.wanted(kind)
         if not comps:
             return _skipped(name, _not_acquired(ctx, kind))
-        result, details = _execute(name, _acquisition(kind, comps, now))
+        split = kind == "spots" and component_split(ctx.settings)
+        body = _refresh_body(ctx, comps) if split else _acquisition(kind, comps, now)
+        result, details = _execute(name, body)
         result.detail["components"] = _components(ctx, comps, details, result)
         ctx.components.extend(result.detail["components"])
+        if split and details is not None:
+            _note_refreshes(ctx, details, result)
         return result
     if name == "blend":
+        blendable = _blendable(ctx.settings)
+        if blendable is not None:
+            return _skipped(name, blendable)
         if not (forced or ctx.stored & {"spots", "ensemble"} or "member" in ctx.unpublished):
             return _skipped(name, "no new member data")
         return _execute(name, _job("blend", now))[0]
     if name == "predict":
         result = _execute(name, _job("predict", now))[0]
         ctx.predict_ok = result.status == "success"
+        if ctx.predict_ok:
+            ctx.scored_at = utcnow()
         return result
     if name == "publish":
         if not (forced or ctx.stored or ctx.unpublished):
@@ -450,6 +518,7 @@ def _stage(name: StageName, ctx: _Sync) -> StageResult:
         ctx.publish_failed = result.status != "success" or ctx.published_at is None
         if not ctx.publish_failed:
             _note_published(ctx.row_id, prewarm=False)
+        result.detail["version_ids"] = list(ctx.version_ids)
         return result
     if ctx.published_at is None:
         return _skipped(name, "nothing was published")
@@ -473,6 +542,60 @@ def _hold_back(ctx: _Sync) -> None:
         f"publication held back: {PUBLISH_HELD}"
         + (f" ({held} component(s) retried after SYNC_RETRY_MINUTES)" if held else "")
     )
+
+
+def _blendable(settings: Settings) -> str | None:
+    """Why the blend stage does not run (None: it may): one provider has nothing to blend,
+    and FORECAST_BLEND_ENABLED=false turns it off. Decided without importing the blend
+    (its data libraries are not in the refresh Function)."""
+    if not settings.forecast_blend_enabled:
+        return "blending disabled (FORECAST_BLEND_ENABLED=false)"
+    if len(settings.forecast_provider_list) < 2:
+        return "one forecast provider: nothing to blend"
+    return None
+
+
+def _refresh_body(ctx: _Sync, comps: list[ComponentStatus]) -> Callable[[Session], Any]:
+    """The spot stage with one provider: a refresh of the due components (design D6) or a
+    retry of the failed spots (D9)."""
+
+    def spots(db: Session) -> dict[str, Any]:
+        from app.services.sync.refresh import refresh_spots
+
+        return {"outcomes": refresh_spots(db, comps, forced=ctx.plan.forced, now=ctx.now)}
+
+    return spots
+
+
+def _note_refreshes(ctx: _Sync, details: dict[str, Any], stage: StageResult) -> None:
+    """Keep the stored refreshes for the publish stage; a refresh whose spots partly failed
+    makes the sync partial (the failed spots keep their previous run and are retried)."""
+    compact: list[dict[str, Any]] = []
+    for o in details.get("outcomes") or []:
+        if not isinstance(o, dict):
+            continue
+        stored = o.get("status") in ("success", "partial") or o.get("reused")
+        if stored and o.get("run_id") is not None:
+            ctx.refreshes.append(o)
+        failed = o.get("failed_spot_ids") or []
+        if failed and o.get("status") in ("success", "partial"):
+            ctx.failed.append(
+                f"{o.get('source')}: {len(failed)} spot(s) failed and keep their previous run "
+                "(retried after 5 min)"
+            )
+        compact.append(
+            {
+                "source": o.get("source"),
+                "run_id": o.get("run_id"),
+                "run_key": o.get("run_key"),
+                "status": o.get("status"),
+                "changed": o.get("changed"),
+                "spots_updated": o.get("spots_updated"),
+                "failed_spot_ids": failed[:DETAIL_LIST_MAX],
+                "retry": o.get("retry"),
+            }
+        )
+    stage.detail["refreshes"] = compact
 
 
 def _acquisition(
@@ -551,14 +674,38 @@ def _job(name: str, now: datetime | None) -> Callable[[Session], Any]:
 
 def _publish_body(ctx: _Sync) -> Callable[[Session], Any]:
     def run(db: Session) -> dict[str, Any]:
+        from app.services.sync import refresh
         from app.services.sync.publish import publication_summary, publish
 
         row = db.get(SyncRun, ctx.row_id)
         if row is None:
             raise RuntimeError(f"sync_runs row {ctx.row_id} no longer exists")
-        published = publish(db, sync_run=row, trigger=ctx.trigger)
+        timings = {
+            "stages_ms": {s.name: s.duration_ms for s in ctx.stages},
+            "stages_cpu_s": {s.name: s.cpu_s for s in ctx.stages},
+        }
+        # The versions first, each in one transaction: when one cannot be published (the
+        # stage fails), the previous version stays published and the map pointer stays.
+        for outcome in ctx.refreshes:
+            version = refresh.stage_refresh_version(
+                db, outcome, sync_run_id=row.id, scored_at=ctx.scored_at, timings=timings
+            )
+            if version is not None:
+                refresh.publish_staged(db, version)
+                ctx.version_ids.append(int(version.id))
+        if not component_split(ctx.settings) and (
+            ctx.stored & {"spots", "ensemble"} or "member" in ctx.unpublished or ctx.plan.forced
+        ):
+            version = refresh.publish_selection_version(db, sync_run_id=row.id, timings=timings)
+            if version is not None:
+                ctx.version_ids.append(int(version.id))
+        row = db.get(SyncRun, ctx.row_id)
+        if row is None:
+            raise RuntimeError(f"sync_runs row {ctx.row_id} no longer exists")
+        # publish() also writes the version marker (versions + the map run it sets).
+        published = publish(db, sync_run=row, trigger=ctx.trigger, selection=False)
         ctx.published_at = published.published_at
-        return publication_summary(published)
+        return {**publication_summary(published), "version_ids": list(ctx.version_ids)}
 
     return run
 
@@ -719,6 +866,7 @@ def run_sync(
                 if name == "blend":
                     with SessionLocal() as db:
                         ctx.unpublished = _unpublished(db)
+                ctx.stages = stages
                 stages.append(_stage(name, ctx))
                 if not lease.renew(stages):
                     lost = True
@@ -773,7 +921,10 @@ def remember(known: KnownRuns, result: SyncResult, now: datetime | None = None) 
 
 
 def tick(*, trigger: SyncTrigger) -> dict[str, Any]:
-    """Plan with the database (and the known runs in Redis) and sync when one is due."""
+    """Plan with the database (and the known runs in Redis) and sync when one is due;
+    nothing with the kill switch on (status ``disabled``)."""
+    if refresh_disabled():
+        return {"status": "disabled", "reason": DISABLED_REASON, "due": False}
     known = state.read_known() or empty_known()
     with SessionLocal() as db:
         plan = plan_sync(db, known=known)
@@ -799,4 +950,68 @@ def tick(*, trigger: SyncTrigger) -> dict[str, Any]:
         "sync_run_id": result.sync_run_id,
         "published_at": result.published_at.isoformat() if result.published_at else None,
         "stages": [[s.name, s.status, s.cpu_s] for s in result.stages],
+    }
+
+
+def refresh_check(*, trigger: SyncTrigger = "http", now: datetime | None = None) -> dict[str, Any]:
+    """The refresh endpoint's run (``/api/internal/refresh``, and the daily cron's
+    backstop): a spot-only check and, when a spot component is due, a spot-only sync (the
+    map/GRIB stage never runs here). Idempotent and safe to call concurrently: another sync
+    holding the lease answers ``busy``.
+
+    The check reads the known runs from Redis and the providers' metadata only (the database
+    only when Redis has no known runs), so a check with nothing due leaves a scale-to-zero
+    database asleep. Returns ``{status: disabled | not_due | busy | <sync status>, plan,
+    sync_run_id, version_ids, published_at, stages, refreshes, timings}``.
+    """
+    started, cpu0 = time.monotonic(), cpu_seconds()
+    settings = get_settings()
+    if refresh_disabled(settings):
+        return {"status": "disabled", "reason": DISABLED_REASON}
+    known = state.read_known()
+    if known is None:
+        with SessionLocal() as db:
+            known = load_known(db)
+    plan = limit_plan(plan_sync(None, settings=settings, now=now, known=known), REFRESH_KINDS)
+    state.write_known(known)
+    checked_ms = int((time.monotonic() - started) * 1000)
+    out: dict[str, Any] = {
+        "status": "not_due",
+        "due": plan.due,
+        "plan": plan.as_dict(),
+        "sync_run_id": None,
+        "version_ids": [],
+        "published_at": None,
+    }
+    if not plan.due:
+        out["timings"] = {"check_ms": checked_ms, "total_ms": checked_ms}
+        out["timings"]["cpu_s"] = round(cpu_seconds() - cpu0, 3)
+        return out
+    try:
+        result = run_sync(trigger=trigger, plan=plan, only=REFRESH_KINDS, now=now)
+    except SyncBusy as exc:
+        return {**out, "status": "busy", "detail": str(exc)}
+    remember(known, result)
+    publish_stage = next((s for s in result.stages if s.name == "publish"), None)
+    spots_stage = next((s for s in result.stages if s.name == "spots"), None)
+    total_ms = int((time.monotonic() - started) * 1000)
+    return {
+        **out,
+        "status": result.status,
+        "sync_run_id": result.sync_run_id,
+        "version_ids": list(
+            (publish_stage.detail if publish_stage else {}).get("version_ids") or []
+        ),
+        "published_at": result.published_at.isoformat() if result.published_at else None,
+        "stages": [
+            {"name": s.name, "status": s.status, "duration_ms": s.duration_ms, "cpu_s": s.cpu_s}
+            for s in result.stages
+        ],
+        "refreshes": list((spots_stage.detail if spots_stage else {}).get("refreshes") or []),
+        "timings": {
+            "check_ms": checked_ms,
+            "sync_ms": total_ms - checked_ms,
+            "total_ms": total_ms,
+            "cpu_s": round(cpu_seconds() - cpu0, 3),
+        },
     }

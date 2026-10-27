@@ -59,6 +59,8 @@ def test_sync_core_signatures() -> None:
         ("sync_run", KW, None),
         ("trigger", KW, "pipeline"),
         ("now", KW, None),
+        # Swell 2.0: also publish the run selection as a forecast version (design D7).
+        ("selection", KW, None),
     ]
     assert params(daemon.run_daemon) == [
         ("stop", KW, None),

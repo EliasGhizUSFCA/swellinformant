@@ -749,8 +749,13 @@ def test_the_pipeline_publishes_what_it_stored(db: Session, few_spots: list[str]
     assert result["publish"]["sync_run_id"] == row.id
     assert row.published_at is not None and row.map_run_id is None  # map fields are off
     assert db.scalar(select(func.count(SyncRun.id))) == 1
-    # Once published, the demo run counts as stored for the sync checks.
+    # Once published, the demo run counts as stored for the sync checks, with the run key
+    # of each of its components (design D6).
     run = db.scalar(select(ForecastRun))
-    assert run is not None and load_known(db).stored == {"demo": run.run_key}
+    assert run is not None and load_known(db).stored == {
+        "demo": run.run_key,
+        "demo:wave": run.run_key,
+        "demo:atmosphere": run.run_key,
+    }
     run_pipeline(db, acquire=False)
     assert db.scalar(select(func.count(SyncRun.id))) == 2  # every pipeline run publishes
