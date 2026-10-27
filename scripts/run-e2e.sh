@@ -21,6 +21,12 @@ OUTBOX_DIR="$(mktemp -d)"  # assigned first, so a mktemp failure stops the scrip
 export OUTBOX_DIR
 export APP_BASE_URL="http://127.0.0.1:${FRONTEND_PORT}" API_BASE_URL="http://127.0.0.1:${BACKEND_PORT}"
 export CORS_ORIGINS="$APP_BASE_URL"
+# Open pages ask for the forecast version this often (baked into the build), so the live-update
+# specs see a publication within seconds; production defaults to 20 s.
+export NEXT_PUBLIC_FORECAST_VERSION_POLL_MS="${E2E_FORECAST_VERSION_POLL_MS:-2000}"
+# The scheduler's secret for POST /api/internal/refresh (live-update.spec.ts): random per run.
+CRON_SECRET="${E2E_CRON_SECRET:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
+export CRON_SECRET
 
 PIDS=()
 MAILPIT_CONTAINER=""

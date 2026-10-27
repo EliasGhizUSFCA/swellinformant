@@ -63,9 +63,10 @@ async function blockTiles(page: Page) {
 
 async function mockSpot(page: Page, sc: Scenario) {
   await blockTiles(page);
-  await page.route(new RegExp(`/api/spots/${SPOT_SLUG}$`), (r) => r.fulfill({ json: spotDetail(sc) }));
+  // (\?|$): the public reads carry ?v=<forecast version> once one is published.
+  await page.route(new RegExp(`/api/spots/${SPOT_SLUG}(\\?|$)`), (r) => r.fulfill({ json: spotDetail(sc) }));
   await page.route(new RegExp(`/api/spots/${SPOT_SLUG}/forecast`), (r) => r.fulfill({ json: spotForecast(sc) }));
-  await page.route(new RegExp(`/api/spots/${SPOT_SLUG}/events$`), (r) =>
+  await page.route(new RegExp(`/api/spots/${SPOT_SLUG}/events(\\?|$)`), (r) =>
     r.fulfill({ json: [swellEvent(sc, { id: "00000000-0000-4000-8000-0000000000e1", name: "Synthetic Point (test fixture)", startH: 150, score: 89 })] }),
   );
 }
