@@ -157,21 +157,23 @@ def encode_marker(payload: Mapping[str, Any]) -> str:
 
 def seed_version_marker(payload: Mapping[str, Any], client: redis.Redis | None = None) -> bool:
     """Store a marker read from the database unless one is stored (SET NX, expiring after
-    :data:`SEEDED_MARKER_TTL_SECONDS`). True when this call stored it. ``client``: the
+    :data:`SEEDED_MARKER_TTL_SECONDS`); a stored value that is not a marker is replaced.
+    True when this call stored it. ``client``: the
     Redis client to use (default: the forecast versions' one, skipped while Redis rests
     after an error). Redis errors are logged by type only and answered False."""
     target = client if client is not None else versions._client()
     if target is None:
         return False
+    key, body = versions.marker_key(), encode_marker(payload)
     try:
-        return bool(
-            target.set(
-                versions.marker_key(),
-                encode_marker(payload),
-                nx=True,
-                ex=SEEDED_MARKER_TTL_SECONDS,
-            )
-        )
+        if target.set(key, body, nx=True, ex=SEEDED_MARKER_TTL_SECONDS):
+            return True
+        # Something is stored: keep it unless it is not a marker at all (which would send
+        # every reader to the database until the next publication).
+        if parse_marker(target.get(key)) is not None:
+            return False
+        target.set(key, body, ex=SEEDED_MARKER_TTL_SECONDS)
+        return True
     except redis.RedisError as exc:
         logger.warning("Forecast version marker not seeded: %s", type(exc).__name__)
         return False

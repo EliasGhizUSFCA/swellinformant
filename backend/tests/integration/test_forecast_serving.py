@@ -370,6 +370,20 @@ def test_a_lost_version_marker_is_read_once_and_seeded(
     assert statements(lambda: app_client.get("/api/spots")) == []
 
 
+def test_a_corrupt_version_marker_is_replaced(
+    app_client: ApiClient, db: Session, two_runs: tuple[int, int]
+) -> None:
+    older, _ = two_runs
+    version = publish(db, dict.fromkeys(active_ids(db), older))
+    public_cache.note_published(1)
+    get_redis().set(versions.marker_key(), '{"version_id": "not a number"}')
+    app_client.get("/api/spots")
+    stored = json.loads(get_redis().get(versions.marker_key()) or "{}")
+    assert stored["version_id"] == version.id
+    public_cache.clear_memo()
+    assert statements(lambda: app_client.get("/api/spots")) == []
+
+
 def test_a_seeded_marker_never_replaces_the_publishers(
     db: Session, two_runs: tuple[int, int]
 ) -> None:
