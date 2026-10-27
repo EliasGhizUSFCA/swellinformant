@@ -1,4 +1,4 @@
-"""docs/SURF_SCORING.md states the scoring constants the code uses (algorithm 2.1.0)."""
+"""docs/SURF_SCORING.md states the scoring constants the code uses (algorithm 2.2.0)."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def test_documented_defaults_equal_the_code() -> None:
     assert wind.SHELTER_TAPER_DEG == 15.0
     assert "| wind gate start | 0.75 | heuristic |" in text
     assert scoring.WIND_GATE_FULL_Q == 0.75
-    assert 'ALGORITHM_VERSION = "2.1.0"' in text
+    assert f'ALGORITHM_VERSION = "{scoring.ALGORITHM_VERSION}"' in text
 
 
 def test_documented_shelter_strength_is_the_committed_one() -> None:

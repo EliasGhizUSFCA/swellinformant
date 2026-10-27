@@ -1,9 +1,12 @@
 """Job B — score every forecast timestep of a model run.
 
-Every prediction also gets its two confidence classes (methodology forecast-v1.2,
-``forecast_confidence``): forecast confidence of the offshore forecast and local
-confidence of the breaking-wave estimate at the break, with the inputs and rules used,
-the run's issue time, the lead time and the research assessment local confidence used.
+Every prediction also gets its confidence (methodology forecast-v1.2,
+``forecast_confidence``): forecast confidence of the offshore forecast, with the inputs and
+rules used, the run's issue time, the lead time and the spot's research assessment (its
+overall research class is the hour's research confidence, kept separate from forecast
+confidence). The combined local confidence is still stored for the deprecated API field;
+no decision uses it (spec 20). Algorithm 2.2.0 also stores the hour's favourable and
+unfavourable conditions and scores with the SCORING_WEIGHTS_JSON weights, if set.
 
 Where sources disagree about which wind is offshore (the spot's research assessment
 fires a conflict rule on wind, or data/surf_spots/profile_decisions.json records the
@@ -93,9 +96,9 @@ from app.services.surf_quality.forecast_confidence import (
 )
 from app.services.surf_quality.models import EXTRA_GUST_KIND, SeaState, SpotParams
 from app.services.surf_quality.scoring import (
-    ALGORITHM_VERSION,
     disputed_wind_relation,
     evaluate,
+    model_version,
 )
 from app.services.surf_quality.sun import is_daylight
 from app.services.surf_quality.uncertainty import (
@@ -103,6 +106,7 @@ from app.services.surf_quality.uncertainty import (
     breaking_uncertainty,
     confidence_index,
 )
+from app.services.surf_quality.weights import effective_weights
 from app.services.tides.stage import TideStage, shared_tide_reads, tide_stages_for
 
 if TYPE_CHECKING:
@@ -465,7 +469,9 @@ def compute_predictions_for_run(
     spots = reads.spots
     decisions = reads.decisions
     tide_classes = reads.tide_classes
-    gust_scoring = get_settings().wind_gust_scoring == "scored"
+    settings = get_settings()
+    gust_scoring = settings.wind_gust_scoring == "scored"
+    weights = effective_weights(settings.scoring_weights)
     by_spot: dict[int, list[ScoringForecast]] = defaultdict(list)
     for row in scoring_forecasts(db, run.id):
         by_spot[row.spot_id].append(row)
@@ -500,6 +506,7 @@ def compute_predictions_for_run(
                 alternative_offshore_deg=alternative,
                 gust_scoring=gust_scoring,
                 tide_detail=_tide_detail(tide),
+                weights=weights,
             )
             dispute_entry = (
                 None
@@ -562,6 +569,7 @@ def compute_predictions_for_run(
                     stale_after_hours=ctx.stale_after_hours,
                 )
             )
+            # Deprecated combined class (spec 20): stored for the API only, never decided on.
             local_conf = classify_local(forecast_conf.cls, research)
             rows.append(
                 {
@@ -611,7 +619,7 @@ def compute_predictions_for_run(
                     "confidence": conf,
                     "confidence_label": confidence_label(conf).value,
                     "explanation": result.explanation,
-                    "algorithm_version": ALGORITHM_VERSION,
+                    "algorithm_version": result.model_version,
                     "forecast_confidence_class": forecast_conf.cls,
                     "local_confidence_class": local_conf.cls,
                     "confidence_method": CONFIDENCE_METHOD,
@@ -620,7 +628,7 @@ def compute_predictions_for_run(
                     ),
                     "issued_at": run.issued_at,
                     "lead_hours": round(lead_hours, 2),
-                    "research_assessment_id": local_conf.assessment_id,
+                    "research_assessment_id": None if research is None else research.assessment_id,
                 }
             )
     if rows:
@@ -641,9 +649,16 @@ def compute_predictions_for_run(
     return len(rows)
 
 
+def current_model_version() -> str:
+    """The version new scores are stored with: ALGORITHM_VERSION, tagged when
+    SCORING_WEIGHTS_JSON changes the weights (``scoring.model_version``)."""
+    return model_version(effective_weights(get_settings().scoring_weights))
+
+
 def outdated_authoritative_runs(db: Session, now: datetime | None = None) -> list[int]:
-    """Runs currently shown to users whose predictions predate ALGORITHM_VERSION, the
-    confidence methodology (forecast-v1) or the spot's current research assessment.
+    """Runs currently shown to users whose predictions predate the current model version
+    (ALGORITHM_VERSION and the weights, :func:`current_model_version`), the confidence
+    methodology or the spot's current research assessment.
 
     After an algorithm upgrade the live forecast is rescored at once instead of waiting
     for the next model cycle; likewise after new research evidence (``research load`` or a
@@ -671,7 +686,7 @@ def outdated_authoritative_runs(db: Session, now: datetime | None = None) -> lis
             )
             .where(
                 SurfQualityPrediction.run_id.in_(run_ids),
-                (SurfQualityPrediction.algorithm_version != ALGORITHM_VERSION)
+                (SurfQualityPrediction.algorithm_version != current_model_version())
                 | SurfQualityPrediction.confidence_method.is_distinct_from(CONFIDENCE_METHOD)
                 | SurfQualityPrediction.research_assessment_id.is_distinct_from(
                     current_research.c.id

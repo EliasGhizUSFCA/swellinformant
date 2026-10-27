@@ -64,6 +64,7 @@ from app.services.notifications.alerts import STALE_ALERT_FACTOR
 from app.services.research.views import research_classes, research_out
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.forecast_confidence import api_fields
+from app.services.surf_quality.outputs import hour_outputs
 from app.services.surf_quality.scoring import label_for_score, min_score_for_label
 from app.services.surf_quality.sun import daylight_windows
 from app.services.swell_detection.service import peak_confidence, peak_wind
@@ -624,6 +625,7 @@ def forecast_points(
             components=p.components,
             **api_fields(p, stale=stale),
             **wind_fields(p.components, f.extra),
+            **hour_outputs(p),
         )
         for p, f in rows
     ]

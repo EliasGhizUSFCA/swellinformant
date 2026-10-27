@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import ORMModel
 
@@ -17,6 +17,58 @@ WindFavourability = Literal["favourable", "workable", "unfavourable"]
 # Gust definitions: GFS instantaneous gust, ECMWF maximum over the last 3 h or since the
 # previous post-processing step, or not documented by the source.
 GustKind = Literal["gfs_instantaneous", "ecmwf_max_3h", "ecmwf_max_since_pp", "unknown"]
+ConfidenceClass = Literal["high", "moderate", "low"]
+
+# Spec 20: the combined "local confidence" mixes research and forecast confidence. It is
+# kept in the API until the UI no longer reads it; nothing decides on it.
+LOCAL_CONFIDENCE_DEPRECATED = (
+    "Deprecated (spec 20): combines research and forecast confidence; use "
+    "forecast_confidence and research_confidence, which are never combined. Removed once "
+    "the UI no longer reads it."
+)
+
+
+def deprecated_field(description: str = LOCAL_CONFIDENCE_DEPRECATED) -> Any:
+    """A None-default field marked deprecated in the OpenAPI schema (no runtime warning)."""
+    return Field(default=None, description=description, json_schema_extra={"deprecated": True})
+
+
+class ForecastConfidenceOut(BaseModel):
+    """Forecast confidence of one hour: how dependable the offshore forecast is (lead time,
+    freshness, ensemble spread and model agreement where available; methodology
+    docs/forecast-confidence.md). A heuristic class from documented rules, not a calibrated
+    probability: ``kind`` says so. Its reasons are ``forecast_confidence_reasons``. Never
+    combined with research confidence."""
+
+    level: ConfidenceClass
+    kind: Literal["heuristic"] = "heuristic"
+    method: str | None = None  # e.g. "forecast-v1.2"
+
+
+class HourOutputs(BaseModel):
+    """Per-hour outputs of the quality model (algorithm 2.2.0; docs/SURF_SCORING.md 3a)."""
+
+    # Main favourable and unfavourable conditions, short plain phrases from the score's
+    # component fits ("well-aligned swell", "light offshore wind", "onshore wind 25 km/h");
+    # empty for hours scored before 2.2.0.
+    favourable: list[str] = []
+    unfavourable: list[str] = []
+    # Offshore-wind classification: strength + relation ("light offshore", "strong
+    # onshore", "glassy"); offshore = wind from the land to the sea at this break.
+    offshore_class: str | None = None
+    # The scoring model version of this hour (algorithm_version; "+w..." when
+    # SCORING_WEIGHTS_JSON changed the weights).
+    model_version: str | None = None
+
+
+class SeparateConfidences(BaseModel):
+    """Forecast confidence and research confidence of one hour, kept apart (spec 20)."""
+
+    # The forecast class at read time (capped at Moderate once the run is stale).
+    forecast_confidence: ForecastConfidenceOut | None = None
+    # The spot's overall research class the hour was scored with ("high" | "moderate" |
+    # "low"; None = not assessed): how well its ideal conditions are documented.
+    research_confidence: ConfidenceClass | None = None
 
 
 class AirportOut(ORMModel):
@@ -38,7 +90,7 @@ class SpotAirportOut(BaseModel):
     notes: str
 
 
-class Conditions(BaseModel):
+class Conditions(SeparateConfidences):
     """One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:
 
     * raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and
@@ -78,19 +130,19 @@ class Conditions(BaseModel):
     breaking_p90_ft: float | None = None
     uncertainty_kind: str | None = None
     ml_model_version: str | None = None
-    # Forecast confidence (the offshore forecast) and local confidence (the breaking
-    # prediction at this break, which also depends on how well the spot is researched):
-    # separate classes "high" | "moderate" | "low", plus short plain-language reasons.
-    # These are documented classifications, not calibrated probabilities.
+    # Forecast confidence class (the offshore forecast: "high" | "moderate" | "low"), a
+    # documented heuristic classification, not a calibrated probability; also in
+    # forecast_confidence with its label.
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = None
+    local_confidence_class: str | None = deprecated_field()
     # Deprecated: forecast, research and wind-dispute reasons mixed in one list. Use
-    # forecast_confidence_reasons, local_confidence_reason and wind_dispute_note.
+    # forecast_confidence_reasons and wind_dispute_note.
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
-    # The one reason local confidence is lower than forecast confidence (how well the
-    # break is understood); None when the two classes are equal.
-    local_confidence_reason: str | None = None
+    local_confidence_reason: str | None = deprecated_field(
+        "Deprecated (spec 20): the reason the combined local confidence is lower than "
+        "forecast confidence; use research_confidence. Removed with local_confidence_class."
+    )
     # Forecast-confidence reasons only (lead time, model agreement, freshness ...), with the
     # stale reason first when staleness capped the class.
     forecast_confidence_reasons: list[str] = []
@@ -181,13 +233,15 @@ class EventOut(BaseModel):
     is_demo: bool
     source_code: str
     history: list[dict[str, Any]] = []
-    # Forecast and local confidence at the event's peak hour (forecast-v1; see
-    # Conditions). None for events last updated before these classes existed.
+    # Forecast confidence at the event's peak hour (forecast-v1; see Conditions). None for
+    # events last updated before these classes existed.
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = None
+    local_confidence_class: str | None = deprecated_field()
     # Deprecated: mixed reasons (see Conditions.confidence_reasons).
     confidence_reasons: list[str] = []
-    local_confidence_reason: str | None = None
+    local_confidence_reason: str | None = deprecated_field(
+        "Deprecated (spec 20): see Conditions.local_confidence_reason."
+    )
     forecast_confidence_reasons: list[str] = []
     wind_dispute_note: str | None = None
     wind_strength: WindStrength | None = None
@@ -284,7 +338,12 @@ class SpotDetail(SpotSummary):
     research: ResearchOut | None = None
 
 
-class ForecastPoint(BaseModel):
+class ForecastPoint(HourOutputs, SeparateConfidences):
+    """One stored forecast hour of the spot forecast: raw model values, our breaking-height
+    estimate (``breaking_height_*``, the nearshore model's typical-to-sets range and
+    central value, an estimate that is not calibrated against observed surf), the score
+    and its per-hour outputs (``HourOutputs``) and the two separate confidences."""
+
     valid_time: datetime
     is_daylight: bool
     sig_wave_height_m: float | None
@@ -325,19 +384,16 @@ class ForecastPoint(BaseModel):
     wind_relation: str
     explanation: str
     components: dict[str, Any]
-    # Forecast confidence (the offshore forecast) and local confidence (the breaking
-    # prediction at this break, which also depends on how well the spot is researched):
-    # separate classes "high" | "moderate" | "low", plus short plain-language reasons.
-    # These are documented classifications, not calibrated probabilities.
+    # Forecast confidence class (see Conditions.forecast_confidence_class).
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = None
+    local_confidence_class: str | None = deprecated_field()
     # Deprecated: forecast, research and wind-dispute reasons mixed in one list. Use
-    # forecast_confidence_reasons, local_confidence_reason and wind_dispute_note.
+    # forecast_confidence_reasons and wind_dispute_note.
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
-    # The one reason local confidence is lower than forecast confidence (how well the
-    # break is understood); None when the two classes are equal.
-    local_confidence_reason: str | None = None
+    local_confidence_reason: str | None = deprecated_field(
+        "Deprecated (spec 20): see Conditions.local_confidence_reason."
+    )
     # Forecast-confidence reasons only (lead time, model agreement, freshness ...), with the
     # stale reason first when staleness capped the class.
     forecast_confidence_reasons: list[str] = []
@@ -362,9 +418,9 @@ class DailySummary(BaseModel):
     # Hours of Good or better daylight surf, weighted by each forecast step's duration.
     good_hours: float
     confidence: int
-    # Forecast and local confidence at the day's best hour (``best_time``).
+    # Forecast confidence at the day's best hour (``best_time``).
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = None
+    local_confidence_class: str | None = deprecated_field()
 
 
 class ForecastSourceOut(BaseModel):

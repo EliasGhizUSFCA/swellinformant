@@ -22,6 +22,9 @@ Everything the spot page's synchronised chart rows draw, read from stored data o
   the partition with the largest predicted breaking height (``breaking.dominant_component``);
 * wind strength and favourability come from the stored ``wind_detail`` (algorithm 2.1.0);
   rows scored before it carry the wind fit and relation only, and the rest stays None;
+* each step's quality carries the per-hour outputs of algorithm 2.2.0
+  (``surf_quality.outputs``: favourable and unfavourable conditions, offshore-wind class,
+  model version) and forecast and research confidence as two separate fields;
 * the tide and observation blocks are app.services.tides.api's; a step's tide height is
   read from that block's curve, never from model sea level.
 """
@@ -78,6 +81,7 @@ from app.services.spot_views import (
 )
 from app.services.surf_quality import breaking
 from app.services.surf_quality.forecast_confidence import api_fields
+from app.services.surf_quality.outputs import hour_outputs
 from app.services.surf_quality.scoring import min_score_for_label
 from app.services.surf_quality.sun import TWILIGHT_MARGIN, daylight_windows, sun_times
 from app.services.tides.api import spot_observations_block, spot_tide_block
@@ -229,6 +233,9 @@ def _quality(pred: SurfQualityPrediction, stale: bool) -> StepQualityOut:
         local_confidence_class=fields["local_confidence_class"],
         forecast_confidence_reasons=list(fields["forecast_confidence_reasons"]),
         local_confidence_reason=fields["local_confidence_reason"],
+        forecast_confidence=fields["forecast_confidence"],
+        research_confidence=fields["research_confidence"],
+        **hour_outputs(pred),
     )
 
 
@@ -589,6 +596,9 @@ def timeline_etag(timeline: SpotTimelineOut, days: int) -> str:
                 s.quality.label,
                 s.quality.forecast_confidence_class,
                 s.quality.local_confidence_class,
+                s.quality.research_confidence,
+                tuple(s.quality.favourable),
+                tuple(s.quality.unfavourable),
                 s.breaking.central_ft,
                 s.breaking.sets_ft,
                 s.wind.favourability if s.wind else None,

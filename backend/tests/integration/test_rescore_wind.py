@@ -121,7 +121,7 @@ def test_the_real_strong_wind_steps_meet_the_acceptance_rules(db: Session) -> No
     assert len(old_offshore_30) >= 10
     changes: Counter[tuple[str, str]] = Counter()
     for p, f in scored:
-        assert p.algorithm_version == ALGORITHM_VERSION == "2.1.0"
+        assert p.algorithm_version == ALGORITHM_VERSION == "2.2.0"  # 2.2.0: same scores
         c = p.components
         for key in ("wind_detail", "weights_used", "contributions"):
             assert key in c, key
