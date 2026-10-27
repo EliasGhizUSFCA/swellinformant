@@ -65,6 +65,11 @@ class SavedSearch(TimestampMixin, Base):
         CheckConstraint("horizon_days BETWEEN 1 AND 365", name="horizon_range"),
         CheckConstraint("min_window_hours BETWEEN 1 AND 240", name="window_hours"),
         CheckConstraint("units IN ('ft', 'm')", name="units"),
+        CheckConstraint(
+            "alert_lead_min_days >= 0 AND alert_lead_min_days <= alert_lead_max_days "
+            "AND alert_lead_max_days <= 16",
+            name="alert_lead_days",
+        ),
         Index("ix_saved_searches_user_status", "user_id", "status"),
     )
 
@@ -121,6 +126,16 @@ class SavedSearch(TimestampMixin, Base):
         default=NotificationChannelPref.EMAIL,
     )
     notify_surf_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # How far ahead a swell may start to be alerted for this search (whole days; spec 28:
+    # users choose how far in advance they get alerts). New searches default to
+    # ALERT_LEAD_DEFAULT_MIN_DAYS / _MAX_DAYS (the API sets them); the server defaults 2 / 10
+    # fill existing rows.
+    alert_lead_min_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=2, server_default=text("2")
+    )
+    alert_lead_max_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default=text("10")
+    )
     notify_on_updates: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     priority: Mapped[RankingPriority] = mapped_column(
         str_enum(RankingPriority, "search_priority"),
