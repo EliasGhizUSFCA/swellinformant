@@ -28,6 +28,7 @@ import pytest
 from app.services.geo import angular_diff, wind_from_uv
 from app.services.seed import DEFAULT_DATA_DIR
 from app.services.surf_quality import forecast_confidence as fc
+from app.services.surf_quality import scoring
 from app.services.surf_quality.models import SeaState, SpotParams
 from app.services.surf_quality.outputs import hour_outputs, offshore_class
 from app.services.surf_quality.reasons import MAX_REASONS, condition_reasons
@@ -424,6 +425,14 @@ class TestReasons:
             wind_speed_kmh=None,
         )
         assert good == ["good size for this break (3–4 ft)"] and bad == []
+
+    def test_a_component_weighted_zero_is_not_mentioned(self) -> None:
+        spot = replace(EAST_FACING, tide_preference="mid", tide_research_class="moderate")
+        sea = hour(spot, 6.0, 270.0, primary_swell_direction_deg=90.0, tide_stage=0.0)
+        assert "unfavourable tide stage" in evaluate(sea, spot).unfavourable
+        zero_tide = evaluate(sea, spot, weights={**scoring.WEIGHTS, "tide": 0.0})
+        assert "tide" in zero_tide.components  # still computed ...
+        assert not any("tide" in p for p in zero_tide.favourable + zero_tide.unfavourable)
 
     def test_offshore_class(self) -> None:
         assert offshore_class("offshore", "light") == "light offshore"

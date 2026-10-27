@@ -76,7 +76,8 @@ def condition_reasons(
 ) -> tuple[list[str], list[str]]:
     """(favourable, unfavourable) phrases of one hour (see the module docstring).
 
-    ``fits``: the factor fits 0-1 the score used (None or absent = not scored);
+    ``fits``: the factor fits 0-1 the score used (None or absent, or a weight of 0 in
+    ``used_weights``, = not scored);
     ``used_weights`` and ``points_lost``: the stored ``weights_used`` and ``contributions``;
     ``gates``: the gate values (``size_gate``, ``period_gate``; absent = 1);
     ``swell_*``: the driving partition (``swell_blocked``: its direction is outside the
@@ -94,9 +95,13 @@ def condition_reasons(
         gate = FACTOR_GATES.get(factor)
         return points_lost.get(factor, 0.0) + (points_lost.get(gate, 0.0) if gate else 0.0)
 
+    def scored(factor: str) -> bool:
+        """The factor has an input and a weight (SCORING_WEIGHTS_JSON may set it to 0)."""
+        return fits.get(factor) is not None and used_weights.get(factor, 0.0) > 0.0
+
     def add(factor: str, favourable: str | None, unfavourable: str | None) -> None:
         fit = fits.get(factor)
-        if fit is None:
+        if fit is None or not scored(factor):
             return
         gate = FACTOR_GATES.get(factor) if factor != "wind" else None
         held_down = gate is not None and (gates or {}).get(gate, 1.0) < 1.0
@@ -129,7 +134,7 @@ def condition_reasons(
         if face_mid_ft < size_min_ft
         else None,
     )
-    if fits.get("wind") is not None:
+    if scored("wind"):
         favourable, unfavourable = wind_phrases(
             wind_relation, wind_strength, wind_favourability, wind_speed_kmh
         )
