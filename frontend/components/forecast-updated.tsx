@@ -78,7 +78,9 @@ export function ForecastUpdated({ tone = "page", className }: { tone?: "page" | 
       title={`Forecast version ${version.version_id}, published ${full().format(new Date(at))}. Open pages pick up new versions by themselves.`}
       className={cn(
         "inline-flex w-fit items-center gap-1.5 rounded-full text-xs whitespace-nowrap tabular-nums transition-colors duration-700",
-        tone === "map" ? cn("px-3 py-1.5", GLASS) : "border bg-card px-2.5 py-0.5 text-muted-foreground",
+        // On short screens (phones in landscape) the map keeps its little height for the map:
+        // the pill is only read out there (its announcement included), not drawn.
+        tone === "map" ? cn("px-3 py-1.5 [@media(max-height:500px)]:sr-only", GLASS) : "border bg-card px-2.5 py-0.5 text-muted-foreground",
         highlight && (tone === "map" ? "ring-[#c4ec4a]/70" : "border-emerald-300 bg-emerald-50 text-emerald-800"),
         className,
       )}
