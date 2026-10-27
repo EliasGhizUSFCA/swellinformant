@@ -11,6 +11,7 @@ import { ConditionsSummary } from "@/components/conditions";
 import { ForecastConfidence, LocalConfidence, ResearchConfidence } from "@/components/confidence";
 import { EventCard } from "@/components/event-card";
 import { ForecastBreakdown, methodLabel } from "@/components/forecast-breakdown";
+import { ForecastUpdated } from "@/components/forecast-updated";
 import { AttributionLinks, ForecastProvenance, useNowMs } from "@/components/forecast-provenance";
 import { SpotForecastTimeline } from "@/components/forecast/forecast-timeline";
 import { TimelineSelectionProvider, useTimelineActions, useTimelineSelection, useTimelineStore } from "@/components/forecast/timeline-selection";
@@ -239,6 +240,7 @@ function ForecastSection({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
+          <ForecastUpdated />
           {tl?.stale && <Badge variant="warn">Stale data</Badge>}
         </div>
       </CardHeader>
