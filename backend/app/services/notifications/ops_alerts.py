@@ -24,6 +24,14 @@ SYNC_CPU_BUDGET_HOURS; ``licence``: COMMERCIAL_USE with the free Open-Meteo API)
 problems like any other and follow the same rules; a failed sync's error text goes into
 the email (``detail``), never into the public report.
 
+The admin-only problems of design D12 (``model_run_late``, ``forecast_stale_spots``,
+``refresh_failures``, ``provider_credentials``, ``provider_unavailable``,
+``provider_fallback``, ``quota_near``, ``refresh_scheduler_silent``; app.services.health,
+``data_health(admin=True)``) join the report's problems here: they are planned,
+de-duplicated, repeated and recovered exactly like them, and only ever emailed to the
+admin recipients below. They are never part of the public report (GET /api/health/data);
+the admin dashboard (/admin/freshness, GET /api/admin/freshness) lists them.
+
 All due items of one run go into one email per recipient. The alert state lives in the
 job's own log rows (``background_job_logs.details["alert_state"]`` of the newest
 successful ``ops.data_health`` run), so it survives restarts without a table of its own;
@@ -262,7 +270,7 @@ def render_alert(
     report: HealthReport, plan: AlertPlan, settings: Settings, repeat: timedelta
 ) -> tuple[str, str]:
     """(subject, plain-text body) of one alert email."""
-    status = report.status
+    status = report.alert_status
     if plan.problems:
         n = len(plan.problems)
         subject = f"[{settings.app_name}] Data health {status.upper()}: {n} problem" + (
@@ -297,7 +305,7 @@ def render_alert(
             lines.append(f"- {item.message} (first seen {stamp(item.first_seen)})")
         lines.append("")
     alerted = {i.key for i in plan.problems}
-    others = [p for p in report.problems if p.key not in alerted]
+    others = [p for p in report.all_problems if p.key not in alerted]
     if others:
         lines.append("Other current problems (already reported):")
         lines.extend(f"- [{p.severity}] {p.message}" for p in others)
@@ -307,6 +315,7 @@ def render_alert(
         f"Each problem is reported once, then again every {hours:g} h while it lasts; you get a "
         "notice when it clears.",
         f"Status page: {settings.app_base_url}/status",
+        f"Freshness dashboard (admins): {settings.app_base_url}/admin/freshness",
         f"Report (JSON): {settings.api_base_url}/api/health/data",
         "Playbook: docs/operations.md, section 'Incident playbook'.",
     ]
@@ -314,7 +323,8 @@ def render_alert(
 
 
 def admin_recipients(db: Session) -> list[str]:
-    """Addresses of active admin accounts with a verified email address."""
+    """Addresses of active admin accounts with a verified email address: the only
+    recipients of these alerts (users never get them)."""
     return list(
         db.scalars(
             select(User.email)
@@ -424,9 +434,10 @@ def run_data_health_check(db: Session, now: datetime | None = None) -> dict[str,
     """Build the report, send what is due, and return the job-log details (incl. state)."""
     settings = get_settings()
     now = now or utcnow()
-    report = data_health(db, now=now, settings=settings)
+    report = data_health(db, now=now, settings=settings, admin=True)
     repeat = timedelta(hours=settings.data_health_alert_repeat_hours)
-    plan = plan_alerts(previous_state(db), report.problems, now, repeat)
+    problems = report.all_problems
+    plan = plan_alerts(previous_state(db), problems, now, repeat)
     email: dict[str, Any] = {"due": plan.due}
     state = plan.state
     if plan.due and not settings.data_health_alerts_enabled:
@@ -435,7 +446,7 @@ def run_data_health_check(db: Session, now: datetime | None = None) -> dict[str,
         recipients = admin_recipients(db)
         if not recipients:
             email["skipped"] = "no active admin account with a verified email address"
-            logger.warning("Data health is %s but no admin can be alerted", report.status)
+            logger.warning("Data health is %s but no admin can be alerted", report.alert_status)
         else:
             subject, text = render_alert(report, plan, settings, repeat)
             counts = send_alert(recipients, subject, text)
@@ -444,15 +455,17 @@ def run_data_health_check(db: Session, now: datetime | None = None) -> dict[str,
                 state = mark_sent(plan, now, repeat)
             logger.info(
                 "Data-health alert (%s): %d sent, %d failed",
-                report.status,
+                report.alert_status,
                 counts["sent"],
                 counts["failed"],
             )
-    if report.status != "ok":
-        logger.warning("Data health %s: %s", report.status, "; ".join(report.out.reasons))
+    if report.alert_status != "ok":
+        logger.warning(
+            "Data health %s: %s", report.alert_status, "; ".join(p.message for p in problems)
+        )
     return {
-        "status": report.status,
-        "problems": [p.key for p in report.problems],
+        "status": report.alert_status,
+        "problems": [p.key for p in problems],
         "alerts": [f"{i.reason}:{i.key}" for i in (*plan.problems, *plan.recoveries)],
         "email": email,
         "alert_state": {k: v.as_dict() for k, v in sorted(state.items())},
