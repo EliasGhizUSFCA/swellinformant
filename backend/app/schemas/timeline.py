@@ -34,6 +34,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.schemas.forecasts import SpotFreshnessOut
 from app.schemas.spots import ForecastSourceOut, RunMemberOut
 from app.schemas.tides import ObservationsBlockOut, TideBlockOut
 
@@ -219,3 +220,5 @@ class SpotTimelineOut(BaseModel):
     steps: list[TimelineStepOut]
     tide: TideBlockOut
     observations: ObservationsBlockOut
+    # How fresh the spot's served forecast is (published version, last update, stale).
+    freshness: SpotFreshnessOut | None = None

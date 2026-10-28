@@ -298,6 +298,29 @@ def test_a_key_is_computed_once(
     assert calls == [public_cache.public_now()]  # once, for the start of the hour
 
 
+def test_a_request_that_takes_the_lock_after_the_holder_finished_uses_its_result() -> None:
+    """Check, then lock: a request misses the stored key, the holder then stores its payload
+    and frees the lock, and the request takes the free lock. It answers with the stored
+    payload instead of computing the key a second time (the 1,000-visitor load test saw
+    such second computations)."""
+    store = public_cache.get_redis_bytes()
+    key = f"{public_cache.namespace()}:test-race:key"
+    lock = f"{key}:lock"
+    stored = public_cache.Snapshot(b'{"stored": true}', etag='W/"x"')
+    store.delete(key, lock)
+    store.set(key, public_cache.encode(stored), ex=60)  # the holder's result; lock freed
+
+    def computed() -> Any:
+        raise AssertionError("the key was computed a second time")
+
+    try:
+        got = public_cache._computed_once(store, key, lock, computed, computed)
+        assert (got.body, got.etag) == (stored.body, stored.etag)
+        assert store.get(lock) is None  # the lock taken for nothing is freed again
+    finally:
+        store.delete(key, lock)
+
+
 def statements(fn: Callable[[], Any]) -> list[str]:
     seen: list[str] = []
 

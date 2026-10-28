@@ -12,28 +12,41 @@ start of the current UTC hour (:func:`public_now`) and kept in Redis under
   share it. A preview or ``vercel dev`` deployment (VERCEL_ENV preview or development)
   keeps its own, ``public:v1:<env>:<deployment>``: its code or its database may differ, so
   production never serves a payload it computed, even when both use one Redis.
-* ``marker`` names the published data. :func:`note_published` (the sync's hook: after its
-  publish stage and again at its end) stores a new random marker, so the next request of
-  every route computes afresh, and no request reads the database to learn the marker
-  (Neon's compute can stay asleep). The marker does not expire: it is replaced at every
-  publication, and the hour in each key bounds every payload whatever the marker says, so
-  a pause in the syncs (the daemon's CPU quota, unreachable map layers) does not send
-  every request to the database. Without a stored marker (no hook ran since Redis was
-  emptied, or in a preview's namespace) each request derives one from the database with
-  one small statement (:func:`derived_marker`: the newest publication and when it
-  finished, and the counts and newest changes of the runs, predictions, swell events,
-  active spots, research assessments and map fields).
+* ``marker`` names the published data: ``<publication>.v<version>.m<map run>``.
+  ``<publication>`` is the random token :func:`note_published` (the sync's hook: after its
+  publish stage and again at its end, after swell detection) stores; ``v<version>`` and
+  ``m<map run>`` are the published forecast version and the published map run, read from
+  the forecast version marker the publisher stores (``<namespace>:forecast-version:v1``,
+  app.services.forecasts.serving), in the same Redis command as the epoch and the token.
+  So a new forecast version, a new map run and every publication hook each start new
+  snapshots, and no request reads the database to learn the marker (Neon's compute can
+  stay asleep). Neither the token nor the publisher's version marker expires: each is
+  replaced at every publication, and the hour in each key bounds every payload whatever
+  the marker says, so a pause in the syncs (the daemon's CPU quota, unreachable map layers)
+  does not send every request to the database. With the token but no version marker
+  (Redis lost it), the request reads the version from the database once and seeds it
+  (``serving.load_version_payload``, SET NX). Without a stored token (no hook ran since
+  Redis was emptied, or in a preview's namespace) each request derives the marker from the
+  database with one small statement (:func:`derived_marker`: the published version and map
+  run, the newest publication and when it finished, and the counts and newest changes of
+  the runs, predictions, swell events, active spots, research assessments and map fields).
+* The payload stored under a version's key is that version's data: its computation serves
+  the version the key names (``queries.serving_version``), even if a newer one was
+  published while it ran. Each :class:`Snapshot` returned carries that version
+  (``version``) for the response headers: a request whose ``?v=`` names another version
+  (an old tab, or a client ahead of this instance) is answered with the current data and
+  ``no-store`` headers, so no shared cache keeps it under its URL (:func:`serves_version`).
 * ``epoch`` is a random token kept in Redis: a Redis that lost its data starts a new
   epoch, so this process's memo can never hand out a payload of an earlier one.
 * ``hour`` bounds every payload to its hour, whatever the marker says.
 
-Every key is one of a bounded set: the map's ``?at=`` is read as its UTC hour within
-:data:`MAP_AT_CACHED_WINDOW` (:func:`map_time`), the other query values are bounded by
-their routes. A visitor whose request misses the cache (and so reads the database) is
-counted: more than PUBLIC_CACHE_MISS_LIMIT_PER_HOUR misses from one client IP in an hour
-answer 429 (app.core.ratelimit; RATE_LIMIT_ENABLED), which bounds what one client can make
-the database send (Neon Free suspends the compute for the rest of the month once its
-egress is used up). Hits are never counted.
+Every key is one of a bounded set (the client's ``?v=`` is never part of one): the map's
+``?at=`` is read as its UTC hour within :data:`MAP_AT_CACHED_WINDOW` (:func:`map_time`), the
+other query values are bounded by their routes. A visitor whose request misses the cache
+(and so reads the database) is counted: more than PUBLIC_CACHE_MISS_LIMIT_PER_HOUR misses
+from one client IP in an hour answer 429 (app.core.ratelimit; RATE_LIMIT_ENABLED), which
+bounds what one client can make the database send (Neon Free suspends the compute for the
+rest of the month once its egress is used up). Hits are never counted.
 
 A key is computed at most once: the first request takes the key's Redis lock (SET NX EX)
 and stores the payload, zlib-compressed (Upstash counts bandwidth), for
@@ -43,7 +56,7 @@ spot page's forecast and timeline, which the page requests side by side) are com
 together (:class:`Together`): a miss of either computes both under one lock, in one read
 of the rows. Each process also keeps the newest payloads in memory (:data:`MEMO_MAX_BYTES`),
 so a warm serverless instance answers a repeated request with a single Redis command (the
-epoch and marker).
+epoch and both markers); a new marker drops the payloads of the previous one from the memo.
 
 Redis unavailable: the request computes its payload directly, exactly as a cache miss
 does, and Redis is not asked again for :data:`FAIL_OPEN_SECONDS` (as the rate limiter does),
@@ -67,7 +80,7 @@ import zlib
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -80,10 +93,12 @@ from app.core import ratelimit
 from app.core.config import get_settings
 from app.core.database import utcnow
 from app.core.redis import RELEASE_SCRIPT, get_redis_bytes
-from app.models import ForecastRun, SpotResearchAssessment, SurfSpot, SwellEvent
+from app.models import ForecastRun, ForecastVersion, SpotResearchAssessment, SurfSpot, SwellEvent
 from app.models.forecast_engine import MapField
 from app.models.sync import SyncRun
 from app.schemas.spots import MapSnapshotOut, SpotSummary
+from app.services.forecasts import serving, versions
+from app.services.forecasts.queries import serving_version
 from app.services.spot_views import map_snapshot, spot_summaries
 
 logger = logging.getLogger(__name__)
@@ -110,6 +125,10 @@ MEMO_MAX_BYTES = 32 * 1024 * 1024
 # answered for the nearer end, as the forecast range would clamp it anyway (map_time).
 MAP_AT_CACHED_WINDOW = (timedelta(days=-2), timedelta(days=17))
 COMPRESSION_LEVEL = 6
+# The version a payload serves when no forecast version is published yet (version ids
+# start at 1), and the ``?v=`` values a client may send for it.
+NO_VERSION = "0"
+NO_VERSION_REQUESTS = frozenset({"", NO_VERSION, "null", "none"})
 
 
 def public_now(now: datetime | None = None) -> datetime:
@@ -141,10 +160,41 @@ def marker_key() -> str:
 
 @dataclass(frozen=True)
 class Snapshot:
-    """One cached response: its JSON body and, for the timeline, its ETag."""
+    """One cached response: its JSON body and, for the timeline, its ETag. ``version``: the
+    forecast version it serves (the id as text, :data:`NO_VERSION` before the first
+    publication, None when unknown: computed without Redis); not stored with the body (the
+    key names it)."""
 
     body: bytes
     etag: str | None = None
+    version: str | None = None
+
+
+def serves_version(requested: str | None, snapshot: Snapshot | None) -> bool:
+    """Whether a response may be kept by shared caches under its URL: True without ``?v=``
+    (the CDN windows of an unversioned URL), or when ``requested`` names the version
+    ``snapshot`` serves; False for another version, or when the version served is unknown."""
+    if requested is None:
+        return True
+    if snapshot is None or snapshot.version is None:
+        return False
+    asked = requested.strip().lower()
+    return asked == snapshot.version or (
+        snapshot.version == NO_VERSION and asked in NO_VERSION_REQUESTS
+    )
+
+
+@dataclass(frozen=True)
+class Published:
+    """What the snapshots of one request are keyed on: the ``marker`` of the published data
+    and the forecast version they serve (None: none published yet)."""
+
+    marker: str
+    version_id: int | None
+
+    @property
+    def tag(self) -> str:
+        return str(self.version_id) if self.version_id is not None else NO_VERSION
 
 
 def render(adapter: TypeAdapter[Any], value: Any, etag: str | None = None) -> Snapshot:
@@ -182,17 +232,32 @@ def note_published(sync_run_id: int | None = None) -> bool:
 def derived_marker(db: Session) -> str:
     """The published data's marker read from the database (one statement over small
     tables), for when no sync stored one."""
+    return _derived(db).marker
+
+
+def _derived(db: Session) -> Published:
+    """:func:`derived_marker` and the published version, from one statement."""
     newest = (
-        select(SyncRun.id, SyncRun.finished_at)
+        select(SyncRun.id, SyncRun.finished_at, SyncRun.map_run_id)
         .where(SyncRun.published_at.is_not(None))
         .order_by(SyncRun.published_at.desc(), SyncRun.id.desc())
         .limit(1)
         .subquery()
     )
+    published = (
+        select(ForecastVersion.id, ForecastVersion.published_at)
+        .where(ForecastVersion.status == versions.PUBLISHED)
+        .limit(1)
+        .subquery()
+    )
     row = db.execute(
         select(
+            # The published forecast version first (also returned on its own).
+            select(published.c.id).scalar_subquery(),
+            select(published.c.published_at).scalar_subquery(),
             select(newest.c.id).scalar_subquery(),
             select(newest.c.finished_at).scalar_subquery(),
+            select(newest.c.map_run_id).scalar_subquery(),
             select(func.count(ForecastRun.id)).scalar_subquery(),
             select(func.max(ForecastRun.id)).scalar_subquery(),
             select(func.max(ForecastRun.predictions_computed_at)).scalar_subquery(),
@@ -207,7 +272,8 @@ def derived_marker(db: Session) -> str:
         )
     ).one()
     text = "|".join(v.isoformat() if isinstance(v, datetime) else str(v) for v in row)
-    return "d" + hashlib.sha256(text.encode()).hexdigest()[:16]
+    version_id = int(row[0]) if row[0] is not None else None
+    return Published("d" + hashlib.sha256(text.encode()).hexdigest()[:16], version_id)
 
 
 # --------------------------------------------------------------------------- the memo
@@ -219,6 +285,18 @@ class _Memo:
     entries: OrderedDict[str, Snapshot] = field(default_factory=OrderedDict)
     size: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # The key prefix (namespace, epoch, marker) of the newest requests.
+    generation: str | None = None
+
+    def retire(self, generation: str) -> None:
+        """A request saw ``generation`` (a new marker: a publication): drop the payloads of
+        every other one, which no request of this marker reads again."""
+        with self.lock:
+            if self.generation == generation:
+                return
+            self.generation = generation
+            for key in [k for k in self.entries if not k.startswith(generation)]:
+                self.size -= len(self.entries.pop(key).body)
 
     def get(self, key: str) -> Snapshot | None:
         with self.lock:
@@ -244,6 +322,7 @@ class _Memo:
         with self.lock:
             self.entries.clear()
             self.size = 0
+            self.generation = None
 
 
 _memo = _Memo()
@@ -285,16 +364,34 @@ def _failed(client: redis.Redis, exc: Exception) -> None:
     )
 
 
-def _epoch_and_marker(client: redis.Redis) -> tuple[str, str | None]:
+def _epoch_and_markers(client: redis.Redis) -> tuple[str, str | None, dict[str, Any] | None]:
+    """The epoch, the publication token and the forecast version marker (one MGET)."""
     epoch_name = epoch_key()
-    raw_epoch, raw_marker = client.mget([epoch_name, marker_key()])
+    raw_epoch, raw_marker, raw_version = client.mget(
+        [epoch_name, marker_key(), versions.marker_key()]
+    )
     if raw_epoch is None:
         token = secrets.token_hex(6).encode()
         raw_epoch = token if client.set(epoch_name, token, nx=True) else client.get(epoch_name)
         raw_epoch = raw_epoch or token
     marker = raw_marker.decode() if isinstance(raw_marker, bytes) else None
     epoch = raw_epoch.decode() if isinstance(raw_epoch, bytes) else str(raw_epoch)
-    return epoch, marker
+    return epoch, marker, serving.parse_marker(raw_version)
+
+
+def _published(
+    db: Session, client: redis.Redis, token: str | None, version: dict[str, Any] | None
+) -> Published:
+    """The marker of the published data (see the module docstring): from the token and the
+    version marker; the version from the database once (and seeded) when Redis lost it; the
+    whole marker from the database without a token."""
+    if token is None:
+        return _derived(db)
+    if version is None:
+        version = serving.load_version_payload(db)
+        serving.seed_version_marker(version, client)
+    version_id, map_run_id = version["version_id"], version["map_run_id"]
+    return Published(f"{token}.v{version_id or 0}.m{map_run_id or 0}", version_id)
 
 
 def _stored(client: redis.Redis, key: str) -> Snapshot | None:
@@ -302,8 +399,13 @@ def _stored(client: redis.Redis, key: str) -> Snapshot | None:
     return decode(raw) if isinstance(raw, bytes) else None
 
 
+def _generation(epoch: str, marker: str) -> str:
+    """The prefix every key of one marker shares."""
+    return f"{namespace()}:{epoch}:{marker}:"
+
+
 def cache_key(epoch: str, marker: str, hour: datetime, route: str, params: str) -> str:
-    key = f"{namespace()}:{epoch}:{marker}:{hour:%Y%m%dT%H}:{route}"
+    key = f"{_generation(epoch, marker)}{hour:%Y%m%dT%H}:{route}"
     if params:
         # Query values are visitor input: hashed, so a key stays short and plain.
         key += ":" + hashlib.sha256(params.encode()).hexdigest()[:24]
@@ -325,6 +427,11 @@ def _computed_once(
     token = secrets.token_hex(8)
     if client.set(lock, token, nx=True, ex=LOCK_TTL_SECONDS):
         try:
+            # The caller read ``key`` before taking the lock: a holder that stored it and
+            # freed the lock in between has computed it already.
+            raw = client.get(key)
+            if isinstance(raw, bytes):
+                return decode(raw)
             built = build_all()
             for name, snap in built.items():
                 client.set(name, encode(snap), ex=PAYLOAD_TTL_SECONDS)
@@ -382,23 +489,26 @@ def snapshot(
 ) -> Snapshot:
     """The response of ``route`` for ``params`` this hour: from this process's memo, from
     Redis, or computed by ``build(public_now())`` (once per key, with the other routes of
-    ``together``; see the module docstring). An exception of ``build`` (e.g. a 404)
-    propagates and nothing is stored. A computation counts as a miss of ``visitor``
-    (:func:`charge_miss`), before the database is read."""
+    ``together``; see the module docstring), serving the forecast version the key names.
+    An exception of ``build`` (e.g. a 404) propagates and nothing is stored. A computation
+    counts as a miss of ``visitor`` (:func:`charge_miss`), before the database is read.
+    The snapshot returned carries the version it serves (:attr:`Snapshot.version`)."""
     hour = public_now()
     client = _usable_client()
     if client is None:
-        return build(hour)
+        return _computed_unkeyed(db, build, hour)
     try:
-        epoch, marker = _epoch_and_marker(client)
+        epoch, token, version = _epoch_and_markers(client)
+        published = _published(db, client, token, version)
     except redis.RedisError as exc:
         _failed(client, exc)
-        return build(hour)
-    marker = marker or derived_marker(db)
+        return _computed_unkeyed(db, build, hour)
+    marker = published.marker
     key = cache_key(epoch, marker, hour, route, params)
+    _memo.retire(_generation(epoch, marker))
     hit = _memo.get(key)
     if hit is not None:
-        return hit
+        return replace(hit, version=published.tag)
     built: dict[str, Snapshot] = {}
     charged: list[bool] = []
 
@@ -406,14 +516,15 @@ def snapshot(
         if not charged:
             charged.append(True)
             charge_miss(visitor)
-        built[key] = build(hour)
+        with serving_version(db, published.version_id):
+            built[key] = build(hour)
         return built[key]
 
     def build_all() -> dict[str, Snapshot]:
         if together is None:
             build_own()
             return built
-        with together.reads():
+        with together.reads(), serving_version(db, published.version_id):
             build_own()
             for other, other_build in together.builds.items():
                 if other == route:
@@ -436,11 +547,20 @@ def snapshot(
         )
     except redis.RedisError as exc:
         _failed(client, exc)
-        result = built.get(key) or build(hour)
+        result = built.get(key) or build_own()
     for name, snap in built.items():
         _memo.put(name, snap)
     _memo.put(key, result)
-    return result
+    return replace(result, version=published.tag)
+
+
+def _computed_unkeyed(
+    db: Session, build: Callable[[datetime], Snapshot], hour: datetime
+) -> Snapshot:
+    """Redis unavailable: the payload computed directly, for the published version (which
+    one is then not known to the caller: ``version`` None)."""
+    with serving_version(db, None):
+        return build(hour)
 
 
 # --------------------------------------------------------------------------- routes
@@ -495,7 +615,7 @@ def prewarm(db: Session) -> bool:
     if client is None:
         return False
     try:
-        _epoch_and_marker(client)
+        _epoch_and_markers(client)
     except redis.RedisError as exc:
         _failed(client, exc)
         return False

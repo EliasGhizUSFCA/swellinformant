@@ -5,6 +5,13 @@ forecast and events, and the next swells) are answered from the public snapshot 
 (app.services.public_cache): computed for the start of the current UTC hour at most once
 per published data, hour and query, and sent with the shared-cache headers below. The
 bodies are the ones the response models give (``public_cache.render``).
+
+Versioned URLs: the client adds ``?v=<version_id>`` of GET /api/forecasts/version to these
+GETs, so a new publication is a new URL for the browser and the CDN. A ``v`` that names the
+version the answer serves keeps the windows below; any other ``v`` (an old tab, or a client
+ahead of this instance) gets the current answer with ``no-store`` headers, so no cache
+keeps it under that URL. ``X-Forecast-Version`` names the version served ("0": none
+published yet). The ``v`` value is never part of a cache key.
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import TypeAdapter
@@ -21,7 +29,7 @@ from sqlalchemy.orm import Session
 from app.auth.deps import get_optional_user
 from app.core.database import get_db
 from app.core.errors import NotFound
-from app.core.http_cache import cache_headers
+from app.core.http_cache import cache_headers, no_store
 from app.core.ratelimit import client_ip
 from app.models import Airport, SurfSpot, SwellEvent, User
 from app.schemas.opportunities import MatchSummary
@@ -65,22 +73,48 @@ SPOT_DETAIL = TypeAdapter(SpotDetail)
 SPOT_FORECAST = TypeAdapter(SpotForecastOut)
 TIMELINE = TypeAdapter(SpotTimelineOut)
 EVENTS = TypeAdapter(list[EventOut])
+# The forecast version a response serves (public_cache.Snapshot.version).
+VERSION_HEADER = "X-Forecast-Version"
 
 
-def public_cache(response: Response) -> None:
-    """The cache headers of a user-independent public GET (see PUBLIC_*_SECONDS)."""
-    cache_headers(
-        response,
-        browser_seconds=PUBLIC_BROWSER_SECONDS,
-        cdn_seconds=PUBLIC_CDN_SECONDS,
-        stale_while_revalidate=PUBLIC_STALE_SECONDS,
+def version_query() -> Any:
+    """The ``v`` query parameter of the versioned public GETs (see the module docstring)."""
+    return Query(
+        None,
+        max_length=32,
+        description="Forecast version the client shows (version_id of GET "
+        "/api/forecasts/version; omit before the first publication). Another version than "
+        "the one served is answered with the current data and no-store headers.",
     )
 
 
-def public_json(snapshot: snapshots.Snapshot) -> Response:
-    """A public snapshot as the JSON response FastAPI would send, with the public headers."""
+def public_cache(
+    response: Response,
+    request: Request | None = None,
+    snapshot: snapshots.Snapshot | None = None,
+) -> None:
+    """The cache headers of a user-independent public GET (see PUBLIC_*_SECONDS); with the
+    ``request``, ``no-store`` when its ``?v=`` names another version than ``snapshot``
+    serves (public_cache.serves_version)."""
+    requested = request.query_params.get("v") if request is not None else None
+    if not snapshots.serves_version(requested, snapshot):
+        no_store(response)
+    else:
+        cache_headers(
+            response,
+            browser_seconds=PUBLIC_BROWSER_SECONDS,
+            cdn_seconds=PUBLIC_CDN_SECONDS,
+            stale_while_revalidate=PUBLIC_STALE_SECONDS,
+        )
+    if snapshot is not None and snapshot.version is not None:
+        response.headers[VERSION_HEADER] = snapshot.version
+
+
+def public_json(snapshot: snapshots.Snapshot, request: Request | None = None) -> Response:
+    """A public snapshot as the JSON response FastAPI would send, with the public headers
+    for ``request`` (see :func:`public_cache`)."""
     response = Response(content=snapshot.body, media_type="application/json")
-    public_cache(response)
+    public_cache(response, request, snapshot)
     return response
 
 
@@ -99,20 +133,25 @@ def map_conditions(
         description="Forecast time (ISO 8601; UTC when it has no offset); default now. "
         "Answered for its UTC hour, within 2 days before and 17 days after the current hour",
     ),
+    v: str | None = version_query(),
     db: Session = Depends(get_db),
 ) -> Response:
     """All spots at one forecast hour, from cached predictions (public data, cacheable)."""
-    return public_json(snapshots.map_conditions(db, at, visitor=client_ip(request)))
+    return public_json(snapshots.map_conditions(db, at, visitor=client_ip(request)), request)
 
 
 @router.get("/spots", response_model=list[SpotSummary])
-def list_spots(request: Request, db: Session = Depends(get_db)) -> Response:
+def list_spots(
+    request: Request, v: str | None = version_query(), db: Session = Depends(get_db)
+) -> Response:
     """Every active spot with its current conditions (public data, cacheable)."""
-    return public_json(snapshots.spot_list(db, visitor=client_ip(request)))
+    return public_json(snapshots.spot_list(db, visitor=client_ip(request)), request)
 
 
 @router.get("/spots/{slug}", response_model=SpotDetail)
-def get_spot(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def get_spot(
+    slug: str, request: Request, v: str | None = version_query(), db: Session = Depends(get_db)
+) -> Response:
     """One spot's page data (public data, cacheable)."""
     return public_json(
         snapshots.snapshot(
@@ -121,7 +160,8 @@ def get_spot(slug: str, request: Request, db: Session = Depends(get_db)) -> Resp
             slug,
             lambda now: snapshots.render(SPOT_DETAIL, spot_detail(db, active_spot(db, slug), now)),
             visitor=client_ip(request),
-        )
+        ),
+        request,
     )
 
 
@@ -155,15 +195,18 @@ def get_forecast(
     slug: str,
     request: Request,
     days: int = Query(10, ge=1, le=16),
+    v: str | None = version_query(),
     db: Session = Depends(get_db),
 ) -> Response:
     """The spot's forecast hours and model series (public data, cacheable)."""
     page = spot_page(db, slug, days)
-    return public_json(page.snapshot(db, "spot-forecast", visitor=client_ip(request)))
+    return public_json(page.snapshot(db, "spot-forecast", visitor=client_ip(request)), request)
 
 
 @router.get("/spots/{slug}/events", response_model=list[EventOut])
-def spot_events(slug: str, request: Request, db: Session = Depends(get_db)) -> Response:
+def spot_events(
+    slug: str, request: Request, v: str | None = version_query(), db: Session = Depends(get_db)
+) -> Response:
     """The spot's swell events that have not ended (public data, cacheable)."""
     return public_json(
         snapshots.snapshot(
@@ -172,7 +215,8 @@ def spot_events(slug: str, request: Request, db: Session = Depends(get_db)) -> R
             slug,
             lambda now: snapshots.render(EVENTS, events_of_spot(db, active_spot(db, slug), now)),
             visitor=client_ip(request),
-        )
+        ),
+        request,
     )
 
 
@@ -191,6 +235,7 @@ def list_events(
     request: Request,
     limit: int = Query(20, ge=1, le=100),
     min_score: int = Query(0, ge=0, le=100),
+    v: str | None = version_query(),
     db: Session = Depends(get_db),
 ) -> Response:
     """The best swells that have not ended (public data, cacheable)."""
@@ -203,7 +248,8 @@ def list_events(
                 EVENTS, upcoming_events(db, now, limit=limit, min_score=min_score)
             ),
             visitor=client_ip(request),
-        )
+        ),
+        request,
     )
 
 

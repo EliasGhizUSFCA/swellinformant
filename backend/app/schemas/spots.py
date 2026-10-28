@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from app.schemas.common import ORMModel
+from app.schemas.forecasts import SpotFreshnessOut
 
 # Wind regime (Beaufort-based km/h thresholds) and favourability at the spot, from the
 # stored wind_detail of a prediction (docs/SURF_SCORING.md, "Stored components contract").
@@ -109,6 +110,8 @@ class MapSpotOut(BaseModel):
     conditions: Conditions | None
     event_at_time: bool  # an active swell event covers the selected time
     upcoming_event_count: int
+    # How fresh the spot's served forecast is (published version, last update, stale).
+    freshness: SpotFreshnessOut | None = None
 
 
 class AttributionLinkOut(BaseModel):
@@ -137,6 +140,8 @@ class MapSnapshotOut(BaseModel):
     # Credit and licence links of the sources behind the snapshot's runs (e.g. Open-Meteo's
     # CC BY 4.0 link, ECMWF's notice): shown next to the model data in the spot panel.
     attribution_links: list[AttributionLinkOut] = []
+    # The published forecast version the snapshot serves (None before the first one).
+    version_id: int | None = None
 
 
 class SpotMini(BaseModel):
@@ -215,6 +220,8 @@ class SpotSummary(SpotMini):
     # Overall research confidence of the spot ("high" | "moderate" | "low"); None when no
     # assessment exists yet.
     research_class: str | None = None
+    # How fresh the spot's served forecast is (published version, last update, stale).
+    freshness: SpotFreshnessOut | None = None
 
 
 class PhysicalProfileOut(BaseModel):
@@ -461,6 +468,8 @@ class SpotForecastOut(BaseModel):
     alerts_paused: bool = False
     # Server time when this response was built (UTC).
     generated_at: datetime | None = None
+    # How fresh the spot's served forecast is (published version, last update, stale).
+    freshness: SpotFreshnessOut | None = None
 
 
 class RegionOut(BaseModel):

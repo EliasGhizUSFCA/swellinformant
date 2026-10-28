@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
-from app.api.spots import public_cache, public_json, spot_page
+from app.api.spots import public_cache, public_json, spot_page, version_query
 from app.core.database import get_db
 from app.core.ratelimit import client_ip
 from app.schemas.timeline import SpotTimelineOut
@@ -36,6 +36,7 @@ def spot_timeline(
     slug: str,
     request: Request,
     days: int = Query(10, ge=1, le=16),
+    v: str | None = version_query(),
     db: Session = Depends(get_db),
 ) -> Response:
     """Every chart row of the spot page on one time axis, for the next ``days`` days."""
@@ -43,9 +44,9 @@ def spot_timeline(
     etag = snapshot.etag or ""
     if _matches(request.headers.get("if-none-match"), etag):
         response = Response(status_code=304)
-        public_cache(response)
+        public_cache(response, request, snapshot)
         response.headers["ETag"] = etag
         return response
-    response = public_json(snapshot)
+    response = public_json(snapshot, request)
     response.headers["ETag"] = etag
     return response

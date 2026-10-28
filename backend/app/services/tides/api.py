@@ -300,9 +300,9 @@ def _demo_block(
     if "demo" not in get_settings().forecast_provider_list:
         return None
     # Imported here: the forecast query helpers pull in the provider registry.
-    from app.services.forecasts.queries import latest_runs_by_spot
+    from app.services.forecasts.queries import served_runs_by_spot
 
-    run = latest_runs_by_spot(db, now).get(spot.id)
+    run = served_runs_by_spot(db, now).get(spot.id)
     if run is None or not run.source.is_demo:
         return None
     rows = db.execute(
