@@ -230,6 +230,11 @@ jobs:
       # scripts/run-e2e.sh recreates swell_e2e on this server (its defaults match).
       E2E_DATABASE_URL: postgresql+psycopg://swell:swell@localhost:5432/swell_e2e
       E2E_REDIS_URL: redis://localhost:6379/14
+      # The live-update specs (e2e/live-update*.spec.ts): open pages poll the forecast version
+      # every 2 s (production: 20 s), so a publication shows within seconds. run-e2e.sh exports
+      # it to the build and makes a random CRON_SECRET per run for POST /api/internal/refresh
+      # (set E2E_CRON_SECRET to fix one).
+      E2E_FORECAST_VERSION_POLL_MS: "2000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
