@@ -598,13 +598,20 @@ def test_a_key_echoed_by_windy_never_reaches_an_error_or_the_health_record() -> 
     assert health is not None and key not in str(health.as_dict())
 
 
-def test_the_daily_limit_answer_is_a_quota_error_until_midnight_utc() -> None:
+def test_the_daily_limit_answer_is_a_quota_error_until_midnight_utc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The adapter's clock at NOW (05:00 UTC): the wait is the 19 h to Windy's 00:00 UTC reset
+    # (with the wall clock the test failed in the last hour of every UTC day).
+    from app.services.forecasts import windy as windy_module
+
+    monkeypatch.setattr(windy_module, "utcnow", lambda: NOW)
     server = WindyServer(wave=lambda b: httpx.Response(429, json={"message": "Too many requests"}))
     p = provider(server)
     with pytest.raises(WindyQuotaError) as err:
         p.current_run(NOW)
     assert len(server.calls) == 1  # 429 is not retried
-    assert err.value.retry_after_s is not None and err.value.retry_after_s > 3600
+    assert err.value.retry_after_s == pytest.approx(19 * 3600)
     health = provider_manager.provider_health("windy")
     assert health is not None and health.last_failure_kind == provider_manager.QUOTA
     limit = WindyServer(gfs=lambda b: httpx.Response(400, json={"message": "Daily limit exceeded"}))
