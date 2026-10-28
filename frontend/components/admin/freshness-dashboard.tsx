@@ -105,7 +105,13 @@ export function NotAdmin() {
   return (
     <Alert data-testid="freshness-forbidden">
       <AlertTitle>Admins only</AlertTitle>
-      <AlertDescription>The freshness dashboard is for admin accounts (python -m app.cli make-admin EMAIL). The public status page is at /status.</AlertDescription>
+      <AlertDescription>
+        The freshness dashboard is for admin accounts. Forecast freshness for everyone is on the{" "}
+        <Link href="/status" className="font-medium text-ocean hover:underline">
+          public status page
+        </Link>
+        .
+      </AlertDescription>
     </Alert>
   );
 }

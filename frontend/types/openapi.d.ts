@@ -1702,6 +1702,18 @@ export interface components {
              * @description REFRESH_SCHEDULER_EXPECTED_MINUTES (0: off)
              */
             expected_minutes: number;
+            /**
+             * Limit Minutes
+             * @description The silence limit applied: REFRESH_SCHEDULER_EXPECTED_MINUTES, at least 3 x SYNC_CHECK_MINUTES when Celery or a daemon checking spots is the runner
+             * @default 0
+             */
+            limit_minutes: number;
+            /**
+             * Sync Running
+             * @description A sync a scheduler started runs under a valid lease
+             * @default false
+             */
+            sync_running: boolean;
             /** Enabled */
             enabled: boolean;
             /**

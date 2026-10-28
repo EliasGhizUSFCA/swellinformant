@@ -253,7 +253,11 @@ export function PublicationCard({ data }: { data: AdminFreshness }) {
                 ) : (
                   "no refresh check recorded"
                 )}
-                <div className="text-xs text-muted-foreground">expected at least every {s.expected_minutes} min</div>
+                <div className="text-xs text-muted-foreground">
+                  expected at least every {s.limit_minutes || s.expected_minutes} min
+                  {s.limit_minutes > s.expected_minutes ? ` (3 × SYNC_CHECK_MINUTES; REFRESH_SCHEDULER_EXPECTED_MINUTES=${s.expected_minutes})` : ""}
+                  {s.sync_running ? " · a sync is running" : ""}
+                </div>
               </>
             )}
           </Row>
@@ -583,7 +587,7 @@ function Stats({ label, s, unit = "s", testId }: { label: string; s: AdminDurati
         <span className="text-muted-foreground">no sample yet</span>
       ) : (
         <>
-          p50 <span className="font-medium">{f(s.p50)}</span> · p95 <span className="font-medium">{f(s.p95)}</span> · last {f(s.last)}
+          avg <span className="font-medium">{f(s.avg)}</span> · p50 {f(s.p50)} · p95 <span className="font-medium">{f(s.p95)}</span> · last {f(s.last)}
           <span className="text-muted-foreground">
             {" "}
             ({s.samples} sample{s.samples === 1 ? "" : "s"})

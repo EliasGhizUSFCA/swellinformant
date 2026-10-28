@@ -171,6 +171,8 @@ function report(overrides: Partial<AdminFreshness> = {}): AdminFreshness {
     ],
     scheduler: {
       expected_minutes: 30,
+      limit_minutes: 30,
+      sync_running: false,
       enabled: true,
       refresh_enabled: true,
       last_check_at: "2026-10-28T17:45:00Z",
@@ -250,6 +252,9 @@ describe("the freshness dashboard", () => {
 
     expect(screen.getByTestId("latency-upstream")).toHaveTextContent("p50 12 min");
     expect(screen.getByTestId("latency-frontend")).toHaveTextContent("p50 22 s · p95 33 s");
+    // Spec 16 asks for the average processing time: every timing row shows it.
+    expect(screen.getByTestId("processing-total")).toHaveTextContent("avg 12 s · p50 12 s");
+    expect(screen.getByTestId("latency-frontend")).toHaveTextContent("avg 27 s");
     expect(screen.getByTestId("processing-stages")).toHaveTextContent("predict");
     expect(screen.getByTestId("freshness-notes")).toHaveTextContent("Counters live in Redis");
   });
@@ -297,6 +302,15 @@ describe("the freshness dashboard", () => {
   it("tells a non-admin why the page is closed", () => {
     render(<NotAdmin />);
     expect(screen.getByTestId("freshness-forbidden")).toHaveTextContent("for admin accounts");
+    expect(screen.getByRole("link", { name: "public status page" })).toHaveAttribute("href", "/status");
+  });
+
+  it("says which silence limit applies to a runner with a slower check interval", () => {
+    const base = report().scheduler;
+    render(<FreshnessView data={report({ scheduler: { ...base, limit_minutes: 180, sync_running: true } })} />);
+    const row = screen.getByTestId("freshness-scheduler");
+    expect(row).toHaveTextContent("expected at least every 180 min (3 × SYNC_CHECK_MINUTES; REFRESH_SCHEDULER_EXPECTED_MINUTES=30)");
+    expect(row).toHaveTextContent("a sync is running");
   });
 });
 
