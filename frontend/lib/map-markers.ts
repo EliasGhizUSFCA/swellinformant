@@ -12,7 +12,8 @@
  * * height labels are placed in priority order (the selected spot, then the best rated), on
  *   the first side (right, left, below, above) whose box hits neither the marker's own
  *   arrows, another marker, another marker's arrows nor a label already placed; a label
- *   with no free side is left out, and labels only appear from LABEL_MIN_ZOOM in.
+ *   with no free side is left out, as is the label of a marker drawn over an already
+ *   labelled one, and labels only appear from LABEL_MIN_ZOOM in.
  * Everything hidden stays in the marker's tooltip and the spot panel.
  */
 import { arrowRotationDeg } from "@/lib/directions";
@@ -145,8 +146,12 @@ export function declutter(items: readonly GlyphInput[], zoom: number): Map<strin
 
   const circles = items.map((g) => ({ key: g.key, box: { x: g.x - g.radius - 1, y: g.y - g.radius - 1, w: 2 * g.radius + 2, h: 2 * g.radius + 2 } }));
   const placed: Box[] = [];
+  const labelled: GlyphInput[] = [];
   const order = [...items].filter((g) => g.label).sort((a, b) => b.priority - a.priority || a.key.localeCompare(b.key));
   for (const g of order) {
+    // Markers drawn over each other: only the first (best) of them is labelled, so a label
+    // never sits between circles it could belong to.
+    if (labelled.some((o) => Math.hypot(o.x - g.x, o.y - g.y) < o.radius + g.radius + 2)) continue;
     const width = labelWidth(g.label!);
     for (const side of SIDES) {
       const box = shift(labelBox(side, g.radius, width), g);
@@ -156,6 +161,7 @@ export function declutter(items: readonly GlyphInput[], zoom: number): Map<strin
       // Every drawn arrow, this marker's own included.
       if ([...arrows.values()].some((segs) => segs.some(([p, q]) => segmentHitsBox(p, q, hit)))) continue;
       placed.push(box);
+      labelled.push(g);
       out.set(g.key, { arrows: out.get(g.key)!.arrows, label: side });
       break;
     }

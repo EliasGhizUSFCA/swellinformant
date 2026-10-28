@@ -106,6 +106,12 @@ describe("declutter", () => {
     }
   });
 
+  it("labels only the best of markers drawn over each other", () => {
+    const out = declutter([glyph({ key: "best", priority: 90, swellRot: null, windRot: null }), glyph({ key: "under", x: 4, priority: 20, swellRot: null, windRot: null })], 6);
+    expect(out.get("best")!.label).not.toBeNull();
+    expect(out.get("under")!.label).toBeNull();
+  });
+
   it("leaves a label out when every side is taken", () => {
     // A ring of markers 16 px around the centre blocks all four sides.
     const ring = [0, 90, 180, 270].map((deg, i) => {
