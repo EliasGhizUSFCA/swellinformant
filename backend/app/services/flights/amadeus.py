@@ -147,6 +147,7 @@ class AmadeusProvider(FlightProvider):
         d_tz = require_tz(dep["iataCode"], None, self.tz_lookup)
         a_tz = require_tz(arr["iataCode"], None, self.tz_lookup)
         code = seg["carrierCode"]
+        operating = (seg.get("operating") or {}).get("carrierCode")
         return Segment(
             origin=dep["iataCode"],
             destination=arr["iataCode"],
@@ -157,7 +158,10 @@ class AmadeusProvider(FlightProvider):
             marketing_carrier=code,
             carrier_name=str(carriers.get(code, code)).title(),
             flight_number=f"{code}{seg.get('number', '')}",
-            operating_carrier=(seg.get("operating") or {}).get("carrierCode"),
+            operating_carrier=operating,
+            operating_carrier_name=(
+                str(carriers.get(operating, operating)).title() if operating else None
+            ),
         )
 
     def normalize(self, raw: dict[str, Any], carriers: dict[str, str]) -> NormalizedOffer:

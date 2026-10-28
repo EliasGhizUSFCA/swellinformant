@@ -642,6 +642,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/searches/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Defaults
+         * @description The deployment's defaults and limits for a new search (the wizard's starting point).
+         */
+        get: operations["defaults_api_searches_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/searches/{search_id}": {
         parameters: {
             query?: never;
@@ -772,7 +792,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Refresh Flights */
+        /**
+         * Refresh Flights
+         * @description An explicit flight check (spec 26: one of the few reasons to search). Searches that
+         *     are still cached are reused; one whose first offer expired is not (its cache entry
+         *     ends then), so the provider is asked again. It counts against the user's daily
+         *     flight-search budget (FLIGHT_USER_DAILY_QUOTA), refused here once that is used up.
+         */
         post: operations["refresh_flights_api_opportunities__match_id__refresh_flights_post"];
         delete?: never;
         options?: never;
@@ -1916,6 +1942,14 @@ export interface components {
             label: string;
             /** Url */
             url: string;
+            /**
+             * Kind
+             * @default route_search
+             * @enum {string}
+             */
+            kind: "booking" | "route_search";
+            /** Note */
+            note?: string | null;
         };
         /** LoginIn */
         LoginIn: {
@@ -2130,6 +2164,18 @@ export interface components {
              * @default false
              */
             stale: boolean;
+            /**
+             * Short Notice
+             * @default false
+             */
+            short_notice: boolean;
+            /**
+             * Best Offer Expired
+             * @default false
+             */
+            best_offer_expired: boolean;
+            /** Quoted Currency */
+            quoted_currency?: string | null;
             event: components["schemas"]["EventOut"];
             /** Spot Airports */
             spot_airports: components["schemas"]["SpotAirportOut"][];
@@ -2257,6 +2303,18 @@ export interface components {
              * @default false
              */
             stale: boolean;
+            /**
+             * Short Notice
+             * @default false
+             */
+            short_notice: boolean;
+            /**
+             * Best Offer Expired
+             * @default false
+             */
+            best_offer_expired: boolean;
+            /** Quoted Currency */
+            quoted_currency?: string | null;
         };
         /** Message */
         Message: {
@@ -2651,6 +2709,18 @@ export interface components {
             offer_expires_at: string | null;
             /** Links */
             links: components["schemas"]["LinkOut"][];
+            /**
+             * Operating Carriers
+             * @default []
+             */
+            operating_carriers: string[];
+            /**
+             * Expired
+             * @default false
+             */
+            expired: boolean;
+            /** Converted Currency */
+            converted_currency?: string | null;
         };
         /** PairCount */
         PairCount: {
@@ -2958,6 +3028,34 @@ export interface components {
             /** Error */
             error: number;
         };
+        /**
+         * SearchDefaultsOut
+         * @description What the search wizard needs to know about this deployment's limits.
+         */
+        SearchDefaultsOut: {
+            /** Alert Lead Min Days */
+            alert_lead_min_days: number;
+            /** Alert Lead Max Days */
+            alert_lead_max_days: number;
+            /** Forecast Days */
+            forecast_days: number;
+            /** Detection Lead Min Days */
+            detection_lead_min_days: number;
+            /** Detection Lead Max Days */
+            detection_lead_max_days: number;
+            /** Short Notice Min Days */
+            short_notice_min_days: number;
+            /** Short Notice Max Days */
+            short_notice_max_days: number;
+            /** Max Origins */
+            max_origins: number;
+            /** Max Layovers */
+            max_layovers: number;
+            /** Max Alert Lead Days */
+            max_alert_lead_days: number;
+            /** Flight Searches Per Day */
+            flight_searches_per_day: number;
+        };
         /** SearchIn */
         SearchIn: {
             /** Name */
@@ -3029,6 +3127,10 @@ export interface components {
              * @default true
              */
             notify_on_updates: boolean;
+            /** Alert Lead Min Days */
+            alert_lead_min_days?: number | null;
+            /** Alert Lead Max Days */
+            alert_lead_max_days?: number | null;
             /** @default balanced */
             priority: components["schemas"]["RankingPriority"];
             travel: components["schemas"]["TravelIn"];
@@ -3091,6 +3193,10 @@ export interface components {
             notify_surf_only: boolean;
             /** Notify On Updates */
             notify_on_updates: boolean;
+            /** Alert Lead Min Days */
+            alert_lead_min_days: number;
+            /** Alert Lead Max Days */
+            alert_lead_max_days: number;
             priority: components["schemas"]["RankingPriority"];
             travel: components["schemas"]["TravelOut"];
             /**
@@ -3142,6 +3248,10 @@ export interface components {
             flight_number: string;
             /** Duration Minutes */
             duration_minutes: number;
+            /** Operating Carrier */
+            operating_carrier?: string | null;
+            /** Operating Carrier Name */
+            operating_carrier_name?: string | null;
         };
         /** SimulateIn */
         SimulateIn: {
@@ -5278,6 +5388,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    defaults_api_searches_defaults_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchDefaultsOut"];
                 };
             };
         };

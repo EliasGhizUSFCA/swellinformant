@@ -206,8 +206,11 @@ def test_the_daemon_has_no_sync_tick_job_and_stages_are_never_overdue() -> None:
         for name in ("forecasts.acquire", "forecasts.blend", "quality.predict", "sync.publish"):
             assert jobs[name].schedule == health.SYNC_STAGE_SCHEDULE == "in each sync", name
             assert jobs[name].max_gap is None, name
-        # Scheduled stages keep their own interval (they also run between syncs).
-        assert jobs["matching.match"].max_gap == timedelta(minutes=30)
+        # Scheduled stages keep their own interval (they also run between syncs): matching
+        # once a day as housekeeping (design D15); flight discovery only in each sync.
+        assert jobs["matching.match"].max_gap == timedelta(days=1)
+        assert jobs["flights.discover"].max_gap is None
+        assert jobs["flights.discover"].schedule == health.SYNC_STAGE_SCHEDULE
         assert jobs["detection.detect"].max_gap is None
 
 

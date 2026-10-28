@@ -103,7 +103,12 @@ def deliver_account_email(
         try:
             result = build_email_provider().send(
                 EmailMessageData(
-                    to=row.recipient, subject=row.subject, text=text, html=html, tag=tag
+                    to=row.recipient,
+                    subject=row.subject,
+                    text=text,
+                    html=html,
+                    tag=tag,
+                    idempotency_key=f"account-email-{row.id}",
                 )
             )
         except TransientProviderError as exc:

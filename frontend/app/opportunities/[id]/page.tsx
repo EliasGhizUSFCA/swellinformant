@@ -64,8 +64,12 @@ function SliceView({ title, slice }: { title: string; slice: FlightSlice }) {
       <ol className="space-y-1.5 border-l-2 border-secondary pl-4 text-xs">
         {slice.segments.map((s, i) => (
           <li key={i}>
-            <span className="font-medium">{s.flight_number}</span> {s.carrier_name} · {s.origin} {localTime(s.departure_local)} → {s.destination}{" "}
-            {localTime(s.arrival_local)} <span className="text-muted-foreground">({formatDuration(s.duration_minutes)}, local times)</span>
+            <span className="font-medium">{s.flight_number}</span> {s.carrier_name}
+            {s.operating_carrier_name && s.operating_carrier_name !== s.carrier_name && (
+              <span className="font-medium"> (operated by {s.operating_carrier_name})</span>
+            )}{" "}
+            · {s.origin} {localTime(s.departure_local)} → {s.destination} {localTime(s.arrival_local)}{" "}
+            <span className="text-muted-foreground">({formatDuration(s.duration_minutes)}, local times)</span>
           </li>
         ))}
       </ol>
@@ -75,17 +79,41 @@ function SliceView({ title, slice }: { title: string; slice: FlightSlice }) {
 
 function OfferCard({ offer, best }: { offer: Offer; best: boolean }) {
   const validated = offer.validation_status === "valid" || offer.validation_status === "price_changed";
+  // A converted price is shown in the search currency and says so, next to the provider's own fare.
+  const converted = offer.converted_currency && offer.price_converted != null;
+  const operating = offer.operating_carriers ?? [];
   return (
-    <div className={cn("rounded-2xl border bg-card p-4", best && "border-primary ring-1 ring-primary")} data-testid="offer-card">
+    <div
+      className={cn("rounded-2xl border bg-card p-4", best && "border-primary ring-1 ring-primary", offer.expired && "opacity-80")}
+      data-testid="offer-card"
+    >
       <div className="flex flex-wrap items-center gap-3">
         {best && <Badge>Best match</Badge>}
-        <span className="font-display text-2xl font-semibold">{formatMoney(offer.price_converted ?? offer.price_per_traveler, offer.currency)}</span>
-        <span className="text-xs text-muted-foreground">per traveller · total {formatMoney(offer.total_price, offer.currency)}</span>
+        <span className="font-display text-2xl font-semibold">
+          {converted
+            ? formatMoney(offer.price_converted, offer.converted_currency)
+            : formatMoney(offer.price_converted ?? offer.price_per_traveler, offer.currency)}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          per traveller
+          {converted ? ` (converted from ${formatMoney(offer.price_per_traveler, offer.currency)} with a configured exchange rate)` : ""} · total{" "}
+          {formatMoney(offer.total_price, offer.currency)}
+        </span>
         {offer.is_mock && <DemoBadge mock />}
+        {offer.expired && (
+          <Badge variant="warn" data-testid="offer-expired">
+            Quote expired — re-check flights
+          </Badge>
+        )}
         <span className="ml-auto text-sm text-muted-foreground">
           {offer.airline_names.join(", ")} · {formatDuration(offer.outbound.duration_minutes)} out / {formatDuration(offer.inbound.duration_minutes)} back
         </span>
       </div>
+      {operating.length > 0 && (
+        <div className="mt-1 text-sm font-medium text-ink" data-testid="offer-operated-by">
+          Operated by {operating.join(", ")}
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span>
           Arrive {localTime(offer.outbound.arrival_local)} ({offer.destination_timezone}) · Depart {localTime(offer.inbound.departure_local)}
@@ -106,14 +134,18 @@ function OfferCard({ offer, best }: { offer: Offer; best: boolean }) {
         <SliceView title="Outbound" slice={offer.outbound} />
         <SliceView title="Return" slice={offer.inbound} />
       </Disclosure>
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         {offer.links.map((l) => (
-          <Button key={l.url} asChild variant="outline" size="sm">
+          <Button key={l.url} asChild variant={l.kind === "booking" ? "default" : "outline"} size="sm">
             <a href={l.url} target="_blank" rel="noopener noreferrer">
-              {l.label} <ExternalLink />
+              {l.label}
+              {l.kind !== "booking" && <span className="font-normal text-muted-foreground"> · route search</span>} <ExternalLink />
             </a>
           </Button>
         ))}
+        {offer.links.some((l) => l.kind !== "booking") && (
+          <span className="text-xs text-muted-foreground">Route searches open a new search; fares there may differ.</span>
+        )}
       </div>
     </div>
   );
@@ -325,7 +357,7 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
             )}
             {m.inspection_links.length > 0 && (
               <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
-                <span className="text-muted-foreground">Compare elsewhere:</span>
+                <span className="text-muted-foreground">Compare elsewhere (route searches — fares may differ):</span>
                 {m.inspection_links.map((l) => (
                   <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-ocean hover:underline">
                     {l.label} <ExternalLink className="size-3" />
@@ -359,7 +391,11 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                   <span className="flex items-center gap-2">
                     <Plane className="size-4 text-ocean" /> {m.origin_iata} <ArrowRight className="size-3" /> {m.destination_iata}
                   </span>
-                  <span className="font-semibold">{formatMoney(m.best_price, m.currency)}</span>
+                  <span className="text-right">
+                    <span className="font-semibold">{formatMoney(m.best_price, m.currency)}</span>
+                    {m.quoted_currency && <span className="block text-xs text-muted-foreground">converted from {m.quoted_currency}</span>}
+                    {m.best_offer_expired && <span className="block text-xs text-amber-700">quote expired</span>}
+                  </span>
                 </div>
               )}
               {m.travel_window && (

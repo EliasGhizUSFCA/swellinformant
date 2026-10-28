@@ -14,6 +14,12 @@ any more; Celery beat runs the sync check instead (:data:`SYNC_TICK_ENTRY`, ever
 SYNC_CHECK_MINUTES), and the daemon checks on its own. The remaining interval jobs run at
 least JOB_INTERVAL_FLOOR_MINUTES apart (0 = as listed), so a hosted deployment wakes its
 database at most hourly between syncs.
+
+Flights are never searched on a timer (spec 26/27, design D15): a sync runs matching,
+flight discovery and alerts after every publication (app.services.sync.orchestrator
+AFTER_PUBLISH), "match my search" and "re-check flights" kick them, and matching runs once
+a day as housekeeping (:data:`MATCHING_HOUSEKEEPING`, windows that passed expire even
+without a new forecast; under Celery its chain then searches only new or changed matches).
 """
 
 from __future__ import annotations
@@ -34,6 +40,9 @@ SYNC_TICK_TIME_LIMIT_SECONDS = 3600
 SYNC_TICK_SOFT_TIME_LIMIT_SECONDS = 3300
 # Beat's entry for the sync check (the daemon skips it: it checks on its own).
 SYNC_TICK_ENTRY = "sync-tick"
+# The daily matching run between publications (expires passed windows; 03:45 UTC, after
+# the 03:30 maintenance cleanup).
+MATCHING_HOUSEKEEPING = "matching-housekeeping"
 
 # Each successful stage queues the next one (app.jobs.runner.run_job, ``on_success``) when a
 # job runs on its own: a manual forecasts.acquire, or matching.match from beat or a kick. A
@@ -153,8 +162,7 @@ def build_schedule(settings: Settings) -> dict[str, JobEntry]:
     """
     jobs = [
         JobEntry(SYNC_TICK_ENTRY, SYNC_TICK_JOB, Every(settings.sync_check_minutes)),
-        JobEntry("user-matching", "matching.match", Every(30)),
-        JobEntry("flight-discovery", "flights.discover", Every(60)),
+        JobEntry(MATCHING_HOUSEKEEPING, "matching.match", DailyAt((3,), 45)),
         JobEntry("alert-generation", "alerts.generate", Every(15)),
         JobEntry("notification-delivery", "notifications.deliver", Every(2)),
         JobEntry("forecast-staleness-check", "forecasts.check_staleness", Every(60)),

@@ -186,6 +186,9 @@ function match(overrides: Partial<MatchSummary> = {}): MatchSummary {
     local_confidence_class: "low",
     local_confidence_reason: LOCAL_REASON,
     stale: false,
+    short_notice: true,
+    best_offer_expired: false,
+    quoted_currency: null,
     ...overrides,
   };
 }

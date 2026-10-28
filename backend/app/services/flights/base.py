@@ -61,6 +61,14 @@ class Segment:
     carrier_name: str
     flight_number: str
     operating_carrier: str | None = None
+    # The operating carrier's full name (Duffel requires it on the first screen that shows an
+    # offer: slices[].segments[].operating_carrier.name). None = the marketing carrier flies.
+    operating_carrier_name: str | None = None
+
+    @property
+    def operated_by(self) -> str:
+        """The full name of the airline that flies this segment."""
+        return self.operating_carrier_name or self.carrier_name or self.marketing_carrier
 
     @property
     def duration_minutes(self) -> int:
@@ -79,6 +87,7 @@ class Segment:
             "carrier_name": self.carrier_name,
             "flight_number": self.flight_number,
             "operating_carrier": self.operating_carrier,
+            "operating_carrier_name": self.operating_carrier_name,
             "duration_minutes": self.duration_minutes,
         }
 
@@ -133,6 +142,30 @@ class NormalizedOffer:
     @property
     def total_duration_minutes(self) -> int:
         return self.outbound.duration_minutes + self.inbound.duration_minutes
+
+    @property
+    def operating_carriers(self) -> list[str]:
+        """Full names of the airlines operating the segments, in travel order, once each."""
+        return operating_carrier_names(self.outbound.segments + self.inbound.segments)
+
+
+def operating_carrier_names(segments: list[Segment] | list[dict[str, Any]]) -> list[str]:
+    """Full names of the operating carriers of ``segments`` (Segment objects or their
+    stored dicts), in order, once each; the marketing carrier's name when none is known."""
+    names: list[str] = []
+    for seg in segments:
+        if isinstance(seg, Segment):
+            name = seg.operated_by
+        else:
+            name = (
+                seg.get("operating_carrier_name")
+                or seg.get("carrier_name")
+                or seg.get("marketing_carrier")
+                or ""
+            )
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 @dataclass

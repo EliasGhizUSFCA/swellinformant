@@ -193,8 +193,9 @@ def test_the_schedule_has_the_synced_entries() -> None:
     assert all(isinstance(e, JobEntry) and e.name == name for name, e in plain.items())
     assert {name: e.task for name, e in plain.items()} == {
         "sync-tick": "sync.tick",
-        "user-matching": "matching.match",
-        "flight-discovery": "flights.discover",
+        # Design D15: daily matching housekeeping; flights.discover only runs in a sync or
+        # on a kick (never on a timer).
+        "matching-housekeeping": "matching.match",
         "alert-generation": "alerts.generate",
         "notification-delivery": "notifications.deliver",
         "forecast-staleness-check": "forecasts.check_staleness",

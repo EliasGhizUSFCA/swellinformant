@@ -1383,6 +1383,28 @@
     }
    }
   },
+  "/api/searches/defaults": {
+   "get": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Defaults",
+    "description": "The deployment's defaults and limits for a new search (the wizard's starting point).",
+    "operationId": "defaults_api_searches_defaults_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchDefaultsOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/searches/{search_id}": {
    "get": {
     "tags": [
@@ -1821,6 +1843,7 @@
      "opportunities"
     ],
     "summary": "Refresh Flights",
+    "description": "An explicit flight check (spec 26: one of the few reasons to search). Searches that\nare still cached are reused; one whose first offer expired is not (its cache entry\nends then), so the provider is asked again. It counts against the user's daily\nflight-search budget (FLIGHT_USER_DAILY_QUOTA), refused here once that is used up.",
     "operationId": "refresh_flights_api_opportunities__match_id__refresh_flights_post",
     "parameters": [
      {
@@ -5360,6 +5383,26 @@
      "url": {
       "type": "string",
       "title": "Url"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "booking",
+       "route_search"
+      ],
+      "title": "Kind",
+      "default": "route_search"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
      }
     },
     "type": "object",
@@ -5920,6 +5963,27 @@
       "title": "Stale",
       "default": false
      },
+     "short_notice": {
+      "type": "boolean",
+      "title": "Short Notice",
+      "default": false
+     },
+     "best_offer_expired": {
+      "type": "boolean",
+      "title": "Best Offer Expired",
+      "default": false
+     },
+     "quoted_currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Quoted Currency"
+     },
      "event": {
       "$ref": "#/components/schemas/EventOut"
      },
@@ -6306,6 +6370,27 @@
       "type": "boolean",
       "title": "Stale",
       "default": false
+     },
+     "short_notice": {
+      "type": "boolean",
+      "title": "Short Notice",
+      "default": false
+     },
+     "best_offer_expired": {
+      "type": "boolean",
+      "title": "Best Offer Expired",
+      "default": false
+     },
+     "quoted_currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Quoted Currency"
      }
     },
     "type": "object",
@@ -7619,6 +7704,30 @@
       },
       "type": "array",
       "title": "Links"
+     },
+     "operating_carriers": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Operating Carriers",
+      "default": []
+     },
+     "expired": {
+      "type": "boolean",
+      "title": "Expired",
+      "default": false
+     },
+     "converted_currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Converted Currency"
      }
     },
     "type": "object",
@@ -8656,6 +8765,70 @@
     ],
     "title": "ScatterPoint"
    },
+   "SearchDefaultsOut": {
+    "properties": {
+     "alert_lead_min_days": {
+      "type": "integer",
+      "title": "Alert Lead Min Days"
+     },
+     "alert_lead_max_days": {
+      "type": "integer",
+      "title": "Alert Lead Max Days"
+     },
+     "forecast_days": {
+      "type": "integer",
+      "title": "Forecast Days"
+     },
+     "detection_lead_min_days": {
+      "type": "number",
+      "title": "Detection Lead Min Days"
+     },
+     "detection_lead_max_days": {
+      "type": "number",
+      "title": "Detection Lead Max Days"
+     },
+     "short_notice_min_days": {
+      "type": "number",
+      "title": "Short Notice Min Days"
+     },
+     "short_notice_max_days": {
+      "type": "number",
+      "title": "Short Notice Max Days"
+     },
+     "max_origins": {
+      "type": "integer",
+      "title": "Max Origins"
+     },
+     "max_layovers": {
+      "type": "integer",
+      "title": "Max Layovers"
+     },
+     "max_alert_lead_days": {
+      "type": "integer",
+      "title": "Max Alert Lead Days"
+     },
+     "flight_searches_per_day": {
+      "type": "integer",
+      "title": "Flight Searches Per Day"
+     }
+    },
+    "type": "object",
+    "required": [
+     "alert_lead_min_days",
+     "alert_lead_max_days",
+     "forecast_days",
+     "detection_lead_min_days",
+     "detection_lead_max_days",
+     "short_notice_min_days",
+     "short_notice_max_days",
+     "max_origins",
+     "max_layovers",
+     "max_alert_lead_days",
+     "flight_searches_per_day"
+    ],
+    "title": "SearchDefaultsOut",
+    "description": "What the search wizard needs to know about this deployment's limits."
+   },
    "SearchIn": {
     "properties": {
      "name": {
@@ -8867,6 +9040,32 @@
       "title": "Notify On Updates",
       "default": true
      },
+     "alert_lead_min_days": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 16.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Alert Lead Min Days"
+     },
+     "alert_lead_max_days": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 16.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Alert Lead Max Days"
+     },
      "priority": {
       "$ref": "#/components/schemas/RankingPriority",
       "default": "balanced"
@@ -9072,6 +9271,14 @@
       "type": "boolean",
       "title": "Notify On Updates"
      },
+     "alert_lead_min_days": {
+      "type": "integer",
+      "title": "Alert Lead Min Days"
+     },
+     "alert_lead_max_days": {
+      "type": "integer",
+      "title": "Alert Lead Max Days"
+     },
      "priority": {
       "$ref": "#/components/schemas/RankingPriority"
      },
@@ -9148,6 +9355,8 @@
      "notification_channel",
      "notify_surf_only",
      "notify_on_updates",
+     "alert_lead_min_days",
+     "alert_lead_max_days",
      "priority",
      "travel",
      "created_at",
@@ -9209,6 +9418,28 @@
      "duration_minutes": {
       "type": "integer",
       "title": "Duration Minutes"
+     },
+     "operating_carrier": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Operating Carrier"
+     },
+     "operating_carrier_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Operating Carrier Name"
      }
     },
     "type": "object",
