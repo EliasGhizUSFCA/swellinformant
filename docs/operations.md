@@ -283,10 +283,73 @@ exits 0 ok, 1 degraded, 2 failing, 3 unreachable:
 
 The same command works locally: `python -m app.services.health` prints the JSON report.
 
+### Admin freshness dashboard: `/admin/freshness` (Swell 2.0)
+
+The public report above stays minimal on purpose. Everything section 16 of the spec asks an
+admin to see is on `/admin/freshness` (linked from `/status` for admin accounts), fed by
+`GET /api/admin/freshness` (`app/api/admin.py`, `app/services/admin_freshness.py`):
+
+* **Who can read it.** Signed-in admin accounts only (`python -m app.cli make-admin EMAIL`):
+  401 signed out, 403 for other users; signed-out visitors of the page are sent to sign in.
+  Always `Cache-Control: private, no-store`, never shared by the CDN: the body carries
+  redacted error text, quota counters and per-spot failure reasons.
+* **What it costs.** Bounded reads only, never a provider call: the newest 30 forecast
+  versions by id (without their spot maps) and the published one, the newest 20 syncs, the
+  newest 200 forecast runs by id, today's flight searches through their `searched_at` index,
+  today's account and alert emails (`email_messages` and `notifications` have no index on
+  `created_at` alone: these two counts scan the rows retention keeps), plus a few Redis reads
+  (the call counters, the latency list, the first-served marks of the newest 5 versions, the
+  provider health and the refresh check), and the data-health report. Nothing here runs for a
+  public request.
+* **When the page reads it.** On opening, when the tab regains focus (a report older than
+  15 s), on "Reload", and when the published forecast version changes: the page polls the
+  Redis-only `GET /api/forecasts/version` every `NEXT_PUBLIC_FORECAST_VERSION_POLL_MS` (20 s)
+  while the tab is visible, never the report itself. Without that endpoint (a deployment
+  without the live-updates API answers 404) the poll stops and the report is still read on
+  focus.
+
+| Group | What it shows | Where it comes from |
+|---|---|---|
+| Problems | the admin-only problems (next section) and the public data-health problems, the most severe first, with the redacted last error | `app/services/health.py` |
+| Provider and models | the active provider, why it was chosen (`WEATHER_PROVIDER` / `FORECAST_PROVIDERS`), whether a fallback stands in (Windy -> Open-Meteo) and until when, the recorded provider health; per component (atmosphere, wave): the model, the served run, its upstream availability, when it was detected and acquired, whether it was carried forward from an older refresh, its typical lag and when the next run is expected and counts as late | `forecast_versions.components`, the provider manager |
+| Detection to publication | the last detected model update, the last successful acquisition and scoring (from the forecast runs before the first version exists), the published version with its spot counts (updated, stale, failed) and the refresh scheduler's last check | `forecast_versions`, `forecast_runs`, Redis |
+| Freshness timeline | the newest versions: status, publication time, wind and wave run, which components changed, spot counts, availability -> publication | `forecast_versions` |
+| Stale spots | the published version's stale active spots with their last update, the reason (latest refresh failed, no data, a component older than its model's interval + threshold) and the failed refresh's error | `versions.spot_freshness` |
+| Failures | non-2xx upstream responses of the last 24 h by source and HTTP status, failed flight searches by provider | `forecast_runs.details.stats`, `flight_searches` |
+| Refresh jobs | the newest 20 syncs: trigger, status, kinds, start, duration, every stage's duration, the versions they published, the redacted error | `sync_runs` |
+| API usage against the limits | see "API usage reporting" below | Redis counters, `flight_searches`, emails |
+| Processing times and latencies | per stage of the finished refresh syncs: runs, average, p95, maximum, average CPU; the whole refresh; detection -> acquisition -> scoring -> publication; upstream availability -> publication (versions that fetched new data; a retry of failed spots is left out); publication -> browsers (p50/p95 of the open tabs' reports after a version change, newest 200 in Redis); publication -> first served by the version endpoint | `sync_runs.stages`, `forecast_versions`, `versions.seen_latencies`, `versions.first_served_at` |
+
+Before the first versioned refresh (a database upgraded from Upgrade 4) the model, spot and
+latency figures stay empty and the page says so; acquisitions and requests still show from
+the stored forecast runs. Verified on a clone of the real data of 2026-10-16: the requests of
+the last 24 h read the runs' own records (Open-Meteo GFS 11 requests and 142.86 weighted
+calls, ECMWF 7 and 124.29, the NOAA GRIB layers 63 requests and 71 MB), and after one version
+was published from the stored run the typical lags came out as the run's own availability
+times (GFS-Wave 318 min after the cycle, GFS atmosphere 374 min: its 0.25 deg domain is the
+later one).
+
+### API usage reporting
+
+`app/services/usage.py` reports what the app spent against each upstream allowance; the
+dashboard's "API usage" group and the `quota_near` problem read it:
+
+| Counter | Window | Limit | Notes |
+|---|---|---|---|
+| Open-Meteo weighted calls | current UTC minute, hour, day, month | `OPEN_METEO_CALLS_PER_MINUTE` / `_HOUR` / `_DAY` / `_MONTH` (600 / 5,000 / 10,000 / 300,000, the free tier) | Open-Meteo bills weighted calls (more than 10 variables or 14 days per location count extra), not HTTP requests; its metadata (`meta.json`) calls are free and not counted. Reserved before each request (`app/services/forecasts/quota.py`) |
+| Windy requests | current UTC day | `WINDY_DAILY_REQUEST_LIMIT` (10,000) | counted by the providers package (`quota.usage_snapshot`); a build without it shows "not counted" |
+| Flight provider requests | current UTC day | `FLIGHT_DAILY_QUOTA` (300) | every attempt counts (`app.core.redis.consume_quota`, key `quota:<provider>:<YYYYMMDD>`); the demo provider has no quota. Also shown: searches stored today per provider, failed ones, and `FLIGHT_USER_DAILY_QUOTA` per user |
+| Emails | current UTC day | none enforced here | account emails (verification, password reset, tests) and alert emails created today, and how many failed, bounced, were rejected or complained; the provider's own quota (e.g. Resend's daily limit) is in its console |
+| Forecast requests | last 24 h | none | per source: runs started, failed runs, HTTP requests, weighted calls, bytes and responses by status, from each run's `details.stats` |
+
+Every counter lives in Redis and restarts from zero when Redis loses its data; a counter
+that cannot be read is shown as unknown, never as 0. The console figures (Neon, Upstash,
+Vercel) are not visible to the app: see "Budgets and meters" below.
+
 ### Admin alerts (`ops.data_health`, every `DATA_HEALTH_CHECK_MINUTES`: 15, hourly on Vercel)
 
 The job emails every **active admin account with a verified address** through the
-configured email provider:
+configured email provider (users never get these emails, whatever their alert settings):
 
 * when a problem appears (new) or its severity rises;
 * again at most every `DATA_HEALTH_ALERT_REPEAT_HOURS` (12 h) while it lasts;
@@ -299,14 +362,33 @@ alert and one recovery notice per 12 h, however often it flaps; only a rise in s
 sent at once.
 
 All due items of one run go into one email per admin; the email lists the other current
-problems as "already reported", the last error of a failed job, and links to `/status`
-and `/api/health/data`. A problem is only marked as sent when the provider accepted (or
+problems as "already reported", the last error of a failed job, and links to `/status`,
+`/admin/freshness` and `/api/health/data`. A problem is only marked as sent when the provider accepted (or
 the development inbox captured) at least one email; otherwise the next run tries again.
 The de-duplication state lives in the job's own `background_job_logs.details`, so a
 restart neither loses it nor re-sends old alerts. Logs carry counts, never addresses.
 Settings: `DATA_HEALTH_CHECK_MINUTES` (15), `DATA_HEALTH_ALERTS_ENABLED` (true),
 `DATA_HEALTH_ALERT_REPEAT_HOURS` (12), `DATA_HEALTH_HEARTBEAT_MINUTES` (30),
 `DATA_HEALTH_OBSERVATION_STALE_HOURS`, `DATA_HEALTH_DATABASE_MAX_GB`.
+
+**Admin-only problems (Swell 2.0, design D12).** The job also checks the problems below
+(`app/services/health.py`, `data_health(admin=True)`). They follow exactly the rules above
+(new, rise in severity, reminder every 12 h, recovery notice, flapping) and go into the same
+email, only to the same verified admins. They are never part of the public report
+(`/api/health/data` and `/status` keep only the checks of the table further up); the admin
+dashboard lists them. If these checks themselves fail (a bug, a database error) the job
+reports `admin_checks_failed` and still sends the public problems' alerts.
+
+| Key | Severity | Means (threshold) | Do |
+|---|---|---|---|
+| `model_run_late:<atmosphere\|wave>` | degraded | no newer run of that component is known (published, staged, attempted by a refresh, or seen by the daemon's last check) although its expected availability has passed: the newest run's init time + the model's update interval (`update_interval_seconds` from Open-Meteo's meta.json where the version recorded it, else 6 h, said "assumed") + the typical lag measured on the recent versions (median of availability minus init time) + a grace of max(90 min, the measured spread of that lag). Without a measured lag (no version with an availability time yet) nothing is judged: never a fixed wall-clock guess. The 90 min cover Open-Meteo's servers disagreeing about the same run (62 min apart, measured 2026-10-26), the 10-minute servable wait and one check interval | the dashboard's model block shows the expected and late times. Check the provider's own update page (Open-Meteo: open-meteo.com/en/docs/model-updates); if the provider has the run, look at `provider_unavailable`, `refresh_failures` and `refresh_scheduler_silent`, then `python -m app.cli sync check` |
+| `forecast_stale_spots` | degraded | active spots of the published version serve a stale forecast: their latest refresh failed while others updated, they have no data, or a component is older than its model's interval + `FORECAST_STALE_THRESHOLD_MINUTES` (360; per model `FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL`). The email names up to 8 spots and the failed refreshes' errors | the site already labels them "Forecast last updated N hours ago". A retry of the failed spots follows automatically (5, 15, 45 min); if they stay stale, read the errors on the dashboard (stale spots, refresh jobs) |
+| `refresh_failures` | degraded | the newest 3 or more finished spot-refresh syncs in a row failed or were abandoned (skipped checks and map-only syncs do not count; `sync_failed` above already fires at 2 of any kind). The newest error goes to the email only | `python -m app.cli sync status`; then the provider's runbook below ("A forecast provider is down or late", "Open-Meteo refuses requests") or "A deploy killed a sync" |
+| `provider_credentials:<provider>` | failing; degraded while a fallback stands in for that provider | the provider refused the key (HTTP 401/403, Windy's HTTP 400 "Invalid API key") or answered with a Windy TESTING key, in the newest attempt of its source or in the provider health the providers package records; no later success | fix the key in the deployment's environment (`OPEN_METEO_API_KEY`, `WINDY_API_KEY`; docs/API_SETUP_REQUIRED.md, docs/WINDY_API_SETUP.md). A testing key is never stored or published: replace it with the paid Point Forecast key |
+| `provider_unavailable:<source>` | degraded | the provider's run metadata could not be read for 30 min (`unknown` components in the daemon's or the refresh endpoint's check, or Windy's consecutive transient failures). When it was first seen unknown is kept in Redis (`ops:metadata-unknown:v1`), so the duration counts across checks; the resolution is the alert job's own interval | the provider's status page; from the server `python -m app.cli forecast provider-check` (one free metadata request) once the providers package is merged; outbound access and DNS of the host |
+| `provider_fallback:<provider>` | degraded | Open-Meteo stands in for Windy: the provider manager holds a fallback after a credential, testing-key, quota or availability failure, or the published version says `fallback_from` | the site keeps updating from Open-Meteo. Fix the cause shown (often `provider_credentials` or `quota_near:windy_day`); Windy is tried again automatically when the hold ends, and a successful Windy refresh ends it at once |
+| `quota_near:<counter>` | degraded | `QUOTA_ALERT_FRACTION` (0.8) of a provider allowance is used: `open_meteo_day`, `open_meteo_month` (weighted calls), `windy_day` (requests), `flights_<provider>_day` (`FLIGHT_DAILY_QUOTA`). Clears when the window resets or the limit is raised | the dashboard's usage group; "Open-Meteo refuses requests" below. A paid plan raises the limits (`OPEN_METEO_CALLS_PER_*`, `WINDY_DAILY_REQUEST_LIMIT`, `FLIGHT_DAILY_QUOTA`) |
+| `refresh_scheduler_silent` | degraded | no refresh check for `REFRESH_SCHEDULER_EXPECTED_MINUTES` (30): neither the refresh endpoint `/api/internal/refresh` nor the daily backstop recorded one, no daemon that checks spots (`SYNC_DAEMON_KINDS` with `spots`) wrote a heartbeat, Celery's `sync.tick` did not run, and no sync they started began. Before any check was ever recorded it fires once background jobs have been logged for that long. Off at `REFRESH_SCHEDULER_EXPECTED_MINUTES=0`, and while `FORECAST_REFRESH_ENABLED=false` | check the scheduler that calls `/api/internal/refresh` (QStash or cron-job.org, docs/sync.md "Scheduling options"; the route needs `CRON_SECRET`, at least 16 characters), the daemon or Celery beat. A deployment that relies on the daily cron alone (no external scheduler) should set it to 0: the largest accepted value, 1440, is shorter than a Hobby cron's day plus its ±59 min window |
 
 The alert path has a blind spot by construction: if the worker, Redis or the email
 provider is down, no email goes out. That is why the external monitor in §2 step 6
