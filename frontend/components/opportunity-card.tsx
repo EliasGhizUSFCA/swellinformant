@@ -46,6 +46,7 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
             <span className="flex flex-wrap items-center gap-x-1.5 font-medium text-ink">
               <Plane className="size-3.5 text-ocean" />
               {match.origin_iata} → {match.destination_iata} · {formatMoney(match.best_price, match.currency)}
+              {match.best_offer_expired && <span className="font-normal text-amber-700">(quote expired)</span>}
               <span className="font-normal text-muted-foreground">
                 · arrive {formatCalendarDate(match.recommended_arrival_date)}, leave {formatCalendarDate(match.recommended_departure_date)}
               </span>
