@@ -25,7 +25,7 @@ from app.schemas.health import (
     StorageOut,
 )
 from app.services import admin_freshness, health, usage
-from app.services.forecasts import quota
+from app.services.forecasts import quota, versions
 from app.services.forecasts.base import ATMOSPHERE, WAVE
 from app.services.forecasts.versions import ComponentRun
 from app.services.notifications.ops_alerts import plan_alerts, render_alert
@@ -154,6 +154,52 @@ def test_without_a_recorded_interval_six_hours_are_assumed_and_said_so() -> None
     )
 
 
+def test_a_run_mixing_domain_cycles_is_no_lag_sample() -> None:
+    """A component refreshes as soon as one domain advances: GFS 0.13 of 06Z with GFS 0.25
+    still at 00Z is such a run. Its init time is the older cycle and its availability the
+    newer domain's, so as a lag sample it would add a whole cycle (6 h) to the lag."""
+    c0 = NOW.replace(hour=0) - timedelta(days=1)
+    c6 = c0 + timedelta(hours=6)
+    lag = timedelta(minutes=322)
+
+    def atmosphere(vid: int, domains: list[tuple[str, datetime, datetime]]) -> ForecastVersion:
+        doms = tuple(versions.DomainRun(m, init, avail) for m, init, avail in domains)
+        run = ComponentRun(
+            ATMOSPHERE,
+            model="ncep_gfs013,ncep_gfs025",
+            init_time=min(d.init_time for d in doms if d.init_time),
+            available_at=max(d.available_at for d in doms if d.available_at),
+            update_interval_seconds=21600,
+            domains=doms,
+        )
+        return ForecastVersion(
+            id=vid, status="superseded", components={ATMOSPHERE: run.as_dict()}, timings={}
+        )
+
+    pure0 = atmosphere(1, [("ncep_gfs013", c0, c0 + lag - LAG / 8), ("ncep_gfs025", c0, c0 + lag)])
+    mixed = atmosphere(2, [("ncep_gfs013", c6, c6 + lag - LAG / 8), ("ncep_gfs025", c0, c0 + lag)])
+    pure6 = atmosphere(3, [("ncep_gfs013", c6, c6 + lag - LAG / 8), ("ncep_gfs025", c6, c6 + lag)])
+    assert mixed.components[ATMOSPHERE]["init_time"] == c0.isoformat()  # the older domain
+    wind = health.component_timings([pure6, mixed, pure0], pure6, NOW, settings())[ATMOSPHERE]
+    assert wind.lag_samples == 2 and wind.typical_lag_s == pytest.approx(lag.total_seconds())
+    assert wind.expected_next_at == c6 + timedelta(hours=6) + lag
+    # Only the mixed run known for c0: no sample from it at all.
+    alone = health.component_timings([mixed], mixed, NOW, settings())[ATMOSPHERE]
+    assert alone.lag_samples == 0 and alone.typical_lag_s is None and not alone.late
+
+
+def test_times_without_an_offset_are_read_as_utc() -> None:
+    assert health.as_datetime("2026-10-28T10:00:00") == datetime(2026, 10, 28, 10, tzinfo=UTC)
+    assert health.as_datetime(datetime(2026, 10, 28, 10)) == datetime(2026, 10, 28, 10, tzinfo=UTC)
+    assert health.as_datetime("2026-10-28T10:00:00+02:00") == datetime(2026, 10, 28, 8, tzinfo=UTC)
+    assert health.as_datetime("soon") is None and health.as_datetime(None) is None
+    # A record without offsets compares with the aware clock instead of raising.
+    record = {"windy": {"last_failure_kind": "credentials", "last_failure_at": "2026-10-28T10:00"}}
+    assert [f.at for f in health._health_failures(record)] == [
+        datetime(2026, 10, 28, 10, tzinfo=UTC)
+    ]
+
+
 def test_daemon_detection_counts_for_component_less_entries() -> None:
     beat = Heartbeat(
         at=NOW,
@@ -260,16 +306,17 @@ def test_recorded_credential_failures_clear_with_a_later_success() -> None:
         "other": {
             "last_failure_kind": "testing_key",
             "last_failure_at": "2026-10-28T10:00:00+00:00",
-            "last_failure_detail": "trial",
+            "last_failure_detail": "trial answer for api_key=abcdef0123456789abcdef",
         },
         "quiet": {
             "last_failure_kind": "unavailable",
             "last_failure_at": "2026-10-28T10:00:00+00:00",
         },
     }
-    assert [(f.provider, f.kind) for f in health._health_failures(health_rows)] == [
-        ("other", "testing_key")
-    ]
+    (failure,) = health._health_failures(health_rows)
+    assert (failure.provider, failure.kind) == ("other", "testing_key")
+    # Another package's record: its text is redacted before it reaches an email or the page.
+    assert failure.detail is not None and "abcdef0123456789abcdef" not in failure.detail
 
 
 def test_metadata_observations_take_the_newest_check() -> None:

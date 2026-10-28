@@ -63,8 +63,9 @@ de-duplication, reminders and recovery notices as every other problem:
   expected availability has passed: the newest run's init time + the model's update
   interval (Open-Meteo meta.json ``update_interval_seconds`` where the version recorded it,
   else 6 h) + its typical lag measured on the recent versions (median of
-  ``available_at - init_time``) + a grace of max(MODEL_RUN_LATE_GRACE, the measured spread
-  of the lag). No measured lag, no judgement: never a fixed wall-clock guess.
+  ``available_at - init_time`` of the runs whose domains share one cycle) + a grace of
+  max(MODEL_RUN_LATE_GRACE, the measured spread of the lag). No measured lag, no
+  judgement: never a fixed wall-clock guess.
 * ``forecast_stale_spots``: active spots of the published version whose forecast is stale
   (their refresh failed, or a component is older than its model's interval plus
   FORECAST_STALE_THRESHOLD_MINUTES; app.services.forecasts.versions.spot_freshness).
@@ -83,8 +84,9 @@ de-duplication, reminders and recovery notices as every other problem:
   (app.services.usage).
 * ``refresh_scheduler_silent``: no refresh check (the refresh endpoint or the daily
   backstop, a daemon that checks spots, Celery's sync.tick, or a sync they started) for
-  REFRESH_SCHEDULER_EXPECTED_MINUTES (30; 0 disables it). Not checked while
-  FORECAST_REFRESH_ENABLED=false.
+  REFRESH_SCHEDULER_EXPECTED_MINUTES (30; 0 disables it), at least 3 x SYNC_CHECK_MINUTES
+  when Celery or such a daemon is the runner, and not while a sync they started runs under
+  a valid lease. Not checked while FORECAST_REFRESH_ENABLED=false.
 
 Assumptions: the limits above are operational heuristics (how late a run may be before
 someone should look), not statements about forecast accuracy. A worker that is down
@@ -1393,6 +1395,21 @@ METADATA_OBSERVATION_MAX_AGE = timedelta(hours=6)
 METADATA_UNKNOWN_KEY = "ops:metadata-unknown:v1"
 METADATA_UNKNOWN_TTL_SECONDS = 7 * 86400
 STALE_SPOTS_NAMED = 8
+# Keys (or key prefixes before ":") of the admin problems, and the one reported when their
+# checks could not run (ops_alerts then keeps their previous state instead of recovering).
+ADMIN_PROBLEM_KEYS = frozenset(
+    {
+        "model_run_late",
+        "forecast_stale_spots",
+        "refresh_failures",
+        "provider_credentials",
+        "provider_unavailable",
+        "provider_fallback",
+        "quota_near",
+        "refresh_scheduler_silent",
+    }
+)
+ADMIN_CHECKS_FAILED = "admin_checks_failed"
 # Sync triggers that a scheduler starts (the refresh endpoint, the daemon, Celery's tick);
 # a CLI or GitHub Actions sync proves nothing about the scheduler.
 SCHEDULER_TRIGGERS = frozenset({"http", "daemon", "celery"})
@@ -1431,7 +1448,8 @@ class ComponentTiming:
     ``run`` / ``available_at`` / ``retrieved_at`` describe the run the published version
     serves; ``newest_run`` is the newest init time known at all (any version, staged or
     failed included, or the daemon's last check). ``typical_lag_s`` is the median of
-    ``available_at - init_time`` over the distinct runs of the recent versions;
+    ``available_at - init_time`` over the distinct runs of the recent versions whose
+    domains share one cycle (:func:`_lag_sample`);
     ``expected_next_at`` = ``newest_run`` + interval + typical lag, and the run is late
     after ``late_after`` (+ max(MODEL_RUN_LATE_GRACE, measured spread))."""
 
@@ -1498,6 +1516,19 @@ def _attempted_runs(db: Session, codes: Iterable[str]) -> dict[str, datetime]:
     return out
 
 
+def _lag_sample(run: versions.ComponentRun) -> float | None:
+    """``available_at - init_time`` (seconds) of a run whose domains all hold the same
+    cycle, else None. A run that mixes cycles (GFS 0.13 of 06Z with GFS 0.25 of 00Z while
+    the 0.25 run is not out yet: a component is refreshed as soon as one domain advances)
+    pairs its oldest domain's init time with its newest domain's availability, which
+    would add a whole cycle to the measured lag."""
+    if run.init_time is None or run.available_at is None or run.available_at < run.init_time:
+        return None
+    if any(d.init_time is not None and d.init_time != run.init_time for d in run.domains):
+        return None
+    return _seconds(run.available_at - run.init_time)
+
+
 def component_timings(
     history: Sequence[ForecastVersion],
     current: ForecastVersion | None,
@@ -1511,22 +1542,22 @@ def component_timings(
     detected = detected or {}
     for comp in (ATMOSPHERE, WAVE):
         runs: dict[datetime, versions.ComponentRun] = {}
+        lag_by_init: dict[datetime, float] = {}
         first_detected: dict[datetime, datetime] = {}
         for version in history:
             run = versions.component_runs_of(version).get(comp)
             if run is None or run.init_time is None:
                 continue
             runs.setdefault(run.init_time, run)
+            lag = _lag_sample(run)
+            if lag is not None:
+                lag_by_init.setdefault(run.init_time, lag)
             if version.detected_at is not None and run.changed:
                 seen = first_detected.get(run.init_time)
                 first_detected[run.init_time] = min(
                     seen or version.detected_at, version.detected_at
                 )
-        lags = sorted(
-            _seconds(r.available_at - init)
-            for init, r in runs.items()
-            if r.available_at is not None and r.available_at >= init
-        )
+        lags = sorted(lag_by_init.values())
         served = versions.component_runs_of(current).get(comp) if current is not None else None
         known = [*runs, *([detected[comp]] if comp in detected else [])]
         newest = max(known) if known else None
@@ -1792,22 +1823,31 @@ def _health_failures(health: Mapping[str, Mapping[str, Any]]) -> list[Credential
                 source=None,
                 at=failed,
                 kind=str(kind),
-                detail=h.get("last_failure_detail"),
+                detail=_redacted(h.get("last_failure_detail")),
             )
         )
     return out
 
 
+def _redacted(text: Any) -> str | None:
+    """Recorded error text (another package's record) redacted and shortened."""
+    return redact(str(text))[:DETAIL_MAX_CHARS] if text else None
+
+
 def as_datetime(value: Any) -> datetime | None:
-    """A datetime or ISO text as a datetime (None when empty or unreadable)."""
+    """A datetime or ISO text as an aware datetime (None when empty or unreadable). A
+    time without an offset (a record written by other code) is read as UTC, so it compares
+    with the aware times here instead of raising."""
     if isinstance(value, datetime):
-        return value
-    if not value:
+        parsed = value
+    elif not value:
         return None
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def credential_problems(
@@ -1900,7 +1940,7 @@ def metadata_observations(
         failed, ok = as_datetime(h.get("last_failure_at")), as_datetime(h.get("last_success_at"))
         transient = h.get("last_failure_kind") == "unavailable"
         if transient and failed is not None and (ok is None or failed > ok):
-            note(str(provider), True, failed, h.get("last_failure_detail"))
+            note(str(provider), True, failed, _redacted(h.get("last_failure_detail")))
         elif ok is not None:
             note(str(provider), False, ok, None)
     return out
@@ -2076,6 +2116,24 @@ class SchedulerState:
     checks: dict[str, datetime | None]
     monitoring_since: datetime | None
     silent: bool
+    # The silence limit applied (:func:`scheduler_limit_minutes`).
+    limit_minutes: int = 0
+    # A sync a scheduler started is running under a valid lease (a long one is no silence).
+    sync_running: bool = False
+
+
+def scheduler_limit_minutes(settings: Settings) -> int:
+    """How long no refresh check may be seen: REFRESH_SCHEDULER_EXPECTED_MINUTES, and at
+    least HEARTBEAT_CHECKS x SYNC_CHECK_MINUTES (as for the daemon's heartbeat) when the
+    configured runner checks on its own timer (Celery's sync.tick, a daemon whose
+    SYNC_DAEMON_KINDS include spots): a slower SYNC_CHECK_MINUTES is no silence."""
+    expected = settings.refresh_scheduler_expected_minutes
+    timed = settings.runs_celery or (
+        settings.job_runner == "daemon" and "spots" in settings.sync_daemon_kind_list
+    )
+    if expected <= 0 or not timed:
+        return expected
+    return max(expected, HEARTBEAT_CHECKS * settings.sync_check_minutes)
 
 
 def scheduler_state(
@@ -2111,10 +2169,28 @@ def scheduler_state(
     known = [(at, by) for by, at in checks.items() if at is not None]
     last_at, last_by = max(known) if known else (None, None)
     expected = settings.refresh_scheduler_expected_minutes
+    limit = scheduler_limit_minutes(settings)
     enabled = expected > 0 and settings.forecast_refresh_enabled
-    since = db.scalar(select(func.min(BackgroundJobLog.started_at)))
+    running = any(
+        r.status == "running"
+        and r.trigger in SCHEDULER_TRIGGERS
+        and r.lease_expires_at is not None
+        and r.lease_expires_at > now
+        for r in syncs
+    )
+    # When monitoring began matters only before any check was ever recorded.
+    since = (
+        db.scalar(select(func.min(BackgroundJobLog.started_at)))
+        if enabled and last_at is None
+        else None
+    )
     reference = last_at or since
-    silent = enabled and reference is not None and now - reference > timedelta(minutes=expected)
+    silent = (
+        enabled
+        and not running
+        and reference is not None
+        and now - reference > timedelta(minutes=limit)
+    )
     return SchedulerState(
         expected_minutes=expected,
         enabled=enabled,
@@ -2123,6 +2199,8 @@ def scheduler_state(
         checks=checks,
         monitoring_since=since,
         silent=bool(silent),
+        limit_minutes=limit,
+        sync_running=running,
     )
 
 
@@ -2143,7 +2221,7 @@ def scheduler_silent_problem(s: SchedulerState, now: datetime) -> Problem | None
     return Problem(
         "refresh_scheduler_silent",
         "degraded",
-        text + f" (expected at least every {s.expected_minutes} min, "
+        text + f" (expected at least every {s.limit_minutes or s.expected_minutes} min, "
         "REFRESH_SCHEDULER_EXPECTED_MINUTES): new model runs are not picked up. Check the "
         "scheduler that calls /api/internal/refresh (QStash or cron-job.org, docs/sync.md), "
         "the daemon or Celery beat; set REFRESH_SCHEDULER_EXPECTED_MINUTES=0 if no scheduler "
@@ -2299,6 +2377,11 @@ def admin_problems(
     return evaluate_admin(admin_inputs(db, settings, now, heartbeat=heartbeat), settings)
 
 
+def is_admin_problem_key(key: str) -> bool:
+    """Whether ``key`` names one of the admin-only problems (design D12)."""
+    return key.split(":", 1)[0] in ADMIN_PROBLEM_KEYS
+
+
 # --------------------------------------------------------------------------- report
 def overall_status(problems: Iterable[Problem]) -> OverallStatus:
     severities = {p.severity for p in problems}
@@ -2364,7 +2447,7 @@ def data_health(
             logger.exception("Admin data-health checks failed")
             extra = [
                 Problem(
-                    "admin_checks_failed",
+                    ADMIN_CHECKS_FAILED,
                     "degraded",
                     f"The admin checks (model runs, spots, refreshes, providers, quotas, "
                     f"scheduler) could not run ({type(exc).__name__}); see the API logs.",
