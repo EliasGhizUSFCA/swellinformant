@@ -359,7 +359,10 @@ describe("versioned public reads", () => {
 });
 
 describe("after a new version is on screen", () => {
-  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  // A fixed clock a few minutes after the versions' publication times (10:01, 10:02 UTC), with
+  // no quarter hour in between: in every time zone they fall on the clock's local day, so the
+  // label writes "hh:mm" (the day is added only for another day).
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.UTC(2026, 9, 27, 10, 5) }));
 
   function Page() {
     const spot = useSpot("pipeline");
