@@ -170,8 +170,12 @@ def test_a_pre_upgrade_database_is_published_and_served_at_once(scratch: URL) ->
 
         known = load_known(db)
         # Every stored run counts as stored (and published): the first check finds none new.
+        # The demo run, stored by today's acquisition, also records the run key of each of
+        # its components (Swell 2.0, design D6).
         assert known.stored == {
             "demo": forecast_key,
+            "demo:wave": forecast_key,
+            "demo:atmosphere": forecast_key,
             "noaa_gfs_fields": f"noaa-gfs-fields:{now:%Y%m%d}00",
         }
         assert known.map_cycle == now.replace(hour=0, minute=0, second=0)

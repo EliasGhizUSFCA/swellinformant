@@ -80,7 +80,9 @@ def test_one_sync_stores_publishes_and_records_every_stage(
         "spots": "success",
         "ensemble": "skipped",  # GEFS_ENABLED=false: the component is disabled
         "map": "success",
-        "blend": "success",  # one model family: nothing to blend, skipped inside the job
+        # One provider: nothing to blend, decided without importing the blend (Swell 2.0:
+        # the refresh Function has no pandas).
+        "blend": "skipped",
         "predict": "success",
         "publish": "success",
         "detect": "success",
@@ -92,16 +94,21 @@ def test_one_sync_stores_publishes_and_records_every_stage(
     }
     ensemble = next(s for s in result.stages if s.name == "ensemble")
     assert ensemble.detail == {"reason": "disabled (GEFS_ENABLED=false)"}
+    blend = next(s for s in result.stages if s.name == "blend")
+    assert blend.detail == {"reason": "one forecast provider: nothing to blend"}
     spots = next(s for s in result.stages if s.name == "spots")
+    # One entry per component (design D6): the demo's wave and atmosphere parts, both new.
     assert spots.detail["components"] == [
         {
             "source_code": "demo",
             "provider": "demo",
+            "component": component,
             "outcome": "stored",
             "message": "",
             "run_key": f"demo:{CYCLE:%Y%m%d%H}",
             "retry_after_s": None,
         }
+        for component in ("wave", "atmosphere")
     ]
     db.expire_all()
     row = db.get(SyncRun, result.sync_run_id)
@@ -156,7 +163,7 @@ def test_a_forced_second_sync_is_idempotent(db: Session, synthetic_map: MapWorld
         if s.name in ("spots", "map")
         for c in s.detail["components"]
     ]
-    assert outcomes == ["current", "current"]
+    assert outcomes == ["current", "current", "current"]  # demo wave, demo atmosphere, map
     # Force acquires every configured component, never a disabled one.
     ensemble = next(s for s in second.stages if s.name == "ensemble")
     assert ensemble.status == "skipped"
@@ -185,7 +192,7 @@ def test_a_sync_that_finds_everything_stored_publishes_nothing(
         if s.name in ("spots", "map")
         for c in s.detail["components"]
     ]
-    assert outcomes == ["current", "current"]
+    assert outcomes == ["current", "current", "current"]  # demo wave, demo atmosphere, map
     assert stages(second)["blend"] == "skipped" and stages(second)["publish"] == "skipped"
     assert second.status == "skipped" and second.published_at is None
     assert second.sync_run_id is not None and second.sync_run_id != first.sync_run_id
@@ -215,17 +222,18 @@ def test_the_lease_is_renewed_after_every_stage(
     def lease(db: Session) -> Any:
         return db.scalar(select(SyncRun.lease_expires_at).where(SyncRun.status == "running"))
 
-    real_acquire, real_predict = ingestion.acquire_all, predict.compute_pending_predictions
+    # One provider: the spot stage is a component refresh (ingestion.refresh_source).
+    real_acquire, real_predict = ingestion.refresh_source, predict.compute_pending_predictions
 
-    def acquire(db: Session, **kw: Any) -> Any:
+    def acquire(db: Session, *args: Any, **kw: Any) -> Any:
         seen["spots"] = lease(db)  # the lease as acquired: no stage has finished yet
-        return real_acquire(db, **kw)
+        return real_acquire(db, *args, **kw)
 
     def scored(db: Session, now: Any = None) -> Any:
         seen["predict"] = lease(db)  # renewed after spots, ensemble, map and blend
         return real_predict(db, now)
 
-    monkeypatch.setattr(ingestion, "acquire_all", acquire)
+    monkeypatch.setattr(ingestion, "refresh_source", acquire)
     monkeypatch.setattr(predict, "compute_pending_predictions", scored)
     started = utcnow()
     result = orchestrator.run_sync(trigger="cli", now=NOW)
@@ -277,13 +285,15 @@ class _Crash(BaseException):
 def test_a_crashed_sync_is_abandoned_and_the_next_one_completes_it(
     db: Session, synthetic_map: MapWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app.services.forecasts import blend
+    # The process dies in the predict stage (with one provider the blend stage does not
+    # run, Swell 2.0).
+    from app.services.surf_quality import predict
 
     def crash(*_a: Any, **_k: Any) -> Any:
         raise _Crash()
 
     with monkeypatch.context() as m:
-        m.setattr(blend, "build_blend", crash)
+        m.setattr(predict, "compute_pending_predictions", crash)
         m.setattr(orchestrator._Lease, "release", lambda *a, **k: True)  # never reached
         m.setattr(orchestrator, "_close_log", lambda *a, **k: None)
         with pytest.raises(_Crash):
@@ -291,7 +301,7 @@ def test_a_crashed_sync_is_abandoned_and_the_next_one_completes_it(
     db.expire_all()
     crashed = db.scalar(select(SyncRun))
     assert crashed is not None and crashed.status == "running"
-    assert [s["name"] for s in crashed.stages] == ["spots", "ensemble", "map"]
+    assert [s["name"] for s in crashed.stages] == ["spots", "ensemble", "map", "blend"]
     assert crashed.published_at is None
     # While the lease is valid nobody else may sync.
     with pytest.raises(SyncBusy):
@@ -311,8 +321,9 @@ def test_a_crashed_sync_is_abandoned_and_the_next_one_completes_it(
         if s.name in ("spots", "map")
         for c in s.detail["components"]
     ]
-    assert outcomes == ["current", "current"]
-    assert stages(nxt)["publish"] == "success" and stages(nxt)["blend"] == "success"
+    assert outcomes == ["current", "current", "current"]  # demo wave, demo atmosphere, map
+    assert stages(nxt)["publish"] == "success" and stages(nxt)["blend"] == "skipped"
+    assert stages(nxt)["predict"] == "success"
     assert published_map_run_id(db) is not None
 
 
@@ -338,16 +349,16 @@ def test_a_sync_that_lost_its_lease_stops(
 ) -> None:
     """A sync stalled past SYNC_LEASE_MINUTES whose lease another runner took over stops at
     the next stage boundary and leaves the row to the new holder."""
-    from app.services.forecasts import blend
+    from app.services.surf_quality import predict
 
-    real = blend.build_blend
+    real = predict.compute_pending_predictions
 
     def taken_over(db: Session, now: Any = None) -> Any:
         db.execute(update(SyncRun).values(status="abandoned", holder="other:1:x"))
         db.commit()
         return real(db, now)
 
-    monkeypatch.setattr(blend, "build_blend", taken_over)
+    monkeypatch.setattr(predict, "compute_pending_predictions", taken_over)
     result = orchestrator.run_sync(trigger="daemon", now=NOW)
     assert result.status == "abandoned" and result.published_at is None
     assert [s.name for s in result.stages if s.detail.get("reason") != "lease lost"] == [
@@ -355,6 +366,7 @@ def test_a_sync_that_lost_its_lease_stops(
         "ensemble",
         "map",
         "blend",
+        "predict",
     ]
     db.expire_all()
     row = db.get(SyncRun, result.sync_run_id)
@@ -475,9 +487,10 @@ def test_a_sync_whose_predict_could_not_run_publishes_nothing_and_retries(
     components = [
         c for s in result.stages if s.name in ("spots", "map") for c in s.detail["components"]
     ]
-    assert [(c["source_code"], c["outcome"]) for c in components] == [
-        ("demo", "failed"),
-        ("noaa_gfs_fields", "failed"),
+    assert [(c["source_code"], c["component"], c["outcome"]) for c in components] == [
+        ("demo", "wave", "failed"),
+        ("demo", "atmosphere", "failed"),
+        ("noaa_gfs_fields", None, "failed"),
     ]
     assert {c["message"] for c in components} == {orchestrator.HELD_MESSAGE}
     assert latest_publication(db) is None and _predictions(db) == 0
@@ -487,7 +500,8 @@ def test_a_sync_whose_predict_could_not_run_publishes_nothing_and_retries(
     assert "publication held back" in (row.error_message or "")
     assert row.stages[3 + 1]["status"] == "failed"  # sync_runs.stages: predict
     orchestrator.remember(known, result, now=NOW)
-    assert known.attempts[f"demo|demo:{CYCLE:%Y%m%d%H}"][0] == 1
+    for part in ("wave", "atmosphere"):  # one attempt per component (design D6)
+        assert known.attempts[f"demo:{part}|demo:{CYCLE:%Y%m%d%H}"][0] == 1
     # Inside SYNC_RETRY_MINUTES nothing is due; after it the next check syncs again.
     soon = plan_sync(None, now=NOW + timedelta(minutes=5), known=known)
     assert not soon.due
@@ -529,7 +543,8 @@ def test_a_predict_that_fails_every_time_stops_after_the_attempt_limit(
         assert result.status == "failed" and result.published_at is None
         assert stages(result)["predict"] == "failed" and stages(result)["publish"] == "skipped"
         orchestrator.remember(known, result, now=when)
-        assert known.attempts[f"demo|demo:{CYCLE:%Y%m%d%H}"][0] == attempt
+        for part in ("wave", "atmosphere"):  # one attempt per component (design D6)
+            assert known.attempts[f"demo:{part}|demo:{CYCLE:%Y%m%d%H}"][0] == attempt
         when += timedelta(minutes=6)
     final = plan_sync(db, now=when, known=known)
     assert not final.due
@@ -615,13 +630,16 @@ def test_a_run_no_longer_served_at_acquisition_is_deferred_not_failed(
     result = orchestrator.run_sync(trigger="daemon", now=NOW, plan=plan)
     assert result.status == "success", result.as_dict()
     spots = next(s for s in result.stages if s.name == "spots")
-    (component,) = spots.detail["components"]
-    assert component["outcome"] == "deferred"
-    assert "being published" in component["message"]
+    parts = spots.detail["components"]
+    assert [(c["component"], c["outcome"]) for c in parts] == [
+        ("wave", "deferred"),
+        ("atmosphere", "deferred"),
+    ]
+    assert all("being published" in c["message"] for c in parts)
     assert stages(result)["map"] == "success" and stages(result)["publish"] == "success"
     assert counts(db)[0] == 0  # no spot forecast stored
     orchestrator.remember(known, result, now=NOW)
-    assert not [k for k in known.attempts if k.startswith("demo|")]
+    assert not [k for k in known.attempts if k.startswith("demo")]
     db.expire_all()
     row = db.get(SyncRun, result.sync_run_id)
     assert row is not None and row.status == "success" and row.error_message is None
@@ -764,7 +782,8 @@ def test_sync_run_exits_1_when_nothing_could_be_stored(
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "failed" and out["published_at"] is None
     spots = next(s for s in out["stages"] if s["name"] == "spots")
-    assert [c["outcome"] for c in spots["detail"]["components"]] == ["failed"]
+    # Both components of the demo source failed (design D6: one entry per component).
+    assert [c["outcome"] for c in spots["detail"]["components"]] == ["failed", "failed"]
 
 
 def test_sync_run_does_not_wait_for_a_retry_but_if_due_does(
@@ -776,7 +795,8 @@ def test_sync_run_does_not_wait_for_a_retry_but_if_due_does(
 
     key = build_provider("demo", get_settings()).current_run(utcnow()).run_key
     known = empty_known()
-    known.attempts[f"demo|{key}"] = (1, utcnow())
+    for part in ("wave", "atmosphere"):  # attempts are per component (design D6)
+        known.attempts[f"demo:{part}|{key}"] = (1, utcnow())
     state.write_known(known)
     assert cli.main(["sync", "run", "--if-due"]) == sync_cli.EXIT_OK
     assert json.loads(capsys.readouterr().out)["status"] == "not_due"
@@ -784,7 +804,7 @@ def test_sync_run_does_not_wait_for_a_retry_but_if_due_does(
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "success"
     spots = next(s for s in result["stages"] if s["name"] == "spots")
-    assert [c["outcome"] for c in spots["detail"]["components"]] == ["stored"]
+    assert [c["outcome"] for c in spots["detail"]["components"]] == ["stored", "stored"]
     after = state.read_known()
     assert after is not None and after.attempts == {}  # the stored run cleared the attempt
 

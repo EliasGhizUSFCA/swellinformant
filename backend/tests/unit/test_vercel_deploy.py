@@ -1,8 +1,10 @@
 """The Vercel deployment files keep the layout contract (design D10, D15).
 
 vercel.json: the web and api services, /api routed to the api and everything else to the web,
-the sync daemon, and one daily cron on the watchdog route. .vercelignore keeps what the
-services and the daemon are built from. .github/workflows/data-sync.yml is manual only.
+the sync daemon, and one daily cron on the watchdog route (which also runs a refresh check;
+the frequent refresh checks come from an external scheduler on Hobby, docs/sync.md).
+.vercelignore keeps what the services and the daemon are built from.
+.github/workflows/data-sync.yml is manual only.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from app.api.internal import CRON_DAILY_PATH
+from app.api.internal import CRON_DAILY_PATH, REFRESH_PATH
 from app.core.config import Settings
 from app.core.profiles import profile_env
 from app.services.sync.types import SYNC_RUN_JOB
@@ -63,7 +65,9 @@ def test_services_and_routing(vercel: dict[str, Any]) -> None:
     assert api["entrypoint"] == "app.main:app"
     assert (ROOT / "backend" / "app" / "main.py").is_file()
     function = api["functions"]["app/main.py"]
-    assert function["maxDuration"] == 60
+    # 300 s, the Hobby maximum: a spot-only refresh (/api/internal/refresh) runs inside the
+    # request (Swell 2.0, design D8; measured in docs/sync.md).
+    assert function["maxDuration"] == 300
     # Nothing the function never reads: tests, a local setuptools build/ and the ML models
     # (the lean install has no joblib to load them).
     excluded = function["excludeFiles"].strip("{}").split(",")
@@ -89,11 +93,15 @@ def test_services_and_routing(vercel: dict[str, Any]) -> None:
 def test_one_daily_cron_on_the_watchdog_route(vercel: dict[str, Any]) -> None:
     crons = vercel["crons"]
     assert [c["path"] for c in crons] == [CRON_DAILY_PATH]
-    minute, hour, *rest = crons[0]["schedule"].split()
-    # Hobby allows once a day at most; a more frequent expression fails the deployment.
-    assert minute.isdigit() and 0 <= int(minute) < 60
-    assert hour.isdigit() and 0 <= int(hour) < 24
-    assert rest == ["*", "*", "*"]
+    # No sub-daily refresh cron: Hobby refuses the deployment (an external scheduler calls
+    # /api/internal/refresh instead; on Pro a */5 entry is documented in docs/sync.md).
+    assert REFRESH_PATH not in [c["path"] for c in crons]
+    for cron in crons:
+        minute, hour, *rest = cron["schedule"].split()
+        # Hobby allows once a day at most; a more frequent expression fails the deployment.
+        assert minute.isdigit() and 0 <= int(minute) < 60
+        assert hour.isdigit() and 0 <= int(hour) < 24
+        assert rest == ["*", "*", "*"]
 
 
 def test_sync_daemon(vercel: dict[str, Any]) -> None:

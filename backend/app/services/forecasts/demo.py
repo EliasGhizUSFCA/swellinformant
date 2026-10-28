@@ -14,21 +14,38 @@ the whole pipeline can be exercised offline:
 
 ``SwellOverride`` injects a strong, well-aligned swell with light offshore winds at one
 spot (used by the "simulate swell" developer tool and the end-to-end tests).
+
+Components (design D6): the wave and atmosphere parts of a demo run have run keys of their
+own (``RunInfo.component_keys``). Both follow the 6-hourly cycle; the developer tool
+``POST /api/dev/simulate-model-run`` (contract C6) *advances* one part to a new simulated
+model run (:func:`advance_demo_run`, a counter per component in Redis so every process
+sees it). An advanced part gets a new key (``demo:2026102712+wave1``) and visibly different
+values: wave heights scaled and periods shifted, or the wind speed changed and its
+direction turned, by fixed steps that differ between consecutive advances
+(:data:`WAVE_STEPS`, :data:`WIND_STEPS`). Hours of a simulated swell keep their values.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 import random
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import Any
 
 from app.core.config import get_settings
 from app.services.forecasts.base import (
+    ATMOSPHERE,
+    COMPONENTS,
+    WAVE,
     FetchResult,
     ForecastProvider,
     ForecastRecord,
+    ModelRunRef,
     RunInfo,
     SourceInfo,
     SpotPoint,
@@ -38,8 +55,119 @@ from app.services.surf_quality.models import SpotParams
 from app.services.surf_quality.nearshore import deep_water_height_for_breaking
 from app.services.units import ft_to_m
 
+logger = logging.getLogger(__name__)
+
 SLOT_HOURS = 84.0
 HOUR = timedelta(hours=1)
+# SYNTHETIC ceiling of a natural demo pulse's deep-water height (m). The big-wave spots'
+# targets (Jaws: 20-60 ft faces) with the lognormal spread asked for up to 33 m, which the
+# per-spot validation of a refresh rejects (carry.PHYSICAL_RANGES: Hs <= 30 m). With two
+# overlapping pulses (x sqrt 2) and a simulated wave advance (WAVE_STEPS, up to x1.35) the
+# significant height stays below that bound.
+MAX_NATURAL_H0_M = 14.0
+WAVE_MODEL = "demo-swell-generator"
+ATMOSPHERE_MODEL = "demo-diurnal-wind"
+# Redis hash {component: advances} of the simulated model runs (contract C6).
+ADVANCE_KEY = "sync:demo:advance"
+# Per advance k >= 1, step (k - 1) % 4: wave heights x factor, periods + shift (s); wind
+# speed + delta (km/h), direction turned by degrees. Consecutive advances always differ.
+WAVE_STEPS: tuple[tuple[float, float], ...] = ((1.35, 2.0), (0.75, -1.5), (1.2, 1.0), (0.85, -1.0))
+WIND_STEPS: tuple[tuple[float, float], ...] = (
+    (12.0, 45.0),
+    (-6.0, -30.0),
+    (8.0, 90.0),
+    (-4.0, -60.0),
+)
+_WAVE_HEIGHTS = (
+    "sig_wave_height_m",
+    "primary_swell_height_m",
+    "secondary_swell_height_m",
+    "tertiary_swell_height_m",
+    "wind_wave_height_m",
+)
+_WAVE_PERIODS = (
+    "wave_period_s",
+    "primary_swell_period_s",
+    "secondary_swell_period_s",
+    "tertiary_swell_period_s",
+)
+_ADVANCE = re.compile(r"\+(wave|atmosphere)(\d+)$")
+
+
+def load_advances() -> dict[str, int]:
+    """The simulated model-run advances per component from Redis ({} when there are none or
+    Redis is unavailable: the plain 6-hourly demo runs)."""
+    from app.core.redis import get_redis
+
+    try:
+        raw = get_redis().hgetall(ADVANCE_KEY) or {}
+    except Exception as exc:  # Redis down: no simulated runs, never an error
+        logger.warning("Demo run advances not read: %s", type(exc).__name__)
+        return {}
+    out: dict[str, int] = {}
+    for component, value in raw.items():
+        name = component.decode() if isinstance(component, bytes) else str(component)
+        try:
+            if name in COMPONENTS and int(value) > 0:
+                out[name] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def advance_demo_run(components: frozenset[str]) -> dict[str, int]:
+    """Advance the demo's available run of these components by one simulated model run
+    (developer tool, contract C6) and return every component's advance. Raises when Redis
+    is unavailable (the simulation cannot be shared with the other processes then)."""
+    from app.core.redis import get_redis
+
+    unknown = sorted(set(components) - COMPONENTS)
+    if unknown or not components:
+        raise ValueError(f"components must be a non-empty subset of {sorted(COMPONENTS)}")
+    client = get_redis()
+    pipe = client.pipeline(transaction=True)
+    for component in sorted(components):
+        pipe.hincrby(ADVANCE_KEY, component, 1)
+    pipe.execute()
+    return load_advances()
+
+
+def component_key(cycle: datetime, component: str, advance: int) -> str:
+    """The run key of one demo component: ``demo:<cycle>`` for the plain run,
+    ``demo:<cycle>+<component><advance>`` for a simulated one."""
+    base = f"demo:{cycle:%Y%m%d%H}"
+    return base if advance <= 0 else f"{base}+{component}{advance}"
+
+
+def advance_of(run_key: str | None) -> int:
+    """The simulated advance named in a component key (0 for a plain run)."""
+    match = _ADVANCE.search(run_key or "")
+    return int(match.group(2)) if match else 0
+
+
+def _apply_advances(record: ForecastRecord, wave: int, wind: int) -> None:
+    """The visibly different values of a simulated model run (see the module docs)."""
+    values = record.values
+    if wave > 0:
+        factor, shift = WAVE_STEPS[(wave - 1) % len(WAVE_STEPS)]
+        for name in _WAVE_HEIGHTS:
+            if values.get(name) is not None:
+                values[name] = round(float(values[name] or 0.0) * factor, 2)
+        for name in _WAVE_PERIODS:
+            if values.get(name) is not None:
+                values[name] = round(max(3.0, float(values[name] or 0.0) + shift), 1)
+    if wind > 0:
+        delta, turn = WIND_STEPS[(wind - 1) % len(WIND_STEPS)]
+        speed = values.get("wind_speed_kmh")
+        if speed is not None:
+            speed = round(max(0.0, float(speed) + delta), 1)
+            values["wind_speed_kmh"] = speed
+            values["wind_gust_kmh"] = round(speed * 1.4, 1)
+            direction = values.get("wind_direction_deg")
+            if speed <= 0:
+                values["wind_direction_deg"] = None
+            elif direction is not None:
+                values["wind_direction_deg"] = round(norm_deg(float(direction) + turn), 0)
 
 
 @dataclass(frozen=True)
@@ -153,6 +281,7 @@ class DemoSeriesGenerator:
         lead_days = max(0.0, (peak - issued_at).total_seconds() / 86400.0)
         prng = random.Random(f"{self.spot.slug}:{k}:{self.run_key}")
         h0 *= max(0.5, 1.0 + prng.gauss(0, 0.025 * lead_days))
+        h0 = min(h0, MAX_NATURAL_H0_M)
         peak += timedelta(hours=prng.gauss(0, 0.5 * lead_days))
         return _Pulse(peak, duration, h0, period, direction)
 
@@ -300,6 +429,7 @@ class DemoForecastProvider(ForecastProvider):
         overrides: list[SwellOverride] | None = None,
         run_key: str | None = None,
         natural_swells: bool = True,
+        advances: Mapping[str, int] | None = None,
     ) -> None:
         # None = FORECAST_DAYS (the rolling horizon every provider follows).
         if forecast_days is None:
@@ -308,6 +438,8 @@ class DemoForecastProvider(ForecastProvider):
         self.overrides = overrides or []
         self.run_key_override = run_key
         self.natural_swells = natural_swells
+        # Simulated model runs per component (load_advances); none = the plain runs.
+        self.advances: Mapping[str, int] = dict(advances or {})
 
     def source_info(self) -> SourceInfo:
         return SourceInfo(
@@ -325,13 +457,23 @@ class DemoForecastProvider(ForecastProvider):
     def current_run(self, now: datetime) -> RunInfo:
         now = now.astimezone(UTC)
         cycle = now.replace(hour=(now.hour // 6) * 6, minute=0, second=0, microsecond=0)
-        key = self.run_key_override or f"demo:{cycle:%Y%m%d%H}"
+        if self.run_key_override:
+            keys = dict.fromkeys(COMPONENTS, self.run_key_override)
+        else:
+            keys = {c: component_key(cycle, c, self.advances.get(c, 0)) for c in COMPONENTS}
+        wave, atmosphere = keys[WAVE], keys[ATMOSPHERE]
         return RunInfo(
-            run_key=key,
+            run_key=self.run_key_override
+            or (wave if wave == atmosphere else f"{wave}|{atmosphere}"),
             issued_at=cycle,
             wave_model_run_at=cycle,
             atmosphere_model_run_at=cycle,
             metadata_source="demo",
+            model_runs=(
+                ModelRunRef(WAVE_MODEL, cycle, component=WAVE),
+                ModelRunRef(ATMOSPHERE_MODEL, cycle, component=ATMOSPHERE),
+            ),
+            component_keys=MappingProxyType(keys),
         )
 
     def fetch(
@@ -341,12 +483,26 @@ class DemoForecastProvider(ForecastProvider):
         components: frozenset[str] | None = None,
     ) -> FetchResult:
         result = FetchResult()
+        keys = run.component_keys or {}
+        wave, wind = advance_of(keys.get(WAVE)), advance_of(keys.get(ATMOSPHERE))
+        # The series' own perturbations follow the plain run key, so an advance changes
+        # only the component it advances.
+        seed_key = self.run_key_override or (
+            f"demo:{run.issued_at:%Y%m%d%H}" if keys else run.run_key
+        )
         for p in spots:
             if p.params is None:
                 result.errors[p.spot_id] = "spot parameters missing"
                 continue
-            gen = DemoSeriesGenerator(p.params, run.run_key, self.natural_swells)
-            result.records[p.spot_id] = gen.generate(
-                run.issued_at, self.forecast_days * 24, self.overrides
-            )
+            gen = DemoSeriesGenerator(p.params, seed_key, self.natural_swells)
+            records = gen.generate(run.issued_at, self.forecast_days * 24, self.overrides)
+            if wave or wind:
+                mine = [o for o in self.overrides if o.spot_slug == p.slug]
+                for rec in records:
+                    if not any(
+                        o.start - timedelta(hours=6) <= rec.valid_time <= o.end + timedelta(hours=6)
+                        for o in mine
+                    ):
+                        _apply_advances(rec, wave, wind)
+            result.records[p.spot_id] = records
         return result

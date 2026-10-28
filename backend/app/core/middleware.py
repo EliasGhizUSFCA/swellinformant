@@ -17,6 +17,7 @@ CSRF_EXEMPT_PREFIXES = (
     "/api/webhooks/",
     "/api/notifications/unsubscribe",
     "/api/health",
+    "/api/internal/",  # Bearer CRON_SECRET (schedulers: POST /api/internal/refresh)
 )
 
 

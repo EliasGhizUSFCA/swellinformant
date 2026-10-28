@@ -46,6 +46,14 @@ What makes the API data equivalent to sampling the model grids ourselves:
   ``data_end_time`` (which Open-Meteo fills from an older, longer run) and hours before its
   initialisation are dropped. Every model run behind the data is recorded
   (``RunInfo.model_runs``; ``gfs_seamless`` = HRRR plus GFS).
+* Components (design D6). The wave models (the marine API) and the atmosphere model (the
+  forecast API) are published independently, minutes to hours apart. Each model domain is
+  tagged with its component (``ModelRunRef.component``) and each component has a run key of
+  its own (``RunInfo.component_keys``: ``wave`` = the wave domains, ``atmosphere`` = the
+  atmosphere domains; the run key is the two joined). ``fetch(components=...)`` requests
+  only those components (the marine request for ``wave``, the forecast request for
+  ``atmosphere``; still one batched request per model for all spots), and
+  ``ensure_servable(components=...)`` checks only their domains.
 * Gusts. ``extra["gust_kind"]`` says what the gust is (``gfs_instantaneous``: GFS's GUST is
   an instantaneous surface diagnostic, often below the 10 m mean wind; ``ecmwf_max_3h``).
 * Sea level. ``sea_level_height_msl`` is not requested: it is a modelled sea surface height
@@ -65,9 +73,10 @@ import json
 import logging
 import math
 import re
-from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import Any, ClassVar, Literal
 
 import httpx
@@ -76,6 +85,8 @@ from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.services.forecasts import provider_cache
 from app.services.forecasts.base import (
+    ATMOSPHERE,
+    COMPONENTS,
     EXTRA_GUST_KIND,
     EXTRA_INTERPOLATED,
     EXTRA_NATIVE_STEP_S,
@@ -93,6 +104,7 @@ from app.services.forecasts.base import (
     SpotPoint,
     http_client,
 )
+from app.services.forecasts.base import WAVE as WAVE_COMPONENT
 from app.services.forecasts.grib import haversine_km
 from app.services.forecasts.provider_cache import ProviderCacheKey, coords_hash
 from app.services.forecasts.quota import (
@@ -121,7 +133,27 @@ USER_AGENT = (
     "SwellTravelAgent/1.0 (forecast ingestion; +https://github.com/eliasghizusfca/swellinformant)"
 )
 HostKind = Literal["marine", "api"]
+# The order the two components of a run are read and listed in (wave domains first).
+COMPONENT_ORDER: tuple[str, ...] = (WAVE_COMPONENT, ATMOSPHERE)
+
+
+@dataclass(frozen=True)
+class PartlyReadRun(RunInfo):
+    """A run of which some components' metadata could not be read (``current_run(...,
+    partial=True)``): ``unread`` holds why, by component; ``component_keys`` and
+    ``model_runs`` name the readable components only (design D6: a marine host timing out
+    does not hold a new wind run back)."""
+
+    unread: Mapping[str, TransientProviderError] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+
 DEFAULT_UPDATE_INTERVAL_S = 6 * 3600
+# HTTP timeout of one meta.json request (seconds; FORECAST_HTTP_TIMEOUT_SECONDS when lower):
+# the file is under 1 kB, so a host that has not answered by then is down. It bounds what a
+# hanging host costs a refresh that carries that host's component (3 attempts).
+META_TIMEOUT_SECONDS = 10.0
 
 # Wave variables of the GFS family (GFS-Wave's wave_period is its peak period PERPW).
 GFS_WAVE_CORE = {
@@ -439,6 +471,8 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         # Weighted calls charged by this instance, failed fetches included (ingestion
         # records the share of a fetch that raised).
         self.weighted_calls_total = 0.0
+        # The newest meta.json read of each domain (update_interval_seconds).
+        self.last_metas: dict[str, ModelMeta] = {}
 
     # ---------------------------------------------------------------- subclass hooks
     def wave_models(self) -> list[str]:
@@ -500,12 +534,15 @@ class OpenMeteoFamilyProvider(ForecastProvider):
             return {**params, "apikey": self.settings.open_meteo_api_key}
         return params
 
-    def read_metas(self) -> dict[str, ModelMeta]:
-        """``meta.json`` of every domain (free calls: not charged to the budget)."""
+    def read_metas(self, components: Collection[str] | None = None) -> dict[str, ModelMeta]:
+        """``meta.json`` of every domain (free calls: not charged to the budget); with
+        ``components``, of the domains of those components only."""
         require_commercial_licence(self.settings)
         metas: dict[str, ModelMeta] = {}
-        for _, host, domain in self.domains():
-            if domain in metas:
+        for model, host, domain in self.domains():
+            if domain in metas or (
+                components is not None and self.component_of_model(model) not in components
+            ):
                 continue
             url = f"{self.hosts[host]}/data/{domain}/static/meta.json"
             resp = request_with_retries(
@@ -515,6 +552,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
                 provider=HTTP_PROVIDER,
                 backoff_seconds=self.backoff_seconds,
                 params=self._params({}),
+                timeout=min(self.settings.forecast_http_timeout_seconds, META_TIMEOUT_SECONDS),
             )
             if resp.status_code != 200:
                 raise TransientProviderError(
@@ -528,7 +566,40 @@ class OpenMeteoFamilyProvider(ForecastProvider):
                     f"Open-Meteo metadata for {domain} is unreadable ({exc}): the model run "
                     "cannot be identified, so nothing is fetched"
                 ) from exc
+        self.last_metas.update(metas)
         return metas
+
+    def _metas_of(self, components: Collection[str]) -> dict[str, ModelMeta]:
+        """``meta.json`` of the domains of these components, read one component at a time
+        (the reads a check shares, ``detect.servable_run``); raises when one fails."""
+        metas: dict[str, ModelMeta] = {}
+        for component in COMPONENT_ORDER:
+            if component in components:
+                metas.update(self.read_metas(frozenset({component})))
+        return metas
+
+    def _component_metas(self) -> tuple[dict[str, ModelMeta], dict[str, TransientProviderError]]:
+        """Every component's ``meta.json``, and why a component's could not be read (its
+        host timed out or answered an error: design D6, the other component is still
+        planned). A refused licence (PermanentProviderError) raises."""
+        metas: dict[str, ModelMeta] = {}
+        unread: dict[str, TransientProviderError] = {}
+        for component in COMPONENT_ORDER:
+            try:
+                metas.update(self.read_metas(frozenset({component})))
+            except TransientProviderError as exc:
+                unread[component] = exc
+        return metas, unread
+
+    def update_interval_seconds(self, component: str) -> int | None:
+        """The update interval of a component's model (meta.json ``update_interval_seconds``,
+        the longest of its domains) as last read; None before its metadata was read."""
+        values = [
+            self.last_metas[d].update_interval_s
+            for m, _, d in self.domains()
+            if self.component_of_model(m) == component and d in self.last_metas
+        ]
+        return max(values) if values else None
 
     def _allowed(self, init: datetime) -> bool:
         return self.cycle_hours is None or init.hour in self.cycle_hours
@@ -545,39 +616,98 @@ class OpenMeteoFamilyProvider(ForecastProvider):
             t -= step
         return meta.init_time - step
 
-    def current_run(self, now: datetime) -> RunInfo:
-        metas = self.read_metas()
+    def component_of_model(self, model: str) -> str:
+        """The component an API model feeds: ``wave`` for the marine models."""
+        return WAVE_COMPONENT if model in self.wave_models() else ATMOSPHERE
+
+    def current_run(self, now: datetime, *, partial: bool = False) -> RunInfo:
+        """The run of every domain this provider reads (metadata only).
+
+        ``partial``: when one component's metadata cannot be read (its host timed out or
+        answered an error), return the other component's run as a :class:`PartlyReadRun`
+        that names why (``unread``) instead of raising, so a refresh plans and fetches the
+        readable component alone (design D6). Raises when nothing can be read, and without
+        ``partial`` when anything cannot.
+        """
+        require_commercial_licence(self.settings)
+        metas, unread = self._component_metas()
+        if unread and (not partial or len(unread) == len(COMPONENT_ORDER)):
+            raise next(iter(unread.values()))
         refs: list[ModelRunRef] = []
         seen: set[str] = set()
-        for _, _, domain in self.domains():
-            if domain in seen:
+        for model, _, domain in self.domains():
+            if domain in seen or self.component_of_model(model) in unread:
                 continue
             seen.add(domain)
             meta = metas[domain]
             init = self.labelled_init(meta, now)
             available = meta.available_at if init == meta.init_time else None
-            refs.append(ModelRunRef(model=domain, init_time=init, available_at=available))
+            refs.append(
+                ModelRunRef(
+                    model=domain,
+                    init_time=init,
+                    available_at=available,
+                    component=self.component_of_model(model),
+                )
+            )
         by_domain = {r.model: r.init_time for r in refs}
         wave_domains = {d for m, _, d in self.domains() if m in self.wave_models()}
         atmos_domains = {d for m, _, d in self.domains() if m == self.atmos_model()}
-        key = "|".join(f"{r.model.removeprefix('ncep_')}:{r.init_time:%Y%m%d%H}" for r in refs)
-        return RunInfo(
-            run_key=key,
+
+        def part(r: ModelRunRef) -> str:
+            return f"{r.model.removeprefix('ncep_')}:{r.init_time:%Y%m%d%H}"
+
+        keys = {
+            c: "|".join(part(r) for r in refs if r.component == c)
+            for c in COMPONENT_ORDER
+            if c not in unread
+        }
+        run = RunInfo(
+            run_key="|".join(part(r) for r in refs),
             issued_at=min(by_domain.values()),
-            wave_model_run_at=min(by_domain[d] for d in wave_domains),
-            atmosphere_model_run_at=min(by_domain[d] for d in atmos_domains),
+            wave_model_run_at=min(
+                (by_domain[d] for d in wave_domains if d in by_domain), default=None
+            ),
+            atmosphere_model_run_at=min(
+                (by_domain[d] for d in atmos_domains if d in by_domain), default=None
+            ),
             metadata_source="open_meteo_meta",
             model_runs=tuple(refs),
+            component_keys=MappingProxyType(keys),
         )
+        if not unread:
+            return run
+        values = {f.name: getattr(run, f.name) for f in fields(RunInfo)}
+        return PartlyReadRun(**values, unread=MappingProxyType(dict(unread)))
 
-    def ensure_servable(self, run: RunInfo, now: datetime | None = None) -> dict[str, ModelMeta]:
+    def ensure_servable(
+        self,
+        run: RunInfo,
+        now: datetime | None = None,
+        components: frozenset[str] | None = None,
+    ) -> dict[str, ModelMeta]:
         """Raise :class:`RunNotServedError` unless Open-Meteo serves exactly ``run`` now.
 
+        ``components``: check only the domains of these components (a refresh that fetches
+        the atmosphere does not wait for a wave run being published, nor reads the wave
+        metadata); None = every component the run names.
         Called by ingestion before a run is recorded, and again by :meth:`fetch`.
         """
         now = now or self.clock()
-        metas = self.read_metas()
-        labelled = {ref.model: ref.init_time for ref in run.model_runs}
+        if components is None:
+            # Every component the run names (a partly read run names one).
+            named = {ref.component for ref in run.model_runs}
+            components = (
+                COMPONENTS
+                if None in named or not named
+                else frozenset(c for c in named if c is not None)
+            )
+        metas = self._metas_of(components)
+        labelled = {
+            ref.model: ref.init_time
+            for ref in run.model_runs
+            if ref.component is None or ref.component in components
+        }
         for domain, init in labelled.items():
             meta = metas.get(domain)
             if meta is None:
@@ -911,20 +1041,45 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         run: RunInfo,
         components: frozenset[str] | None = None,
     ) -> FetchResult:
-        """Waves and wind for every spot, for exactly the run ``run`` names."""
+        """Waves and wind for every spot, for exactly the run ``run`` names.
+
+        ``components``: only the wave (marine requests) or the atmosphere (forecast
+        requests) part; None = both. The run's domains of the other component are neither
+        checked nor requested (a refresh carries that part from a stored run)."""
         require_commercial_licence(self.settings)
-        result = FetchResult()
+        wanted = COMPONENTS if components is None else frozenset(components) & COMPONENTS
+        if not wanted:
+            raise ValueError(f"components must name {sorted(COMPONENTS)}, not {components!r}")
+        result = FetchResult(components=wanted)
         before = self.tally.snapshot()
         if not run.model_runs:
             raise PermanentProviderError(
                 f"run {run.run_key!r} lists no model runs: an Open-Meteo run is identified by "
                 "current_run()"
             )
-        metas = self.ensure_servable(run)
-        state = _Fetch(labelled={r.model: r.init_time for r in run.model_runs}, metas=metas)
+        metas = self.ensure_servable(run, components=None if wanted == COMPONENTS else wanted)
+        labelled = {
+            r.model: r.init_time
+            for r in run.model_runs
+            if r.component is None or r.component in wanted
+        }
+        unnamed = sorted(
+            c for c in wanted if not any(r.component in (None, c) for r in run.model_runs)
+        )
+        if unnamed:
+            raise TransientProviderError(
+                f"run {run.run_key!r} names no {unnamed[0]} model run (its metadata was not "
+                "read): that component cannot be fetched"
+            )
+        state = _Fetch(labelled=labelled, metas=metas)
+        want_waves, want_atmos = WAVE_COMPONENT in wanted, ATMOSPHERE in wanted
         try:
-            waves, wave_errors = self._fetch_waves(state, spots)
-            atmos, atmos_errors = self._fetch_atmos(state, spots) if waves else ({}, {})
+            waves, wave_errors = self._fetch_waves(state, spots) if want_waves else ({}, {})
+            atmos, atmos_errors = (
+                self._fetch_atmos(state, spots)
+                if want_atmos and (waves or not want_waves)
+                else ({}, {})
+            )
         except ProviderError:
             # A later request failed (a call budget, a timeout): keep the responses that
             # arrived for this run, so the task's retry does not download and pay for them
@@ -933,7 +1088,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
                 if not self._changed_runs(state):
                     self._save_responses(state)
             raise
-        if waves:
+        if waves or atmos:
             changed = self._changed_runs(state)
             if changed:
                 raise TransientProviderError(
@@ -945,6 +1100,17 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         self._save_responses(state)
 
         for p in spots:
+            if not want_waves:
+                if p.spot_id not in atmos:
+                    error = atmos_errors.get(p.spot_id, "missing")
+                    result.errors[p.spot_id] = f"atmosphere data: {error}"
+                    continue
+                records = self._atmos_records(p, atmos[p.spot_id], state)
+                if not records:
+                    result.errors[p.spot_id] = "no wind data at the spot"
+                    continue
+                result.records[p.spot_id] = records
+                continue
             if p.spot_id not in waves:
                 result.errors[p.spot_id] = wave_errors.get(p.spot_id, "wave data: missing")
                 continue
@@ -955,7 +1121,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
                 )
                 continue
             result.records[p.spot_id] = records
-            if p.spot_id in atmos_errors or p.spot_id not in atmos:
+            if want_atmos and (p.spot_id in atmos_errors or p.spot_id not in atmos):
                 reason = atmos_errors.get(p.spot_id, "missing")
                 result.errors[p.spot_id] = f"incomplete: wind and pressure unavailable ({reason})"
         result.stats = FetchStats.between(
@@ -973,8 +1139,11 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         return result
 
     def _changed_runs(self, state: _Fetch) -> list[str]:
-        """Domains whose current run differs from the one being fetched (meta.json, free)."""
-        after = self.read_metas()
+        """Domains whose current run differs from the one being fetched (meta.json, free;
+        only the fetched components' domains are read)."""
+        after = self._metas_of(
+            {self.component_of_model(m) for m, _, d in self.domains() if d in state.labelled}
+        )
         return [
             f"{d} {after[d].init_time:%Y-%m-%d %H}Z"
             for d, init in state.labelled.items()
@@ -990,9 +1159,11 @@ class OpenMeteoFamilyProvider(ForecastProvider):
         """(run init, data end, temporal resolution in s) of one requested model.
 
         A model read from several metadata domains (gfs_global: GFS 0.13 and 0.25 deg)
-        takes the earliest init and end, so no hour of a newer or longer run slips in.
+        takes the earliest init and end, so no hour of a newer or longer run slips in. A
+        model of a component this fetch does not request has no metadata here (a wave-only
+        fetch reads no atmosphere metadata): no end, hourly.
         """
-        domains = [d for m, _, d in self.domains() if m == model]
+        domains = [d for m, _, d in self.domains() if m == model and d in state.metas]
         inits = [state.labelled[d] for d in domains if d in state.labelled]
         ends = [e for d in domains if (e := state.metas[d].data_end) is not None]
         resolutions = [r for d in domains if (r := state.metas[d].temporal_resolution_s)]
@@ -1056,6 +1227,45 @@ class OpenMeteoFamilyProvider(ForecastProvider):
                 wind_cell = _cell(atmos.item, p.latitude, p.longitude)
                 if wind_cell is not None:
                     first[EXTRA_WIND_CELL] = {**wind_cell, "model": atmos_model}
+        return records
+
+    def _atmos_records(self, p: SpotPoint, atmos: Series, state: _Fetch) -> list[ForecastRecord]:
+        """The atmosphere-only records of an atmosphere refresh (the wave part is carried
+        from a stored run): the atmosphere model's own steps of its run, at the break."""
+        model = self.atmos_model()
+        init, end, resolution = self._model_meta(state, model)
+        max_lead = self.days * 24
+        native_only = self.settings.open_meteo_native_steps_only
+        records: list[ForecastRecord] = []
+        for ts, row in sorted(atmos.by_time().items()):
+            t = datetime.fromtimestamp(ts, tz=UTC)
+            lead = (t - init).total_seconds() / 3600.0
+            if lead < 0 or lead > max_lead or (end is not None and t >= end):
+                continue
+            native = is_native_step(model, lead, resolution)
+            if native_only and not native:
+                continue
+            values: dict[str, float | None] = dict.fromkeys(FORECAST_FIELDS)
+            values.update({k: v for k, v in row.items() if k in values})
+            values = _clean(values)
+            if all(values[k] is None for k in ATMOS_FIELDS):
+                continue
+            extra: dict[str, object] = {}
+            if values.get("wind_gust_kmh") is not None:
+                extra[EXTRA_GUST_KIND] = self.gust_kind_at()
+            step = native_step_hours(model, lead, resolution)
+            if step is not None:
+                extra[EXTRA_NATIVE_STEP_S] = step * 3600
+            if not native:
+                extra[EXTRA_INTERPOLATED] = True
+                extra["interpolated_fields"] = sorted(
+                    k for k in ATMOS_FIELDS if values.get(k) is not None
+                )
+            records.append(ForecastRecord(valid_time=t, values=values, extra=extra))
+        if records:
+            wind_cell = _cell(atmos.item, p.latitude, p.longitude)
+            if wind_cell is not None:
+                records[0].extra[EXTRA_WIND_CELL] = {**wind_cell, "model": model}
         return records
 
 
