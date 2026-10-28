@@ -523,8 +523,9 @@ counted; the sandbox reaches Open-Meteo through a proxy, and some TLS handshakes
 * 27 checks every 5 minutes from 20:32 to 22:46 UTC, all `not_due` (the two 0.25 domains
   stayed on 06Z): 26 read 4 `meta.json` each, no data request, 0.02-0.03 CPU s, 1.2-14.4 s
   wall. At 21:29 one `meta.json` request timed out three times (36 s): that check found the
-  source `unknown` (both components: the provider reads its domains' metadata together),
-  refreshed nothing and raised nothing, and the next check was normal.
+  source `unknown` (both components: the provider then read its domains' metadata
+  together; since the second review only the component whose `meta.json` failed is
+  `unknown`), refreshed nothing and raised nothing, and the next check was normal.
 * 2026-10-28 01:20 UTC, the 18Z run, a **wave-only refresh**: both GFS-Wave domains were
   servable on 18Z, while GFS 0.25 had become available at 01:18 (read from 01:28), so the
   atmosphere was `waiting` ("not served yet: Open-Meteo is publishing ncep_gfs025 run
@@ -578,6 +579,28 @@ only the spot providers, and the version marker is written after `match`):
   refreshed the atmosphere only (served from the provider response cache, so no data
   request that time), carrying the waves from that run: 8,000 of 8,000 wave rows equal,
   the version's `wave_model_run` the run's own 00Z, `carried_from_run_id` that run.
+
+**Second review re-check, 2026-10-28** (same sandbox after a restart, 1-minute load average
+1.1-1.7; after the per-component metadata fix and the 10 s `meta.json` timeout):
+
+* The demo route measurement (`measure_http.py`, real `uvicorn`, scratch database and
+  Redis): first refresh 18.7 s wall / 14.3 server CPU s, wave-only 16.6 / 11.9,
+  atmosphere-only 16.5 / 12.0 (predict 11.2-13.7 s, spots 3.1-3.6 s, detect 1.4-1.7 s),
+  checks with nothing new 0.005-0.007 s: 15-25 % slower than the first re-check, mostly
+  in the predict stage, which these fixes do not touch (11.2-13.7 s against 9.7-10.7 s);
+  every refresh used under 7 % of the 300 s limit. `scripts/measure_refresh_egress.py --redis-url
+  redis://localhost:6379/4`: 8.35, 9.32 and 9.50 MB database to app per refresh, 41 Redis
+  commands, a check 0 database bytes and 4 Redis commands.
+* Live Open-Meteo on a fresh clone of the real-data database: the first check refreshed
+  both components (2 marine and 1 forecast request, 20 `meta.json`; 22.7 s wall, 12.0 CPU
+  s; both components' `update_interval_seconds` 21600 from `meta.json`). Then the published
+  atmosphere was relabelled one cycle older, the provider cache emptied and the marine
+  host's `meta.json` made to fail inside the measuring process (a synthetic outage): the
+  check found the waves `unknown` ("ConnectTimeout ... after 3 attempts") and the
+  atmosphere new, and the refresh made 1 forecast request and no marine data request,
+  carrying the waves (`changed: false`, their run key kept; 7,900 of 7,900 wave rows equal
+  to the source run's); 23.3 s wall, 9.2 CPU s. The refresh check's Redis record named the
+  unknown component with its error.
 
 **Monthly Function CPU (extrapolation, not a measurement).** Vercel Hobby includes 4
 Active CPU-hours of Functions a month (https://vercel.com/docs/plans/hobby, read
