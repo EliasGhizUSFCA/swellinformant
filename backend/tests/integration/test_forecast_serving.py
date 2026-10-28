@@ -15,7 +15,8 @@ error at the first answer; POST /api/forecasts/seen stores a latency sample for 
 current version only; GET /api/forecasts/status; swell detection reads the served runs.
 
 Every forecast run comes from the SYNTHETIC demo provider (``run_pipeline``); the versions
-are staged by the tests themselves (versions.stage_version + publish_version).
+are staged by the tests themselves (versions.stage_version + publish_version): the version
+the pipeline publishes is removed first (see ``two_runs``).
 """
 
 from __future__ import annotations
@@ -85,6 +86,15 @@ def two_runs(db: Session, few_spots: list[str], frozen: list[datetime]) -> tuple
     assert len(runs) == 2 and runs[0].issued_at < runs[1].issued_at
     older, newer = runs[0].id, runs[1].id
     assert {r.id for r in latest_runs_by_spot(db).values()} == {newer}
+    # run_pipeline also publishes its run selection as a forecast version and writes the
+    # version marker (P2 refresh). This module stages its own versions, so the runs start
+    # without any version or marker, as in a database upgraded from schema 0008.
+    assert versions.current_version(db) is not None
+    db.execute(delete(ForecastVersion))
+    db.commit()
+    get_redis().delete(versions.marker_key())
+    serving.clear_memo()
+    assert versions.current_version(db) is None
     return older, newer
 
 
