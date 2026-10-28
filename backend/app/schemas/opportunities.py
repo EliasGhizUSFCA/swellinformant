@@ -26,6 +26,10 @@ class SegmentOut(BaseModel):
     carrier_name: str
     flight_number: str
     duration_minutes: int
+    # The airline that flies the segment (its full name: Duffel's display rule). None for
+    # offers stored before it was recorded, or when the marketing carrier flies it.
+    operating_carrier: str | None = None
+    operating_carrier_name: str | None = None
 
 
 class SliceOut(BaseModel):
@@ -43,6 +47,10 @@ class SliceOut(BaseModel):
 class LinkOut(BaseModel):
     label: str
     url: str
+    # "booking": the provider's own booking flow for this offer; "route_search": a new
+    # search for the same route and dates on a third-party site (fares may differ).
+    kind: Literal["booking", "route_search"] = "route_search"
+    note: str | None = None
 
 
 class OfferOut(BaseModel):
@@ -70,6 +78,13 @@ class OfferOut(BaseModel):
     validation_status: str
     offer_expires_at: datetime | None
     links: list[LinkOut]
+    # Full names of the airlines operating the segments, in travel order.
+    operating_carriers: list[str] = []
+    # The quote's own expiry has passed: shown as a past quote, never as bookable.
+    expired: bool = False
+    # The currency of ``price_converted`` when it differs from the offer's (converted
+    # with the configured FX_RATES_USD_JSON rates); None when no conversion was needed.
+    converted_currency: str | None = None
 
 
 class MatchSummary(BaseModel):
@@ -115,6 +130,12 @@ class MatchSummary(BaseModel):
     local_confidence_reason: str | None = None
     # The forecast run behind the match is older than its source's stale limit.
     stale: bool = False
+    # The swell starts SHORT_NOTICE_MIN_DAYS to _MAX_DAYS ahead (ranked first, spec 28).
+    short_notice: bool = False
+    # The best fare's quote has expired: a past price, re-check before booking.
+    best_offer_expired: bool = False
+    # The provider's currency when ``best_price`` was converted into the search currency.
+    quoted_currency: str | None = None
 
 
 class TravelWindowOut(BaseModel):

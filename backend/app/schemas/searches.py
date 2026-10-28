@@ -21,6 +21,9 @@ from app.models.enums import (
 )
 from app.schemas.common import CurrencyCode, IataCode, PlainText
 
+# saved_searches.alert_lead_*_days CHECK bound (migration 0009).
+MAX_ALERT_LEAD_DAYS = 16
+
 
 class TravelIn(BaseModel):
     max_price: Decimal = Field(gt=0, le=100000, decimal_places=2)
@@ -89,6 +92,11 @@ class SearchIn(BaseModel):
     notification_channel: NotificationChannelPref = NotificationChannelPref.EMAIL
     notify_surf_only: bool = False
     notify_on_updates: bool = True
+    # How far ahead a swell may start to be alerted (whole days, spec 28). None: the
+    # deployment's ALERT_LEAD_DEFAULT_MIN_DAYS / _MAX_DAYS for a new search, the current
+    # value when an existing search is saved without it.
+    alert_lead_min_days: int | None = Field(default=None, ge=0, le=MAX_ALERT_LEAD_DAYS)
+    alert_lead_max_days: int | None = Field(default=None, ge=0, le=MAX_ALERT_LEAD_DAYS)
     priority: RankingPriority = RankingPriority.BALANCED
     travel: TravelIn
 
@@ -113,6 +121,12 @@ class SearchIn(BaseModel):
                 raise ValueError("Travel window must be at most one year.")
         if (self.swell_direction_min is None) != (self.swell_direction_max is None):
             raise ValueError("Provide both swell direction bounds or neither.")
+        if (
+            self.alert_lead_min_days is not None
+            and self.alert_lead_max_days is not None
+            and self.alert_lead_min_days > self.alert_lead_max_days
+        ):
+            raise ValueError("The earliest alert lead time must not be later than the latest one.")
         d = self.destinations
         if self.destination_mode == DestinationMode.SPOTS and not d.spot_slugs:
             raise ValueError("Select at least one surf spot.")
@@ -163,6 +177,8 @@ class SearchOut(BaseModel):
     notification_channel: NotificationChannelPref
     notify_surf_only: bool
     notify_on_updates: bool
+    alert_lead_min_days: int
+    alert_lead_max_days: int
     priority: RankingPriority
     travel: TravelOut
     created_at: datetime
@@ -170,3 +186,21 @@ class SearchOut(BaseModel):
     paused_at: datetime | None
     last_evaluated_at: datetime | None
     match_counts: MatchCounts
+
+
+class SearchDefaultsOut(BaseModel):
+    """What the search wizard needs to know about this deployment's limits."""
+
+    alert_lead_min_days: int
+    alert_lead_max_days: int
+    # The forecast horizon and the global detection window that bound every search.
+    forecast_days: int
+    detection_lead_min_days: float
+    detection_lead_max_days: float
+    # Swells starting this many days ahead rank first (short notice, spec 28).
+    short_notice_min_days: float
+    short_notice_max_days: float
+    max_origins: int
+    max_layovers: int
+    max_alert_lead_days: int
+    flight_searches_per_day: int

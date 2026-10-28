@@ -11,13 +11,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.deps import get_current_user
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import AppError
 from app.models import OpportunityMatch, SavedSearch, User
 from app.schemas.common import Message
 from app.schemas.opportunities import MatchSummary
-from app.schemas.searches import SearchIn, SearchOut
+from app.schemas.searches import MAX_ALERT_LEAD_DAYS, SearchDefaultsOut, SearchIn, SearchOut
 from app.services import searches as svc
+from app.services.flights.service import MAX_CONNECTIONS, MAX_ORIGINS
 from app.services.opportunity_views import list_matches
 from app.workers.dispatch import kick
 
@@ -57,6 +59,25 @@ def create(
     search = svc.create_search(db, user, body)
     _kick_matching()
     return svc.search_out(db, search)
+
+
+@router.get("/defaults", response_model=SearchDefaultsOut)
+def defaults(user: User = Depends(get_current_user)) -> SearchDefaultsOut:
+    """The deployment's defaults and limits for a new search (the wizard's starting point)."""
+    s = get_settings()
+    return SearchDefaultsOut(
+        alert_lead_min_days=s.alert_lead_default_min_days,
+        alert_lead_max_days=s.alert_lead_default_max_days,
+        forecast_days=s.forecast_days,
+        detection_lead_min_days=s.detection_lead_min_days,
+        detection_lead_max_days=s.detection_lead_max_days,
+        short_notice_min_days=s.short_notice_min_days,
+        short_notice_max_days=s.short_notice_max_days,
+        max_origins=MAX_ORIGINS,
+        max_layovers=MAX_CONNECTIONS,
+        max_alert_lead_days=MAX_ALERT_LEAD_DAYS,
+        flight_searches_per_day=s.flight_user_daily_quota,
+    )
 
 
 @router.get("/{search_id}", response_model=SearchOut)
