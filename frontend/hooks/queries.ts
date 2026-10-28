@@ -28,8 +28,8 @@ import type {
 /**
  * Query keys. The public forecast reads (spot list, spot, forecast, timeline, events, map
  * conditions) end with the forecast version their data belongs to (`{ v }`, see
- * hooks/use-forecast-version.ts): a new published version is a new key, read at once, with the
- * previous version's data kept on screen meanwhile; their URLs carry the same `?v=`.
+ * hooks/use-forecast-version.ts), and their URLs carry the same `?v=` (taken from the key, so
+ * the version provider can read a new version under its own key before the page moves to it).
  */
 export const qk = {
   me: ["me"] as const,
@@ -55,8 +55,9 @@ export const qk = {
 };
 
 /** placeholderData of a versioned read: the previous version's data of the same read stays
- * on screen while the new version's loads (never another spot's or another query's), so an
- * update never blanks the page, unmounts a chart or loses its selection or scroll. */
+ * on screen while a read of the new version that was not read ahead loads (never another
+ * spot's or another query's), so an update never blanks the page, unmounts a chart or loses
+ * its selection or scroll. */
 function previousVersion<T, K extends QueryKey>(key: K): PlaceholderDataFunction<T, Error, T, K> {
   return (previous, previousQuery) => (previousQuery && sameExceptVersion(previousQuery.queryKey, key) ? previous : undefined);
 }
@@ -83,7 +84,7 @@ export function useSpots() {
   const queryKey = qk.spots(read.v);
   return useQuery({
     queryKey,
-    queryFn: async ({ signal }) => get<SpotSummary[]>(await read.url("/api/spots", signal), signal),
+    queryFn: async ({ queryKey: key, signal }) => get<SpotSummary[]>(await read.url("/api/spots", key, signal), signal),
     placeholderData: previousVersion<SpotSummary[], typeof queryKey>(queryKey),
     staleTime: 120_000,
   });
@@ -94,7 +95,7 @@ export function useSpot(slug: string) {
   const queryKey = qk.spot(slug, read.v);
   return useQuery({
     queryKey,
-    queryFn: async ({ signal }) => get<SpotDetail>(await read.url(`/api/spots/${slug}`, signal), signal),
+    queryFn: async ({ queryKey: key, signal }) => get<SpotDetail>(await read.url(`/api/spots/${slug}`, key, signal), signal),
     placeholderData: previousVersion<SpotDetail, typeof queryKey>(queryKey),
   });
 }
@@ -104,7 +105,7 @@ export function useForecast(slug: string, days = 10) {
   const queryKey = qk.forecast(slug, days, read.v);
   return useQuery({
     queryKey,
-    queryFn: async ({ signal }) => get<SpotForecast>(await read.url(`/api/spots/${slug}/forecast?days=${days}`, signal), signal),
+    queryFn: async ({ queryKey: key, signal }) => get<SpotForecast>(await read.url(`/api/spots/${slug}/forecast?days=${days}`, key, signal), signal),
     placeholderData: previousVersion<SpotForecast, typeof queryKey>(queryKey),
     staleTime: 120_000,
   });
@@ -117,7 +118,7 @@ export function useSpotTimeline(slug: string, days = 10) {
   const queryKey = qk.timeline(slug, days, read.v);
   return useQuery({
     queryKey,
-    queryFn: async ({ signal }) => get<SpotTimeline>(await read.url(`/api/spots/${slug}/timeline?days=${days}`, signal), signal),
+    queryFn: async ({ queryKey: key, signal }) => get<SpotTimeline>(await read.url(`/api/spots/${slug}/timeline?days=${days}`, key, signal), signal),
     placeholderData: previousVersion<SpotTimeline, typeof queryKey>(queryKey),
     staleTime: 120_000,
   });
@@ -128,7 +129,7 @@ export function useSpotEvents(slug: string) {
   const queryKey = qk.spotEvents(slug, read.v);
   return useQuery({
     queryKey,
-    queryFn: async ({ signal }) => get<SwellEvent[]>(await read.url(`/api/spots/${slug}/events`, signal), signal),
+    queryFn: async ({ queryKey: key, signal }) => get<SwellEvent[]>(await read.url(`/api/spots/${slug}/events`, key, signal), signal),
     placeholderData: previousVersion<SwellEvent[], typeof queryKey>(queryKey),
   });
 }
@@ -145,7 +146,7 @@ export function useEvents(limit = 12, minScore = 0) {
   const queryKey = qk.events(limit, minScore, read.v);
   return useQuery({
     queryKey,
-    queryFn: async ({ signal }) => get<SwellEvent[]>(await read.url(`/api/events?limit=${limit}&min_score=${minScore}`, signal), signal),
+    queryFn: async ({ queryKey: key, signal }) => get<SwellEvent[]>(await read.url(`/api/events?limit=${limit}&min_score=${minScore}`, key, signal), signal),
     placeholderData: previousVersion<SwellEvent[], typeof queryKey>(queryKey),
     staleTime: 120_000,
   });
@@ -246,8 +247,8 @@ export function useMapConditions(at: string | null) {
   const read = useVersionedRead();
   return useQuery({
     queryKey: qk.mapConditions(at, read.v),
-    queryFn: async ({ signal }) =>
-      get<MapSnapshot>(await read.url(at ? `/api/map/conditions?at=${encodeURIComponent(at)}` : "/api/map/conditions", signal), signal),
+    queryFn: async ({ queryKey: key, signal }) =>
+      get<MapSnapshot>(await read.url(at ? `/api/map/conditions?at=${encodeURIComponent(at)}` : "/api/map/conditions", key, signal), signal),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: at === null,

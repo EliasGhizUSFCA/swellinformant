@@ -44,15 +44,15 @@ function useNow(everyMs: number): number {
 }
 
 /**
- * "Forecast updated 14:32 · 5 min ago": when the forecast shown was published (the published
- * version's time, in the viewer's zone, with its age). When a newer version replaces it on an
- * open page the label changes with the data, is highlighted briefly, and screen readers hear
- * "New forecast loaded" (aria-live, once the new data is on screen). Nothing before the version
- * is known or while nothing has been published. `tone` "map" is the floating dark pill of the
- * map's controls.
+ * "Forecast updated 14:32 · 5 min ago": when the forecast shown was published (the version
+ * whose data the page shows, in the viewer's zone, with its age). When a newer version replaces
+ * it on an open page the label changes with the data, is highlighted briefly, and screen readers
+ * hear "New forecast loaded" (aria-live, once the new data is on screen). Nothing before the
+ * version is known or while nothing has been published. `tone` "map" is the floating dark pill
+ * of the map's controls.
  */
 export function ForecastUpdated({ tone = "page", className }: { tone?: "page" | "map"; className?: string }) {
-  const { status, version, renderedId, changedAt } = useForecastVersion();
+  const { status, shown: version, renderedId, changedAt } = useForecastVersion();
   const now = useNow(30_000);
   // The replacing version whose data is on screen: highlighted until HIGHLIGHT_MS later.
   const fresh = renderedId != null && renderedId === version?.version_id;

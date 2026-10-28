@@ -244,7 +244,10 @@ describe("version store", () => {
     server.current = version(2);
     await vi.advanceTimersByTimeAsync(POLL);
     expect(changes).toHaveBeenLastCalledWith(expect.objectContaining({ replaced: true, continuous: true, previous: expect.objectContaining({ version_id: 1 }), next: expect.objectContaining({ version_id: 2 }) }));
-    expect(store.getState()).toMatchObject({ version: { version_id: 2 }, changes: 1 });
+    // The newest answer is known at once; the page shows it once the provider read its data.
+    expect(store.getState()).toMatchObject({ version: { version_id: 2 }, shown: { version_id: 1 }, changes: 0 });
+    store.show(store.getState().version!, true);
+    expect(store.getState()).toMatchObject({ shown: { version_id: 2 }, changes: 1 });
     server.current = version(2, { map_run_id: 8 });
     await vi.advanceTimersByTimeAsync(POLL);
     expect(changes).toHaveBeenLastCalledWith(expect.objectContaining({ replaced: false }));
@@ -301,7 +304,7 @@ describe("versioned public reads", () => {
   });
 
   it("a new version is read at once under its key while the previous data stays on screen", async () => {
-    const { server, wrapper, client } = setup(version(1));
+    const { server, store, wrapper, client } = setup(version(1));
     let release: (v: unknown) => void = () => undefined;
     const get = vi.spyOn(api, "get").mockImplementation(async (path: string) => {
       const v = Number(new URL(path, "http://x").searchParams.get("v"));
@@ -315,14 +318,84 @@ describe("versioned public reads", () => {
     await act(() => vi.advanceTimersByTimeAsync(POLL));
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
     expect(get.mock.calls[1]![0]).toBe("/api/spots/pipeline?v=2");
-    // While version 2 loads, version 1 stays (never blank, never a loading state).
+    // While version 2 loads, the page stays on version 1: its key, its data, its label
+    // (never blank, never a loading state).
     expect(result.current.data).toEqual(spotDetail(1));
-    expect(result.current.isPlaceholderData).toBe(true);
     expect(result.current.isLoading).toBe(false);
+    expect(store.getState()).toMatchObject({ version: { version_id: 2 }, shown: { version_id: 1 } });
     release(undefined);
     await waitFor(() => expect(result.current.data).toEqual(spotDetail(2)));
+    expect(store.getState().shown?.version_id).toBe(2);
+    // Read once, ahead: the page moved to the cached answer without reading it again.
+    expect(get).toHaveBeenCalledTimes(2);
     // Same map run: the field index is left alone.
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: FIELD_INDEX_KEY });
+  });
+
+  it("a failed read of the new version keeps the previous version on screen and is tried again at the next answer", async () => {
+    const { server, store, wrapper } = setup(version(1));
+    let failures = 1;
+    const get = vi.spyOn(api, "get").mockImplementation(async (path: string) => {
+      const v = Number(new URL(path, "http://x").searchParams.get("v"));
+      if (v === 2 && failures > 0) {
+        failures -= 1;
+        throw new api.ApiError(503, "unavailable", "The service is temporarily unavailable.");
+      }
+      return spotDetail(v);
+    });
+    const { result } = renderHook(() => useSpot("pipeline"), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual(spotDetail(1)));
+    server.current = version(2);
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    // Still version 1: data, no error, the label's version.
+    expect(result.current.data).toEqual(spotDetail(1));
+    expect(result.current.isError).toBe(false);
+    expect(store.getState().shown?.version_id).toBe(1);
+    // The next answer (the same version 2) reads it again, and the page moves to it.
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(result.current.data).toEqual(spotDetail(2)));
+    expect(store.getState().shown?.version_id).toBe(2);
+    expect(get.mock.calls.map((c) => c[0])).toEqual(["/api/spots/pipeline?v=1", "/api/spots/pipeline?v=2", "/api/spots/pipeline?v=2"]);
+  });
+
+  it("a read of the new version that fails for good (4xx) is shown as a first load would", async () => {
+    const { server, store, wrapper } = setup(version(1));
+    vi.spyOn(api, "get").mockImplementation(async (path: string) => {
+      if (path.includes("v=2")) throw new api.ApiError(404, "not_found", "Spot not found");
+      return spotDetail(1);
+    });
+    const { result } = renderHook(() => useSpot("pipeline"), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual(spotDetail(1)));
+    server.current = version(2);
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(store.getState().shown?.version_id).toBe(2));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+
+  it("an older answer (another CDN copy, another API instance) changes nothing", async () => {
+    const { server, store, wrapper } = setup(version(1));
+    const get = vi.spyOn(api, "get").mockImplementation(async (path: string) => spotDetail(Number(new URL(path, "http://x").searchParams.get("v"))));
+    const { result } = renderHook(() => useSpot("pipeline"), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual(spotDetail(1)));
+    server.current = version(3);
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(result.current.data).toEqual(spotDetail(3)));
+    await waitFor(() => expect(store.getState().renderedId).toBe(3));
+    const state = store.getState();
+    // Version 2 (older, published earlier), and version 3 with an older map run.
+    for (const stale of [version(2), version(3, { map_run_id: 6 }), version(null)]) {
+      server.current = stale;
+      await act(() => vi.advanceTimersByTimeAsync(POLL));
+      expect(store.getState()).toBe(state);
+    }
+    expect(result.current.data).toEqual(spotDetail(3));
+    expect(get.mock.calls.map((c) => c[0])).toEqual(["/api/spots/pipeline?v=1", "/api/spots/pipeline?v=3"]);
+    // A lower id published later (the database was started again) is a new version.
+    server.current = version(1, { published_at: "2026-10-28T09:00:00.000Z" });
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(store.getState().shown?.published_at).toBe("2026-10-28T09:00:00.000Z"));
   });
 
   it("the previous version is kept for the same read only, never for another spot", async () => {
@@ -429,6 +502,101 @@ describe("after a new version is on screen", () => {
     await waitFor(() => expect(screen.getByTestId("forecast-updated")).toHaveAttribute("data-version-id", "2"));
     await waitFor(() => expect(screen.getByTestId("forecast-updated-announcement")).toHaveTextContent("New forecast loaded"));
     expect(report).not.toHaveBeenCalled();
+    disconnect();
+  });
+
+  it("the label stays on the version shown while the next one loads, and while its read fails", async () => {
+    const { server, store, client } = setup(version(1));
+    let mode: "hold" | "fail" | "ok" = "hold";
+    let release: (v: unknown) => void = () => undefined;
+    vi.spyOn(api, "get").mockImplementation(async (path: string) => {
+      const v = Number(new URL(path, "http://x").searchParams.get("v"));
+      if (v === 2 && mode === "hold") await new Promise((r) => (release = r));
+      if (v === 2 && mode === "fail") throw new TypeError("Failed to fetch");
+      return spotDetail(v);
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <ForecastVersionProvider store={store}>
+          <Page />
+        </ForecastVersionProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("41"));
+    server.current = version(2);
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    // Loading version 2: the page, its label and the announcement stay on version 1.
+    expect(screen.getByTestId("forecast-updated")).toHaveAttribute("data-version-id", "1");
+    expect(screen.getByTestId("score")).toHaveTextContent("41");
+    mode = "fail";
+    release(undefined);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    // Version 2's read failed (no network): still version 1, no error shown.
+    expect(screen.getByTestId("forecast-updated")).toHaveAttribute("data-version-id", "1");
+    expect(screen.getByTestId("score")).toHaveTextContent("41");
+    expect(screen.getByTestId("forecast-updated-announcement")).toHaveTextContent("");
+    mode = "ok";
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("42"));
+    expect(screen.getByTestId("forecast-updated")).toHaveAttribute("data-version-id", "2");
+    await waitFor(() => expect(screen.getByTestId("forecast-updated-announcement")).toHaveTextContent("New forecast loaded"));
+  });
+
+  it("does not report a version whose data was painted after the tab was hidden", async () => {
+    const { server, store, client } = setup(version(1));
+    const report = vi.fn();
+    let release: (v: unknown) => void = () => undefined;
+    vi.spyOn(api, "get").mockImplementation(async (path: string) => {
+      const v = Number(new URL(path, "http://x").searchParams.get("v"));
+      if (v === 2) await new Promise((r) => (release = r));
+      return spotDetail(v);
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <ForecastVersionProvider store={store}>
+          <Page />
+        </ForecastVersionProvider>
+      </QueryClientProvider>,
+    );
+    const disconnect = connectStore(store, client, report);
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("41"));
+    server.current = version(2);
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    // Version 2 was learned while visible; its data arrives after the tab was hidden.
+    setVisibility("hidden");
+    release(undefined);
+    setVisibility("visible");
+    await waitFor(() => expect(screen.getByTestId("forecast-updated-announcement")).toHaveTextContent("New forecast loaded"));
+    expect(report).not.toHaveBeenCalled();
+    disconnect();
+  });
+
+  it("a version endpoint that answers after the first reads moves the page to it without announcing it", async () => {
+    let answer: (v: ForecastVersion) => void = () => undefined;
+    const store = new ForecastVersionStore({ pollMs: POLL, initTimeoutMs: 1_000, fetchVersion: () => new Promise<ForecastVersion>((r) => (answer = r)) });
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: false } } });
+    const report = vi.fn();
+    const get = vi.spyOn(api, "get").mockImplementation(async (path: string) => spotDetail(Number(new URL(path, "http://x").searchParams.get("v") ?? 0)));
+    render(
+      <QueryClientProvider client={client}>
+        <ForecastVersionProvider store={store}>
+          <Page />
+        </ForecastVersionProvider>
+      </QueryClientProvider>,
+    );
+    const disconnect = connectStore(store, client, report);
+    // The version did not answer in time: the data is read without one.
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("40"));
+    expect(get.mock.calls.map((c) => c[0])).toEqual(["/api/spots/pipeline"]);
+    answer(version(4));
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("44"));
+    expect(screen.getByTestId("forecast-updated")).toHaveAttribute("data-version-id", "4");
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(screen.getByTestId("forecast-updated-announcement")).toHaveTextContent("");
+    expect(store.getState().changes).toBe(0);
+    expect(report).not.toHaveBeenCalled();
+    expect(get.mock.calls.map((c) => c[0])).toEqual(["/api/spots/pipeline", "/api/spots/pipeline?v=4"]);
     disconnect();
   });
 

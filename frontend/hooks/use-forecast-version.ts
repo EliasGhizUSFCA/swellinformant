@@ -15,23 +15,30 @@
  *   and the "Forecast updated" label retain the store): pages without forecast data never ask.
  *
  * The public forecast reads put the version in their query keys (`{ v }`, the last key part)
- * and URLs (`?v=<version_id>`), so a new version is a new key, fetched while the previous
- * version's data stays on screen (placeholderData), and a new URL for the browser cache and the
- * CDN. A new map run (`map_run_id`) refreshes the map's field index. The first page load waits
- * for the version (at most INIT_TIMEOUT_MS) so its data is read once, already versioned.
+ * and URLs (`?v=<version_id>`): a new version is a new key, and a new URL for the browser cache
+ * and the CDN. A new version is switched to as a whole: every public read on screen is first
+ * read under the new version (into the query cache, while the page keeps showing the previous
+ * version), and only then do the keys, and the "Forecast updated" label with them, move to it
+ * (`shown`). If one of those reads fails (a server error or no network), the page stays on the
+ * previous version, its data and its label, and the next answer of the poll tries again; an
+ * update therefore never blanks a page or leaves half of it on another version. An answer older
+ * than the newest one seen (another CDN copy, another API instance's memo) changes nothing. A
+ * new map run (`map_run_id`) refreshes the map's field index. The first page load waits for
+ * the version (at most INIT_TIMEOUT_MS) so its data is read once, already versioned.
  *
  * When a version replaces the one a tab showed, once its data is on screen: the "Forecast
  * updated" label announces it (aria-live), and the tab reports it once with
  * POST /api/forecasts/seen (navigator.sendBeacon) for the publication-to-browser latency, only
- * if the tab stayed visible since it last saw the previous version (a tab opened or shown
- * late would measure its own absence). The signed-in opportunity lists (no-store database
- * reads) are re-read once SETTLE_MS later, after the refresh's matching ran.
+ * if the tab stayed visible from the answer that showed the previous version until the new data
+ * was painted (a tab opened or shown late would measure its own absence). The signed-in
+ * opportunity lists (no-store database reads) are re-read once SETTLE_MS later, after the
+ * refresh's matching ran.
  */
 
 import { useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { createContext, createElement, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 
-import { FORECAST_VERSION_PATH, get, sendSeenBeacon, versionParam, withParams, withVersion, type ForecastVersion } from "@/lib/api";
+import { ApiError, FORECAST_VERSION_PATH, get, sendSeenBeacon, versionParam, withParams, withVersion, type ForecastVersion } from "@/lib/api";
 
 /** NEXT_PUBLIC_FORECAST_VERSION_POLL_MS when it is not set (or not a number). */
 export const DEFAULT_POLL_MS = 20_000;
@@ -70,6 +77,11 @@ export function keyVersion(key: QueryKey): number | null | undefined {
   return isVersionedKey(key) ? ((key[key.length - 1] as { v: number | null }).v ?? null) : undefined;
 }
 
+/** `key` with its version part set to `v` (a key that is not versioned is returned as is). */
+export function withKeyVersion(key: QueryKey, v: number | null): QueryKey {
+  return isVersionedKey(key) ? [...key.slice(0, -1), versionKey(v)] : key;
+}
+
 /** Two keys that differ at most in their version (the same spot, days, time...). */
 export function sameExceptVersion(a: QueryKey, b: QueryKey): boolean {
   if (!isVersionedKey(a) || !isVersionedKey(b) || a.length !== b.length) return false;
@@ -85,7 +97,11 @@ export interface VersionState {
    * `unknown`: the endpoint failed or did not answer in time (data is read without ?v= until
    * it answers). */
   status: VersionStatus;
+  /** The newest version the API named (it can be ahead of `shown` while its data loads). */
   version: ForecastVersion | null;
+  /** The version whose data the page shows: the public reads' keys and URLs carry its id,
+   * and the "Forecast updated" label names it (null: data read without a version). */
+  shown: ForecastVersion | null;
   /** Epoch ms when a version replaced the one this tab showed (null: none so far). */
   changedAt: number | null;
   /** The replacing version whose data is on screen (announced once). */
@@ -94,17 +110,21 @@ export interface VersionState {
   changes: number;
 }
 
-const INITIAL: VersionState = { status: "init", version: null, changedAt: null, renderedId: null, changes: 0 };
+const INITIAL: VersionState = { status: "init", version: null, shown: null, changedAt: null, renderedId: null, changes: 0 };
 /** Outside a provider (tests, a component rendered alone) and on the server: no version, no wait. */
 const DETACHED: VersionState = { ...INITIAL, status: "unknown" };
 
 export interface VersionChange {
-  previous: ForecastVersion;
+  /** The newest answer before `next` (null: the first answer after the endpoint failed or
+   * timed out, while the page shows data read without a version). */
+  previous: ForecastVersion | null;
   next: ForecastVersion;
-  /** Another version_id than the one shown (false: only the map run changed). */
+  /** Another version_id than the newest one so far (false: only the map run changed). */
   replaced: boolean;
   /** The tab stayed visible since the answer that showed `previous`. */
   continuous: boolean;
+  /** {@link ForecastVersionStore.hides} when `next` arrived (a hide since breaks `continuous`). */
+  hides: number;
 }
 
 export interface ForecastVersionStoreOptions {
@@ -119,8 +139,23 @@ const visible = () => typeof document === "undefined" || document.visibilityStat
 const same = (a: ForecastVersion, b: ForecastVersion) =>
   a.version_id === b.version_id && a.published_at === b.published_at && a.map_run_id === b.map_run_id && a.map_cycle === b.map_cycle;
 
+const publishedMs = (v: ForecastVersion) => (v.published_at ? Date.parse(v.published_at) : Number.NaN);
+
+/**
+ * Whether `next` is an older answer than `newest`: a lower version id (or none after one), or
+ * the same version with an older map run. Ids only grow (each publication is a new row), so
+ * such an answer is a stale copy (another CDN edge within its window, another API instance's
+ * memo), unless it was published later than `newest` (a database started again from scratch).
+ */
+export function olderAnswer(next: ForecastVersion, newest: ForecastVersion): boolean {
+  const a = versionParam(next.version_id) ?? 0;
+  const b = versionParam(newest.version_id) ?? 0;
+  if (a !== b) return a < b && !(publishedMs(next) > publishedMs(newest));
+  return (next.map_run_id ?? 0) < (newest.map_run_id ?? 0);
+}
+
 /** The version id the public query keys and URLs carry in `state`. */
-export const keyVersionOf = (state: VersionState): number | null => (state.status === "known" ? versionParam(state.version?.version_id) : null);
+export const keyVersionOf = (state: VersionState): number | null => (state.status === "known" ? versionParam(state.shown?.version_id) : null);
 
 function abortError(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("The read was cancelled.", "AbortError");
@@ -130,6 +165,10 @@ export class ForecastVersionStore {
   readonly pollMs: number;
   /** Set by the provider: what a new version or map run does to the query cache. */
   onChange: ((change: VersionChange) => void) | null = null;
+  /** Set by the provider: an answer that changed nothing (a pending switch tries again). */
+  onRepeat: (() => void) | null = null;
+  /** How many times the tab was hidden while the store was in use. */
+  hides = 0;
   private state: VersionState = INITIAL;
   private readonly listeners = new Set<() => void>();
   private readonly waiters = new Set<() => void>();
@@ -189,6 +228,14 @@ export class ForecastVersionStore {
       this.waiters.add(done);
       signal?.addEventListener("abort", abort, { once: true });
     });
+  }
+
+  /** The public reads now show `next` (the provider calls it once they are all read under
+   * it); `announce`: it replaces the version shown (false: the first versioned data after the
+   * endpoint failed, which may well be the same forecast). */
+  show(next: ForecastVersion, announce: boolean): void {
+    if (this.state.shown === next) return;
+    this.set(announce ? { shown: next, changedAt: this.now(), changes: this.state.changes + 1 } : { shown: next });
   }
 
   /** The data of version `id` is on screen (the provider calls it after the paint). */
@@ -263,6 +310,7 @@ export class ForecastVersionStore {
   private onVisibility = () => {
     if (!visible()) {
       this.hiddenSinceAnswer = true;
+      this.hides += 1;
       this.clearTimer();
       return;
     }
@@ -293,15 +341,25 @@ export class ForecastVersionStore {
     const continuous = !this.hiddenSinceAnswer;
     this.hiddenSinceAnswer = !visible();
     const { status, version: previous } = this.state;
-    if (status !== "known" || !previous) {
-      // The first answer (or the first after failures): what the tab shows, not a change.
-      this.settle({ status: "known", version: next });
+    if (status === "init") {
+      // The first answer: what the page's first reads are made under, not a change.
+      this.settle({ status: "known", version: next, shown: next });
       return;
     }
-    if (same(previous, next)) return;
+    if (!previous) {
+      // The first answer after the endpoint failed or timed out: the page shows data read
+      // without a version, which the provider reads again under this one before showing it.
+      this.settle({ status: "known", version: next });
+      this.onChange?.({ previous: null, next, replaced: true, continuous: false, hides: this.hides });
+      return;
+    }
+    if (same(previous, next) || olderAnswer(next, previous)) {
+      this.onRepeat?.();
+      return;
+    }
     const replaced = previous.version_id !== next.version_id;
-    this.set(replaced ? { version: next, changedAt: this.now(), changes: this.state.changes + 1 } : { version: next });
-    this.onChange?.({ previous, next, replaced, continuous });
+    this.set({ version: next });
+    this.onChange?.({ previous, next, replaced, continuous, hides: this.hides });
   }
 
   private onFailure() {
@@ -351,26 +409,76 @@ export function whenVersionRendered(client: QueryClient, id: number | null, done
   };
 }
 
+/** A failed read worth trying again at the next answer (a server error, a rate limit, a
+ * timeout or no network); a 4xx such as a spot that no longer exists is final. */
+function retryable(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.status >= 500 || error.status === 408 || error.status === 429;
+}
+
+/**
+ * Reads every public forecast read on screen under version `id` into the query cache (a
+ * read already cached and fresh is not read again). Resolves true when the page can switch
+ * to `id`: every read succeeded or failed for good (a 4xx, which the page then shows as a
+ * first load would); false when one failed in a way worth trying again.
+ */
+export async function readUnder(client: QueryClient, id: number | null): Promise<boolean> {
+  const reads = client
+    .getQueryCache()
+    .findAll({ type: "active", predicate: (q) => isVersionedKey(q.queryKey) && keyVersion(q.queryKey) !== id })
+    .flatMap((q) => {
+      const queryFn = q.options.queryFn;
+      return typeof queryFn === "function" ? [client.fetchQuery({ queryKey: withKeyVersion(q.queryKey, id), queryFn })] : [];
+    });
+  const results = await Promise.allSettled(reads);
+  return !results.some((r) => r.status === "rejected" && retryable(r.reason));
+}
+
 /** The provider's reaction to a new version or map run (exported for tests). */
 export function connectStore(store: ForecastVersionStore, client: QueryClient, report: (id: number) => void = sendSeenBeacon): () => void {
   const reported = new Set<number>();
   let cancelRender: (() => void) | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
-  store.onChange = ({ previous, next, replaced, continuous }) => {
-    if (previous.map_run_id !== next.map_run_id) void client.invalidateQueries({ queryKey: FIELD_INDEX_KEY });
-    if (!replaced) return;
-    // The new version's public reads are new keys: the hooks fetch them as they re-render.
+  // The version waiting for its data (a failed read: tried again at the next answer), and
+  // the attempt under way (a newer version, or the disconnect, drops an older attempt).
+  let pending: VersionChange | null = null;
+  let attempt = 0;
+  let busy = false;
+  let connected = true;
+
+  const switchTo = async (change: VersionChange) => {
+    const token = ++attempt;
+    pending = change;
+    busy = true;
+    const id = versionParam(change.next.version_id);
+    const ready = await readUnder(client, id).catch(() => false);
+    if (token !== attempt || !connected) return;
+    busy = false;
+    // Keep the previous version on screen (data and label); the next answer tries again.
+    if (!ready) return;
+    pending = null;
+    const announce = change.previous != null;
+    store.show(change.next, announce);
+    if (!announce || id == null) return;
     cancelRender?.();
-    const id = versionParam(next.version_id);
     cancelRender = whenVersionRendered(client, id, () => {
       cancelRender = null;
-      if (id == null) return;
       store.markRendered(id);
-      if (continuous && !reported.has(id)) {
+      // Only a tab that stayed visible from the previous answer to this paint measures the
+      // publication-to-browser latency (a hidden tab paints when it is shown again).
+      if (change.continuous && store.hides === change.hides && !reported.has(id)) {
         reported.add(id);
         report(id);
       }
     });
+  };
+
+  store.onChange = (change) => {
+    const { previous, next, replaced } = change;
+    if (previous && previous.map_run_id !== next.map_run_id) void client.invalidateQueries({ queryKey: FIELD_INDEX_KEY });
+    if (!replaced) return;
+    // The new version's public reads are read first; the keys move once they are cached.
+    void switchTo(change);
+    if (!previous) return;
     if (settleTimer) clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
       settleTimer = null;
@@ -381,8 +489,14 @@ export function connectStore(store: ForecastVersionStore, client: QueryClient, r
       });
     }, SETTLE_MS);
   };
+  store.onRepeat = () => {
+    if (pending && !busy) void switchTo(pending);
+  };
   return () => {
+    connected = false;
+    attempt += 1;
     store.onChange = null;
+    store.onRepeat = null;
     cancelRender?.();
     if (settleTimer) clearTimeout(settleTimer);
   };
@@ -433,9 +547,11 @@ export function useForecastVersion(): VersionState {
 export interface VersionedRead {
   /** The version id the query keys carry (null: none known). */
   v: number | null;
-  /** `path` with ?v=. On a first page load it first waits (at most INIT_TIMEOUT_MS) for the
-   * version; a read whose key changes meanwhile is cancelled before it fetches. */
-  url: (path: string, signal: AbortSignal) => Promise<string>;
+  /** `path` with the ?v= of `queryKey` (a versioned key: the provider reads a new version
+   * under its own key with the same query function). On a first page load it first waits (at
+   * most INIT_TIMEOUT_MS) for the version; a read whose key changes meanwhile is cancelled
+   * before it fetches. */
+  url: (path: string, queryKey: QueryKey, signal: AbortSignal) => Promise<string>;
 }
 
 /** For the public forecast hooks: the version for keys and URLs; keeps the store polling. */
@@ -450,8 +566,8 @@ export function useVersionedRead(): VersionedRead {
   return useMemo(
     () => ({
       v,
-      url: async (path, signal) => {
-        if (!store || store.getState().status !== "init") return withVersion(path, v);
+      url: async (path, queryKey, signal) => {
+        if (!store || store.getState().status !== "init") return withVersion(path, keyVersion(queryKey));
         await store.settled(signal);
         // Let React re-render with the version first: the key changes and this read is
         // cancelled, so the data is fetched once, under its versioned key and URL.
