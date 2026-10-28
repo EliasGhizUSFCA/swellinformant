@@ -46,6 +46,9 @@ function visibleWords(root: Element): string[] {
 // Reasons as long as the backend writes them (forecast-v1 wording, <= 90 characters).
 const FORECAST_REASON = "A 6-day forecast, and the ensemble members spread widely on the swell's size.";
 const LOCAL_REASON = "How this break responds to swell is only partly documented.";
+/** The combined "local confidence" the API sent before 2.0 removed it (spec 20); a response
+ * cached before the upgrade can still carry it, and the UI must not show it. */
+const LEGACY_LOCAL = { local_confidence_class: "low", local_confidence_reason: LOCAL_REASON };
 
 function conditions(overrides: Partial<Conditions> = {}): Conditions {
   return {
@@ -77,10 +80,9 @@ function conditions(overrides: Partial<Conditions> = {}): Conditions {
     explanation:
       "2.2 m @ 16 s SW swell, well aligned with the break; offshore wind 9 km/h from NE; approx. 6–8 ft faces vs. a working range of 3–12 ft (synthetic).",
     forecast_confidence_class: "moderate",
-    local_confidence_class: "low",
+    ...LEGACY_LOCAL,
     confidence_reasons: [FORECAST_REASON, "Not yet checked against buoys near this spot.", LOCAL_REASON],
     forecast_confidence_reasons: [FORECAST_REASON],
-    local_confidence_reason: LOCAL_REASON,
     lead_hours: 18,
     wind_strength: "light",
     wind_favourability: "favourable",
@@ -132,10 +134,9 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
     source_code: "blend",
     history: [],
     forecast_confidence_class: "moderate",
-    local_confidence_class: "low",
+    ...LEGACY_LOCAL,
     confidence_reasons: [FORECAST_REASON, LOCAL_REASON],
     forecast_confidence_reasons: [FORECAST_REASON],
-    local_confidence_reason: LOCAL_REASON,
     wind_dispute_note: null,
     wind_strength: "light",
     wind_favourability: "favourable",
@@ -183,8 +184,7 @@ function match(overrides: Partial<MatchSummary> = {}): MatchSummary {
     created_at: at(-30),
     updated_at: at(-2),
     forecast_confidence_class: "moderate",
-    local_confidence_class: "low",
-    local_confidence_reason: LOCAL_REASON,
+    ...LEGACY_LOCAL,
     stale: false,
     short_notice: true,
     best_offer_expired: false,

@@ -336,7 +336,6 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
     source_code: "synthetic",
     history: [],
     forecast_confidence_class: "high",
-    local_confidence_class: "high",
     confidence_reasons: [],
     forecast_confidence_reasons: [],
     stale: false,
@@ -347,7 +346,10 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
 
 describe("EventCard confidence", () => {
   it("shows forecast confidence only, even when the deprecated combined class is lower (spec 20)", () => {
-    const { unmount } = render(<EventCard event={event({ local_confidence_class: "low", local_confidence_reason: RESEARCH_REASON_TEXTS[0] })} />);
+    // The combined class the API sent before 2.0 removed it (spec 20), as a response cached
+    // before the upgrade could still carry it.
+    const legacy = { local_confidence_class: "low", local_confidence_reason: RESEARCH_REASON_TEXTS[0] };
+    const { unmount } = render(<EventCard event={{ ...event(), ...legacy }} />);
     expect(screen.getByTestId("forecast-confidence-badge")).toHaveTextContent("Forecast confidence: High");
     expect(screen.queryByTestId("local-confidence-badge")).toBeNull();
     expect(screen.queryByTestId("local-confidence")).toBeNull();

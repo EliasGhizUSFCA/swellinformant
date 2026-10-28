@@ -41,6 +41,14 @@ function mixedReasons(sc: Scenario): string[] {
   return [...sc.reasons, ...(sc.windNote ? [sc.windNote] : []), ...(sc.localReason ? [sc.localReason] : [])];
 }
 
+/** The combined "local confidence" the API sent before 2.0 removed it (spec 20). The mocks
+ * still send it, as a response cached before the upgrade could, to prove the UI ignores it. */
+function legacyLocal(sc: Scenario, withReason = true) {
+  return withReason
+    ? { local_confidence_class: sc.localClass, local_confidence_reason: sc.localReason }
+    : { local_confidence_class: sc.localClass };
+}
+
 /** The wind fields the API adds from its wind model (synthetic speeds; the backend's classes). */
 function windFields(kmh: number) {
   const strength = kmh <= 5 ? "glassy" : kmh < 12 ? "light" : kmh < 29 ? "moderate" : "strong";
@@ -188,14 +196,17 @@ function point(h: number, sc: Scenario): ForecastPoint {
     explanation: "Synthetic explanation: swell well aligned with the break; offshore wind (test fixture).",
     components: { swell_direction: 0.95, swell_period: Math.min(1, w.period / 15), wave_size: 0.8, wind: 0.9, consistency: 0.8, size_gate: 1, period_gate: 1, wind_gate: 1 },
     forecast_confidence_class: sc.forecastClass,
-    local_confidence_class: sc.localClass,
+    ...legacyLocal(sc),
     confidence_reasons: mixedReasons(sc),
     forecast_confidence_reasons: sc.reasons,
-    local_confidence_reason: sc.localReason,
     wind_dispute_note: sc.windNote ?? null,
     lead_hours: h,
     ...windFields(Math.round(w.wind)),
   };
+}
+
+function pick(o: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  return Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
 }
 
 function toConditions(p: ForecastPoint): Conditions {
@@ -227,10 +238,10 @@ function toConditions(p: ForecastPoint): Conditions {
     algorithm_version: "2.1.0",
     explanation: p.explanation,
     forecast_confidence_class: p.forecast_confidence_class ?? null,
-    local_confidence_class: p.local_confidence_class ?? null,
+    // Whatever legacy combined class the mocked point carries (see legacyLocal).
+    ...pick(p as Record<string, unknown>, ["local_confidence_class", "local_confidence_reason"]),
     confidence_reasons: p.confidence_reasons ?? [],
     forecast_confidence_reasons: p.forecast_confidence_reasons ?? [],
-    local_confidence_reason: p.local_confidence_reason ?? null,
     wind_dispute_note: p.wind_dispute_note ?? null,
     wind_strength: p.wind_strength ?? null,
     wind_favourability: p.wind_favourability ?? null,
@@ -307,7 +318,7 @@ function daily(sc: Scenario): DailySummary[] {
       good_hours: p.score >= 57 ? 8 : 0,
       confidence: 61,
       forecast_confidence_class: sc.forecastClass,
-      local_confidence_class: sc.localClass,
+      ...legacyLocal(sc, false),
     };
   });
 }
@@ -374,10 +385,9 @@ export function swellEvent(sc: Scenario, opts: { id: string; name: string; start
     source_code: "demo",
     history: [],
     forecast_confidence_class: sc.forecastClass,
-    local_confidence_class: sc.localClass,
+    ...legacyLocal(sc),
     confidence_reasons: mixedReasons(sc),
     forecast_confidence_reasons: sc.reasons,
-    local_confidence_reason: sc.localReason,
     wind_dispute_note: sc.windNote ?? null,
     attribution_links: [],
     ...windFields(8),
@@ -456,9 +466,11 @@ export function matchSummary(sc: Scenario): MatchSummary {
     created_at: iso(-24),
     updated_at: iso(-2),
     forecast_confidence_class: sc.forecastClass,
-    local_confidence_class: sc.localClass,
-    local_confidence_reason: sc.localReason,
+    ...legacyLocal(sc),
     stale: false,
+    // Required since P8 (2.0); the values the fixture always implied (undefined = false).
+    short_notice: false,
+    best_offer_expired: false,
   };
 }
 
@@ -506,8 +518,7 @@ export function notifications(sc: Scenario): NotificationPage {
         window_label: "7 days out (synthetic)",
         is_demo: true,
         forecast_confidence_class: sc.forecastClass,
-        local_confidence_class: sc.localClass,
-        local_confidence_reason: sc.localReason,
+        ...legacyLocal(sc),
       },
     ],
   };

@@ -3,7 +3,7 @@
  * HttpOnly session cookie automatically, and echo the readable `sta_csrf` cookie in the
  * `X-CSRF-Token` header on state-changing requests (double-submit CSRF protection).
  */
-import type { ApiErrorBody } from "@/types/api";
+import type { ApiErrorBody, ForecastVersionOut } from "@/types/api";
 
 const CSRF_COOKIE = "sta_csrf";
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -98,29 +98,11 @@ export const del = <T>(path: string, body?: unknown) => api<T>(path, { method: "
 
 // --- forecast versions (design D11, contract C4) --------------------------------------------
 
-/** GET /api/forecasts/version (contract C4): the published forecast version. `version_id`
- * null = nothing published yet (the data served then comes from the run selection used before
- * versions existed). Times are ISO 8601 UTC. Mirrors the API's ForecastVersionOut until the
- * generated OpenAPI types (types/openapi.d.ts) include it. */
-export interface ForecastVersion {
-  version_id: number | null;
-  published_at: string | null;
-  provider: string | null;
-  source_code: string | null;
-  wind_model: string | null;
-  wind_model_run: string | null;
-  wind_run_estimated: boolean;
-  wave_model: string | null;
-  wave_model_run: string | null;
-  wave_run_estimated: boolean;
-  spots_total: number;
-  spots_updated: number;
-  spots_stale: number;
-  /** The published map-layer run (its own pointer): a change means new ocean layers. */
-  map_run_id: number | null;
-  map_cycle: string | null;
-  attribution: string[];
-}
+/** GET /api/forecasts/version (contract C4): the published forecast version, the generated
+ * ForecastVersionOut. `version_id` null = nothing published yet (the data served then comes
+ * from the run selection used before versions existed); `map_run_id` is the published
+ * map-layer run (its own pointer: a change means new ocean layers). Times are ISO 8601 UTC. */
+export type ForecastVersion = ForecastVersionOut;
 
 export const FORECAST_VERSION_PATH = "/api/forecasts/version";
 export const FORECAST_SEEN_PATH = "/api/forecasts/seen";

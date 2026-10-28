@@ -7,6 +7,11 @@ import type { ForecastPoint, SpotForecast } from "@/types/api";
 
 // SYNTHETIC forecast hour and spot forecast: invented values and reasons that exist only to
 // exercise the conversion. Nothing here describes a real forecast or a real surf spot.
+
+/** The combined "local confidence" the API sent before 2.0 removed it (spec 20). A response
+ * cached before the upgrade can still carry it: the UI must drop it. */
+const LEGACY_LOCAL = { local_confidence_class: "low", local_confidence_reason: "Synthetic: the API's own reason for this hour." };
+
 function point(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
   return {
     valid_time: "2026-10-14T06:00:00Z",
@@ -36,11 +41,12 @@ function point(overrides: Partial<ForecastPoint> = {}): ForecastPoint {
     explanation: "Synthetic explanation.",
     components: {},
     forecast_confidence_class: "high",
-    local_confidence_class: "low",
+    forecast_confidence: { level: "high", kind: "heuristic", method: "forecast-v1.2" },
+    research_confidence: "low",
+    ...LEGACY_LOCAL,
     confidence_reasons: ["Synthetic: models agree.", "Synthetic: this break's research is thin."],
     forecast_confidence_reasons: ["Synthetic: models agree."],
     lead_hours: 18,
-    local_confidence_reason: "Synthetic: the API's own reason for this hour.",
     ...overrides,
   };
 }
@@ -59,16 +65,21 @@ const FORECAST = {
 } as SpotForecast;
 
 describe("pointToConditions", () => {
-  it("keeps the API's local-confidence reason", () => {
+  it("keeps the two separate confidences and drops the combined local confidence (spec 20)", () => {
     const c = pointToConditions(point(), FORECAST);
-    expect(c.local_confidence_reason).toBe("Synthetic: the API's own reason for this hour.");
-    expect(c.local_confidence_class).toBe("low");
+    expect(c.forecast_confidence).toEqual({ level: "high", kind: "heuristic", method: "forecast-v1.2" });
+    expect(c.research_confidence).toBe("low");
     expect(c.confidence_reasons).toEqual(["Synthetic: models agree.", "Synthetic: this break's research is thin."]);
+    // 2.0 removed the combined class and its reason from the API; an older cached response
+    // that still carries them does not pass them on.
+    expect("local_confidence_class" in c).toBe(false);
+    expect("local_confidence_reason" in c).toBe(false);
   });
 
-  it("maps a missing reason to null", () => {
-    expect(pointToConditions(point({ local_confidence_reason: undefined }), FORECAST).local_confidence_reason).toBeNull();
-    expect(pointToConditions(point({ local_confidence_reason: null }), FORECAST).local_confidence_reason).toBeNull();
+  it("maps missing confidences to null", () => {
+    const c = pointToConditions(point({ forecast_confidence: undefined, research_confidence: null }), FORECAST);
+    expect(c.forecast_confidence).toBeNull();
+    expect(c.research_confidence).toBeNull();
   });
 
   it("never shows the deprecated combined reason in the spot page's breakdown (spec 20)", () => {

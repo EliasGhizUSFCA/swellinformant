@@ -6,7 +6,7 @@
  *   hour; `forecast_confidence_class`), and
  * * research confidence: how well a break's ideal conditions are documented (per spot).
  *
- * The API's deprecated `local_confidence_*` fields combined the two; the UI does not show them.
+ * The combined `local_confidence_*` fields that mixed the two were removed from the API in 2.0.
  *
  * Both are documented heuristic classifications, not calibrated probabilities. A missing or
  * unknown class is "Not assessed yet" — never a default of High.

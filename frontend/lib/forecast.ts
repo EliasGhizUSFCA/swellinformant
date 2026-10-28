@@ -59,10 +59,11 @@ export function pointToConditions(p: ForecastPoint, fc: SpotForecast): Condition
     algorithm_version: p.algorithm_version ?? null,
     explanation: p.explanation,
     forecast_confidence_class: p.forecast_confidence_class ?? null,
-    local_confidence_class: p.local_confidence_class ?? null,
+    // The two separate confidences of the hour (spec 20: never combined).
+    forecast_confidence: p.forecast_confidence ?? null,
+    research_confidence: p.research_confidence ?? null,
     confidence_reasons: p.confidence_reasons ?? [],
     lead_hours: p.lead_hours ?? null,
-    local_confidence_reason: p.local_confidence_reason ?? null,
     forecast_confidence_reasons: p.forecast_confidence_reasons ?? [],
     wind_dispute_note: p.wind_dispute_note ?? null,
     wind_strength: p.wind_strength ?? null,

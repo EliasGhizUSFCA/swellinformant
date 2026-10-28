@@ -251,7 +251,11 @@ test.describe("spot detail against the demo backend (no mocks)", () => {
       const block = outlook.getByTestId("forecast-confidence").first();
       await block.getByRole("button", { name: "Confidence details" }).click();
       if (best.forecast_confidence_reasons.length) await expect(block.getByTestId("forecast-confidence-reasons").getByRole("listitem")).toHaveText(best.forecast_confidence_reasons);
-      await expectForecastReasonsOnly(block, [best.local_confidence_reason]);
+      // Spec 20 (2.0): the API no longer serves the combined local class or its reason; the
+      // research sentences (NOT_FORECAST_REASONS) never appear under forecast confidence.
+      expect(best).not.toHaveProperty("local_confidence_class");
+      expect(best).not.toHaveProperty("local_confidence_reason");
+      await expectForecastReasonsOnly(block, []);
       await block.getByRole("button", { name: "Confidence details" }).click();
       await expect(outlook.getByTestId("rating-title")).toHaveText(`${QUALITY[best.label]} Surf — ${(best.score / 10).toFixed(1)}/10`);
       // "Why this rating?" shows the API's own component fits for that hour, word for word.
@@ -473,7 +477,11 @@ test.describe("opportunity, alert and match badges against the demo backend (no 
     const detail = (await apiGet(page.request, `/api/opportunities/${top.id}`)) as MatchDetail;
     // The API's own contract: the opportunity reads exactly like its swell event.
     expect(top.forecast_confidence_class ?? null).toBe(detail.event.forecast_confidence_class ?? null);
-    expect(top.local_confidence_class ?? null).toBe(detail.event.local_confidence_class ?? null);
+    // Spec 20 (2.0): neither serves the combined local class (research and forecast mixed).
+    for (const body of [top, detail.event]) {
+      expect(body).not.toHaveProperty("local_confidence_class");
+      expect(body).not.toHaveProperty("local_confidence_reason");
+    }
 
     await page.goto("/dashboard");
     const card = page.locator(`[data-testid="opportunity-card"][href="/opportunities/${top.id}"]`);
@@ -485,7 +493,7 @@ test.describe("opportunity, alert and match badges against the demo backend (no 
     await page.goto(`/opportunities/${top.id}`);
     const overview = page.getByTestId("swell-overview");
     await expect(overview.getByTestId("forecast-confidence-badge")).toHaveText(`Forecast confidence: ${label(detail.event.forecast_confidence_class)}`);
-    await expectForecastReasonsOnly(overview.getByTestId("forecast-confidence"), [detail.event.local_confidence_reason]);
+    await expectForecastReasonsOnly(overview.getByTestId("forecast-confidence"), []);
 
     // The search's matches use the same card.
     await page.goto(`/searches/${search.id}`);

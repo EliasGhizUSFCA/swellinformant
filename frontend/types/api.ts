@@ -103,3 +103,8 @@ export type AccuracyOverview = S["AccuracyOverview"];
 export type AccuracyMetric = S["MetricRow"];
 export type AccuracyPairs = S["PairsOut"];
 export type ModelVersionSummary = S["ModelVersionSummary"];
+
+// Swell 2.0 forecast versions and freshness (design D7, D10, D11; contract C4).
+export type ForecastVersionOut = S["ForecastVersionOut"];
+export type ForecastStatus = S["ForecastStatusOut"];
+export type SpotFreshness = S["SpotFreshnessOut"];

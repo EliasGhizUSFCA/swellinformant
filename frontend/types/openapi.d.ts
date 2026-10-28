@@ -1090,6 +1090,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/forecasts/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Forecast Version
+         * @description The published forecast version (``version_id`` null: none published yet).
+         */
+        get: operations["forecast_version_api_forecasts_version_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/forecasts/seen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Forecast Seen
+         * @description A tab rendered ``version_id`` (see the module docstring).
+         */
+        post: operations["forecast_seen_api_forecasts_seen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/forecasts/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Forecast Status
+         * @description The published version, the model run of each component and the stale spots.
+         */
+        get: operations["forecast_status_api_forecasts_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dev/simulate-swell": {
         parameters: {
             query?: never;
@@ -1101,6 +1161,26 @@ export interface paths {
         put?: never;
         /** Simulate */
         post: operations["simulate_api_dev_simulate_swell_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dev/simulate-model-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Simulate Model Run
+         * @description Advance the demo provider's available run of ``component`` (developer tool, C6).
+         */
+        post: operations["simulate_model_run_api_dev_simulate_model_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1964,6 +2044,9 @@ export interface components {
          *     * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``).
          */
         Conditions: {
+            forecast_confidence?: components["schemas"]["ForecastConfidenceOut"] | null;
+            /** Research Confidence */
+            research_confidence?: ("high" | "moderate" | "low") | null;
             /**
              * Valid Time
              * Format: date-time
@@ -2026,8 +2109,6 @@ export interface components {
             ml_model_version?: string | null;
             /** Forecast Confidence Class */
             forecast_confidence_class?: string | null;
-            /** Local Confidence Class */
-            local_confidence_class?: string | null;
             /**
              * Confidence Reasons
              * @default []
@@ -2035,8 +2116,6 @@ export interface components {
             confidence_reasons: string[];
             /** Lead Hours */
             lead_hours?: number | null;
-            /** Local Confidence Reason */
-            local_confidence_reason?: string | null;
             /**
              * Forecast Confidence Reasons
              * @default []
@@ -2092,8 +2171,6 @@ export interface components {
             confidence: number;
             /** Forecast Confidence Class */
             forecast_confidence_class?: string | null;
-            /** Local Confidence Class */
-            local_confidence_class?: string | null;
         };
         /** DataHealthOut */
         DataHealthOut: {
@@ -2269,15 +2346,11 @@ export interface components {
             }[];
             /** Forecast Confidence Class */
             forecast_confidence_class?: string | null;
-            /** Local Confidence Class */
-            local_confidence_class?: string | null;
             /**
              * Confidence Reasons
              * @default []
              */
             confidence_reasons: string[];
-            /** Local Confidence Reason */
-            local_confidence_reason?: string | null;
             /**
              * Forecast Confidence Reasons
              * @default []
@@ -2394,8 +2467,96 @@ export interface components {
             /** System */
             system?: ("primary" | "secondary" | "windsea") | null;
         };
-        /** ForecastPoint */
+        /**
+         * ForecastComponentOut
+         * @description The model run one component of the published version comes from.
+         */
+        ForecastComponentOut: {
+            /**
+             * Component
+             * @enum {string}
+             */
+            component: "atmosphere" | "wave";
+            /** Model */
+            model?: string | null;
+            /** Run Key */
+            run_key?: string | null;
+            /** Model Run */
+            model_run?: string | null;
+            /**
+             * Estimated
+             * @default false
+             */
+            estimated: boolean;
+            /** Available At */
+            available_at?: string | null;
+            /** Retrieved At */
+            retrieved_at?: string | null;
+            /**
+             * Changed
+             * @default true
+             */
+            changed: boolean;
+            /**
+             * Domains
+             * @default []
+             */
+            domains: components["schemas"]["ForecastDomainOut"][];
+        };
+        /**
+         * ForecastConfidenceOut
+         * @description Forecast confidence of one hour: how dependable the offshore forecast is (lead time,
+         *     freshness, ensemble spread and model agreement where available; methodology
+         *     docs/forecast-confidence.md). A heuristic class from documented rules, not a calibrated
+         *     probability: ``kind`` says so. Its reasons are ``forecast_confidence_reasons``. Never
+         *     combined with research confidence.
+         */
+        ForecastConfidenceOut: {
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "high" | "moderate" | "low";
+            /**
+             * Kind
+             * @default heuristic
+             * @constant
+             */
+            kind: "heuristic";
+            /** Method */
+            method?: string | null;
+        };
+        /**
+         * ForecastDomainOut
+         * @description One model domain behind a component (e.g. GFS 0.13 and GFS 0.25).
+         */
+        ForecastDomainOut: {
+            /** Model */
+            model: string;
+            /** Model Run */
+            model_run?: string | null;
+            /** Available At */
+            available_at?: string | null;
+        };
+        /**
+         * ForecastPoint
+         * @description One stored forecast hour of the spot forecast: raw model values, our breaking-height
+         *     estimate (``breaking_height_*``, the nearshore model's typical-to-sets range and
+         *     central value, an estimate that is not calibrated against observed surf), the score
+         *     and its per-hour outputs (``HourOutputs``) and the two separate confidences.
+         */
         ForecastPoint: {
+            forecast_confidence?: components["schemas"]["ForecastConfidenceOut"] | null;
+            /** Research Confidence */
+            research_confidence?: ("high" | "moderate" | "low") | null;
+            /** Favourable */
+            favourable?: string[] | null;
+            /** Unfavourable */
+            unfavourable?: string[] | null;
+            /** Offshore Class */
+            offshore_class?: string | null;
+            /** Model Version */
+            model_version?: string | null;
             /**
              * Valid Time
              * Format: date-time
@@ -2483,8 +2644,6 @@ export interface components {
             };
             /** Forecast Confidence Class */
             forecast_confidence_class?: string | null;
-            /** Local Confidence Class */
-            local_confidence_class?: string | null;
             /**
              * Confidence Reasons
              * @default []
@@ -2492,8 +2651,6 @@ export interface components {
             confidence_reasons: string[];
             /** Lead Hours */
             lead_hours?: number | null;
-            /** Local Confidence Reason */
-            local_confidence_reason?: string | null;
             /**
              * Forecast Confidence Reasons
              * @default []
@@ -2550,6 +2707,72 @@ export interface components {
              * @default []
              */
             attribution_links: components["schemas"]["AttributionLinkOut"][];
+        };
+        /**
+         * ForecastStatusOut
+         * @description The public freshness summary: the published version, the model run behind each
+         *     component, and the active spots whose forecast is stale.
+         */
+        ForecastStatusOut: {
+            version: components["schemas"]["ForecastVersionOut"];
+            /**
+             * Components
+             * @default []
+             */
+            components: components["schemas"]["ForecastComponentOut"][];
+            /**
+             * Spots Served
+             * @default 0
+             */
+            spots_served: number;
+            /**
+             * Stale Spots
+             * @default []
+             */
+            stale_spots: components["schemas"]["StaleSpotOut"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+        };
+        /**
+         * ForecastVersionOut
+         * @description The published forecast version (C4). Every field is always present.
+         */
+        ForecastVersionOut: {
+            /** Version Id */
+            version_id: number | null;
+            /** Published At */
+            published_at: string | null;
+            /** Provider */
+            provider: string | null;
+            /** Source Code */
+            source_code: string | null;
+            /** Wind Model */
+            wind_model: string | null;
+            /** Wind Model Run */
+            wind_model_run: string | null;
+            /** Wind Run Estimated */
+            wind_run_estimated: boolean;
+            /** Wave Model */
+            wave_model: string | null;
+            /** Wave Model Run */
+            wave_model_run: string | null;
+            /** Wave Run Estimated */
+            wave_run_estimated: boolean;
+            /** Spots Total */
+            spots_total: number;
+            /** Spots Updated */
+            spots_updated: number;
+            /** Spots Stale */
+            spots_stale: number;
+            /** Map Run Id */
+            map_run_id: number | null;
+            /** Map Cycle */
+            map_cycle: string | null;
+            /** Attribution */
+            attribution: string[];
         };
         /** ForgotPasswordIn */
         ForgotPasswordIn: {
@@ -2713,6 +2936,8 @@ export interface components {
              * @default []
              */
             attribution_links: components["schemas"]["AttributionLinkOut"][];
+            /** Version Id */
+            version_id?: number | null;
         };
         /** MapSpotOut */
         MapSpotOut: {
@@ -2723,6 +2948,7 @@ export interface components {
             event_at_time: boolean;
             /** Upcoming Event Count */
             upcoming_event_count: number;
+            freshness?: components["schemas"]["SpotFreshnessOut"] | null;
         };
         /** MatchCounts */
         MatchCounts: {
@@ -2848,10 +3074,6 @@ export interface components {
             updated_at: string;
             /** Forecast Confidence Class */
             forecast_confidence_class?: ("high" | "moderate" | "low") | null;
-            /** Local Confidence Class */
-            local_confidence_class?: ("high" | "moderate" | "low") | null;
-            /** Local Confidence Reason */
-            local_confidence_reason?: string | null;
             /**
              * Stale
              * @default false
@@ -2987,10 +3209,6 @@ export interface components {
             updated_at: string;
             /** Forecast Confidence Class */
             forecast_confidence_class?: ("high" | "moderate" | "low") | null;
-            /** Local Confidence Class */
-            local_confidence_class?: ("high" | "moderate" | "low") | null;
-            /** Local Confidence Reason */
-            local_confidence_reason?: string | null;
             /**
              * Stale
              * @default false
@@ -3216,10 +3434,6 @@ export interface components {
             is_demo: boolean;
             /** Forecast Confidence Class */
             forecast_confidence_class?: ("high" | "moderate" | "low") | null;
-            /** Local Confidence Class */
-            local_confidence_class?: ("high" | "moderate" | "low") | null;
-            /** Local Confidence Reason */
-            local_confidence_reason?: string | null;
         };
         /** NotificationPage */
         NotificationPage: {
@@ -4096,6 +4310,7 @@ export interface components {
             upcoming_event_count: number;
             /** Research Class */
             research_class?: string | null;
+            freshness?: components["schemas"]["SpotFreshnessOut"] | null;
             /** Forecast Latitude */
             forecast_latitude: number;
             /** Forecast Longitude */
@@ -4187,6 +4402,29 @@ export interface components {
             alerts_paused: boolean;
             /** Generated At */
             generated_at?: string | null;
+            freshness?: components["schemas"]["SpotFreshnessOut"] | null;
+        };
+        /**
+         * SpotFreshnessOut
+         * @description How fresh one spot's served forecast is (design D10).
+         *
+         *     ``version_id``: the published version the spot is served from (None before the first
+         *     publication: then the freshness of the run the legacy selection serves, ``stale`` by
+         *     that run's own staleness rule). ``last_updated_at``: the spot's last successful update
+         *     ("Forecast last updated 7 hours ago"). ``stale`` data is never labelled current.
+         */
+        SpotFreshnessOut: {
+            /** Version Id */
+            version_id?: number | null;
+            /** Last Updated At */
+            last_updated_at?: string | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Reason */
+            reason?: ("missing" | "refresh_failed" | "atmosphere_age" | "wave_age" | "age") | null;
         };
         /** SpotMini */
         SpotMini: {
@@ -4261,6 +4499,7 @@ export interface components {
             upcoming_event_count: number;
             /** Research Class */
             research_class?: string | null;
+            freshness?: components["schemas"]["SpotFreshnessOut"] | null;
         };
         /** SpotTimelineOut */
         SpotTimelineOut: {
@@ -4288,6 +4527,20 @@ export interface components {
             steps: components["schemas"]["TimelineStepOut"][];
             tide: components["schemas"]["TideBlockOut"];
             observations: components["schemas"]["ObservationsBlockOut"];
+            freshness?: components["schemas"]["SpotFreshnessOut"] | null;
+        };
+        /** StaleSpotOut */
+        StaleSpotOut: {
+            /** Spot Id */
+            spot_id: number;
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Last Updated At */
+            last_updated_at?: string | null;
+            /** Reason */
+            reason?: ("missing" | "refresh_failed" | "atmosphere_age" | "wave_age" | "age") | null;
         };
         /** StationSummary */
         StationSummary: {
@@ -4344,20 +4597,31 @@ export interface components {
             /** Dir From Deg */
             dir_from_deg: number | null;
         };
-        /** StepQualityOut */
+        /**
+         * StepQualityOut
+         * @description Our rating of the step, its per-hour outputs (``HourOutputs``) and its two separate
+         *     confidences (``SeparateConfidences``).
+         */
         StepQualityOut: {
+            forecast_confidence?: components["schemas"]["ForecastConfidenceOut"] | null;
+            /** Research Confidence */
+            research_confidence?: ("high" | "moderate" | "low") | null;
+            /** Favourable */
+            favourable?: string[] | null;
+            /** Unfavourable */
+            unfavourable?: string[] | null;
+            /** Offshore Class */
+            offshore_class?: string | null;
+            /** Model Version */
+            model_version?: string | null;
             /** Score */
             score: number;
             /** Label */
             label: string;
             /** Forecast Confidence Class */
             forecast_confidence_class: string | null;
-            /** Local Confidence Class */
-            local_confidence_class: string | null;
             /** Forecast Confidence Reasons */
             forecast_confidence_reasons: string[];
-            /** Local Confidence Reason */
-            local_confidence_reason: string | null;
         };
         /**
          * StepSegmentOut
@@ -5117,7 +5381,10 @@ export interface operations {
     };
     system_status_api_system_status_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5133,6 +5400,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -5744,6 +6020,8 @@ export interface operations {
             query?: {
                 /** @description Forecast time (ISO 8601; UTC when it has no offset); default now. Answered for its UTC hour, within 2 days before and 17 days after the current hour */
                 at?: string | null;
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
             };
             header?: never;
             path?: never;
@@ -5773,7 +6051,10 @@ export interface operations {
     };
     list_spots_api_spots_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5789,11 +6070,23 @@ export interface operations {
                     "application/json": components["schemas"]["SpotSummary"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_spot_api_spots__slug__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
+            };
             header?: never;
             path: {
                 slug: string;
@@ -5826,6 +6119,8 @@ export interface operations {
         parameters: {
             query?: {
                 days?: number;
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
             };
             header?: never;
             path: {
@@ -5857,7 +6152,10 @@ export interface operations {
     };
     spot_events_api_spots__slug__events_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
+            };
             header?: never;
             path: {
                 slug: string;
@@ -5922,6 +6220,8 @@ export interface operations {
             query?: {
                 limit?: number;
                 min_score?: number;
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
             };
             header?: never;
             path?: never;
@@ -6693,7 +6993,10 @@ export interface operations {
     };
     fields_index_api_map_fields_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -6707,6 +7010,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FieldIndexOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6818,6 +7130,8 @@ export interface operations {
         parameters: {
             query?: {
                 days?: number;
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
             };
             header?: never;
             path: {
@@ -6854,6 +7168,87 @@ export interface operations {
             };
         };
     };
+    forecast_version_api_forecasts_version_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForecastVersionOut"];
+                };
+            };
+        };
+    };
+    forecast_seen_api_forecasts_seen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Version Id */
+                    version_id: number;
+                };
+                "text/plain": {
+                    /** Version Id */
+                    version_id: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    forecast_status_api_forecasts_status_get: {
+        parameters: {
+            query?: {
+                /** @description Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers. */
+                v?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForecastStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     simulate_api_dev_simulate_swell_post: {
         parameters: {
             query?: never;
@@ -6866,6 +7261,40 @@ export interface operations {
                 "application/json": components["schemas"]["SimulateIn"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    simulate_model_run_api_dev_simulate_model_run_post: {
+        parameters: {
+            query?: {
+                /** @description The demo component that gets a new simulated model run */
+                component?: "wave" | "atmosphere" | "both";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
