@@ -33,6 +33,7 @@ from app.services.forecasts.windy import (
     SENTINEL_POINTS,
     SENTINEL_SLUG,
     TESTING_KEY_REASON,
+    TESTING_WARNING,
     URL,
     WindyCredentialsError,
     WindyProvider,
@@ -275,6 +276,20 @@ def test_a_series_in_an_unknown_unit_is_left_out_with_a_warning() -> None:
     result = p.fetch([JBAY], p.current_run(NOW))
     assert result.records[JBAY.spot_id][0].values["pressure_msl_hpa"] is None
     assert any("pressure-surface" in w and "inHg" in w for w in result.warnings)
+
+
+def test_unit_names_spelled_out_are_read_and_other_units_are_still_left_out() -> None:
+    wave = wave_body(2)
+    wave["units"]["waves_height-surface"] = "meters"
+    wave["units"]["swell1_period-surface"] = "seconds"
+    wave["units"]["swell2_height-surface"] = "ft"  # never converted by guesswork
+    server = WindyServer(wave=lambda b: wave)
+    p = provider(server)
+    result = p.fetch([JBAY], p.current_run(NOW))
+    v = result.records[JBAY.spot_id][0].values
+    assert v["sig_wave_height_m"] == 2.0 and v["primary_swell_period_s"] == 14.0
+    assert v["secondary_swell_height_m"] is None and v["secondary_swell_period_s"] is None
+    assert any("swell2_height-surface" in w and "'ft'" in w for w in result.warnings)
 
 
 def test_records_end_at_forecast_days_after_the_estimated_cycle() -> None:
@@ -520,6 +535,28 @@ def test_an_invalid_key_is_a_credentials_error_after_one_request(response: httpx
     assert "test-key" not in str(err.value)
     health = provider_manager.provider_health("windy")
     assert health is not None and health.last_failure_kind == provider_manager.CREDENTIALS
+
+
+def test_a_key_echoed_by_windy_never_reaches_an_error_or_the_health_record() -> None:
+    key = "synthetic-windy-key-7f3a91"  # a test value, not a real key
+    echo = httpx.Response(400, json={"message": f"Invalid API key {key}"})
+    server = WindyServer(wave=lambda b: echo, gfs=lambda b: echo)
+    p = WindyProvider(settings(windy_api_key=key), client=server.client(), backoff_seconds=0)
+    with pytest.raises(WindyCredentialsError) as err:
+        p.current_run(NOW)
+    assert key not in str(err.value) and "[REDACTED]" in str(err.value)
+    health = provider_manager.provider_health("windy")
+    assert health is not None and key not in str(health.as_dict())
+    server.wave = lambda b: httpx.Response(418, text=f"unexpected answer for {key}")
+    with pytest.raises(PermanentProviderError) as other:
+        p.current_run(NOW)
+    assert key not in str(other.value)
+    server.wave = lambda b: {**wave_body(), "warning": f"{TESTING_WARNING} ({key})"}
+    with pytest.raises(WindyTestingKeyError) as testing:
+        p.current_run(NOW)
+    assert key not in str(testing.value)
+    health = provider_manager.provider_health("windy")
+    assert health is not None and key not in str(health.as_dict())
 
 
 def test_the_daily_limit_answer_is_a_quota_error_until_midnight_utc() -> None:

@@ -167,10 +167,13 @@ PARTITIONS = ("primary_swell", "secondary_swell", "tertiary_swell", "wind_wave")
 # (for a response whose ``units`` omits a key) are the units of Windy's own examples.
 SPEED_UNITS = {"m*s-1": 3.6, "m/s": 3.6, "m s-1": 3.6, "ms-1": 3.6, "km*h-1": 1.0, "km/h": 1.0}
 PRESSURE_UNITS = {"pa": 0.01, "hpa": 1.0}
-LENGTH_UNITS = {"m": 1.0}
-PERIOD_UNITS = {"s": 1.0}
+LENGTH_UNITS = {"m": 1.0, "meter": 1.0, "meters": 1.0, "metre": 1.0, "metres": 1.0}
+PERIOD_UNITS = {"s": 1.0, "sec": 1.0, "secs": 1.0, "second": 1.0, "seconds": 1.0}
 DEFAULT_UNITS = {"speed": "m*s-1", "pressure": "Pa", "length": "m", "period": "s"}
 EXTRA_PRESSURE_KIND = "pressure_kind"
+# A configured key shorter than this is not scrubbed from texts (it would garble them; a real
+# Windy key is much longer).
+MIN_SCRUB_CHARS = 8
 PRESSURE_KIND = "surface_unspecified"
 
 # Testing (trial) keys: the documented warning of their responses (Windy staff example,
@@ -360,8 +363,18 @@ def check_interval(now: datetime, settings: Settings) -> timedelta:
     return timedelta(minutes=minutes)
 
 
-def _message(resp: httpx.Response) -> str:
-    """The error text of a response (its JSON ``message``, else the body start), redacted."""
+def scrub(text: str, secret: str | None) -> str:
+    """``text`` without the key's value (should Windy ever echo the key in a message), then
+    redacted (:func:`app.core.logging.redact`): Windy texts reach logs, run details and the
+    provider health."""
+    if secret and len(secret) >= MIN_SCRUB_CHARS:
+        text = text.replace(secret, "[REDACTED]")
+    return redact(text)
+
+
+def _message(resp: httpx.Response, secret: str | None = None) -> str:
+    """The error text of a response (its JSON ``message``, else the body start), without the
+    key and redacted."""
     text = ""
     try:
         body = resp.json()
@@ -371,8 +384,8 @@ def _message(resp: httpx.Response) -> str:
         message = body["message"]
         text = "; ".join(map(str, message)) if isinstance(message, list) else str(message)
     elif resp.content:
-        text = resp.text[:200]
-    return redact(text)[:200]
+        text = resp.text[:2000]
+    return scrub(text, secret)[:200]
 
 
 # --------------------------------------------------------------------------- run state
@@ -717,8 +730,11 @@ class WindyProvider(ForecastProvider):
     def _failure(self, kind: str, detail: str, retry_after_s: float | None = None) -> None:
         if self.record_health:
             provider_manager.record_provider_failure(
-                PROVIDER, kind, detail, retry_after_s=retry_after_s
+                PROVIDER, kind, self._scrub(detail), retry_after_s=retry_after_s
             )
+
+    def _scrub(self, text: str) -> str:
+        return scrub(text, self.settings.windy_api_key)
 
     def _success(self) -> None:
         if self.record_health:
@@ -750,7 +766,7 @@ class WindyProvider(ForecastProvider):
     def _read(self, resp: httpx.Response, model: str) -> dict[str, Any]:
         status = resp.status_code
         if status != 200:
-            message = _message(resp)
+            message = _message(resp, self.settings.windy_api_key)
             low = message.lower()
             if status in (401, 403) or (status == 400 and "api key" in low and "limit" not in low):
                 detail = f"Windy refused the key (HTTP {status}: {message or 'no message'})"
@@ -775,7 +791,7 @@ class WindyProvider(ForecastProvider):
             raise TransientProviderError(f"Windy {model} returned no forecast object")
         warning = data.get("warning")
         if warning and is_testing_warning(warning):
-            notice = redact(str(warning))[:160]
+            notice = self._scrub(str(warning))[:160]
             detail = (
                 f"{TESTING_KEY_REASON}: Windy answered with TESTING-key data ('{notice}'): "
                 "testing data are randomly shuffled and are never stored or published"
@@ -783,7 +799,7 @@ class WindyProvider(ForecastProvider):
             self._failure(provider_manager.TESTING_KEY, detail)
             raise WindyTestingKeyError(detail)
         if warning:
-            self.warnings.append(f"Windy {model} warning: {redact(str(warning))[:200]}")
+            self.warnings.append(f"Windy {model} warning: {self._scrub(str(warning))[:200]}")
         if not isinstance(data.get("ts"), list):
             raise TransientProviderError(f"Windy {model} returned no time steps")
         return data
