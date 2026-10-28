@@ -105,3 +105,15 @@ def test_parse_marker_reads_json_text_and_bytes() -> None:
 )
 def test_the_seen_report_body(body: bytes, expected: int | None) -> None:
     assert seen_version_id(body) == expected
+
+
+def test_windy_data_carry_the_credit_its_terms_name_and_the_data_source() -> None:
+    from app.models import ForecastSource
+    from app.services.forecasts import queries
+
+    source = ForecastSource(code="windy_gfswave", name="w", provider="windy", wave_model="gfsWave")
+    links = [(link.label, link.href) for link in queries.attribution_links_for(source)]
+    assert links[0] == ("Contains data from the Windy database", "https://www.windy.com/")
+    assert ("NOAA NCEP GFS and GFS-Wave (modified)", queries._NOAA_GFS_LINK.href) in links
+    # The plain-text credit of the version payload says the same.
+    assert versions.attribution_for("windy") == [links[0][0]]

@@ -223,7 +223,15 @@ SOURCE_ATTRIBUTION_LINKS: dict[str, tuple[AttributionLinkOut, ...]] = {
             href="https://registry.opendata.aws/noaa-gefs/",
         ),
     ),
-    "windy_gfswave": (AttributionLinkOut(label="Windy.com", href="https://www.windy.com/"),),
+    # Windy's API terms: the text "Contains data from the Windy database" states the source,
+    # and the weather data's own source must be credited too (GFS and GFS-Wave). The logo
+    # the terms also ask for is the frontend's (docs/WINDY_API_SETUP.md).
+    "windy_gfswave": (
+        AttributionLinkOut(
+            label="Contains data from the Windy database", href="https://www.windy.com/"
+        ),
+        _NOAA_GFS_LINK,
+    ),
 }
 
 
