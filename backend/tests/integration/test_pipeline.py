@@ -399,9 +399,13 @@ def test_expired_offer_is_never_alerted_and_triggers_research(
     # Stop after flight discovery: expire every offer before alerts are generated.
     from app.services.flights.service import discover_flights
     from app.services.surf_quality.predict import compute_pending_predictions
+    from app.services.sync.publish import publish
 
     db.execute(delete(Notification))
     compute_pending_predictions(db)
+    # The pipeline's own order (services/pipeline.py): the simulated run is published as
+    # the forecast version first, since detection reads the published runs (design D7).
+    publish(db, trigger="pipeline")
     detect_events(db)
     match_all(db)
     discover_flights(db)
