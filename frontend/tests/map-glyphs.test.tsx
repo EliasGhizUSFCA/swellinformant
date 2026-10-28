@@ -76,6 +76,8 @@ describe("declutter", () => {
   it(`shows labels only from zoom ${LABEL_MIN_ZOOM}`, () => {
     expect(declutter([glyph()], LABEL_MIN_ZOOM - 0.01).get("a")!.label).toBeNull();
     expect(declutter([glyph()], LABEL_MIN_ZOOM).get("a")!.label).not.toBeNull();
+    // The one-world desktop view opens at about zoom 2.5: no labels there.
+    expect(declutter([glyph()], 2.5).get("a")!.label).toBeNull();
   });
 
   it("puts a label on a side its own arrows leave free", () => {
@@ -159,6 +161,9 @@ describe("glyph HTML", () => {
     expect(html).toContain('data-label-side="right"');
     expect(html).toContain(">4–6 ft</span>");
     expect(html).not.toContain("sg-stale");
+    // Decoration for sighted users: the circle's tooltip carries the numbers, so the label
+    // is not read out of context from the marker pane.
+    expect(html).toMatch(/^<div class="spot-glyph" aria-hidden="true"/);
   });
 
   it("escapes the label and marks a stale forecast", () => {

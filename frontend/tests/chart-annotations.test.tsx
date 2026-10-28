@@ -97,6 +97,11 @@ describe("tide suitability (spec 24)", () => {
     ]);
   });
 
+  it("uses the scoring explanation's cut-offs: favourable from 0.75, workable from 0.4", () => {
+    const tl = withTideFits(jbay(), [0.75, 0.749, 0.4, 0.399, 0]);
+    expect(timelineModel(tl).steps.slice(0, 5).map((s) => tideFit(s.step))).toEqual(["favourable", "workable", "workable", "unfavourable", "unfavourable"]);
+  });
+
   it("shades the tide row and keys the classes; nothing is shaded without a rated tide", () => {
     const { unmount } = renderTimeline(withTideFits(jbay(), [0.9, 0.5, 0.1]));
     const row = screen.getByTestId("tide-row");

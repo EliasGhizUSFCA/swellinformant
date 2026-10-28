@@ -75,7 +75,9 @@ export function glyphHtml({
     .filter(Boolean)
     .join(" ");
   const svgPart = parts.length ? `<svg width="${2 * HALF}" height="${2 * HALF}" viewBox="${-HALF} ${-HALF} ${2 * HALF} ${2 * HALF}" aria-hidden="true" focusable="false">${parts.join("")}</svg>` : "";
-  return `<div class="spot-glyph" ${attrs}>${svgPart}${labelHtml}</div>`;
+  // Decoration only: the circle's tooltip carries the same numbers for assistive technology,
+  // so the label text is not read out of context from the marker pane.
+  return `<div class="spot-glyph" aria-hidden="true" ${attrs}>${svgPart}${labelHtml}</div>`;
 }
 
 /**
