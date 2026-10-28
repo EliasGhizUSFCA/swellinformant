@@ -31,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StaleBanner } from "@/components/stale-banner";
 import { WindDisputeNote } from "@/components/wind-dispute";
 import { useForecast, useMe, useSpot, useSpotEvents, useSpotOpportunities, useSpotTimeline } from "@/hooks/queries";
+import { useForecastVersion } from "@/hooks/use-forecast-version";
 import { forecastReasonsOf, rangeWords, runAgeHours } from "@/lib/confidence";
 import { nearestPointIndex, pointToConditions } from "@/lib/forecast";
 import { combinedFreshness, FRESHNESS_REASON_TEXT, hourOutputs, type Freshness } from "@/lib/forecast-fields";
@@ -117,7 +118,13 @@ function SurfOutlook({
   freshness: Freshness | null;
 }) {
   const [windUnit] = useWindUnit();
+  const { shown } = useForecastVersion();
   const c = s.best_upcoming;
+  // The estimated run-time flags of the published version whose data is on screen (contract
+  // C4), only when the hour comes from that version's source (a stale spot can be served
+  // from an older run of another source); otherwise the source rule applies.
+  const sourceCode = fc?.source?.code ?? c?.source_code ?? null;
+  const runFlags = shown && sourceCode && shown.source_code === sourceCode ? shown : null;
   const at = c ? new Date(c.valid_time).getTime() : NaN;
   const point = fc?.points.find((p) => new Date(p.valid_time).getTime() === at) ?? null;
   const step = timeline?.steps.find((st) => Date.parse(st.t) === at) ?? null;
@@ -203,7 +210,7 @@ function SurfOutlook({
                 units={units}
                 method={method}
               >
-                <RatingDetails spot={s} c={c} point={point} step={step} fc={fc} tide={timeline?.tide} units={units} windUnit={windUnit} />
+                <RatingDetails spot={s} c={c} point={point} step={step} fc={fc} tide={timeline?.tide} units={units} windUnit={windUnit} version={runFlags} />
               </WhyThisRating>
               <div className="mt-3 space-y-1.5 border-t pt-3">
                 {/* Forecast reasons only: research and the not-yet-verified note are not about the

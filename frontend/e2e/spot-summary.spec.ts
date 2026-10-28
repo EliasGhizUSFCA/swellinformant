@@ -79,6 +79,28 @@ test.describe("spot summary (spec 25)", () => {
     await expect(details.getByTestId("rating-research").getByTestId("rating-research-confidence")).toBeVisible();
   });
 
+  test("'Why this rating?' lists the API's own favourable and unfavourable conditions of the hour (scoring 2.2.0)", async ({ page }) => {
+    const spot = (await apiGet(page.request, `/api/spots/${SPOT}`)) as { best_upcoming: Best | null };
+    test.skip(!spot.best_upcoming, "the demo has no usable forecast for this spot");
+    const fc = (await apiGet(page.request, `/api/spots/${SPOT}/forecast?days=10`)) as {
+      points: Array<{ valid_time: string; favourable?: string[] | null; unfavourable?: string[] | null; model_version?: string | null }>;
+    };
+    const at = Date.parse(spot.best_upcoming!.valid_time);
+    const point = fc.points.find((p) => Date.parse(p.valid_time) === at);
+    expect(point, "the best hour is a forecast point").toBeTruthy();
+    // The merged backend scores with 2.2.0, whose hours carry the two lists.
+    expect(point!.model_version).toBe("2.2.0");
+    const good = point!.favourable ?? [];
+    const bad = point!.unfavourable ?? [];
+    expect(good.length + bad.length).toBeGreaterThan(0);
+    await openSpot(page);
+    const outlook = page.getByTestId("surf-outlook");
+    await outlook.getByRole("button", { name: "Why this rating?" }).click();
+    const why = outlook.getByTestId("why-rating");
+    await expect(why.getByTestId("rating-favourable").getByRole("listitem")).toHaveCount(good.length);
+    await expect(why.getByTestId("rating-unfavourable").getByRole("listitem")).toHaveCount(bad.length);
+  });
+
   test("ft / m works signed out, is remembered, and the map follows it", async ({ page }) => {
     await openSpot(page);
     const toggle = page.getByTestId("height-unit-toggle");
