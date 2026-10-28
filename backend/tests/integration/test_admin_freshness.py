@@ -178,6 +178,8 @@ def test_every_metric_comes_from_the_recorded_pipeline(
     # Redis: the call budget, the flight quota, the version marker and the latencies.
     quota.consume_open_meteo_budget(340.0, now=now)
     quota.consume_open_meteo_budget(170.0, now=now)
+    for _ in range(2):  # the Windy adapter's daily request counter (P1 providers)
+        quota.consume_windy_request(now=now)
     monkeypatch.setattr(get_settings(), "flight_provider", "duffel")
     consume_quota("duffel", get_settings().flight_daily_quota, 7)
     versions.write_version_marker(versions.version_payload(v2))
@@ -270,7 +272,11 @@ def test_every_metric_comes_from_the_recorded_pipeline(
     assert usage["open_meteo"]["day"]["limit"] == 10000.0
     assert usage["open_meteo"]["day"]["fraction"] == 0.051
     assert usage["open_meteo"]["month"]["used"] == 510.0 and usage["open_meteo"]["available"]
-    assert usage["windy"]["counted"] is False and usage["windy"]["day"]["used"] is None
+    # The Windy meter reads the adapter's own counter now that the providers package is
+    # merged (it pinned "not counted" while monitoring was built without it).
+    assert usage["windy"]["counted"] is True and usage["windy"]["available"] is True
+    assert usage["windy"]["day"]["used"] == 2.0
+    assert usage["windy"]["day"]["limit"] == float(get_settings().windy_daily_request_limit)
     assert usage["flights"]["today"] == 3
     assert usage["flights"]["per_provider"] == {"demo": 1, "duffel": 2}
     assert usage["flights"]["failed_today"] == 1
