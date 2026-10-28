@@ -597,6 +597,9 @@ test.describe("spot page mini map", () => {
     await installMapProbe(page);
     await stubTiles(page);
     await page.goto("/spots/pipeline");
+    // The forecast timeline above the mini map replaces a shorter placeholder when it loads:
+    // wait for it, so the map does not move down under the mouse after it was measured.
+    await expect(page.getByTestId("timeline-scroller")).toBeVisible();
     const map = page.getByRole("region", { name: "Map of monitored surf spots" });
     await map.scrollIntoViewIfNeeded();
     await expect(map.locator("path.spot-pipeline")).toHaveCount(1);

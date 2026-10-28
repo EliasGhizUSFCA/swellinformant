@@ -14,29 +14,51 @@ export function ageText(hours: number): string {
  * confidence classes are capped at Moderate while the data is stale, and alerts are paused
  * only when `alertsPaused` says so (the alert job's own rule, at twice the stale age).
  * `runAgeHours` is the age of the run's issue time; a blend's issue time is its oldest
- * member's, so with `blend` the age is named as the oldest model run's.
+ * member's, so with `blend` the age is named as the oldest model run's. `lastUpdated` ("7
+ * hours ago", from the spot's `freshness.last_updated_at`) leads with when this site last
+ * updated the spot's forecast ("Forecast last updated 7 hours ago."), and `reason` says why
+ * it is stale (e.g. its latest refresh failed while other spots updated).
+ *
+ * `stale` is the run's own staleness (the API's `stale`), the one that caps the confidence
+ * classes; `freshnessStale` is the spot's served-forecast staleness (`freshness.stale`), which
+ * the API reports separately and which caps nothing. A spot stale only by its freshness says
+ * when it was last updated and that it is not current, never that its confidence was capped.
  */
 export function StaleBanner({
   stale,
+  freshnessStale = false,
   alertsPaused = false,
   runAgeHours,
   blend = false,
+  lastUpdated,
+  reason,
   className,
 }: {
   stale: boolean | null | undefined;
+  freshnessStale?: boolean | null;
   alertsPaused?: boolean | null;
   runAgeHours?: number | null;
   blend?: boolean;
+  lastUpdated?: string | null;
+  reason?: string | null;
   className?: string;
 }) {
-  if (!stale) return null;
+  if (!stale && !freshnessStale) return null;
   const age = runAgeHours != null && Number.isFinite(runAgeHours) ? ageText(runAgeHours) : null;
   return (
     <Alert variant="warn" className={cn("mb-6", className)} data-testid="stale-banner">
       <AlertTriangle />
       <AlertTitle>Forecast out of date</AlertTitle>
       <AlertDescription>
-        {age ? `${blend ? "Its oldest model run" : "The model run"} is ${age} old` : "A newer model run is overdue"}, so confidence is capped at Moderate.
+        {lastUpdated && (
+          <span className="font-medium" data-testid="stale-last-updated">
+            Forecast last updated {lastUpdated}.{" "}
+          </span>
+        )}
+        {reason ? `${reason} ` : ""}
+        {stale
+          ? `${age ? `${blend ? "Its oldest model run" : "The model run"} is ${age} old` : "A newer model run is overdue"}, so confidence is capped at Moderate.`
+          : "Not a current forecast."}
         {alertsPaused ? " New alerts are paused until fresh data arrives." : ""}
       </AlertDescription>
     </Alert>

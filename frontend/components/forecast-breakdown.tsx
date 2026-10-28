@@ -3,7 +3,7 @@
 import { Bot, Waves, Wind } from "lucide-react";
 
 import { uncertaintyLabel } from "@/components/charts/forecast-charts";
-import { ForecastConfidence, LocalConfidence } from "@/components/confidence";
+import { ForecastConfidence } from "@/components/confidence";
 import { ForecastProvenance, useNowMs } from "@/components/forecast-provenance";
 import { InfoPopover } from "@/components/info-popover";
 import { DemoBadge } from "@/components/quality";
@@ -14,7 +14,9 @@ import { forecastReasonsOf, modelRunText, rangeWords, validInText } from "@/lib/
 import { compass, formatSpotDateTime, heightRange, seconds, type Units } from "@/lib/format";
 import { cycleLabel } from "@/lib/map-time";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
-import { ratingFactors, ratingReason } from "@/lib/rating";
+import { ratingFactors } from "@/lib/rating";
+import { hourReason } from "@/lib/rating-sentence";
+import { hourOutputs } from "@/lib/forecast-fields";
 import { offshoreHeightText } from "@/lib/timeline";
 import { formatWind, useWindUnit, type WindUnit } from "@/lib/units";
 import type { Conditions, ForecastPoint, ForecastRunInfo, ForecastSourceInfo } from "@/types/api";
@@ -82,7 +84,7 @@ function runsLabel(c: Conditions, run: ForecastRunInfo | null | undefined, nowMs
 
 /**
  * One forecast step: our prediction first (rating, breaking-wave estimate and its likely
- * range, the swell and wind behind it, forecast and local confidence), then the raw
+ * range, the swell and wind behind it, forecast confidence), then the raw
  * numerical-model data it is based on, folded under "Offshore model data". They are different
  * physical quantities, so their difference is never shown as an error.
  *
@@ -133,7 +135,11 @@ export function ForecastBreakdown({
     spotMinFt: spotRange?.minFt,
     spotMaxFt: spotRange?.maxFt,
   };
-  const reason = ratingReason(factorInput);
+  // The hour's own favourable / unfavourable conditions (on its forecast point when given),
+  // else the factor wording.
+  const hour = point ?? c;
+  const outputs = hourOutputs(hour);
+  const reason = hourReason(hour, factorInput, units, windUnit);
   const away = validInText(c.valid_time, now);
   const range = rangeWords(c.uncertainty_kind);
   const runs = runsLabel(c, run, now);
@@ -190,7 +196,6 @@ export function ForecastBreakdown({
             showReason={false}
             legacyIndex={c.confidence}
           />
-          <LocalConfidence compact explain value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} reason={c.local_confidence_reason} />
         </div>
         <WhyThisRating
           className="mt-2"
@@ -198,6 +203,8 @@ export function ForecastBreakdown({
           explanation={c.explanation}
           components={components}
           factors={ratingFactors(factorInput)}
+          favourable={outputs.favourable}
+          unfavourable={outputs.unfavourable}
           units={units}
           method={
             <>
@@ -262,6 +269,7 @@ export function ForecastBreakdown({
           members={run?.members}
           generatedAt={generatedAt}
           links={source?.attribution_links}
+          sourceCode={source?.code ?? c.source_code}
         />
       </Disclosure>
     </div>

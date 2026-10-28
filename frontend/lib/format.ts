@@ -195,6 +195,20 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
   return "now";
 }
 
+/**
+ * How long ago a forecast was last updated, in whole units: "12 minutes ago", "1 hour ago",
+ * "7 hours ago" (up to 48 hours), then "3 days ago" ("just now" under a minute). A time in the
+ * future (a clock behind the server's) reads "just now", never "in 2 minutes".
+ */
+export function updatedAgo(iso: string, nowMs: number = Date.now()): string {
+  const ms = nowMs - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 60_000) return "just now";
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+  if (ms < 3_600_000) return plural(Math.floor(ms / 60_000), "minute");
+  if (ms < 48 * 3_600_000) return plural(Math.floor(ms / 3_600_000), "hour");
+  return plural(Math.floor(ms / 86_400_000), "day");
+}
+
 export function leadLabel(days: number): string {
   if (days < 0) return "in progress";
   if (days < 1) return "within a day";

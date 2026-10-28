@@ -71,9 +71,11 @@ describe("pointToConditions", () => {
     expect(pointToConditions(point({ local_confidence_reason: null }), FORECAST).local_confidence_reason).toBeNull();
   });
 
-  it("lets the spot page's breakdown show the API's reason, not one guessed from the list", () => {
+  it("never shows the deprecated combined reason in the spot page's breakdown (spec 20)", () => {
     render(<ForecastBreakdown c={pointToConditions(point(), FORECAST)} tz="UTC" units="ft" />);
-    expect(screen.getByTestId("local-confidence-reason")).toHaveTextContent("Synthetic: the API's own reason for this hour.");
+    expect(screen.queryByTestId("local-confidence-reason")).toBeNull();
+    expect(screen.getByTestId("forecast-breakdown")).not.toHaveTextContent("Synthetic: the API's own reason for this hour.");
+    expect(screen.getByTestId("forecast-confidence-badge")).toHaveTextContent("Forecast confidence: High");
   });
 });
 

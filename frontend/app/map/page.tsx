@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { toast } from "sonner";
 
+import { useNowMs } from "@/components/forecast-provenance";
 import { ForecastUpdated } from "@/components/forecast-updated";
 import { AppShell } from "@/components/layout/app-shell";
 import { LayerTabs } from "@/components/map/layer-tabs";
@@ -24,12 +25,14 @@ import { useCityAirports, useFieldIndex, useMapLayerFields } from "@/hooks/map-f
 import { useMediaQuery, usePageVisible, usePrefersReducedMotion } from "@/hooks/map-media";
 import { useMapSettings } from "@/hooks/map-settings";
 import { useMapConditions, useMe, useSpots } from "@/hooks/queries";
-import { formatDateTime, heightRange, type Units } from "@/lib/format";
+import { freshnessOf } from "@/lib/forecast-fields";
+import { compass, formatDateTime, heightRange, updatedAgo, type Units } from "@/lib/format";
 import { isobarsFor } from "@/lib/map-geo";
 import { layerDef, layerScale, type DisplayUnits } from "@/lib/map-layers";
 import { bubbleLabel, longTimeLabel, nearestStepIndex, timelineSteps } from "@/lib/map-time";
-import { QUALITY_LABELS } from "@/lib/quality";
+import { QUALITY_LABELS, WIND_RELATION_LABEL } from "@/lib/quality";
 import { score10 } from "@/lib/rating";
+import { formatWind, useHeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
 
@@ -52,8 +55,17 @@ const TABS_INSET = 64;
 export default function MapPage() {
   const { data: spots = [], isLoading, isError } = useSpots();
   const { data: user } = useMe();
-  const [settings, updateSettings] = useMapSettings();
-  const heightUnits: Units = settings.heightUnits ?? (user?.profile.units as Units | undefined) ?? "ft";
+  const [settings, updateMapSettings] = useMapSettings();
+  // One height unit for the whole site (the spot charts too): this browser's choice, else the
+  // map's older own setting, else the account's units, else feet.
+  const [heightUnits, setHeightUnits] = useHeightUnit(settings.heightUnits ?? (user?.profile.units as Units | undefined) ?? "ft");
+  const updateSettings = useCallback(
+    (patch: Partial<typeof settings>) => {
+      if (patch.heightUnits) setHeightUnits(patch.heightUnits);
+      updateMapSettings(patch);
+    },
+    [setHeightUnits, updateMapSettings],
+  );
   const units: DisplayUnits = useMemo(() => ({ height: heightUnits, wind: settings.windUnits }), [heightUnits, settings.windUnits]);
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
   const reducedMotion = usePrefersReducedMotion();
@@ -146,20 +158,39 @@ export default function MapPage() {
 
   // --- spots ----------------------------------------------------------------------------
   const visible = useMemo(() => spots.filter((s) => passes(s, bySlug.get(s.slug), filters, heightUnits)), [spots, bySlug, filters, heightUnits]);
+  const now = useNowMs();
   const markers = useMemo(() => {
     const out: Record<string, MarkerState> = {};
     for (const s of spots) {
-      const c = bySlug.get(s.slug)?.conditions;
-      out[s.slug] = c
-        ? {
-            score: c.score,
-            tooltip: `${QUALITY_LABELS[c.label as QualityLabel] ?? c.label} ${score10(c.score)}/10 · ${heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, heightUnits)} surf (our prediction)`,
-            highlight: !!bySlug.get(s.slug)?.event_at_time,
-          }
-        : { score: null, tooltip: predictionsCover ? "No usable forecast at this time" : "No surf prediction this far ahead" };
+      const m = bySlug.get(s.slug);
+      const c = m?.conditions;
+      // A spot whose served forecast is out of date says so, and when it was last updated.
+      const fresh = freshnessOf(m);
+      const staleText = fresh?.stale ? (fresh.lastUpdatedAt ? `Forecast last updated ${updatedAgo(fresh.lastUpdatedAt, now)}` : "Forecast out of date") : null;
+      if (!c) {
+        out[s.slug] = { score: null, tooltip: predictionsCover ? "No usable forecast at this time" : "No surf prediction this far ahead", detail: staleText, stale: !!fresh?.stale };
+        continue;
+      }
+      const surf = heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, heightUnits);
+      const swell = c.swell_direction_deg != null ? `Swell from ${compass(c.swell_direction_deg)}` : null;
+      const wind =
+        c.wind_speed_kmh != null
+          ? `wind ${formatWind(c.wind_speed_kmh, settings.windUnits)}${c.wind_direction_deg != null ? ` from ${compass(c.wind_direction_deg)}` : ""}${c.wind_relation && c.wind_relation !== "unknown" ? `, ${(WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation).toLowerCase()}` : ""}`
+          : null;
+      const detail = [swell, wind].filter(Boolean).join(" · ");
+      out[s.slug] = {
+        score: c.score,
+        tooltip: `${QUALITY_LABELS[c.label as QualityLabel] ?? c.label} ${score10(c.score)}/10 · ${surf} surf (our prediction)`,
+        detail: [detail ? detail.charAt(0).toUpperCase() + detail.slice(1) : null, staleText].filter(Boolean).join(" · ") || null,
+        highlight: !!m?.event_at_time,
+        swellFromDeg: c.swell_direction_deg,
+        windFromDeg: c.wind_direction_deg,
+        label: surf,
+        stale: !!fresh?.stale,
+      };
     }
     return out;
-  }, [spots, bySlug, heightUnits, predictionsCover]);
+  }, [spots, bySlug, heightUnits, predictionsCover, settings.windUnits, now]);
   const selectedSpot = spots.find((s) => s.slug === selected);
   const noForecastAnywhere = nowSnapshot.data && !nowSnapshot.data.valid_time;
   const predictionNote = predictionsCover
@@ -333,6 +364,7 @@ export default function MapPage() {
                 signedIn={!!user}
                 onClose={() => setSelected(null)}
                 links={(snapshot.data ?? nowSnapshot.data)?.attribution_links}
+                freshness={freshnessOf(bySlug.get(selectedSpot.slug))}
                 className="w-full"
               />
             </div>
@@ -399,6 +431,7 @@ export default function MapPage() {
               signedIn={!!user}
               onClose={() => setSelected(null)}
               links={(snapshot.data ?? nowSnapshot.data)?.attribution_links}
+              freshness={freshnessOf(bySlug.get(selectedSpot.slug))}
               className="w-full rounded-b-xl"
             />
           </div>

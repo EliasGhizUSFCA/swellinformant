@@ -18,6 +18,7 @@ import type { SpotSummary } from "@/types/api";
 
 import type { CityLabel, IsobarPath } from "./basemap-draw";
 import { fieldSampler, MapDataLayers, type ParticleMode } from "./map-canvas-layers";
+import { markerRadius, SpotGlyphs } from "./spot-glyphs";
 import { BOUNDED_MAP_OPTIONS, CentreWatcher, flyOrJump, FlyToSpot, MapBounds, TileErrors, TILES, useWrapCentre, type MapCover, type MarkerState } from "./surf-map";
 
 /** The map's sea colour under the dark basemap (and under the layers while they load). */
@@ -202,7 +203,8 @@ function ZoomWatcher({ onZoom }: { onZoom?: (z: number) => void }) {
 }
 
 /**
- * One spot marker, an SVG path `path.spot-<slug>` coloured by our surf-quality prediction.
+ * One spot marker, an SVG path `path.spot-<slug>` coloured by our surf-quality prediction
+ * (its arrows and height label are drawn above it by SpotGlyphs).
  * Memoised with stable props, so a new forecast hour restyles only the markers whose colour
  * changed and a zoom or pan touches none; `lng` is the spot's world copy nearest the view.
  * `surface` "dark" (the dark basemap) uses the brighter-is-better ramp made for dark
@@ -213,6 +215,7 @@ export const SpotMarker = memo(function SpotMarker({
   lng,
   score,
   tooltip,
+  detail,
   selected,
   highlight,
   onSelect,
@@ -222,6 +225,7 @@ export const SpotMarker = memo(function SpotMarker({
   lng: number;
   score: number | null;
   tooltip: string;
+  detail?: string | null;
   selected: boolean;
   highlight: boolean;
   onSelect: (slug: string) => void;
@@ -248,7 +252,7 @@ export const SpotMarker = memo(function SpotMarker({
   return (
     <CircleMarker
       center={center}
-      radius={selected ? 11 : highlight ? 8 : 6}
+      radius={markerRadius(selected, highlight)}
       pathOptions={pathOptions}
       // Set at creation (Leaflet ignores className changes in later setStyle calls).
       className={`spot-marker spot-${slug}`}
@@ -258,6 +262,12 @@ export const SpotMarker = memo(function SpotMarker({
         <strong>{spot.name}</strong>
         <br />
         {tooltip}
+        {detail && (
+          <>
+            <br />
+            <span className="text-white/80">{detail}</span>
+          </>
+        )}
       </Tooltip>
     </CircleMarker>
   );
@@ -273,7 +283,9 @@ function initialView(el: HTMLElement): { zoom: number; minZoom: number } {
 /**
  * Full-screen forecast map: ocean colour field, flow particles, dark Natural Earth basemap
  * (or OpenStreetMap tiles), isobars, labels and the spot markers on top. Markers stay SVG
- * paths (`path.spot-<slug>`) coloured by our surf-quality prediction and always clickable.
+ * paths (`path.spot-<slug>`) coloured by our surf-quality prediction and always clickable,
+ * with the spot's swell and wind arrows (pointing where they go) and its predicted surf height
+ * drawn beside them where there is room (SpotGlyphs).
  *
  * Navigation (lib/map-bounds.ts): the latitude band 84°N to 78.5°S with a hard edge, a minimum
  * zoom of one world width for the container's size, endless east-west panning with markers,
@@ -369,6 +381,7 @@ function ForecastMap(props: ForecastMapProps) {
                 lng={nearestCopy(s.longitude, centreLng)}
                 score={m?.score ?? null}
                 tooltip={m?.tooltip ?? "No usable forecast"}
+                detail={m?.detail}
                 selected={s.slug === selected}
                 highlight={!!m?.highlight}
                 onSelect={onSelect}
@@ -376,6 +389,9 @@ function ForecastMap(props: ForecastMapProps) {
               />
             );
           })}
+          {/* Arrows and height labels over the circles (not interactive: clicks, focus and
+              tooltips stay with the circles). */}
+          <SpotGlyphs spots={spots} markers={markers} selected={selected} centreLng={centreLng} />
           {userCentre && <CircleMarker center={userCentre} radius={7} pathOptions={USER_PATH} className="user-location-marker" interactive={false} />}
           <Readout sample={sample} layer={layer} units={units} />
           <FlyToSpot slug={selected} lat={selectedSpot?.latitude} lon={selectedSpot?.longitude} minZoom={SPOT_ZOOM} cover={cover} />

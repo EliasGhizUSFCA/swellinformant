@@ -4,7 +4,7 @@ import { Bell, ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
-import { ConfidenceBadge, LocalConfidence } from "@/components/confidence";
+import { ConfidenceBadge } from "@/components/confidence";
 import { InfoPopover } from "@/components/info-popover";
 import { AppShell } from "@/components/layout/app-shell";
 import { EmptyState, PageHeader } from "@/components/page-header";
@@ -118,7 +118,6 @@ function History() {
                     {n.match_id && (
                       <div className="mt-1 flex flex-wrap gap-1">
                         <ConfidenceBadge value={n.forecast_confidence_class} />
-                        <LocalConfidence compact value={n.local_confidence_class} forecastValue={n.forecast_confidence_class} reason={n.local_confidence_reason} />
                       </div>
                     )}
                   </td>

@@ -7,7 +7,7 @@ import { CursorLayer, HoverTooltip, NowMarker } from "@/components/forecast/curs
 import { QualityStrip } from "@/components/forecast/quality-strip";
 import { QualityMarker, SelectedTimeSummary } from "@/components/forecast/selected-summary";
 import { SwellPartitions } from "@/components/forecast/swell-partitions";
-import { datumText, TideRow, TideSourceNote, tideSourceText, TIDE_UNAVAILABLE } from "@/components/forecast/tide-row";
+import { datumText, TIDE_FIT_STYLE, TideRow, TideSourceNote, tideSourceText, TIDE_UNAVAILABLE } from "@/components/forecast/tide-row";
 import { HEADER_H, rowOffsets, TimelineHeader } from "@/components/forecast/timeline-header";
 import { useTimelineSelection, useTimelineStore } from "@/components/forecast/timeline-selection";
 import { WaveBars } from "@/components/forecast/wave-bars";
@@ -44,7 +44,8 @@ import {
   type TimelineModel,
 } from "@/lib/timeline";
 import { safeExternalUrl } from "@/lib/confidence";
-import { formatHeightRange, formatWind, useWindUnit, WIND_UNITS, type HeightUnit, type WindUnit } from "@/lib/units";
+import { bestWindows, tideFitRuns } from "@/lib/best-windows";
+import { formatHeightRange, formatWind, HEIGHT_UNITS, useHeightUnit, useWindUnit, WIND_UNITS, type HeightUnit, type WindUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { SpotTimeline } from "@/types/api";
 
@@ -87,6 +88,9 @@ export function SpotForecastTimeline({
 }) {
   const model = useMemo(() => timelineModel(timeline), [timeline]);
   const [windUnit, setWindUnit] = useWindUnit();
+  // The height toggle writes the site-wide choice (lib/units, kept in this browser, so it works
+  // signed out too); the page passes the resulting unit back in as `units`.
+  const [, setHeightUnit] = useHeightUnit(units);
   const [showOffshore, setShowOffshore] = useState(false);
   const [legendOpen, setLegendOpen] = useState<boolean | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -300,6 +304,19 @@ export function SpotForecastTimeline({
           >
             Offshore Hs (model)
           </button>
+          <div className="flex items-center rounded-full border bg-card p-0.5" role="group" aria-label="Height unit" data-testid="height-unit-toggle">
+            {HEIGHT_UNITS.map((u) => (
+              <button
+                key={u}
+                type="button"
+                aria-pressed={units === u}
+                onClick={() => setHeightUnit(u)}
+                className={cn("rounded-full px-2 py-0.5 font-medium transition-colors", units === u ? "bg-ink text-white" : "text-muted-foreground hover:text-ink")}
+              >
+                {u}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center rounded-full border bg-card p-0.5" role="group" aria-label="Wind unit">
             {WIND_UNITS.map((u) => (
               <button
@@ -518,6 +535,8 @@ function Swatch({ className, style }: { className?: string; style?: React.CSSPro
 const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffshore, units }: { timeline: SpotTimeline; model: TimelineModel; showOffshore: boolean; units: HeightUnit }) {
   const tide = timeline.tide;
   const rated = model.steps.some((s) => s.step.wind?.favourability);
+  const hasWindows = useMemo(() => bestWindows(model.steps).length > 0, [model]);
+  const tideFits = useMemo(() => new Set(tideFitRuns(model.steps).map((r) => r.fit)), [model]);
   return (
     <div className="grid gap-x-8 gap-y-2.5 rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground lg:grid-cols-2" data-testid="quality-chart-legend">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -529,6 +548,14 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
           </span>
         ))}
         <span>deeper blue = better · thin bar = night</span>
+        {hasWindows && (
+          <span className="inline-flex items-center gap-1" data-testid="best-window-key">
+            <svg viewBox="0 0 18 8" className="h-2 w-[18px] shrink-0" aria-hidden="true">
+              <path d="M1,1V6.5H17V1" fill="none" stroke="var(--ink)" strokeWidth={1.5} />
+            </svg>
+            best window: daylight rated Good or better
+          </span>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <span className="font-semibold text-ink">Surf</span>
@@ -605,6 +632,20 @@ const TimelineLegend = memo(function TimelineLegend({ timeline, model, showOffsh
         <span data-testid="tide-preference">
           Preferred tide here: {tide.preference.text}
         </span>
+        {tideFits.size > 0 ? (
+          <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="tide-fit-key">
+            {(["favourable", "workable", "unfavourable"] as const)
+              .filter((k) => tideFits.has(k))
+              .map((k) => (
+                <span key={k} className="inline-flex items-center gap-1">
+                  <Swatch style={{ backgroundColor: TIDE_FIT_STYLE[k].fill }} /> {TIDE_FIT_STYLE[k].label}
+                </span>
+              ))}
+            <span>(shading: how the tide suits this break at each step, from our rating)</span>
+          </span>
+        ) : (
+          <span data-testid="tide-fit-key">Tide is not part of this break&apos;s rating, so the tide row is not shaded.</span>
+        )}
       </div>
       <ObservationsNote timeline={timeline} units={units} />
       <div className="lg:col-span-2">Shaded: night (last light to first light). Each mark spans the time its forecast step stands for (1, 3 or 6 hours).</div>

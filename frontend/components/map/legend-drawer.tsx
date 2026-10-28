@@ -77,6 +77,22 @@ export function CrestSwatch({ system, className }: { system: WaveSystem; classNa
   );
 }
 
+/** A marker arrow as the map draws it (components/map/spot-glyphs; map.css .sg-*), pointing east. */
+function MarkerArrowKey({ kind }: { kind: "swell" | "wind" }) {
+  return (
+    <svg viewBox="-2 -6 22 12" className="h-3 w-6 shrink-0" aria-hidden="true" data-arrow-key={kind}>
+      {kind === "swell" ? (
+        <path d="M17,0L10.5,-4.4L10.5,-1.4L0,-1.4L0,1.4L10.5,1.4L10.5,4.4Z" fill="#c4ec4a" stroke="#0b1620" strokeWidth={1} strokeLinejoin="round" />
+      ) : (
+        <>
+          <path d="M0,0L16,0M12,-3.2L16,0L12,3.2" fill="none" stroke="#0b1620" strokeWidth={3.4} strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />
+          <path d="M0,0L16,0M12,-3.2L16,0L12,3.2" fill="none" stroke="#fff" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 /** "+30 h" after the model cycle, or "analysis" at the cycle time itself. */
 export function leadText(validTime: string | null | undefined, cycleTime: string | null | undefined): string | null {
   if (!validTime || !cycleTime) return null;
@@ -249,6 +265,30 @@ export function LegendDrawer({
             </li>
           ))}
         </ul>
+        <ul className="mt-2.5 space-y-1.5 text-xs leading-relaxed text-white/80" aria-label="Spot marker arrows and labels" data-testid="legend-marker-glyphs">
+          <li className="flex items-center gap-2">
+            <MarkerArrowKey kind="swell" />
+            <span>The swell that drives the surf, pointing where it travels</span>
+          </li>
+          <li className="flex items-center gap-2">
+            <MarkerArrowKey kind="wind" />
+            <span>The wind, pointing where it blows</span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span className="shrink-0 rounded-[4px] bg-[#101418]/80 px-1 text-[10px] font-semibold text-white ring-1 ring-white/20 tabular-nums">{units.height === "m" ? "1.2–1.8 m" : "4–6 ft"}</span>
+            <span>Our predicted surf height (breaking faces)</span>
+          </li>
+          <li className="flex items-center gap-2">
+            <svg viewBox="-8 -8 16 16" className="size-4 shrink-0" aria-hidden="true">
+              <circle r={6.5} fill="none" stroke="#fbbf24" strokeWidth={1.6} strokeDasharray="2.5 2" />
+              <circle r={3.5} fill="#589bb7" stroke="#fff" strokeWidth={1} />
+            </svg>
+            <span>Forecast out of date at this spot</span>
+          </li>
+        </ul>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-white/60">
+          Arrows show where markers have room; labels from regional zoom. Hover or tap a marker for the numbers.
+        </p>
       </section>
     </aside>
   );

@@ -1,7 +1,7 @@
 import { ArrowRight, CalendarDays, Plane } from "lucide-react";
 import Link from "next/link";
 
-import { ConfidenceBadge, LocalConfidence } from "@/components/confidence";
+import { ConfidenceBadge } from "@/components/confidence";
 import { DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
 import { StaleBadge } from "@/components/stale-banner";
 import { formatCalendarDate, formatMoney, formatRange, heightRange, leadLabel, type Units } from "@/lib/format";
@@ -58,7 +58,6 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
         <div className="mt-2 flex items-center justify-between gap-2">
           <span className="flex flex-wrap items-center gap-1.5">
             <ConfidenceBadge value={match.forecast_confidence_class} />
-            <LocalConfidence compact value={match.local_confidence_class} forecastValue={match.forecast_confidence_class} reason={match.local_confidence_reason} />
             <StaleBadge stale={match.stale} />
           </span>
           <span className="flex items-center gap-1 text-xs font-medium text-ocean opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">

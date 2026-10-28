@@ -1,6 +1,8 @@
 "use client";
 
 import { InfoPopover } from "@/components/info-popover";
+import { ConditionLists } from "@/components/rating";
+import { hourOutputs } from "@/lib/forecast-fields";
 import { Disclosure } from "@/components/ui/disclosure";
 import { componentFits, score10, TONE_BAR, TONE_WORD } from "@/lib/rating";
 import { explanationText, type HeightUnit, type WindUnit } from "@/lib/units";
@@ -26,7 +28,8 @@ const CONTRIBUTION_LABEL: Record<string, string> = {
 
 /**
  * "Why this forecast?": what the scoring engine itself recorded for the selected step, and
- * nothing else: its explanation sentence, each factor's fit (0-1, with the app's usual
+ * nothing else: its explanation sentence, the main favourable and unfavourable conditions it
+ * listed (when sent), each factor's fit (0-1, with the app's usual
  * Favorable / Workable / Limiting words), the gates that held the score back, the points each
  * factor cost when the run stored them, and whether tide was part of the rating. No text is
  * composed here beyond labels; the sentence's numbers are shown in the viewer's units.
@@ -45,6 +48,7 @@ export function WhyThisForecast({
   className?: string;
 }) {
   const why = step.why;
+  const outputs = hourOutputs(step.quality);
   const fits = componentFits(why.fits);
   const gates = Object.entries(why.gates)
     .filter(([, v]) => v < 0.999)
@@ -64,6 +68,7 @@ export function WhyThisForecast({
           {explanationText(why.explanation, units, windUnit)}
         </p>
       )}
+      <ConditionLists favourable={outputs.favourable} unfavourable={outputs.unfavourable} units={units} />
       {fits.length > 0 && (
         <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2" aria-label="How each factor fits this break" data-testid="why-fits">
           {fits.map((f) => (

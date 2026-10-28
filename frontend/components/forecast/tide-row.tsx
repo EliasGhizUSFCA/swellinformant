@@ -3,6 +3,7 @@
 import { memo, useMemo } from "react";
 
 import { RowBackground, TIDE_H, TimelineRow, type RowProps } from "@/components/forecast/timeline-header";
+import { tideFitRuns, type TideFit } from "@/lib/best-windows";
 import { safeExternalUrl } from "@/lib/confidence";
 import { clockTime, smoothPath } from "@/lib/timeline";
 import { convertHeightFt, M_PER_FT, type HeightUnit } from "@/lib/units";
@@ -78,6 +79,15 @@ export function TideSourceNote({ tide, className }: { tide: TideBlock; className
   );
 }
 
+/** Tint (behind the curve) and strip (at the bottom) of each tide suitability class: the
+ * wind row's favourability colours, so "favourable / workable / unfavourable" reads alike. */
+export const TIDE_FIT_STYLE: Record<TideFit, { fill: string; label: string }> = {
+  favourable: { fill: "var(--wind-favourable)", label: "Favorable tide" },
+  workable: { fill: "var(--wind-workable)", label: "Workable tide" },
+  unfavourable: { fill: "var(--wind-unfavourable)", label: "Unfavorable tide" },
+};
+const FIT_STRIP_H = 4;
+
 /** The y scale of the tide row (shared with the cursor layer's marker). */
 export function tideScale(model: RowProps["model"], unit: HeightUnit) {
   const conv = (m: number) => convertHeightFt(m / M_PER_FT, unit);
@@ -96,9 +106,12 @@ export function tideScale(model: RowProps["model"], unit: HeightUnit) {
  * curve through the block's points with its high and low waters marked and timed in the
  * spot's zone, heights relative to the stated datum. Without a tide source the row says so
  * and draws nothing. The curve is drawn between the block's own points only (monotone, so it
- * never overshoots them); the summary reads each step's tide height from the API.
+ * never overshoots them); the summary reads each step's tide height from the API. Where the
+ * tide is part of the rating, each step is shaded by its tide suitability (the score's own
+ * tide fit, lib/best-windows tideFit); elsewhere nothing is shaded.
  */
 export const TideRow = memo(function TideRow({ model, scale, width, tide, units }: RowProps & { tide: TideBlock; units: HeightUnit }) {
+  const fits = useMemo(() => tideFitRuns(model.steps), [model]);
   const geo = useMemo(() => {
     if (!model.tide) return null;
     const ts = tideScale(model, units);
@@ -130,6 +143,17 @@ export const TideRow = memo(function TideRow({ model, scale, width, tide, units 
     >
       <svg width={width} height={TIDE_H} className="block" aria-hidden="true" data-tide-status={tide.status}>
         <RowBackground model={model} scale={scale} height={TIDE_H} />
+        {fits.map((r) => {
+          const x = scale(r.from) + 0.5;
+          const w = Math.max(1, scale(r.to) - scale(r.from) - 1);
+          const st = TIDE_FIT_STYLE[r.fit];
+          return (
+            <g key={r.first} data-tide-fit={r.fit} data-first={r.first} data-last={r.last}>
+              <rect x={x} y={0} width={w} height={TIDE_H} fill={st.fill} opacity={0.07} />
+              <rect x={x} y={TIDE_H - FIT_STRIP_H} width={w} height={FIT_STRIP_H} fill={st.fill} opacity={0.85} />
+            </g>
+          );
+        })}
         {geo && (
           <>
             <path d={geo.area} fill="var(--tide-fill)" />
