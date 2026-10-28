@@ -55,6 +55,7 @@ def publish(
     trigger: SyncTrigger = "pipeline",
     now: datetime | None = None,
     selection: bool | None = None,
+    marker: bool | None = None,
 ) -> SyncRun:
     """Publish what is stored now: one commit sets the publication on ``sync_run`` (or on
     a new ``sync_runs`` row with status success, ``trigger`` and ``plan.published_by``).
@@ -62,13 +63,16 @@ def publish(
     ``now`` is the publication time; the default, the wall clock, is what the synced
     pipeline always uses (load_known compares it with the runs' ``completed_at``).
     ``selection``: also publish the run selection as a forecast version first (default:
-    when ``sync_run`` is None); the version marker in Redis follows either way.
+    when ``sync_run`` is None). ``marker``: then write the version marker in Redis, which
+    switches the browsers to the new version (default: when ``sync_run`` is None; a sync
+    writes it itself once the swell events of the new version are re-evaluated).
     """
     from app.services.map_fields import servable_runs
     from app.services.sync.refresh import publish_selection_version, write_marker
 
     at = now or utcnow()
-    if selection if selection is not None else sync_run is None:
+    own_row = sync_run is None
+    if selection if selection is not None else own_row:
         publish_selection_version(db, timings={"published_by": trigger})
     if sync_run is None:
         sync_run = SyncRun(
@@ -85,7 +89,8 @@ def publish(
     sync_run.map_run_id = best[0].run_id if best else None
     sync_run.blend_run_id = newest_blend_run_id(db)
     db.commit()
-    write_marker(db)
+    if marker if marker is not None else own_row:
+        write_marker(db)
     return sync_run
 
 

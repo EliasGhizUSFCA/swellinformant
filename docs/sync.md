@@ -185,10 +185,16 @@ The publish stage (`orchestrator._publish_body`), in this order:
    and the sync is `failed`.
 3. **The map pointer** (`publish.publish`): `sync_runs.published_at`, `map_run_id` (the best
    servable map run) and `blend_run_id`. Map layers create no version.
-4. **The version marker**: `versions.write_version_marker(versions.version_payload(...))`
-   with the published map run, so the version endpoint answers from Redis; then
-   `public_cache.note_published(sync_run_id)` as before (and once more at the end of the
-   sync, after detection).
+4. **The public cache hook**: `public_cache.note_published(sync_run_id)` as before (and
+   once more at the end of the sync, after detection).
+5. **The version marker**: `versions.write_version_marker(versions.version_payload(...))`
+   with the published map run, so the version endpoint answers from Redis. It is written
+   after the `match` stage (or at the end of a sync stopped before it), once `detect` has
+   re-evaluated the swell events of the new version: the browsers switch to the new version
+   when its event and opportunity lists are ready, so nothing fetched (and cached) for the
+   new version holds the previous version's events. This adds the `detect` and `match`
+   time, about 1.3 s in the demo measurements below, to the publication-to-browser latency.
+   Outside a sync (`sync publish`, the developer pipeline) `publish.publish` writes it.
 
 With several providers (the blend path) the version is the run selection of the public
 reads (`refresh.publish_selection_version`: one run per spot, `queries.latest_runs_by_spot`,

@@ -29,8 +29,10 @@ Stage rules:
 * ``publish``: stages a forecast version per stored refresh and publishes it in one
   transaction (``versions.publish_version``; with several providers, the run selection as
   a version), then sets the publication on the ``sync_runs`` row (the map pointer,
-  ``map_run_id``; map layers create no version) and writes the version marker
-  (``versions.write_version_marker``). It runs when an acquisition stored new data, data
+  ``map_run_id``; map layers create no version). The version marker
+  (``versions.write_version_marker``), which switches the browsers to the new version, is
+  written after ``match``, once the swell events of the new version are re-evaluated (or
+  at the end of a sync stopped before). It runs when an acquisition stored new data, data
   stored earlier is unpublished, or forced; but never after a failed ``predict`` (unless
   forced), so the map and the spot pages never switch to runs that were not scored. A
   version that cannot be published is marked failed and the previous one stays published.
@@ -341,6 +343,8 @@ class _Sync:
     version_ids: list[int] = field(default_factory=list)
     scored_at: datetime | None = None
     stages: list[StageResult] = field(default_factory=list)
+    # A publication whose version marker is not written yet (_write_marker).
+    marker_due: bool = False
 
     def wanted(self, kind: ComponentKind) -> list[ComponentStatus]:
         if self.only is not None and kind not in self.only:
@@ -524,6 +528,10 @@ def _stage(name: StageName, ctx: _Sync) -> StageResult:
         ctx.publish_failed = result.status != "success" or ctx.published_at is None
         if not ctx.publish_failed:
             _note_published(ctx.row_id, prewarm=False)
+        # The browsers learn of the publication from the version marker, written once the
+        # swell events are re-evaluated (after "match"): a list fetched for the new version
+        # never holds the previous version's events.
+        ctx.marker_due = bool(ctx.version_ids) or not ctx.publish_failed
         result.detail["version_ids"] = list(ctx.version_ids)
         return result
     if ctx.published_at is None:
@@ -708,12 +716,27 @@ def _publish_body(ctx: _Sync) -> Callable[[Session], Any]:
         row = db.get(SyncRun, ctx.row_id)
         if row is None:
             raise RuntimeError(f"sync_runs row {ctx.row_id} no longer exists")
-        # publish() also writes the version marker (versions + the map run it sets).
-        published = publish(db, sync_run=row, trigger=ctx.trigger, selection=False)
+        # The version marker (versions + the map run set here) follows after "match".
+        published = publish(db, sync_run=row, trigger=ctx.trigger, selection=False, marker=False)
         ctx.published_at = published.published_at
         return {**publication_summary(published), "version_ids": list(ctx.version_ids)}
 
     return run
+
+
+def _write_marker(ctx: _Sync) -> None:
+    """Write the version marker of this sync's publication (refresh.write_marker: the
+    published version and map run), once; never raises."""
+    if not ctx.marker_due:
+        return
+    ctx.marker_due = False
+    try:
+        from app.services.sync.refresh import write_marker
+
+        with SessionLocal() as db:
+            write_marker(db)
+    except Exception:  # the version endpoint then re-seeds the marker from the database
+        logger.warning("Version marker not written after sync %s", ctx.row_id, exc_info=True)
 
 
 def _note_published(sync_run_id: int, *, prewarm: bool) -> None:
@@ -874,10 +897,13 @@ def run_sync(
                         ctx.unpublished = _unpublished(db)
                 ctx.stages = stages
                 stages.append(_stage(name, ctx))
+                if name == "match":
+                    _write_marker(ctx)
                 if not lease.renew(stages):
                     lost = True
                     break
     except BaseException as exc:  # e.g. KeyboardInterrupt: never leave the lease running
+        _write_marker(ctx)
         lease.release("failed", stages, _text(exc))
         _close_log(
             log_id,
@@ -887,6 +913,7 @@ def run_sync(
             error=_text(exc),
         )
         raise
+    _write_marker(ctx)  # stopped or lost before "match": what was published is served
     done = {s.name for s in stages}
     reason = "lease lost" if lost else "stopped"
     stages += [_skipped(n, reason) for n in STAGES if n not in done]

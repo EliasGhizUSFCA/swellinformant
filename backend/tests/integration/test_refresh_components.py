@@ -220,6 +220,44 @@ def test_a_first_refresh_fetches_both_components_and_publishes_a_version(
     assert marker["version_id"] == v1.id and marker["wave_model_run"] == C00.isoformat()
 
 
+def marker_version() -> int | None:
+    raw = state.get_redis().get(f"{_namespace()}:forecast-version:v1")
+    return json.loads(raw)["version_id"] if raw else None
+
+
+def test_the_version_marker_moves_once_the_swell_events_are_re_evaluated(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The browsers switch to a new version (the version marker) only after detection and
+    matching ran on it: event lists fetched for the new version are the new ones."""
+    from app.services.matching import service as matching
+    from app.services.swell_detection import service as detection
+
+    assert refresh()["status"] == "success"
+    v1 = published(db)
+    assert marker_version() == v1.id
+    seen: dict[str, int | None] = {}
+    real_detect, real_match = detection.detect_events, matching.match_all
+
+    def detect(*a: Any, **k: Any) -> Any:
+        seen["detect"] = marker_version()
+        return real_detect(*a, **k)
+
+    def match(*a: Any, **k: Any) -> Any:
+        seen["match"] = marker_version()
+        return real_match(*a, **k)
+
+    monkeypatch.setattr(detection, "detect_events", detect)
+    monkeypatch.setattr(matching, "match_all", match)
+    split.cycles["wave"] = C06
+    out = refresh()
+    assert out["status"] == "success", out
+    v2 = published(db)
+    assert v2.id != v1.id
+    assert seen == {"detect": v1.id, "match": v1.id}  # the new version was not announced yet
+    assert marker_version() == v2.id
+
+
 def _namespace() -> str:
     from app.services.public_cache import namespace
 
