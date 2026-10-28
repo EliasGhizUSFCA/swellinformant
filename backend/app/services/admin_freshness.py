@@ -460,13 +460,16 @@ def _processing(
     syncs: Sequence[SyncRun], history: Sequence[ForecastVersion]
 ) -> AdminProcessingTimeOut:
     """Per-stage durations of the finished refresh syncs among ``syncs`` (newest first),
-    their total durations, and the versions' pipeline gaps."""
+    their total durations, and the versions' pipeline gaps. A sync without a recorded
+    stage did no work worth timing (the row migration 0008 writes for the data stored
+    before syncs existed starts and ends at the same instant): it is no sample."""
     done = [
         r
         for r in syncs
         if health.is_refresh_sync(r)
         and r.status not in ("running", "skipped")
         and r.finished_at is not None
+        and _stages(r)
     ]
     totals = [g * 1000 for r in done if (g := _gap(r.started_at, r.finished_at)) is not None]
     per_stage: dict[str, list[AdminStageOut]] = {}

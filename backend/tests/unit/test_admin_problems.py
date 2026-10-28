@@ -501,6 +501,19 @@ def test_percentiles_and_duration_stats() -> None:
     assert admin_freshness.duration_stats([]).samples == 0
 
 
+def test_a_sync_without_stages_is_no_processing_time_sample() -> None:
+    """Migration 0008 records the data stored before syncs existed as one 'pipeline' sync
+    with no stage that starts and ends at the same instant: not a 0 ms refresh."""
+    timed = sync(2, "success")
+    timed.finished_at = timed.started_at + timedelta(seconds=12)
+    legacy = SyncRun(
+        id=1, trigger="pipeline", status="success", started_at=NOW, finished_at=NOW, plan={}
+    )
+    legacy.stages = []
+    out = admin_freshness._processing([timed, legacy], [])
+    assert out.refreshes == 1 and out.total_ms.samples == 1 and out.total_ms.last == 12000.0
+
+
 def test_a_retry_version_is_not_an_upstream_latency_sample() -> None:
     v = version(1, NOW.replace(hour=6))
     assert admin_freshness._is_refresh_version(v)
