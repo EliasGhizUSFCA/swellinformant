@@ -77,7 +77,7 @@ A match is set to `pending_flights` (searched by the next flight run) only when:
 | Trigger | Example |
 |---------|---------|
 | new match | a swell starts to fit the search inside its lead time |
-| material change | the recommended arrival or departure date moved (surf window shifted, buffers edited) or the destination airport changed |
+| material change | the recommended arrival or departure date moved (surf window shifted, buffers edited), the destination airport changed, or the surf window's hours moved within the same dates so the stored flights no longer land in time (or leave before the swell is over) |
 | quality class crossing the threshold | an `expired` match (the forecast fell below the search's quality, size or wind criteria) qualifies again |
 | explicit request | "Re-check flights" on the opportunity (`flights_requested_at`) |
 | fare re-check before an alert | the best fare expired, sold out or rose above the budget when an alert was about to be sent (section 4) |
@@ -146,9 +146,14 @@ explicit request, never speculatively.
   it runs out mid-match the match keeps what was found, or waits in `pending_flights`
   ("daily flight-search limit reached …") and is searched by the first flight run after
   00:00 UTC; "Re-check flights" is refused with HTTP 429 `flight_budget_reached`. When
-  Redis is down the budget fails open (the provider quota below still applies).
+  Redis is down the budget fails open (the provider quota below still applies). A search
+  that the provider quota refused, or that failed transiently (an outage), is given back,
+  so an outage does not use up anyone's budget for the day.
 * **Provider quota.** `FLIGHT_DAILY_QUOTA` (300) calls per provider and UTC day (Redis).
-  When it runs out the run stops early and reports `quota_exhausted`; the matches wait.
+  When it runs out the run stops early and reports `quota_exhausted`; the matches wait in
+  `pending_flights` for the next run. Nothing is remembered as a failed search or written
+  off as "no flights" (with no periodic re-search such a match would never be searched
+  again); a provider outage (transient error) is handled the same way.
 * **Order and fairness.** `queue_order` serves users round-robin (every user's best match
   before anyone's second), each user's matches with explicit requests first, then
   short-notice swells (section 5), then the overall score.
@@ -308,7 +313,10 @@ still shown:
   emails. Resend receives it as the `Idempotency-Key` request header ("Resend checks
   whether an email with the same idempotency key has already been sent in the last 24
   hours", https://resend.com/docs/dashboard/emails/idempotency-keys), so neither an HTTP
-  retry after a timeout nor a reclaimed `sending` row sends a duplicate there. SendGrid,
+  retry after a timeout nor a reclaimed `sending` row sends a duplicate there. While the
+  first request with a key is still in progress Resend answers 409
+  `concurrent_idempotent_requests` ("it is safe to retry this request later"): that is
+  retried later like any temporary failure, never recorded as failed. SendGrid,
   SMTP and the console have no such key: a rare duplicate stays possible there (preferred
   to a lost alert).
 * Preferences, verified email / phone and opt-outs are re-checked at send time.
