@@ -481,6 +481,39 @@ def test_data_that_change_during_the_fetch_are_not_returned() -> None:
     server.calls.clear()
     nxt = p.current_run(NOW + timedelta(minutes=1))
     assert server.calls == [] and nxt.component_keys[ATMOSPHERE] != run.component_keys[ATMOSPHERE]
+    health = provider_manager.provider_health("windy")
+    assert health is not None and health.consecutive_unavailable == 1
+    # The new run fetches cleanly: the one changed fetch no longer counts.
+    server.gfs = lambda b: gfs_body(shift=0.5)
+    assert JBAY.spot_id in p.fetch([JBAY], nxt).records
+    health = provider_manager.provider_health("windy")
+    assert health is not None and health.consecutive_unavailable == 0
+    assert not health.blocking(datetime.now(UTC))
+
+
+def test_data_that_differ_in_every_fetch_make_windy_unavailable() -> None:
+    """SYNTHETIC: every answer differs (an unverified risk: a forum report of identical
+    requests answered differently). Each fetch ends with "mix runs"; after
+    UNAVAILABLE_THRESHOLD of them Windy is unavailable and Open-Meteo stands in, instead of
+    every check refetching 50-100 requests that can never be stored."""
+    answers = {"n": 0}
+
+    def differing(body: dict[str, Any]) -> dict[str, Any]:
+        answers["n"] += 1
+        return gfs_body(shift=0.01 * answers["n"])
+
+    server = WindyServer(gfs=differing)
+    p = provider(server)
+    for minute in range(provider_manager.UNAVAILABLE_THRESHOLD):
+        run = p.current_run(NOW + timedelta(minutes=minute))
+        with pytest.raises(TransientProviderError, match="mix runs"):
+            p.fetch([JBAY], run, frozenset({ATMOSPHERE}))
+    health = provider_manager.provider_health("windy")
+    assert health is not None and health.last_failure_kind == provider_manager.UNAVAILABLE
+    assert health.consecutive_unavailable == provider_manager.UNAVAILABLE_THRESHOLD
+    assert health.blocking(datetime.now(UTC))
+    s = settings(forecast_providers="windy", windy_storage_authorized=True)
+    assert provider_manager.active_provider(s).providers == ("open_meteo",)
 
 
 def test_a_run_without_windy_component_keys_is_refused() -> None:

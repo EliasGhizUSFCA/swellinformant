@@ -945,7 +945,13 @@ class WindyProvider(ForecastProvider):
 
     def _verify(self, component: str, data: Mapping[str, Any], expected: str) -> None:
         """Raise unless the sentinel still returns the run being fetched (and record a new
-        fingerprint, so the next check sees the new run without another request)."""
+        fingerprint, so the next check sees the new run without another request).
+
+        The failure also counts as an availability failure: one (a run published during the
+        fetch) is cleared by the next good fetch, but data that change in every fetch (Windy
+        serving differing answers to the same request) make Windy unavailable after
+        UNAVAILABLE_THRESHOLD fetches in a row, instead of spending the day's requests on
+        fetches that can never be stored."""
         model = MODELS[component]
         full = fingerprint(model, data)
         if short_fingerprint(full) == expected:
@@ -953,11 +959,12 @@ class WindyProvider(ForecastProvider):
         state = self.state.load(model) or ModelRunState(model)
         state.observe(full, utcnow())
         self.state.save(state)
-        raise TransientProviderError(
+        detail = (
             f"Windy published new {model} data during the fetch (the sentinel fingerprint "
-            "changed): the responses may mix runs, so nothing is stored",
-            retry_after_s=60.0,
+            "changed): the responses may mix runs, so nothing is stored"
         )
+        self._failure(provider_manager.UNAVAILABLE, detail)
+        raise TransientProviderError(detail, retry_after_s=60.0)
 
 
 def _is_sentinel_spot(p: SpotPoint) -> bool:

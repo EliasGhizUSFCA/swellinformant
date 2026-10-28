@@ -165,7 +165,7 @@ whose run changed: 50 requests.
 
 | What | Requests a day |
 |---|---|
-| Sentinel checks: every 15 min for 4 h after each of the 4 GFS cycles, every 60 min otherwise, per model | 2 × (4 × 16 + 8) = 144 |
+| Sentinel checks: every 15 min from 4 h to 8 h after each of the 4 GFS cycles, every 60 min otherwise, per model | 2 × (4 × 16 + 8) = 144 |
 | Component refreshes: about 4 new `gfs` and 4 new `gfsWave` runs a day × 50 spots | about 400 |
 | End-of-fetch check of a retry that does not include the sentinel spot | 1 per component |
 | Total | **about 550**, under 6 % of the 10,000 a day |
@@ -239,7 +239,7 @@ same normalized records, when Windy:
 | invalid, expired or wrong-type key (HTTP 400 "Invalid API key", 401, 403) | `credentials` | 60 min, then Windy is tried again |
 | testing-key data | `testing_key` | 60 min, then tried again |
 | HTTP 429, a "limit" message or `WINDY_DAILY_REQUEST_LIMIT` reached | `quota` | until 00:00 UTC (Windy's reset), at least 60 min |
-| timeouts or 5xx after the retries, 3 times in a row | `unavailable` | 60 min |
+| timeouts or 5xx after the retries, or data that changed during the fetch ("mix runs"), 3 times in a row | `unavailable` | 60 min |
 | `WINDY_API_KEY` removed | (settings) | until it is set again |
 
 A successful Windy check or fetch ends the fallback at once. The provider health is kept in
@@ -264,6 +264,16 @@ Only a paid key can show these; until then they are open:
   whether the fingerprint changes once per cycle (the window above is an estimate).
 * Whether paid-key responses are deterministic for identical requests (an unanswered forum
   report of 2025-11-07 saw very different values seconds apart, perhaps from a trial key).
+  If they are not, every sentinel check looks like a new run and every fetch ends with
+  "mix runs" (nothing is stored); after 3 such fetches in a row Windy counts as
+  `unavailable` and Open-Meteo stands in (section 10). Windy cannot then be used: set
+  `WEATHER_PROVIDER=open_meteo` and ask Windy.
+* Whether `ts` follows the model run. The one example response at hand (Windy staff,
+  community.windy.com topic 36428, posted 2024-08-30 08:19 UTC, a trial key, read
+  2026-10-28) has 80 steps from 2024-08-30 03:00 UTC to 2024-09-09 00:00 UTC: the steps
+  +3 h to +240 h of that day's 00Z cycle, not steps counted from the request time. If paid
+  responses do the same, the cycle could be read from `ts` instead of estimated from the
+  clock (`provider-check` prints `info.first_step` and `info.last_step`).
 * The HTTP status and body of an exceeded daily limit and of an expired subscription (only
   the invalid-key body is known, from a user report); the adapter treats 429 and any 4xx
   "limit" message as the daily limit.
