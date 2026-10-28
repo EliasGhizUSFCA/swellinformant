@@ -235,3 +235,14 @@ def test_the_update_interval_of_each_component_comes_from_its_metadata() -> None
     ):
         expected = max(int(META[d]["update_interval_seconds"]) for d in domains)
         assert p.update_interval_seconds(component) == expected
+
+
+def test_a_metadata_request_waits_at_most_ten_seconds() -> None:
+    """A hanging host costs a refresh that carries its component at most 3 x 10 s."""
+    rec = Recorder()
+    provider(rec, forecast_http_timeout_seconds=30).current_run(NOW)
+    metas = [c for c in rec.calls if c.url.path.endswith("meta.json")]
+    assert metas and {c.extensions["timeout"]["read"] for c in metas} == {10.0}
+    rec = Recorder()
+    provider(rec, forecast_http_timeout_seconds=4).current_run(NOW)
+    assert {c.extensions["timeout"]["read"] for c in rec.calls} == {4.0}

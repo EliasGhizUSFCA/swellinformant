@@ -150,6 +150,10 @@ class PartlyReadRun(RunInfo):
 
 
 DEFAULT_UPDATE_INTERVAL_S = 6 * 3600
+# HTTP timeout of one meta.json request (seconds; FORECAST_HTTP_TIMEOUT_SECONDS when lower):
+# the file is under 1 kB, so a host that has not answered by then is down. It bounds what a
+# hanging host costs a refresh that carries that host's component (3 attempts).
+META_TIMEOUT_SECONDS = 10.0
 
 # Wave variables of the GFS family (GFS-Wave's wave_period is its peak period PERPW).
 GFS_WAVE_CORE = {
@@ -548,6 +552,7 @@ class OpenMeteoFamilyProvider(ForecastProvider):
                 provider=HTTP_PROVIDER,
                 backoff_seconds=self.backoff_seconds,
                 params=self._params({}),
+                timeout=min(self.settings.forecast_http_timeout_seconds, META_TIMEOUT_SECONDS),
             )
             if resp.status_code != 200:
                 raise TransientProviderError(

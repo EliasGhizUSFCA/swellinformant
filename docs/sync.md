@@ -97,7 +97,10 @@ runs are ignored).
    `unread` component; with several providers a source stays one component and is `unknown`).
    A refresh then fetches the atmosphere and carries the waves with their published run; a
    spot whose served run lacks them fails and keeps its run, and with no wave run published
-   at all (the first refresh) the refresh fails, publishes nothing and is retried.
+   at all (the first refresh) the refresh fails, publishes nothing and is retried. Every
+   `meta.json` request, in a check or a refresh, waits at most 10 s
+   (`open_meteo.META_TIMEOUT_SECONDS`, 3 attempts), so a hanging host costs a refresh that
+   carries its component about half a minute.
 2. **Servable.** Open-Meteo labels a domain with its previous run until 10 minutes after
    the new run's availability. While one component's domains are being published, that
    component is `waiting` ("not served yet", `detect.PartlyServedRun`) and the other one is
