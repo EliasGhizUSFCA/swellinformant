@@ -1,9 +1,11 @@
 """The public reads serve the published forecast version (design D7, D10, D11; C3, C4).
 
-Covered: the legacy run selection before any version exists; a version that maps every spot
+Covered: the legacy run selection before any version exists (its freshness stale by the
+run's own age rule); a version that maps every spot
 to the run the legacy selection serves answers every route byte for byte as before (apart
 from the additive ``freshness`` and ``version_id`` fields); a version wins over the legacy
-selection; a stale spot keeps its previous run and is flagged with its last update; a
+selection; a stale spot keeps its previous run and is flagged with its last update (and its
+timeline gets a new ETag, never a 304 for the old label); a
 payload stored under a version's key holds that version's data; a publication (a new
 version, a new map run) starts new snapshots and drops the old ones; a request whose ``?v=``
 names another version is answered with no-store headers and stores nothing under its own
@@ -196,6 +198,28 @@ def test_before_any_version_the_legacy_selection_is_served(
     assert body["version_id"] is None and body["attribution"] == []
 
 
+def test_before_any_version_an_old_forecast_is_flagged_stale(
+    app_client: ApiClient, db: Session, two_runs: tuple[int, int], frozen: list[datetime]
+) -> None:
+    """Before the first publication the freshness follows the served run's own staleness
+    rule (``queries.is_stale``): a day past FORECAST_STALE_HOURS every spot is stale by age,
+    with the run's last update; never labelled current."""
+    _, newer = two_runs
+    run = db.get(ForecastRun, newer)
+    assert run is not None and run.completed_at is not None
+    frozen[0] = run.issued_at + timedelta(hours=get_settings().forecast_stale_hours + 24)
+    public_cache.clear()
+    spots = app_client.get("/api/spots").json()
+    assert spots
+    for spot in spots:
+        fresh = spot["freshness"]
+        assert fresh["version_id"] is None and fresh["stale"] is True, spot["slug"]
+        assert fresh["reason"] == "age", spot["slug"]
+        assert datetime.fromisoformat(fresh["last_updated_at"]) == run.completed_at
+    forecast = app_client.get("/api/spots/pipeline/forecast?days=10").json()
+    assert forecast["freshness"]["stale"] is True and forecast["stale"] is True
+
+
 def test_a_version_of_the_legacy_runs_answers_every_route_as_before(
     app_client: ApiClient, db: Session, two_runs: tuple[int, int]
 ) -> None:
@@ -263,6 +287,29 @@ def test_the_version_wins_and_a_stale_spot_keeps_its_previous_run(
     assert [c["component"] for c in status["components"]] == ["atmosphere", "wave"]
     assert all(c["model"] and c["model_run"] for c in status["components"])
     assert status["spots_served"] == len(ids)
+
+
+def test_a_spot_whose_refresh_failed_gets_a_new_timeline_etag(
+    app_client: ApiClient, db: Session, two_runs: tuple[int, int]
+) -> None:
+    """Same run, same steps, same ratings: once a version flags the spot stale (its latest
+    refresh failed), a revalidation with the previous ETag gets the body with the stale
+    freshness, not a 304 that would keep the old label."""
+    _, newer = two_runs
+    ids = active_ids(db)
+    publish(db, dict.fromkeys(ids, newer))
+    serving.refresh_version_marker(db)
+    url = "/api/spots/pipeline/timeline?days=10"
+    before = app_client.get(url)
+    assert before.status_code == 200 and before.json()["freshness"]["stale"] is False
+    publish(db, dict.fromkeys(ids, newer), stale=frozenset({spot_id(db, "pipeline")}))
+    serving.refresh_version_marker(db)
+    after = app_client.get(url, headers={"If-None-Match": before.headers["etag"]})
+    assert after.status_code == 200
+    assert after.json()["freshness"]["stale"] is True
+    assert after.json()["freshness"]["reason"] == "refresh_failed"
+    assert after.json()["provenance"] == before.json()["provenance"]  # the same run
+    assert after.headers["etag"] != before.headers["etag"]
 
 
 def test_swell_detection_reads_the_served_runs(
