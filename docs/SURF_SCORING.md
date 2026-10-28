@@ -619,10 +619,12 @@ components): short plain phrases built only from the component fits the score us
   with the break", "swell mostly blocked at this break" (outside the swell window); period:
   "good swell period (14 s)", "period too short for this reef (8 s)" (the spot's break type).
   Direction and period are scored over every partition (section 3e), so each phrase names
-  the partition behind its claim: a favourable one the partition that adds most to the
-  weighted fit (largest weight × fit), an unfavourable one the partition that costs it most
-  (largest weight × (1 − fit)), `scoring.named_partition`. That is not always the partition
-  that drives the surf: a small 16 s swell can carry the largest share while a 6 s swell and
+  the partition behind its claim (`scoring.named_partition`): a favourable one the heaviest
+  partition whose own fit is at least 0.75 (one exists whenever the weighted fit is), an
+  unfavourable one the heaviest whose own fit is below 0.4; without such a partition, the
+  one that adds most to the weighted fit (largest weight × fit) or costs it most (largest
+  weight × (1 − fit), a fit below 1). That is not always the partition that drives the
+  surf: a small 16 s swell can carry the largest share while a 6 s swell and
   a 5 s wind sea make the period fit poor, and the phrase is then "period too short for this
   reef (6 s)", never "(16 s)" (the explanation sentence still describes the driving
   partition, as in 2.1.0); size: "good size for this break (4–6 ft)", "too small
@@ -642,10 +644,11 @@ Measured on the real run (section 3h), most frequent favourable phrases: good si
 25,000 hours), well-aligned swell (16,658), moderate offshore wind (4,401); unfavourable:
 period too short for this reef (7,116) or point (4,346), too small (3,648), onshore wind
 (2,244). 668 hours had no favourable phrase and 6,738 no unfavourable one. Every direction
-and period phrase names a partition whose own fit supports it (0 exceptions among 37,525
-such phrases); naming the driving partition instead, as a first version did, contradicted
-the partition's own fit in 356 of them (e.g. "period too short for this reef (16 s)"). Rows scored
-before 2.2.0 have no lists (`null` in the API) until they are rescored (the served runs are
+and period phrase names a partition whose own fit supports it (at least 0.75 for a
+favourable phrase, below 1 for an unfavourable one: 0 exceptions among 37,525 such phrases);
+naming the driving partition instead, as a first version did, contradicted the partition's
+own fit in 356 of them (e.g. "period too short for this reef (16 s)"). Rows scored before
+2.2.0 have no lists (`null` in the API) until they are rescored (the served runs are
 rescored after the upgrade).
 
 ## 3h. 2.2.0 on the real run
