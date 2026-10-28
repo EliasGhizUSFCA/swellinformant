@@ -48,10 +48,12 @@ function useNow(everyMs: number): number {
  * whose data the page shows, in the viewer's zone, with its age). When a newer version replaces
  * it on an open page the label changes with the data, is highlighted briefly, and screen readers
  * hear "New forecast loaded" (aria-live, once the new data is on screen). Nothing before the
- * version is known or while nothing has been published. `tone` "map" is the floating dark pill
- * of the map's controls.
+ * version is known or while nothing has been published. `stale`: the data under the label is
+ * older than the version (a spot whose refresh failed keeps its previous run), so the label is
+ * not drawn and the page's stale notice speaks for it; the announcement region stays. `tone`
+ * "map" is the floating dark pill of the map's controls.
  */
-export function ForecastUpdated({ tone = "page", className }: { tone?: "page" | "map"; className?: string }) {
+export function ForecastUpdated({ tone = "page", stale = false, className }: { tone?: "page" | "map"; stale?: boolean; className?: string }) {
   const { status, shown: version, renderedId, changedAt } = useForecastVersion();
   const now = useNow(30_000);
   // The replacing version whose data is on screen: highlighted until HIGHLIGHT_MS later.
@@ -69,33 +71,43 @@ export function ForecastUpdated({ tone = "page", className }: { tone?: "page" | 
   const at = Date.parse(published);
   if (!Number.isFinite(at)) return null;
   const nowMs = Math.max(now, changedAt ?? 0);
-  return (
-    <span
-      data-testid="forecast-updated"
-      data-version-id={version.version_id}
-      data-published-at={published}
-      data-highlight={highlight ? "" : undefined}
-      title={`Forecast version ${version.version_id}, published ${full().format(new Date(at))}. Open pages pick up new versions by themselves.`}
-      className={cn(
-        "inline-flex w-fit items-center gap-1.5 rounded-full text-xs whitespace-nowrap tabular-nums transition-colors duration-700",
-        // On short screens (phones in landscape) the map keeps its little height for the map:
-        // the pill is only read out there (its announcement included), not drawn.
-        tone === "map" ? cn("px-3 py-1.5 [@media(max-height:500px)]:sr-only", GLASS) : "border bg-card px-2.5 py-0.5 text-muted-foreground",
-        highlight && (tone === "map" ? "ring-[#c4ec4a]/70" : "border-emerald-300 bg-emerald-50 text-emerald-800"),
-        className,
-      )}
-    >
-      <RefreshCw className={cn("size-3 shrink-0", tone === "map" ? "text-[#c4ec4a]" : "text-ocean")} aria-hidden />
-      <span>
-        Forecast updated <span className={cn("font-medium", tone === "map" ? "text-white" : "text-ink")}>{updatedClock(published, nowMs)}</span>
-        <span className={tone === "map" ? "text-white/70" : undefined} data-testid="forecast-updated-age">
-          {" "}
-          · {ageText(at, nowMs)}
-        </span>
-      </span>
-      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="forecast-updated-announcement">
-        {fresh ? "New forecast loaded" : ""}
-      </span>
+  // The live region stays in place whatever is drawn (a region added with its text is not
+  // read out); it is absolutely positioned, so it takes no room in the header.
+  const announcement = (
+    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="forecast-updated-announcement">
+      {fresh && !stale ? "New forecast loaded" : ""}
     </span>
+  );
+  return (
+    <>
+      {/* A stale spot: "updated just now" would call its old data current. */}
+      {!stale && (
+        <span
+          data-testid="forecast-updated"
+          data-version-id={version.version_id}
+          data-published-at={published}
+          data-highlight={highlight ? "" : undefined}
+          title={`Forecast version ${version.version_id}, published ${full().format(new Date(at))}. Open pages pick up new versions by themselves.`}
+          className={cn(
+            "inline-flex w-fit items-center gap-1.5 rounded-full text-xs whitespace-nowrap tabular-nums transition-colors duration-700",
+            // On short screens (phones in landscape) the map keeps its little height for the map:
+            // the pill is only read out there, not drawn.
+            tone === "map" ? cn("px-3 py-1.5 [@media(max-height:500px)]:sr-only", GLASS) : "border bg-card px-2.5 py-0.5 text-muted-foreground",
+            highlight && (tone === "map" ? "ring-[#c4ec4a]/70" : "border-emerald-300 bg-emerald-50 text-emerald-800"),
+            className,
+          )}
+        >
+          <RefreshCw className={cn("size-3 shrink-0", tone === "map" ? "text-[#c4ec4a]" : "text-ocean")} aria-hidden />
+          <span>
+            Forecast updated <span className={cn("font-medium", tone === "map" ? "text-white" : "text-ink")}>{updatedClock(published, nowMs)}</span>
+            <span className={tone === "map" ? "text-white/70" : undefined} data-testid="forecast-updated-age">
+              {" "}
+              · {ageText(at, nowMs)}
+            </span>
+          </span>
+        </span>
+      )}
+      {announcement}
+    </>
   );
 }

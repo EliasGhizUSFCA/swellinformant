@@ -240,7 +240,7 @@ function ForecastSection({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <ForecastUpdated />
+          <ForecastUpdated stale={tl?.stale} />
           {tl?.stale && <Badge variant="warn">Stale data</Badge>}
         </div>
       </CardHeader>

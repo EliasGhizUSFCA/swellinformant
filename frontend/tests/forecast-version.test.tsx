@@ -571,6 +571,17 @@ describe("after a new version is on screen", () => {
     disconnect();
   });
 
+  it("a stale spot's label leaves the claim to its stale notice; the announcement region stays", async () => {
+    const { wrapper } = setup(version(1));
+    const { result } = renderHook(() => useForecastVersion(), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe("known"));
+    const { rerender } = render(<ForecastUpdated stale />, { wrapper });
+    expect(screen.queryByTestId("forecast-updated")).toBeNull();
+    expect(screen.getByTestId("forecast-updated-announcement")).toHaveTextContent("");
+    rerender(<ForecastUpdated />);
+    expect(screen.getByTestId("forecast-updated")).toHaveAttribute("data-version-id", "1");
+  });
+
   it("a version endpoint that answers after the first reads moves the page to it without announcing it", async () => {
     let answer: (v: ForecastVersion) => void = () => undefined;
     const store = new ForecastVersionStore({ pollMs: POLL, initTimeoutMs: 1_000, fetchVersion: () => new Promise<ForecastVersion>((r) => (answer = r)) });
