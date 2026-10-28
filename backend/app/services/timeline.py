@@ -221,9 +221,21 @@ def _why(pred: SurfQualityPrediction) -> StepWhyOut:
             if isinstance(contributions, dict)
             else None
         ),
-        tide_included=components.get("tide") is not None or "tide_detail" in components,
+        tide_included=_tide_included(components),
         explanation=pred.explanation,
     )
+
+
+def _tide_included(components: dict[str, Any]) -> bool:
+    """Whether the tide was part of the rating: it was scored (a tide fit or its detail)
+    and, when the row records its weights (algorithm 2.2.0), with a weight above 0 (a
+    component weighted 0 by SCORING_WEIGHTS_JSON is out of the score)."""
+    if components.get("tide") is None and "tide_detail" not in components:
+        return False
+    used = components.get("weights_used")
+    if isinstance(used, dict) and "tide" in used:
+        return float(used["tide"] or 0) > 0
+    return True
 
 
 def _quality(pred: SurfQualityPrediction, stale: bool) -> StepQualityOut:

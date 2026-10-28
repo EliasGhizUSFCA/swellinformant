@@ -207,6 +207,12 @@ def test_why_lists_only_stored_fits_and_gates() -> None:
     why = assemble(rows).steps[0].why
     assert why.contributions == {"wind": 4.0, "swell_period": 12.5}
     assert why.tide_included is True and why.fits["tide"] == 0.8
+    # A tide weighted 0 (SCORING_WEIGHTS_JSON) is scored but out of the rating: the chart's
+    # tide shading and the tide-fit line follow tide_included.
+    comp["weights_used"] = {"wind": 0.5, "wave_size": 0.5, "tide": 0.0}
+    assert assemble(rows).steps[0].why.tide_included is False
+    comp["weights_used"] = {"wind": 0.4, "wave_size": 0.4, "tide": 0.2}
+    assert assemble(rows).steps[0].why.tide_included is True
 
 
 # --- partitions -----------------------------------------------------------------------
