@@ -194,6 +194,9 @@ def test_three_failed_refreshes_in_a_row_are_alerted_then_recovered(
     assert "last error: db-host-7 refused" in mail  # the error goes to admins only
     report = data_health(db, now=t0 + timedelta(minutes=1)).out.model_dump_json()
     assert "db-host-7" not in report and "refresh_failures" not in report  # never public
+    with_admin = data_health(db, now=t0 + timedelta(minutes=1), admin=True)
+    assert "refresh_failures" in {p.key for p in with_admin.admin_problems}
+    assert "refresh_failures" not in with_admin.out.model_dump_json()  # out stays public
 
     fx.sync_run(db, t0 + timedelta(minutes=10))
     later = check(db, monkeypatch, t0 + timedelta(minutes=15))
