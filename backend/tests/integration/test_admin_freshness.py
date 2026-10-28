@@ -107,6 +107,13 @@ def test_every_metric_comes_from_the_recorded_pipeline(
     now = utcnow()
     c2 = fx.cycle_of(now - fx.WIND_LAG - timedelta(minutes=30))  # newest available cycle
     c1 = c2 - timedelta(hours=6)
+    # The wind below is carried from c1, so it is older than the newest cycle by up to 12.5 h
+    # depending on the wall clock's place in the 6 h cycle; with the default 6 h + 360 min
+    # limit it turned every spot stale ("atmosphere_age") in the last ~30 minutes of each
+    # cycle. A 420-minute threshold keeps it fresh at any time of day, so the stale spots
+    # are exactly the three whose refresh failed (the carried-component age rule itself is
+    # pinned in tests/unit/test_forecast_versions.py).
+    monkeypatch.setattr(get_settings(), "forecast_stale_threshold_minutes", 420)
     spots = fx.active_spot_ids(db)
     failed_spots = {spots[0]: "masked cells", spots[1]: "HTTP 500", spots[2]: "timeout"}
 
