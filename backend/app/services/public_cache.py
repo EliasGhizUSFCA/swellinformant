@@ -427,6 +427,11 @@ def _computed_once(
     token = secrets.token_hex(8)
     if client.set(lock, token, nx=True, ex=LOCK_TTL_SECONDS):
         try:
+            # The caller read ``key`` before taking the lock: a holder that stored it and
+            # freed the lock in between has computed it already.
+            raw = client.get(key)
+            if isinstance(raw, bytes):
+                return decode(raw)
             built = build_all()
             for name, snap in built.items():
                 client.set(name, encode(snap), ex=PAYLOAD_TTL_SECONDS)
