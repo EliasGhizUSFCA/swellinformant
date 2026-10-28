@@ -193,7 +193,7 @@ The publish stage (`orchestrator._publish_body`), in this order:
    re-evaluated the swell events of the new version: the browsers switch to the new version
    when its event and opportunity lists are ready, so nothing fetched (and cached) for the
    new version holds the previous version's events. This adds the `detect` and `match`
-   time, about 1.3 s in the demo measurements below, to the publication-to-browser latency.
+   time, 1.1-1.8 s in the demo measurements below, to the publication-to-browser latency.
    Outside a sync (`sync publish`, the developer pipeline) `publish.publish` writes it.
 
 With several providers (the blend path) the version is the run selection of the public
@@ -542,6 +542,30 @@ counted; the sandbox reaches Open-Meteo through a proxy, and some TLS handshakes
   rows, while its wind differs in 7,710 of them.
 
 Every live refresh fitted the 300 s Function limit (the slowest took 60 s).
+
+**Review re-check, 2026-10-28** (same sandbox, 1-minute load average 2.8-3.3 because
+another agent's test suites ran alongside; after the review fixes: the refresh check asks
+only the spot providers, and the version marker is written after `match`):
+
+* The demo route measurement again (`measure_http.py` of the builder, scratch database and
+  Redis): first refresh 14.8 s wall / 11.1 server CPU s, wave-only 14.2 / 10.2,
+  atmosphere-only 14.1 / 9.8 (predict 9.7-10.7 s, detect 1.3-1.8 s, match 0.03-0.06 s),
+  checks with nothing new 0.007 s. `scripts/measure_refresh_egress.py --redis-url
+  redis://localhost:6379/4`: 8.30, 9.29 and 9.46 MB database to app per refresh, 41 Redis
+  commands, a check 0 database bytes and 4 Redis commands: the same as above.
+* Live Open-Meteo on a fresh clone of the real-data database with MAP_FIELDS_ENABLED=true
+  (the hosted profile's map mode): the clone's Upgrade-4 runs have no component keys and no
+  version exists. The check found both components new (their runs were 12 days old): 2
+  marine and 1 forecast request (1.02 and 0.39 MB) and 20 `meta.json`, all HTTP 200, and no
+  NOAA request (the map component "not checked here"); 18.2 s wall, 10.2 CPU s, one
+  version with both components on the 00Z run, the marker naming it. With that run's
+  component keys and parts removed and the version deleted (the run then looks like an
+  Upgrade-4 run), the next check found both components current from the whole run key: 4
+  `meta.json`, no data request, 1.7 s. With the same run relabelled as if its atmosphere
+  were 18Z of the day before, the check found the waves current and the atmosphere new and
+  refreshed the atmosphere only (served from the provider response cache, so no data
+  request that time), carrying the waves from that run: 8,000 of 8,000 wave rows equal,
+  the version's `wave_model_run` the run's own 00Z, `carried_from_run_id` that run.
 
 **Monthly Function CPU (extrapolation, not a measurement).** Vercel Hobby includes 4
 Active CPU-hours of Functions a month (https://vercel.com/docs/plans/hobby, read
