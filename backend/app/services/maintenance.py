@@ -8,7 +8,8 @@
   (:func:`prune_forecast_runs`, daily and also by every sync's prune stage, so the free
   database profile's 1-day retention holds between the daily cleanups);
 * superseded and failed forecast versions older than RETENTION_FORECAST_DAYS are deleted,
-  except the previous published one (:func:`prune_versions`);
+  except the previous published one, and a version still staging that long after it was
+  staged (abandoned) is failed first (:func:`prune_versions`);
 * the surf-quality predictions of superseded runs of the blend's member sources are
   deleted (:func:`prune_superseded_predictions`): derived, recomputable data, about 2 kB
   per row and every member run scored as well as the blend. The newest usable run of every
@@ -115,11 +116,25 @@ def version_run_ids(db: Session, *, previous: bool = True) -> set[int]:
     return ids
 
 
+ABANDONED_STAGING = "abandoned: staged and never published (RETENTION_FORECAST_DAYS)"
+
+
 def prune_versions(db: Session, now: datetime) -> int:
     """Delete the superseded and failed forecast versions created more than
     RETENTION_FORECAST_DAYS before ``now``, except the previous published one (the newest
-    superseded). The caller commits; returns the rows deleted."""
+    superseded). A version still staging that long after it was staged was abandoned (a
+    sync stopped between staging and publishing; a sync stages and publishes within one
+    stage): it is marked failed first, so the runs it alone references are pruned by the
+    next pass. The caller commits; returns the rows deleted."""
     cutoff = now - timedelta(days=get_settings().retention_forecast_days)
+    db.execute(
+        update(ForecastVersion)
+        .where(
+            ForecastVersion.status == "staging",
+            func.coalesce(ForecastVersion.staged_at, ForecastVersion.created_at) < cutoff,
+        )
+        .values(status="failed", error_message=ABANDONED_STAGING)
+    )
     keep = [v.id for v in _protected_versions(db)]
     stmt = delete(ForecastVersion).where(
         ForecastVersion.status.in_(("superseded", "failed")),

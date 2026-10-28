@@ -936,6 +936,44 @@ def test_prune_keeps_every_run_a_version_needs(
     assert {r1.id, r2.id, v3.forecast_run_id} <= remaining
     versions = set(db.scalars(select(ForecastVersion.id)).all())
     assert versions == {v2.id, v3.id} and out["forecast_versions"] == 1  # v1 pruned
+    # A version left staging (a sync stopped between staging and publishing) protects its
+    # run while it may still be published; once older than the retention it is abandoned.
+    run_ids = set(db.scalars(select(ForecastRun.id)).all())
+    stray = ForecastRun(
+        source_id=r1.source_id,
+        run_key="demo-wave:2026102506|demo-wind:2026102506",
+        issued_at=old,
+        started_at=old,
+        completed_at=old,
+        status=ForecastRunStatus.SUCCESS,
+        details={"spot_ids": []},
+    )
+    db.add(stray)
+    db.commit()
+    staging = ForecastVersion(
+        status="staging",
+        provider="demo",
+        source_code="demo",
+        forecast_run_id=stray.id,
+        previous_version_id=v3.id,
+        staged_at=utcnow(),
+    )
+    db.add(staging)
+    db.commit()
+    prune_pass(db)
+    db.expire_all()
+    assert stray.id in set(db.scalars(select(ForecastRun.id)).all())  # staging: kept
+    assert db.get(ForecastVersion, staging.id) is not None
+    db.execute(
+        text("UPDATE forecast_versions SET staged_at = :t, created_at = :t WHERE id = :v"),
+        {"t": old, "v": staging.id},
+    )
+    db.commit()
+    assert prune_pass(db)["forecast_versions"] == 1  # abandoned: failed, then pruned
+    prune_pass(db)
+    db.expire_all()
+    assert set(db.scalars(select(ForecastRun.id)).all()) == run_ids  # its run went too
+    assert published(db).id == v3.id
 
 
 # --------------------------------------------------------------------------- map layers
