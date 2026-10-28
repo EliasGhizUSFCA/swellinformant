@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type DataHealth, useDataHealth } from "@/app/status/data-health";
+import { useFieldIndex } from "@/hooks/map-fields";
 import { useEvents, useForecast, useMapConditions, useOpportunities, useSpot, useSpotEvents, useSpots, useSpotTimeline } from "@/hooks/queries";
 import { DEFAULT_POLL_MS, ForecastVersionProvider } from "@/hooks/use-forecast-version";
 import * as api from "@/lib/api";
@@ -43,8 +44,10 @@ const VERSION: api.ForecastVersion = {
   attribution: [],
 };
 
-/** Every public forecast read of the map, spot and dashboard pages, plus the opportunities. */
+/** Every public forecast read of the map, spot and dashboard pages (the map's ocean-layer
+ * index included), plus the opportunities. */
 function usePublicReads() {
+  useFieldIndex();
   useSpots();
   useSpot("pipeline");
   useForecast("pipeline");
@@ -142,6 +145,9 @@ describe("the forecast version poll, the one read on a timer", () => {
       "/api/events?limit=6&min_score=57&v=3": 1,
       "/api/map/conditions?v=3": 1,
       "/api/map/conditions?at=2026-10-28T12%3A00%3A00Z&v=3": 1,
+      // Read once at mount (before the first version answer; it carries ?v=&m= once a new
+      // map run is announced: tests/forecast-version.test.tsx), never on a timer.
+      "/api/map/fields": 1,
       "/api/opportunities?include_past=false": 1,
     });
   });

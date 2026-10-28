@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FIELD_INDEX_REFETCH_MS, layerVariables, useFieldIndex, useMapLayerFields } from "@/hooks/map-fields";
+import { layerVariables, useFieldIndex, useMapLayerFields } from "@/hooks/map-fields";
 import * as api from "@/lib/api";
 import type { FieldIndex } from "@/lib/map-fields";
 import { DEFAULT_SETTINGS, type MapSettings } from "@/lib/map-settings";
@@ -42,22 +42,24 @@ describe("field index freshness", () => {
     vi.restoreAllMocks();
   });
 
-  it("re-reads the index every 5 minutes and when the window regains focus", async () => {
+  it("re-reads the index when the window regains focus, never on a timer", async () => {
+    // Design D11: a new map run reaches an open map through the forecast version poll (its
+    // map_run_id re-reads the index under a new URL: tests/forecast-version.test.tsx), so the
+    // index has no timer of its own (it used to be re-read every 5 minutes).
     const get = vi.spyOn(api, "get").mockResolvedValue(INDEX);
     const { result } = renderHook(() => useFieldIndex(), { wrapper: wrapper() });
     await waitFor(() => expect(result.current.data?.run_key).toBe("run-1"));
     expect(get).toHaveBeenCalledTimes(1);
     get.mockResolvedValue({ ...INDEX, run_key: "run-2" });
-    await act(() => vi.advanceTimersByTimeAsync(FIELD_INDEX_REFETCH_MS + 50));
-    await waitFor(() => expect(result.current.data?.run_key).toBe("run-2"));
-    expect(get).toHaveBeenCalledTimes(2);
-    // Focus after the data went stale (1 minute): one more read.
-    await act(() => vi.advanceTimersByTimeAsync(61_000));
+    await act(() => vi.advanceTimersByTimeAsync(30 * 60_000));
+    expect(get).toHaveBeenCalledTimes(1);
+    // Focus after the data went stale (1 minute): one more read, with the new run.
     act(() => {
       focusManager.setFocused(false);
       focusManager.setFocused(true);
     });
-    await waitFor(() => expect(get).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.data?.run_key).toBe("run-2"));
     focusManager.setFocused(undefined);
   });
 
