@@ -790,8 +790,9 @@ has no pandas, scikit-learn, SciPy, pyarrow, joblib or ecCodes (design D8):
 * the **ML correction** of offshore Hs is optional and off by default
   (`ML_CORRECTIONS_ENABLED=false`, spec 2: no ML in the default path). The ML code stays
   (docs/ml-pipeline.md) and is imported only when the setting is on and an ACTIVE model
-  version exists (`predict.run_corrector`; `ml/hook.py` imports its ML modules inside the
-  functions that use them);
+  version exists (`predict.run_corrector` for the prediction job,
+  `ml.hook.RunCorrector.for_run` for each blend member; `ml/hook.py` imports its ML modules
+  inside the functions that use them);
 * the **prediction archive** (`forecasts/archive.py`) is optional and off by default
   (`PREDICTION_ARCHIVE_ENABLED=false`; the full-retention profile turns it on). When on, it
   archives the served runs of the published forecast version.

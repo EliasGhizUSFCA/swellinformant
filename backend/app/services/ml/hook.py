@@ -22,9 +22,11 @@ archived lead-0 point forecast of the same cycle. A feature the model requires b
 is unavailable leaves the value raw (Correction.correct_hs).
 
 The ML modules (``ml.apply``, ``ml.registry``, ``verification.pairing``: pandas,
-scikit-learn, joblib) are imported only by the functions that use a correction, so this
-module, and the blend and prediction jobs that import it, load without the data libraries.
-ML corrections are optional and off by default (ML_CORRECTIONS_ENABLED=false).
+scikit-learn, joblib) are imported only by the functions that use a correction, and
+:meth:`RunCorrector.for_run` imports them only when ML_CORRECTIONS_ENABLED is on and an
+ACTIVE model version exists, so this module, and the blend and prediction jobs that use it,
+load and run without the data libraries. ML corrections are optional and off by default
+(ML_CORRECTIONS_ENABLED=false).
 """
 
 from __future__ import annotations
@@ -34,10 +36,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
-from app.models import BuoyObservation, BuoyStation, ForecastRun, PointForecast, SurfSpot
+from app.core.config import get_settings
+from app.models import (
+    BuoyObservation,
+    BuoyStation,
+    ForecastRun,
+    MLModelVersion,
+    PointForecast,
+    SurfSpot,
+)
+from app.models.enums import MLModelStatus
 from app.services.surf_quality.models import HEIGHT_FIELDS
 
 if TYPE_CHECKING:
@@ -70,7 +81,14 @@ class RunCorrector:
 
     @classmethod
     def for_run(cls, db: Session, run: ForecastRun) -> RunCorrector | None:
-        """None unless a correction is active and was trained on this run's family."""
+        """None unless a correction is active and was trained on this run's family.
+
+        With ML_CORRECTIONS_ENABLED off, or no ACTIVE model version, this returns None before
+        the ML code (pandas, scikit-learn, joblib) is imported."""
+        if not get_settings().ml_corrections_enabled:
+            return None
+        if not db.scalar(select(exists().where(MLModelVersion.status == MLModelStatus.ACTIVE))):
+            return None
         from app.services.ml.apply import load_active_correction
         from app.services.ml.registry import transferable_slugs
 

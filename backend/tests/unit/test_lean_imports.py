@@ -323,6 +323,28 @@ def test_the_prediction_path_imports_and_scores_lean() -> None:
     assert_imported(done)
 
 
+ML_OFF_CORRECTOR = """
+import os
+
+os.environ["ML_CORRECTIONS_ENABLED"] = "false"
+from app.core.config import get_settings
+
+get_settings.cache_clear()
+from app.services.ml.hook import RunCorrector
+
+# The blend asks for a corrector per member run: with ML corrections off it gets None
+# before any ML module (pandas, scikit-learn, joblib) is imported or the database is read.
+assert RunCorrector.for_run(None, None) is None
+"""
+
+
+def test_the_ml_hook_with_corrections_off_runs_lean() -> None:
+    """forecasts.blend calls ml.hook.RunCorrector.for_run for every member run; with
+    ML_CORRECTIONS_ENABLED off (the default) that imports no data library."""
+    done = import_without(["app.services.ml.hook"], DATA_LIBRARIES, then=ML_OFF_CORRECTOR)
+    assert_imported(done)
+
+
 def test_the_blocker_catches_a_heavy_import() -> None:
     """The check above is not vacuous: a module that imports pandas fails it (the ML
     correction; surf_quality.predict no longer imports pandas, algorithm 2.2.0)."""
