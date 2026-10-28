@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ConditionsSummary } from "@/components/conditions";
-import { ForecastConfidence, LocalConfidence, ResearchConfidence } from "@/components/confidence";
+import { ForecastConfidence, ResearchConfidence } from "@/components/confidence";
 import { EventCard } from "@/components/event-card";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
 import { OpportunityCard } from "@/components/opportunity-card";
@@ -215,14 +215,14 @@ const FOUR_GAPS = [
   "Synthetic gap: the bathymetry near the break is not surveyed.",
 ];
 
-/** The spot page's summary block: the headline and its reason, then forecast confidence and
- * confidence at the break, each with its first reason, as the page lays them out. */
+/** The spot page's summary block: the one-sentence headline, then forecast confidence with
+ * its first reason, as the page lays them out (spec 20: no combined "confidence at the break";
+ * research confidence is its own block, measured below). */
 function SpotSummary({ c }: { c: Conditions }) {
   return (
     <div data-testid="spot-summary">
-      <RatingHeadline label={c.label} score={c.score} reason={ratingReason({ periodS: c.swell_period_s, windRelation: c.wind_relation, windStrength: c.wind_strength, explanation: c.explanation })} size="lg" />
+      <RatingHeadline label={c.label} score={c.score} reason={ratingReason({ periodS: c.swell_period_s, windRelation: c.wind_relation, windStrength: c.wind_strength, explanation: c.explanation })} size="lg" inline />
       <ForecastConfidence value={c.forecast_confidence_class} reasons={forecastReasonsOf(c)} notes={c.confidence_reasons} validTime={c.valid_time} runIssuedAt={c.run_issued_at} nowMs={NOW} legacyIndex={c.confidence} />
-      <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reason={c.local_confidence_reason} />
     </div>
   );
 }
@@ -232,7 +232,7 @@ function count(testId: string): string[] {
 }
 
 describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
-  it("the spot page summary: rating, reason, forecast confidence and confidence at the break", () => {
+  it("the spot page summary: rating, reason and forecast confidence (never a combined class)", () => {
     render(<SpotSummary c={conditions()} />);
     const words = count("spot-summary");
     expect(words.length, words.join(" ")).toBeLessThanOrEqual(BUDGET);
@@ -240,7 +240,9 @@ describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
     const root = screen.getByTestId("spot-summary");
     expect(root).toHaveTextContent("Excellent Surf — 9.2/10");
     expect(root).toHaveTextContent(`Forecast confidence: Moderate${FORECAST_REASON}`);
-    expect(root).toHaveTextContent(`Confidence at the break: Low${LOCAL_REASON}`);
+    // Spec 20: the combined class that mixed research and forecast confidence is gone.
+    expect(root).not.toHaveTextContent("Confidence at the break");
+    expect(root).not.toHaveTextContent(LOCAL_REASON);
   });
 
   it("the spot page research block: class, first gap and the gap count", () => {
@@ -278,7 +280,8 @@ describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
     // It also names the swell and wind behind the rating: five words more than a card.
     expect(words.length, words.join(" ")).toBeLessThanOrEqual(BUDGET + 5);
     expect(screen.getByTestId("our-prediction")).toHaveTextContent("Forecast confidence: Moderate");
-    expect(screen.getByTestId("local-confidence-badge")).toHaveTextContent("At the break: Low");
+    // Spec 20: no combined "at the break" class next to it.
+    expect(screen.queryByTestId("local-confidence-badge")).toBeNull();
     // The raw model data is one header line until opened.
     expect(screen.getByTestId("raw-model").querySelector("dl")).not.toBeVisible();
   });
@@ -287,7 +290,7 @@ describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
     const { unmount } = render(<EventCard event={event()} featured />);
     let words = count("event-card");
     expect(words.length, words.join(" ")).toBeLessThanOrEqual(BUDGET);
-    expect(screen.getByTestId("local-confidence-badge")).toHaveTextContent("At the break: Low");
+    expect(screen.queryByTestId("local-confidence-badge")).toBeNull();
     unmount();
     render(<EventCard event={event(NOTES)} featured />);
     words = count("event-card");

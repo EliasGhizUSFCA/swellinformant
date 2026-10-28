@@ -3,7 +3,7 @@
 import { CalendarDays, Waves, Wind } from "lucide-react";
 import Link from "next/link";
 
-import { ConfidenceBadge, LocalConfidence } from "@/components/confidence";
+import { ConfidenceBadge } from "@/components/confidence";
 import { DemoBadge } from "@/components/quality";
 import { RatingHeadline } from "@/components/rating";
 import { StaleBadge } from "@/components/stale-banner";
@@ -91,15 +91,9 @@ export function EventCard({
       </div>
       <WindDisputeNote note={event.wind_dispute_note} reasons={event.confidence_reasons} className="mt-1.5" />
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {/* Forecast confidence only: the combined "confidence at the break" mixed research
+            and forecast confidence (spec 20) and is no longer shown. */}
         <ConfidenceBadge value={event.forecast_confidence_class} />
-        <LocalConfidence
-          compact
-          dark={dark}
-          value={event.local_confidence_class}
-          forecastValue={event.forecast_confidence_class}
-          reason={event.local_confidence_reason}
-          reasons={event.confidence_reasons}
-        />
         <StaleBadge stale={event.stale} dark={dark} />
         {event.is_demo && <DemoBadge />}
       </div>

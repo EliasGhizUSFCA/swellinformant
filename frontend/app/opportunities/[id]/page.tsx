@@ -7,7 +7,7 @@ import { useParams } from "next/navigation";
 import { toast } from "sonner";
 
 import { DailyStrip } from "@/components/charts/forecast-charts";
-import { ForecastConfidence, LocalConfidence } from "@/components/confidence";
+import { ForecastConfidence } from "@/components/confidence";
 import { AttributionLinks } from "@/components/forecast-provenance";
 import { InfoPopover } from "@/components/info-popover";
 import { AppShell } from "@/components/layout/app-shell";
@@ -270,12 +270,6 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
               {/* The swell's peak-hour classes from the API ("Not assessed yet" when it has none). */}
               <div className="space-y-1.5 border-t pt-3">
                 <ForecastConfidence value={e.forecast_confidence_class ?? m.forecast_confidence_class} reasons={forecastReasonsOf(e)} notes={e.confidence_reasons} validTime={e.peak_time} />
-                <LocalConfidence
-                  value={e.local_confidence_class ?? m.local_confidence_class}
-                  forecastValue={e.forecast_confidence_class ?? m.forecast_confidence_class}
-                  reason={e.local_confidence_reason ?? m.local_confidence_reason}
-                  reasons={e.confidence_reasons}
-                />
               </div>
               <Disclosure summary="How this trip is scored" contentClassName="mt-3 space-y-3" data-testid="match-scoring">
                 <div className="flex items-center gap-3">

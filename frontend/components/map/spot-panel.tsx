@@ -89,7 +89,7 @@ export function SpotPanel({
         {at ? (
           <>
             <ForecastBreakdown c={at} tz={spot.timezone} units={units} />
-            <AttributionLinks links={links} dark className="-mt-2" />
+            <AttributionLinks links={links} sourceCode={at.source_code} dark className="-mt-2" />
           </>
         ) : (
           <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground" data-testid="no-forecast">
@@ -98,9 +98,9 @@ export function SpotPanel({
         )}
 
         {/*
-          Forecast and local confidence for the selected hour are part of ForecastBreakdown
-          above. Research confidence is a separate, per-spot assessment (how well the break's
-          ideal conditions are documented): shown on its own line, never merged with either.
+          Forecast confidence for the selected hour is part of ForecastBreakdown above. Research
+          confidence is a separate, per-spot assessment (how well the break's ideal conditions
+          are documented): shown on its own line, never merged with it (spec 20).
         */}
         <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="forecast-confidence-slot">
           <ConfidenceBadge value={spot.research_class} kind="research" data-testid="panel-research-confidence" />

@@ -7,6 +7,7 @@ import { DemoBadge } from "@/components/quality";
 import { safeExternalUrl } from "@/lib/confidence";
 import { relativeTime } from "@/lib/format";
 import { cycleLabel } from "@/lib/map-time";
+import { creditLinks } from "@/lib/provider";
 import { cn } from "@/lib/utils";
 import type { AttributionLink, RunMember } from "@/types/api";
 
@@ -24,12 +25,25 @@ export function useNowMs(): number {
 
 /**
  * The credit and licence links the data sources ask for, shown next to their data: Open-Meteo
- * ("Weather data by Open-Meteo.com", CC BY 4.0), ECMWF ("Copyright ECMWF", CC BY 4.0), NOAA.
- * The API's `source.attribution_links` (every member's for a blend). Only http(s) URLs
- * become links. Nothing is shown without links (e.g. the demo source).
+ * ("Weather data by Open-Meteo.com", CC BY 4.0), ECMWF ("Copyright ECMWF", CC BY 4.0), NOAA,
+ * and Windy ("Contains data from the Windy database", lib/provider creditLinks; `sourceCode`
+ * adds it for Windy data the links do not credit yet). The API's `source.attribution_links`
+ * (every member's for a blend). Only http(s) URLs become links. Nothing is shown without links
+ * (e.g. the demo source).
  */
-export function AttributionLinks({ links, dark = false, className }: { links: readonly AttributionLink[] | null | undefined; dark?: boolean; className?: string }) {
-  if (!links?.length) return null;
+export function AttributionLinks({
+  links: given,
+  sourceCode,
+  dark = false,
+  className,
+}: {
+  links: readonly AttributionLink[] | null | undefined;
+  sourceCode?: string | null;
+  dark?: boolean;
+  className?: string;
+}) {
+  const links = creditLinks(given, sourceCode);
+  if (!links.length) return null;
   return (
     <p className={cn("text-[11px] text-muted-foreground", className)} data-testid="attribution-links">
       <span className="font-medium">Data: </span>
@@ -72,6 +86,7 @@ export function ForecastProvenance({
   members,
   generatedAt,
   links,
+  sourceCode,
   className,
 }: {
   source: { name: string; is_demo: boolean } | null | undefined;
@@ -82,6 +97,8 @@ export function ForecastProvenance({
   generatedAt?: string | null;
   /** The sources' credit and licence links (`source.attribution_links`). */
   links?: readonly AttributionLink[] | null;
+  /** The source's code (Windy data adds its credit, lib/provider creditLinks). */
+  sourceCode?: string | null;
   className?: string;
 }) {
   const clock = useNowMs();
@@ -114,7 +131,7 @@ export function ForecastProvenance({
           <Clock className="size-3" aria-hidden="true" /> Fetched {relativeTime(run.completed_at, now)}
         </div>
       )}
-      <AttributionLinks links={links} />
+      <AttributionLinks links={links} sourceCode={sourceCode} />
     </div>
   );
 }
