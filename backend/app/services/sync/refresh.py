@@ -15,7 +15,8 @@ made before versions existed (:func:`publish_selection_version`): one run per sp
 ``queries.latest_runs_by_spot``.
 
 After any publication :func:`write_marker` stores the version payload (C4) with the
-published map run in Redis, so the version endpoint answers without the database.
+published map run in Redis (through ``serving.refresh_version_marker``, the one marker
+writer), so the version endpoint answers without the database.
 """
 
 from __future__ import annotations
@@ -42,7 +43,6 @@ from app.services.forecasts.versions import (
     STALE,
     UPDATED,
     ComponentRun,
-    MapRunRef,
     SpotRun,
     VersionPublishError,
     component_runs_of,
@@ -51,8 +51,6 @@ from app.services.forecasts.versions import (
     publish_version,
     serving_runs,
     stage_version,
-    version_payload,
-    write_version_marker,
 )
 from app.services.sync.types import ComponentStatus
 
@@ -192,7 +190,15 @@ def refresh_spots(
 ) -> list[dict[str, Any]]:
     """Refresh the spot components a plan wants, provider by provider (in FORECAST_PROVIDERS
     order); returns each provider's ``RefreshOutcome.as_dict()`` plus ``components``
-    (the version's component runs) and ``detected_at`` (the first sighting)."""
+    (the version's component runs) and ``detected_at`` (the first sighting).
+
+    Runtime fallback within the same refresh (design D4): when the refresh of a provider
+    that has a configured fallback (Windy) fails and the provider manager now has the
+    fallback stand in for it (the adapter recorded a credential, testing-key, quota or
+    availability failure), the same token is rebuilt (``registry.build_provider`` then
+    returns the fallback, marked ``fallback_from``) and refreshed again at once, every
+    component due, so the new data are not held back until the next check. Its version
+    records the fallback's provider and ``fallback_from``."""
     from app.services.forecasts import ingestion
     from app.services.sync.detect import with_simulated_runs
 
@@ -231,49 +237,115 @@ def refresh_spots(
                 }
             )
             continue
-        code = provider.source_info().code
-        _, stored = published_components(db, code)
-        extra = {"overrides": [o.to_json() for o in overrides]} if overrides else None
-        try:
-            outcome = ingestion.refresh_source(
-                db,
-                provider,
-                token=name,
-                due=due,
-                stored=stored,
-                serving=serving_runs(db, now=now),
-                retry_spot_ids=retry_ids or None,
-                now=now,
-                priority=priority,
-                extra_details=extra,
+        entry = _refresh_provider(
+            db, provider, name, due, retry_ids, priority=priority, overrides=overrides, now=now
+        )
+        stand_in = _stand_in_after_failure(entry, provider, name, settings, overrides)
+        if stand_in is not None:
+            logger.warning(
+                "Forecast refresh of %s failed (%s); %s stands in for it in this refresh",
+                name,
+                str(entry.get("message") or "")[:200],
+                stand_in.source_info().code,
             )
-        except Exception as exc:  # e.g. the database refused the source row
-            db.rollback()
-            logger.exception("Forecast refresh of %s failed", name)
-            out.append(
-                {
-                    "source": code,
-                    "provider": name,
-                    "status": "failed",
-                    "message": f"{type(exc).__name__}: refresh failed",
-                    "run_key": None,
-                }
+            failed_entry = entry
+            entry = _refresh_provider(
+                db, stand_in, name, set(COMPONENTS), set(), priority=priority, now=now
             )
-            continue
-        finally:
-            client = getattr(provider, "client", None)
-            if client is not None and callable(getattr(client, "close", None)):
-                client.close()
-        entry = outcome.as_dict()
-        entry["components"] = outcome.components
-        entry["detected_at"] = min(firsts).isoformat() if firsts else None
-        entry["acquired_at"] = outcome.acquired_at.isoformat() if outcome.acquired_at else None
-        entry["failed_spots"] = {str(k): v for k, v in sorted(outcome.failed_spots.items())}
-        entry["updated_spot_ids"] = list(outcome.updated_spots)
-        entry["estimated"] = outcome.estimated
-        entry["fallback_from"] = outcome.fallback_from
+            entry["fallback_of"] = {
+                "source": failed_entry.get("source"),
+                "status": failed_entry.get("status"),
+                "message": failed_entry.get("message"),
+            }
+        if "components" in entry:
+            entry["detected_at"] = min(firsts).isoformat() if firsts else None
         out.append(entry)
     return out
+
+
+def _refresh_provider(
+    db: Session,
+    provider: Any,
+    name: str,
+    due: set[str],
+    retry_ids: set[int],
+    *,
+    priority: int,
+    overrides: Any = None,
+    now: datetime,
+) -> dict[str, Any]:
+    """One provider's ``ingestion.refresh_source`` as a refresh entry (see
+    :func:`refresh_spots`); never raises. The provider's HTTP client is closed."""
+    from app.services.forecasts import ingestion
+
+    code = provider.source_info().code
+    try:
+        _, stored = published_components(db, code)
+        extra = {"overrides": [o.to_json() for o in overrides]} if overrides else None
+        outcome = ingestion.refresh_source(
+            db,
+            provider,
+            token=name,
+            due=due,
+            stored=stored,
+            serving=serving_runs(db, now=now),
+            retry_spot_ids=retry_ids or None,
+            now=now,
+            priority=priority,
+            extra_details=extra,
+        )
+    except Exception as exc:  # e.g. the database refused the source row
+        db.rollback()
+        logger.exception("Forecast refresh of %s failed", name)
+        return {
+            "source": code,
+            "provider": name,
+            "status": "failed",
+            "message": f"{type(exc).__name__}: refresh failed",
+            "run_key": None,
+        }
+    finally:
+        client = getattr(provider, "client", None)
+        if client is not None and callable(getattr(client, "close", None)):
+            client.close()
+    entry = outcome.as_dict()
+    entry["components"] = outcome.components
+    entry["acquired_at"] = outcome.acquired_at.isoformat() if outcome.acquired_at else None
+    entry["failed_spots"] = {str(k): v for k, v in sorted(outcome.failed_spots.items())}
+    entry["updated_spot_ids"] = list(outcome.updated_spots)
+    entry["estimated"] = outcome.estimated
+    entry["fallback_from"] = outcome.fallback_from
+    return entry
+
+
+def _stand_in_after_failure(
+    entry: Mapping[str, Any],
+    provider: Any,
+    name: str,
+    settings: Settings,
+    overrides: Any,
+) -> Any | None:
+    """The fallback provider that stands in for ``name`` now that its refresh failed, or
+    None (the refresh did not fail, ``name`` has no configured fallback, the provider was a
+    stand-in already, or the provider manager keeps ``name`` primary: a failure that falling
+    back would not fix, e.g. one spot's 400)."""
+    from app.services.forecasts import ingestion, provider_manager, registry
+
+    if entry.get("status") != "failed" or provider_manager.fallback_for(name) is None:
+        return None
+    if registry.fallback_origin(provider) is not None:
+        return None
+    try:
+        rebuilt = ingestion.build_provider(name, settings, overrides=overrides)
+    except Exception as exc:  # the fallback cannot be built: the failure stands
+        logger.error("Fallback for %s unavailable: %s", name, type(exc).__name__)
+        return None
+    if registry.fallback_origin(rebuilt) is None:
+        client = getattr(rebuilt, "client", None)
+        if client is not None and callable(getattr(client, "close", None)):
+            client.close()
+        return None
+    return rebuilt
 
 
 # --------------------------------------------------------------------------- versions
@@ -330,9 +402,14 @@ def stage_refresh_version(
     upstream = None
     if retry and published is not None:
         upstream = published.upstream_available_at
+    # A stand-in (fallback_from set) records its own provider, not the token it stood in
+    # for (design D4: provider=open_meteo, fallback_from=windy).
+    provider = refresh.get("provider") or token_for_source(source_code)
+    if refresh.get("fallback_from"):
+        provider = token_for_source(source_code)
     return stage_version(
         db,
-        provider=str(refresh.get("provider") or token_for_source(source_code)),
+        provider=str(provider),
         source_code=source_code,
         forecast_run_id=run_id,
         components=components,
@@ -414,29 +491,18 @@ def publish_selection_version(
         return None
 
 
-def map_run_ref(db: Session) -> MapRunRef | None:
-    """The map run the version payload names: ``sync_runs.map_run_id`` of the newest
-    publication that has one, with that run's cycle (``issued_at``). The same rule as the
-    serving side's marker re-seed, so a marker rebuilt after a Redis loss is identical."""
-    newest = (
-        select(SyncRun.map_run_id)
-        .where(SyncRun.published_at.is_not(None), SyncRun.map_run_id.is_not(None))
-        .order_by(SyncRun.published_at.desc(), SyncRun.id.desc())
-        .limit(1)
-        .scalar_subquery()
-    )
-    row = db.execute(
-        select(ForecastRun.id, ForecastRun.issued_at).where(ForecastRun.id == newest)
-    ).first()
-    return MapRunRef(int(row[0]), row[1]) if row is not None else None
-
-
 def write_marker(db: Session) -> bool:
     """Store the published version's payload (C4) with the published map run as the
-    version marker in Redis. Never raises (False when it was not stored)."""
+    version marker in Redis, through the serving side's single writer
+    (``serving.refresh_version_marker``: the same payload and map-run rule as the version
+    endpoint's re-seed after a Redis loss, and it clears this process's version memo so
+    the endpoint answers the new version at once). Never raises: False when the payload
+    could not be read (Redis errors are logged and swallowed by the writer)."""
+    from app.services.forecasts import serving
+
     try:
-        payload = version_payload(current_version(db), map_run_ref(db))
+        serving.refresh_version_marker(db)
     except Exception:
         logger.warning("Version marker not built", exc_info=True)
         return False
-    return write_version_marker(payload)
+    return True
