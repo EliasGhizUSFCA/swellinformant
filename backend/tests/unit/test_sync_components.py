@@ -161,6 +161,45 @@ def test_a_component_older_than_stored_is_never_new(world: World) -> None:
     assert "older than the stored run" in (part(plan, "wave").detail or "")
 
 
+def legacy(wave: datetime, atmos: datetime) -> KnownRuns:
+    """What Upgrade 4 stored: one whole-source run key, no component keys."""
+    return KnownRuns(
+        stored={SRC: om_run(wave, atmos).run_key},
+        map_cycle=None,
+        first_seen={},
+        attempts={},
+        loaded_at=C00,
+    )
+
+
+def test_a_run_stored_before_components_existed_is_split_by_model_domain(world: World) -> None:
+    """The upgrade path: each component is compared with the part of the whole stored run
+    key that names its own model domains. The waves (00Z, older than the stored wind of
+    06Z) stay current while a new atmosphere run is due; never both new, never "older"."""
+    C12 = C06 + timedelta(hours=6)
+    world.run = om_run(C00, C12)
+    plan = plan_sync(None, settings=settings(), now=T0, known=legacy(C00, C06))
+    assert plan.due and parts(plan) == {"wave": "current", "atmosphere": "new"}
+    assert part(plan, "wave").stored_run_key == wave_key(C00)
+    assert part(plan, "atmosphere").stored_run_key == atmos_key(C06)
+    world.run = om_run(C00, C06)  # nothing new since the upgrade
+    plan = plan_sync(None, settings=settings(), now=T0, known=legacy(C00, C06))
+    assert not plan.due and parts(plan) == {"wave": "current", "atmosphere": "current"}
+
+
+def test_component_part_names_the_domains_of_a_component() -> None:
+    from app.services.forecasts.carry import component_part
+
+    whole = om_run(C00, C06).run_key
+    assert component_part(whole, wave_key(C06)) == wave_key(C00)
+    assert component_part(whole, atmos_key(C00)) == atmos_key(C06)
+    assert component_part(wave_key(C00), wave_key(C06)) == wave_key(C00)  # same domains
+    assert component_part(wave_key(C00), "gfswave025:2026102700|ecmwf:2026102700") is None
+    assert component_part("demo:2026102700", "demo:2026102706") == "demo:2026102700"
+    assert component_part("demo:2026102700", "demo:2026102700+wave1") is None
+    assert component_part(None, wave_key(C00)) is None
+
+
 def test_a_metadata_timeout_is_unknown_and_not_due(world: World) -> None:
     world.run = TimeoutError("meta.json timed out")
     plan = plan_sync(None, settings=settings(), now=T0, known=stored(C00, C00))

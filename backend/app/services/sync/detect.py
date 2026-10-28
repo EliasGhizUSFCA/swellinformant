@@ -49,6 +49,7 @@ from app.models.enums import ForecastRunStatus
 from app.models.sync import SyncRun
 from app.services.forecasts.base import ATMOSPHERE, WAVE, RunInfo
 from app.services.forecasts.carry import (
+    component_part,
     domain_cycles,
     domains_behind,
     newest_cycle,
@@ -546,8 +547,12 @@ def _observe(probe: Probe, known: KnownRuns, now: datetime, split: bool = False)
             available=str(run.component_keys.get(component) or run.run_key),
             stored=known.stored.get(stored_key(probe.source_code, component)),
         )
-        if part.stored is None and whole is not None and whole == run.run_key:
-            part.stored = part.available  # stored before component keys were recorded
+        if part.stored is None and whole is not None:
+            # Stored before component keys were recorded (Upgrade 4): the part of the whole
+            # run key that names this component's model domains.
+            part.stored = (
+                part.available if whole == run.run_key else component_part(whole, part.available)
+            )
         part.stored_cycle = newest_cycle(part.stored)
         inits = _inits(run, component)
         part.cycle, part.complete = max(inits), min(inits) == max(inits)

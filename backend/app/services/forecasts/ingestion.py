@@ -685,6 +685,12 @@ def refresh_source(
         else dict.fromkeys(COMPONENTS, available.run_key)
     )
     stored_keys = {c: stored[c].run_key for c in COMPONENTS if c in stored}
+    if split:
+        # A run stored before component keys existed (Upgrade 4) names both components in
+        # one key: compare each component with the part naming its own model domains.
+        stored_keys = {
+            c: carry.component_part(key, avail[c]) or key for c, key in stored_keys.items()
+        }
     wanted = set(due) & COMPONENTS
     changed = {
         c
@@ -718,12 +724,21 @@ def refresh_source(
     if retry:
         wanted_spots = {int(s) for s in retry_spot_ids or ()}
         points = [p for p in points if p.spot_id in wanted_spots]
+
+    def served_keys(run_key: str, details: Mapping[str, Any] | None) -> dict[str, str]:
+        keys = carry.run_component_keys(details)
+        if keys or not split:
+            return keys
+        # Stored before component keys existed: the parts of its run key, by model domain.
+        parts = {c: carry.component_part(run_key, target[c]) for c in COMPONENTS}
+        return {c: k for c, k in parts.items() if k}
+
     runs = {
-        rid: (sid, carry.run_component_keys(details))
-        for rid, sid, details in db.execute(
-            select(ForecastRun.id, ForecastRun.source_id, ForecastRun.details).where(
-                ForecastRun.id.in_(sorted(set(serving.values())))
-            )
+        rid: (sid, served_keys(str(key), details))
+        for rid, sid, key, details in db.execute(
+            select(
+                ForecastRun.id, ForecastRun.source_id, ForecastRun.run_key, ForecastRun.details
+            ).where(ForecastRun.id.in_(sorted(set(serving.values()))))
         ).all()
     }
     groups: dict[frozenset[str], list[SpotPoint]] = {}
@@ -801,11 +816,15 @@ def refresh_source(
     for c in (WAVE, ATMOSPHERE):
         if c in carried and c in stored:
             comp = stored[c]
-            refs += [
+            own = [
                 ModelRunRef(d.model, d.init_time, d.available_at, c)
                 for d in comp.domains
                 if d.init_time is not None
             ]
+            if not own and comp.init_time is not None:
+                # A run stored before components existed lists no domains per component.
+                own = [ModelRunRef(comp.model or c, comp.init_time, comp.available_at, c)]
+            refs += own
             inits[c] = comp.init_time or _component_init(available, c)
         else:
             refs += _component_refs(available, c) if split else []

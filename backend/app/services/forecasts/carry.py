@@ -107,6 +107,21 @@ def older_than_stored(available: str | None, stored: str | None) -> bool:
     return domains_behind(available, stored)
 
 
+def component_part(run_key: str | None, like: str | None) -> str | None:
+    """The part of a whole-source run key that names the model domains of the component key
+    ``like``, in ``like``'s order (a run stored before component keys existed, Upgrade 4:
+    ``"gfswave016:2026102700|gfs013:2026102706"`` with ``like`` ``"gfswave016:2026102712"``
+    gives ``"gfswave016:2026102700"``). ``run_key`` itself when it names exactly ``like``'s
+    domains; None when it does not name all of them, or either is not a multi-domain key."""
+    have, want = domain_cycles(run_key), domain_cycles(like)
+    if not run_key or not have or not want or not want.keys() <= have.keys():
+        return None
+    if want.keys() == have.keys():
+        return run_key
+    parts = {part.rpartition(":")[0]: part for part in run_key.split("|")}
+    return "|".join(parts[name] for name in want)
+
+
 def combined_run_key(keys: Mapping[str, str]) -> str:
     """The run key of data made of these component keys: one key when both components share
     it, else ``"<wave>|<atmosphere>"`` (the Open-Meteo order: wave domains first)."""

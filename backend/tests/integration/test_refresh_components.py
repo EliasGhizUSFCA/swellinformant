@@ -287,6 +287,46 @@ def test_a_one_component_update_keeps_the_other_components_values_and_model_time
     assert r2.predictions_computed_at is not None
 
 
+def test_a_run_stored_before_components_existed_is_split_by_its_model_domains(
+    db: Session, few_spots: list[str], split: type[SplitDemo]
+) -> None:
+    """The upgrade path: the stored run predates component keys (Upgrade 4) and no version
+    exists yet. Each component's stored key is the part of the run key that names its own
+    model domains, so a new atmosphere run is the only new component, and the waves are
+    carried from that run with their own model time; an older wave run is never counted as
+    new, and the refresh never fails for want of a carried key."""
+    split.cycles["atmosphere"] = C06  # the stored run: waves of 00Z, wind of 06Z
+    assert refresh()["status"] == "success"
+    r1 = run_of(db, published(db))
+    # The run as Upgrade 4 stored it: no component keys or parts, untagged model runs.
+    legacy = {k: v for k, v in r1.details.items() if k not in ("component_keys", "components")}
+    legacy["model_runs"] = [
+        {k: v for k, v in m.items() if k != "component"} for m in legacy["model_runs"]
+    ]
+    r1.details = legacy
+    db.execute(text("DELETE FROM forecast_versions"))
+    db.commit()
+    state.get_redis().delete(state.KNOWN_KEY)
+    fetches = len(split.calls)
+    split.cycles["atmosphere"] = datetime(2026, 10, 27, 12, tzinfo=UTC)
+    out = refresh()
+    assert out["status"] == "success", out
+    plan = {c["component"]: c["state"] for c in out["plan"]["components"] if c["kind"] == "spots"}
+    assert plan == {"wave": "current", "atmosphere": "new"}
+    assert split.calls[fetches:] == [(sorted(few_spots), frozenset({"atmosphere"}))]
+    v2 = published(db)
+    r2 = run_of(db, v2)
+    assert (v2.wave_model_run, v2.wind_model_run) == (C00, datetime(2026, 10, 27, 12, tzinfo=UTC))
+    assert r2.wave_model_run_at == C00 and v2.components["wave"]["changed"] is False
+    assert v2.components["wave"]["run_key"] == "demo-wave:2026102700"
+    assert r2.details["components"]["wave"]["carried_from_run_id"] == r1.id
+    assert {m["component"]: m["init_time"] for m in r2.details["model_runs"]} == {
+        "wave": C00.isoformat(),
+        "atmosphere": datetime(2026, 10, 27, 12, tzinfo=UTC).isoformat(),
+    }
+    assert differing(db, r1.id, r2.id, COMPONENT_FIELDS["wave"]) == 0
+
+
 def test_a_carried_component_keeps_its_own_extra_keys(
     db: Session, few_spots: list[str], split: type[SplitDemo]
 ) -> None:
