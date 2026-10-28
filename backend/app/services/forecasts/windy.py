@@ -398,8 +398,9 @@ class ModelRunState:
         return self.runs.get(self.latest) if self.latest else None
 
     def observe(self, full: str, now: datetime) -> SeenRun:
-        """Record a sentinel answer: a known fingerprint keeps its first label (an older one
-        seen again stays older, so it is never new); a new one becomes the latest run."""
+        """Record a sentinel answer: a known fingerprint keeps its first label and does not
+        become the latest again (an older one seen again is never new); a new one becomes the
+        latest run."""
         self.checked_at = now
         if full in self.runs:
             return self.runs[full]
@@ -817,7 +818,12 @@ class WindyProvider(ForecastProvider):
                 self._failure(provider_manager.UNAVAILABLE, str(exc))
                 raise
             state = state or ModelRunState(model)
-            seen[component] = state.observe(fingerprint(model, data), now)
+            observed = state.observe(fingerprint(model, data), now)
+            # A known older fingerprint answered again (a lagging Windy server) is never the
+            # available run: the newest one seen stays it. Its estimated cycle can equal the
+            # newest one's, and the sync cannot order two fingerprints of the same cycle, so
+            # offering it would refetch and publish older data as a new version.
+            seen[component] = state.latest_run() or observed
             self.state.save(state)
             probed = True
         if probed:

@@ -375,7 +375,7 @@ def test_a_new_wave_run_changes_only_the_wave_key() -> None:
     assert second.atmosphere_model_run_at == datetime(2026, 10, 27, 0, tzinfo=UTC)  # original
 
 
-def test_an_older_fingerprint_seen_again_keeps_its_older_label() -> None:
+def test_an_older_fingerprint_seen_again_is_never_offered_as_the_run() -> None:
     state = {"shift": 0.0}
     server = WindyServer(wave=lambda b: wave_body(shift=state["shift"]))
     p = provider(server)
@@ -384,7 +384,34 @@ def test_an_older_fingerprint_seen_again_keeps_its_older_label() -> None:
     new = p.current_run(NOW + timedelta(hours=6)).component_keys[WAVE]
     state["shift"] = 0.0  # a lagging Windy server answers the previous run again
     back = p.current_run(NOW + timedelta(hours=7)).component_keys[WAVE]
-    assert back == old and back != new  # the sync's monotonic rule never takes it as new
+    assert len(server.calls) == 6  # the check was due and was sent
+    assert back == new and back != old  # the newest run seen stays the available run
+    stored = json.loads(str(get_redis().get("windy:run-state:v1:gfsWave")))
+    assert stored["latest"] == fingerprint(GFS_WAVE, wave_body(shift=0.3))
+    assert stored["runs"].keys() == {
+        fingerprint(GFS_WAVE, wave_body()),
+        fingerprint(GFS_WAVE, wave_body(shift=0.3)),
+    }
+
+
+def test_an_older_fingerprint_of_the_same_estimated_cycle_never_comes_back() -> None:
+    """Two fingerprints within one cycle (Windy re-processed it): their keys name the same
+    cycle, so the sync's monotonic rule (newest cycle stamp) cannot tell that the first one
+    is older. A lagging answer with it must not be offered again: it would be refetched and
+    published as a new version with older data."""
+    state = {"shift": 0.0}
+    server = WindyServer(wave=lambda b: wave_body(shift=state["shift"]))
+    p = provider(server)
+    first = p.current_run(NOW).component_keys[WAVE]
+    state["shift"] = 0.1
+    second = p.current_run(NOW + timedelta(hours=1)).component_keys[WAVE]
+    a, b = parse_key_part(first), parse_key_part(second)
+    assert a is not None and b is not None and a[2] == b[2]  # the same estimated cycle
+    assert first != second
+    state["shift"] = 0.0
+    again = p.current_run(NOW + timedelta(hours=1, minutes=20)).component_keys[WAVE]
+    assert len(server.calls) == 6
+    assert again == second
 
 
 @pytest.mark.parametrize(
