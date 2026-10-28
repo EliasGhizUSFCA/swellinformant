@@ -18,7 +18,7 @@ from app.schemas.health import OverallStatus, Severity
 Component = Literal["atmosphere", "wave"]
 
 
-class ProviderHealthOut(BaseModel):
+class AdminProviderHealthOut(BaseModel):
     """A provider's recorded health (the provider manager, when it records any)."""
 
     provider: str
@@ -33,7 +33,7 @@ class ProviderHealthOut(BaseModel):
     blocking: bool = False
 
 
-class ActiveProviderOut(BaseModel):
+class AdminActiveProviderOut(BaseModel):
     primary: str = Field(description="The provider a refresh builds now")
     providers: list[str]
     configured: list[str] = Field(description="What the settings select")
@@ -45,16 +45,16 @@ class ActiveProviderOut(BaseModel):
     fallback_from: str | None = Field(None, description="The provider the fallback stands in for")
     fallback_until: datetime | None = None
     reasons: list[str] = []
-    health: list[ProviderHealthOut] = []
+    health: list[AdminProviderHealthOut] = []
 
 
-class DomainOut(BaseModel):
+class AdminDomainOut(BaseModel):
     model: str
     init_time: datetime | None = None
     available_at: datetime | None = None
 
 
-class ComponentFreshnessOut(BaseModel):
+class AdminComponentFreshnessOut(BaseModel):
     """The model run the published version serves for one component, and when the next
     one is expected."""
 
@@ -86,23 +86,23 @@ class ComponentFreshnessOut(BaseModel):
     expected_next_at: datetime | None = None
     late_after: datetime | None = None
     late: bool = False
-    domains: list[DomainOut] = []
+    domains: list[AdminDomainOut] = []
 
 
-class EventOut(BaseModel):
+class AdminEventOut(BaseModel):
     at: datetime | None = None
     detail: str | None = None
     version_id: int | None = None
 
 
-class VersionCountsOut(BaseModel):
+class AdminVersionCountsOut(BaseModel):
     total: int
     updated: int
     stale: int
     failed: int
 
 
-class PublishedVersionOut(BaseModel):
+class AdminPublishedVersionOut(BaseModel):
     id: int
     published_at: datetime | None = None
     age_minutes: float | None = None
@@ -115,10 +115,10 @@ class PublishedVersionOut(BaseModel):
     wave_model: str | None = None
     wave_model_run: datetime | None = None
     wave_run_estimated: bool = False
-    counts: VersionCountsOut
+    counts: AdminVersionCountsOut
 
 
-class StaleSpotOut(BaseModel):
+class AdminStaleSpotOut(BaseModel):
     spot_id: int
     slug: str | None = None
     name: str | None = None
@@ -129,13 +129,13 @@ class StaleSpotOut(BaseModel):
     error: str | None = Field(None, description="The failed refresh's redacted error")
 
 
-class FailedRequestOut(BaseModel):
+class AdminFailedRequestOut(BaseModel):
     provider: str = Field(description="Forecast source code or flight provider")
     status: str = Field(description="HTTP status, or 'failed' for a failed flight search")
     count: int
 
 
-class ProviderRequestsOut(BaseModel):
+class AdminProviderRequestsOut(BaseModel):
     source: str
     provider: str | None = None
     runs: int
@@ -147,39 +147,39 @@ class ProviderRequestsOut(BaseModel):
     failed_requests: int
 
 
-class UsageWindowOut(BaseModel):
+class AdminUsageWindowOut(BaseModel):
     used: float | None = Field(None, description="None: the counter could not be read")
     limit: float | None = None
     fraction: float | None = None
     resets_at: datetime | None = None
 
 
-class OpenMeteoUsageOut(BaseModel):
-    minute: UsageWindowOut
-    hour: UsageWindowOut
-    day: UsageWindowOut
-    month: UsageWindowOut
+class AdminOpenMeteoUsageOut(BaseModel):
+    minute: AdminUsageWindowOut
+    hour: AdminUsageWindowOut
+    day: AdminUsageWindowOut
+    month: AdminUsageWindowOut
     available: bool = Field(description="False: Redis could not be read")
 
 
-class WindyUsageOut(BaseModel):
-    day: UsageWindowOut
+class AdminWindyUsageOut(BaseModel):
+    day: AdminUsageWindowOut
     available: bool
     counted: bool = Field(description="False: this build does not count Windy requests")
 
 
-class FlightUsageOut(BaseModel):
+class AdminFlightUsageOut(BaseModel):
     provider: str
     today: int = Field(description="Provider searches stored today (UTC)")
     per_provider: dict[str, int] = {}
     failed_today: int = 0
-    quota: UsageWindowOut | None = Field(
+    quota: AdminUsageWindowOut | None = Field(
         None, description="FLIGHT_DAILY_QUOTA counter (None: the demo provider has no quota)"
     )
     user_daily_quota: int
 
 
-class EmailUsageOut(BaseModel):
+class AdminEmailUsageOut(BaseModel):
     provider: str
     today: int
     account: int
@@ -187,17 +187,17 @@ class EmailUsageOut(BaseModel):
     failed: int
 
 
-class ApiUsageOut(BaseModel):
+class AdminApiUsageOut(BaseModel):
     checked_at: datetime
     alert_fraction: float = Field(description="QUOTA_ALERT_FRACTION")
-    open_meteo: OpenMeteoUsageOut
-    windy: WindyUsageOut
-    flights: FlightUsageOut
-    emails: EmailUsageOut
-    requests_24h: list[ProviderRequestsOut] = []
+    open_meteo: AdminOpenMeteoUsageOut
+    windy: AdminWindyUsageOut
+    flights: AdminFlightUsageOut
+    emails: AdminEmailUsageOut
+    requests_24h: list[AdminProviderRequestsOut] = []
 
 
-class DurationStatsOut(BaseModel):
+class AdminDurationStatsOut(BaseModel):
     samples: int = 0
     last: float | None = None
     avg: float | None = None
@@ -206,7 +206,7 @@ class DurationStatsOut(BaseModel):
     max: float | None = None
 
 
-class StageTimeOut(BaseModel):
+class AdminStageTimeOut(BaseModel):
     stage: str
     runs: int
     avg_ms: float
@@ -215,35 +215,35 @@ class StageTimeOut(BaseModel):
     avg_cpu_s: float | None = None
 
 
-class ProcessingTimeOut(BaseModel):
+class AdminProcessingTimeOut(BaseModel):
     refreshes: int = Field(description="Finished refresh syncs in the sample (newest 20 syncs)")
-    total_ms: DurationStatsOut
-    stages: list[StageTimeOut] = []
-    detected_to_acquired_s: DurationStatsOut
-    acquired_to_scored_s: DurationStatsOut
-    scored_to_published_s: DurationStatsOut
+    total_ms: AdminDurationStatsOut
+    stages: list[AdminStageTimeOut] = []
+    detected_to_acquired_s: AdminDurationStatsOut
+    acquired_to_scored_s: AdminDurationStatsOut
+    scored_to_published_s: AdminDurationStatsOut
 
 
-class LatencyOut(BaseModel):
-    upstream_to_publication_s: DurationStatsOut = Field(
+class AdminLatencyOut(BaseModel):
+    upstream_to_publication_s: AdminDurationStatsOut = Field(
         description="upstream_available_at -> published_at of the recent refresh versions"
     )
-    publication_to_frontend_s: DurationStatsOut = Field(
+    publication_to_frontend_s: AdminDurationStatsOut = Field(
         description="Browser 'seen' reports after a version change (newest 200 in Redis)"
     )
-    first_served_s: DurationStatsOut = Field(
+    first_served_s: AdminDurationStatsOut = Field(
         description="published_at -> first served by the version endpoint (newest versions)"
     )
 
 
-class StageOut(BaseModel):
+class AdminStageOut(BaseModel):
     name: str
     status: str
     duration_ms: int
     cpu_s: float | None = None
 
 
-class RefreshJobOut(BaseModel):
+class AdminRefreshJobOut(BaseModel):
     id: int
     trigger: str
     status: str
@@ -253,12 +253,12 @@ class RefreshJobOut(BaseModel):
     finished_at: datetime | None = None
     duration_ms: int | None = None
     published_at: datetime | None = None
-    stages: list[StageOut] = []
+    stages: list[AdminStageOut] = []
     version_ids: list[int] = []
     error: str | None = Field(None, description="Redacted, shortened")
 
 
-class VersionRowOut(BaseModel):
+class AdminVersionRowOut(BaseModel):
     id: int
     status: str
     kind: str | None = None
@@ -277,18 +277,18 @@ class VersionRowOut(BaseModel):
     upstream_to_publication_s: float | None = None
 
 
-class SchedulerCheckOut(BaseModel):
+class AdminSchedulerCheckOut(BaseModel):
     source: str
     at: datetime | None = None
 
 
-class SchedulerOut(BaseModel):
+class AdminSchedulerOut(BaseModel):
     expected_minutes: int = Field(description="REFRESH_SCHEDULER_EXPECTED_MINUTES (0: off)")
     enabled: bool
     refresh_enabled: bool = Field(description="FORECAST_REFRESH_ENABLED")
     last_check_at: datetime | None = None
     last_check_by: str | None = None
-    checks: list[SchedulerCheckOut] = []
+    checks: list[AdminSchedulerCheckOut] = []
     silent: bool
 
 
@@ -303,24 +303,24 @@ class AdminFreshnessOut(BaseModel):
     checked_at: datetime
     status: OverallStatus = Field(description="Over the admin and the public problems")
     version_id: int | None = Field(None, description="The published forecast version")
-    active_provider: ActiveProviderOut
-    atmosphere: ComponentFreshnessOut
-    wave: ComponentFreshnessOut
-    last_detected_model_update: EventOut
-    last_successful_acquisition: EventOut
-    last_successful_scoring: EventOut
-    last_published_version: PublishedVersionOut | None = None
+    active_provider: AdminActiveProviderOut
+    atmosphere: AdminComponentFreshnessOut
+    wave: AdminComponentFreshnessOut
+    last_detected_model_update: AdminEventOut
+    last_successful_acquisition: AdminEventOut
+    last_successful_scoring: AdminEventOut
+    last_published_version: AdminPublishedVersionOut | None = None
     spots_updated: int | None = None
-    stale_spots: list[StaleSpotOut] = []
-    failed_requests: list[FailedRequestOut] = Field(
+    stale_spots: list[AdminStaleSpotOut] = []
+    failed_requests: list[AdminFailedRequestOut] = Field(
         [], description="Last 24 h, by provider and status"
     )
-    api_usage: ApiUsageOut
-    processing_time: ProcessingTimeOut
-    latency: LatencyOut
-    refresh_jobs: list[RefreshJobOut] = []
-    versions: list[VersionRowOut] = []
-    scheduler: SchedulerOut
+    api_usage: AdminApiUsageOut
+    processing_time: AdminProcessingTimeOut
+    latency: AdminLatencyOut
+    refresh_jobs: list[AdminRefreshJobOut] = []
+    versions: list[AdminVersionRowOut] = []
+    scheduler: AdminSchedulerOut
     problems: list[AdminProblemOut] = Field([], description="The admin-only problems (D12)")
     health_problems: list[AdminProblemOut] = Field(
         [], description="The public data-health report's problems"

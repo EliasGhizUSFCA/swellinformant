@@ -39,33 +39,33 @@ from app.models import ForecastRun, ForecastSource
 from app.models.sync import SyncRun
 from app.models.version import ForecastVersion
 from app.schemas.admin import (
-    ActiveProviderOut,
+    AdminActiveProviderOut,
+    AdminApiUsageOut,
+    AdminComponentFreshnessOut,
+    AdminDomainOut,
+    AdminDurationStatsOut,
+    AdminEmailUsageOut,
+    AdminEventOut,
+    AdminFailedRequestOut,
+    AdminFlightUsageOut,
     AdminFreshnessOut,
+    AdminLatencyOut,
+    AdminOpenMeteoUsageOut,
     AdminProblemOut,
-    ApiUsageOut,
-    ComponentFreshnessOut,
-    DomainOut,
-    DurationStatsOut,
-    EmailUsageOut,
-    EventOut,
-    FailedRequestOut,
-    FlightUsageOut,
-    LatencyOut,
-    OpenMeteoUsageOut,
-    ProcessingTimeOut,
-    ProviderHealthOut,
-    ProviderRequestsOut,
-    PublishedVersionOut,
-    RefreshJobOut,
-    SchedulerCheckOut,
-    SchedulerOut,
-    StageOut,
-    StageTimeOut,
-    StaleSpotOut,
-    UsageWindowOut,
-    VersionCountsOut,
-    VersionRowOut,
-    WindyUsageOut,
+    AdminProcessingTimeOut,
+    AdminProviderHealthOut,
+    AdminProviderRequestsOut,
+    AdminPublishedVersionOut,
+    AdminRefreshJobOut,
+    AdminSchedulerCheckOut,
+    AdminSchedulerOut,
+    AdminStageOut,
+    AdminStageTimeOut,
+    AdminStaleSpotOut,
+    AdminUsageWindowOut,
+    AdminVersionCountsOut,
+    AdminVersionRowOut,
+    AdminWindyUsageOut,
 )
 from app.services import health
 from app.services.forecasts import versions
@@ -97,11 +97,11 @@ def percentile(values: Sequence[float], q: float) -> float | None:
     return ordered[rank - 1]
 
 
-def duration_stats(values: Sequence[float], *, last: float | None = None) -> DurationStatsOut:
+def duration_stats(values: Sequence[float], *, last: float | None = None) -> AdminDurationStatsOut:
     """``values`` newest first (``last`` defaults to the first)."""
     if not values:
-        return DurationStatsOut()
-    return DurationStatsOut(
+        return AdminDurationStatsOut()
+    return AdminDurationStatsOut(
         samples=len(values),
         last=round(values[0] if last is None else last, 3),
         avg=round(sum(values) / len(values), 3),
@@ -122,14 +122,14 @@ def _gap(start: datetime | None, end: datetime | None) -> float | None:
 
 
 # --------------------------------------------------------------------------- blocks
-def _active_provider(selection: Mapping[str, Any]) -> ActiveProviderOut:
+def _active_provider(selection: Mapping[str, Any]) -> AdminActiveProviderOut:
     providers = [str(p) for p in selection.get("providers") or []]
     health_rows = []
     for name, h in (selection.get("health") or {}).items():
         if not isinstance(h, Mapping):
             continue
         health_rows.append(
-            ProviderHealthOut(
+            AdminProviderHealthOut(
                 provider=str(h.get("provider") or name),
                 last_success_at=health.as_datetime(h.get("last_success_at")),
                 last_failure_at=health.as_datetime(h.get("last_failure_at")),
@@ -140,7 +140,7 @@ def _active_provider(selection: Mapping[str, Any]) -> ActiveProviderOut:
                 blocking=bool(h.get("blocking")),
             )
         )
-    return ActiveProviderOut(
+    return AdminActiveProviderOut(
         primary=str(selection.get("primary") or (providers[0] if providers else "")),
         providers=providers,
         configured=[str(p) for p in selection.get("configured") or providers],
@@ -156,9 +156,11 @@ def _active_provider(selection: Mapping[str, Any]) -> ActiveProviderOut:
     )
 
 
-def _component(t: health.ComponentTiming, current: ForecastVersion | None) -> ComponentFreshnessOut:
+def _component(
+    t: health.ComponentTiming, current: ForecastVersion | None
+) -> AdminComponentFreshnessOut:
     served = versions.component_runs_of(current).get(t.component) if current else None
-    return ComponentFreshnessOut(
+    return AdminComponentFreshnessOut(
         component=t.component,  # type: ignore[arg-type]  # ATMOSPHERE or WAVE
         model=t.model,
         run_key=t.run_key,
@@ -178,7 +180,7 @@ def _component(t: health.ComponentTiming, current: ForecastVersion | None) -> Co
         late_after=t.late_after,
         late=t.late,
         domains=[
-            DomainOut(model=d.model, init_time=d.init_time, available_at=d.available_at)
+            AdminDomainOut(model=d.model, init_time=d.init_time, available_at=d.available_at)
             for d in (served.domains if served else ())
         ],
     )
@@ -199,9 +201,9 @@ def _is_refresh_version(version: ForecastVersion) -> bool:
     return kind != "retry" and bool(_changed(version))
 
 
-def _version_rows(history: Sequence[ForecastVersion]) -> list[VersionRowOut]:
+def _version_rows(history: Sequence[ForecastVersion]) -> list[AdminVersionRowOut]:
     return [
-        VersionRowOut(
+        AdminVersionRowOut(
             id=int(v.id),
             status=v.status,
             kind=(v.timings or {}).get("kind"),
@@ -225,11 +227,11 @@ def _version_rows(history: Sequence[ForecastVersion]) -> list[VersionRowOut]:
     ]
 
 
-def _published(version: ForecastVersion | None, now: datetime) -> PublishedVersionOut | None:
+def _published(version: ForecastVersion | None, now: datetime) -> AdminPublishedVersionOut | None:
     if version is None:
         return None
     age = _gap(version.published_at, now)
-    return PublishedVersionOut(
+    return AdminPublishedVersionOut(
         id=int(version.id),
         published_at=version.published_at,
         age_minutes=None if age is None else round(age / 60, 1),
@@ -242,7 +244,7 @@ def _published(version: ForecastVersion | None, now: datetime) -> PublishedVersi
         wave_model=version.wave_model,
         wave_model_run=version.wave_model_run,
         wave_run_estimated=version.wave_run_estimated,
-        counts=VersionCountsOut(
+        counts=AdminVersionCountsOut(
             total=version.spots_total,
             updated=version.spots_updated,
             stale=version.spots_stale,
@@ -274,7 +276,7 @@ def _recent_runs(db: Session, codes: Iterable[str]) -> list[tuple[str, Any, Any,
 
 def _events(
     history: Sequence[ForecastVersion], runs: Sequence[tuple[str, Any, Any, Any]]
-) -> tuple[EventOut, EventOut, EventOut]:
+) -> tuple[AdminEventOut, AdminEventOut, AdminEventOut]:
     """(last detected model update, last successful acquisition, last successful scoring):
     from the versions, else (no version yet) from the forecast runs."""
     detected = max(
@@ -299,9 +301,11 @@ def _events(
         return f"{v.provider or v.source_code}: {changed} (version {v.id})"
 
     detected_out = (
-        EventOut(at=detected.detected_at, detail=describe(detected), version_id=int(detected.id))
+        AdminEventOut(
+            at=detected.detected_at, detail=describe(detected), version_id=int(detected.id)
+        )
         if detected is not None
-        else EventOut()
+        else AdminEventOut()
     )
     run_done = max(
         ((code, done) for code, status, done, _ in runs if status in USABLE and done is not None),
@@ -314,30 +318,30 @@ def _events(
         default=None,
     )
     if acquired is not None:
-        acquired_out = EventOut(
+        acquired_out = AdminEventOut(
             at=acquired.acquired_at, detail=describe(acquired), version_id=int(acquired.id)
         )
     elif run_done is not None:
-        acquired_out = EventOut(at=run_done[1], detail=f"{run_done[0]} (forecast run)")
+        acquired_out = AdminEventOut(at=run_done[1], detail=f"{run_done[0]} (forecast run)")
     else:
-        acquired_out = EventOut()
+        acquired_out = AdminEventOut()
     if scored is not None:
-        scored_out = EventOut(
+        scored_out = AdminEventOut(
             at=scored.scored_at, detail=describe(scored), version_id=int(scored.id)
         )
     elif run_scored is not None:
-        scored_out = EventOut(at=run_scored[1], detail=f"{run_scored[0]} (forecast run)")
+        scored_out = AdminEventOut(at=run_scored[1], detail=f"{run_scored[0]} (forecast run)")
     else:
-        scored_out = EventOut()
+        scored_out = AdminEventOut()
     return detected_out, acquired_out, scored_out
 
 
 def _window(
     used: Any, limit: Any, resets_at: Any, fraction_of: float | None = None
-) -> UsageWindowOut:
+) -> AdminUsageWindowOut:
     value = float(used) if isinstance(used, int | float) and not isinstance(used, bool) else None
     cap = float(limit) if isinstance(limit, int | float) and not isinstance(limit, bool) else None
-    return UsageWindowOut(
+    return AdminUsageWindowOut(
         used=value,
         limit=cap,
         fraction=round(value / cap, 4) if value is not None and cap else None,
@@ -345,29 +349,29 @@ def _window(
     )
 
 
-def _api_usage(usage: Mapping[str, Any], settings: Settings) -> ApiUsageOut:
+def _api_usage(usage: Mapping[str, Any], settings: Settings) -> AdminApiUsageOut:
     om = usage.get("open_meteo") or {}
     limits, resets = om.get("limits") or {}, om.get("resets_at") or {}
     windy = usage.get("windy") or {}
     flights = usage.get("flights") or {}
     fq = flights.get("quota")
     emails = usage.get("emails") or {}
-    return ApiUsageOut(
+    return AdminApiUsageOut(
         checked_at=health.as_datetime(usage.get("checked_at")) or utcnow(),
         alert_fraction=settings.quota_alert_fraction,
-        open_meteo=OpenMeteoUsageOut(
+        open_meteo=AdminOpenMeteoUsageOut(
             **{
                 w: _window(om.get(w), limits.get(w), resets.get(w))
                 for w in ("minute", "hour", "day", "month")
             },
             available=bool(om.get("available")),
         ),
-        windy=WindyUsageOut(
+        windy=AdminWindyUsageOut(
             day=_window(windy.get("day"), windy.get("limit"), windy.get("resets_at")),
             available=bool(windy.get("available")),
             counted=bool(windy.get("counted", True)),
         ),
-        flights=FlightUsageOut(
+        flights=AdminFlightUsageOut(
             provider=str(flights.get("provider") or settings.flight_provider),
             today=int(flights.get("today") or 0),
             per_provider={str(k): int(v) for k, v in (flights.get("per_provider") or {}).items()},
@@ -381,18 +385,18 @@ def _api_usage(usage: Mapping[str, Any], settings: Settings) -> ApiUsageOut:
                 flights.get("user_daily_quota") or settings.flight_user_daily_quota
             ),
         ),
-        emails=EmailUsageOut(
+        emails=AdminEmailUsageOut(
             provider=str(emails.get("provider") or settings.email_provider),
             today=int(emails.get("today") or 0),
             account=int(emails.get("account") or 0),
             alerts=int(emails.get("alerts") or 0),
             failed=int(emails.get("failed") or 0),
         ),
-        requests_24h=[ProviderRequestsOut(**r) for r in usage.get("requests_24h") or []],
+        requests_24h=[AdminProviderRequestsOut(**r) for r in usage.get("requests_24h") or []],
     )
 
 
-def _stages(row: SyncRun) -> list[StageOut]:
+def _stages(row: SyncRun) -> list[AdminStageOut]:
     out = []
     for entry in row.stages or []:
         if not isinstance(entry, dict) or not entry.get("name"):
@@ -400,7 +404,7 @@ def _stages(row: SyncRun) -> list[StageOut]:
         cpu = entry.get("cpu_s")
         try:
             out.append(
-                StageOut(
+                AdminStageOut(
                     name=str(entry["name"]),
                     status=str(entry.get("status") or ""),
                     duration_ms=int(entry.get("duration_ms") or 0),
@@ -421,7 +425,7 @@ def _kinds(row: SyncRun) -> list[str]:
 
 def _refresh_jobs(
     syncs: Sequence[SyncRun], history: Sequence[ForecastVersion]
-) -> list[RefreshJobOut]:
+) -> list[AdminRefreshJobOut]:
     by_sync: dict[int, list[int]] = {}
     for v in history:
         if v.sync_run_id is not None:
@@ -430,7 +434,7 @@ def _refresh_jobs(
     for row in syncs:
         duration = _gap(row.started_at, row.finished_at)
         out.append(
-            RefreshJobOut(
+            AdminRefreshJobOut(
                 id=row.id,
                 trigger=row.trigger,
                 status=row.status,
@@ -448,7 +452,9 @@ def _refresh_jobs(
     return out
 
 
-def _processing(syncs: Sequence[SyncRun], history: Sequence[ForecastVersion]) -> ProcessingTimeOut:
+def _processing(
+    syncs: Sequence[SyncRun], history: Sequence[ForecastVersion]
+) -> AdminProcessingTimeOut:
     """Per-stage durations of the finished refresh syncs among ``syncs`` (newest first),
     their total durations, and the versions' pipeline gaps."""
     done = [
@@ -459,7 +465,7 @@ def _processing(syncs: Sequence[SyncRun], history: Sequence[ForecastVersion]) ->
         and r.finished_at is not None
     ]
     totals = [g * 1000 for r in done if (g := _gap(r.started_at, r.finished_at)) is not None]
-    per_stage: dict[str, list[StageOut]] = {}
+    per_stage: dict[str, list[AdminStageOut]] = {}
     for row in done:
         for stage in _stages(row):
             per_stage.setdefault(stage.name, []).append(stage)
@@ -468,7 +474,7 @@ def _processing(syncs: Sequence[SyncRun], history: Sequence[ForecastVersion]) ->
         ms = [float(e.duration_ms) for e in entries]
         cpus = [e.cpu_s for e in entries if e.cpu_s is not None]
         stages.append(
-            StageTimeOut(
+            AdminStageTimeOut(
                 stage=name,
                 runs=len(entries),
                 avg_ms=round(sum(ms) / len(ms), 1),
@@ -484,7 +490,7 @@ def _processing(syncs: Sequence[SyncRun], history: Sequence[ForecastVersion]) ->
         values = [_gap(getattr(v, start), getattr(v, end)) for v in published]
         return [g for g in values if g is not None]
 
-    return ProcessingTimeOut(
+    return AdminProcessingTimeOut(
         refreshes=len(done),
         total_ms=duration_stats(totals),
         stages=stages,
@@ -494,7 +500,7 @@ def _processing(syncs: Sequence[SyncRun], history: Sequence[ForecastVersion]) ->
     )
 
 
-def _latency(history: Sequence[ForecastVersion]) -> LatencyOut:
+def _latency(history: Sequence[ForecastVersion]) -> AdminLatencyOut:
     published = [v for v in history if v.status in PUBLISHED_STATUSES]
     upstream = [
         g
@@ -508,21 +514,21 @@ def _latency(history: Sequence[ForecastVersion]) -> LatencyOut:
         gap = _gap(v.published_at, served_at)
         if gap is not None:
             first_served.append(gap)
-    return LatencyOut(
+    return AdminLatencyOut(
         upstream_to_publication_s=duration_stats(upstream),
         publication_to_frontend_s=duration_stats(versions.seen_latencies()),
         first_served_s=duration_stats(first_served),
     )
 
 
-def _scheduler(s: health.SchedulerState, settings: Settings) -> SchedulerOut:
-    return SchedulerOut(
+def _scheduler(s: health.SchedulerState, settings: Settings) -> AdminSchedulerOut:
+    return AdminSchedulerOut(
         expected_minutes=s.expected_minutes,
         enabled=s.enabled,
         refresh_enabled=settings.forecast_refresh_enabled,
         last_check_at=s.last_check_at,
         last_check_by=s.last_check_by,
-        checks=[SchedulerCheckOut(source=k, at=v) for k, v in s.checks.items()],
+        checks=[AdminSchedulerCheckOut(source=k, at=v) for k, v in s.checks.items()],
         silent=s.silent,
     )
 
@@ -578,7 +584,7 @@ def freshness_report(
         last_published_version=_published(current, now),
         spots_updated=current.spots_updated if current is not None else None,
         stale_spots=[
-            StaleSpotOut(
+            AdminStaleSpotOut(
                 spot_id=s.spot_id,
                 slug=s.slug,
                 name=s.name,
@@ -588,7 +594,9 @@ def freshness_report(
             )
             for s in inputs.stale
         ],
-        failed_requests=[FailedRequestOut(**r) for r in usage.get("failed_requests_24h") or []],
+        failed_requests=[
+            AdminFailedRequestOut(**r) for r in usage.get("failed_requests_24h") or []
+        ],
         api_usage=_api_usage(usage, settings),
         processing_time=_processing(inputs.syncs, inputs.history),
         latency=_latency(inputs.history),
