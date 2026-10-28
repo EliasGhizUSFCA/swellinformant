@@ -368,7 +368,11 @@ def test_a_regional_airport_with_no_flights_falls_back_to_the_gateway_once(
 
 # --------------------------------------------------------------------------- lead time
 def _short_notice_window(db: Session) -> datetime:
-    swell(db, days=3.5, hours=48)
+    # Nominally 4 days out. The demo swell builds up over the hours before its start (a
+    # Gaussian edge, sigma 8 h), so its surf window can begin up to about half a day
+    # earlier, and daylight can push it later: 3.5-4.6 days ahead, inside the 3-7 day
+    # short-notice band and short of the old 5-day floor whatever the hour the test runs.
+    swell(db, days=4.0, hours=48)
     surf_matches(db)
     return utcnow()
 
@@ -376,7 +380,7 @@ def _short_notice_window(db: Session) -> datetime:
 def test_short_notice_swells_match_by_the_searchs_own_lead_time(
     db: Session, few_spots: list[str], calls: CallLog, make_client: Callable[[], ApiClient]
 ) -> None:
-    """Before Swell 2.0 a swell 3.5 days out never matched (a global 5-day floor); now each
+    """Before Swell 2.0 a swell 4 days out never matched (a global 5-day floor); now each
     search's alert lead time decides, and short-notice trips are flagged and ranked first."""
     client = make_client()
     client.register("soon@example.com")
@@ -390,5 +394,6 @@ def test_short_notice_swells_match_by_the_searchs_own_lead_time(
     rows = db.scalars(select(OpportunityMatch)).all()
     assert [str(m.search_id) for m in rows] == [default.json()["id"]]
     opps = client.get("/api/opportunities").json()
-    assert len(opps) == 1 and opps[0]["short_notice"] is True
+    assert len(opps) == 1
+    assert opps[0]["short_notice"] is True, (opps[0]["lead_days"], opps[0]["window_start"])
     assert 3 <= opps[0]["lead_days"] <= 7

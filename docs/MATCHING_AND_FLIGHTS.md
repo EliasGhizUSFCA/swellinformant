@@ -40,7 +40,7 @@ allows (all spots, chosen spots, or regions/countries; optional break-type filte
    10-day forecast horizon. Existing matches keep updating until the swell passes, so a
    match found at day 8 is still tracked at day 3. Before Swell 2.0 a global 5-day floor hid
    every swell first forecast 3-5 days ahead (the audit's probe: 3.5 and 4.0 days → no
-   match); `tests/integration/test_flight_targeting.py` now matches one 3.5 days out.
+   match); `tests/integration/test_flight_targeting.py` now matches one 4 days out.
 2. **User window.** The event's daylight timesteps are re-filtered with the search's own
    criteria:
    * minimum quality label
