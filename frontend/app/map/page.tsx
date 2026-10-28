@@ -362,6 +362,7 @@ export default function MapPage() {
                 signedIn={!!user}
                 onClose={() => setSelected(null)}
                 links={(snapshot.data ?? nowSnapshot.data)?.attribution_links}
+                freshness={freshnessOf(bySlug.get(selectedSpot.slug))}
                 className="w-full"
               />
             </div>
@@ -428,6 +429,7 @@ export default function MapPage() {
               signedIn={!!user}
               onClose={() => setSelected(null)}
               links={(snapshot.data ?? nowSnapshot.data)?.attribution_links}
+              freshness={freshnessOf(bySlug.get(selectedSpot.slug))}
               className="w-full rounded-b-xl"
             />
           </div>

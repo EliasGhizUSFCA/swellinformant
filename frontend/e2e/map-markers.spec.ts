@@ -116,6 +116,29 @@ test.describe("spot marker arrows and labels", () => {
     await expect(page.getByTestId("panel-spot-name")).toHaveText(/Jeffreys Bay/);
   });
 
+  test("a stale spot gets a dashed ring, a tooltip line and a panel label (synthetic freshness)", async ({ page }) => {
+    const updated = new Date(Date.now() - 7 * 3_600_000 - 600_000).toISOString();
+    // SYNTHETIC: the demo's own snapshot with one spot marked stale, as the serving package's
+    // freshness block says it.
+    await page.route(/\/api\/map\/conditions(\?|$)/, async (route) => {
+      const res = await route.fetch();
+      const body = (await res.json()) as { spots: Array<{ slug: string; freshness?: unknown }> };
+      for (const s of body.spots) if (s.slug === "jeffreys-bay") s.freshness = { version_id: 3, last_updated_at: updated, stale: true, reason: "refresh_failed" };
+      await route.fulfill({ response: res, json: body });
+    });
+    await openMap(page);
+    await setMapView(page, -34, 25, 6);
+    await mapSettled(page);
+    await expect(glyph(page, "jeffreys-bay")).toHaveAttribute("data-stale", "");
+    await page.locator("path.spot-jeffreys-bay").focus();
+    await expect(page.locator(".leaflet-tooltip").filter({ hasText: "Jeffreys Bay" })).toContainText("Forecast last updated 7 hours ago");
+    const c = await markerCentre(page, "jeffreys-bay");
+    await page.mouse.click(c.x, c.y);
+    await expect(page.getByTestId("panel-stale")).toHaveText("Forecast last updated 7 hours ago. Not a current forecast.");
+    // Other spots are not marked.
+    await expect(page.locator('[data-testid="spot-glyph"][data-stale]')).toHaveCount(1);
+  });
+
   test("the legend explains the arrows, the label and the stale ring", async ({ page }) => {
     await openMap(page);
     await page.getByRole("button", { name: "Legend", exact: true }).click();
