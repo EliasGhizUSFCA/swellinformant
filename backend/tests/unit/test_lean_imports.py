@@ -14,7 +14,9 @@ image), dev = all plus the tools.
 (d) pyproject.toml and uv.lock keep that split;
 (e) scripts/check_api_bundle.py attributes installed bytes to distributions correctly;
 (f) with LEAN_PYTHON set to the interpreter of a real lean install (CI makes one from uv.lock),
-    (a) and (c) again with nothing blocked, and `uvicorn app.main:app` serves /api/health;
+    (a) and (c) again with nothing blocked, a demo spot-only refresh (the refresh Function's
+    path, on the test database) publishes a version, and `uvicorn app.main:app` serves
+    /api/health;
 (g) the classic image's entrypoint (backend/docker-entrypoint.sh) starts each role's command,
     the sync role as the job runner, and names an invalid setting without its value.
 
@@ -614,6 +616,42 @@ def test_the_lean_install_scores_a_synthetic_run() -> None:
     imports = f"import importlib\nimportlib.import_module({PREDICT_MODULE!r})\n"
     done = _lean(imports + SYNTHETIC_SCORING + 'print("ok")\n')
     assert_imported(done)
+
+
+@needs_lean_install
+def test_the_lean_install_runs_a_demo_spot_only_refresh(few_spots: list[str], db: Any) -> None:
+    """The refresh Function's whole path in the lean install (what POST /api/internal/refresh
+    runs on Vercel): the free check, a spot-only sync of the demo provider (acquisition,
+    scoring, staging and publishing a forecast version, the version marker) on the test
+    database, with none of the extras installed. The demo data are synthetic by design."""
+    from sqlalchemy import select
+
+    from app.models.version import ForecastVersion
+
+    done = _lean(
+        """
+        import json, sys
+        from app.services.sync import orchestrator
+        out = orchestrator.refresh_check(trigger="http")
+        heavy = sorted(m for m in ("pandas", "sklearn", "scipy", "pyarrow", "joblib", "eccodes")
+                       if m in sys.modules)
+        print(json.dumps({"status": out.get("status"), "version_ids": out.get("version_ids"),
+                          "stages": {s.get("name"): s.get("status") for s in out.get("stages") or []},
+                          "heavy": heavy}, default=str))
+        """
+    )
+    assert done.returncode == 0, done.stderr[-4000:]
+    out = json.loads(done.stdout.strip().splitlines()[-1])
+    assert out["status"] == "success", out
+    assert out["heavy"] == []
+    # Spot-only: the map/GRIB stage never runs here; the spots are acquired and published.
+    assert out["stages"].get("map") in (None, "skipped"), out["stages"]
+    assert out["stages"]["spots"] == "success" and out["stages"]["publish"] == "success"
+    assert out["version_ids"], out
+    db.expire_all()
+    published = db.scalar(select(ForecastVersion).where(ForecastVersion.status == "published"))
+    assert published is not None and published.id in out["version_ids"]
+    assert published.provider == "demo" and published.spots_updated == len(few_spots)
 
 
 @needs_lean_install
