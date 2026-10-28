@@ -571,6 +571,36 @@ describe("after a new version is on screen", () => {
     disconnect();
   });
 
+  it("reports a version id at most once per tab, also when a database started again reuses it", async () => {
+    const { server, store, client } = setup(version(1));
+    const report = vi.fn();
+    vi.spyOn(api, "get").mockImplementation(async (path: string) => spotDetail(Number(new URL(path, "http://x").searchParams.get("v"))));
+    render(
+      <QueryClientProvider client={client}>
+        <ForecastVersionProvider store={store}>
+          <Page />
+        </ForecastVersionProvider>
+      </QueryClientProvider>,
+    );
+    const disconnect = connectStore(store, client, report);
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("41"));
+    // 2, then a database started from scratch publishes 1 and 2 again (later than before):
+    // each is a new version on screen, but the tab reports the id 2 only once.
+    for (const [next, minute] of [
+      [2, 2],
+      [1, 3],
+      [2, 4],
+    ] as const) {
+      server.current = version(next, { published_at: new Date(Date.UTC(2026, 9, 27, 10, minute)).toISOString() });
+      await act(() => vi.advanceTimersByTimeAsync(POLL));
+      await waitFor(() => expect(store.getState().renderedId).toBe(next));
+      await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent(String(40 + next)));
+    }
+    expect(store.getState().changes).toBe(3);
+    expect(report.mock.calls.map((c) => c[0])).toEqual([2, 1]);
+    disconnect();
+  });
+
   it("a stale spot's label leaves the claim to its stale notice; the announcement region stays", async () => {
     const { wrapper } = setup(version(1));
     const { result } = renderHook(() => useForecastVersion(), { wrapper });
