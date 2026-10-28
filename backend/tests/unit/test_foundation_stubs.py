@@ -43,6 +43,8 @@ def test_sync_core_signatures() -> None:
         ("now", KW, None),
         ("known", KW, None),
         ("force", KW, False),
+        # Swell 2.0: check only the component kinds a runner syncs (the refresh endpoint).
+        ("kinds", KW, None),
     ]
     assert params(orchestrator.run_sync) == [
         ("trigger", KW, EMPTY),
