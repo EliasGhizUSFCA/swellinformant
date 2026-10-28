@@ -15,9 +15,11 @@ The Open-Meteo families follow the same rule with Open-Meteo's own publication l
 time between a run's initialisation and its ``last_run_availability_time`` in meta.json,
 read on 2026-10-14: GFS 5.3-6.0 h, ECMWF 7.0-7.2 h) plus OPEN_METEO_AVAILABILITY_WAIT_MINUTES:
 6 + 6 + 0.17 + 3 + 2 = 17.2 h for ``open_meteo_noaa`` and 12 + 7.5 + 0.17 + 3 + 2 = 24.7 h for
-``open_meteo_ecmwf`` (it reads the 00Z and 12Z runs only). Sources without a known cycle
-(demo, Windy) keep FORECAST_STALE_HOURS. A blend is stale when any of its members is stale
-by its own source's rule.
+``open_meteo_ecmwf`` (it reads the 00Z and 12Z runs only). Windy (``windy_gfswave``) follows
+it with GFS's 6 h cycle and the adapter's expected availability lag (windy.EXPECTED_LAG_HOURS,
+an estimate, as its cycle labels are): 6 + 4 + 3 + 2 = 15 h. Sources without a known cycle
+(demo) keep FORECAST_STALE_HOURS. A blend is stale when any of its members is stale by its
+own source's rule.
 
 Which run the public reads serve per spot (:func:`served_runs_by_spot`): the runs of the
 published forecast version (``versions.serving_runs``: a spot whose latest refresh failed is
@@ -51,8 +53,11 @@ from app.services.forecasts.registry import (
     NOAA_GFS_CODE,
     OPEN_METEO_ECMWF_CODE,
     OPEN_METEO_NOAA_CODE,
+    WINDY_CODE,
     configured_source_codes,
 )
+from app.services.forecasts.windy import CYCLE as WINDY_CYCLE
+from app.services.forecasts.windy import EXPECTED_LAG_HOURS as WINDY_LAG_HOURS
 
 USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
 BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: cycle)
@@ -69,6 +74,7 @@ SOURCE_CYCLE_HOURS: dict[str, float] = {
     ECMWF_IFS_CODE: 12.0,
     OPEN_METEO_NOAA_CODE: 6.0,
     OPEN_METEO_ECMWF_CODE: 12.0,  # open_meteo_ecmwf.OpenMeteoEcmwfProvider.cycle_hours
+    WINDY_CODE: WINDY_CYCLE.total_seconds() / 3600.0,  # GFS / GFS-Wave: 6-hourly (D10)
 }
 # Open-Meteo's publication lag (hours from initialisation to availability; meta.json of
 # 2026-10-14, rounded up to the slowest domain of each family).
@@ -94,6 +100,9 @@ def _availability_lag_hours(source_code: str, settings: Settings) -> float:
     if source_code in OPEN_METEO_LAG_HOURS:
         wait = settings.open_meteo_availability_wait_minutes / 60.0
         return OPEN_METEO_LAG_HOURS[source_code] + wait
+    if source_code == WINDY_CODE:
+        # The expected delay after a cycle before Windy serves it (an estimate, windy.py).
+        return WINDY_LAG_HOURS
     return {
         NOAA_GFS_CODE: settings.noaa_availability_lag_hours,
         GEFS_WAVE_CODE: settings.gefs_availability_lag_hours,
