@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any, ClassVar
@@ -35,9 +35,16 @@ from app.models.enums import ForecastRunStatus
 from app.models.sync import SyncRun
 from app.models.version import ForecastVersion
 from app.services.forecasts import ingestion, registry
-from app.services.forecasts.base import COMPONENT_FIELDS, FetchResult, ModelRunRef, RunInfo
+from app.services.forecasts.base import (
+    COMPONENT_FIELDS,
+    FetchResult,
+    ForecastRecord,
+    ModelRunRef,
+    RunInfo,
+)
 from app.services.forecasts.demo import DemoForecastProvider
 from app.services.forecasts.versions import current_version, serving_runs, version_payload
+from app.services.http import RunNotServedError
 from app.services.sync import cli as sync_cli
 from app.services.sync import orchestrator, state
 from app.services.sync import refresh as refresh_module
@@ -59,8 +66,26 @@ class SplitDemo(DemoForecastProvider):
     cycles: ClassVar[dict[str, datetime]] = {}
     calls: ClassVar[list[tuple[list[str], frozenset[str] | None]]] = []
     failing: ClassVar[set[str]] = set()
+    # slug -> f(record, hour index): alters that spot's fetched records (SYNTHETIC).
+    tamper: ClassVar[dict[str, Callable[[ForecastRecord, int], None]]] = {}
     entered: ClassVar[threading.Event | None] = None
     gate: ClassVar[threading.Event | None] = None
+    # Components whose current run the "provider" is still publishing (SYNTHETIC: what
+    # Open-Meteo's meta.json says during the availability wait).
+    publishing: ClassVar[set[str]] = set()
+
+    def read_metas(self) -> dict[str, Any]:
+        return {}
+
+    def ensure_servable(
+        self, run: RunInfo, now: datetime | None = None, components: frozenset[str] | None = None
+    ) -> dict[str, Any]:
+        for ref in run.model_runs:
+            wanted = components is None or ref.component in components
+            busy = ref.component in self.publishing and ref.init_time == self.cycles[ref.component]
+            if wanted and busy:
+                raise RunNotServedError(f"synthetic: the {ref.component} run is being published")
+        return {}
 
     def current_run(self, now: datetime) -> RunInfo:
         wave, wind = self.cycles["wave"], self.cycles["atmosphere"]
@@ -99,6 +124,9 @@ class SplitDemo(DemoForecastProvider):
                         float(rec.values["wind_speed_kmh"] or 0) + wind_hours, 1
                     )
         for p in spots:
+            alter = self.tamper.get(p.slug)
+            for i, rec in enumerate(result.records.get(p.spot_id, []) if alter else []):
+                alter(rec, i)
             if p.slug in self.failing:  # the request for this spot failed (SYNTHETIC)
                 result.records.pop(p.spot_id, None)
                 result.errors[p.spot_id] = "synthetic failure: HTTP 502 for this spot"
@@ -110,6 +138,8 @@ def split(monkeypatch: pytest.MonkeyPatch) -> type[SplitDemo]:
     SplitDemo.cycles = {"wave": C00, "atmosphere": C00}
     SplitDemo.calls = []
     SplitDemo.failing = set()
+    SplitDemo.tamper = {}
+    SplitDemo.publishing = set()
     SplitDemo.entered = SplitDemo.gate = None
 
     def build(name: str, settings: object = None, overrides: Any = None) -> Any:
@@ -365,6 +395,38 @@ def test_a_run_stored_before_components_existed_is_split_by_its_model_domains(
     assert differing(db, r1.id, r2.id, COMPONENT_FIELDS["wave"]) == 0
 
 
+def test_a_component_still_being_published_is_carried_with_its_published_run(
+    db: Session, few_spots: list[str], split: type[SplitDemo]
+) -> None:
+    """New wave and wind runs, but the wind is still being published (as Open-Meteo's GFS
+    0.25 during its availability wait): the waves are refreshed alone and the wind is
+    carried with the run it was published with, never labelled with the newer run."""
+    assert refresh()["status"] == "success"
+    r1 = run_of(db, published(db))
+    split.cycles = {"wave": C06, "atmosphere": C06}
+    split.publishing = {"atmosphere"}
+    out = refresh()
+    assert out["status"] == "success", out
+    plan = {c["component"]: c["state"] for c in out["plan"]["components"] if c["kind"] == "spots"}
+    assert plan == {"wave": "new", "atmosphere": "waiting"}
+    assert split.calls[-1] == (sorted(few_spots), frozenset({"wave"}))
+    v2 = published(db)
+    r2 = run_of(db, v2)
+    assert (v2.wave_model_run, v2.wind_model_run) == (C06, C00)
+    assert (r2.wave_model_run_at, r2.atmosphere_model_run_at) == (C06, C00)
+    assert v2.components["atmosphere"]["run_key"] == "demo-wind:2026102700"
+    assert v2.components["atmosphere"]["changed"] is False
+    assert r2.details["component_keys"]["atmosphere"] == "demo-wind:2026102700"
+    assert differing(db, r1.id, r2.id, COMPONENT_FIELDS["atmosphere"]) == 0
+    # Once the wind run is served, it is refreshed alone.
+    split.publishing = set()
+    out = refresh()
+    assert out["status"] == "success", out
+    assert split.calls[-1] == (sorted(few_spots), frozenset({"atmosphere"}))
+    v3 = published(db)
+    assert (v3.wave_model_run, v3.wind_model_run) == (C06, C06)
+
+
 def test_a_carried_component_keeps_its_own_extra_keys(
     db: Session, few_spots: list[str], split: type[SplitDemo]
 ) -> None:
@@ -516,6 +578,89 @@ def test_47_of_50_spots_publish_the_3_failed_keep_their_run_and_are_retried_alon
     known = state.read_known()
     assert known is not None and known.retries == {}
     assert refresh(now=utcnow() + timedelta(minutes=30))["status"] == "not_due"
+
+
+def test_retries_of_failed_spots_back_off_and_stop_at_the_attempt_limit(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D9 with the counts in the database: each retry that fails again waits longer
+    (5, then 15 minutes), and after SYNC_MAX_ATTEMPTS retries the spot stays stale until
+    the next run."""
+    monkeypatch.setattr(get_settings(), "sync_max_attempts", 2)
+    assert refresh()["status"] == "success"
+    split.failing = {"pipeline"}
+    split.cycles["atmosphere"] = C06
+    assert refresh()["status"] == "partial"
+    staged = published(db).staged_at
+    assert staged is not None
+
+    def retry_state(at: datetime) -> tuple[str, int]:
+        known = state.read_known()
+        assert known is not None
+        plan = plan_sync(None, now=at, known=known)
+        atmos = next(c for c in plan.components if c.component == "atmosphere")
+        return atmos.state, atmos.attempts
+
+    assert retry_state(staged + timedelta(minutes=4)) == ("waiting", 0)
+    first = refresh(now=staged + timedelta(minutes=6))  # the first retry fails again
+    assert first["status"] == "failed", first
+    tried = utcnow()  # the retry run's start (the wall clock)
+    assert retry_state(tried + timedelta(minutes=14)) == ("waiting", 1)  # 15 minutes now
+    assert retry_state(tried + timedelta(minutes=16)) == ("new", 1)
+    second = refresh(now=tried + timedelta(minutes=16))
+    assert second["status"] == "failed", second
+    assert retry_state(utcnow() + timedelta(hours=5)) == ("failed", 2)  # SYNC_MAX_ATTEMPTS
+    fetches = len(split.calls)
+    assert refresh(now=utcnow() + timedelta(hours=5))["status"] == "not_due"
+    assert len(split.calls) == fetches
+    pipeline = spot_ids(db, ["pipeline"])[0]
+    assert published(db).spot_runs[str(pipeline)]["status"] == "stale"
+
+
+def test_a_spot_whose_data_fail_validation_keeps_its_previous_run(
+    db: Session, few_spots: list[str], split: type[SplitDemo]
+) -> None:
+    """D9 validation before staging: a value outside the physical ranges, or fewer than
+    FORECAST_MIN_VALID_FRACTION of the hours with a wave height and a wind speed, fails
+    that spot alone (stale on its previous run, the reason recorded, retried)."""
+    assert refresh()["status"] == "success"
+    r1 = run_of(db, published(db))
+
+    def decoding_error(rec: ForecastRecord, i: int) -> None:
+        if i == 10:
+            rec.values["sig_wave_height_m"] = 45.0  # SYNTHETIC: above the 30 m bound
+
+    def gappy(rec: ForecastRecord, i: int) -> None:
+        if i % 3 == 0:
+            rec.values["sig_wave_height_m"] = None  # SYNTHETIC: a third of the hours
+
+    split.tamper = {"pipeline": decoding_error, "nazare": gappy}
+    split.cycles["wave"] = C06
+    out = refresh()
+    assert out["status"] == "partial", out
+    v2 = published(db)
+    r2 = run_of(db, v2)
+    ids = dict(db.execute(select(SurfSpot.slug, SurfSpot.id).where(SurfSpot.is_active)).all())
+    entries = v2.spot_runs
+    assert entries[str(ids["pipeline"])]["error"] == (
+        "values outside physical ranges: sig_wave_height_m"
+    )
+    assert "FORECAST_MIN_VALID_FRACTION 0.8" in entries[str(ids["nazare"])]["error"]
+    for slug in ("pipeline", "nazare"):
+        assert entries[str(ids[slug])]["status"] == "stale"
+        assert entries[str(ids[slug])]["run_id"] == r1.id
+    assert (v2.spots_updated, v2.spots_stale) == (3, 2)
+    stored = db.scalar(
+        select(func.count()).where(
+            WaveForecast.run_id == r2.id,
+            WaveForecast.spot_id.in_([ids["pipeline"], ids["nazare"]]),
+        )
+    )
+    assert stored == 0  # the failed spots' rows are not in the new run
+    known = state.read_known()
+    assert known is not None and known.retries["demo"].spot_ids == tuple(
+        sorted((ids["pipeline"], ids["nazare"]))
+    )
 
 
 def test_a_whole_component_failure_publishes_nothing_and_keeps_everything_served(

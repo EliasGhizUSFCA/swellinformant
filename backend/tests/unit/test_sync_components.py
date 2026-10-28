@@ -161,6 +161,15 @@ def test_a_component_older_than_stored_is_never_new(world: World) -> None:
     assert "older than the stored run" in (part(plan, "wave").detail or "")
 
 
+def test_a_component_with_a_domain_behind_the_stored_run_is_never_new(world: World) -> None:
+    """A lagging metadata server: GFS 0.13 on the stored cycle, GFS 0.25 one cycle behind
+    and nothing ahead. Same newest cycle as stored, but older: current, not new."""
+    world.run = om_run(C00, C06, atmos025=C00)
+    plan = plan_sync(None, settings=settings(), now=T0, known=stored(C00, C06))
+    assert not plan.due and parts(plan) == {"wave": "current", "atmosphere": "current"}
+    assert "older than the stored run" in (part(plan, "atmosphere").detail or "")
+
+
 def legacy(wave: datetime, atmos: datetime) -> KnownRuns:
     """What Upgrade 4 stored: one whole-source run key, no component keys."""
     return KnownRuns(
