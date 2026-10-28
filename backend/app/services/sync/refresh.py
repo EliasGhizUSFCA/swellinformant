@@ -316,11 +316,9 @@ def stage_refresh_version(
     ]
     failed = {int(s): str(err) for s, err in dict(refresh.get("failed_spots") or {}).items()}
     if not failed:
-        errors = (run.details or {}).get("spot_errors") or {}
-        failed = {
-            int(s): str(next(iter(errors.values()), "the refresh failed"))
-            for s in (run.details or {}).get("failed_spot_ids") or []
-        }
+        from app.services.forecasts.ingestion import stored_spot_errors
+
+        failed = stored_spot_errors(run.details, "the refresh failed")
     spot_runs: dict[int, SpotRun] = {s: SpotRun(run_id, UPDATED, acquired) for s in updated}
     for spot_id, error in failed.items():
         spot_runs.setdefault(spot_id, SpotRun(None, STALE, None, error))

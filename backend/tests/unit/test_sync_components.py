@@ -341,3 +341,20 @@ def test_limit_plan_restricts_a_plan_to_one_runners_kinds(world: World) -> None:
     map_only = settings(sync_trigger_sources="map")
     plan2 = plan_sync(None, settings=map_only, now=T0, known=stored(C00, C00))
     assert limit_plan(plan2, {"spots"}, map_only).due
+
+
+def test_a_stored_refresh_keeps_each_failed_spots_own_error() -> None:
+    from app.services.forecasts.ingestion import stored_spot_errors
+
+    details = {
+        "failed_spot_ids": [3, 7],
+        "spot_errors": {"pipeline": "HTTP 502", "nazare": "no data"},
+        "failed_spot_errors": {"3": "HTTP 502", "7": "no data"},
+    }
+    assert stored_spot_errors(details) == {3: "HTTP 502", 7: "no data"}
+    # A run stored before the errors were recorded by id: its first error, as before.
+    legacy = {"failed_spot_ids": [3, 7], "spot_errors": {"pipeline": "HTTP 502"}}
+    assert stored_spot_errors(legacy) == {3: "HTTP 502", 7: "HTTP 502"}
+    assert stored_spot_errors({"failed_spot_ids": [3]}, "the refresh failed") == {
+        3: "the refresh failed"
+    }

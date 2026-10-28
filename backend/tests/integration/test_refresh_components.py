@@ -476,6 +476,10 @@ def test_47_of_50_spots_publish_the_3_failed_keep_their_run_and_are_retried_alon
         r2.status == ForecastRunStatus.PARTIAL
         and sorted(r2.details["failed_spot_ids"]) == failed_ids
     )
+    # Each failed spot's own error, by id (a sync that reuses the run stages the same).
+    assert ingestion.stored_spot_errors(r2.details) == {
+        s: entries[str(s)]["error"] for s in failed_ids
+    }
     stored_failed = db.scalar(
         select(func.count()).where(
             WaveForecast.run_id == r2.id, WaveForecast.spot_id.in_(failed_ids)

@@ -999,6 +999,8 @@ def refresh_source(
         "spot_ids": updated,
         "spot_errors": {slugs.get(k, str(k)): v for k, v in sorted(failed.items())},
         "failed_spot_ids": sorted(failed),
+        # By spot id, so a sync that reuses this run records each spot's own error.
+        "failed_spot_errors": {str(k): v for k, v in sorted(failed.items())},
         "warnings": warnings[:50],
         "stats": total,
         "fetch_groups": {"+".join(sorted(g)): len(ps) for g, ps in groups.items()},
@@ -1126,6 +1128,17 @@ def _version_components(
     return out
 
 
+def stored_spot_errors(
+    details: Mapping[str, Any] | None, default: str = "failed"
+) -> dict[int, str]:
+    """{spot id: its error} of the spots a stored refresh run failed (``failed_spot_errors``;
+    a run without it gives its first ``spot_errors`` text, or ``default``)."""
+    details = details or {}
+    by_id = details.get("failed_spot_errors") or {}
+    first = str(next(iter((details.get("spot_errors") or {}).values()), default))
+    return {int(s): str(by_id.get(str(s)) or first) for s in details.get("failed_spot_ids") or []}
+
+
 def _reused(
     run: ForecastRun,
     source_code: str,
@@ -1137,8 +1150,6 @@ def _reused(
     nothing is fetched (status skipped, "run already ingested"); the sync publishes it as it
     is (``reused``, with its run id)."""
     details = run.details or {}
-    failed_ids = [int(s) for s in details.get("failed_spot_ids") or []]
-    errors = details.get("spot_errors") or {}
     return RefreshOutcome(
         source_code,
         token,
@@ -1150,7 +1161,7 @@ def _reused(
         changed=frozenset(changed),
         component_keys=dict(target),
         updated_spots=[int(s) for s in details.get("spot_ids") or []],
-        failed_spots={s: str(next(iter(errors.values()), "failed")) for s in failed_ids},
+        failed_spots=stored_spot_errors(details),
         retry=details.get("retry"),
         acquired_at=run.completed_at,
         reused=True,
