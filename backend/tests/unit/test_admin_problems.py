@@ -13,8 +13,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+import redis
 
 from app.core.config import Settings, get_settings
+from app.core.redis import get_redis
 from app.models.sync import SyncRun
 from app.models.version import ForecastVersion
 from app.schemas.health import (
@@ -426,8 +428,8 @@ def test_scheduler_silence_messages() -> None:
     assert health.scheduler_silent_problem(scheduler(silent=False), NOW) is None
 
 
-# --------------------------------------------------------------------------- seams
-def test_forecast_usage_uses_the_providers_snapshot_when_there_is_one(
+# --------------------------------------------------------------------------- providers
+def test_forecast_usage_is_the_providers_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = {
@@ -435,22 +437,41 @@ def test_forecast_usage_uses_the_providers_snapshot_when_there_is_one(
         "open_meteo": {"day": 12.0, "limits": {"day": 10000}, "available": True},
         "windy": {"day": 104, "limit": 10000, "available": True},
     }
-    monkeypatch.setattr(quota, "usage_snapshot", lambda now, s: snapshot, raising=False)
+    monkeypatch.setattr(quota, "usage_snapshot", lambda now, s: snapshot)
     out = usage.forecast_usage(NOW, settings())
     assert out["open_meteo"]["day"] == 12.0 and out["windy"]["day"] == 104
     assert out["windy"]["counted"] is True
 
 
-def test_provider_selection_uses_the_manager_when_there_is_one(
+def test_forecast_usage_counts_windy_requests_from_redis() -> None:
+    """The Windy meter of the dashboard reads the adapter's daily counter (counted)."""
+    s = settings(windy_daily_request_limit=500)
+    try:
+        get_redis().delete(quota.windy_day_window(NOW, s).key)
+        quota.consume_windy_request(now=NOW, settings=s)
+    except redis.RedisError:
+        pytest.skip("Redis is not reachable")
+    windy = usage.forecast_usage(NOW, s)["windy"]
+    assert windy["counted"] is True and windy["available"] is True
+    assert windy["day"] == 1 and windy["limit"] == 500
+
+
+def test_provider_selection_uses_the_manager(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.services.forecasts import provider_manager
+
     active = types.SimpleNamespace(
         as_dict=lambda now: {"providers": ["open_meteo"], "fallback_from": "windy", "health": {}}
     )
-    manager = types.SimpleNamespace(active_provider=lambda s, now: active)
-    monkeypatch.setattr(health, "_provider_manager", lambda: manager)
+    monkeypatch.setattr(provider_manager, "active_provider", lambda s, now: active)
     assert health.provider_selection_state(settings(), NOW)["fallback_from"] == "windy"
-    monkeypatch.setattr(health, "_provider_manager", lambda: None)
+
+    def unreadable(s: object, now: object) -> object:
+        raise redis.ConnectionError("Redis down")
+
+    # When the manager cannot be read, the settings selection (no fallback recorded).
+    monkeypatch.setattr(provider_manager, "active_provider", unreadable)
     plain = health.provider_selection_state(settings(), NOW)
     assert plain["fallback_from"] is None and plain["providers"] == ["demo"]
     assert plain["configured"] == ["demo"] and plain["health"] == {}

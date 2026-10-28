@@ -25,9 +25,8 @@ newest :data:`RECENT_RUNS` forecast runs by primary key, today's flight searches
 alone, so their counts scan the rows RETENTION_NOTIFICATION_DAYS keeps (alerts) and the
 account emails (a few per user).
 
-Seam: ``quota.usage_snapshot`` (the providers package, design D3) reads the Open-Meteo
-windows and the Windy day counter in one Redis round trip. Before that package is merged
-this module reads the Open-Meteo windows itself and reports Windy as not counted.
+``quota.usage_snapshot`` (design D3) reads the Open-Meteo windows and the Windy day counter
+in one Redis round trip.
 """
 
 from __future__ import annotations
@@ -44,7 +43,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
-from app.core.redis import budget_usage, get_redis
+from app.core.redis import get_redis
 from app.models import EmailMessage, FlightSearch, ForecastRun, ForecastSource, Notification
 from app.models.enums import (
     EmailDeliveryStatus,
@@ -86,57 +85,16 @@ def day_start(now: datetime) -> datetime:
 
 
 # --------------------------------------------------------------------------- forecast APIs
-def _open_meteo_windows(now: datetime, settings: Settings) -> dict[str, Any]:
-    """The Open-Meteo windows in the shape of ``quota.usage_snapshot`` (seam, see above)."""
-    windows = quota.budget_windows(now, settings)
-    try:
-        used: list[float | None] = list(budget_usage([w.key for w in windows]))
-        available = True
-    except redis.RedisError as exc:
-        logger.warning("Open-Meteo call counters unavailable (Redis: %s)", type(exc).__name__)
-        used = [None] * len(windows)
-        available = False
-    out: dict[str, Any] = {
-        w.name: None if u is None else round(u, 2) for w, u in zip(windows, used, strict=True)
-    }
-    out["limits"] = {w.name: w.limit for w in windows}
-    out["resets_at"] = {w.name: w.resets_at.isoformat() for w in windows}
-    out["available"] = available
-    return out
-
-
 def forecast_usage(now: datetime | None = None, settings: Settings | None = None) -> dict[str, Any]:
     """``{checked_at, open_meteo: {minute, hour, day, month, limits, resets_at, available},
-    windy: {day, limit, resets_at, available, counted}}``: the forecast API counters.
-
-    ``quota.usage_snapshot`` when the providers package provides it; otherwise the
-    Open-Meteo windows are read here and Windy is reported with ``counted: false`` (this
-    build does not count Windy requests) and ``day: None``."""
+    windy: {day, limit, resets_at, available, counted}}``: the forecast API counters, read
+    in one Redis round trip by ``quota.usage_snapshot`` (fail-open: the counts are None when
+    Redis cannot be read). ``counted``: this build counts Windy requests (always true)."""
     s = settings or get_settings()
     when = (now or utcnow()).astimezone(UTC)
-    snapshot = getattr(quota, "usage_snapshot", None)
-    if callable(snapshot):
-        try:
-            data = dict(snapshot(when, s))
-        except redis.RedisError as exc:  # the snapshot is fail-open; this is a guard
-            logger.warning("Forecast usage unavailable (Redis: %s)", type(exc).__name__)
-        else:
-            windy = dict(data.get("windy") or {})
-            windy.setdefault("counted", True)
-            data["windy"] = windy
-            return data
-    tomorrow = day_start(when) + timedelta(days=1)
-    return {
-        "checked_at": when.isoformat(),
-        "open_meteo": _open_meteo_windows(when, s),
-        "windy": {
-            "day": None,
-            "limit": s.windy_daily_request_limit,
-            "resets_at": tomorrow.isoformat(),
-            "available": False,
-            "counted": False,
-        },
-    }
+    data = dict(quota.usage_snapshot(when, s))
+    data["windy"] = {**dict(data.get("windy") or {}), "counted": True}
+    return data
 
 
 # --------------------------------------------------------------------------- requests 24 h

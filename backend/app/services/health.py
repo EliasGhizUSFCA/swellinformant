@@ -96,14 +96,12 @@ cannot send its own alert: poll this endpoint from an external monitor as well
 
 from __future__ import annotations
 
-import importlib
 import logging
 import re
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from types import ModuleType
 from typing import Any
 
 import redis
@@ -162,7 +160,7 @@ from app.schemas.sync import (
     SyncStageOut,
     SyncStoredRunOut,
 )
-from app.services.forecasts import versions
+from app.services.forecasts import provider_manager, versions
 from app.services.forecasts.base import ATMOSPHERE, WAVE
 from app.services.forecasts.open_meteo import free_api_refused
 from app.services.forecasts.queries import BLEND_CODE, USABLE, is_stale, stale_after_hours
@@ -1422,16 +1420,6 @@ CREDENTIAL_TEXT = re.compile(
 _TOKEN_OF_SOURCE = {code: token for token, code in SOURCE_CODES.items()}
 
 
-def _provider_manager() -> ModuleType | None:
-    """``app.services.forecasts.provider_manager`` (the providers package, design D4), or
-    None in a build without it: then the selection comes from the settings alone and no
-    provider health is recorded."""
-    try:
-        return importlib.import_module("app.services.forecasts.provider_manager")
-    except ImportError:
-        return None
-
-
 def _seconds(delta: timedelta) -> float:
     return delta.total_seconds()
 
@@ -2230,20 +2218,18 @@ def scheduler_silent_problem(s: SchedulerState, now: datetime) -> Problem | None
 
 
 def provider_selection_state(settings: Settings, now: datetime) -> dict[str, Any]:
-    """The active provider and why: the provider manager's view when the providers
-    package provides it (recorded health and fallback included), else the settings
-    selection with no fallback recorded. Keys: providers, primary, configured, source,
-    weather_provider, windy_eligible, fallback, fallback_from, fallback_until, reasons,
-    health ({provider: recorded health})."""
-    manager = _provider_manager()
-    if manager is not None:
-        try:
-            data = dict(manager.active_provider(settings, now).as_dict(now))
-        except Exception as exc:  # never let the dashboard or the alert job fail on it
-            logger.warning("Provider manager unavailable: %s", type(exc).__name__)
-        else:
-            data.setdefault("health", {})
-            return data
+    """The active provider and why: the provider manager's view (design D4: recorded
+    health and fallback included), or, when it cannot be read, the settings selection with
+    no fallback recorded. Keys: providers, primary, configured, source, weather_provider,
+    windy_eligible, fallback, fallback_from, fallback_until, reasons, health ({provider:
+    recorded health})."""
+    try:
+        data = dict(provider_manager.active_provider(settings, now).as_dict(now))
+    except Exception as exc:  # never let the dashboard or the alert job fail on it
+        logger.warning("Provider manager unavailable: %s", type(exc).__name__)
+    else:
+        data.setdefault("health", {})
+        return data
     selection = settings.provider_selection()
     return {
         **selection.as_dict(),
