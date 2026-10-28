@@ -210,16 +210,20 @@ def refresh_version_marker(db: Session) -> dict[str, Any]:
 
 def note_served(version_id: int | None) -> None:
     """Record when ``version_id`` was first served (``versions.note_first_served``, a Redis
-    SET NX), once per version in this process."""
+    SET NX), once per version in this process. A version counts as noted only once Redis
+    answered: after an error (Redis then rests, ``versions._client`` is None) a later
+    answer tries again, so a Redis blip at the first answer does not lose the time."""
     if version_id is None:
         return
     with _memo_lock:
         if version_id in _noted:
             return
+    if not versions.note_first_served(version_id) and versions._client() is None:
+        return
+    with _memo_lock:
         _noted[version_id] = None
         while len(_noted) > _NOTED_MAX:
             _noted.popitem(last=False)
-    versions.note_first_served(version_id)
 
 
 # --------------------------------------------------------------------------- freshness

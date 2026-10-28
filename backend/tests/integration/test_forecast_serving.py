@@ -8,7 +8,8 @@ payload stored under a version's key holds that version's data; a publication (a
 version, a new map run) starts new snapshots and drops the old ones; a request whose ``?v=``
 names another version is answered with no-store headers and stores nothing under its own
 key; GET /api/forecasts/version reads no database statement while Redis holds the marker
-and one on a miss (seeding Redis); POST /api/forecasts/seen stores a latency sample for the
+and one on a miss (seeding Redis), and records the first-served time even after a Redis
+error at the first answer; POST /api/forecasts/seen stores a latency sample for the
 current version only; GET /api/forecasts/status; swell detection reads the served runs.
 
 Every forecast run comes from the SYNTHETIC demo provider (``run_pipeline``); the versions
@@ -506,6 +507,24 @@ def test_the_version_endpoint_answers_from_memory_for_a_few_seconds(
     for _ in range(5):
         assert app_client.get("/api/forecasts/version").status_code == 200
     assert asked == []  # within VERSION_MEMO_SECONDS: neither Redis nor the database
+
+
+def test_first_served_is_recorded_once_redis_answers(
+    db: Session, frozen: list[datetime], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Redis error at a version's first answer does not stop this process from recording
+    the version's first-served time at a later answer, once Redis is back."""
+    refusing = redis.Redis(host="127.0.0.1", port=1, socket_connect_timeout=0.2)
+    monkeypatch.setattr(versions, "get_redis", lambda: refusing)
+    serving.note_served(41)
+    monkeypatch.setattr(versions, "get_redis", get_redis)
+    versions.reset_fail_open()
+    assert versions.first_served_at(41) is None
+    serving.note_served(41)
+    first = versions.first_served_at(41)
+    assert first is not None
+    serving.note_served(41)  # noted now: the recorded time stays
+    assert versions.first_served_at(41) == first
 
 
 def test_the_seen_endpoint_stores_a_latency_sample_for_the_current_version_only(
