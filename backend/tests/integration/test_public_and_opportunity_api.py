@@ -111,12 +111,13 @@ def test_opportunity_endpoints_and_ownership(
     assert opps, "expected at least one opportunity"
     top = opps[0]
     assert top["status"] == "flight_found" and top["is_demo"] and top["has_mock_flights"]
-    # Forecast and local confidence come from the real API (not only from a mock): the
-    # event's peak hour, exactly as EventOut shows it.
+    # Forecast confidence comes from the real API (not only from a mock): the event's peak
+    # hour, exactly as EventOut shows it. Spec 20 (2.0): the combined "local confidence"
+    # (research and forecast mixed) is served by neither.
     event = owner.get(f"/api/events/{top['event_id']}").json()
     assert top["forecast_confidence_class"] == event["forecast_confidence_class"] == "low"
-    assert top["local_confidence_class"] == event["local_confidence_class"]
-    assert top["local_confidence_reason"] == event["local_confidence_reason"]
+    for body in (top, event):
+        assert "local_confidence_class" not in body and "local_confidence_reason" not in body
     assert top["stale"] is event["stale"] is False
     detail = owner.get(f"/api/opportunities/{top['id']}").json()
     assert detail["forecast_confidence_class"] == detail["event"]["forecast_confidence_class"]
@@ -148,7 +149,7 @@ def test_opportunity_endpoints_and_ownership(
     item = history["items"][0]
     assert item["recipient_masked"].startswith("o***@") and item["is_demo"]
     assert item["forecast_confidence_class"] == event["forecast_confidence_class"]
-    assert item["local_confidence_class"] == event["local_confidence_class"]
+    assert "local_confidence_class" not in item and "local_confidence_reason" not in item
     outbox = owner.get("/api/dev/outbox?limit=5").json()
     assert any("Swell Alert" in str(m.get("subject")) for m in outbox)
 
@@ -221,9 +222,13 @@ def test_opportunity_and_alert_confidence_get_the_events_staleness_cap(
         summary = match_summary(match, now)
         alert = notification_out(note, now)
         assert summary.stale is event.stale
-        for key in ("forecast_confidence_class", "local_confidence_class"):
-            assert getattr(summary, key) == getattr(event, key) == getattr(alert, key)
-        assert summary.local_confidence_reason == event.local_confidence_reason
+        key = "forecast_confidence_class"
+        assert getattr(summary, key) == getattr(event, key) == getattr(alert, key)
+        # Spec 20 (2.0): no combined local class in any of the three read models.
+        for out in (summary, event, alert):
+            assert not {"local_confidence_class", "local_confidence_reason"} & set(
+                type(out).model_fields
+            )
     assert event.stale is True and event.forecast_confidence_reasons[0].startswith(
         "Forecast data is out of date"
     )

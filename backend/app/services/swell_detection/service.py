@@ -207,12 +207,11 @@ def load_steps(db: Session, spot_id: int, run_id: int, since: datetime) -> list[
     ]
 
 
-# Peak-hour confidence fields of EventOut, and what each history snapshot stores.
+# Peak-hour confidence fields of EventOut, and what each history snapshot stores (spec 20:
+# the combined "local confidence" that snapshots taken before 2.0 also hold is not read).
 EVENT_CONFIDENCE_KEYS = (
     "forecast_confidence_class",
-    "local_confidence_class",
     "confidence_reasons",
-    "local_confidence_reason",
     "forecast_confidence_reasons",
     "wind_dispute_note",
 )

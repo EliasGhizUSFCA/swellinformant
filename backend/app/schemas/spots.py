@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.schemas.common import ORMModel
 from app.schemas.forecasts import SpotFreshnessOut
@@ -19,19 +19,6 @@ WindFavourability = Literal["favourable", "workable", "unfavourable"]
 # previous post-processing step, or not documented by the source.
 GustKind = Literal["gfs_instantaneous", "ecmwf_max_3h", "ecmwf_max_since_pp", "unknown"]
 ConfidenceClass = Literal["high", "moderate", "low"]
-
-# Spec 20: the combined "local confidence" mixes research and forecast confidence. It is
-# kept in the API until the UI no longer reads it; nothing decides on it.
-LOCAL_CONFIDENCE_DEPRECATED = (
-    "Deprecated (spec 20): combines research and forecast confidence; use "
-    "forecast_confidence and research_confidence, which are never combined. Removed once "
-    "the UI no longer reads it."
-)
-
-
-def deprecated_field(description: str = LOCAL_CONFIDENCE_DEPRECATED) -> Any:
-    """A None-default field marked deprecated in the OpenAPI schema (no runtime warning)."""
-    return Field(default=None, description=description, json_schema_extra={"deprecated": True})
 
 
 class ForecastConfidenceOut(BaseModel):
@@ -135,15 +122,10 @@ class Conditions(SeparateConfidences):
     # documented heuristic classification, not a calibrated probability; also in
     # forecast_confidence with its label.
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = deprecated_field()
     # Deprecated: forecast, research and wind-dispute reasons mixed in one list. Use
     # forecast_confidence_reasons and wind_dispute_note.
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
-    local_confidence_reason: str | None = deprecated_field(
-        "Deprecated (spec 20): the reason the combined local confidence is lower than "
-        "forecast confidence; use research_confidence. Removed with local_confidence_class."
-    )
     # Forecast-confidence reasons only (lead time, model agreement, freshness ...), with the
     # stale reason first when staleness capped the class.
     forecast_confidence_reasons: list[str] = []
@@ -241,12 +223,8 @@ class EventOut(BaseModel):
     # Forecast confidence at the event's peak hour (forecast-v1; see Conditions). None for
     # events last updated before these classes existed.
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = deprecated_field()
     # Deprecated: mixed reasons (see Conditions.confidence_reasons).
     confidence_reasons: list[str] = []
-    local_confidence_reason: str | None = deprecated_field(
-        "Deprecated (spec 20): see Conditions.local_confidence_reason."
-    )
     forecast_confidence_reasons: list[str] = []
     wind_dispute_note: str | None = None
     wind_strength: WindStrength | None = None
@@ -393,14 +371,10 @@ class ForecastPoint(HourOutputs, SeparateConfidences):
     components: dict[str, Any]
     # Forecast confidence class (see Conditions.forecast_confidence_class).
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = deprecated_field()
     # Deprecated: forecast, research and wind-dispute reasons mixed in one list. Use
     # forecast_confidence_reasons and wind_dispute_note.
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
-    local_confidence_reason: str | None = deprecated_field(
-        "Deprecated (spec 20): see Conditions.local_confidence_reason."
-    )
     # Forecast-confidence reasons only (lead time, model agreement, freshness ...), with the
     # stale reason first when staleness capped the class.
     forecast_confidence_reasons: list[str] = []
@@ -427,7 +401,6 @@ class DailySummary(BaseModel):
     confidence: int
     # Forecast confidence at the day's best hour (``best_time``).
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = deprecated_field()
 
 
 class ForecastSourceOut(BaseModel):

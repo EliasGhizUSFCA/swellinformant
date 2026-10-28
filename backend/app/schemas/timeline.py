@@ -21,8 +21,8 @@ selected-time summary. Rules of the contract:
   metres, wind in km/h. The client converts for display.
 * Directions are degrees FROM (nautical). Confidence classes are documented heuristic
   classes, not probabilities. Forecast confidence and research confidence are separate
-  (``quality.forecast_confidence``, ``quality.research_confidence``) and never combined;
-  the combined ``local_confidence_*`` fields are deprecated (spec 20).
+  (``quality.forecast_confidence``, ``quality.research_confidence``) and never combined
+  (spec 20: the combined "local confidence" of earlier versions is gone).
 * ``quality`` also carries the hour's main favourable and unfavourable conditions, its
   offshore-wind class and the scoring model version (algorithm 2.2.0).
 * ``days`` are local calendar days in ``timezone``, from local midnight to local midnight
@@ -36,11 +36,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.schemas.forecasts import SpotFreshnessOut
 from app.schemas.spots import (
-    LOCAL_CONFIDENCE_DEPRECATED,
     ForecastSourceOut,
     HourOutputs,
     RunMemberOut,
@@ -120,14 +119,7 @@ class StepQualityOut(HourOutputs, SeparateConfidences):
     score: int
     label: str
     forecast_confidence_class: str | None
-    local_confidence_class: str | None = Field(
-        description=LOCAL_CONFIDENCE_DEPRECATED, json_schema_extra={"deprecated": True}
-    )
     forecast_confidence_reasons: list[str]
-    local_confidence_reason: str | None = Field(
-        description="Deprecated (spec 20): removed with local_confidence_class.",
-        json_schema_extra={"deprecated": True},
-    )
 
 
 class StepBreakingOut(BaseModel):

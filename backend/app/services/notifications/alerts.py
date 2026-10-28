@@ -113,7 +113,6 @@ class PeakPrediction:
     breaking_p90_ft: float | None
     uncertainty_kind: str | None
     forecast_confidence_class: str | None
-    local_confidence_class: str | None
     confidence_inputs: dict[str, Any] | None
     lead_hours: float | None
 

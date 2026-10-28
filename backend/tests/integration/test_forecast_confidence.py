@@ -467,7 +467,8 @@ def test_events_get_the_read_time_staleness_cap(db: Session, scored: dict[str, A
     for e in events:
         assert e.forecast_confidence_class in (fc.MODERATE, fc.LOW)
         assert e.confidence_reasons[0] == fc.STALE_REASON
-        assert fc.rank(e.local_confidence_class or fc.LOW) <= fc.rank(e.forecast_confidence_class)
+        # Spec 20 (2.0): no combined local class on events.
+        assert not hasattr(e, "local_confidence_class")
         # What the forecast endpoints show for the peak hour at the same "now".
         peak = db.scalar(
             select(SurfQualityPrediction).where(
@@ -478,12 +479,9 @@ def test_events_get_the_read_time_staleness_cap(db: Session, scored: dict[str, A
         )
         assert peak is not None
         shown = fc.api_fields(peak, stale=True)
-        assert (e.forecast_confidence_class, e.local_confidence_class) == (
-            shown["forecast_confidence_class"],
-            shown["local_confidence_class"],
-        )
+        assert e.forecast_confidence_class == shown["forecast_confidence_class"]
         assert e.confidence_reasons == shown["confidence_reasons"]
-        assert e.local_confidence_reason == shown["local_confidence_reason"]
+        assert e.forecast_confidence_reasons == shown["forecast_confidence_reasons"]
     # The well-researched spot (SYNTHETIC High research) still reads High while fresh.
     assert fresh and all(e.confidence_reasons[0] != fc.STALE_REASON for e in fresh.values())
 
@@ -626,27 +624,28 @@ def test_api_outputs(db: Session, scored: dict[str, Any], app_client: ApiClient)
     assert out.available and not out.stale
     for point in out.points:
         assert point.forecast_confidence_class in CLASSES
-        assert point.local_confidence_class == fc.LOW
+        # Spec 20 (2.0): the combined local class is gone; uluwatu's research confidence is
+        # Low (its own field, apart from the forecast's), and the research sentence never
+        # enters the forecast reasons.
+        assert not hasattr(point, "local_confidence_class")
+        assert point.research_confidence == fc.LOW
         assert point.lead_hours is not None and point.confidence_reasons
         assert point.confidence_reasons[-1] == fc.NO_RESEARCH_REASON  # forecast reasons first
-        # The single local reason, only when local confidence is lower than the forecast's.
-        assert point.local_confidence_reason == (
-            None if point.forecast_confidence_class == fc.LOW else fc.NO_RESEARCH_REASON
-        )
-    assert any(p.local_confidence_reason == fc.NO_RESEARCH_REASON for p in out.points)
+        assert fc.NO_RESEARCH_REASON not in point.forecast_confidence_reasons
     for day in out.daily:
         best = next(p for p in out.points if p.valid_time == day.best_time)
         assert day.forecast_confidence_class == best.forecast_confidence_class
-        assert day.local_confidence_class == best.local_confidence_class
+        assert not hasattr(day, "local_confidence_class")
     snap = map_snapshot(db, NOW + timedelta(hours=24), now=NOW)
     cond = next(s.conditions for s in snap.spots if s.slug == "uluwatu")
     assert cond is not None and cond.forecast_confidence_class == fc.HIGH
-    assert cond.local_confidence_class == fc.LOW and cond.lead_hours is not None
-    assert cond.local_confidence_reason == fc.NO_RESEARCH_REASON
-    # The well-researched spot (SYNTHETIC High research): local = forecast, no local reason.
+    assert cond.research_confidence == fc.LOW and cond.lead_hours is not None
+    assert fc.NO_RESEARCH_REASON not in cond.forecast_confidence_reasons
+    # The well-researched spot (SYNTHETIC High research): research confidence High, shown
+    # apart from its forecast confidence.
     high = next(s.conditions for s in snap.spots if s.slug == "pipeline")
-    assert high is not None and high.local_confidence_class == high.forecast_confidence_class
-    assert high.local_confidence_reason is None
+    assert high is not None and high.research_confidence == fc.HIGH
+    assert not hasattr(high, "local_confidence_reason")
     # Events: the peak hour's classes and the local reason (stored at detection).
     from app.services.swell_detection.service import detect_events
 
@@ -655,13 +654,12 @@ def test_api_outputs(db: Session, scored: dict[str, Any], app_client: ApiClient)
     assert events, "the SYNTHETIC sea state should produce events"
     for slug, e in events.items():
         assert e.forecast_confidence_class in CLASSES and e.confidence_reasons
-        lower = fc.rank(e.local_confidence_class or fc.LOW) < fc.rank(
-            e.forecast_confidence_class or fc.LOW
-        )
-        assert (e.local_confidence_reason is not None) == lower, slug
-        if slug != "pipeline" and lower:  # Low or no research everywhere but pipeline
-            assert e.local_confidence_reason == fc.NO_RESEARCH_REASON
-    assert any(e.local_confidence_reason is not None for e in events.values())
+        # The research sentences stay out of the forecast reasons (spec 20), and no
+        # combined local class or reason is served.
+        assert not set(fc.RESEARCH_REASONS.values()) & set(e.forecast_confidence_reasons), slug
+        assert not hasattr(e, "local_confidence_reason"), slug
+    # The mixed (deprecated) list still names the research sentence where research is weak.
+    assert any(fc.NO_RESEARCH_REASON in e.confidence_reasons for e in events.values())
     # Over HTTP (real "now" is long after these synthetic runs: stale, so capped).
     body = app_client.client.get("/api/spots/uluwatu/forecast").json()
     point = body["points"][0] if body["points"] else None
@@ -698,7 +696,7 @@ def test_demo_data_is_low_in_predictions_events_and_alerts(
     events = upcoming_events(db)
     assert events
     for e in events:
-        assert e.forecast_confidence_class == fc.LOW and e.local_confidence_class == fc.LOW
+        assert e.forecast_confidence_class == fc.LOW and not hasattr(e, "local_confidence_class")
         assert e.confidence_reasons[0] == "Demo data, not a real forecast."
     body = app_client.client.get("/api/events").json()
     assert body and all(e["forecast_confidence_class"] == "low" for e in body)
@@ -721,7 +719,7 @@ def test_demo_data_is_low_in_predictions_events_and_alerts(
     assert "Confidence at this break" not in text
     research = snap.get("research_confidence_class")
     assert ("Research confidence: " in text) is (research is not None)
-    assert all(e.local_confidence_reason is None for e in events)
+    assert not any(hasattr(e, "local_confidence_reason") for e in events)
     # An alert built once the run has gone stale (alerts are withheld only at twice the
     # stale-after age) reads like the API at that time: the staleness reason comes first.
     from app.core.database import utcnow

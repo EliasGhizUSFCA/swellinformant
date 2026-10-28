@@ -64,8 +64,8 @@ def get_owned_match(db: Session, user: User, match_id: uuid.UUID) -> Opportunity
 
 
 def event_confidence(event: SwellEvent, now: datetime) -> dict[str, object]:
-    """Forecast and local confidence at the event's peak hour, exactly as EventOut shows
-    them (``peak_confidence`` with the read-time staleness cap), plus ``stale``."""
+    """Forecast confidence at the event's peak hour, exactly as EventOut shows it
+    (``peak_confidence`` with the read-time staleness cap), plus ``stale``."""
     db = object_session(event)
     stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
     fields = peak_confidence(event, stale=stale)
@@ -76,8 +76,6 @@ def event_confidence(event: SwellEvent, now: datetime) -> dict[str, object]:
 
     return {
         "forecast_confidence_class": cls("forecast_confidence_class"),
-        "local_confidence_class": cls("local_confidence_class"),
-        "local_confidence_reason": fields.get("local_confidence_reason"),
         "stale": stale,
     }
 

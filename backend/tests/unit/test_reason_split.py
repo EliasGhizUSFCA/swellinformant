@@ -111,17 +111,22 @@ def test_stale_reason_comes_first_when_the_read_time_cap_applies() -> None:
 
 
 def test_local_reason_only_when_local_is_lower_than_forecast() -> None:
+    """The stored combined class (kept for the archive) and its reason; spec 20 (2.0): the
+    API serves neither, only the separate research confidence."""
     for research_cls in (None, LOW, MODERATE, HIGH):
         p = stored(lead=24.0, index=90, research_cls=research_cls, dispute=False)
         fields = fc.api_fields(p)
-        lower = fc.rank(fields["local_confidence_class"]) < fc.rank(
-            fields["forecast_confidence_class"]
+        reason = fc.local_reason(
+            p.forecast_confidence_class, p.local_confidence_class, p.confidence_inputs
         )
+        lower = fc.rank(p.local_confidence_class) < fc.rank(fields["forecast_confidence_class"])
         if lower:
-            assert fields["local_confidence_reason"] in fc.RESEARCH_REASONS.values()
+            assert reason in fc.RESEARCH_REASONS.values()
         else:
-            assert fields["local_confidence_reason"] is None
-        assert fields["local_confidence_reason"] not in fields["forecast_confidence_reasons"]
+            assert reason is None
+        assert reason not in fields["forecast_confidence_reasons"]
+        assert "local_confidence_class" not in fields and "local_confidence_reason" not in fields
+        assert fields["research_confidence"] == research_cls
 
 
 def test_the_constant_not_verified_note_stays_in_the_stored_and_mixed_lists_only() -> None:
@@ -155,6 +160,8 @@ def test_older_event_snapshots_get_the_split_from_their_mixed_list() -> None:
     capped = peak_confidence(event, stale=True)  # type: ignore[arg-type]
     assert capped["forecast_confidence_reasons"] == [fc.STALE_REASON, mixed[0]]
     assert capped["forecast_confidence_class"] == MODERATE
+    # Their combined local class (spec 20) is not read back.
+    assert not {"local_confidence_class", "local_confidence_reason"} & (fields | capped).keys()
     without = peak_confidence(  # type: ignore[arg-type]
         SimpleNamespace(history=[{**snapshot, "confidence_reasons": mixed[:2]}])
     )

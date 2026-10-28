@@ -114,13 +114,26 @@ def test_the_forecast_and_timeline_carry_the_hour_outputs(
         assert quality["model_version"] == "2.2.0"
 
 
-def test_the_combined_local_confidence_is_marked_deprecated_in_the_schema() -> None:
+def test_the_combined_local_confidence_is_gone_from_the_schema() -> None:
+    """Spec 20: research and forecast confidence are never combined. The combined "local
+    confidence" fields, deprecated while the UI still read them, are removed in 2.0 (the UI
+    no longer reads them); the two separate confidences stay."""
     schemas = app.openapi()["components"]["schemas"]
-    for name in ("Conditions", "ForecastPoint", "StepQualityOut", "EventOut", "DailySummary"):
-        local = schemas[name]["properties"]["local_confidence_class"]
-        assert local.get("deprecated") is True, name
-        assert "spec 20" in local.get("description", ""), name
-    assert "forecast_confidence" in schemas["ForecastPoint"]["properties"]
+    for name in (
+        "Conditions",
+        "ForecastPoint",
+        "StepQualityOut",
+        "EventOut",
+        "DailySummary",
+        "MatchSummary",
+        "NotificationOut",
+    ):
+        props = schemas[name]["properties"]
+        assert "local_confidence_class" not in props, name
+        assert "local_confidence_reason" not in props, name
+    for name in ("Conditions", "ForecastPoint", "StepQualityOut"):
+        props = schemas[name]["properties"]
+        assert "forecast_confidence" in props and "research_confidence" in props, name
     assert schemas["ForecastConfidenceOut"]["properties"]["kind"]["const"] == "heuristic"
 
 

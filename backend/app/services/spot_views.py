@@ -585,7 +585,6 @@ def daily_summaries(
                 good_hours=round(timesteps.covered_hours(extents, good_mask, windows, bounds), 2),
                 confidence=round(sum(p.confidence for p in items) / len(items)),
                 forecast_confidence_class=top.forecast_confidence_class,
-                local_confidence_class=top.local_confidence_class,
             )
         )
     return out

@@ -123,11 +123,10 @@ class MatchSummary(BaseModel):
     lead_days: float
     created_at: datetime
     updated_at: datetime
-    # Confidence at the event's peak hour: in the offshore forecast, and in our breaking
-    # prediction at this break (with the reason when it is lower). None = not assessed.
+    # Forecast confidence at the event's peak hour (the offshore forecast; heuristic
+    # classes). None = not assessed. Research confidence is the spot's (spec 20: never
+    # combined with it).
     forecast_confidence_class: ConfidenceClass | None = None
-    local_confidence_class: ConfidenceClass | None = None
-    local_confidence_reason: str | None = None
     # The forecast run behind the match is older than its source's stale limit.
     stale: bool = False
     # The swell starts SHORT_NOTICE_MIN_DAYS to _MAX_DAYS ahead (ranked first, spec 28).
@@ -184,5 +183,3 @@ class NotificationOut(BaseModel):
     is_demo: bool
     # Confidence at the alerted event's peak hour (see MatchSummary).
     forecast_confidence_class: ConfidenceClass | None = None
-    local_confidence_class: ConfidenceClass | None = None
-    local_confidence_reason: str | None = None
