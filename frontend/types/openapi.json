@@ -2362,6 +2362,28 @@
     }
    }
   },
+  "/api/admin/freshness": {
+   "get": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Admin Freshness",
+    "description": "Forecast freshness, provider and API usage, processing times and latencies, refresh\njobs and the admin problems, for the admin dashboard (/admin/freshness).",
+    "operationId": "admin_freshness_api_admin_freshness_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AdminFreshnessOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/map/fields": {
    "get": {
     "tags": [
@@ -2949,6 +2971,1779 @@
      "notes"
     ],
     "title": "AccuracyOverview"
+   },
+   "AdminActiveProviderOut": {
+    "properties": {
+     "primary": {
+      "type": "string",
+      "title": "Primary",
+      "description": "The provider a refresh builds now"
+     },
+     "providers": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Providers"
+     },
+     "configured": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Configured",
+      "description": "What the settings select"
+     },
+     "source": {
+      "type": "string",
+      "title": "Source",
+      "description": "FORECAST_PROVIDERS (advanced override) or WEATHER_PROVIDER"
+     },
+     "weather_provider": {
+      "type": "string",
+      "title": "Weather Provider"
+     },
+     "windy_eligible": {
+      "type": "boolean",
+      "title": "Windy Eligible"
+     },
+     "fallback": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback",
+      "description": "The configured runtime fallback"
+     },
+     "fallback_active": {
+      "type": "boolean",
+      "title": "Fallback Active",
+      "default": false
+     },
+     "fallback_from": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback From",
+      "description": "The provider the fallback stands in for"
+     },
+     "fallback_until": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback Until"
+     },
+     "reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Reasons",
+      "default": []
+     },
+     "health": {
+      "items": {
+       "$ref": "#/components/schemas/AdminProviderHealthOut"
+      },
+      "type": "array",
+      "title": "Health",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "primary",
+     "providers",
+     "configured",
+     "source",
+     "weather_provider",
+     "windy_eligible"
+    ],
+    "title": "AdminActiveProviderOut"
+   },
+   "AdminApiUsageOut": {
+    "properties": {
+     "checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Checked At"
+     },
+     "alert_fraction": {
+      "type": "number",
+      "title": "Alert Fraction",
+      "description": "QUOTA_ALERT_FRACTION"
+     },
+     "open_meteo": {
+      "$ref": "#/components/schemas/AdminOpenMeteoUsageOut"
+     },
+     "windy": {
+      "$ref": "#/components/schemas/AdminWindyUsageOut"
+     },
+     "flights": {
+      "$ref": "#/components/schemas/AdminFlightUsageOut"
+     },
+     "emails": {
+      "$ref": "#/components/schemas/AdminEmailUsageOut"
+     },
+     "requests_24h": {
+      "items": {
+       "$ref": "#/components/schemas/AdminProviderRequestsOut"
+      },
+      "type": "array",
+      "title": "Requests 24H",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "checked_at",
+     "alert_fraction",
+     "open_meteo",
+     "windy",
+     "flights",
+     "emails"
+    ],
+    "title": "AdminApiUsageOut"
+   },
+   "AdminComponentFreshnessOut": {
+    "properties": {
+     "component": {
+      "type": "string",
+      "enum": [
+       "atmosphere",
+       "wave"
+      ],
+      "title": "Component"
+     },
+     "model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model"
+     },
+     "run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Key"
+     },
+     "run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run",
+      "description": "Init time of the served run"
+     },
+     "estimated": {
+      "type": "boolean",
+      "title": "Estimated",
+      "description": "The run time is an estimate (Windy)",
+      "default": false
+     },
+     "available_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available At",
+      "description": "Upstream availability of that run"
+     },
+     "last_detected_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Detected At"
+     },
+     "last_acquired_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Acquired At",
+      "description": "When the served run was fetched (a carried component keeps it)"
+     },
+     "changed": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Changed",
+      "description": "Fetched by the newest refresh (false: carried forward)"
+     },
+     "carried_from_run_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Carried From Run Id"
+     },
+     "newest_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Newest Run",
+      "description": "The newest init time known (published, staged or detected)"
+     },
+     "update_interval_minutes": {
+      "type": "number",
+      "title": "Update Interval Minutes"
+     },
+     "update_interval_recorded": {
+      "type": "boolean",
+      "title": "Update Interval Recorded",
+      "description": "From Open-Meteo meta.json update_interval_seconds (else 6 h assumed)"
+     },
+     "typical_lag_minutes": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Typical Lag Minutes",
+      "description": "Median availability lag after the cycle, measured on recent runs"
+     },
+     "lag_samples": {
+      "type": "integer",
+      "title": "Lag Samples",
+      "default": 0
+     },
+     "expected_next_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Expected Next At"
+     },
+     "late_after": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Late After"
+     },
+     "late": {
+      "type": "boolean",
+      "title": "Late",
+      "default": false
+     },
+     "domains": {
+      "items": {
+       "$ref": "#/components/schemas/AdminDomainOut"
+      },
+      "type": "array",
+      "title": "Domains",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "component",
+     "update_interval_minutes",
+     "update_interval_recorded"
+    ],
+    "title": "AdminComponentFreshnessOut",
+    "description": "The model run the published version serves for one component, and when the next\none is expected."
+   },
+   "AdminDomainOut": {
+    "properties": {
+     "model": {
+      "type": "string",
+      "title": "Model"
+     },
+     "init_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Init Time"
+     },
+     "available_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "model"
+    ],
+    "title": "AdminDomainOut"
+   },
+   "AdminDurationStatsOut": {
+    "properties": {
+     "samples": {
+      "type": "integer",
+      "title": "Samples",
+      "default": 0
+     },
+     "last": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last"
+     },
+     "avg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Avg"
+     },
+     "p50": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P50"
+     },
+     "p95": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P95"
+     },
+     "max": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max"
+     }
+    },
+    "type": "object",
+    "title": "AdminDurationStatsOut"
+   },
+   "AdminEmailUsageOut": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "today": {
+      "type": "integer",
+      "title": "Today"
+     },
+     "account": {
+      "type": "integer",
+      "title": "Account"
+     },
+     "alerts": {
+      "type": "integer",
+      "title": "Alerts"
+     },
+     "failed": {
+      "type": "integer",
+      "title": "Failed"
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider",
+     "today",
+     "account",
+     "alerts",
+     "failed"
+    ],
+    "title": "AdminEmailUsageOut"
+   },
+   "AdminEventOut": {
+    "properties": {
+     "at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "At"
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Detail"
+     },
+     "version_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version Id"
+     }
+    },
+    "type": "object",
+    "title": "AdminEventOut"
+   },
+   "AdminFailedRequestOut": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider",
+      "description": "Forecast source code or flight provider"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status",
+      "description": "HTTP status, or 'failed' for a failed flight search"
+     },
+     "count": {
+      "type": "integer",
+      "title": "Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider",
+     "status",
+     "count"
+    ],
+    "title": "AdminFailedRequestOut"
+   },
+   "AdminFlightUsageOut": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "today": {
+      "type": "integer",
+      "title": "Today",
+      "description": "Provider searches stored today (UTC)"
+     },
+     "per_provider": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Per Provider",
+      "default": {}
+     },
+     "failed_today": {
+      "type": "integer",
+      "title": "Failed Today",
+      "default": 0
+     },
+     "quota": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AdminUsageWindowOut"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "FLIGHT_DAILY_QUOTA counter (None: the demo provider has no quota)"
+     },
+     "user_daily_quota": {
+      "type": "integer",
+      "title": "User Daily Quota"
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider",
+     "today",
+     "user_daily_quota"
+    ],
+    "title": "AdminFlightUsageOut"
+   },
+   "AdminFreshnessOut": {
+    "properties": {
+     "checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Checked At"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "degraded",
+       "failing"
+      ],
+      "title": "Status",
+      "description": "Over the admin and the public problems"
+     },
+     "version_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version Id",
+      "description": "The published forecast version"
+     },
+     "active_provider": {
+      "$ref": "#/components/schemas/AdminActiveProviderOut"
+     },
+     "atmosphere": {
+      "$ref": "#/components/schemas/AdminComponentFreshnessOut"
+     },
+     "wave": {
+      "$ref": "#/components/schemas/AdminComponentFreshnessOut"
+     },
+     "last_detected_model_update": {
+      "$ref": "#/components/schemas/AdminEventOut"
+     },
+     "last_successful_acquisition": {
+      "$ref": "#/components/schemas/AdminEventOut"
+     },
+     "last_successful_scoring": {
+      "$ref": "#/components/schemas/AdminEventOut"
+     },
+     "last_published_version": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AdminPublishedVersionOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "spots_updated": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Spots Updated"
+     },
+     "stale_spots": {
+      "items": {
+       "$ref": "#/components/schemas/AdminStaleSpotOut"
+      },
+      "type": "array",
+      "title": "Stale Spots",
+      "default": []
+     },
+     "failed_requests": {
+      "items": {
+       "$ref": "#/components/schemas/AdminFailedRequestOut"
+      },
+      "type": "array",
+      "title": "Failed Requests",
+      "description": "Last 24 h, by provider and status",
+      "default": []
+     },
+     "api_usage": {
+      "$ref": "#/components/schemas/AdminApiUsageOut"
+     },
+     "processing_time": {
+      "$ref": "#/components/schemas/AdminProcessingTimeOut"
+     },
+     "latency": {
+      "$ref": "#/components/schemas/AdminLatencyOut"
+     },
+     "refresh_jobs": {
+      "items": {
+       "$ref": "#/components/schemas/AdminRefreshJobOut"
+      },
+      "type": "array",
+      "title": "Refresh Jobs",
+      "default": []
+     },
+     "versions": {
+      "items": {
+       "$ref": "#/components/schemas/AdminVersionRowOut"
+      },
+      "type": "array",
+      "title": "Versions",
+      "default": []
+     },
+     "scheduler": {
+      "$ref": "#/components/schemas/AdminSchedulerOut"
+     },
+     "problems": {
+      "items": {
+       "$ref": "#/components/schemas/AdminProblemOut"
+      },
+      "type": "array",
+      "title": "Problems",
+      "description": "The admin-only problems (D12)",
+      "default": []
+     },
+     "health_problems": {
+      "items": {
+       "$ref": "#/components/schemas/AdminProblemOut"
+      },
+      "type": "array",
+      "title": "Health Problems",
+      "description": "The public data-health report's problems",
+      "default": []
+     },
+     "notes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Notes",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "checked_at",
+     "status",
+     "active_provider",
+     "atmosphere",
+     "wave",
+     "last_detected_model_update",
+     "last_successful_acquisition",
+     "last_successful_scoring",
+     "api_usage",
+     "processing_time",
+     "latency",
+     "scheduler"
+    ],
+    "title": "AdminFreshnessOut"
+   },
+   "AdminLatencyOut": {
+    "properties": {
+     "upstream_to_publication_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut",
+      "description": "upstream_available_at -> published_at of the recent refresh versions"
+     },
+     "publication_to_frontend_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut",
+      "description": "Browser 'seen' reports after a version change (newest 200 in Redis)"
+     },
+     "first_served_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut",
+      "description": "published_at -> first served by the version endpoint (newest versions)"
+     }
+    },
+    "type": "object",
+    "required": [
+     "upstream_to_publication_s",
+     "publication_to_frontend_s",
+     "first_served_s"
+    ],
+    "title": "AdminLatencyOut"
+   },
+   "AdminOpenMeteoUsageOut": {
+    "properties": {
+     "minute": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "hour": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "day": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "month": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "available": {
+      "type": "boolean",
+      "title": "Available",
+      "description": "False: Redis could not be read"
+     }
+    },
+    "type": "object",
+    "required": [
+     "minute",
+     "hour",
+     "day",
+     "month",
+     "available"
+    ],
+    "title": "AdminOpenMeteoUsageOut"
+   },
+   "AdminProblemOut": {
+    "properties": {
+     "key": {
+      "type": "string",
+      "title": "Key"
+     },
+     "severity": {
+      "type": "string",
+      "enum": [
+       "degraded",
+       "failing"
+      ],
+      "title": "Severity"
+     },
+     "message": {
+      "type": "string",
+      "title": "Message"
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Detail",
+      "description": "Redacted error text (admins only)"
+     }
+    },
+    "type": "object",
+    "required": [
+     "key",
+     "severity",
+     "message"
+    ],
+    "title": "AdminProblemOut"
+   },
+   "AdminProcessingTimeOut": {
+    "properties": {
+     "refreshes": {
+      "type": "integer",
+      "title": "Refreshes",
+      "description": "Finished refresh syncs in the sample (newest 20 syncs)"
+     },
+     "total_ms": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut"
+     },
+     "stages": {
+      "items": {
+       "$ref": "#/components/schemas/AdminStageTimeOut"
+      },
+      "type": "array",
+      "title": "Stages",
+      "default": []
+     },
+     "detected_to_acquired_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut"
+     },
+     "acquired_to_scored_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut"
+     },
+     "scored_to_published_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut"
+     }
+    },
+    "type": "object",
+    "required": [
+     "refreshes",
+     "total_ms",
+     "detected_to_acquired_s",
+     "acquired_to_scored_s",
+     "scored_to_published_s"
+    ],
+    "title": "AdminProcessingTimeOut"
+   },
+   "AdminProviderHealthOut": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "last_success_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Success At"
+     },
+     "last_failure_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Failure At"
+     },
+     "last_failure_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Failure Kind",
+      "description": "credentials, testing_key, quota or unavailable"
+     },
+     "last_failure_detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Failure Detail"
+     },
+     "consecutive_unavailable": {
+      "type": "integer",
+      "title": "Consecutive Unavailable",
+      "default": 0
+     },
+     "blocked_until": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Blocked Until"
+     },
+     "blocking": {
+      "type": "boolean",
+      "title": "Blocking",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider"
+    ],
+    "title": "AdminProviderHealthOut",
+    "description": "A provider's recorded health (the provider manager, when it records any)."
+   },
+   "AdminProviderRequestsOut": {
+    "properties": {
+     "source": {
+      "type": "string",
+      "title": "Source"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     },
+     "runs": {
+      "type": "integer",
+      "title": "Runs"
+     },
+     "failed_runs": {
+      "type": "integer",
+      "title": "Failed Runs"
+     },
+     "requests": {
+      "type": "integer",
+      "title": "Requests"
+     },
+     "weighted_calls": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weighted Calls"
+     },
+     "bytes_downloaded": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bytes Downloaded"
+     },
+     "http_status_counts": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Http Status Counts",
+      "default": {}
+     },
+     "failed_requests": {
+      "type": "integer",
+      "title": "Failed Requests"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source",
+     "runs",
+     "failed_runs",
+     "requests",
+     "failed_requests"
+    ],
+    "title": "AdminProviderRequestsOut"
+   },
+   "AdminPublishedVersionOut": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "age_minutes": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Minutes"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     },
+     "source_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Code"
+     },
+     "fallback_from": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback From"
+     },
+     "wind_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Model"
+     },
+     "wind_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Model Run"
+     },
+     "wind_run_estimated": {
+      "type": "boolean",
+      "title": "Wind Run Estimated",
+      "default": false
+     },
+     "wave_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model"
+     },
+     "wave_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model Run"
+     },
+     "wave_run_estimated": {
+      "type": "boolean",
+      "title": "Wave Run Estimated",
+      "default": false
+     },
+     "counts": {
+      "$ref": "#/components/schemas/AdminVersionCountsOut"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "counts"
+    ],
+    "title": "AdminPublishedVersionOut"
+   },
+   "AdminRefreshJobOut": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "trigger": {
+      "type": "string",
+      "title": "Trigger"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "refresh": {
+      "type": "boolean",
+      "title": "Refresh",
+      "description": "A spot forecast refresh (false: map or ensemble only)"
+     },
+     "kinds": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Kinds",
+      "default": []
+     },
+     "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Started At"
+     },
+     "finished_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Finished At"
+     },
+     "duration_ms": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Duration Ms"
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "stages": {
+      "items": {
+       "$ref": "#/components/schemas/AdminStageOut"
+      },
+      "type": "array",
+      "title": "Stages",
+      "default": []
+     },
+     "version_ids": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Version Ids",
+      "default": []
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error",
+      "description": "Redacted, shortened"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "trigger",
+     "status",
+     "refresh",
+     "started_at"
+    ],
+    "title": "AdminRefreshJobOut"
+   },
+   "AdminSchedulerCheckOut": {
+    "properties": {
+     "source": {
+      "type": "string",
+      "title": "Source"
+     },
+     "at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source"
+    ],
+    "title": "AdminSchedulerCheckOut"
+   },
+   "AdminSchedulerOut": {
+    "properties": {
+     "expected_minutes": {
+      "type": "integer",
+      "title": "Expected Minutes",
+      "description": "REFRESH_SCHEDULER_EXPECTED_MINUTES (0: off)"
+     },
+     "enabled": {
+      "type": "boolean",
+      "title": "Enabled"
+     },
+     "refresh_enabled": {
+      "type": "boolean",
+      "title": "Refresh Enabled",
+      "description": "FORECAST_REFRESH_ENABLED"
+     },
+     "last_check_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Check At"
+     },
+     "last_check_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Check By"
+     },
+     "checks": {
+      "items": {
+       "$ref": "#/components/schemas/AdminSchedulerCheckOut"
+      },
+      "type": "array",
+      "title": "Checks",
+      "default": []
+     },
+     "silent": {
+      "type": "boolean",
+      "title": "Silent"
+     }
+    },
+    "type": "object",
+    "required": [
+     "expected_minutes",
+     "enabled",
+     "refresh_enabled",
+     "silent"
+    ],
+    "title": "AdminSchedulerOut"
+   },
+   "AdminStageOut": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "duration_ms": {
+      "type": "integer",
+      "title": "Duration Ms"
+     },
+     "cpu_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cpu S"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "status",
+     "duration_ms"
+    ],
+    "title": "AdminStageOut"
+   },
+   "AdminStageTimeOut": {
+    "properties": {
+     "stage": {
+      "type": "string",
+      "title": "Stage"
+     },
+     "runs": {
+      "type": "integer",
+      "title": "Runs"
+     },
+     "avg_ms": {
+      "type": "number",
+      "title": "Avg Ms"
+     },
+     "p95_ms": {
+      "type": "number",
+      "title": "P95 Ms"
+     },
+     "max_ms": {
+      "type": "number",
+      "title": "Max Ms"
+     },
+     "avg_cpu_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Avg Cpu S"
+     }
+    },
+    "type": "object",
+    "required": [
+     "stage",
+     "runs",
+     "avg_ms",
+     "p95_ms",
+     "max_ms"
+    ],
+    "title": "AdminStageTimeOut"
+   },
+   "AdminStaleSpotOut": {
+    "properties": {
+     "spot_id": {
+      "type": "integer",
+      "title": "Spot Id"
+     },
+     "slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Slug"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "last_updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Updated At"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason",
+      "description": "missing, refresh_failed, atmosphere_age, wave_age or age"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error",
+      "description": "The failed refresh's redacted error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "spot_id"
+    ],
+    "title": "AdminStaleSpotOut"
+   },
+   "AdminUsageWindowOut": {
+    "properties": {
+     "used": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Used",
+      "description": "None: the counter could not be read"
+     },
+     "limit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Limit"
+     },
+     "fraction": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fraction"
+     },
+     "resets_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Resets At"
+     }
+    },
+    "type": "object",
+    "title": "AdminUsageWindowOut"
+   },
+   "AdminVersionCountsOut": {
+    "properties": {
+     "total": {
+      "type": "integer",
+      "title": "Total"
+     },
+     "updated": {
+      "type": "integer",
+      "title": "Updated"
+     },
+     "stale": {
+      "type": "integer",
+      "title": "Stale"
+     },
+     "failed": {
+      "type": "integer",
+      "title": "Failed"
+     }
+    },
+    "type": "object",
+    "required": [
+     "total",
+     "updated",
+     "stale",
+     "failed"
+    ],
+    "title": "AdminVersionCountsOut"
+   },
+   "AdminVersionRowOut": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Kind"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     },
+     "fallback_from": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback From"
+     },
+     "detected_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Detected At"
+     },
+     "upstream_available_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Upstream Available At"
+     },
+     "staged_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Staged At"
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "wind_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Model Run"
+     },
+     "wave_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model Run"
+     },
+     "changed": {
+      "items": {
+       "type": "string",
+       "enum": [
+        "atmosphere",
+        "wave"
+       ]
+      },
+      "type": "array",
+      "title": "Changed",
+      "default": []
+     },
+     "spots_updated": {
+      "type": "integer",
+      "title": "Spots Updated"
+     },
+     "spots_stale": {
+      "type": "integer",
+      "title": "Spots Stale"
+     },
+     "spots_failed": {
+      "type": "integer",
+      "title": "Spots Failed"
+     },
+     "upstream_to_publication_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Upstream To Publication S"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "status",
+     "spots_updated",
+     "spots_stale",
+     "spots_failed"
+    ],
+    "title": "AdminVersionRowOut"
+   },
+   "AdminWindyUsageOut": {
+    "properties": {
+     "day": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "available": {
+      "type": "boolean",
+      "title": "Available"
+     },
+     "counted": {
+      "type": "boolean",
+      "title": "Counted",
+      "description": "False: this build does not count Windy requests"
+     }
+    },
+    "type": "object",
+    "required": [
+     "day",
+     "available",
+     "counted"
+    ],
+    "title": "AdminWindyUsageOut"
    },
    "AirportOut": {
     "properties": {
