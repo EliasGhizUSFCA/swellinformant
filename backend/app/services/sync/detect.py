@@ -145,6 +145,9 @@ class Probe:
     disabled: str | None = None
     error: str | None = None
     close: Callable[[], None] | None = None
+    # Not checked by this runner (it syncs other kinds): reported as disabled, but still a
+    # component of this setup for SYNC_TRIGGER_SOURCES.
+    unchecked: bool = False
 
 
 def _error_detail(exc: BaseException) -> str:
@@ -209,17 +212,30 @@ def _closer(provider: object) -> Callable[[], None] | None:
     return close if callable(close) else None
 
 
-def build_probes(settings: Settings) -> list[Probe]:
+def build_probes(settings: Settings, kinds: Collection[str] | None = None) -> list[Probe]:
     """The components of a plan for these settings, in display order (spots in
-    FORECAST_PROVIDERS order, then the ensemble, then the map)."""
+    FORECAST_PROVIDERS order, then the ensemble, then the map).
+
+    ``kinds``: the component kinds the runner syncs (None: all). A component of another kind
+    is neither built nor asked (no provider import, no metadata request: the refresh
+    endpoint never checks the map layers' NOAA files); it is listed as ``unchecked``."""
     from app.services.forecasts.registry import SOURCE_CODES, build_provider
     from app.services.map_fields import map_fields_mode
 
     timeout = min(settings.forecast_http_timeout_seconds, PROBE_TIMEOUT_SECONDS)
     settings = settings.model_copy(update={"forecast_http_timeout_seconds": timeout})
+    wanted = frozenset(kinds) if kinds is not None else None
+    note = f"not checked here (this runner syncs {','.join(sorted(wanted or ()))})"
+
+    def skip(kind: ComponentKind) -> bool:
+        return wanted is not None and kind not in wanted
+
     probes: list[Probe] = []
     for token in settings.forecast_provider_list:
         code = SOURCE_CODES.get(token, token)
+        if skip("spots"):
+            probes.append(Probe("spots", code, token, disabled=note, unchecked=True))
+            continue
         try:
             provider = build_provider(token, settings)
         except Exception as exc:  # e.g. a missing optional dependency or a refused setting
@@ -239,7 +255,15 @@ def build_probes(settings: Settings) -> list[Probe]:
             )
         )
 
-    if settings.gefs_enabled:
+    if not settings.gefs_enabled:
+        probes.append(
+            Probe("ensemble", GEFS_SOURCE_CODE, ENSEMBLE_PROVIDER, disabled="GEFS_ENABLED=false")
+        )
+    elif skip("ensemble"):
+        probes.append(
+            Probe("ensemble", GEFS_SOURCE_CODE, ENSEMBLE_PROVIDER, disabled=note, unchecked=True)
+        )
+    else:
         try:
             from app.services.forecasts.ensemble import GefsWaveEnsembleProvider
 
@@ -257,13 +281,18 @@ def build_probes(settings: Settings) -> list[Probe]:
             probes.append(
                 Probe("ensemble", GEFS_SOURCE_CODE, ENSEMBLE_PROVIDER, error=_error_detail(exc))
             )
-    else:
-        probes.append(
-            Probe("ensemble", GEFS_SOURCE_CODE, ENSEMBLE_PROVIDER, disabled="GEFS_ENABLED=false")
-        )
 
     mode = map_fields_mode(settings)
-    if mode == "standalone":
+    if mode != "standalone":
+        reason = (
+            "the map layers are stored by the noaa_gfs spot acquisition"
+            if mode == "with_noaa"
+            else "map fields are off (MAP_FIELDS_ENABLED)"
+        )
+        probes.append(Probe("map", FIELDS_SOURCE_CODE, MAP_PROVIDER, disabled=reason))
+    elif skip("map"):
+        probes.append(Probe("map", FIELDS_SOURCE_CODE, MAP_PROVIDER, disabled=note, unchecked=True))
+    else:
         try:
             from app.services.forecasts.noaa import NoaaGfsFieldsProvider
 
@@ -279,13 +308,6 @@ def build_probes(settings: Settings) -> list[Probe]:
             )
         except Exception as exc:
             probes.append(Probe("map", FIELDS_SOURCE_CODE, MAP_PROVIDER, error=_error_detail(exc)))
-    else:
-        reason = (
-            "the map layers are stored by the noaa_gfs spot acquisition"
-            if mode == "with_noaa"
-            else "map fields are off (MAP_FIELDS_ENABLED)"
-        )
-        probes.append(Probe("map", FIELDS_SOURCE_CODE, MAP_PROVIDER, disabled=reason))
     return probes
 
 
@@ -600,6 +622,7 @@ def plan_sync(
     now: datetime | None = None,
     known: KnownRuns | None = None,
     force: bool = False,
+    kinds: Collection[str] | None = None,
 ) -> SyncPlan:
     """The sync plan at ``now`` (rules: docs/sync.md).
 
@@ -607,6 +630,8 @@ def plan_sync(
     given) and a running sync with a valid lease turns new components ``in_progress``.
     With ``db=None`` only ``known`` is used (None: nothing is known as stored). ``known``
     is updated in place: first sightings of new runs, attempts of runs no longer offered.
+    ``kinds``: check only the components of these kinds (:func:`build_probes`; the refresh
+    endpoint: ``spots``), the others are ``disabled`` (unchecked) in the plan.
     """
     settings = settings or get_settings()
     now = now or utcnow()
@@ -617,7 +642,7 @@ def plan_sync(
     elif known is None:
         known = empty_known(now)
 
-    probes = build_probes(settings)
+    probes = build_probes(settings) if kinds is None else build_probes(settings, kinds)
     split = component_split(settings)
     try:
         seen = [part for p in probes for part in _observe(p, known, now, split)]
@@ -640,7 +665,7 @@ def trigger_kinds(seen: Iterable[_Seen], settings: Settings) -> tuple[frozenset[
     spot forecasts never stop syncing; the note says so in the plan's reasons.
     """
     configured = settings.sync_trigger_list
-    enabled = {s.probe.kind for s in seen if s.probe.disabled is None}
+    enabled = {s.probe.kind for s in seen if s.probe.disabled is None or s.probe.unchecked}
     if configured & enabled:
         return configured, None
     kinds = ",".join(sorted(configured))

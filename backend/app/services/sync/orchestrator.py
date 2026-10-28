@@ -1006,7 +1006,12 @@ def _refresh_check(
     if known is None:
         with SessionLocal() as db:
             known = load_known(db)
-    plan = limit_plan(plan_sync(None, settings=settings, now=now, known=known), REFRESH_KINDS)
+    # Only the spot components are asked (metadata only): the map/GRIB layers and the
+    # ensemble are another runner's, so their providers are neither imported nor asked.
+    plan = limit_plan(
+        plan_sync(None, settings=settings, now=now, known=known, kinds=REFRESH_KINDS),
+        REFRESH_KINDS,
+    )
     state.write_known(known)
     checked_ms = int((time.monotonic() - started) * 1000)
     out: dict[str, Any] = {

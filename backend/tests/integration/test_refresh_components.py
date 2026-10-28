@@ -376,6 +376,35 @@ def test_an_unchanged_run_is_not_refreshed_and_the_check_reads_no_database(
     assert db.scalar(select(func.count()).select_from(SyncRun)) == 1
 
 
+def test_the_refresh_check_asks_only_the_spot_providers(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The map layers (standalone mode, as in the hosted profile) belong to another runner:
+    the refresh endpoint's check neither asks NOAA for them nor marks them due."""
+    from app.services.forecasts import noaa
+
+    asked: list[datetime] = []
+
+    def probed(_self: object, now: datetime) -> RunInfo:
+        asked.append(now)
+        raise AssertionError("the map provider was asked")
+
+    monkeypatch.setattr(get_settings(), "map_fields_enabled", True)
+    monkeypatch.setattr(noaa.NoaaGfsFieldsProvider, "current_run", probed)
+    out = refresh()
+    assert out["status"] == "success", out
+    assert asked == []
+    (layers,) = [c for c in out["plan"]["components"] if c["kind"] == "map"]
+    assert layers["state"] == "disabled" and "not checked here" in layers["detail"]
+    assert {s["name"]: s["status"] for s in out["stages"]}["map"] == "skipped"
+    # The daemon (every kind) still checks the map layers.
+    known = state.read_known()
+    assert known is not None
+    plan = plan_sync(None, known=known)
+    assert len(asked) == 1
+    assert next(c for c in plan.components if c.kind == "map").state == "unknown"
+
+
 # --------------------------------------------------------------------------- failures
 def test_47_of_50_spots_publish_the_3_failed_keep_their_run_and_are_retried_alone(
     db: Session, split: type[SplitDemo]
