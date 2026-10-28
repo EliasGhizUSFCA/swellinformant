@@ -13,9 +13,12 @@ whether one published forecast is shared by every visitor. Nothing is written.
       [--visitors 1000] [--concurrency 64] [--spot pipeline] [--days 10] [--unversioned] \
       [--database-url postgresql://...] [--wait-for-new-version SECONDS] [--json]
 
---database-url (a LOCAL database, for a local stack only): its pg_stat_database commits and
-rollbacks before and after the run are printed (database transactions caused by the load,
-plus any other client's). --wait-for-new-version: after the load, poll the version endpoint
+--database-url (a LOCAL database, for a local stack only): its pg_stat_database rollbacks
+and commits during the run are printed, read again once PG_FLUSH_WAIT_SECONDS have passed
+after the load (an idle backend may hold its counters that long). The rollbacks are the
+read transactions (the public reads end each with one; autovacuum never does); the commits
+also count connection start-ups and autovacuum's work, which runs at any time.
+--wait-for-new-version: after the load, poll the version endpoint
 (every 2 s) until another version is published (e.g. after POST /api/internal/refresh), then
 load every route once more and check that the new version is served; prints how long after
 ``published_at`` the version endpoint and the routes served it.
@@ -93,8 +96,12 @@ def digest(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()[:16]
 
 
-def pg_transactions(database_url: str) -> int | None:
-    """Commits plus rollbacks of the database in pg_stat_database (psycopg, if installed)."""
+# PostgreSQL (15+) lets an idle backend hold its statistics for up to 10 s before flushing.
+PG_FLUSH_WAIT_SECONDS = 11.0
+
+
+def pg_transactions(database_url: str) -> tuple[int, int] | None:
+    """(rollbacks, commits) of the database in pg_stat_database (psycopg, if installed)."""
     try:
         import psycopg
     except ImportError:
@@ -104,10 +111,10 @@ def pg_transactions(database_url: str) -> int | None:
     with psycopg.connect(url) as conn:
         conn.execute("SELECT pg_stat_clear_snapshot()")
         row = conn.execute(
-            "SELECT xact_commit + xact_rollback FROM pg_stat_database "
+            "SELECT xact_rollback, xact_commit FROM pg_stat_database "
             "WHERE datname = current_database()"
         ).fetchone()
-    return int(row[0]) if row else None
+    return (int(row[0]), int(row[1])) if row else None
 
 
 def run_load(
@@ -225,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         before = current_version(client)
         pg_before = pg_transactions(args.database_url) if args.database_url else None
         stats, wall = run_load(client, paths, args.visitors, args.concurrency, not args.unversioned)
+        if args.database_url:
+            time.sleep(PG_FLUSH_WAIT_SECONDS)
         pg_after = pg_transactions(args.database_url) if args.database_url else None
         follow = (
             wait_for_new_version(client, paths, before.get("version_id"), args.wait_for_new_version)
@@ -244,7 +253,9 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "routes": {name: s.summary() for name, s in stats.items()},
         "pg_transactions": (
-            pg_after - pg_before if pg_before is not None and pg_after is not None else None
+            {"rollbacks": pg_after[0] - pg_before[0], "commits": pg_after[1] - pg_before[1]}
+            if pg_before is not None and pg_after is not None
+            else None
         ),
         "new_version": follow,
     }
@@ -274,7 +285,11 @@ def main(argv: list[str] | None = None) -> int:
             if s["x_vercel_cache"]:
                 print(f"  {'':15s} x-vercel-cache {s['x_vercel_cache']}")
         if result["pg_transactions"] is not None:
-            print(f"database transactions during the run: {result['pg_transactions']}")
+            pg = result["pg_transactions"]
+            print(
+                f"database transactions during the run: rollbacks {pg['rollbacks']} (the "
+                f"reads), commits {pg['commits']} (connection start-ups and autovacuum's too)"
+            )
         if follow is not None:
             print(f"new version: {json.dumps(follow)}")
     return 1 if failed or mixed else 0
