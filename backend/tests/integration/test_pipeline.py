@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.database import utcnow
 from app.models import (
     FlightOffer,
+    FlightSearch,
     ForecastRun,
     Notification,
     NotificationPreference,
@@ -406,14 +407,25 @@ def test_expired_offer_is_never_alerted_and_triggers_research(
     discover_flights(db)
     db.execute(update(FlightOffer).values(offer_expires_at=utcnow() - timedelta(minutes=1)))
     db.commit()
+    expired = set(db.scalars(select(FlightOffer.id)).all())
+    searches_before = db.scalar(select(func.count()).select_from(FlightSearch))
     stats = generate_alerts(db)
-    assert stats.invalidated >= 1 and stats.queued == 0
+    # Design D15 / spec 27: the fare is re-checked only right before the alert is sent. The
+    # expired quote is invalidated, the trip is searched once more right there (its cached
+    # search was expired, so the provider is asked again) and the alert goes out with the
+    # fresh fare: an expired offer is never alerted, and nothing waits for a timer.
+    assert stats.invalidated >= 1 and stats.researched >= 1
+    assert db.scalar(select(func.count()).select_from(FlightSearch)) > searches_before  # type: ignore[operator]
     db.expire_all()
     match = sim_match(db, start, start + timedelta(hours=60))
-    assert match.status == MatchStatus.PENDING_FLIGHTS
-    discover_flights(db)  # cache was invalidated → fresh offers
-    db.expire_all()
-    assert db.get(OpportunityMatch, match.id).status == MatchStatus.FLIGHT_FOUND  # type: ignore[union-attr]
+    assert match.status == MatchStatus.FLIGHT_FOUND
+    assert match.best_offer is not None and match.best_offer.id not in expired
+    assert match.best_offer.offer_expires_at is not None
+    assert match.best_offer.offer_expires_at > utcnow()
+    sent = db.scalars(select(Notification).where(Notification.match_id == match.id)).all()
+    assert stats.queued >= 1 and sent
+    assert all(n.snapshot.get("offer_id") not in {str(i) for i in expired} for n in sent)
+    assert all(n.snapshot.get("offer_id") == str(match.best_offer.id) for n in sent)
 
 
 # ---------------------------------------------------------------- notification preferences

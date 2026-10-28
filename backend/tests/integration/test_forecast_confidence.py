@@ -706,9 +706,12 @@ def test_demo_data_is_low_in_predictions_events_and_alerts(
     assert snap["forecast_confidence_class"] == fc.LOW
     text = sent[0].body_text or ""
     assert "Forecast confidence: Low — about " in text and " days away" in text
-    # Local confidence equals forecast confidence (both Low): no separate local reason.
-    assert snap["local_confidence_class"] == fc.LOW and snap["local_confidence_reason"] is None
-    assert "Confidence at this break: Low\n" in text
+    # Spec 20: the alert no longer carries the combined local confidence; research
+    # confidence (the spot's research class, when assessed) is a separate row.
+    assert "local_confidence_class" not in snap and "local_confidence_reason" not in snap
+    assert "Confidence at this break" not in text
+    research = snap.get("research_confidence_class")
+    assert ("Research confidence: " in text) is (research is not None)
     assert all(e.local_confidence_reason is None for e in events)
     # An alert built once the run has gone stale (alerts are withheld only at twice the
     # stale-after age) reads like the API at that time: the staleness reason comes first.

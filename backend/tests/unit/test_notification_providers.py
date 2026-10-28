@@ -232,7 +232,8 @@ class TestTemplates:
             # A snapshot without model runs names the run's issue time for what it is.
             "Model run: 2026-07-03 06:00 UTC · NOAA GFS-Wave",
             "Price checked:",
-            "Flight offers: https://flights",
+            # Spec 26/29: a third-party route search is labelled as such (fares may differ).
+            "Google Flights (route search — fares may differ): https://flights",
             "Your dashboard: https://app/dashboard",
             "Manage alerts: https://app/settings#alerts",
             "Unsubscribe",
@@ -277,20 +278,25 @@ class TestTemplates:
         _, single, _ = render_alert_email({**snap, "model_runs": snap["model_runs"][:1]}, LINKS)
         assert "Model run: NOAA GFS-Wave + GFS (direct) (2026-10-11 18:00 UTC)" in single
 
-    def test_forecast_and_local_confidence_in_words(self) -> None:
+    def test_forecast_and_research_confidence_in_words(self) -> None:
+        """Spec 20: forecast confidence and research confidence are separate rows; the
+        combined "confidence at this break" row is gone (a snapshot that still carries the
+        old local class does not bring it back)."""
         snap = {
             **SNAP,
             "forecast_confidence_class": "moderate",
             "local_confidence_class": "low",
+            "research_confidence_class": "low",
             "confidence_lead_hours": 146.0,
             "local_confidence_reason": "How this break responds to swell is not well documented yet.",
         }
         _, text, html = render_alert_email(snap, LINKS)
         assert "Forecast confidence: Moderate — about 6 days away" in text
         assert (
-            "Confidence at this break: Low — How this break responds to swell is not well "
-            "documented yet." in text
+            "Research confidence: Low (how well this break's ideal conditions are documented; "
+            "separate from the forecast)" in text
         )
+        assert "Confidence at this break" not in text
         assert "60/100" not in text and "Moderate — about 6 days away" in html
         # The distance is measured from when the alert was built, when that is known.
         _, sent_later, _ = render_alert_email({**snap, "peak_in_hours": 130.0}, LINKS)
@@ -304,6 +310,7 @@ class TestTemplates:
         )
         assert "Forecast confidence: Moderate" not in legacy
         assert "Confidence at this break" not in legacy
+        assert "Research confidence" not in legacy
 
     def test_data_credits_are_printed_next_to_the_model_values(self) -> None:
         """Open-Meteo asks for a link wherever its data are shown and ECMWF for "Copyright

@@ -43,6 +43,10 @@ class EmailMessageData:
     html: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     tag: str = "alert"
+    # One key per message we record ("notification-<id>", "account-email-<id>"): a retry
+    # of the same message (after a timeout, or a reclaimed SENDING row) is not sent twice
+    # by providers that honour it (Resend: the Idempotency-Key request header, 24 h).
+    idempotency_key: str | None = None
 
 
 @dataclass
@@ -192,13 +196,18 @@ class ResendEmailProvider(_HttpEmailProvider):
             body["html"] = message.html
         if message.headers:
             body["headers"] = message.headers
+        headers = {"Authorization": f"Bearer {self.settings.resend_api_key}"}
+        if message.idempotency_key:
+            # https://resend.com/docs/dashboard/emails/idempotency-keys: a repeated request
+            # with the same key within 24 hours is not sent again.
+            headers["Idempotency-Key"] = message.idempotency_key[:256]
         resp = request_with_retries(
             self.client,
             "POST",
             "https://api.resend.com/emails",
             provider="resend",
             backoff_seconds=self.backoff_seconds,
-            headers={"Authorization": f"Bearer {self.settings.resend_api_key}"},
+            headers=headers,
             json=body,
         )
         self._check(resp)
