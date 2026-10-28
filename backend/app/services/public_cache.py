@@ -72,7 +72,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import secrets
 import threading
 import time
@@ -92,7 +91,7 @@ from sqlalchemy.orm import Session
 from app.core import ratelimit
 from app.core.config import get_settings
 from app.core.database import utcnow
-from app.core.redis import RELEASE_SCRIPT, get_redis_bytes
+from app.core.redis import RELEASE_SCRIPT, deployment_scope, get_redis_bytes
 from app.models import ForecastRun, ForecastVersion, SpotResearchAssessment, SurfSpot, SwellEvent
 from app.models.forecast_engine import MapField
 from app.models.sync import SyncRun
@@ -141,13 +140,7 @@ def namespace(environ: Mapping[str, str] | None = None) -> str:
     production or unset), so the daemon's marker reaches the production API whether or not
     the daemon sees VERCEL_ENV; ``public:v1:<env>:<digest of the deployment>`` for a
     preview or development deployment (VERCEL_DEPLOYMENT_ID, else VERCEL_URL)."""
-    env = os.environ if environ is None else environ
-    target = (env.get("VERCEL_ENV") or "production").strip().lower()
-    if target == "production":
-        return PREFIX
-    deployment = env.get("VERCEL_DEPLOYMENT_ID") or env.get("VERCEL_URL") or "local"
-    digest = hashlib.sha256(deployment.encode()).hexdigest()[:12]
-    return f"{PREFIX}:{target}:{digest}"
+    return f"{PREFIX}{deployment_scope(environ)}"
 
 
 def epoch_key() -> str:

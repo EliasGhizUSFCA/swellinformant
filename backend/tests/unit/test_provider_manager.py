@@ -330,3 +330,29 @@ def test_the_windy_check_without_a_key_sends_nothing() -> None:
     assert pm.health_check("windy", make(), now=NOW).status == "not_configured"
     with pytest.raises(ValueError, match="no health check"):
         pm.health_check("noaa_gfs", make())
+
+
+def test_a_preview_deployment_keeps_its_own_provider_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A preview sharing production's Redis and refreshing with a Windy testing key records
+    its failure under its own keys: production stays on Windy (and keeps its run state)."""
+    from app.core.redis import deployment_scope
+    from app.services.forecasts.windy import RunStateStore
+
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
+    assert pm.health_key("windy") == "provider-health:v1:windy"  # production: unchanged
+    assert RunStateStore().key("gfs") == "windy:run-state:v1:gfs"
+    production_scope = deployment_scope()
+    monkeypatch.setenv("VERCEL_ENV", "preview")
+    monkeypatch.setenv("VERCEL_DEPLOYMENT_ID", "dpl_synthetic123")
+    scope = deployment_scope()
+    assert production_scope == "" and scope.startswith(":preview:")
+    assert pm.health_key("windy") == f"provider-health:v1{scope}:windy"
+    assert RunStateStore().key("gfs") == f"windy:run-state:v1{scope}:gfs"
+    pm.record_provider_failure("windy", pm.TESTING_KEY, "synthetic testing-key answer", now=NOW)
+    preview = pm.provider_health("windy")
+    assert preview is not None and preview.blocking(NOW)
+    monkeypatch.setenv("VERCEL_ENV", "production")
+    assert pm.provider_health("windy") is None
+    assert pm.active_provider(windy_primary(), NOW).providers == ("windy",)

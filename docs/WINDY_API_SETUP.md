@@ -253,7 +253,12 @@ same normalized records, when Windy:
 | `WINDY_API_KEY` removed | (settings) | until it is set again |
 
 A successful Windy check or fetch ends the fallback at once. The provider health is kept in
-Redis (`provider-health:v1:windy`), so a Redis outage means Windy is simply tried. A version
+Redis (`provider-health:v1:windy`), so a Redis outage means Windy is simply tried. A preview
+deployment (VERCEL_ENV preview or development) keeps its own provider health and Windy run
+state (`provider-health:v1:<env>:<deployment>:windy`), so a preview tried with a testing key
+never holds production on the fallback, even when both use one Redis. The fallback within a
+refresh: when a Windy refresh fails for one of these reasons, the same refresh runs again on
+Open-Meteo at once. A version
 published during the fallback records `provider` `open_meteo` and `fallback_from` `windy`, and
 the admin alerts (docs/operations.md) report `provider_fallback` and, for a key problem,
 `provider_credentials`.

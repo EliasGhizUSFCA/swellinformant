@@ -42,7 +42,7 @@ import redis
 from app.core.config import WINDY_FALLBACK_PROVIDER, Settings, get_settings
 from app.core.database import utcnow
 from app.core.logging import redact
-from app.core.redis import get_redis
+from app.core.redis import deployment_scope, get_redis
 from app.services.http import ProviderError, QuotaExhaustedError, TransientProviderError
 
 if TYPE_CHECKING:
@@ -139,7 +139,10 @@ class ProviderHealth:
 
 
 def health_key(provider: str) -> str:
-    return HEALTH_KEY.format(provider=provider)
+    """``provider-health:v1:<provider>`` in production; a preview deployment keeps its own
+    (``provider-health:v1:<env>:<deployment>:<provider>``), so a preview refreshing with a
+    Windy testing key never holds production on the fallback."""
+    return HEALTH_KEY.format(provider=f"{deployment_scope()[1:]}:{provider}".lstrip(":"))
 
 
 def provider_health(provider: str) -> ProviderHealth | None:

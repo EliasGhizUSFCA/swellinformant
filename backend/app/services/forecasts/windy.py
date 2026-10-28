@@ -82,7 +82,7 @@ import redis
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.core.logging import redact
-from app.core.redis import get_redis
+from app.core.redis import deployment_scope, get_redis
 from app.services.forecasts import provider_manager
 from app.services.forecasts.base import (
     ATMOSPHERE,
@@ -469,7 +469,9 @@ class RunStateStore:
     """The sentinel states in Redis (decoded client), with a process memo when Redis fails."""
 
     def key(self, model: str) -> str:
-        return STATE_KEY.format(model=model)
+        """``windy:run-state:v1:<model>`` in production; a preview deployment keeps its own
+        (``...:v1:<env>:<deployment>:<model>``, app.core.redis.deployment_scope)."""
+        return STATE_KEY.format(model=f"{deployment_scope()[1:]}:{model}".lstrip(":"))
 
     def load(self, model: str) -> ModelRunState | None:
         raw: str | None
