@@ -86,7 +86,9 @@ def test_light_onshore_is_still_onshore() -> None:
     pred, fc = hour(6.0, 110.0)
     assert pred.wind_relation == "onshore"
     assert pred.components["wind_detail"]["strength"] == "light"
-    assert pred.components["wind_detail"]["favourability"] == "favourable"
+    # Algorithm 2.2.0 (spec 19, light onshore is often marginal): at best "workable".
+    assert pred.components["wind_detail"]["favourability"] == "workable"
+    assert pred.components["wind_detail"]["onshore_capped"] is True
     assert not step_meets(pred, fc, criteria(WindRequirement.NOT_ONSHORE))
     assert step_meets(pred, fc, criteria(WindRequirement.ANY))
 

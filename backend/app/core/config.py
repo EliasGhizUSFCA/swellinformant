@@ -365,8 +365,9 @@ class Settings(BaseSettings):
     # Forecast sources archived at observation stations for verification.
     point_forecast_sources: str = "gfswave_bulletin"
     ml_artifact_dir: str = "/tmp/swell-ml"  # noqa: S108  (use a persistent volume in production)
-    # Apply ACTIVE ML corrections (only models that passed the deployment criteria).
-    ml_corrections_enabled: bool = True
+    # Optional, off by default (spec 2: no ML in the default path): apply an ACTIVE ML
+    # correction (only models that passed the deployment criteria).
+    ml_corrections_enabled: bool = False
     # Archive every published prediction at each lead time (verification and ML training
     # data; app.services.forecasts.archive). Off by default (design D5); the full-retention
     # profile turns it on.
@@ -408,8 +409,8 @@ class Settings(BaseSettings):
     # definition is documented (ForecastRecord.extra["gust_kind"]).
     wind_gust_scoring: Literal["off", "scored"] = "off"
     # Optional JSON object overriding the component weights of the quality score, e.g.
-    # {"wind": 0.35, "tide": 0.0}: non-negative numbers, at least one above 0. The names are
-    # checked against the scoring components by app.services.surf_quality.
+    # {"wind": 0.35, "tide": 0.0}: non-negative numbers, at least one above 0; the rest
+    # keep their defaults. app.services.surf_quality.weights checks the names at start-up.
     scoring_weights_json: str | None = None
 
     # ------------------------------------------------------------------ detection
@@ -633,6 +634,9 @@ class Settings(BaseSettings):
                 raise ValueError(f"SCORING_WEIGHTS_JSON[{name!r}] must be a number >= 0")
         if not any(weight > 0 for weight in weights.values()):
             raise ValueError("SCORING_WEIGHTS_JSON needs at least one weight above 0")
+        from app.services.surf_quality.weights import validate_weights
+
+        validate_weights(weights)  # component names; wave_size above 0
         return v
 
     @field_validator("map_field_steps")

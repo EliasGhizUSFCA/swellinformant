@@ -38,7 +38,7 @@ def test_forecast_and_events_after_pipeline(
     fc = app_client.get("/api/spots/pipeline/forecast?days=5").json()
     assert fc["available"] and fc["source"]["is_demo"] and fc["stale"] is False
     assert fc["breaking_height_method"] == "linear_wave_v2"  # the method the predictions used
-    assert fc["algorithm_version"] == ALGORITHM_VERSION == "2.1.0"
+    assert fc["algorithm_version"] == ALGORITHM_VERSION == "2.2.0"
     assert fc["points"][0]["uncertainty_kind"] == "heuristic"
     assert fc["points"][0]["breaking_p10_ft"] < fc["points"][0]["breaking_p90_ft"]
     assert [m["role"] for m in fc["models"]] == ["authoritative"]

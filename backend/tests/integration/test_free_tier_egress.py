@@ -107,6 +107,14 @@ from tests.sync_fixtures import MapWorld, install_synthetic_map
 
 pytestmark = pytest.mark.integration
 
+
+@pytest.fixture(autouse=True)
+def _prediction_archive_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The prediction archive is optional and off by default since Swell 2.0
+    (PREDICTION_ARCHIVE_ENABLED); these tests check what it archives, so it is on."""
+    monkeypatch.setattr(get_settings(), "prediction_archive_enabled", True)
+
+
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 

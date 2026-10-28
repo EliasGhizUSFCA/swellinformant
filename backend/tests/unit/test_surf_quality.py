@@ -337,7 +337,8 @@ class TestStoredComponents:
         assert "wind 34 km/h from WNW" in r.explanation
 
     def test_version(self) -> None:
-        assert ALGORITHM_VERSION == "2.1.0"
+        # 2.2.0: favourable/unfavourable conditions, the light-onshore cap, weights override.
+        assert ALGORITHM_VERSION == "2.2.0"
 
     def test_gusts_are_display_only_unless_scored_with_a_documented_definition(self) -> None:
         gusty = replace(

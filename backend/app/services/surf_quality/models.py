@@ -41,6 +41,8 @@ class SpotParams:
     # and the spot has a preference (scoring.tide_excluded_reason).
     tide_research_class: str | None = None
     tide_decision: str | None = None
+    # reef | point | beach | slab | rivermouth (spots.json), for the plain-language reasons.
+    break_type: str | None = None
 
     def physical_profile(self) -> Profile:
         """The stored profile, or one derived from the spot's windows (all estimated)."""
@@ -76,6 +78,7 @@ class SpotParams:
             calibration=spot.calibration,
             profile=profile_from_orm(spot),
             wind_profile=wind_profile_from_orm(spot),
+            break_type=str(spot.break_type) if getattr(spot, "break_type", None) else None,
         )
 
 
@@ -225,9 +228,20 @@ class QualityResult:
     explanation: str
     # Algorithm 2.1.0 additions (docs/SURF_SCORING.md section 3a): wind_detail,
     # weights_used, contributions, direction_partitions and tide_detail or
-    # tide_excluded_reason.
+    # tide_excluded_reason; 2.2.0 adds favourable and unfavourable (reasons.py).
     details: dict[str, Any] = field(default_factory=dict)
+    # The scoring model version the result was made with (ALGORITHM_VERSION, with the
+    # weights tag when SCORING_WEIGHTS_JSON changes the weights: weights.tagged_version).
+    model_version: str = ""
+
+    @property
+    def favourable(self) -> list[str]:
+        return list(self.details.get("favourable") or [])
+
+    @property
+    def unfavourable(self) -> list[str]:
+        return list(self.details.get("unfavourable") or [])
 
     def stored_components(self) -> dict[str, Any]:
-        """``components`` plus the 2.1.0 keys, as written to the prediction row."""
+        """``components`` plus the 2.1.0 and 2.2.0 keys, as written to the prediction row."""
         return {**self.components, **self.details}

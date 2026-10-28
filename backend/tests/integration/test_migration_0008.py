@@ -78,7 +78,7 @@ def _store_pre_upgrade_data(now: datetime) -> tuple[int, int]:
     """What the pipeline stored before Upgrade 4, at schema 0006: (forecast run, map run)."""
     from app.services.forecasts.ingestion import acquire_all
     from app.services.seed import seed_reference_data
-    from app.services.surf_quality.predict import compute_pending_predictions
+    from app.services.surf_quality.predict import compute_predictions_for_run
 
     with SessionLocal() as db:
         seed_reference_data(db)
@@ -86,9 +86,13 @@ def _store_pre_upgrade_data(now: datetime) -> tuple[int, int]:
             text("UPDATE surf_spots SET is_active = (slug = ANY(:keep))"), {"keep": list(KEEP)}
         )
         db.commit()
-        # SYNTHETIC: the demo provider's generated forecasts and their predictions.
-        acquire_all(db, now=now)
-        compute_pending_predictions(db, now)
+        # SYNTHETIC: the demo provider's generated forecasts and their predictions. The run is
+        # scored directly: the prediction pass (compute_pending_predictions) now also checks
+        # the served runs of the published forecast version (Swell 2.0, table of 0009),
+        # which a schema-0006 database does not have.
+        (outcome,) = acquire_all(db, now=now)
+        assert outcome.run_id is not None
+        compute_predictions_for_run(db, outcome.run_id, now=now)
         forecast_run = db.scalars(select(ForecastRun).where(ForecastRun.status.in_(USABLE))).one()
         # SYNTHETIC map fields (not model data): one run, every core variable at one time.
         source = ForecastSource(
