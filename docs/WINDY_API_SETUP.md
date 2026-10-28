@@ -207,7 +207,12 @@ the same times as windy.com and that gfsWave cannot update more often than every
   cycle. The run records `estimated = true` and every page that shows it says "estimated".
 * **A fetch is checked at its end**: the sentinel spot is fetched last (otherwise one more
   request per component) and its fingerprint must still be the run's. Data that changed
-  during the fetch are not stored; the refresh retries a minute later.
+  during the fetch are not stored; the refresh retries a minute later. A fingerprint seen
+  before that comes back (a lagging answer) is never taken as a new run.
+* **The labels live in Redis.** While Redis is unreachable a process keeps its own copy; a
+  process that starts without either (or after Redis lost its data) estimates the cycle of
+  the data it sees afresh, so unchanged data can get a newer label once the next cycle's
+  expected time has passed.
 * The 4 h and 8 h are **estimates**: NOAA's GFS output is complete roughly 3.5-5 h after the
   cycle (Open-Meteo listed GFS-Wave 0.16° of 2026-10-27 06Z as available at 11:15 UTC, 5.3 h
   after the cycle, in the provider check run while writing this page), and Windy's own delay
