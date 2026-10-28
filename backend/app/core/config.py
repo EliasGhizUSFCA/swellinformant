@@ -443,7 +443,6 @@ class Settings(BaseSettings):
     flight_cache_ttl_hours: float = 6.0
     flight_daily_quota: int = 300
     flight_max_queries_per_match: int = 3
-    flight_refresh_hours: float = 12.0
     flight_max_offers_per_search: int = 50
     # Provider flight searches a day for one user (all of their saved searches).
     flight_user_daily_quota: int = Field(default=20, ge=1, le=10_000)

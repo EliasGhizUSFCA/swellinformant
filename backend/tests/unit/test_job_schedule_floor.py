@@ -67,8 +67,11 @@ def test_floor_zero_keeps_the_listed_intervals() -> None:
     plain = build_schedule(settings())
     assert plain["notification-delivery"].schedule == Every(2)
     assert plain["alert-generation"].schedule == Every(15)
-    assert plain["user-matching"].schedule == Every(30)
-    assert plain["flight-discovery"].schedule == Every(60)
+    # Design D15: matching runs after every publication plus one daily housekeeping run,
+    # and flights are never searched on a timer (no "flight-discovery" entry any more).
+    assert plain["matching-housekeeping"].schedule == DailyAt((3,), 45)
+    assert "flight-discovery" not in plain
+    assert "flights.discover" not in {e.task for e in plain.values()}
 
 
 def test_the_hosted_profile_batches_the_periodic_jobs_hourly() -> None:
@@ -111,7 +114,9 @@ def test_beat_gets_the_floored_intervals_and_matching_expiry() -> None:
     assert beat_entries["notification-delivery"]["schedule"] == timedelta(hours=1)
     assert beat_entries["notification-delivery"]["options"]["expires"] == 3600.0
     assert beat_entries[SYNC_TICK_ENTRY]["task"] == SYNC_TICK_JOB
-    assert beat_entries["user-matching"]["schedule"] == timedelta(hours=1)
+    # The daily matching housekeeping keeps its fixed time; its message expires after a day.
+    assert beat_entries["matching-housekeeping"]["options"]["expires"] == 24 * 3600.0
+    assert beat_entries["alert-generation"]["schedule"] == timedelta(hours=1)
     assert beat_entries["maintenance-cleanup"]["options"]["expires"] == 24 * 3600.0
 
 

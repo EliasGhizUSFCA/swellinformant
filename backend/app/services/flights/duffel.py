@@ -143,6 +143,9 @@ class DuffelProvider(FlightProvider):
                 f"{marketing.get('iata_code', '')}{seg.get('marketing_carrier_flight_number', '')}"
             ),
             operating_carrier=operating.get("iata_code"),
+            # Duffel's display rule: the operating carrier's full name must be shown
+            # prominently wherever the offer is first presented (offer-requests docs).
+            operating_carrier_name=operating.get("name") or None,
         )
 
     @staticmethod

@@ -245,7 +245,10 @@ def test_periodic_jobs_run_in_one_batch_from_in_memory_timers(
     assert job_names(db) == []  # nothing is due at start
     now[0] += 3600
     expected = [t.entry.task for t in every if t.interval_s == 3600]
-    assert len(expected) >= 5  # everything at the 60-minute floor falls due together
+    # Everything at the 60-minute floor falls due together (alerts, delivery, staleness
+    # check, data health; matching is daily and flights are never on a timer, design D15).
+    assert len(expected) >= 4
+    assert not {"matching.match", "flights.discover"} & set(expected)
     assert daemon.run_periodic() == expected  # one batch, back to back
     assert job_names(db) == expected
     assert daemon.run_periodic() == []  # not again until the next hour
