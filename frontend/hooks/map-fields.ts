@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { fieldIndexPath } from "@/hooks/use-forecast-version";
 import { ApiError, get } from "@/lib/api";
 import { FieldMismatchError, FieldStore, FIELD_STORE_CAPACITY, isFieldVariable, type FieldGrid, type FieldIndex, type FieldVariableName } from "@/lib/map-fields";
 import { layerDef } from "@/lib/map-layers";
@@ -34,7 +35,7 @@ export const useFieldIndex = () =>
     queryKey: FIELD_INDEX_KEY,
     queryFn: async ({ signal }) => {
       try {
-        return await get<FieldIndex>("/api/map/fields", signal);
+        return await get<FieldIndex>(fieldIndexPath(), signal); // ?v=&m= of the forecast version (a new map run is a new URL)
       } catch (e) {
         if (e instanceof ApiError || e instanceof TypeError) return UNAVAILABLE;
         throw e;

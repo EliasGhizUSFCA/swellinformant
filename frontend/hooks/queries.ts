@@ -1,7 +1,8 @@
 "use client";
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, type PlaceholderDataFunction, type QueryKey } from "@tanstack/react-query";
 
+import { sameExceptVersion, useVersionedRead, versionKey } from "@/hooks/use-forecast-version";
 import { ApiError, get } from "@/lib/api";
 import type {
   AccuracyMetric,
@@ -24,15 +25,21 @@ import type {
   VerificationStatus,
 } from "@/types/api";
 
+/**
+ * Query keys. The public forecast reads (spot list, spot, forecast, timeline, events, map
+ * conditions) end with the forecast version their data belongs to (`{ v }`, see
+ * hooks/use-forecast-version.ts), and their URLs carry the same `?v=` (taken from the key, so
+ * the version provider can read a new version under its own key before the page moves to it).
+ */
 export const qk = {
   me: ["me"] as const,
-  spots: ["spots"] as const,
-  spot: (slug: string) => ["spot", slug] as const,
-  forecast: (slug: string, days: number) => ["forecast", slug, days] as const,
-  timeline: (slug: string, days: number) => ["timeline", slug, days] as const,
-  spotEvents: (slug: string) => ["spot-events", slug] as const,
+  spots: (v: number | null = null) => ["spots", versionKey(v)] as const,
+  spot: (slug: string, v: number | null = null) => ["spot", slug, versionKey(v)] as const,
+  forecast: (slug: string, days: number, v: number | null = null) => ["forecast", slug, days, versionKey(v)] as const,
+  timeline: (slug: string, days: number, v: number | null = null) => ["timeline", slug, days, versionKey(v)] as const,
+  spotEvents: (slug: string, v: number | null = null) => ["spot-events", slug, versionKey(v)] as const,
   spotOpportunities: (slug: string) => ["spot-opportunities", slug] as const,
-  events: (limit: number, minScore: number) => ["events", limit, minScore] as const,
+  events: (limit: number, minScore: number, v: number | null = null) => ["events", limit, minScore, versionKey(v)] as const,
   searches: ["searches"] as const,
   search: (id: string) => ["search", id] as const,
   searchMatches: (id: string) => ["search-matches", id] as const,
@@ -44,8 +51,16 @@ export const qk = {
   status: ["system-status"] as const,
   verification: ["verification-status"] as const,
   accuracy: (part: string, params: string) => ["accuracy", part, params] as const,
-  mapConditions: (at: string | null) => ["map-conditions", at] as const,
+  mapConditions: (at: string | null, v: number | null = null) => ["map-conditions", at, versionKey(v)] as const,
 };
+
+/** placeholderData of a versioned read: the previous version's data of the same read stays
+ * on screen while a read of the new version that was not read ahead loads (never another
+ * spot's or another query's), so an update never blanks the page, unmounts a chart or loses
+ * its selection or scroll. */
+function previousVersion<T, K extends QueryKey>(key: K): PlaceholderDataFunction<T, Error, T, K> {
+  return (previous, previousQuery) => (previousQuery && sameExceptVersion(previousQuery.queryKey, key) ? previous : undefined);
+}
 
 /** The signed-in user, or `null` when signed out (never throws for 401). */
 export function useMe() {
@@ -64,29 +79,60 @@ export function useMe() {
   });
 }
 
-export const useSpots = () =>
-  useQuery({ queryKey: qk.spots, queryFn: ({ signal }) => get<SpotSummary[]>("/api/spots", signal), staleTime: 120_000 });
-
-export const useSpot = (slug: string) =>
-  useQuery({ queryKey: qk.spot(slug), queryFn: ({ signal }) => get<SpotDetail>(`/api/spots/${slug}`, signal) });
-
-export const useForecast = (slug: string, days = 10) =>
-  useQuery({
-    queryKey: qk.forecast(slug, days),
-    queryFn: ({ signal }) => get<SpotForecast>(`/api/spots/${slug}/forecast?days=${days}`, signal),
+export function useSpots() {
+  const read = useVersionedRead();
+  const queryKey = qk.spots(read.v);
+  return useQuery({
+    queryKey,
+    queryFn: async ({ queryKey: key, signal }) => get<SpotSummary[]>(await read.url("/api/spots", key, signal), signal),
+    placeholderData: previousVersion<SpotSummary[], typeof queryKey>(queryKey),
     staleTime: 120_000,
   });
+}
 
-/** Every chart row of the spot page on one time axis (fetched once; selection is client-side). */
-export const useSpotTimeline = (slug: string, days = 10) =>
-  useQuery({
-    queryKey: qk.timeline(slug, days),
-    queryFn: ({ signal }) => get<SpotTimeline>(`/api/spots/${slug}/timeline?days=${days}`, signal),
+export function useSpot(slug: string) {
+  const read = useVersionedRead();
+  const queryKey = qk.spot(slug, read.v);
+  return useQuery({
+    queryKey,
+    queryFn: async ({ queryKey: key, signal }) => get<SpotDetail>(await read.url(`/api/spots/${slug}`, key, signal), signal),
+    placeholderData: previousVersion<SpotDetail, typeof queryKey>(queryKey),
+  });
+}
+
+export function useForecast(slug: string, days = 10) {
+  const read = useVersionedRead();
+  const queryKey = qk.forecast(slug, days, read.v);
+  return useQuery({
+    queryKey,
+    queryFn: async ({ queryKey: key, signal }) => get<SpotForecast>(await read.url(`/api/spots/${slug}/forecast?days=${days}`, key, signal), signal),
+    placeholderData: previousVersion<SpotForecast, typeof queryKey>(queryKey),
     staleTime: 120_000,
   });
+}
 
-export const useSpotEvents = (slug: string) =>
-  useQuery({ queryKey: qk.spotEvents(slug), queryFn: ({ signal }) => get<SwellEvent[]>(`/api/spots/${slug}/events`, signal) });
+/** Every chart row of the spot page on one time axis (fetched once per version; selection is
+ * client-side and survives a new version: every row snaps it to the nearest step). */
+export function useSpotTimeline(slug: string, days = 10) {
+  const read = useVersionedRead();
+  const queryKey = qk.timeline(slug, days, read.v);
+  return useQuery({
+    queryKey,
+    queryFn: async ({ queryKey: key, signal }) => get<SpotTimeline>(await read.url(`/api/spots/${slug}/timeline?days=${days}`, key, signal), signal),
+    placeholderData: previousVersion<SpotTimeline, typeof queryKey>(queryKey),
+    staleTime: 120_000,
+  });
+}
+
+export function useSpotEvents(slug: string) {
+  const read = useVersionedRead();
+  const queryKey = qk.spotEvents(slug, read.v);
+  return useQuery({
+    queryKey,
+    queryFn: async ({ queryKey: key, signal }) => get<SwellEvent[]>(await read.url(`/api/spots/${slug}/events`, key, signal), signal),
+    placeholderData: previousVersion<SwellEvent[], typeof queryKey>(queryKey),
+  });
+}
 
 export const useSpotOpportunities = (slug: string, enabled: boolean) =>
   useQuery({
@@ -95,12 +141,16 @@ export const useSpotOpportunities = (slug: string, enabled: boolean) =>
     enabled,
   });
 
-export const useEvents = (limit = 12, minScore = 0) =>
-  useQuery({
-    queryKey: qk.events(limit, minScore),
-    queryFn: ({ signal }) => get<SwellEvent[]>(`/api/events?limit=${limit}&min_score=${minScore}`, signal),
+export function useEvents(limit = 12, minScore = 0) {
+  const read = useVersionedRead();
+  const queryKey = qk.events(limit, minScore, read.v);
+  return useQuery({
+    queryKey,
+    queryFn: async ({ queryKey: key, signal }) => get<SwellEvent[]>(await read.url(`/api/events?limit=${limit}&min_score=${minScore}`, key, signal), signal),
+    placeholderData: previousVersion<SwellEvent[], typeof queryKey>(queryKey),
     staleTime: 120_000,
   });
+}
 
 export const useSearches = () =>
   useQuery({ queryKey: qk.searches, queryFn: ({ signal }) => get<Search[]>("/api/searches", signal) });
@@ -117,7 +167,8 @@ export const useSearchMatches = (id: string) =>
 /** The signed-in user's opportunities (no-store: every read reaches the database). Read on
  * mount and when the window regains focus (after the 30 s staleTime), never on a timer: a
  * poll every minute kept a scale-to-zero database (Neon) awake for as long as any dashboard
- * stayed visible, while matching runs hourly and after syncs anyway. */
+ * stayed visible, while matching runs hourly and after syncs anyway. A new forecast version
+ * re-reads it once, after the refresh's matching (hooks/use-forecast-version.ts, SETTLE_MS). */
 export const useOpportunities = (includePast = false) =>
   useQuery({
     queryKey: qk.opportunities(includePast),
@@ -187,17 +238,19 @@ export const useVerificationStatus = (enabled: boolean) =>
     },
   });
 
-/** All spots at one forecast hour (cached predictions). Keeps the previous hour on screen
- * while the next loads so scrubbing the time control never blanks the map. The "now" snapshot
- * (`at` null) is refreshed every 5 minutes and when the window regains focus, so a page left
- * open picks up new model runs. */
-export const useMapConditions = (at: string | null) =>
-  useQuery({
-    queryKey: qk.mapConditions(at),
-    queryFn: ({ signal }) =>
-      get<MapSnapshot>(at ? `/api/map/conditions?at=${encodeURIComponent(at)}` : "/api/map/conditions", signal),
+/** All spots at one forecast hour (cached predictions). Keeps the previous hour (and the
+ * previous version) on screen while the next loads, so scrubbing the time control or a new
+ * forecast never blanks the map. A page left open picks up a new forecast through its version
+ * (the key and ?v=, hooks/use-forecast-version.ts), never on a timer; the "now" snapshot (`at`
+ * null) is also read again when the window regains focus (its hour moves on). */
+export function useMapConditions(at: string | null) {
+  const read = useVersionedRead();
+  return useQuery({
+    queryKey: qk.mapConditions(at, read.v),
+    queryFn: async ({ queryKey: key, signal }) =>
+      get<MapSnapshot>(await read.url(at ? `/api/map/conditions?at=${encodeURIComponent(at)}` : "/api/map/conditions", key, signal), signal),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
-    refetchInterval: at === null ? 300_000 : false,
     refetchOnWindowFocus: at === null,
   });
+}

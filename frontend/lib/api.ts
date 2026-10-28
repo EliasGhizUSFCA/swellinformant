@@ -96,6 +96,76 @@ export const put = <T>(path: string, body?: unknown) => api<T>(path, { method: "
 export const patch = <T>(path: string, body?: unknown) => api<T>(path, { method: "PATCH", body });
 export const del = <T>(path: string, body?: unknown) => api<T>(path, { method: "DELETE", body });
 
+// --- forecast versions (design D11, contract C4) --------------------------------------------
+
+/** GET /api/forecasts/version (contract C4): the published forecast version. `version_id`
+ * null = nothing published yet (the data served then comes from the run selection used before
+ * versions existed). Times are ISO 8601 UTC. Mirrors the API's ForecastVersionOut until the
+ * generated OpenAPI types (types/openapi.d.ts) include it. */
+export interface ForecastVersion {
+  version_id: number | null;
+  published_at: string | null;
+  provider: string | null;
+  source_code: string | null;
+  wind_model: string | null;
+  wind_model_run: string | null;
+  wind_run_estimated: boolean;
+  wave_model: string | null;
+  wave_model_run: string | null;
+  wave_run_estimated: boolean;
+  spots_total: number;
+  spots_updated: number;
+  spots_stale: number;
+  /** The published map-layer run (its own pointer): a change means new ocean layers. */
+  map_run_id: number | null;
+  map_cycle: string | null;
+  attribution: string[];
+}
+
+export const FORECAST_VERSION_PATH = "/api/forecasts/version";
+export const FORECAST_SEEN_PATH = "/api/forecasts/seen";
+
+/** An id usable as `?v=`: a positive integer, else null (0, null and NaN mean "none published",
+ * and the API treats them as such). */
+export function versionParam(id: number | null | undefined): number | null {
+  return typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/** `path` with each positive-integer param of `params` appended (`?v=12`, `&m=7`); the rest
+ * are left out, so without a known version the path is unchanged. The public forecast GETs
+ * take `v` (the version shown): a new publication is then a new URL for the browser cache
+ * and the CDN, and a `v` the server does not serve is answered with no-store headers. */
+export function withParams(path: string, params: Record<string, number | null | undefined>): string {
+  let out = path;
+  for (const [name, value] of Object.entries(params)) {
+    const v = versionParam(value);
+    if (v != null) out += `${out.includes("?") ? "&" : "?"}${name}=${v}`;
+  }
+  return out;
+}
+
+export const withVersion = (path: string, versionId: number | null | undefined) => withParams(path, { v: versionId });
+
+/** Tells the API this tab rendered forecast version `versionId` (publication-to-browser
+ * latency, admin dashboard). navigator.sendBeacon (a JSON string goes as text/plain, which the
+ * endpoint reads; no CSRF header, the route is exempt), else a keepalive fetch. Never throws;
+ * returns whether the browser accepted the report. */
+export function sendSeenBeacon(versionId: number): boolean {
+  const body = JSON.stringify({ version_id: versionId });
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+      if (navigator.sendBeacon(FORECAST_SEEN_PATH, body)) return true;
+    }
+    if (typeof fetch === "function") {
+      void fetch(FORECAST_SEEN_PATH, { method: "POST", body, keepalive: true, credentials: "same-origin", headers: { "Content-Type": "text/plain" } }).catch(() => undefined);
+      return true;
+    }
+  } catch {
+    // A report is best effort: the page works the same without it.
+  }
+  return false;
+}
+
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.details.length) return error.details.map((d) => d.message).join(" ");

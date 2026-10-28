@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { toast } from "sonner";
 
+import { ForecastUpdated } from "@/components/forecast-updated";
 import { AppShell } from "@/components/layout/app-shell";
 import { LayerTabs } from "@/components/map/layer-tabs";
 import { LegendDrawer, LegendTab } from "@/components/map/legend-drawer";
@@ -258,6 +259,7 @@ export default function MapPage() {
             <div className="pointer-events-auto w-fit max-w-full">
               <LayerTabs layer={layer} onLayer={(l) => updateSettings({ layer: l })} pressure={settings.pressure} onPressure={(p) => updateSettings({ pressure: p })} />
             </div>
+            <ForecastUpdated tone="map" className="pointer-events-auto ml-1" />
             {(notice || stale || isError || noForecastAnywhere || layerFields.error) && (
               <div className="pointer-events-auto flex w-fit max-w-full flex-col gap-1.5 pl-1">
                 {/* The newest model run is out of date: the layers and markers still show it. */}
