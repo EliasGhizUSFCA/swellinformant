@@ -62,6 +62,10 @@ interface Conditions {
 interface Snapshot {
   spots: Array<{ slug: string; conditions: Conditions | null }>;
 }
+interface NotificationsOut {
+  total: number;
+  items: Array<{ match_id: string | null; channel: string; kind: string; peak_label: string | null; window_label: string | null; price: string | null }>;
+}
 interface TimelineOut {
   steps: Array<{ t: string; breaking: { central_ft: number }; wind: { speed_kmh: number | null } | null }>;
 }
@@ -263,7 +267,13 @@ test.describe.serial("live update pipeline (spec 32)", () => {
     expect(r2.status, "12: nothing is due").toBe("not_due");
     expect(r2.version_ids).toEqual([]);
     expect((await currentVersion(request)).version_id).toBe(v2.version_id);
-    expect(((await apiGet(page.request, "/api/notifications")) as { total: number }).total, "12: no duplicate alert").toBe(notificationsAfter);
+    const notifications = (await apiGet(page.request, "/api/notifications?limit=200")) as NotificationsOut;
+    expect(notifications.total, "12: no duplicate alert").toBe(notificationsAfter);
+    // Across the first alert, the refresh and its repeat, the user was never told the same
+    // thing twice: one notification per match, channel, kind and content (the dedup rule).
+    const told = notifications.items.map((n) => JSON.stringify([n.match_id, n.channel, n.kind, n.peak_label, n.window_label, n.price]));
+    expect(told.length, "12: every notification listed").toBe(notifications.total);
+    expect(new Set(told).size, `12: no alert repeated (${told.join(" | ")})`).toBe(told.length);
     expect(((await apiGet(page.request, `/api/searches/${search.id}/matches`)) as unknown[]).length).toBe(matchesAfter.length);
     // The pages stay on the version (no reload, no second update).
     await spotPage.waitForTimeout(POLL_MS * 2);
