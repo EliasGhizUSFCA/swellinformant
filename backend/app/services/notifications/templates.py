@@ -7,6 +7,7 @@ prominently so test data can never be mistaken for a real opportunity.
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -50,13 +51,15 @@ def fmt_range(start: str, end: str, tz: str) -> str:
     return f"{fmt_date(a)} – {fmt_date(b)}"
 
 
-def fmt_money(amount: str | float | None, currency: str | None) -> str:
+def fmt_money(amount: str | float | Decimal | None, currency: str | None) -> str:
     if amount is None or currency is None:
         return "—"
-    value = float(amount)
+    # Whole units rounded half up, as the app shows them (Intl.NumberFormat): 350.50 is $351
+    # in both, never $350 in the email (float formatting rounds half to even).
+    value = Decimal(str(amount)).quantize(Decimal(1), rounding=ROUND_HALF_UP)
     symbols = {"USD": "$", "EUR": "€", "GBP": "£", "AUD": "A$", "CAD": "C$", "NZD": "NZ$"}
     symbol = symbols.get(currency, "")
-    text = f"{value:,.0f}"
+    text = f"{value:,}"
     return f"{symbol}{text}" if symbol else f"{text} {currency}"
 
 

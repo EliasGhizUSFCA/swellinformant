@@ -43,7 +43,7 @@ from app.services.matching.scoring import (
 )
 from app.services.matching.service import lead_window
 from app.services.notifications.providers import EmailMessageData, ResendEmailProvider
-from app.services.notifications.templates import render_alert_email
+from app.services.notifications.templates import fmt_money, render_alert_email
 from tests.unit.test_flight_providers import DUFFEL_OFFER, TZ
 
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
@@ -424,6 +424,16 @@ def test_a_concurrent_request_with_the_same_key_is_retried_later_not_failed() ->
     # The key was used for a different payload: retrying is useless (a permanent error).
     with pytest.raises(PermanentProviderError):
         _resend(reused).send(msg)
+
+
+def test_fares_in_emails_round_like_the_app() -> None:
+    """The app shows whole units rounded half up (Intl.NumberFormat): a 350.50 fare is $351
+    on the dashboard, so the email must not say $350 (float formatting rounds half to even)."""
+    assert fmt_money("350.50", "USD") == "$351"
+    assert fmt_money("350.49", "USD") == "$350"
+    assert fmt_money(Decimal("1180.00"), "AUD") == "A$1,180"
+    assert fmt_money("2.5", "JPY") == "3 JPY"
+    assert fmt_money(None, "USD") == "—"
 
 
 def test_how_far_ahead_the_swell_starts_is_rounded_conventionally() -> None:
