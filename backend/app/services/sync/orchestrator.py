@@ -1017,6 +1017,9 @@ def refresh_check(
             "due": bool(out.get("due")),
             "sync_run_id": out.get("sync_run_id"),
             "version_ids": list(out.get("version_ids") or []),
+            # What the check saw per component (state, detail): monitoring reads a provider
+            # whose metadata is unknown from here when no daemon writes a heartbeat.
+            "components": list((out.get("plan") or {}).get("components") or []),
         }
     )
     return out

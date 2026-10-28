@@ -17,7 +17,8 @@ import pytest
 
 from app.core.config import Settings, get_settings
 from app.services.forecasts.base import ModelRunRef, RunInfo
-from app.services.http import RunNotServedError
+from app.services.forecasts.open_meteo import PartlyReadRun
+from app.services.http import RunNotServedError, TransientProviderError
 from app.services.sync import detect
 from app.services.sync.detect import PartlyServedRun, Probe, limit_plan, plan_sync
 from app.services.sync.types import (
@@ -242,6 +243,45 @@ def test_a_component_being_published_waits_while_the_other_is_planned(world: Wor
     plan = plan_sync(None, settings=settings(), now=T0, known=stored(C00, C00))
     assert parts(plan) == {"wave": "waiting", "atmosphere": "new"} and plan.due
     assert (part(plan, "wave").detail or "").startswith("not served yet")
+
+
+def partly_read(atmos: datetime) -> PartlyReadRun:
+    """An Open-Meteo run whose marine metadata timed out (SYNTHETIC): the atmosphere only."""
+    full = om_run(C00, atmos)
+    refs = tuple(r for r in full.model_runs if r.component == "atmosphere")
+    return PartlyReadRun(
+        run_key=full.component_keys["atmosphere"],
+        issued_at=atmos,
+        atmosphere_model_run_at=atmos,
+        metadata_source="open_meteo_meta",
+        model_runs=refs,
+        component_keys=MappingProxyType({"atmosphere": full.component_keys["atmosphere"]}),
+        unread=MappingProxyType({"wave": TransientProviderError("marine meta.json timed out")}),
+    )
+
+
+def test_an_unreadable_component_is_unknown_and_the_other_is_planned(world: World) -> None:
+    """D6: the marine host timing out leaves the waves unknown; a new wind run is still due."""
+    world.run = partly_read(C06)
+    k = stored(C00, C00)
+    plan = plan_sync(None, settings=settings(), now=T0, known=k)
+    assert parts(plan) == {"wave": "unknown", "atmosphere": "new"} and plan.due
+    wave = part(plan, "wave")
+    assert "timed out" in (wave.detail or "") and wave.stored_run_key == wave_key(C00)
+    assert wave.available_run_key is None
+    # Nothing is recorded for the unknown part: no first sighting, no attempt.
+    assert not [key for key in k.first_seen if key.startswith(f"{SRC}:wave|")]
+    # The wind unchanged: nothing is due, the waves stay unknown.
+    current = plan_sync(None, settings=settings(), now=T0, known=stored(C00, C06))
+    assert parts(current) == {"wave": "unknown", "atmosphere": "current"} and not current.due
+
+
+def test_with_several_providers_a_partly_read_source_is_unknown(world: World) -> None:
+    """The blend path plans a source as a whole: known only when all of it was read."""
+    world.run = partly_read(C06)
+    many = settings(forecast_providers="open_meteo,open_meteo_ecmwf")
+    plan = plan_sync(None, settings=many, now=T0, known=stored(C00, C00))
+    assert parts(plan) == {None: "unknown"} and not plan.due
 
 
 def test_with_several_providers_a_source_is_one_component(world: World) -> None:

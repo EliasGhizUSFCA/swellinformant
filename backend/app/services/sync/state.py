@@ -13,8 +13,9 @@ Keys:
   restarted daemon can check without reading the database.
 * :data:`REFRESH_CHECK_KEY` ``sync:refresh-check``: JSON of the last refresh check of the
   refresh endpoint or the daily backstop (``orchestrator.refresh_check``: when, its trigger,
-  status, sync run and versions; expires after 7 days), so monitoring sees a scheduler that
-  stopped calling (design D12, ``refresh_scheduler_silent``).
+  status, sync run, versions and the plan's components; expires after 7 days), so
+  monitoring sees a scheduler that stopped calling (design D12,
+  ``refresh_scheduler_silent``) and, without a daemon, a provider whose metadata is unknown.
 * :data:`KICK_PREFIX` ``sync:kick:<job>``: requests from the API for the daemon (expire
   after 1 day): ``sync:kick:matching.match`` holds the ISO time of the newest request,
   ``sync:kick:flights.discover`` is a set of match ids (:data:`ALL_MATCHES` = every match).
@@ -174,8 +175,8 @@ def write_refresh_check(record: dict[str, Any]) -> None:
 
 
 def read_refresh_check() -> dict[str, Any] | None:
-    """The last refresh check ({at, trigger, status, due, sync_run_id, version_ids}), or None
-    (none recorded, expired, unreadable or Redis down)."""
+    """The last refresh check ({at, caller, trigger, status, due, sync_run_id, version_ids,
+    components}), or None (none recorded, expired, unreadable or Redis down)."""
     try:
         raw = get_redis().get(REFRESH_CHECK_KEY)
     except redis.RedisError as exc:

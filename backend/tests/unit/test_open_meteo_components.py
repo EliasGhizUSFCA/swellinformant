@@ -20,8 +20,8 @@ import redis
 
 from app.core.redis import get_redis
 from app.services.forecasts.base import COMPONENT_FIELDS
-from app.services.forecasts.open_meteo import OpenMeteoProvider
-from app.services.http import RunNotServedError
+from app.services.forecasts.open_meteo import OpenMeteoProvider, PartlyReadRun
+from app.services.http import RunNotServedError, TransientProviderError
 from app.services.sync import detect
 from tests.unit.test_open_meteo_adapter import (
     INIT,
@@ -166,3 +166,72 @@ def test_a_new_run_of_the_other_component_during_a_fetch_does_not_void_it() -> N
     result = p.fetch([PIPELINE], run, frozenset({"atmosphere"}))
     assert result.records[1] and not result.errors
     assert META  # the recorded metadata is untouched (copied by meta_at)
+
+
+def _marine_metadata_down(request: httpx.Request) -> httpx.Response | None:
+    """SYNTHETIC outage: the marine host's meta.json answers 503, everything else works."""
+    if request.url.host.startswith("marine-api") and request.url.path.endswith("meta.json"):
+        return httpx.Response(503)
+    return None
+
+
+def _meta_calls(rec: Recorder, host_prefix: str) -> int:
+    return sum(
+        1
+        for c in rec.calls
+        if c.url.host.startswith(host_prefix) and c.url.path.endswith("meta.json")
+    )
+
+
+def test_one_unreadable_component_leaves_the_other_one_planned_and_fetched() -> None:
+    """D6: the wave metadata timing out (marine host) does not hold a new wind run back. A
+    whole-run caller still gets the error; a component-aware one gets the atmosphere."""
+    rec = Recorder(override=_marine_metadata_down)
+    p = provider(rec)
+    with pytest.raises(TransientProviderError):
+        p.current_run(NOW)  # the whole run needs every component's metadata
+    run = p.current_run(NOW, partial=True)
+    assert isinstance(run, PartlyReadRun) and set(run.unread) == {"wave"}
+    stamp = f"{INIT:%Y%m%d%H}"
+    assert dict(run.component_keys) == {"atmosphere": f"gfs013:{stamp}|gfs025:{stamp}"}
+    assert run.run_key == run.component_keys["atmosphere"]
+    assert {r.component for r in run.model_runs} == {"atmosphere"}
+    assert run.wave_model_run_at is None and run.atmosphere_model_run_at == INIT
+    # The atmosphere is servable and fetched without a marine request.
+    p.ensure_servable(run, NOW)
+    before = len(rec.calls)
+    result = p.fetch([PIPELINE, JBAY], run, frozenset({"atmosphere"}))
+    assert set(result.records) == {1, 2} and not result.errors
+    assert not [c for c in rec.calls[before:] if c.url.host.startswith("marine-api")]
+    # The waves cannot be fetched from it.
+    with pytest.raises(TransientProviderError):
+        p.fetch([PIPELINE], run, frozenset({"wave"}))
+
+
+def test_a_check_reads_each_components_metadata_once_and_reports_the_unread_one() -> None:
+    rec = Recorder(override=_marine_metadata_down)
+    p = provider(rec)
+    checked = detect.servable_run(p, partial=True)(NOW)
+    assert set(getattr(checked, "unread", {})) == {"wave"}
+    assert set(checked.component_keys) == {"atmosphere"}
+    # current_run and ensure_servable shared one read per domain (the two GFS domains);
+    # the failed marine read is not repeated within the check (3 attempts of its first
+    # domain, then the component is unread).
+    assert _meta_calls(rec, "api.") == 2
+    assert _meta_calls(rec, "marine-api") == 3
+    assert "read_metas" not in vars(p)  # the method is restored after the check
+    # Without ``partial`` (several providers: a source is one component) it stays an error.
+    with pytest.raises(TransientProviderError):
+        detect.servable_run(provider(Recorder(override=_marine_metadata_down)))(NOW)
+
+
+def test_the_update_interval_of_each_component_comes_from_its_metadata() -> None:
+    p = provider(Recorder())
+    assert p.update_interval_seconds("wave") is None  # nothing read yet
+    p.current_run(NOW)
+    for component, domains in (
+        ("wave", WAVE_DOMAINS),
+        ("atmosphere", ("ncep_gfs013", "ncep_gfs025")),
+    ):
+        expected = max(int(META[d]["update_interval_seconds"]) for d in domains)
+        assert p.update_interval_seconds(component) == expected

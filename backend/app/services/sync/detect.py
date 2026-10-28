@@ -122,9 +122,11 @@ def component_split(settings: Settings) -> bool:
 class PartlyServedRun(RunInfo):
     """A provider's run of which some components are not served unmixed yet (e.g. Open-Meteo
     publishing a new wave run while the atmosphere is current): ``not_served`` holds why, by
-    component; the other components are planned as usual."""
+    component; the other components are planned as usual. ``unread``: components whose
+    metadata could not be read at all (a partly read run, ``current_run(partial=True)``)."""
 
     not_served: Mapping[str, Exception] = field(default_factory=lambda: MappingProxyType({}))
+    unread: Mapping[str, Exception] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass
@@ -157,22 +159,42 @@ def _error_detail(exc: BaseException) -> str:
     return redact(text)[:DETAIL_MAX_CHARS]
 
 
-def servable_run(provider: Any) -> Callable[[datetime], RunInfo]:
+def servable_run(provider: Any, partial: bool = False) -> Callable[[datetime], RunInfo]:
     """``current_run`` of an Open-Meteo provider followed by its ``ensure_servable``, both on
     one read of the metadata (each ``meta.json`` is fetched once per check).
 
     Open-Meteo can label a run that it no longer serves unmixed (e.g. the ECMWF family
     reads only 00Z/12Z, while Open-Meteo serves the 06Z run between them): such a run raises
     RunNotServedError here instead of making a sync due that can only fail.
+
+    ``partial`` (components planned on their own, design D6): a component whose metadata
+    cannot be read is reported ``unread`` (state unknown) while the other is planned, for a
+    provider whose ``current_run`` takes ``partial``.
     """
 
     def current_run(now: datetime) -> RunInfo:
         from app.services.http import RunNotServedError
 
-        metas = provider.read_metas()
-        provider.read_metas = lambda: metas  # shadows the method for this check only
+        reads: dict[tuple[str, ...] | None, Any] = {}
+        read_metas = provider.read_metas
+
+        def read_once(*args: Any, **kwargs: Any) -> Any:
+            # Each component's metadata once per check (also a failed read: not retried).
+            which = kwargs.get("components", args[0] if args else None)
+            key = None if which is None else tuple(sorted(which))
+            if key not in reads:
+                try:
+                    reads[key] = read_metas(*args, **kwargs)
+                except Exception as exc:
+                    reads[key] = exc
+            if isinstance(reads[key], Exception):
+                raise reads[key]
+            return reads[key]
+
+        provider.read_metas = read_once  # shadows the method for this check only
         try:
-            run: RunInfo = provider.current_run(now)
+            run: RunInfo = current_run_of(provider, now, partial)
+            unread: Mapping[str, Exception] = getattr(run, "unread", None) or {}
             try:
                 provider.ensure_servable(run, now)
                 return run
@@ -187,14 +209,37 @@ def servable_run(provider: Any) -> Callable[[datetime], RunInfo]:
                         provider.ensure_servable(run, now, components=frozenset({component}))
                     except RunNotServedError as exc:
                         refused[component] = exc
-                if len(refused) == len(run.component_keys):
+                if len(refused) == len(run.component_keys) and not unread:
                     raise
-                values = {f.name: getattr(run, f.name) for f in fields(run)}
-                return PartlyServedRun(**values, not_served=MappingProxyType(refused))
+                values = {f.name: getattr(run, f.name) for f in fields(RunInfo)}
+                return PartlyServedRun(
+                    **values,
+                    not_served=MappingProxyType(refused),
+                    unread=MappingProxyType(dict(unread)),
+                )
         finally:
             del provider.read_metas
 
     return current_run
+
+
+def current_run_of(provider: Any, now: datetime, partial: bool = False) -> RunInfo:
+    """``provider.current_run(now)``, with ``partial=True`` when asked for and the provider
+    can report a component whose metadata it could not read (``unread``)."""
+    if partial and _takes_partial(provider.current_run):
+        run: RunInfo = provider.current_run(now, partial=True)
+        return run
+    out: RunInfo = provider.current_run(now)
+    return out
+
+
+def _takes_partial(fn: Callable[..., Any]) -> bool:
+    import inspect
+
+    try:
+        return "partial" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _takes_components(fn: Callable[..., Any]) -> bool:
@@ -230,6 +275,7 @@ def build_probes(settings: Settings, kinds: Collection[str] | None = None) -> li
     def skip(kind: ComponentKind) -> bool:
         return wanted is not None and kind not in wanted
 
+    split = component_split(settings)
     probes: list[Probe] = []
     for token in settings.forecast_provider_list:
         code = SOURCE_CODES.get(token, token)
@@ -249,7 +295,9 @@ def build_probes(settings: Settings, kinds: Collection[str] | None = None) -> li
                 "spots",
                 info.code,
                 token,
-                current_run=servable_run(provider) if servable else provider.current_run,
+                current_run=servable_run(provider, split)
+                if servable
+                else _current_run_fn(provider, split),
                 family=info.family,
                 close=_closer(provider),
             )
@@ -309,6 +357,13 @@ def build_probes(settings: Settings, kinds: Collection[str] | None = None) -> li
         except Exception as exc:
             probes.append(Probe("map", FIELDS_SOURCE_CODE, MAP_PROVIDER, error=_error_detail(exc)))
     return probes
+
+
+def _current_run_fn(provider: Any, partial: bool) -> Callable[[datetime], RunInfo]:
+    def current_run(now: datetime) -> RunInfo:
+        return current_run_of(provider, now, partial)
+
+    return current_run
 
 
 def with_simulated_runs[P](provider: P) -> P:
@@ -553,7 +608,11 @@ def _observe(probe: Probe, known: KnownRuns, now: datetime, split: bool = False)
         seen.error = _error_detail(exc)
         logger.info("Sync check: %s run unknown: %s", probe.source_code, seen.error)
         return [seen]
+    unread: Mapping[str, Exception] = getattr(run, "unread", None) or {}
     if not (split and probe.kind == "spots" and run.component_keys):
+        if unread:  # a whole source is known only when all of it was read
+            seen.error = _error_detail(next(iter(unread.values())))
+            return [seen]
         seen.run, seen.available = run, run.run_key
         inits = _inits(run)
         seen.cycle, seen.complete = max(inits), min(inits) == max(inits)
@@ -562,6 +621,22 @@ def _observe(probe: Probe, known: KnownRuns, now: datetime, split: bool = False)
     whole = known.stored.get(probe.source_code)
     out: list[_Seen] = []
     for component in SPOT_COMPONENTS:
+        why_unread = unread.get(component)
+        if why_unread is not None:
+            # Its metadata could not be read (e.g. the marine host timed out): unknown,
+            # checked again at the next check; the other component is planned (D6).
+            lost = _Seen(
+                probe,
+                component=component,
+                stored=known.stored.get(stored_key(probe.source_code, component)),
+            )
+            lost.stored_cycle = newest_cycle(lost.stored)
+            lost.error = _error_detail(why_unread)
+            logger.info(
+                "Sync check: %s %s run unknown: %s", probe.source_code, component, lost.error
+            )
+            out.append(lost)
+            continue
         part = _Seen(
             probe,
             component=component,

@@ -577,6 +577,31 @@ def _accepts_components(fn: Callable[..., Any]) -> bool:
         return False
 
 
+def _component_current_run(provider: ForecastProvider, now: datetime) -> RunInfo:
+    """The provider's current run, partly read when it can say which component's metadata
+    it could not read (``current_run(partial=True)``, design D6): the other component is
+    still refreshed."""
+    current_run: Callable[..., RunInfo] = provider.current_run
+    try:
+        partial = "partial" in inspect.signature(current_run).parameters
+    except (TypeError, ValueError):
+        partial = False
+    return current_run(now, partial=True) if partial else current_run(now)
+
+
+def _update_interval(provider: ForecastProvider, component: str) -> int | None:
+    """The update interval of a fetched component's model, when the provider reports it
+    (Open-Meteo meta.json ``update_interval_seconds``; design D10)."""
+    read = getattr(provider, "update_interval_seconds", None)
+    if not callable(read):
+        return None
+    try:
+        value = read(component)
+    except Exception:  # an interval is informative only
+        return None
+    return int(value) if isinstance(value, int | float) and value > 0 else None
+
+
 def _component_refs(info: RunInfo, component: str) -> list[ModelRunRef]:
     """The model runs of one component (refs without a component feed both)."""
     return [
@@ -656,7 +681,7 @@ def refresh_source(
     source = ensure_source(db, provider, priority)
     db.commit()
     try:
-        available = provider.current_run(now)
+        available = _component_current_run(provider, now)
     except Exception as exc:
         logger.error("Could not determine current run for %s: %s", source.code, _error_text(exc))
         no_run = _failure(source.code, None, exc)
@@ -679,8 +704,14 @@ def refresh_source(
             message="windy_testing_key: the provider answered with testing data; not stored",
         )
     split = bool(available.component_keys)
-    avail = (
-        {c: str(available.component_keys[c]) for c in COMPONENTS}
+    # A component whose metadata could not be read (a partly read run, design D6) has no
+    # available run: it is carried from its published run, never fetched.
+    unread: Mapping[str, Exception] = getattr(available, "unread", None) or {}
+    avail: dict[str, str | None] = (
+        {
+            c: (None if c in unread else str(available.component_keys.get(c) or available.run_key))
+            for c in COMPONENTS
+        }
         if split
         else dict.fromkeys(COMPONENTS, available.run_key)
     )
@@ -688,14 +719,24 @@ def refresh_source(
     if split:
         # A run stored before component keys existed (Upgrade 4) names both components in
         # one key: compare each component with the part naming its own model domains.
-        stored_keys = {
-            c: carry.component_part(key, avail[c]) or key for c, key in stored_keys.items()
-        }
+        readable = next((k for k in avail.values() if k), None)
+        own_parts: dict[str, str | None] = {}
+        for c, key in stored_keys.items():
+            if avail[c] is not None:
+                own_parts[c] = carry.component_part(key, avail[c]) or key
+            elif key and readable and carry.component_part(key, readable) is not None:
+                # The whole key of such a run cannot be split without this component's
+                # metadata: there is nothing it could be carried as.
+                own_parts[c] = None
+            else:
+                own_parts[c] = key
+        stored_keys = own_parts
     wanted = set(due) & COMPONENTS
     changed = {
         c
         for c in COMPONENTS
         if c in wanted
+        and avail[c] is not None
         and avail[c] != stored_keys.get(c)
         and not carry.older_than_stored(avail[c], stored_keys.get(c))
     }
@@ -703,7 +744,22 @@ def refresh_source(
         changed = set(COMPONENTS)  # one run key: both parts or nothing
     # A part without a published run is fetched with the due ones.
     if changed:
-        changed |= {c for c in COMPONENTS if not stored_keys.get(c)}
+        changed |= {c for c in COMPONENTS if not stored_keys.get(c) and avail[c] is not None}
+    lost = sorted(c for c in COMPONENTS if avail[c] is None and not stored_keys.get(c))
+    if lost and (changed or retry_spot_ids):
+        # Nothing to carry and nothing readable: the refresh waits for the metadata.
+        message = (
+            f"the {lost[0]} metadata could not be read ({_error_text(unread[lost[0]])}) and no "
+            f"{lost[0]} run is published to carry"
+        )
+        return RefreshOutcome(
+            source.code,
+            token,
+            available.run_key,
+            "failed",
+            message=message[:2000],
+            retryable=True,
+        )
     retry = bool(retry_spot_ids) and not changed
     if not changed and not retry:
         return RefreshOutcome(
@@ -712,9 +768,9 @@ def refresh_source(
             available.run_key,
             "skipped",
             message="run already ingested",
-            component_keys=avail,
+            component_keys={c: k for c, k in avail.items() if k},
         )
-    target = {c: (avail[c] if c in changed else str(stored_keys[c])) for c in COMPONENTS}
+    target = {c: str(avail[c] if c in changed else stored_keys[c]) for c in COMPONENTS}
     base_key = carry.combined_run_key(target) if split else available.run_key
     carried = COMPONENTS - changed
 
@@ -757,9 +813,11 @@ def refresh_source(
             continue  # a retry of a spot that is up to date already
         unserved = sorted(c for c in need if target[c] != avail[c])
         if unserved:
-            failed[p.spot_id] = (
-                f"no stored {unserved[0]} data of run {target[unserved[0]]} to carry, and the "
-                "provider no longer serves that run"
+            gone = unserved[0]
+            failed[p.spot_id] = f"no stored {gone} data of run {target[gone]} to carry, and " + (
+                f"the {gone} metadata could not be read"
+                if avail[gone] is None
+                else "the provider no longer serves that run"
             )
             continue
         groups.setdefault(frozenset(need), []).append(p)
@@ -1030,8 +1088,9 @@ def refresh_source(
         len(failed),
         total.get("bytes_downloaded"),
     )
+    intervals = {c: _update_interval(provider, c) for c in changed}
     components_out = _version_components(
-        info, available, stored, target, changed, main_source, acquired, split
+        info, available, stored, target, changed, main_source, acquired, split, intervals
     )
     return RefreshOutcome(
         source.code,
@@ -1081,9 +1140,12 @@ def _version_components(
     main_source: Mapping[str, int | None],
     acquired: datetime,
     split: bool,
+    intervals: Mapping[str, int | None] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """The version's ``components`` for a refresh: a fetched component from the provider's
-    run, a carried one with its ORIGINAL model run and retrieval time."""
+    run (with its model's update interval when the provider reports it), a carried one with
+    its ORIGINAL model run, retrieval time and interval."""
+    intervals = intervals or {}
     from app.services.forecasts.versions import ComponentRun
 
     out: dict[str, dict[str, Any]] = {}
@@ -1097,6 +1159,7 @@ def _version_components(
                 retrieved_at=acquired,
                 changed=c in changed,
                 estimated=available.estimated,
+                update_interval_seconds=intervals.get(c),
             )
             if comp.init_time is None:
                 init = _component_init(available, c)
@@ -1108,6 +1171,7 @@ def _version_components(
                     retrieved_at=acquired,
                     changed=c in changed,
                     estimated=available.estimated,
+                    update_interval_seconds=intervals.get(c),
                 )
         else:
             old = stored[c]

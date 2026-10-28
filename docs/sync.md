@@ -91,7 +91,13 @@ runs are ignored).
    monotonic: a key whose newest `YYYYMMDDHH` cycle is older than the stored one, or whose
    domains are the stored ones with none newer and one older (a lagging Open-Meteo server),
    is never new. A metadata timeout or error makes the component `unknown`: never due,
-   never raised, never "nothing new".
+   never raised, never "nothing new". Per component: when only the marine host's
+   `meta.json` fails, the wave component is `unknown` and the atmosphere is planned from its
+   own metadata (`current_run(partial=True)` returns an `open_meteo.PartlyReadRun` naming the
+   `unread` component; with several providers a source stays one component and is `unknown`).
+   A refresh then fetches the atmosphere and carries the waves with their published run; a
+   spot whose served run lacks them fails and keeps its run, and with no wave run published
+   at all (the first refresh) the refresh fails, publishes nothing and is retried.
 2. **Servable.** Open-Meteo labels a domain with its previous run until 10 minutes after
    the new run's availability. While one component's domains are being published, that
    component is `waiting` ("not served yet", `detect.PartlyServedRun`) and the other one is
@@ -171,8 +177,10 @@ The publish stage (`orchestrator._publish_body`), in this order:
    previous run as `stale` with the redacted error); every other spot is carried over from
    the published version, so a retry of three spots updates just those three.
    `components` are the refresh's `ComponentRun`s (a carried one with its original run key,
-   init and retrieval time, `changed: false`, `carried_from_run_id`); a retry keeps the
-   published version's components. A component's init time, the version's `wind_model_run`
+   init and retrieval time, `changed: false`, `carried_from_run_id`; a fetched one with its
+   model's `update_interval_seconds` from Open-Meteo's `meta.json`, the longest of its
+   domains, which the staleness rule of design D10 reads); a retry keeps the published
+   version's components. A component's init time, the version's `wind_model_run`
    or `wave_model_run`, is its OLDEST domain's (`versions.ComponentRun.from_model_runs`):
    with GFS 0.13 on 12Z and GFS 0.25 still on 06Z the atmosphere is labelled 06Z, the cycle
    of its gusts and MSLP, and the run's `details.model_runs` names each domain's cycle. Timings: `detected_at` (the component's first
@@ -425,8 +433,9 @@ RETENTION_FORECAST_DAYS are deleted, except the previous published one
 
 `sync:known` (stored keys per component, first sightings, attempts, the spot retry; 7 days),
 `sync:heartbeat` (the daemon's last check; 6 h), `sync:refresh-check` (the last check of the
-refresh endpoint or the daily backstop: when, caller, status, sync run, versions; 7 days; for
-the scheduler-silence alert), `sync:kick:matching.match` and `sync:kick:flights.discover` (1
+refresh endpoint or the daily backstop: when, caller, status, sync run, versions and the
+plan's components with their state and detail; 7 days; for the scheduler-silence alert and,
+without a daemon, the provider-unavailable alert), `sync:kick:matching.match` and `sync:kick:flights.discover` (1
 day), `sync:demo:advance` (the simulated demo runs, developer tool). The version marker and
 the first-served and seen-latency keys are under the public cache namespace
 (`<ns>:forecast-version:*`, app.services.forecasts.versions). Reading and writing them is

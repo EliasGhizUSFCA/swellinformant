@@ -43,8 +43,9 @@ from app.services.forecasts.base import (
     RunInfo,
 )
 from app.services.forecasts.demo import DemoForecastProvider
+from app.services.forecasts.open_meteo import PartlyReadRun
 from app.services.forecasts.versions import current_version, serving_runs, version_payload
-from app.services.http import RunNotServedError
+from app.services.http import RunNotServedError, TransientProviderError
 from app.services.sync import cli as sync_cli
 from app.services.sync import orchestrator, state
 from app.services.sync import refresh as refresh_module
@@ -73,6 +74,13 @@ class SplitDemo(DemoForecastProvider):
     # Components whose current run the "provider" is still publishing (SYNTHETIC: what
     # Open-Meteo's meta.json says during the availability wait).
     publishing: ClassVar[set[str]] = set()
+    # Components whose metadata cannot be read (SYNTHETIC: their host times out).
+    unreadable: ClassVar[set[str]] = set()
+    # SYNTHETIC update intervals by component (Open-Meteo reads them from meta.json).
+    intervals: ClassVar[dict[str, int]] = {"wave": 21600, "atmosphere": 3600}
+
+    def update_interval_seconds(self, component: str) -> int | None:
+        return self.intervals.get(component)
 
     def read_metas(self) -> dict[str, Any]:
         return {}
@@ -87,19 +95,38 @@ class SplitDemo(DemoForecastProvider):
                 raise RunNotServedError(f"synthetic: the {ref.component} run is being published")
         return {}
 
-    def current_run(self, now: datetime) -> RunInfo:
+    def current_run(self, now: datetime, partial: bool = False) -> RunInfo:
         wave, wind = self.cycles["wave"], self.cycles["atmosphere"]
         keys = {"wave": f"demo-wave:{wave:%Y%m%d%H}", "atmosphere": f"demo-wind:{wind:%Y%m%d%H}"}
+        refs = (
+            ModelRunRef("demo-swell-generator", wave, component="wave"),
+            ModelRunRef("demo-diurnal-wind", wind, component="atmosphere"),
+        )
+        if self.unreadable:
+            unread = {
+                c: TransientProviderError(f"synthetic: the {c} meta.json timed out")
+                for c in sorted(self.unreadable)
+            }
+            if not partial or len(unread) == len(keys):
+                raise next(iter(unread.values()))
+            readable = {c: k for c, k in keys.items() if c not in unread}
+            return PartlyReadRun(
+                run_key="|".join(readable.values()),
+                issued_at=wind if "wave" in unread else wave,
+                wave_model_run_at=None if "wave" in unread else wave,
+                atmosphere_model_run_at=None if "atmosphere" in unread else wind,
+                metadata_source="demo",
+                model_runs=tuple(r for r in refs if r.component in readable),
+                component_keys=MappingProxyType(readable),
+                unread=MappingProxyType(unread),
+            )
         return RunInfo(
             run_key=f"{keys['wave']}|{keys['atmosphere']}",
             issued_at=min(wave, wind),
             wave_model_run_at=wave,
             atmosphere_model_run_at=wind,
             metadata_source="demo",
-            model_runs=(
-                ModelRunRef("demo-swell-generator", wave, component="wave"),
-                ModelRunRef("demo-diurnal-wind", wind, component="atmosphere"),
-            ),
+            model_runs=refs,
             component_keys=MappingProxyType(keys),
         )
 
@@ -140,6 +167,7 @@ def split(monkeypatch: pytest.MonkeyPatch) -> type[SplitDemo]:
     SplitDemo.failing = set()
     SplitDemo.tamper = {}
     SplitDemo.publishing = set()
+    SplitDemo.unreadable = set()
     SplitDemo.entered = SplitDemo.gate = None
 
     def build(name: str, settings: object = None, overrides: Any = None) -> Any:
@@ -425,6 +453,73 @@ def test_a_component_still_being_published_is_carried_with_its_published_run(
     assert split.calls[-1] == (sorted(few_spots), frozenset({"atmosphere"}))
     v3 = published(db)
     assert (v3.wave_model_run, v3.wind_model_run) == (C06, C06)
+
+
+def test_a_component_whose_metadata_cannot_be_read_is_carried_and_the_other_refreshed(
+    db: Session, few_spots: list[str], split: type[SplitDemo]
+) -> None:
+    """D6: the wave host timing out does not hold a new wind run back. The waves are
+    unknown in the plan (never due, never "current"), carried with their published run;
+    the wind is fetched and published; the check record names the unknown component."""
+    assert refresh()["status"] == "success"
+    v1 = published(db)
+    r1 = run_of(db, v1)
+    assert v1.components["wave"]["update_interval_seconds"] == 21600  # SYNTHETIC intervals
+    assert v1.components["atmosphere"]["update_interval_seconds"] == 3600
+    split.unreadable = {"wave"}
+    split.cycles["atmosphere"] = C06
+    out = refresh()
+    assert out["status"] == "success", out
+    spots_plan = {
+        c["component"]: c["state"] for c in out["plan"]["components"] if c["kind"] == "spots"
+    }
+    assert spots_plan == {"wave": "unknown", "atmosphere": "new"}
+    assert split.calls[-1] == (sorted(few_spots), frozenset({"atmosphere"}))
+    v2 = published(db)
+    r2 = run_of(db, v2)
+    assert (v2.wave_model_run, v2.wind_model_run) == (C00, C06)
+    assert v2.components["wave"]["changed"] is False
+    assert v2.components["wave"]["run_key"] == v1.components["wave"]["run_key"]
+    assert r2.wave_model_run_at == C00 and r2.details["component_keys"] == {
+        "wave": f"demo-wave:{C00:%Y%m%d%H}",
+        "atmosphere": f"demo-wind:{C06:%Y%m%d%H}",
+    }
+    assert differing(db, r1.id, r2.id, COMPONENT_FIELDS["wave"]) == 0
+    assert v2.spots_updated == len(few_spots)
+    # Monitoring sees the unknown component in the refresh check's record (design D12).
+    last = state.read_refresh_check()
+    assert last is not None
+    wave = next(c for c in last["components"] if c.get("component") == "wave")
+    assert wave["state"] == "unknown" and "timed out" in wave["detail"]
+    # Nothing readable: unknown, nothing due, nothing fetched.
+    split.unreadable = {"wave", "atmosphere"}
+    fetches = len(split.calls)
+    assert refresh()["status"] == "not_due"
+    assert len(split.calls) == fetches
+
+
+def test_a_first_refresh_without_one_components_metadata_publishes_nothing(
+    db: Session, few_spots: list[str], split: type[SplitDemo]
+) -> None:
+    """Nothing published yet and the wave metadata unreadable: there is no wave run to
+    carry, so the refresh fails (retried) and publishes nothing; once the metadata answers
+    both components are fetched."""
+    split.unreadable = {"wave"}
+    out = refresh()
+    assert out["status"] == "failed" and out["version_ids"] == [], out
+    assert current_version(db) is None and split.calls == []
+    (spots,) = [s for s in out["stages"] if s["name"] == "spots"]
+    assert spots["status"] == "failed"
+    row = db.get(SyncRun, out["sync_run_id"])
+    assert row is not None
+    (stage,) = [s for s in row.stages if s["name"] == "spots"]
+    (atmosphere,) = [c for c in stage["detail"]["components"] if c["component"] == "atmosphere"]
+    assert atmosphere["outcome"] == "failed"
+    assert "wave metadata could not be read" in atmosphere["message"]
+    split.unreadable = set()
+    again = refresh()
+    assert again["status"] == "success", again
+    assert split.calls == [(sorted(few_spots), None)]
 
 
 def test_a_carried_component_keeps_its_own_extra_keys(
