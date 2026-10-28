@@ -966,6 +966,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/freshness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Freshness
+         * @description Forecast freshness, provider and API usage, processing times and latencies, refresh
+         *     jobs and the admin problems, for the admin dashboard (/admin/freshness).
+         */
+        get: operations["admin_freshness_api_admin_freshness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/map/fields": {
         parameters: {
             query?: never;
@@ -1186,6 +1207,678 @@ export interface components {
             lead_buckets_h: number[];
             /** Notes */
             notes: string[];
+        };
+        /** AdminActiveProviderOut */
+        AdminActiveProviderOut: {
+            /**
+             * Primary
+             * @description The provider a refresh builds now
+             */
+            primary: string;
+            /** Providers */
+            providers: string[];
+            /**
+             * Configured
+             * @description What the settings select
+             */
+            configured: string[];
+            /**
+             * Source
+             * @description FORECAST_PROVIDERS (advanced override) or WEATHER_PROVIDER
+             */
+            source: string;
+            /** Weather Provider */
+            weather_provider: string;
+            /** Windy Eligible */
+            windy_eligible: boolean;
+            /**
+             * Fallback
+             * @description The configured runtime fallback
+             */
+            fallback?: string | null;
+            /**
+             * Fallback Active
+             * @default false
+             */
+            fallback_active: boolean;
+            /**
+             * Fallback From
+             * @description The provider the fallback stands in for
+             */
+            fallback_from?: string | null;
+            /** Fallback Until */
+            fallback_until?: string | null;
+            /**
+             * Reasons
+             * @default []
+             */
+            reasons: string[];
+            /**
+             * Health
+             * @default []
+             */
+            health: components["schemas"]["AdminProviderHealthOut"][];
+        };
+        /** AdminApiUsageOut */
+        AdminApiUsageOut: {
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /**
+             * Alert Fraction
+             * @description QUOTA_ALERT_FRACTION
+             */
+            alert_fraction: number;
+            open_meteo: components["schemas"]["AdminOpenMeteoUsageOut"];
+            windy: components["schemas"]["AdminWindyUsageOut"];
+            flights: components["schemas"]["AdminFlightUsageOut"];
+            emails: components["schemas"]["AdminEmailUsageOut"];
+            /**
+             * Requests 24H
+             * @default []
+             */
+            requests_24h: components["schemas"]["AdminProviderRequestsOut"][];
+        };
+        /**
+         * AdminComponentFreshnessOut
+         * @description The model run the published version serves for one component, and when the next
+         *     one is expected.
+         */
+        AdminComponentFreshnessOut: {
+            /**
+             * Component
+             * @enum {string}
+             */
+            component: "atmosphere" | "wave";
+            /** Model */
+            model?: string | null;
+            /** Run Key */
+            run_key?: string | null;
+            /**
+             * Run
+             * @description Init time of the served run
+             */
+            run?: string | null;
+            /**
+             * Estimated
+             * @description The run time is an estimate (Windy)
+             * @default false
+             */
+            estimated: boolean;
+            /**
+             * Available At
+             * @description Upstream availability of that run
+             */
+            available_at?: string | null;
+            /** Last Detected At */
+            last_detected_at?: string | null;
+            /**
+             * Last Acquired At
+             * @description When the served run was fetched (a carried component keeps it)
+             */
+            last_acquired_at?: string | null;
+            /**
+             * Changed
+             * @description Fetched by the newest refresh (false: carried forward)
+             */
+            changed?: boolean | null;
+            /** Carried From Run Id */
+            carried_from_run_id?: number | null;
+            /**
+             * Newest Run
+             * @description The newest init time known (published, staged or detected)
+             */
+            newest_run?: string | null;
+            /** Update Interval Minutes */
+            update_interval_minutes: number;
+            /**
+             * Update Interval Recorded
+             * @description From Open-Meteo meta.json update_interval_seconds (else 6 h assumed)
+             */
+            update_interval_recorded: boolean;
+            /**
+             * Typical Lag Minutes
+             * @description Median availability lag after the cycle, measured on recent runs
+             */
+            typical_lag_minutes?: number | null;
+            /**
+             * Lag Samples
+             * @default 0
+             */
+            lag_samples: number;
+            /** Expected Next At */
+            expected_next_at?: string | null;
+            /** Late After */
+            late_after?: string | null;
+            /**
+             * Late
+             * @default false
+             */
+            late: boolean;
+            /**
+             * Domains
+             * @default []
+             */
+            domains: components["schemas"]["AdminDomainOut"][];
+        };
+        /** AdminDomainOut */
+        AdminDomainOut: {
+            /** Model */
+            model: string;
+            /** Init Time */
+            init_time?: string | null;
+            /** Available At */
+            available_at?: string | null;
+        };
+        /** AdminDurationStatsOut */
+        AdminDurationStatsOut: {
+            /**
+             * Samples
+             * @default 0
+             */
+            samples: number;
+            /** Last */
+            last?: number | null;
+            /** Avg */
+            avg?: number | null;
+            /** P50 */
+            p50?: number | null;
+            /** P95 */
+            p95?: number | null;
+            /** Max */
+            max?: number | null;
+        };
+        /** AdminEmailUsageOut */
+        AdminEmailUsageOut: {
+            /** Provider */
+            provider: string;
+            /** Today */
+            today: number;
+            /** Account */
+            account: number;
+            /** Alerts */
+            alerts: number;
+            /** Failed */
+            failed: number;
+        };
+        /** AdminEventOut */
+        AdminEventOut: {
+            /** At */
+            at?: string | null;
+            /** Detail */
+            detail?: string | null;
+            /** Version Id */
+            version_id?: number | null;
+        };
+        /** AdminFailedRequestOut */
+        AdminFailedRequestOut: {
+            /**
+             * Provider
+             * @description Forecast source code or flight provider
+             */
+            provider: string;
+            /**
+             * Status
+             * @description HTTP status, or 'failed' for a failed flight search
+             */
+            status: string;
+            /** Count */
+            count: number;
+        };
+        /** AdminFlightUsageOut */
+        AdminFlightUsageOut: {
+            /** Provider */
+            provider: string;
+            /**
+             * Today
+             * @description Provider searches stored today (UTC)
+             */
+            today: number;
+            /**
+             * Per Provider
+             * @default {}
+             */
+            per_provider: {
+                [key: string]: number;
+            };
+            /**
+             * Failed Today
+             * @default 0
+             */
+            failed_today: number;
+            /** @description FLIGHT_DAILY_QUOTA counter (None: the demo provider has no quota) */
+            quota?: components["schemas"]["AdminUsageWindowOut"] | null;
+            /** User Daily Quota */
+            user_daily_quota: number;
+        };
+        /** AdminFreshnessOut */
+        AdminFreshnessOut: {
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /**
+             * Status
+             * @description Over the admin and the public problems
+             * @enum {string}
+             */
+            status: "ok" | "degraded" | "failing";
+            /**
+             * Version Id
+             * @description The published forecast version
+             */
+            version_id?: number | null;
+            active_provider: components["schemas"]["AdminActiveProviderOut"];
+            atmosphere: components["schemas"]["AdminComponentFreshnessOut"];
+            wave: components["schemas"]["AdminComponentFreshnessOut"];
+            last_detected_model_update: components["schemas"]["AdminEventOut"];
+            last_successful_acquisition: components["schemas"]["AdminEventOut"];
+            last_successful_scoring: components["schemas"]["AdminEventOut"];
+            last_published_version?: components["schemas"]["AdminPublishedVersionOut"] | null;
+            /** Spots Updated */
+            spots_updated?: number | null;
+            /**
+             * Stale Spots
+             * @default []
+             */
+            stale_spots: components["schemas"]["AdminStaleSpotOut"][];
+            /**
+             * Failed Requests
+             * @description Last 24 h, by provider and status
+             * @default []
+             */
+            failed_requests: components["schemas"]["AdminFailedRequestOut"][];
+            api_usage: components["schemas"]["AdminApiUsageOut"];
+            processing_time: components["schemas"]["AdminProcessingTimeOut"];
+            latency: components["schemas"]["AdminLatencyOut"];
+            /**
+             * Refresh Jobs
+             * @default []
+             */
+            refresh_jobs: components["schemas"]["AdminRefreshJobOut"][];
+            /**
+             * Versions
+             * @default []
+             */
+            versions: components["schemas"]["AdminVersionRowOut"][];
+            scheduler: components["schemas"]["AdminSchedulerOut"];
+            /**
+             * Problems
+             * @description The admin-only problems (D12)
+             * @default []
+             */
+            problems: components["schemas"]["AdminProblemOut"][];
+            /**
+             * Health Problems
+             * @description The public data-health report's problems
+             * @default []
+             */
+            health_problems: components["schemas"]["AdminProblemOut"][];
+            /**
+             * Notes
+             * @default []
+             */
+            notes: string[];
+        };
+        /** AdminLatencyOut */
+        AdminLatencyOut: {
+            /** @description upstream_available_at -> published_at of the recent refresh versions */
+            upstream_to_publication_s: components["schemas"]["AdminDurationStatsOut"];
+            /** @description Browser 'seen' reports after a version change (newest 200 in Redis) */
+            publication_to_frontend_s: components["schemas"]["AdminDurationStatsOut"];
+            /** @description published_at -> first served by the version endpoint (newest versions) */
+            first_served_s: components["schemas"]["AdminDurationStatsOut"];
+        };
+        /** AdminOpenMeteoUsageOut */
+        AdminOpenMeteoUsageOut: {
+            minute: components["schemas"]["AdminUsageWindowOut"];
+            hour: components["schemas"]["AdminUsageWindowOut"];
+            day: components["schemas"]["AdminUsageWindowOut"];
+            month: components["schemas"]["AdminUsageWindowOut"];
+            /**
+             * Available
+             * @description False: Redis could not be read
+             */
+            available: boolean;
+        };
+        /** AdminProblemOut */
+        AdminProblemOut: {
+            /** Key */
+            key: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "degraded" | "failing";
+            /** Message */
+            message: string;
+            /**
+             * Detail
+             * @description Redacted error text (admins only)
+             */
+            detail?: string | null;
+        };
+        /** AdminProcessingTimeOut */
+        AdminProcessingTimeOut: {
+            /**
+             * Refreshes
+             * @description Finished refresh syncs in the sample (newest 20 syncs)
+             */
+            refreshes: number;
+            total_ms: components["schemas"]["AdminDurationStatsOut"];
+            /**
+             * Stages
+             * @default []
+             */
+            stages: components["schemas"]["AdminStageTimeOut"][];
+            detected_to_acquired_s: components["schemas"]["AdminDurationStatsOut"];
+            acquired_to_scored_s: components["schemas"]["AdminDurationStatsOut"];
+            scored_to_published_s: components["schemas"]["AdminDurationStatsOut"];
+        };
+        /**
+         * AdminProviderHealthOut
+         * @description A provider's recorded health (the provider manager, when it records any).
+         */
+        AdminProviderHealthOut: {
+            /** Provider */
+            provider: string;
+            /** Last Success At */
+            last_success_at?: string | null;
+            /** Last Failure At */
+            last_failure_at?: string | null;
+            /**
+             * Last Failure Kind
+             * @description credentials, testing_key, quota or unavailable
+             */
+            last_failure_kind?: string | null;
+            /** Last Failure Detail */
+            last_failure_detail?: string | null;
+            /**
+             * Consecutive Unavailable
+             * @default 0
+             */
+            consecutive_unavailable: number;
+            /** Blocked Until */
+            blocked_until?: string | null;
+            /**
+             * Blocking
+             * @default false
+             */
+            blocking: boolean;
+        };
+        /** AdminProviderRequestsOut */
+        AdminProviderRequestsOut: {
+            /** Source */
+            source: string;
+            /** Provider */
+            provider?: string | null;
+            /** Runs */
+            runs: number;
+            /** Failed Runs */
+            failed_runs: number;
+            /** Requests */
+            requests: number;
+            /** Weighted Calls */
+            weighted_calls?: number | null;
+            /** Bytes Downloaded */
+            bytes_downloaded?: number | null;
+            /**
+             * Http Status Counts
+             * @default {}
+             */
+            http_status_counts: {
+                [key: string]: number;
+            };
+            /** Failed Requests */
+            failed_requests: number;
+        };
+        /** AdminPublishedVersionOut */
+        AdminPublishedVersionOut: {
+            /** Id */
+            id: number;
+            /** Published At */
+            published_at?: string | null;
+            /** Age Minutes */
+            age_minutes?: number | null;
+            /** Provider */
+            provider?: string | null;
+            /** Source Code */
+            source_code?: string | null;
+            /** Fallback From */
+            fallback_from?: string | null;
+            /** Wind Model */
+            wind_model?: string | null;
+            /** Wind Model Run */
+            wind_model_run?: string | null;
+            /**
+             * Wind Run Estimated
+             * @default false
+             */
+            wind_run_estimated: boolean;
+            /** Wave Model */
+            wave_model?: string | null;
+            /** Wave Model Run */
+            wave_model_run?: string | null;
+            /**
+             * Wave Run Estimated
+             * @default false
+             */
+            wave_run_estimated: boolean;
+            counts: components["schemas"]["AdminVersionCountsOut"];
+        };
+        /** AdminRefreshJobOut */
+        AdminRefreshJobOut: {
+            /** Id */
+            id: number;
+            /** Trigger */
+            trigger: string;
+            /** Status */
+            status: string;
+            /**
+             * Refresh
+             * @description A spot forecast refresh (false: map or ensemble only)
+             */
+            refresh: boolean;
+            /**
+             * Kinds
+             * @default []
+             */
+            kinds: string[];
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Published At */
+            published_at?: string | null;
+            /**
+             * Stages
+             * @default []
+             */
+            stages: components["schemas"]["AdminStageOut"][];
+            /**
+             * Version Ids
+             * @default []
+             */
+            version_ids: number[];
+            /**
+             * Error
+             * @description Redacted, shortened
+             */
+            error?: string | null;
+        };
+        /** AdminSchedulerCheckOut */
+        AdminSchedulerCheckOut: {
+            /** Source */
+            source: string;
+            /** At */
+            at?: string | null;
+        };
+        /** AdminSchedulerOut */
+        AdminSchedulerOut: {
+            /**
+             * Expected Minutes
+             * @description REFRESH_SCHEDULER_EXPECTED_MINUTES (0: off)
+             */
+            expected_minutes: number;
+            /**
+             * Limit Minutes
+             * @description The silence limit applied: REFRESH_SCHEDULER_EXPECTED_MINUTES, at least 3 x SYNC_CHECK_MINUTES when Celery or a daemon checking spots is the runner
+             * @default 0
+             */
+            limit_minutes: number;
+            /**
+             * Sync Running
+             * @description A sync a scheduler started runs under a valid lease
+             * @default false
+             */
+            sync_running: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Refresh Enabled
+             * @description FORECAST_REFRESH_ENABLED
+             */
+            refresh_enabled: boolean;
+            /** Last Check At */
+            last_check_at?: string | null;
+            /** Last Check By */
+            last_check_by?: string | null;
+            /**
+             * Checks
+             * @default []
+             */
+            checks: components["schemas"]["AdminSchedulerCheckOut"][];
+            /** Silent */
+            silent: boolean;
+        };
+        /** AdminStageOut */
+        AdminStageOut: {
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Cpu S */
+            cpu_s?: number | null;
+        };
+        /** AdminStageTimeOut */
+        AdminStageTimeOut: {
+            /** Stage */
+            stage: string;
+            /** Runs */
+            runs: number;
+            /** Avg Ms */
+            avg_ms: number;
+            /** P95 Ms */
+            p95_ms: number;
+            /** Max Ms */
+            max_ms: number;
+            /** Avg Cpu S */
+            avg_cpu_s?: number | null;
+        };
+        /** AdminStaleSpotOut */
+        AdminStaleSpotOut: {
+            /** Spot Id */
+            spot_id: number;
+            /** Slug */
+            slug?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Last Updated At */
+            last_updated_at?: string | null;
+            /**
+             * Reason
+             * @description missing, refresh_failed, atmosphere_age, wave_age or age
+             */
+            reason?: string | null;
+            /**
+             * Error
+             * @description The failed refresh's redacted error
+             */
+            error?: string | null;
+        };
+        /** AdminUsageWindowOut */
+        AdminUsageWindowOut: {
+            /**
+             * Used
+             * @description None: the counter could not be read
+             */
+            used?: number | null;
+            /** Limit */
+            limit?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Resets At */
+            resets_at?: string | null;
+        };
+        /** AdminVersionCountsOut */
+        AdminVersionCountsOut: {
+            /** Total */
+            total: number;
+            /** Updated */
+            updated: number;
+            /** Stale */
+            stale: number;
+            /** Failed */
+            failed: number;
+        };
+        /** AdminVersionRowOut */
+        AdminVersionRowOut: {
+            /** Id */
+            id: number;
+            /** Status */
+            status: string;
+            /** Kind */
+            kind?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Fallback From */
+            fallback_from?: string | null;
+            /** Detected At */
+            detected_at?: string | null;
+            /** Upstream Available At */
+            upstream_available_at?: string | null;
+            /** Staged At */
+            staged_at?: string | null;
+            /** Published At */
+            published_at?: string | null;
+            /** Wind Model Run */
+            wind_model_run?: string | null;
+            /** Wave Model Run */
+            wave_model_run?: string | null;
+            /**
+             * Changed
+             * @default []
+             */
+            changed: ("atmosphere" | "wave")[];
+            /** Spots Updated */
+            spots_updated: number;
+            /** Spots Stale */
+            spots_stale: number;
+            /** Spots Failed */
+            spots_failed: number;
+            /** Upstream To Publication S */
+            upstream_to_publication_s?: number | null;
+        };
+        /** AdminWindyUsageOut */
+        AdminWindyUsageOut: {
+            day: components["schemas"]["AdminUsageWindowOut"];
+            /** Available */
+            available: boolean;
+            /**
+             * Counted
+             * @description False: this build does not count Windy requests
+             */
+            counted: boolean;
         };
         /** AirportOut */
         AirportOut: {
@@ -5974,6 +6667,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_freshness_api_admin_freshness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminFreshnessOut"];
                 };
             };
         };

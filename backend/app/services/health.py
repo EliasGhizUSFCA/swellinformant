@@ -52,6 +52,42 @@ source is fresh), the job runner is down (Celery: no background job has finished
 DATA_HEALTH_HEARTBEAT_MINUTES; daemon: its heartbeat is stale) or the licence check fails;
 ``degraded`` for any other problem; ``ok`` otherwise.
 
+**Admin problems** (design D12; :func:`admin_problems`, ``data_health(admin=True)``): the
+checks below are computed only for the ``ops.data_health`` job and the admin freshness
+dashboard (GET /api/admin/freshness), never for the public report, whose payload and cost
+stay as they were. ops_alerts emails them to verified admins with the same
+de-duplication, reminders and recovery notices as every other problem:
+
+* ``model_run_late:<component>``: no newer run of the wave or atmosphere model is known
+  (published, staged, or seen by the daemon's last check) although the next cycle's
+  expected availability has passed: the newest run's init time + the model's update
+  interval (Open-Meteo meta.json ``update_interval_seconds`` where the version recorded it,
+  else 6 h) + its typical lag measured on the recent versions (median of
+  ``available_at - init_time`` of the runs whose domains share one cycle) + a grace of
+  max(MODEL_RUN_LATE_GRACE, the measured spread of the lag). No measured lag, no
+  judgement: never a fixed wall-clock guess.
+* ``forecast_stale_spots``: active spots of the published version whose forecast is stale
+  (their refresh failed, or a component is older than its model's interval plus
+  FORECAST_STALE_THRESHOLD_MINUTES; app.services.forecasts.versions.spot_freshness).
+* ``refresh_failures``: the newest REFRESH_FAILURES_IN_A_ROW (3) or more finished spot
+  refresh syncs all failed or were abandoned (map-only syncs and skipped checks ignored).
+* ``provider_credentials:<provider>``: the provider refused the key (HTTP 401/403, Windy's
+  "Invalid API key") or answered with a Windy TESTING key, in the newest attempt of its
+  source or in the recorded provider health (the providers package).
+* ``provider_unavailable:<source>``: the provider's run metadata has been unreadable for
+  PROVIDER_UNAVAILABLE_AFTER (30 min): new runs cannot be detected. When the metadata was
+  first seen unknown is kept in Redis (METADATA_UNKNOWN_KEY) by these checks.
+* ``provider_fallback:<provider>``: Open-Meteo stands in for Windy (the provider manager's
+  recorded fallback, or a published version with ``fallback_from``).
+* ``quota_near:<counter>``: QUOTA_ALERT_FRACTION (0.8) of the Open-Meteo day or month
+  window, Windy's daily requests or the flight provider's FLIGHT_DAILY_QUOTA is used
+  (app.services.usage).
+* ``refresh_scheduler_silent``: no refresh check (the refresh endpoint or the daily
+  backstop, a daemon that checks spots, Celery's sync.tick, or a sync they started) for
+  REFRESH_SCHEDULER_EXPECTED_MINUTES (30; 0 disables it), at least 3 x SYNC_CHECK_MINUTES
+  when Celery or such a daemon is the runner, and not while a sync they started runs under
+  a valid lease. Not checked while FORECAST_REFRESH_ENABLED=false.
+
 Assumptions: the limits above are operational heuristics (how late a run may be before
 someone should look), not statements about forecast accuracy. A worker that is down
 cannot send its own alert: poll this endpoint from an external monitor as well
@@ -60,21 +96,26 @@ cannot send its own alert: poll this endpoint from an external monitor as well
 
 from __future__ import annotations
 
+import importlib
+import logging
 import re
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+import statistics
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import ModuleType
 from typing import Any
 
 import redis
 from pydantic import ValidationError
 from sqlalchemy import Float, String, and_, column, func, select, true, values
-from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import distinct_on
+from sqlalchemy.orm import Session, defer
 
 from app.core.config import OPEN_METEO_PROVIDER_TOKENS, Settings, get_settings
 from app.core.database import utcnow
 from app.core.logging import redact
-from app.core.redis import parse_memory_size, redis_memory
+from app.core.redis import get_redis, parse_memory_size, redis_memory
 from app.jobs.registry import JOB_SPECS
 from app.jobs.runner import cpu_seconds_this_month
 from app.jobs.schedule import (
@@ -86,9 +127,17 @@ from app.jobs.schedule import (
     max_interval,
     time_limit_seconds,
 )
-from app.models import BackgroundJobLog, BuoyObservation, BuoyStation, ForecastRun, ForecastSource
-from app.models.enums import JobStatus
+from app.models import (
+    BackgroundJobLog,
+    BuoyObservation,
+    BuoyStation,
+    ForecastRun,
+    ForecastSource,
+    SurfSpot,
+)
+from app.models.enums import ForecastRunStatus, JobStatus
 from app.models.sync import SyncRun
+from app.models.version import ForecastVersion
 from app.schemas.health import (
     DataHealthOut,
     Freshness,
@@ -113,11 +162,14 @@ from app.schemas.sync import (
     SyncStageOut,
     SyncStoredRunOut,
 )
+from app.services.forecasts import versions
+from app.services.forecasts.base import ATMOSPHERE, WAVE
 from app.services.forecasts.open_meteo import free_api_refused
 from app.services.forecasts.queries import BLEND_CODE, USABLE, is_stale, stale_after_hours
 from app.services.forecasts.registry import (
     GEFS_WAVE_CODE,
     KNOWN_SOURCE_NAMES,
+    SOURCE_CODES,
     configured_source_codes,
 )
 from app.services.map_fields import map_fields_mode, served_run
@@ -126,6 +178,9 @@ from app.services.sync.detect import newest_cycle
 from app.services.sync.published import latest_publication
 from app.services.sync.types import STAGE_JOB_NAMES, SYNC_OWNED_TASKS, SYNC_TICK_JOB
 from app.services.tides.health import constants_file_present, tide_freshness
+from app.services.usage import RECENT_RUNS, usage_report
+
+logger = logging.getLogger(__name__)
 
 # Jobs that (re)build the blend: forecasts.acquire, then the chained forecasts.blend stage.
 BLEND_BUILDERS = frozenset({"forecasts.acquire", "forecasts.blend"})
@@ -177,12 +232,30 @@ class Problem:
 
 @dataclass(frozen=True)
 class HealthReport:
+    """``out`` and ``problems``: the public report. ``admin_problems``: the admin-only
+    problems (design D12), computed with ``data_health(admin=True)`` only and never put
+    into ``out``."""
+
     out: DataHealthOut
     problems: list[Problem]
+    admin_problems: list[Problem] = field(default_factory=list)
 
     @property
     def status(self) -> OverallStatus:
         return self.out.status
+
+    @property
+    def all_problems(self) -> list[Problem]:
+        """The public and the admin problems, the most severe first (what admins are
+        alerted about)."""
+        return sorted(
+            [*self.problems, *self.admin_problems], key=lambda p: (p.severity != "failing", p.key)
+        )
+
+    @property
+    def alert_status(self) -> OverallStatus:
+        """The overall status of :attr:`all_problems` (the admin emails' status)."""
+        return overall_status(self.all_problems)
 
 
 # --------------------------------------------------------------------------- formatting
@@ -1307,6 +1380,1008 @@ def check_licence(settings: Settings) -> list[Problem]:
     ]
 
 
+# --------------------------------------------------------------------------- admin problems
+# Design D12, see the module docstring. The grace past a model's expected availability
+# covers Open-Meteo's servers disagreeing about the same run (62 min apart for one GFS 0.25
+# run, measured 2026-10-26), the 10-minute servable wait and one refresh check interval.
+MODEL_RUN_LATE_GRACE = timedelta(minutes=90)
+VERSION_HISTORY = 30  # newest forecast versions read (by id): lags, detection, timeline
+REFRESH_HISTORY = 20  # newest sync_runs read
+REFRESH_FAILURES_IN_A_ROW = 3
+PROVIDER_UNAVAILABLE_AFTER = timedelta(minutes=30)
+# A check older than this says nothing about the provider now (the heartbeat's own TTL).
+METADATA_OBSERVATION_MAX_AGE = timedelta(hours=6)
+# Redis hash: source (or provider) -> ISO time its run metadata was first seen unknown.
+METADATA_UNKNOWN_KEY = "ops:metadata-unknown:v1"
+METADATA_UNKNOWN_TTL_SECONDS = 7 * 86400
+STALE_SPOTS_NAMED = 8
+# Keys (or key prefixes before ":") of the admin problems, and the one reported when their
+# checks could not run (ops_alerts then keeps their previous state instead of recovering).
+ADMIN_PROBLEM_KEYS = frozenset(
+    {
+        "model_run_late",
+        "forecast_stale_spots",
+        "refresh_failures",
+        "provider_credentials",
+        "provider_unavailable",
+        "provider_fallback",
+        "quota_near",
+        "refresh_scheduler_silent",
+    }
+)
+ADMIN_CHECKS_FAILED = "admin_checks_failed"
+# Sync triggers that a scheduler starts (the refresh endpoint, the daemon, Celery's tick);
+# a CLI or GitHub Actions sync proves nothing about the scheduler.
+SCHEDULER_TRIGGERS = frozenset({"http", "daemon", "celery"})
+CREDENTIAL_STATUSES = ("401", "403")
+CREDENTIAL_TEXT = re.compile(
+    r"refused the key|invalid api key|windy_testing_key|testing-key|unauthori[sz]ed|"
+    r"forbidden|\bHTTP 40[13]\b",
+    re.IGNORECASE,
+)
+_TOKEN_OF_SOURCE = {code: token for token, code in SOURCE_CODES.items()}
+
+
+def _provider_manager() -> ModuleType | None:
+    """``app.services.forecasts.provider_manager`` (the providers package, design D4), or
+    None in a build without it: then the selection comes from the settings alone and no
+    provider health is recorded."""
+    try:
+        return importlib.import_module("app.services.forecasts.provider_manager")
+    except ImportError:
+        return None
+
+
+def _seconds(delta: timedelta) -> float:
+    return delta.total_seconds()
+
+
+def _minutes_text(seconds: float) -> str:
+    return ago(timedelta(seconds=seconds))
+
+
+@dataclass(frozen=True)
+class ComponentTiming:
+    """One component's model run timing (the dashboard's atmosphere / wave block and
+    ``model_run_late``).
+
+    ``run`` / ``available_at`` / ``retrieved_at`` describe the run the published version
+    serves; ``newest_run`` is the newest init time known at all (any version, staged or
+    failed included, or the daemon's last check). ``typical_lag_s`` is the median of
+    ``available_at - init_time`` over the distinct runs of the recent versions whose
+    domains share one cycle (:func:`_lag_sample`);
+    ``expected_next_at`` = ``newest_run`` + interval + typical lag, and the run is late
+    after ``late_after`` (+ max(MODEL_RUN_LATE_GRACE, measured spread))."""
+
+    component: str
+    model: str | None = None
+    run_key: str | None = None
+    run: datetime | None = None
+    estimated: bool = False
+    available_at: datetime | None = None
+    retrieved_at: datetime | None = None
+    changed: bool | None = None
+    carried_from_run_id: int | None = None
+    last_detected_at: datetime | None = None
+    newest_run: datetime | None = None
+    interval_s: int = versions.DEFAULT_UPDATE_INTERVAL_SECONDS
+    interval_recorded: bool = False
+    typical_lag_s: float | None = None
+    lag_spread_s: float | None = None
+    lag_samples: int = 0
+    expected_next_at: datetime | None = None
+    late_after: datetime | None = None
+    late: bool = False
+
+
+def _detected_runs(heartbeat: state.Heartbeat | None, now: datetime) -> dict[str, datetime]:
+    """{component: newest available cycle} the daemon's last check saw for the spot
+    sources (a component-less entry stands for both components)."""
+    out: dict[str, datetime] = {}
+    if heartbeat is None or now - heartbeat.at > METADATA_OBSERVATION_MAX_AGE:
+        return out
+    for raw in heartbeat.components or []:
+        if not isinstance(raw, dict) or raw.get("kind") != "spots":
+            continue
+        try:
+            cycle = datetime.fromisoformat(str(raw.get("available_cycle")))
+        except ValueError:
+            continue
+        comps = [str(raw["component"])] if raw.get("component") else [ATMOSPHERE, WAVE]
+        for comp in comps:
+            if comp not in out or cycle > out[comp]:
+                out[comp] = cycle
+    return out
+
+
+def _attempted_runs(db: Session, codes: Iterable[str]) -> dict[str, datetime]:
+    """{component: newest model run} of the newest forecast runs (any status, the
+    ``usage.RECENT_RUNS`` newest by id) of ``codes``: a run a refresh tried to fetch was
+    detected, even when the attempt failed or is not published yet."""
+    wanted = sorted({c for c in codes if c})
+    if not wanted:
+        return {}
+    rows = db.execute(
+        select(ForecastRun.wave_model_run_at, ForecastRun.atmosphere_model_run_at)
+        .join(ForecastSource, ForecastSource.id == ForecastRun.source_id)
+        .where(ForecastSource.code.in_(wanted))
+        .order_by(ForecastRun.id.desc())
+        .limit(RECENT_RUNS)
+    ).all()
+    out: dict[str, datetime] = {}
+    for wave_at, wind_at in rows:
+        for comp, at in ((WAVE, wave_at), (ATMOSPHERE, wind_at)):
+            if at is not None and (comp not in out or at > out[comp]):
+                out[comp] = at
+    return out
+
+
+def _lag_sample(run: versions.ComponentRun) -> float | None:
+    """``available_at - init_time`` (seconds) of a run whose domains all hold the same
+    cycle, else None. A run that mixes cycles (GFS 0.13 of 06Z with GFS 0.25 of 00Z while
+    the 0.25 run is not out yet: a component is refreshed as soon as one domain advances)
+    pairs its oldest domain's init time with its newest domain's availability, which
+    would add a whole cycle to the measured lag."""
+    if run.init_time is None or run.available_at is None or run.available_at < run.init_time:
+        return None
+    if any(d.init_time is not None and d.init_time != run.init_time for d in run.domains):
+        return None
+    return _seconds(run.available_at - run.init_time)
+
+
+def component_timings(
+    history: Sequence[ForecastVersion],
+    current: ForecastVersion | None,
+    now: datetime,
+    settings: Settings,
+    detected: Mapping[str, datetime] | None = None,
+) -> dict[str, ComponentTiming]:
+    """The atmosphere and wave :class:`ComponentTiming` from the recent versions
+    (``history``, newest first) and the published version."""
+    out: dict[str, ComponentTiming] = {}
+    detected = detected or {}
+    for comp in (ATMOSPHERE, WAVE):
+        runs: dict[datetime, versions.ComponentRun] = {}
+        lag_by_init: dict[datetime, float] = {}
+        first_detected: dict[datetime, datetime] = {}
+        for version in history:
+            run = versions.component_runs_of(version).get(comp)
+            if run is None or run.init_time is None:
+                continue
+            runs.setdefault(run.init_time, run)
+            lag = _lag_sample(run)
+            if lag is not None:
+                lag_by_init.setdefault(run.init_time, lag)
+            if version.detected_at is not None and run.changed:
+                seen = first_detected.get(run.init_time)
+                first_detected[run.init_time] = min(
+                    seen or version.detected_at, version.detected_at
+                )
+        lags = sorted(lag_by_init.values())
+        served = versions.component_runs_of(current).get(comp) if current is not None else None
+        known = [*runs, *([detected[comp]] if comp in detected else [])]
+        newest = max(known) if known else None
+        reference = (runs.get(newest) if newest is not None else None) or served
+        interval_recorded = bool(reference and reference.update_interval_seconds)
+        interval = (
+            int(reference.update_interval_seconds)
+            if reference is not None and reference.update_interval_seconds
+            else versions.DEFAULT_UPDATE_INTERVAL_SECONDS
+        )
+        typical = statistics.median(lags) if lags else None
+        spread = (lags[-1] - typical) if typical is not None else None
+        expected = late_after = None
+        if typical is not None and newest is not None:
+            expected = newest + timedelta(seconds=interval + typical)
+            grace = max(MODEL_RUN_LATE_GRACE, timedelta(seconds=spread or 0.0))
+            late_after = expected + grace
+        out[comp] = ComponentTiming(
+            component=comp,
+            model=served.model if served else (reference.model if reference else None),
+            run_key=served.run_key if served else None,
+            run=served.init_time if served else None,
+            estimated=bool(served and served.estimated),
+            available_at=served.available_at if served else None,
+            retrieved_at=served.retrieved_at if served else None,
+            changed=served.changed if served else None,
+            carried_from_run_id=served.carried_from_run_id if served else None,
+            last_detected_at=(
+                first_detected.get(served.init_time) if served and served.init_time else None
+            ),
+            newest_run=newest,
+            interval_s=interval,
+            interval_recorded=interval_recorded,
+            typical_lag_s=typical,
+            lag_spread_s=spread,
+            lag_samples=len(lags),
+            expected_next_at=expected,
+            late_after=late_after,
+            late=late_after is not None and now > late_after,
+        )
+    return out
+
+
+def model_run_late_problems(
+    timings: Mapping[str, ComponentTiming], now: datetime, settings: Settings
+) -> list[Problem]:
+    """``model_run_late:<component>`` for every late component (not while
+    FORECAST_REFRESH_ENABLED=false: nothing is detected then)."""
+    if not settings.forecast_refresh_enabled:
+        return []
+    problems: list[Problem] = []
+    for comp, t in timings.items():
+        if (
+            not t.late
+            or t.newest_run is None
+            or t.typical_lag_s is None
+            or t.expected_next_at is None
+        ):
+            continue
+        interval = timedelta(seconds=t.interval_s)
+        due = t.newest_run + interval
+        missed = int((now - t.expected_next_at) / interval) + 1 if interval else 1
+        more = f" (and {missed - 1} later cycle{'s' if missed > 2 else ''})" if missed > 1 else ""
+        source = "meta.json update_interval_seconds" if t.interval_recorded else "assumed"
+        problems.append(
+            Problem(
+                f"model_run_late:{comp}",
+                "degraded",
+                f"The {comp} model run of {stamp(due)}{more} is late ({t.model or 'model'}): its "
+                f"runs usually become available {_minutes_text(t.typical_lag_s)} after their "
+                f"cycle (median of {t.lag_samples} run{'s' if t.lag_samples != 1 else ''}; "
+                f"updates every {_minutes_text(t.interval_s)}, {source}), so it was expected "
+                f"by {stamp(t.expected_next_at)}; nothing newer than {stamp(t.newest_run)} has "
+                f"been detected or published by {stamp(now)}. The provider is late, or the "
+                "refresh cannot see or fetch it (check provider_unavailable and "
+                "refresh_failures).",
+            )
+        )
+    return problems
+
+
+@dataclass(frozen=True)
+class StaleSpot:
+    spot_id: int
+    slug: str | None
+    name: str | None
+    last_updated_at: datetime | None
+    reason: str | None
+    error: str | None = None
+
+
+def stale_spots(
+    db: Session, current: ForecastVersion | None, now: datetime, settings: Settings
+) -> list[StaleSpot]:
+    """The published version's stale active spots (versions.spot_freshness), oldest
+    update first."""
+    if current is None:
+        return []
+    freshness = versions.spot_freshness(current, now, settings)
+    stale_ids = [sid for sid, f in freshness.items() if f.stale]
+    if not stale_ids:
+        return []
+    names = {
+        sid: (slug, name)
+        for sid, slug, name in db.execute(
+            select(SurfSpot.id, SurfSpot.slug, SurfSpot.name).where(
+                SurfSpot.id.in_(stale_ids), SurfSpot.is_active.is_(True)
+            )
+        )
+    }
+    entries = versions.spot_runs_of(current)
+    out = [
+        StaleSpot(
+            spot_id=sid,
+            slug=names[sid][0],
+            name=names[sid][1],
+            last_updated_at=freshness[sid].last_updated_at,
+            reason=freshness[sid].reason,
+            error=entries[sid].error if sid in entries else None,
+        )
+        for sid in stale_ids
+        if sid in names
+    ]
+    epoch = datetime.min.replace(tzinfo=UTC)
+    return sorted(out, key=lambda s: (s.last_updated_at or epoch, s.slug or ""))
+
+
+def stale_spots_problem(
+    spots: Sequence[StaleSpot], current: ForecastVersion | None
+) -> Problem | None:
+    if not spots or current is None:
+        return None
+    reasons = _count_text(s.reason or "stale" for s in spots)
+    named = ", ".join(s.slug or str(s.spot_id) for s in spots[:STALE_SPOTS_NAMED])
+    if len(spots) > STALE_SPOTS_NAMED:
+        named += f" (+{len(spots) - STALE_SPOTS_NAMED} more)"
+    errors = [f"{s.slug}: {s.error}" for s in spots if s.error][:5]
+    return Problem(
+        "forecast_stale_spots",
+        "degraded",
+        f"{len(spots)} of {current.spots_total} spots in published version {current.id} serve a "
+        f"stale forecast ({reasons}): {named}. They are labelled stale on the site and keep "
+        "their previous forecast until a refresh updates them.",
+        detail="; ".join(errors)[:1000] or None,
+    )
+
+
+def _count_text(reasons: Iterable[str]) -> str:
+    """'2 refresh failed, 1 wave age'."""
+    counts: dict[str, int] = {}
+    for r in reasons:
+        counts[r] = counts.get(r, 0) + 1
+    return ", ".join(f"{n} {r.replace('_', ' ')}" for r, n in sorted(counts.items()))
+
+
+def is_refresh_sync(row: SyncRun) -> bool:
+    """A sync that refreshed (or tried to refresh) the spot forecasts: one the refresh
+    endpoint started, one whose plan made spots due, or one with a spots stage. A map- or
+    ensemble-only sync is not."""
+    if row.trigger == "http":
+        return True
+    plan = row.plan if isinstance(row.plan, dict) else {}
+    if "spots" in (plan.get("due_kinds") or []):
+        return True
+    stages = [s.get("name") for s in row.stages or [] if isinstance(s, dict)]
+    if "spots" in stages:
+        return True
+    # Neither plan nor stages (a sync that failed before planning): counted.
+    return not plan.get("due_kinds") and not stages
+
+
+def refresh_failures_problem(syncs: Sequence[SyncRun]) -> Problem | None:
+    """``refresh_failures``: the newest REFRESH_FAILURES_IN_A_ROW or more finished refresh
+    syncs (``syncs`` newest first; skipped and running rows ignored) failed or were
+    abandoned. The newest error goes to the admin email only."""
+    finished = [r for r in syncs if r.status not in ("running", "skipped") and is_refresh_sync(r)]
+    streak: list[SyncRun] = []
+    for row in finished:
+        if row.status not in FAILED_SYNC_STATUSES:
+            break
+        streak.append(row)
+    if len(streak) < REFRESH_FAILURES_IN_A_ROW:
+        return None
+    newest, oldest = streak[0], streak[-1]
+    # Every refresh read failed and older rows exist: the streak may be longer.
+    more = "+" if len(streak) == len(finished) and len(syncs) >= REFRESH_HISTORY else ""
+    return Problem(
+        "refresh_failures",
+        "degraded",
+        f"The last {len(streak)}{more} forecast "
+        f"refreshes failed (syncs {oldest.id}-{newest.id}, since {stamp(oldest.started_at)}; "
+        f"the newest ended {newest.status}): new model runs are not being published and "
+        "spots go stale.",
+        detail=newest.error_message,
+    )
+
+
+@dataclass(frozen=True)
+class CredentialFailure:
+    provider: str  # FORECAST_PROVIDERS token (or the source code when it has none)
+    source: str | None
+    at: datetime | None
+    kind: str  # credentials | testing_key
+    detail: str | None
+
+
+def _attempt_failures(db: Session, codes: Iterable[str]) -> list[CredentialFailure]:
+    """Credential failures in the newest attempt of each source (``forecast_runs``): HTTP
+    401/403 responses or a refused key / testing key in the error text."""
+    wanted = sorted({c for c in codes if c})
+    if not wanted:
+        return []
+    run = ForecastRun
+    rows = db.execute(
+        select(
+            ForecastSource.code,
+            run.status,
+            run.started_at,
+            run.error_message,
+            run.details["stats"],
+        )
+        .join(ForecastSource, ForecastSource.id == run.source_id)
+        .where(ForecastSource.code.in_(wanted))
+        .order_by(run.source_id, run.started_at.desc(), run.id.desc())
+        .ext(distinct_on(run.source_id))
+    ).all()
+    out: list[CredentialFailure] = []
+    for code, status, started, error, stats in rows:
+        if status != ForecastRunStatus.FAILED:
+            continue
+        counts = stats.get("http_status_counts") if isinstance(stats, dict) else None
+        refused = [s for s in CREDENTIAL_STATUSES if isinstance(counts, dict) and counts.get(s)]
+        text = str(error or "")
+        if not refused and not CREDENTIAL_TEXT.search(text):
+            continue
+        testing = "testing" in text.lower() or "trial" in text.lower()
+        out.append(
+            CredentialFailure(
+                provider=_TOKEN_OF_SOURCE.get(str(code), str(code)),
+                source=str(code),
+                at=started,
+                kind="testing_key" if testing else "credentials",
+                detail=redact(text)[:500] or (f"HTTP {', '.join(refused)}" if refused else None),
+            )
+        )
+    return out
+
+
+def _health_failures(health: Mapping[str, Mapping[str, Any]]) -> list[CredentialFailure]:
+    """Credential and testing-key failures in the recorded provider health (the providers
+    package) that no later success cleared."""
+    out: list[CredentialFailure] = []
+    for provider, h in health.items():
+        kind = h.get("last_failure_kind")
+        if kind not in ("credentials", "testing_key"):
+            continue
+        failed, ok = as_datetime(h.get("last_failure_at")), as_datetime(h.get("last_success_at"))
+        if failed is None or (ok is not None and ok >= failed):
+            continue
+        out.append(
+            CredentialFailure(
+                provider=str(provider),
+                source=None,
+                at=failed,
+                kind=str(kind),
+                detail=_redacted(h.get("last_failure_detail")),
+            )
+        )
+    return out
+
+
+def _redacted(text: Any) -> str | None:
+    """Recorded error text (another package's record) redacted and shortened."""
+    return redact(str(text))[:DETAIL_MAX_CHARS] if text else None
+
+
+def as_datetime(value: Any) -> datetime | None:
+    """A datetime or ISO text as an aware datetime (None when empty or unreadable). A
+    time without an offset (a record written by other code) is read as UTC, so it compares
+    with the aware times here instead of raising."""
+    if isinstance(value, datetime):
+        parsed = value
+    elif not value:
+        return None
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def credential_problems(
+    failures: Sequence[CredentialFailure], selection: Mapping[str, Any]
+) -> list[Problem]:
+    """``provider_credentials:<provider>``: failing, or degraded while a fallback stands in
+    for that provider (the site still gets data, from the fallback)."""
+    by_provider: dict[str, CredentialFailure] = {}
+    for f in failures:
+        known = by_provider.get(f.provider)
+        if known is None or (f.at and (known.at is None or f.at > known.at)):
+            by_provider[f.provider] = f
+    standing_in = selection.get("fallback_from")
+    problems: list[Problem] = []
+    for provider, f in sorted(by_provider.items()):
+        what = (
+            "answered with a TESTING key (trial data are shuffled and are never stored or "
+            "published)"
+            if f.kind == "testing_key"
+            else "refused the API key (invalid, expired or without the needed permission)"
+        )
+        fallback = (
+            f"; {selection.get('fallback') or 'the fallback'} stands in meanwhile"
+            if standing_in == provider
+            else ""
+        )
+        problems.append(
+            Problem(
+                f"provider_credentials:{provider}",
+                "degraded" if standing_in == provider else "failing",
+                f"Forecast provider {provider} {what}"
+                + (f" at {stamp(f.at)}" if f.at else "")
+                + f"{fallback}. Check its key in the deployment's environment "
+                "(docs/API_SETUP_REQUIRED.md; Windy: docs/WINDY_API_SETUP.md).",
+                detail=f.detail,
+            )
+        )
+    return problems
+
+
+@dataclass(frozen=True)
+class MetadataState:
+    """Whether a provider's run metadata could be read at its newest check."""
+
+    key: str  # the source code (":<component>" when the check named one) or provider token
+    unknown: bool
+    observed_at: datetime
+    unknown_since: datetime | None = None
+    detail: str | None = None
+
+
+def metadata_observations(
+    heartbeat: state.Heartbeat | None,
+    refresh_check: Mapping[str, Any] | None,
+    health: Mapping[str, Mapping[str, Any]],
+    now: datetime,
+) -> dict[str, MetadataState]:
+    """The newest observation of each provider's metadata: the daemon's last check, the
+    refresh endpoint's last check (when it records its components) and the recorded
+    provider health (a transient failure after the last success = unknown)."""
+    out: dict[str, MetadataState] = {}
+
+    def note(key: str, unknown: bool, at: datetime | None, detail: str | None) -> None:
+        if at is None or now - at > METADATA_OBSERVATION_MAX_AGE:
+            return
+        known = out.get(key)
+        if known is None or at >= known.observed_at:
+            out[key] = MetadataState(key, unknown, at, detail=detail)
+
+    checks: list[tuple[datetime | None, list[Any]]] = []
+    if heartbeat is not None:
+        checks.append((heartbeat.at, list(heartbeat.components or [])))
+    if refresh_check:
+        checks.append(
+            (as_datetime(refresh_check.get("at")), list(refresh_check.get("components") or []))
+        )
+    for at, components in checks:
+        for raw in components:
+            if not isinstance(raw, dict) or not raw.get("source_code"):
+                continue
+            if raw.get("state") in ("disabled", None):
+                continue
+            key = str(raw["source_code"]) + (f":{raw['component']}" if raw.get("component") else "")
+            unknown = raw.get("state") == "unknown"
+            detail = (
+                redact(str(raw.get("detail")))[:DETAIL_MAX_CHARS] if raw.get("detail") else None
+            )
+            note(key, unknown, at, detail if unknown else None)
+    for provider, h in health.items():
+        failed, ok = as_datetime(h.get("last_failure_at")), as_datetime(h.get("last_success_at"))
+        transient = h.get("last_failure_kind") == "unavailable"
+        if transient and failed is not None and (ok is None or failed > ok):
+            note(str(provider), True, failed, _redacted(h.get("last_failure_detail")))
+        elif ok is not None:
+            note(str(provider), False, ok, None)
+    return out
+
+
+def track_metadata(
+    observed: Mapping[str, MetadataState], *, write: bool = True
+) -> dict[str, MetadataState]:
+    """``observed`` with ``unknown_since``: when each unknown provider was first seen
+    unknown (kept in Redis across checks; a known one is forgotten). Without Redis,
+    ``unknown_since`` is None (the duration is not known, so no problem is raised)."""
+    try:
+        client = get_redis()
+        stored = {str(k): str(v) for k, v in (client.hgetall(METADATA_UNKNOWN_KEY) or {}).items()}
+    except redis.RedisError as exc:
+        logger.warning("Provider metadata state unavailable (Redis: %s)", type(exc).__name__)
+        return dict(observed)
+    out: dict[str, MetadataState] = {}
+    new: dict[str, str] = {}
+    gone: list[str] = []
+    for key, obs in observed.items():
+        if obs.unknown:
+            since = as_datetime(stored.get(key))
+            if since is None or since > obs.observed_at:
+                since = obs.observed_at
+                new[key] = since.isoformat()
+            out[key] = MetadataState(key, True, obs.observed_at, since, obs.detail)
+        else:
+            out[key] = obs
+            if key in stored:
+                gone.append(key)
+    if write and (new or gone):
+        try:
+            pipe = client.pipeline(transaction=True)
+            for key, since_text in new.items():
+                pipe.hset(METADATA_UNKNOWN_KEY, key, since_text)
+            if gone:
+                pipe.hdel(METADATA_UNKNOWN_KEY, *gone)
+            pipe.expire(METADATA_UNKNOWN_KEY, METADATA_UNKNOWN_TTL_SECONDS)
+            pipe.execute()
+        except redis.RedisError as exc:
+            logger.warning("Provider metadata state not stored (Redis: %s)", type(exc).__name__)
+    return out
+
+
+def provider_unavailable_problems(
+    states: Mapping[str, MetadataState], now: datetime, names: Mapping[str, str] | None = None
+) -> list[Problem]:
+    """``provider_unavailable:<source>``: metadata unknown for PROVIDER_UNAVAILABLE_AFTER."""
+    problems: list[Problem] = []
+    for key, s in sorted(states.items()):
+        if not s.unknown or s.unknown_since is None:
+            continue
+        if now - s.unknown_since < PROVIDER_UNAVAILABLE_AFTER:
+            continue
+        source = key.split(":", 1)[0]
+        name = (names or {}).get(source) or source
+        problems.append(
+            Problem(
+                f"provider_unavailable:{key}",
+                "degraded",
+                f"{name}: the provider's run metadata could not be read since "
+                f"{stamp(s.unknown_since)} ({ago(now - s.unknown_since)}; last check "
+                f"{stamp(s.observed_at)}): new model runs cannot be detected meanwhile.",
+                detail=s.detail,
+            )
+        )
+    return problems
+
+
+def provider_fallback_problems(
+    selection: Mapping[str, Any], current: ForecastVersion | None
+) -> list[Problem]:
+    """``provider_fallback:<provider>``: a fallback stands in for the configured primary
+    (the provider manager's recorded fallback, or the published version's
+    ``fallback_from``)."""
+    replaced: dict[str, str] = {}
+    if selection.get("fallback_from"):
+        until = as_datetime(selection.get("fallback_until"))
+        reasons = [str(r) for r in selection.get("reasons") or [] if "stands in" in str(r)]
+        replaced[str(selection["fallback_from"])] = (
+            (f"until {stamp(until)}" if until else "") + (f" ({reasons[-1]})" if reasons else "")
+        ).strip()
+    if current is not None and current.fallback_from:
+        replaced.setdefault(
+            str(current.fallback_from),
+            f"published version {current.id} came from {current.provider}",
+        )
+    problems = []
+    for provider, why in sorted(replaced.items()):
+        problems.append(
+            Problem(
+                f"provider_fallback:{provider}",
+                "degraded",
+                f"{selection.get('fallback') or 'The fallback provider'} stands in for "
+                f"{provider}" + (f": {why}" if why else "") + ". The site keeps updating "
+                f"from the fallback; {provider} is tried again automatically.",
+            )
+        )
+    return problems
+
+
+def quota_near_problems(usage: Mapping[str, Any], settings: Settings) -> list[Problem]:
+    """``quota_near:<counter>`` at QUOTA_ALERT_FRACTION of a provider allowance: the
+    Open-Meteo day and month windows, Windy's day, the flight provider's daily quota."""
+    alert = settings.quota_alert_fraction
+    counters: list[tuple[str, str, Any, Any, str]] = []
+    om = usage.get("open_meteo") or {}
+    limits = om.get("limits") or {}
+    resets = om.get("resets_at") or {}
+    for window in ("day", "month"):
+        counters.append(
+            (
+                f"open_meteo_{window}",
+                f"Open-Meteo weighted calls this {window} (OPEN_METEO_CALLS_PER_{window.upper()})",
+                om.get(window),
+                limits.get(window),
+                str(resets.get(window) or ""),
+            )
+        )
+    windy = usage.get("windy") or {}
+    if windy.get("counted", True):
+        counters.append(
+            (
+                "windy_day",
+                "Windy requests today (WINDY_DAILY_REQUEST_LIMIT)",
+                windy.get("day"),
+                windy.get("limit"),
+                str(windy.get("resets_at") or ""),
+            )
+        )
+    flights = usage.get("flights") or {}
+    fq = flights.get("quota")
+    if isinstance(fq, Mapping):
+        counters.append(
+            (
+                f"flights_{flights.get('provider')}_day",
+                f"{flights.get('provider')} flight requests today (FLIGHT_DAILY_QUOTA)",
+                fq.get("used"),
+                fq.get("limit"),
+                str(fq.get("resets_at") or ""),
+            )
+        )
+    problems = []
+    for key, label, used, limit, resets_at in counters:
+        if not isinstance(used, int | float) or not isinstance(limit, int | float) or limit <= 0:
+            continue
+        share = used / limit
+        if share < alert:
+            continue
+        reset = as_datetime(resets_at)
+        problems.append(
+            Problem(
+                f"quota_near:{key}",
+                "degraded",
+                f"{label}: {used:g} of {limit:g} used ({share:.0%}; alert at {alert:.0%}"
+                f", QUOTA_ALERT_FRACTION)"
+                + (f"; it resets at {stamp(reset)}" if reset else "")
+                + ". Requests stop once the limit is reached.",
+            )
+        )
+    return problems
+
+
+@dataclass(frozen=True)
+class SchedulerState:
+    """When a refresh check last ran (``refresh_scheduler_silent``)."""
+
+    expected_minutes: int
+    enabled: bool  # FORECAST_REFRESH_ENABLED and REFRESH_SCHEDULER_EXPECTED_MINUTES > 0
+    last_check_at: datetime | None
+    last_check_by: str | None
+    checks: dict[str, datetime | None]
+    monitoring_since: datetime | None
+    silent: bool
+    # The silence limit applied (:func:`scheduler_limit_minutes`).
+    limit_minutes: int = 0
+    # A sync a scheduler started is running under a valid lease (a long one is no silence).
+    sync_running: bool = False
+
+
+def scheduler_limit_minutes(settings: Settings) -> int:
+    """How long no refresh check may be seen: REFRESH_SCHEDULER_EXPECTED_MINUTES, and at
+    least HEARTBEAT_CHECKS x SYNC_CHECK_MINUTES (as for the daemon's heartbeat) when the
+    configured runner checks on its own timer (Celery's sync.tick, a daemon whose
+    SYNC_DAEMON_KINDS include spots): a slower SYNC_CHECK_MINUTES is no silence."""
+    expected = settings.refresh_scheduler_expected_minutes
+    timed = settings.runs_celery or (
+        settings.job_runner == "daemon" and "spots" in settings.sync_daemon_kind_list
+    )
+    if expected <= 0 or not timed:
+        return expected
+    return max(expected, HEARTBEAT_CHECKS * settings.sync_check_minutes)
+
+
+def scheduler_state(
+    db: Session,
+    settings: Settings,
+    now: datetime,
+    *,
+    heartbeat: state.Heartbeat | None,
+    refresh_check: Mapping[str, Any] | None,
+    syncs: Sequence[SyncRun],
+) -> SchedulerState:
+    """The newest refresh check of any scheduler: the refresh endpoint and the daily
+    backstop (their Redis record), a daemon whose SYNC_DAEMON_KINDS include spots (its
+    heartbeat), Celery's sync.tick (its job log) and the newest sync one of them started."""
+    checks: dict[str, datetime | None] = {}
+    if refresh_check:
+        caller = str(refresh_check.get("caller") or "refresh")
+        checks[f"refresh endpoint ({caller})"] = as_datetime(refresh_check.get("at"))
+    if heartbeat is not None and "spots" in settings.sync_daemon_kind_list:
+        checks["daemon"] = heartbeat.at
+    if settings.runs_celery:
+        checks["celery sync.tick"] = db.scalar(
+            select(BackgroundJobLog.started_at)
+            .where(BackgroundJobLog.job_name == SYNC_TICK_JOB)
+            .order_by(BackgroundJobLog.started_at.desc())
+            .limit(1)
+        )
+    started = next(
+        (r for r in syncs if r.trigger in SCHEDULER_TRIGGERS and is_refresh_sync(r)), None
+    )
+    if started is not None:
+        checks[f"sync {started.id} ({started.trigger})"] = started.started_at
+    known = [(at, by) for by, at in checks.items() if at is not None]
+    last_at, last_by = max(known) if known else (None, None)
+    expected = settings.refresh_scheduler_expected_minutes
+    limit = scheduler_limit_minutes(settings)
+    enabled = expected > 0 and settings.forecast_refresh_enabled
+    running = any(
+        r.status == "running"
+        and r.trigger in SCHEDULER_TRIGGERS
+        and r.lease_expires_at is not None
+        and r.lease_expires_at > now
+        for r in syncs
+    )
+    # When monitoring began matters only before any check was ever recorded.
+    since = (
+        db.scalar(select(func.min(BackgroundJobLog.started_at)))
+        if enabled and last_at is None
+        else None
+    )
+    reference = last_at or since
+    silent = (
+        enabled
+        and not running
+        and reference is not None
+        and now - reference > timedelta(minutes=limit)
+    )
+    return SchedulerState(
+        expected_minutes=expected,
+        enabled=enabled,
+        last_check_at=last_at,
+        last_check_by=last_by,
+        checks=checks,
+        monitoring_since=since,
+        silent=bool(silent),
+        limit_minutes=limit,
+        sync_running=running,
+    )
+
+
+def scheduler_silent_problem(s: SchedulerState, now: datetime) -> Problem | None:
+    if not s.silent:
+        return None
+    if s.last_check_at is None:
+        assert s.monitoring_since is not None
+        text = (
+            f"No forecast refresh check has been recorded, although background jobs have been "
+            f"logged for {ago(now - s.monitoring_since)}"
+        )
+    else:
+        text = (
+            f"The last forecast refresh check was at {stamp(s.last_check_at)} "
+            f"({s.last_check_by}), {ago(now - s.last_check_at)} ago"
+        )
+    return Problem(
+        "refresh_scheduler_silent",
+        "degraded",
+        text + f" (expected at least every {s.limit_minutes or s.expected_minutes} min, "
+        "REFRESH_SCHEDULER_EXPECTED_MINUTES): new model runs are not picked up. Check the "
+        "scheduler that calls /api/internal/refresh (QStash or cron-job.org, docs/sync.md), "
+        "the daemon or Celery beat; set REFRESH_SCHEDULER_EXPECTED_MINUTES=0 if no scheduler "
+        "is meant to run.",
+    )
+
+
+def provider_selection_state(settings: Settings, now: datetime) -> dict[str, Any]:
+    """The active provider and why: the provider manager's view when the providers
+    package provides it (recorded health and fallback included), else the settings
+    selection with no fallback recorded. Keys: providers, primary, configured, source,
+    weather_provider, windy_eligible, fallback, fallback_from, fallback_until, reasons,
+    health ({provider: recorded health})."""
+    manager = _provider_manager()
+    if manager is not None:
+        try:
+            data = dict(manager.active_provider(settings, now).as_dict(now))
+        except Exception as exc:  # never let the dashboard or the alert job fail on it
+            logger.warning("Provider manager unavailable: %s", type(exc).__name__)
+        else:
+            data.setdefault("health", {})
+            return data
+    selection = settings.provider_selection()
+    return {
+        **selection.as_dict(),
+        "configured": list(selection.providers),
+        "fallback_from": None,
+        "fallback_until": None,
+        "health": {},
+    }
+
+
+def read_refresh_check() -> dict[str, Any] | None:
+    """The refresh endpoint's last check (``state.read_refresh_check``, the refresh
+    package), or None in a build without it."""
+    reader = getattr(state, "read_refresh_check", None)
+    if not callable(reader):
+        return None
+    data = reader()
+    return dict(data) if isinstance(data, Mapping) else None
+
+
+@dataclass
+class AdminInputs:
+    """What the admin problems and the freshness dashboard are computed from (one read
+    per source; :func:`admin_inputs`)."""
+
+    now: datetime
+    history: list[ForecastVersion]
+    current: ForecastVersion | None
+    timings: dict[str, ComponentTiming]
+    stale: list[StaleSpot]
+    syncs: list[SyncRun]
+    usage: dict[str, Any]
+    selection: dict[str, Any]
+    scheduler: SchedulerState
+    metadata: dict[str, MetadataState]
+    credential_failures: list[CredentialFailure]
+    source_names: dict[str, str] = field(default_factory=dict)
+
+
+def admin_inputs(
+    db: Session,
+    settings: Settings,
+    now: datetime,
+    *,
+    heartbeat: state.Heartbeat | None = None,
+    track: bool = True,
+) -> AdminInputs:
+    """Read everything the admin problems need: the newest VERSION_HISTORY versions
+    (without their spot maps) and the published one, the newest REFRESH_HISTORY syncs,
+    the usage counters, the provider selection and health, the refresh checks. ``track``:
+    keep the provider-metadata state in Redis (:func:`track_metadata`)."""
+    history = list(
+        db.scalars(
+            select(ForecastVersion)
+            .options(defer(ForecastVersion.spot_runs))
+            .order_by(ForecastVersion.id.desc())
+            .limit(VERSION_HISTORY)
+        ).all()
+    )
+    current = versions.current_version(db)
+    syncs = list(
+        db.scalars(
+            select(SyncRun)
+            .order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+            .limit(REFRESH_HISTORY)
+        ).all()
+    )
+    refresh_check = read_refresh_check()
+    selection = provider_selection_state(settings, now)
+    health = {
+        str(k): v for k, v in (selection.get("health") or {}).items() if isinstance(v, Mapping)
+    }
+    codes = set(configured_source_codes(settings))
+    if current is not None and current.source_code:
+        codes.add(current.source_code)
+    detected = _detected_runs(heartbeat, now)
+    for comp, at in _attempted_runs(db, codes).items():
+        if comp not in detected or at > detected[comp]:
+            detected[comp] = at
+    timings = component_timings(history, current, now, settings, detected)
+    observed = metadata_observations(heartbeat, refresh_check, health, now)
+    return AdminInputs(
+        now=now,
+        history=history,
+        current=current,
+        timings=timings,
+        stale=stale_spots(db, current, now, settings),
+        syncs=syncs,
+        usage=usage_report(db, now, settings),
+        selection=selection,
+        scheduler=scheduler_state(
+            db, settings, now, heartbeat=heartbeat, refresh_check=refresh_check, syncs=syncs
+        ),
+        metadata=track_metadata(observed, write=track),
+        credential_failures=[*_attempt_failures(db, codes), *_health_failures(health)],
+        source_names=source_names(db, {k.split(":", 1)[0] for k in observed} | codes),
+    )
+
+
+def evaluate_admin(inputs: AdminInputs, settings: Settings) -> list[Problem]:
+    """The admin problems of :func:`admin_inputs`' data, the most severe first."""
+    now = inputs.now
+    problems: list[Problem] = [
+        *model_run_late_problems(inputs.timings, now, settings),
+        *credential_problems(inputs.credential_failures, inputs.selection),
+        *provider_unavailable_problems(inputs.metadata, now, inputs.source_names),
+        *provider_fallback_problems(inputs.selection, inputs.current),
+        *quota_near_problems(inputs.usage, settings),
+    ]
+    for one in (
+        stale_spots_problem(inputs.stale, inputs.current),
+        refresh_failures_problem(inputs.syncs),
+        scheduler_silent_problem(inputs.scheduler, now),
+    ):
+        if one is not None:
+            problems.append(one)
+    problems.sort(key=lambda p: (p.severity != "failing", p.key))
+    return problems
+
+
+def admin_problems(
+    db: Session,
+    now: datetime | None = None,
+    settings: Settings | None = None,
+    *,
+    heartbeat: state.Heartbeat | None = None,
+) -> list[Problem]:
+    """The admin-only problems (design D12) at ``now``."""
+    settings = settings or get_settings()
+    now = now or utcnow()
+    return evaluate_admin(admin_inputs(db, settings, now, heartbeat=heartbeat), settings)
+
+
+def is_admin_problem_key(key: str) -> bool:
+    """Whether ``key`` names one of the admin-only problems (design D12)."""
+    return key.split(":", 1)[0] in ADMIN_PROBLEM_KEYS
+
+
 # --------------------------------------------------------------------------- report
 def overall_status(problems: Iterable[Problem]) -> OverallStatus:
     severities = {p.severity for p in problems}
@@ -1316,9 +2391,15 @@ def overall_status(problems: Iterable[Problem]) -> OverallStatus:
 
 
 def data_health(
-    db: Session, now: datetime | None = None, settings: Settings | None = None
+    db: Session,
+    now: datetime | None = None,
+    settings: Settings | None = None,
+    *,
+    admin: bool = False,
 ) -> HealthReport:
-    """The data-health report (read-only; a handful of indexed queries)."""
+    """The data-health report (read-only; a handful of indexed queries). ``admin``: also
+    the admin-only problems (``HealthReport.admin_problems``; for the ops.data_health job
+    and the admin dashboard, never the public report)."""
     settings = settings or get_settings()
     now = now or utcnow()
     sources, source_problems = _check_sources(db, settings, now, building=_blend_building(db, now))
@@ -1357,7 +2438,22 @@ def data_health(
         storage=storage,
         sync=sync,
     )
-    return HealthReport(out=out, problems=problems)
+    extra: list[Problem] = []
+    if admin:
+        try:
+            extra = admin_problems(db, now, settings, heartbeat=daemon_beat)
+        except Exception as exc:  # the public checks and their alerts must still go out
+            db.rollback()
+            logger.exception("Admin data-health checks failed")
+            extra = [
+                Problem(
+                    ADMIN_CHECKS_FAILED,
+                    "degraded",
+                    f"The admin checks (model runs, spots, refreshes, providers, quotas, "
+                    f"scheduler) could not run ({type(exc).__name__}); see the API logs.",
+                )
+            ]
+    return HealthReport(out=out, problems=problems, admin_problems=extra)
 
 
 def main() -> int:
