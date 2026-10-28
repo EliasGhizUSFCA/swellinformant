@@ -134,7 +134,11 @@ def _active_provider(selection: Mapping[str, Any]) -> AdminActiveProviderOut:
                 last_success_at=health.as_datetime(h.get("last_success_at")),
                 last_failure_at=health.as_datetime(h.get("last_failure_at")),
                 last_failure_kind=h.get("last_failure_kind"),
-                last_failure_detail=h.get("last_failure_detail"),
+                last_failure_detail=(
+                    redact(str(h["last_failure_detail"]))[:ERROR_MAX_CHARS]
+                    if h.get("last_failure_detail")
+                    else None
+                ),
                 consecutive_unavailable=int(h.get("consecutive_unavailable") or 0),
                 blocked_until=health.as_datetime(h.get("blocked_until")),
                 blocking=bool(h.get("blocking")),
@@ -524,6 +528,8 @@ def _latency(history: Sequence[ForecastVersion]) -> AdminLatencyOut:
 def _scheduler(s: health.SchedulerState, settings: Settings) -> AdminSchedulerOut:
     return AdminSchedulerOut(
         expected_minutes=s.expected_minutes,
+        limit_minutes=s.limit_minutes,
+        sync_running=s.sync_running,
         enabled=s.enabled,
         refresh_enabled=settings.forecast_refresh_enabled,
         last_check_at=s.last_check_at,

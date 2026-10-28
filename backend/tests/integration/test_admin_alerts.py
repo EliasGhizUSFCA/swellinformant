@@ -21,6 +21,8 @@ from app.core.redis import consume_quota, get_redis
 from app.jobs import runner
 from app.models import BackgroundJobLog
 from app.models.enums import ForecastRunStatus, JobStatus
+from app.models.sync import SyncRun
+from app.services import health
 from app.services.forecasts import quota
 from app.services.health import METADATA_UNKNOWN_KEY, data_health, expected_jobs
 from app.services.notifications.ops_alerts import run_data_health_check
@@ -336,6 +338,72 @@ def test_a_silent_refresh_scheduler_is_alerted_then_recovered(
     assert "The last forecast refresh check was at" in str(ops_emails()[0]["text"])
     later = check(db, monkeypatch, t0 + timedelta(minutes=20))
     assert alerts(later, "refresh_scheduler") == ["recovered:refresh_scheduler_silent"]
+    only_admins_were_emailed()
+
+
+def test_a_slower_check_interval_is_no_silence(
+    db: Session, people: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Celery's sync.tick runs every SYNC_CHECK_MINUTES (up to 180): a check 40 minutes old
+    is on time at SYNC_CHECK_MINUTES=60 (the limit becomes 3 x 60 min, as for the daemon's
+    heartbeat), so no alert flaps between two ticks."""
+    monkeypatch.setattr(get_settings(), "sync_check_minutes", 60)
+    t0 = utcnow()
+    between = check(db, monkeypatch, t0, tick=t0 - timedelta(minutes=40))
+    assert "refresh_scheduler_silent" not in between["problems"]  # type: ignore[operator]
+    # 190 minutes after that tick: three intervals missed.
+    missed = check(db, monkeypatch, t0 + timedelta(minutes=150), tick=t0 - timedelta(minutes=40))
+    assert alerts(missed, "refresh_scheduler") == ["new:refresh_scheduler_silent"]
+    assert "expected at least every 180 min" in str(ops_emails()[0]["text"])
+
+
+def test_a_long_sync_under_a_valid_lease_is_no_silence(
+    db: Session, people: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sync.tick that runs a long sync holds the bulk worker: no new tick is logged until
+    it ends. While its lease is valid that is work, not silence."""
+    t0 = utcnow()
+    started = t0 - timedelta(minutes=50)
+    db.add(
+        SyncRun(
+            trigger="celery",
+            status="running",
+            started_at=started,
+            lease_expires_at=t0 + timedelta(minutes=10),
+            plan={"due": True, "due_kinds": ["spots", "map"]},
+            stages=[],
+        )
+    )
+    db.commit()
+    working = check(db, monkeypatch, t0, tick=started)
+    assert "refresh_scheduler_silent" not in working["problems"]  # type: ignore[operator]
+    # The lease ran out (a killed worker): the silence counts again.
+    expired = check(db, monkeypatch, t0 + timedelta(minutes=15), tick=started)
+    assert alerts(expired, "refresh_scheduler") == ["new:refresh_scheduler_silent"]
+
+
+def test_failed_admin_checks_do_not_announce_a_recovery(
+    db: Session, people: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the admin checks themselves fail, the problems they had raised are kept open (an
+    exception is not a recovery); the failure is reported, and the next good run carries on."""
+    t0 = utcnow()
+    for minutes in (40, 30, 20):
+        fx.sync_run(db, t0 - timedelta(minutes=minutes), status="failed", error="HTTP 500")
+    raised = check(db, monkeypatch, t0)
+    assert alerts(raised, "refresh_failures") == ["new:refresh_failures"]
+
+    def broken(*_args: object, **_kwargs: object) -> list[object]:
+        raise RuntimeError("synthetic failure of the admin checks")
+
+    with monkeypatch.context() as m:
+        m.setattr(health, "admin_problems", broken)
+        failed = check(db, monkeypatch, t0 + timedelta(minutes=15))
+    assert "new:admin_checks_failed" in failed["alerts"]  # type: ignore[operator]
+    assert not [a for a in failed["alerts"] if a.startswith("recovered:")]  # type: ignore[union-attr]
+    assert "refresh_failures" in failed["problems"]  # type: ignore[operator]
+    back = check(db, monkeypatch, t0 + timedelta(minutes=30))
+    assert back["alerts"] == ["recovered:admin_checks_failed"]
     only_admins_were_emailed()
 
 

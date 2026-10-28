@@ -284,6 +284,14 @@ class AdminSchedulerCheckOut(BaseModel):
 
 class AdminSchedulerOut(BaseModel):
     expected_minutes: int = Field(description="REFRESH_SCHEDULER_EXPECTED_MINUTES (0: off)")
+    limit_minutes: int = Field(
+        0,
+        description="The silence limit applied: REFRESH_SCHEDULER_EXPECTED_MINUTES, at least "
+        "3 x SYNC_CHECK_MINUTES when Celery or a daemon checking spots is the runner",
+    )
+    sync_running: bool = Field(
+        False, description="A sync a scheduler started runs under a valid lease"
+    )
     enabled: bool
     refresh_enabled: bool = Field(description="FORECAST_REFRESH_ENABLED")
     last_check_at: datetime | None = None

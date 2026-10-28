@@ -65,7 +65,14 @@ from app.core.redis import get_redis
 from app.jobs.schedule import DATA_HEALTH_TASK
 from app.models import BackgroundJobLog, User
 from app.models.enums import JobStatus
-from app.services.health import HealthReport, Problem, data_health, stamp
+from app.services.health import (
+    ADMIN_CHECKS_FAILED,
+    HealthReport,
+    Problem,
+    data_health,
+    is_admin_problem_key,
+    stamp,
+)
 from app.services.notifications.providers import EmailMessageData, build_email_provider
 
 logger = logging.getLogger(__name__)
@@ -430,14 +437,31 @@ def previous_state(db: Session) -> dict[str, ProblemState]:
     return {str(k): ProblemState.from_dict(v) for k, v in raw.items() if isinstance(v, dict)}
 
 
+def held_admin_problems(
+    previous: dict[str, ProblemState], problems: list[Problem]
+) -> list[Problem]:
+    """The admin problems the previous runs knew as present and this run could not check
+    (``admin_checks_failed``): kept as they were, so a crash of the checks is not
+    announced to the admins as their recovery."""
+    current = {p.key for p in problems}
+    return [
+        Problem(key, "failing" if old.severity == "failing" else "degraded", old.message)
+        for key, old in sorted(previous.items())
+        if old.present and is_admin_problem_key(key) and key not in current
+    ]
+
+
 def run_data_health_check(db: Session, now: datetime | None = None) -> dict[str, Any]:
     """Build the report, send what is due, and return the job-log details (incl. state)."""
     settings = get_settings()
     now = now or utcnow()
     report = data_health(db, now=now, settings=settings, admin=True)
     repeat = timedelta(hours=settings.data_health_alert_repeat_hours)
+    previous = previous_state(db)
     problems = report.all_problems
-    plan = plan_alerts(previous_state(db), problems, now, repeat)
+    if any(p.key == ADMIN_CHECKS_FAILED for p in report.admin_problems):
+        problems = [*problems, *held_admin_problems(previous, problems)]
+    plan = plan_alerts(previous, problems, now, repeat)
     email: dict[str, Any] = {"due": plan.due}
     state = plan.state
     if plan.due and not settings.data_health_alerts_enabled:
