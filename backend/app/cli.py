@@ -16,6 +16,7 @@ Command groups provided by feature packages (``python -m app.cli GROUP --help``)
   verify    forecast verification and backtests       (app.services.verification.cli)
   ml        ML experiments and the model registry     (app.services.ml.cli)
   engine    ensemble, map fields, Open-Meteo budget   (app.services.forecasts.cli)
+  forecast  weather provider selection, health check  (app.services.forecasts.provider_cli)
   research  research evidence and research confidence (app.services.research.cli)
   tides     tide stations and predictions             (app.services.tides.cli)
   sync      synced data pipeline: check, run, daemon  (app.services.sync.cli)
@@ -110,6 +111,7 @@ PLUGIN_GROUPS = {
     "verify": "app.services.verification.cli",
     "ml": "app.services.ml.cli",
     "engine": "app.services.forecasts.cli",
+    "forecast": "app.services.forecasts.provider_cli",
     "research": "app.services.research.cli",
     # Tide stations and predictions.
     "tides": "app.services.tides.cli",
