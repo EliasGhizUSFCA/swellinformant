@@ -127,7 +127,9 @@ function Trips({ opps, units }: { opps: MatchSummary[]; units: Units }) {
         <div className="space-y-3" data-testid="short-notice-trips">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <Badge variant="info">Short notice</Badge>
-            <span className="text-muted-foreground">Swells {shortNoticeLabel(defaults)}: firmer forecasts, book soon.</span>
+            <span className="text-muted-foreground">
+              Swells {shortNoticeLabel(defaults)}: the trips to book first. Check each one&apos;s forecast confidence.
+            </span>
           </div>
           {soon.map((m) => (
             <OpportunityCard key={m.id} match={m} units={units} />

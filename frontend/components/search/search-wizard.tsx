@@ -548,10 +548,13 @@ function LeadTimeFields({ state, set, errors = {} }: StepProps) {
   const { data: defaults } = useSearchDefaults();
   const horizon = defaults?.forecast_days ?? 10;
   const maxLead = Math.min(defaults?.max_alert_lead_days ?? MAX_ALERT_LEAD_DAYS, MAX_ALERT_LEAD_DAYS);
+  // The deployment's global floor (DETECTION_LEAD_MIN_DAYS, 1 day by default): a trip needs time to book.
+  const floor = defaults?.detection_lead_min_days ?? 1;
+  const floorText = floor === 1 ? "a day" : `${floor} days`;
   return (
-    <div className="space-y-3 rounded-xl border p-4" data-testid="alert-lead-time">
+    <div className="space-y-3 rounded-xl border p-4" data-testid="alert-lead-time" role="group" aria-labelledby="alert-lead-time-label">
       <div>
-        <Label>Alert lead time</Label>
+        <Label id="alert-lead-time-label">Alert lead time</Label>
         <p className="mt-1 text-xs text-muted-foreground">Alert me about swells that start within this range of days from now.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -559,7 +562,7 @@ function LeadTimeFields({ state, set, errors = {} }: StepProps) {
           label="Earliest (days ahead)"
           htmlFor="alert_lead_min_days"
           error={errors.alert_lead_min_days}
-          hint="Swells less than a day away are never matched: a trip needs a day to book."
+          hint={`Swells less than ${floorText} away are never matched: a trip needs time to book.`}
         >
           <NumberInput
             id="alert_lead_min_days"
