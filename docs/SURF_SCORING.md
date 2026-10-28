@@ -573,8 +573,10 @@ component weights, e.g. `{"wind": 0.35, "tide": 0}`:
 
 * keys must be component names: `swell_direction`, `swell_period`, `wave_size`, `wind`,
   `tide`, `consistency`; components it does not name keep their default;
-* values are finite numbers ≥ 0 (0 leaves that component out of the score); `wave_size`, the
-  one component every hour has, must stay above 0;
+* values are finite numbers ≥ 0; 0 leaves that component out of the score, its
+  limiting-factor gate included (a `wind` or `swell_period` weighted 0 no longer gates the
+  score, and no phrase names it); `wave_size`, the one component every hour has, must stay
+  above 0, and its size gate always applies;
 * weights are renormalised over the components an hour has, so they need not sum to 1.
 
 An invalid value is a start-up error: the settings refuse to load and name

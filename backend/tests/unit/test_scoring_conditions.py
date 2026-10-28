@@ -434,6 +434,29 @@ class TestReasons:
         assert "tide" in zero_tide.components  # still computed ...
         assert not any("tide" in p for p in zero_tide.favourable + zero_tide.unfavourable)
 
+    def test_wind_weighted_zero_has_no_gate_either(self) -> None:
+        """Weight 0 leaves a component out of the score, its limiting-factor gate included:
+        with wind weighted 0 a blown-out onshore wind scores like calm."""
+        ob = seeded("ocean-beach-sf")
+        weights = {**scoring.WEIGHTS, "wind": 0.0}
+        blown_out, calm = hour(ob, 45.0, 270.0), hour(ob, 0.0, None)
+        assert evaluate(blown_out, ob).components["wind_gate"] < 1.0  # default: cut
+        zero = evaluate(blown_out, ob, weights=weights)
+        assert zero.components["wind_gate"] == 1.0
+        assert zero.details["contributions"]["wind_gate"] == 0.0
+        assert zero.details["weights_used"]["wind"] == 0.0
+        assert zero.score == evaluate(calm, ob, weights=weights).score
+        assert not any("wind" in p for p in zero.favourable + zero.unfavourable)
+
+    def test_period_weighted_zero_has_no_gate_either(self) -> None:
+        ob = seeded("ocean-beach-sf")  # min period 10 s
+        short = hour(ob, 6.0, 90.0, primary_swell_period_s=7.0)
+        assert evaluate(short, ob).components["period_gate"] < 1.0  # default: cut
+        zero = evaluate(short, ob, weights={**scoring.WEIGHTS, "swell_period": 0.0})
+        assert zero.components["period_gate"] == 1.0
+        assert zero.details["contributions"]["period_gate"] == 0.0
+        assert not any("period" in p for p in zero.favourable + zero.unfavourable)
+
     def test_offshore_class(self) -> None:
         assert offshore_class("offshore", "light") == "light offshore"
         assert offshore_class("onshore", "strong") == "strong onshore"

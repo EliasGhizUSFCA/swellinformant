@@ -416,10 +416,12 @@ def evaluate(
 
     # Limiting-factor gates: a weighted mean alone lets clean wind compensate for flat,
     # short-period surf. Gates stop tiny, weak or blown-out conditions from scoring well.
+    # A component weighted 0 (SCORING_WEIGHTS_JSON) is out of the score, its gate included;
+    # wave_size always keeps a weight above 0 (weights.validate_weights).
     size_gate = _clamp(components["wave_size"] / 0.6)
-    period_fit = components.get("swell_period")
+    period_fit = components.get("swell_period") if used.get("swell_period") else None
     period_gate = 1.0 if period_fit is None else 0.5 + 0.5 * _clamp(period_fit / 0.5)
-    wind_c = components.get("wind")
+    wind_c = components.get("wind") if used.get("wind") else None
     wind_gate = 1.0 if wind_c is None else 0.5 + 0.5 * _clamp(wind_c / WIND_GATE_FULL_Q)
     score = int(round(100 * base * size_gate * period_gate * wind_gate))
     score = max(0, min(100, score))
