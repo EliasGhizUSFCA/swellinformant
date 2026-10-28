@@ -1,49 +1,58 @@
-# Synced data pipeline
+# Forecast refresh pipeline
 
-"All of the weather data should be pulled when the forecast updates." The background
-pipeline does not run on fixed timers. It checks the providers' **metadata** for a new
-model run, and when one appears it runs **one coordinated sync**: the spot forecasts, the
-ensemble and the world map layers of that run are acquired, blended, scored and
-**published together**. The code is `backend/app/services/sync/`; the same sync runs in
-every runner (the sync daemon on Vercel and in the local Vercel-style stack, Celery's
-`sync.tick` in the classic compose stack, the command line, and the manual GitHub Actions
-workflow).
+"The website must update as soon as new model data is available." The background pipeline
+does not run on fixed timers. A cheap **check** reads the providers' **metadata** and finds,
+per **component** of every forecast source, whether a newer model run is available; when
+one is, a **refresh** fetches just that component for the 50 spots, carries the other
+component forward with its original model run, validates and scores the result and
+**publishes a new forecast version** in one transaction. The world map layers are refreshed
+the same way but on their own (they create no forecast version). The code is
+`backend/app/services/sync/`; the same refresh runs in every runner: the refresh endpoint
+called by a scheduler (the hosted path on Vercel), the optional sync daemon, Celery's
+`sync.tick` in the classic compose stack, the command line and the manual GitHub Actions
+workflow.
 
-## What "synced" guarantees
+```
+provider metadata ──► check (per component) ──► refresh (spot-only) ──► stage version ──► publish
+  meta.json, .idx       new? due? retry?          due component only      spot_runs,          one transaction,
+  sentinel fingerprint  no data request,          + carry the other one   components,          version marker,
+                        no database when idle     + validate every spot   timings              public cache hook
+```
 
-* **One sync per new model run.** A run key already stored is never fetched again; a
-  duplicate trigger (two runners, a retry, `--force`) finds every stage idempotent.
-* **The map and the spots switch within one job.** Spot pages switch when the new
-  predictions commit (stage `predict`); the map index switches when the same job commits
-  its publication (stage `publish`, a few seconds later). The map index serves the map run
-  of the newest publication (`SYNC_PUBLISH_GATE`, app.services.map_fields), so a map run
-  stored by any other path is not shown before a sync publishes it. Responses cached at
-  the edge can lag by their cache lifetime (docs/map-layers.md).
-* **The GFS spot run and the map layers of the same cycle appear together.** When one of
-  them is new for a map cycle (`MAP_FIELD_CYCLES`: 00Z and 12Z by default, 06Z and 18Z in
-  the free-database profile) and the other is not yet, the
-  sync waits up to `SYNC_COALESCE_MINUTES` (90) from the first sighting of either, then
-  syncs whatever is available.
-* **Point forecasts only for the surf spots.** The spot stage requests the active seeded
-  spots only (`surf_spots.is_active`), one Open-Meteo request per model for up to 50 spots.
-  Global grids are downloaded only for the world map layers. `init-db`, which the daemon
-  runs at every start, sets `is_active` from `data/surf_spots`, so a spot is switched off
-  there, not in the database.
-* **Nothing is published half-way.** A sync that stops before `publish` (SIGTERM, a crash)
-  leaves its data unpublished; the next check treats it as new and the next sync publishes
-  it (below, "stored" means "stored and published"). A sync whose `predict` stage failed,
-  or could not run because another holder had its job lock (a daemon killed mid-stage: the
-  lock outlives it by its 30-minute TTL), does not publish either, unless it was forced:
-  the map and the spot pages never switch to runs that were not scored. The components it
-  stored or found stored count as failed attempts, so the next check retries after
-  SYNC_RETRY_MINUTES, at most SYNC_MAX_ATTEMPTS times per run.
-* **The check is free.** It reads Open-Meteo `meta.json` (not charged to the call budget)
-  and NOAA NODD `.idx` HEAD requests, and in the daemon it makes **no database query**, so
-  a scale-to-zero database (Neon) stays asleep between syncs.
+## What it guarantees
 
-It does not guarantee that every provider has a run of the same cycle: ECMWF runs 00Z and
-12Z only and is synced on its own as soon as it is new (it never waits for GFS), and a
-provider that fails is retried on its own schedule (below) while the others publish.
+* **The check is free.** It reads Open-Meteo `meta.json` (not charged to the call budget),
+  NOAA NODD `.idx` HEAD requests or Windy's sentinel fingerprint (providers package), never
+  a forecast. With the known runs in Redis it makes **no database query**, so a
+  scale-to-zero database (Neon) stays asleep while nothing is new.
+* **Each component is refreshed on its own.** A spot forecast source has two components:
+  `atmosphere` (10 m wind speed and direction, gust, MSLP) and `wave` (significant height,
+  period, direction, the swell partitions, wind sea, sea level when present;
+  `forecasts.base.COMPONENT_FIELDS`). Each has its own run key built from its own model
+  domains, its own availability and its own detection state. A new wind run fetches the
+  atmosphere only (the forecast API) and keeps the waves; a new wave run fetches the waves
+  only (the marine API) and keeps the wind. The carried component keeps its ORIGINAL model
+  run: `forecast_runs.wave_model_run_at` / `atmosphere_model_run_at`,
+  `details.model_runs` (per domain, with its component), `details.component_keys`,
+  `details.components` and the version's `wind_model_run` / `wave_model_run`. Carried data
+  are never labelled with the new run. Scores are recomputed for the whole new run.
+* **One refresh per new run of a component.** A component whose available run key is the
+  published one is current; a refresh finds a run it already stored (a refresh stopped
+  before publishing) and publishes it instead of fetching it again; a duplicate call (two
+  runners, a scheduler retry, `--force`) finds the lease taken or nothing due.
+* **Nothing is published half-way.** A refresh stages a forecast version (status `staging`)
+  after acquisition, validation and scoring, and publishes it in one transaction
+  (`versions.publish_version`: the published version becomes `superseded`, the staged one
+  `published`). A failure after staging marks the staged version `failed` and leaves the
+  previous one published. Public reads serve only the published version
+  (`versions.serving_runs`).
+* **A failed spot keeps its forecast.** A spot whose data failed (request error,
+  missing cells, validation) keeps its previous run in the new version, marked `stale`
+  with the error (redacted); it is retried alone, 5, 15 and 45 minutes later. A whole
+  component that fails publishes nothing and keeps everything served.
+* **Point forecasts only for the surf spots.** A refresh requests the active seeded spots
+  only (`surf_spots.is_active`), in one batched request per model for all of them. Global
+  grids are downloaded only for the optional world map layers.
 
 ## Components
 
@@ -51,176 +60,297 @@ provider that fails is retried on its own schedule (below) while the others publ
 
 | Component | Source code | What tells a new run | Present when |
 |---|---|---|---|
-| `spots` per FORECAST_PROVIDERS token (e.g. `open_meteo`, `open_meteo_ecmwf`) | `open_meteo_noaa`, `open_meteo_ecmwf`, ... | the provider's `current_run(now)`: Open-Meteo `meta.json` of every model domain, used OPEN_METEO_AVAILABILITY_WAIT_MINUTES (10) after its availability time; `.idx` HEADs for the direct GRIB ingesters | always |
+| `spots` `wave` and `spots` `atmosphere` of the one FORECAST_PROVIDERS token (the WEATHER_PROVIDER selection) | `open_meteo_noaa` (Open-Meteo GFS family), `windy`, `demo` | the provider's `current_run(now)` with `RunInfo.component_keys`: Open-Meteo `meta.json` per model domain (wave = `ncep_gfswave016` + `ncep_gfswave025`; atmosphere = `ncep_gfs013` + `ncep_gfs025`, the domains behind `gfs_global`), used OPEN_METEO_AVAILABILITY_WAIT_MINUTES (10) after its availability time; Windy: the sentinel fingerprint of `gfsWave` / `gfs` (estimated run times); demo: the 6-hourly cycle and the simulated runs of `POST /api/dev/simulate-model-run` | one provider |
+| `spots` per FORECAST_PROVIDERS token, one component per source | `open_meteo_noaa`, `open_meteo_ecmwf`, ... | the provider's whole run key | several providers (the blend path, design D5: the family-level behaviour of Upgrade 4 applies) |
 | `ensemble` | `noaa_gefs_wave` | `.idx` of the last GEFS-Wave mean step | `GEFS_ENABLED=true` |
-| `map` | `noaa_gfs_fields` | `.idx` of the last map hour (MAP_FIELD_STEPS, MAP_FIELD_MAX_LEAD_HOURS) of the map atmosphere file and `global.0p25`, map cycles only | the standalone map-fields mode (`MAP_FIELDS_ENABLED`, docs/map-layers.md) |
+| `map` | `noaa_gfs_fields` | `.idx` of the last map hour of the map atmosphere file and `global.0p25`, map cycles only | the standalone map-fields mode (`MAP_FIELDS_ENABLED`, docs/map-layers.md) |
 
-A component that is not configured is `disabled`. With `noaa_gfs` as a spot provider
-(the "with_noaa" mode) the map layers come with that spot run and the `map` component is
-disabled.
+A component that is not configured is `disabled`. Providers that name no component keys (the
+direct GRIB ingesters) are one component per source, as before.
 
-For the Open-Meteo families the check also asks `ensure_servable` (on the same metadata
-read): between the 00Z and 12Z runs the ECMWF family reads, Open-Meteo serves the ECMWF
-06Z/18Z run and fills its later hours from an older run, so the labelled 00Z/12Z run can
-no longer be read unmixed. Such a component is `waiting` ("not served yet") and never
-makes a sync due. Without this check, every such window cost up to SYNC_MAX_ATTEMPTS
-failing syncs. That was seen live on 2026-10-19, before the check existed: ECMWF 00Z was
-planned as new, Open-Meteo refused its acquisition, and the refusal counted as a failed
-attempt.
+Measured on 2026-10-27 (`meta.json` read at 11:31 and 15:25 UTC): the 06Z GFS-Wave 0.16
+and 0.25 domains became available at 11:15 UTC, GFS 0.13 at 11:20 and GFS 0.25 at 11:54. So
+the waves of a cycle are servable a few minutes before its wind, and the two atmosphere
+domains can be more than half an hour apart: with SYNC_COALESCE_MINUTES=0 the atmosphere is
+refreshed when GFS 0.13 is servable (GFS 0.25, which `gfs_global` reads for some variables,
+still on the previous cycle and recorded so in `details.model_runs`) and again when GFS 0.25
+follows. The research behind the timings (Open-Meteo publishes GFS-Wave about 5.3 h and the
+GFS atmosphere 5.6-7.1 h after the cycle; its servers are "eventually consistent", hence the
+10-minute wait after `last_run_availability_time`; https://open-meteo.com/en/docs/model-updates)
+is in docs/FORECAST_SOURCES.md.
 
 ## The rules (a plan, `detect.plan_sync`)
 
 Per component the plan compares the provider's newest servable run with the **stored**
-run key: the newest usable (success or partial) run of that source that completed before
-the newest publication (`detect.load_known`; simulated demo runs are ignored).
+run key: the published forecast version's component run (`forecast_versions.components`)
+for its source; for another source, or before any version, the newest usable run that
+completed before the newest publication (`detect.load_known`; simulated demo runs and retry
+runs are ignored).
 
-1. **New.** The available run key differs from the stored one. A run older than the stored
-   one is never new: its newest `YYYYMMDDHH` cycle is earlier (e.g. a metadata cache
-   serving the previous run), or it has the stored run's model domains with none newer and
-   one older (a lagging Open-Meteo server offering part of the previous run). A map cycle
-   whose layers are already published is current.
-2. **Coalescing** (state `waiting`). A run whose model domains are on different cycles
-   (Open-Meteo published GFS-Wave, GFS 0.13 and GFS 0.25 5.3, 6.0 and up to 8.2 h after the
-   cycle on 2026-10-14/15, docs/FORECAST_SOURCES.md) waits for the late domains; the GFS
-   spot run of a map cycle and the map layers of that cycle wait for each other. Both waits
-   end SYNC_COALESCE_MINUTES (90) after the first sighting of anything new for that source
-   or cycle; then whatever is available is synced. The first sighting is kept when the
-   available run key changes again before a sync, so a domain that keeps changing never
-   starves the wait. `SYNC_COALESCE_MINUTES=0` turns coalescing off.
-3. **Triggers.** A sync is **due** when a component of a kind in SYNC_TRIGGER_SOURCES
-   (default `spots,map`; `map` in the free-database profile) is `new`. A new ensemble run
-   (not a trigger by default) is acquired by the next sync anything else triggers, and so
-   are the newest spot runs when only `map` triggers. When none of the configured kinds
-   has a component in this setup (`map` with `MAP_FIELDS_ENABLED=false`, or in the
-   with_noaa mode), new spot runs trigger instead, and the plan's reasons say so.
-4. **Retries.** A component whose acquisition failed is retried SYNC_RETRY_MINUTES (15)
-   after the attempt, or later when the provider asked for a longer wait (`retry_after`);
-   state `waiting` meanwhile. After SYNC_MAX_ATTEMPTS (6) failed attempts for one run key
-   it is `failed` until the provider offers the next run (health shows it).
-5. **Provider errors** (metadata unreachable, no complete cycle yet, a bug) make the
-   component `unknown`, with a redacted detail; never due, never raised.
-6. **One sync at a time.** With the database (Celery's `sync.tick`, `sync run`), a sync that
-   holds a valid lease makes new components `in_progress` and the plan not due.
-7. **Force** (`sync run --force`) is always due and acquires every configured component;
+1. **New.** The component's available key differs from the stored one. Detection is
+   monotonic: a key whose newest `YYYYMMDDHH` cycle is older than the stored one, or whose
+   domains are the stored ones with none newer and one older (a lagging Open-Meteo server),
+   is never new. A metadata timeout or error makes the component `unknown`: never due,
+   never raised, never "nothing new".
+2. **Servable.** Open-Meteo labels a domain with its previous run until 10 minutes after
+   the new run's availability. While one component's domains are being published, that
+   component is `waiting` ("not served yet", `detect.PartlyServedRun`) and the other one is
+   planned as usual.
+3. **Coalescing within a component** (state `waiting`). A component whose model domains
+   are on different cycles (GFS 0.13 published, GFS 0.25, from which `gfs_global` takes
+   some variables, not yet) waits for the late domain up to SYNC_COALESCE_MINUTES after its own
+   first sighting; then whatever is available is refreshed. The default is **0**: a
+   component is due as soon as any of its domains advanced. There is no waiting across
+   components (wave and atmosphere, or the spots and the map layers).
+4. **Triggers.** A plan is due when a component of a kind in SYNC_TRIGGER_SOURCES (default
+   `spots,map`; `spots` in the free-database profile) is `new`. Each runner then limits the
+   plan to the kinds it syncs (`detect.limit_plan`): the refresh endpoint `spots`, the
+   daemon SYNC_DAEMON_KINDS. When none of a runner's kinds is a trigger, its own kinds
+   trigger.
+5. **Component retries.** A component whose acquisition failed is retried
+   SYNC_RETRY_MINUTES (15) after the attempt, or later when the provider asked for a longer
+   wait (`retry_after`); state `waiting` meanwhile. After SYNC_MAX_ATTEMPTS (6) failed
+   attempts for one run key it is `failed` until the provider offers the next run.
+6. **Spot retries** (design D9). When the published version has spots that failed
+   (`stale` or `missing` with an error), the component that refresh fetched carries a retry
+   of those spots (`retry_spot_ids`): `waiting` for 5 minutes after the refresh, then `new`;
+   each retry that does not recover every spot waits longer: 15, then 45 minutes
+   (`types.SPOT_RETRY_BACKOFF_MINUTES`), at most SYNC_MAX_ATTEMPTS retries per run
+   (`failed` after that). The retries are counted in the database (the retry runs,
+   `<run key>#retry<n>`), so every runner sees the same state. A newer run of the component
+   supersedes the retry: it refreshes every spot anyway.
+7. **One sync at a time.** A sync that holds a valid lease makes new components
+   `in_progress` and the plan not due (with the database); without it the next sync attempt
+   gets SyncBusy.
+8. **Force** (`sync run --force`) is always due and acquires every configured component;
    the acquisitions themselves still skip runs already stored.
 
 States: `current`, `new`, `waiting`, `in_progress`, `failed`, `unknown`, `disabled`
-(app.services.sync.types). `plan.anchor_cycle` is the GFS cycle of the map (or GFS spot)
-run a due plan acquires.
+(app.services.sync.types). The known runs (stored keys per component, first sightings,
+attempts, the spot retry) are kept in Redis (`sync:known`, 7 days), so a check needs only
+Redis and the providers; they are reloaded from the database before and after every sync.
 
-The daemon keeps the stored keys, the first sightings and the attempts in memory and in
-Redis (`sync:known`, 7 days), so a check needs only Redis and the providers; the stored
-keys are reloaded from the database at start and after every sync.
+## One refresh (the spot stage, `refresh.refresh_spots`, `ingestion.refresh_source`)
 
-## One sync (`orchestrator.run_sync`)
+1. **Target.** The fetched components take the provider's available run, the others keep
+   the published one: target keys `{wave, atmosphere}`, run key `"<wave key>|<atmosphere
+   key>"` (Open-Meteo's own format; one key when both are the same, as for the plain demo
+   run). A retry stores its run as `<run key>#retry<n>`.
+2. **Per spot.** A carried component is copied from the run the spot is served from
+   (`versions.serving_runs`) when that run holds the carried run key; otherwise the spot
+   fetches that component too, when the provider still serves exactly that run, or fails
+   (and keeps its previous run). Spots are fetched in at most three groups by the components
+   they need (normally one: the due components for every spot), each one batched request
+   per model: for Open-Meteo the marine request for `wave`, the forecast request for
+   `atmosphere`.
+3. **Store, then carry in the database.** The fetched rows are inserted with the other
+   component's columns empty; one `UPDATE ... FROM` (`forecasts.carry.carry_component`)
+   fills them from the source run, matched on spot and valid time, server-side (no forecast
+   row travels through Python). An hour the source run does not have stays empty and is
+   listed in `missing_fields` (never filled in): a 6-hour offset between the components
+   leaves the last hours of the horizon without the carried component.
+4. **Validate every spot** (`carry.validate_spots`, one aggregate statement): at least
+   FORECAST_MIN_VALID_FRACTION (0.8) of the run's hours carry both a wave height and a wind
+   speed, and no value is outside `carry.PHYSICAL_RANGES` (heights 0-30 m, periods 0-40 s,
+   directions 0-360, wind 0-400 km/h, gusts 0-500, MSLP 850-1100 hPa). A spot that fails is
+   removed from the run (its rows deleted) and keeps its previous run.
+5. **Outcome.** No valid spot: the run is `failed` (a provider or whole-component
+   failure), nothing is published, the component counts a failed attempt. Some spots failed:
+   the run is `partial`, the sync `partial`. A provider answering with Windy TESTING data
+   (`RunInfo.testing`) is never stored.
 
-The lease is a `sync_runs` row with status `running` (unique partial index
-`uq_sync_runs_running`). Its `lease_expires_at` is SYNC_LEASE_MINUTES (45) ahead and
-renewed after every stage. A second sync meanwhile gets `SyncBusy` (`sync run` exits 3);
-an expired lease (a crashed runner) is marked `abandoned` by the next sync, which then
-does the work. A sync that fails before its first stage (its `sync.run` job log cannot be
-written) releases the lease at once, as `failed`.
+Then `predict` scores the new run (the whole run), and `publish` stages and publishes its
+version.
+
+## Versions and publication
+
+The publish stage (`orchestrator._publish_body`), in this order:
+
+1. **One version per stored refresh** (`refresh.stage_refresh_version`): `spot_runs` names the
+   spots the refresh handled (updated ones point at the new run; failed ones keep their
+   previous run as `stale` with the redacted error); every other spot is carried over from
+   the published version, so a retry of three spots updates just those three.
+   `components` are the refresh's `ComponentRun`s (a carried one with its original run key,
+   init and retrieval time, `changed: false`, `carried_from_run_id`); a retry keeps the
+   published version's components. A component's init time, the version's `wind_model_run`
+   or `wave_model_run`, is its OLDEST domain's (`versions.ComponentRun.from_model_runs`):
+   with GFS 0.13 on 12Z and GFS 0.25 still on 06Z the atmosphere is labelled 06Z, the cycle
+   of its gusts and MSLP, and the run's `details.model_runs` names each domain's cycle. Timings: `detected_at` (the component's first
+   sighting), `upstream_available_at` (the newest availability of the changed components),
+   `acquired_at`, `scored_at`, `staged_at`, `published_at`, and `timings` (`kind`:
+   refresh, retry or selection; the stage durations and CPU so far).
+2. **Publish it** (`refresh.publish_staged` → `versions.publish_version`): one transaction
+   under an advisory lock; a version with zero updated spots is refused. On any error the
+   version is marked `failed` and the previous one stays published; the stage then fails
+   and the sync is `failed`.
+3. **The map pointer** (`publish.publish`): `sync_runs.published_at`, `map_run_id` (the best
+   servable map run) and `blend_run_id`. Map layers create no version.
+4. **The version marker**: `versions.write_version_marker(versions.version_payload(...))`
+   with the published map run, so the version endpoint answers from Redis; then
+   `public_cache.note_published(sync_run_id)` as before (and once more at the end of the
+   sync, after detection).
+
+With several providers (the blend path) the version is the run selection of the public
+reads (`refresh.publish_selection_version`: one run per spot, `queries.latest_runs_by_spot`,
+`timings.kind = "selection"`). So is the version of the developer pipeline
+(`python -m app.cli pipeline`, `POST /api/dev/run-pipeline`) and of `sync publish`: what they
+store is served as before.
+
+`detect`, `match`, `flights`, `alerts` and `deliver` run after a publication; `prune` too,
+with SYNC_PRUNE_EACH_PASS.
+
+## The stages
 
 | Stage | Job log name | Runs when |
 |---|---|---|
-| `spots` | `forecasts.acquire` | a spot component is new (only those providers: `acquire_all(only=)`) |
+| `spots` | `forecasts.acquire` | a spot component is new or has a due spot retry (one provider: `refresh.refresh_spots`; several: `acquire_all(only=)`) |
 | `ensemble` | `forecasts.acquire_ensemble` | the ensemble is new |
-| `map` | `forecasts.map_fields` | the map is new |
-| `blend` | `forecasts.blend` | new spot or ensemble data (stored now, or stored but unpublished) |
-| `predict` | `quality.predict` | always (pending runs only); failed, not skipped, when another holder has its lock (so does `blend`) |
+| `map` | `forecasts.map_fields` | the map is new (never on the refresh endpoint) |
+| `blend` | `forecasts.blend` | several providers, FORECAST_BLEND_ENABLED, and new or unpublished member data (one provider: skipped, "nothing to blend", without importing the blend's data libraries) |
+| `predict` | `quality.predict` | always (pending runs only); failed, not skipped, when another holder has its lock |
 | `publish` | `sync.publish` | anything new was stored, or stored data is unpublished; never after a failed `predict` unless forced |
-| `detect`, `match`, `flights`, `alerts`, `deliver` | `detection.detect`, `matching.match`, `flights.discover`, `alerts.generate`, `notifications.deliver` | after a publish |
-| `prune` | `maintenance.prune_pass` | after a publish, with SYNC_PRUNE_EACH_PASS=true |
+| `detect`, `match`, `flights`, `alerts`, `deliver` | `detection.detect`, `matching.match`, `flights.discover`, `alerts.generate`, `notifications.deliver` | after a publication |
+| `prune` | `maintenance.prune_pass` | after a publication, with SYNC_PRUNE_EACH_PASS=true |
 
-With `--force` every stage runs except two: the acquisition of a `disabled` component,
-and `prune` without SYNC_PRUNE_EACH_PASS. All 12 stages are recorded either way.
+Each stage runs through `app.jobs.runner.run_job` (one `background_job_logs` row under the
+job name above, with `cpu_s`, and the job's Redis lock); `sync_runs.stages` holds one entry
+per stage, `{name, status, started_at, duration_ms, cpu_s, detail}`. An acquisition's
+`detail.components` lists each planned component's outcome (`stored`, `current`, `deferred`,
+`failed`; with `component` and that component's run key) and the spot stage's
+`detail.refreshes` each refresh (`run_id`, `changed`, `spots_updated`, `failed_spot_ids`,
+`retry`). The lease, the lease keeper, `stop` and the statuses (`success`, `partial`,
+`failed`, `skipped`, `abandoned`) are as in Upgrade 4: the lease is a `sync_runs` row with
+status `running` (unique partial index `uq_sync_runs_running`), renewed after every stage
+and extended every third of SYNC_LEASE_MINUTES while a stage runs; an expired lease is
+marked `abandoned` and taken over. A sync the refresh endpoint runs (trigger `http`) holds a
+lease of at most 10 minutes (`orchestrator.HTTP_LEASE_MINUTES`): the platform stops a
+Function at its maxDuration (300 s), and the lease of a stopped Function then expires
+within about 13 minutes instead of SYNC_LEASE_MINUTES (45), so the scheduler's next checks
+are not answered `busy` for long.
 
-Each stage runs through `app.jobs.runner.run_job`: one `background_job_logs` row under the
-job name above (with `cpu_s`), the job's Redis lock, and no chaining. `sync_runs.stages`
-holds one entry per stage: `{name, status, started_at, duration_ms, cpu_s, detail}`. For
-an acquisition, `detail.components` lists each component's outcome:
+## Runners
 
-* `stored`;
-* `current`: stored already;
-* `deferred`: the provider did not serve the run unmixed at acquisition time, although the
-  check saw it as servable. Examples: Open-Meteo switching to its next run, or Open-Meteo
-  servers that disagree for a few minutes about a run being published (seen live, below).
-  This is no failure, and no attempt is counted;
-* `failed`. "In progress" (another runner is storing the same run) also counts as a
-  failed attempt.
+| Runner | Kinds | How often | Notes |
+|---|---|---|---|
+| **`GET\|POST /api/internal/refresh`** (Bearer CRON_SECRET) | `spots` only, never the map/GRIB stage | every 5 minutes from a scheduler (below) | the hosted path: runs inside the API Function (maxDuration 300 s) |
+| `GET /api/internal/cron/daily` (Vercel Cron, daily) | `spots` | once a day | after the watchdog, one refresh check: the backstop when the scheduler stops |
+| sync daemon (`python -m app.cli sync daemon`) | SYNC_DAEMON_KINDS (default `spots,ensemble,map`; hosted profile `map`) | every SYNC_CHECK_MINUTES (10) | optional on Vercel (Public Beta, 5 Active CPU-hours a month on Hobby) |
+| Celery `sync.tick` (classic compose) | all | every SYNC_CHECK_MINUTES | |
+| `python -m app.cli sync run` / GitHub Actions `data-sync.yml` | all (or `--only`) | by hand | |
 
-One `sync.run` job log per sync holds the status and the sync's own CPU share (`cpu_s`).
-Its `cpu_s_total` includes the stages, so summing `cpu_s` over all job logs counts each
-CPU second once.
+**The refresh endpoint** answers 404 without CRON_SECRET (the same body as an unknown route),
+401 for a wrong token (constant-time comparison), and otherwise 200 with
+`Cache-Control: private, no-store` and a JSON summary:
 
-The publish stage (`publish.publish`) commits `published_at`, `map_run_id` (the best
-servable map run) and `blend_run_id` (the newest blend run with predictions).
-`python -m app.cli pipeline` and the developer "run pipeline" endpoint publish too (a row
-with trigger `pipeline`).
+```json
+{"status": "success", "due": true, "plan": {"components": [...], "reasons": [...]},
+ "sync_run_id": 12, "version_ids": [7], "published_at": "2026-10-27T17:31:04+00:00",
+ "stages": [{"name": "spots", "status": "success", "duration_ms": 2140, "cpu_s": 1.9}, ...],
+ "refreshes": [{"source": "open_meteo_noaa", "changed": ["wave"], "spots_updated": 50,
+                "failed_spot_ids": [], "run_id": 31, "retry": null}],
+ "timings": {"check_ms": 412, "sync_ms": 20512, "total_ms": 20924, "cpu_s": 14.2}}
+```
 
-The status of a sync is one of:
+(the numbers in this example are illustrative). `status` is `disabled` with the kill switch,
+`not_due` when nothing is new (the check read no database), `busy` when another sync holds
+the lease (still 200: a scheduler must not retry into a storm; the next check comes anyway),
+else the sync's status (`success`, `partial`, `failed`, `skipped`). An unexpected error
+answers 503 `{"status": "error"}`. The route is exempt from the CSRF check (it is
+authenticated by its own secret, like the webhooks). Calls are idempotent: a repeated or
+concurrent call finds nothing due or the lease taken.
 
-* `success`, even with a deferred component;
-* `partial`: a component or a stage failed, or the sync was stopped;
-* `failed`: nothing was published and something failed, or the publication failed;
-* `skipped`: nothing was new after all;
-* `abandoned`: the lease expired and was taken over.
+**The kill switch.** `FORECAST_REFRESH_ENABLED=false` stops every runner's automatic
+refreshes: the refresh endpoint and the daily backstop answer `disabled`, Celery's tick
+answers `disabled`, `sync run` (also with `--force`) prints `{"status": "disabled"}` and
+exits 0, and the daemon keeps checking (heartbeat note "refreshes disabled") but never
+syncs. The data already published stays served.
 
-`stop` (SIGTERM in the daemon) is checked between stages: the current stage finishes,
-the other stages are recorded as skipped ("stopped"), the lease is released. A stage is
-never interrupted, so a process killed before its stage ends (for example one that
-outlives its grace period after SIGTERM: vercel.json sets the daemon's
-terminationGracePeriodSeconds to 600, Vercel's default being 30 and its maximum 3600, so a
-full map stage, an estimated 165-287 CPU s on one vCPU, normally finishes) leaves the
-lease running. The next sync then waits for the lease to expire
-(SYNC_LEASE_MINUTES after its last renewal), marks it `abandoned` and does the work; a map
-or spot run the killed stage left `running` counts as "in progress" (a failed attempt)
-until it is an hour old, and is then acquired again.
+**The developer simulation** (contract C6, only with ENABLE_DEV_ENDPOINTS and the demo
+provider): `POST /api/dev/simulate-model-run?component=wave|atmosphere|both` (signed in)
+advances the demo provider's available run of that component by one simulated model run (a
+counter per component in Redis, `sync:demo:advance`, so the planner of every process sees
+it). The new run's values differ visibly and deterministically (wave heights x1.35, x0.75,
+x1.2, x0.85 and periods +2, -1.5, +1, -1 s; wind +12, -6, +8, -4 km/h and turned 45, -30,
+90, -60 degrees, by advance; hours of a simulated swell keep their values). The next refresh
+check detects it, fetches only that component and publishes a new version.
 
 ## The daemon (`python -m app.cli sync daemon`)
 
-At start: `init-db` (migrate, seed, tide catalog; idempotent) when SYNC_DAEMON_INIT_DB is
-true (the default; `--no-init-db` skips it), then the known runs from the database, then
-the start-up catch-up (SYNC_DAEMON_CATCH_UP, default true): every periodic job that has not
-succeeded within its longest gap (its interval; 24 h for a job once a day) or never has
-runs once, back to back, before the first check (one statement over the job logs decides).
-A job that started within an hour (or its own interval, when shorter) is skipped, so a
-restart loop does not ask a provider again at every start. Without it a new deployment had
-no tide predictions until the next 02:20 UTC, and frequent restarts could keep restarting
-the hourly timers before they fired. A start-up failure (e.g. the database still waking) is
-retried every minute. Then, until SIGTERM or SIGINT:
+Optional on Vercel (the spot forecasts come from the refresh endpoint), the runner of the
+local Vercel-style stack. At start: `init-db` (migrate, seed, tide catalog; idempotent) when
+SYNC_DAEMON_INIT_DB is true (`--no-init-db` skips it), the known runs from the database, then
+the start-up catch-up (SYNC_DAEMON_CATCH_UP): every periodic job that has not succeeded within
+its longest gap runs once before the first check (a job started within the last hour is
+skipped, so a restart loop does not ask a provider again at every start). A start-up failure
+(e.g. the database still waking) is retried every minute. Then, until SIGTERM or SIGINT:
 
 * every SYNC_DAEMON_POLL_SECONDS (60): the API's kicks from Redis (`sync:kick:*`, one Lua
-  call). "Match my search" runs `matching.match` and the stages after it (flights, alerts,
-  delivery), as Celery chains them; "refresh flights" runs `flights.discover` for the
-  matches asked for and the stages after it;
-* every SYNC_CHECK_MINUTES (10): the plan from the known runs and the heartbeat in Redis
-  (`sync:heartbeat`); when due, one sync, then the known runs are reloaded;
-* the periodic jobs of `app.jobs.schedule.build_schedule` except the sync's own (the
-  acquisitions, predictions and detection, and `sync.tick`): `Every` jobs on in-memory
-  timers that start one interval after the daemon, at least JOB_INTERVAL_FLOOR_MINUTES
-  apart (60 when hosted), so they fall due together and run back to back in one batch,
-  one database wake an hour; `DailyAt` jobs (tides, cleanup) by the UTC wall clock.
+  call): "match my search" runs `matching.match` and the stages after it, "refresh flights"
+  `flights.discover` for the matches asked for;
+* every SYNC_CHECK_MINUTES (10): the plan from the known runs, limited to SYNC_DAEMON_KINDS
+  (`detect.limit_plan`), and the heartbeat in Redis (`sync:heartbeat`); when due, one sync of
+  those kinds (`run_sync(only=...)`), then the known runs are reloaded. With the kill switch
+  the check still runs (heartbeat note "refreshes disabled") but nothing syncs;
+* the periodic jobs of `app.jobs.schedule.build_schedule` except the sync's own: `Every` jobs
+  on in-memory timers at least JOB_INTERVAL_FLOOR_MINUTES apart (60 when hosted), so they run
+  back to back in one database wake an hour; `DailyAt` jobs (tides, cleanup) by the UTC clock.
 
-An idle iteration reads only Redis and the providers' metadata
-(`tests/integration/test_sync_daemon.py` counts zero SQL statements and zero pool
-checkouts), and no database connection stays open between wakes: the daemon empties its
-connection pool after every wake, so a scale-to-zero database can suspend. The metadata
-requests of a check use a 10 s HTTP timeout (`detect.PROBE_TIMEOUT_SECONDS`); a provider
-that does not answer is `unknown` until the next check. The loop is single-threaded:
-kicks wait while a sync runs (about a minute without map layers, a few minutes with them).
+An idle iteration reads only Redis and the providers' metadata (zero SQL statements and pool
+checkouts, `tests/integration/test_sync_daemon.py`), and the connection pool is emptied after
+every wake, so a scale-to-zero database can suspend. The metadata requests of a check use a
+10 s HTTP timeout (`detect.PROBE_TIMEOUT_SECONDS`); a provider that does not answer is
+`unknown` until the next check. The heartbeat's `cpu_s_month` is this month's daemon CPU
+outside job runs; job logs plus the heartbeat count every CPU second once
+(SYNC_CPU_BUDGET_HOURS, 5 when hosted: the Hobby daemon quota).
 
-The heartbeat's `cpu_s_month` is this month's daemon CPU outside job runs (checks, polls,
-start-up), carried over restarts; job logs plus the heartbeat count every CPU second once
-(the 10 Active CPU-hour Hobby quota, SYNC_CPU_BUDGET_HOURS). Do not add `sync_runs.stages`
-CPU to the job logs: every stage is also a job log.
+## Scheduling options
 
-## Other runners
+Vercel's limits decide the runner on each plan (pages read on 2026-10-27; the quotes are
+from the pages linked):
 
-* **Celery** (classic compose, JOB_RUNNER=celery): beat runs `sync.tick` every
-  SYNC_CHECK_MINUTES; it plans with the database and syncs when due (`orchestrator.tick`).
-* **Command line / GitHub Actions**: `sync run --trigger github` in the manual
-  `data-sync.yml` workflow.
+* **Vercel Cron on Hobby runs once a day** with per-hour precision ("Hobby ... Once per day
+  ... Per-hour (±59 min)"), and "Hobby accounts are limited to daily cron jobs. This cron
+  expression would run more than once per day." fails the deployment
+  (https://vercel.com/docs/cron-jobs/usage-and-pricing). `vercel.json` therefore keeps only
+  the daily watchdog cron, which also runs one refresh check as a backstop. Cron does not
+  retry and can deliver twice; both are safe here.
+* **Recommended on Hobby: Upstash QStash** calling the refresh endpoint every 5 minutes.
+  Free: 1,000 messages a day (a 5-minute schedule is 288; retries and every trigger count),
+  10 active schedules, and it waits up to 15 minutes for the response, so a 300 s refresh
+  fits (https://upstash.com/pricing/qstash). Headers are forwarded when prefixed:
+  "Simply add them prefixed with Upstash-Forward- and we will include them in the message."
+  (https://upstash.com/docs/qstash/howto/publishing). A schedule:
+
+  ```bash
+  curl -XPOST -H "Authorization: Bearer $QSTASH_TOKEN" \
+    -H "Upstash-Cron: */5 * * * *" \
+    -H "Upstash-Forward-Authorization: Bearer $CRON_SECRET" \
+    "https://qstash.upstash.io/v2/schedules/https://<your-app>.vercel.app/api/internal/refresh"
+  ```
+
+  ("To create a schedule, you simply need to add the Upstash-Cron header to your publish
+  request.", https://upstash.com/docs/qstash/features/schedules.) QStash retries a failed
+  delivery 3 times by default; the endpoint answers 200 for busy and failed refreshes, so
+  only real errors (503) are retried. QStash also signs each request (Upstash-Signature); the
+  endpoint checks the bearer secret only.
+* **Alternative: cron-job.org**, free and down to once a minute with custom headers, but "If
+  your URL/script does not finish after 30 seconds, it will timeout and we will close the
+  connection" (https://cron-job.org/en/faq/): whether the Function finishes a refresh longer
+  than 30 s after the caller hung up is **not verified**, so it is documented as unverified
+  for refreshes that fetch and score (a check with nothing due answers in well under a
+  second, measured below). It auto-disables a job after more than 25 consecutive failures.
+* **On Vercel Pro**, Cron runs once a minute with per-minute precision: add
+  `{"path": "/api/internal/refresh", "schedule": "*/5 * * * *"}` to `crons` in
+  `vercel.json` (Vercel sends CRON_SECRET as the Authorization header). This entry fails a
+  Hobby deployment, so it is not in the repository's `vercel.json`.
+* **The Vercel Daemon** is optional: Hobby daemons get "5 Active CPU-hours per month" and are
+  stopped until the 1st of the next month when the quota runs out
+  (https://vercel.com/docs/daemons/limits). The hosted profile sets SYNC_DAEMON_KINDS=map,
+  so the daemon only refreshes the optional GRIB map layers (MAP_FIELD_CYCLES 06,18); without
+  it the map overlay ages and is labelled stale while the spot forecasts keep refreshing
+  through the endpoint.
+* **GitHub Actions** schedules (5-minute minimum, delayed or dropped runs, the "serverless
+  application" clause of the terms) stay out: `data-sync.yml` is manual only.
 
 ## Commands
 
@@ -229,69 +359,197 @@ From `backend/` (`cd backend`):
 | Command | What it does |
 |---|---|
 | `python -m app.cli sync check`, with `--json` for JSON | the plan (Redis and provider metadata; the database only the first time) |
-| `python -m app.cli sync run` | sync every component with a newer run, no waiting |
-| `python -m app.cli sync run --if-due` | only when the rules say a sync is due (like the daemon) |
+| `python -m app.cli sync run` | sync every component with a newer run (and a due spot retry), no waiting |
+| `python -m app.cli sync run --if-due` | only when the rules say a sync is due |
 | `python -m app.cli sync run --force` | every stage now; stored runs are still skipped |
-| `python -m app.cli sync run --only map` | limit the acquisitions (spots, ensemble, map) |
-| `python -m app.cli sync daemon`, with `--once` and `--no-init-db` | the daemon (one iteration with `--once`; no init-db with `--no-init-db`) |
-| `python -m app.cli sync publish` | publish what is stored now |
+| `python -m app.cli sync run --only spots` | limit the acquisitions (spots, ensemble, map) |
+| `python -m app.cli sync daemon`, with `--once` and `--no-init-db` | the daemon |
+| `python -m app.cli sync publish` | publish what is stored now (the run selection as a version) |
 | `python -m app.cli sync status`, with `--limit 10` | the newest syncs and their stages |
-| `python -m app.cli migrate --on-build` | migrate a production build (MIGRATE_ON_BUILD) |
+| `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/internal/refresh` | one refresh check through the API |
 
-Against a production database only with the Production environment loaded
-(docs/operations.md, "Data is stale" step 5): with only `DATABASE_URL` set, a sync stores
+`sync run` exits 0 for success, partial, skipped and disabled, 1 for failed (or abandoned), 3
+when another sync holds the lease. Against a production database only with the Production
+environment loaded (docs/operations.md): with only `DATABASE_URL` set, a sync stores
 synthetic demo forecasts and publishes them.
 
-`sync run` exits 0 for success, partial or skipped, 1 for failed (or abandoned), 3 when
-another sync holds the lease. To re-download a run that is already stored use
-`python -m app.cli pipeline --force-acquire` or `python -m app.cli engine map-fields --force`.
-`engine map-fields` stores map layers without publishing them: with SYNC_PUBLISH_GATE the
-map keeps showing the published run until the next sync or `sync publish` (`pipeline`
-publishes on its own).
-
-`migrate --on-build` reads MIGRATE_ON_BUILD: `off` (default) never migrates; `production`
-migrates only when VERCEL_ENV=production, so preview builds and Neon preview branches are
-left alone; `all` migrates every build. It prints a JSON line with `status` `skipped`,
-`migrated` or `failed` (exit 1, the build fails rather than deploying against an old
-schema).
+To re-download a run that is already stored use `python -m app.cli pipeline --force-acquire`
+or `python -m app.cli engine map-fields --force`. `engine map-fields` stores map layers
+without publishing them: with SYNC_PUBLISH_GATE the map keeps showing the published run
+until the next sync or `sync publish` (`pipeline` publishes on its own).
+`python -m app.cli migrate --on-build` (the API's build command) reads MIGRATE_ON_BUILD:
+`off` (default) never migrates, `production` only when VERCEL_ENV=production, `all` every
+build; it prints `skipped`, `migrated` or `failed` (exit 1: the build fails rather than
+deploying against an old schema).
 
 ## Settings
 
 | Setting | Default | Meaning |
 |---|---|---|
-| SYNC_CHECK_MINUTES | 10 | metadata checks of the daemon and of Celery's `sync.tick` |
-| SYNC_COALESCE_MINUTES | 90 | how long a GFS spot run and the map layers (or late model domains) wait for each other |
-| SYNC_TRIGGER_SOURCES | `spots,map` (free-database profile: `map`) | component kinds whose new run makes a sync due |
-| MAP_FIELD_CYCLES | `00,12` (free-database profile: `06,18`) | the map cycles read; with `map` triggers, also when syncs run (docs/map-layers.md) |
-| SYNC_RETRY_MINUTES | 15 | wait after a failed acquisition |
-| SYNC_MAX_ATTEMPTS | 6 | failed attempts per run key before waiting for the next run |
-| SYNC_LEASE_MINUTES | 45 (15 under JOB_RUNNER=daemon) | lease lifetime, renewed after every stage and extended every third of it while a stage runs |
+| FORECAST_REFRESH_ENABLED | true | the kill switch of every runner |
+| CRON_SECRET | none | the bearer secret of `/api/internal/*` (at least 16 characters); the routes are 404 without it |
+| SYNC_CHECK_MINUTES | 10 | metadata checks of the daemon and of Celery's `sync.tick` (the endpoint: the scheduler's cadence) |
+| SYNC_COALESCE_MINUTES | 0 | how long a component waits for its own late model domains (no wait across components) |
+| SYNC_TRIGGER_SOURCES | `spots,map` (free-database profile: `spots`) | component kinds whose new run makes a sync due |
+| MAP_FIELD_CYCLES | `00,12` (free-database profile: `06,18`) | the map cycles read (docs/map-layers.md) |
+| SYNC_DAEMON_KINDS | `spots,ensemble,map` (hosted profile: `map`) | the kinds the daemon syncs |
+| SYNC_RETRY_MINUTES | 15 | wait after a failed component acquisition |
+| SYNC_MAX_ATTEMPTS | 6 | failed attempts per run key (and spot retries per run) before waiting for the next run |
+| FORECAST_MIN_VALID_FRACTION | 0.8 | share of a spot's hours that must carry a wave height and a wind speed |
+| OPEN_METEO_AVAILABILITY_WAIT_MINUTES | 10 | wait after Open-Meteo's availability time before a run is read |
+| SYNC_LEASE_MINUTES | 45 (15 under JOB_RUNNER=daemon) | lease lifetime |
 | SYNC_PUBLISH_GATE | true | the map index serves the published map run |
-| SYNC_PRUNE_EACH_PASS | false | prune superseded predictions and map fields after every sync |
-| SYNC_PREWARM_PUBLIC_CACHE | false | after a publishing sync, compute the public spot list and conditions at once (about 1.4 MB of reads per publication) |
-| SYNC_DAEMON_POLL_SECONDS | 60 | kick polling |
-| SYNC_DAEMON_INIT_DB | true | init-db at daemon start |
-| SYNC_DAEMON_CATCH_UP | true | run the overdue periodic jobs once at daemon start |
-| SYNC_CPU_BUDGET_HOURS | none | monthly CPU budget health warns about (10 when hosted) |
-| JOB_INTERVAL_FLOOR_MINUTES | 0 | minimum interval of every periodic job (60 when hosted) |
+| SYNC_PRUNE_EACH_PASS | false (hosted: true) | prune after every publication |
+| SYNC_PREWARM_PUBLIC_CACHE | false | after a publication, compute the public spot list and conditions at once |
+| SYNC_DAEMON_POLL_SECONDS, SYNC_DAEMON_INIT_DB, SYNC_DAEMON_CATCH_UP | 60, true, true | the daemon's kick polls, init-db and start-up catch-up |
+| SYNC_CPU_BUDGET_HOURS | none (hosted: 5) | monthly daemon CPU budget health warns about |
+| JOB_INTERVAL_FLOOR_MINUTES | 0 (hosted: 60) | minimum interval of every periodic job the daemon runs |
+
+## Retention
+
+`maintenance.prune_forecast_runs` (daily cleanup and every prune stage) never deletes a run
+that the published version, the previous published version (the newest superseded one) or a
+staging version references: their `forecast_run_id` and every run their `spot_runs` serve,
+so a stale spot never loses its previous run (`maintenance.version_run_ids`). The superseded
+member predictions of those runs are kept too. Superseded and failed versions older than
+RETENTION_FORECAST_DAYS are deleted, except the previous published one
+(`maintenance.prune_versions`).
 
 ## Redis keys
 
-`sync:known` (stored keys, first sightings, attempts; 7 days), `sync:heartbeat` (the last
-check; 6 h), `sync:kick:matching.match` and `sync:kick:flights.discover` (1 day). Reading
-and writing them is best effort: with Redis down the daemon keeps the known runs in
-memory, checks on, and the kicks wait for Redis.
+`sync:known` (stored keys per component, first sightings, attempts, the spot retry; 7 days),
+`sync:heartbeat` (the daemon's last check; 6 h), `sync:refresh-check` (the last check of the
+refresh endpoint or the daily backstop: when, caller, status, sync run, versions; 7 days; for
+the scheduler-silence alert), `sync:kick:matching.match` and `sync:kick:flights.discover` (1
+day), `sync:demo:advance` (the simulated demo runs, developer tool). The version marker and
+the first-served and seen-latency keys are under the public cache namespace
+(`<ns>:forecast-version:*`, app.services.forecasts.versions). Reading and writing them is
+best effort; a sync itself needs Redis for its job locks (as in Upgrade 4).
 
-A sync itself needs Redis, though: every stage runs through `run_job`, which takes the
-job's Redis lock first. Measured on 2026-10-22 with Redis refusing connections (demo
-provider, `sync run --force`): the spots, blend, predict and publish stages failed on the
-lock (`ConnectionError`) in 0.4 s, nothing was published, and the command exited 1. Each
-such sync counts a failed attempt per due component, so an outage of more than about an
-hour and a half (SYNC_MAX_ATTEMPTS attempts SYNC_RETRY_MINUTES apart) leaves the run
-`failed` until the provider offers the next one (once Redis is back, `sync run` acquires
-it at once).
+Measured on 2026-10-22 (Upgrade 4) with Redis refusing connections (demo provider,
+`sync run --force`): the spots, blend, predict and publish stages failed on their job lock
+(`ConnectionError`) in 0.4 s, nothing was published, and the command exited 1. Each such sync
+counts a failed attempt per due component, so an outage longer than SYNC_MAX_ATTEMPTS
+attempts SYNC_RETRY_MINUTES apart leaves the run `failed` until the provider offers the next
+one (once Redis is back, `sync run` acquires it at once).
 
-## Measured
+## Measured (2.0)
+
+On this development sandbox (4 vCPUs shared with another agent's work, local PostgreSQL 16
+and Redis), 2026-10-27. Wall times are the caller's, CPU is the serving process's user plus
+system time (`/proc/<pid>/stat` or `getrusage`), the stage figures are the `duration_ms` and
+`cpu_s` the endpoint returns. FORECAST_DAYS=10 (240 hourly steps, 12,000 point forecasts for
+50 spots).
+
+**Demo provider through `POST /api/internal/refresh`** (synthetic data, a fresh scratch
+database after `init-db`, `uvicorn` on localhost and an HTTP client sending the bearer
+secret; the next refreshes after `POST /api/dev/simulate-model-run?component=wave`, then
+`atmosphere`, signed in; 1-minute load average 0.9-1.0):
+
+| Call | Wall s | Server CPU s | spots | predict | detect | publish | rest |
+|---|---|---|---|---|---|---|---|
+| first refresh, both components | 12.24 | 9.71 | 1.90 s / 1.62 CPU | 8.95 / 7.18 | 1.04 / 0.65 | 0.05 / 0.03 | 0.13 / 0.08 |
+| wave-only refresh | 12.26 | 8.48 | 2.22 / 1.71 | 8.57 / 5.86 | 1.26 / 0.79 | 0.04 / 0.02 | 0.07 / 0.03 |
+| atmosphere-only refresh | 12.51 | 8.77 | 2.38 / 1.75 | 8.69 / 6.10 | 1.25 / 0.80 | 0.04 / 0.02 | 0.06 / 0.03 |
+| check with nothing new | 0.006 | < 0.01 | | | | | |
+
+Every refresh updated all 50 spots and published one version; the check made no database
+query (it read the known runs from Redis) and answered `not_due`. A spot-only refresh uses
+about 4 % of the 300 s Function limit; the predict stage is two thirds to three quarters of
+it.
+
+**Database egress of one spot-only refresh** (the counting TCP proxies of
+`scripts/measure_db_egress.py` between the app and PostgreSQL and Redis, the same refreshes
+through the route in process with FastAPI's TestClient:
+`backend/.venv/bin/python scripts/measure_refresh_egress.py --redis-url
+redis://localhost:6379/12`; wall 12.1-13.5 s and 9.7-10.9 CPU s per refresh in that
+process):
+
+| Refresh | DB -> app | app -> DB | Redis | of which DB -> app: spots, predict, detect, match, publish |
+|---|---|---|---|---|
+| first, both components | 8.30 MB | 58.6 MB | 41 commands, 5.9 kB | 0.53, 5.09, 2.43, 0.19, 0.03 MB |
+| wave-only | 9.27 MB | 59.5 MB | 41 commands, 5.6 kB | 0.54, 5.79, 2.70, 0.16, 0.05 MB |
+| atmosphere-only | 9.45 MB | 61.3 MB | 41 commands, 5.7 kB | 0.55, 5.80, 2.84, 0.19, 0.05 MB |
+| check, nothing new | 0 | 0 | 4 commands, 0.8-1.0 kB | |
+
+A check here is 4 Redis commands: GET and SET `sync:known`, SET `sync:refresh-check` and,
+for the demo provider only, HGETALL `sync:demo:advance`. A 5-minute schedule makes about
+26,000-35,000 commands a month, against Upstash Free's 500K (docs/map-layers.md); a refresh
+adds about 41.
+
+The carried component never travels through Python (the spots stage's 0.5 MB is the spot
+list, the served runs' details and the validation aggregates); what a refresh reads back is
+the scoring (predict) and the swell detection of the whole new run. Per new component run
+that is about 9.5 MB: at 4 GFS cycles a day with the wave and the atmosphere refreshed
+separately, about 2.3 GB a month (8 refreshes a day; 3.4 GB if the late GFS 0.25 domain makes
+a third refresh per cycle), against Neon Free's 5 GB (docs/map-layers.md). These are demo
+figures; the scoring stage is the lever (and SYNC_COALESCE_MINUTES, which lets the
+atmosphere wait for its late domain).
+
+**Live Open-Meteo** (a clone of a real-data database, migrated to 0009,
+WEATHER_PROVIDER=open_meteo, 2026-10-27 and 28; `orchestrator.refresh_check`, what the
+refresh endpoint runs, called every 2 or 5 minutes in one process with every HTTP request
+counted; the sandbox reaches Open-Meteo through a proxy, and some TLS handshakes timed out):
+
+* 15:25 UTC, first refresh (the clone's runs were 11 days old, so both components were new:
+  the 06Z run): 20.1 s wall, 10.4 CPU s; 3 data requests (2 marine, 1.02 MB; 1 forecast,
+  0.39 MB) and 20 `meta.json` (12 kB), all HTTP 200; spots 5.97 s / 0.95 CPU s, predict
+  9.95 / 7.72, detect 1.57 / 0.90, publish 0.22 / 0.20; 50 spots updated, one version.
+* Checks every 2 minutes after it: 4 `meta.json` each, no data request, 0.02 CPU s,
+  1.9-2.3 s wall (one took 13.3 s through the sandbox's proxy), `not_due`.
+* 20:27 UTC, the 12Z run: GFS-Wave 0.16 and GFS 0.13 were on 12Z, GFS-Wave 0.25 and GFS
+  0.25 still on 06Z (`meta.json`), so both component keys had changed: 43.6 s wall, 9.3 CPU
+  s; 2 marine requests (1.02 MB), 1 forecast request (0.39 MB), 20 `meta.json`, all HTTP
+  200; spots 11.6 s / 0.88 CPU s, predict 24.7 / 6.78; one version. Both components are
+  labelled 06Z (their oldest domain) and `details.model_runs` names each domain's cycle.
+* 27 checks every 5 minutes from 20:32 to 22:46 UTC, all `not_due` (the two 0.25 domains
+  stayed on 06Z): 26 read 4 `meta.json` each, no data request, 0.02-0.03 CPU s, 1.2-14.4 s
+  wall. At 21:29 one `meta.json` request timed out three times (36 s): that check found the
+  source `unknown` (both components: the provider reads its domains' metadata together),
+  refreshed nothing and raised nothing, and the next check was normal.
+* 2026-10-28 01:20 UTC, the 18Z run, a **wave-only refresh**: both GFS-Wave domains were
+  servable on 18Z, while GFS 0.25 had become available at 01:18 (read from 01:28), so the
+  atmosphere was `waiting` ("not served yet: Open-Meteo is publishing ncep_gfs025 run
+  2026-10-27 18Z ...") and was carried. 2 marine requests (1.02 MB), no forecast request,
+  20 `meta.json`. The version: `wave_model_run` 18Z, `wind_model_run` 06Z (the carried
+  atmosphere keeps its key `gfs013:2026102712|gfs025:2026102706`, `changed: false`); its run
+  stores `wave_model_run_at` 18Z and `atmosphere_model_run_at` 06Z. 59.9 s wall, 9.0 CPU s:
+  spots 8.4 s / 0.81 CPU s, predict 46.0 / 6.84 (the sandbox had restarted 8 minutes
+  before, so the database cache was cold, and another agent's end-to-end tests ran
+  alongside), publish 0.23 / 0.20, detect 2.2 / 0.68.
+* 01:24 and 01:27 UTC, two checks during the race the 10-minute wait is for: the plan's
+  `meta.json` already showed GFS 0.25 on 18Z as servable, the acquisition's (read seconds
+  later) did not ("Open-Meteo is publishing ncep_gfs025 run 2026-10-27 18Z (available 01:18
+  UTC); it is read 10 min after that"). Both syncs deferred the atmosphere (status
+  `skipped`: no data request, nothing stored or published, no failed attempt); 12
+  `meta.json` each, 15-36 s wall, 0.1 CPU s.
+* 01:29:57 UTC, an **atmosphere-only refresh**: 1 forecast request (0.39 MB), no marine
+  request, 20 `meta.json`. The version: `wind_model_run` 18Z, `wave_model_run` 18Z carried
+  from the wave-only run (`changed: false`, `carried_from_run_id` that run);
+  `detected_at` 01:24:20 (the first sighting), `upstream_available_at` 01:18:15,
+  `published_at` 01:29:56. 46.1 s wall, 4.7 CPU s: spots 37.6 s / 0.70 CPU s (the requests
+  through the sandbox's proxy), predict 5.6 / 3.29, detect 1.0 / 0.61.
+* The carried values, compared in the database row by row (same spot and valid time): the
+  wave-only run's wind, gust and MSLP equal the previous run's in all 7,128 matching rows
+  (its last 622 rows, past the end of the previous run, have no wind and list it in
+  `missing_fields`); the atmosphere-only run's waves equal the wave-only run's in all 7,750
+  rows, while its wind differs in 7,710 of them.
+
+Every live refresh fitted the 300 s Function limit (the slowest took 60 s).
+
+**Monthly Function CPU (extrapolation, not a measurement).** Vercel Hobby includes 4
+Active CPU-hours of Functions a month (https://vercel.com/docs/plans/hobby, read
+2026-10-27). With a 5-minute QStash schedule (8,640 checks a month at about 0.02 CPU s, the
+live figure) and 8-12 component refreshes a day at 9-11 CPU s, the refresh endpoint needs
+about 0.65-1.15 CPU-hours a month, plus cold starts (imports, not measured here) and what
+the API serves to visitors. Whether Vercel's Active CPU equals this sandbox's process CPU is
+not verified.
+
+## Measured with Upgrade 4 (2026-10-20 to 2026-10-22)
+
+These measurements are of the Upgrade 4 code (one coordinated sync, the daemon as the
+only hosted runner, two model families). They stay valid for the map stage and the
+daemon's idle checks; the 2.0 refresh path is measured in "Measured (2.0)" above.
 
 On this development sandbox (4 vCPUs shared with other work, local PostgreSQL 16 and
 Redis), with the settings `profile_env("hosted", "free-database")`
@@ -309,7 +567,7 @@ through the sandbox's proxy sometimes timed out and were retried, so wall times 
 and vary. CPU varied by up to 2x between the two days with the machine's load. Where a
 cell has two values, they are the two days.
 
-### Checks
+### Checks (Upgrade 4)
 
 | Check | CPU s | Database | Downloaded |
 |---|---|---|---|
@@ -328,7 +586,7 @@ idle check: live metadata requests through the proxy, GEFS on, after one warm-up
 rounds of three checks each. The rows above and the monthly estimate below keep the earlier
 figures.
 
-### Syncs
+### Syncs (Upgrade 4)
 
 | Sync | Plan | CPU s | Wall s | Downloaded | Rows written |
 |---|---|---|---|---|---|
@@ -385,7 +643,7 @@ synthetic data, 50 spots, 384 hourly steps over 16 days) ended `success` and pub
 12 stages were recorded; ensemble, map and prune were skipped by configuration. Stage CPU
 was 21.3 s: spots 2.77, predict 14.50 for 19,200 predictions, detect 3.92, the rest 0.13.
 
-### The daemon, live
+### The daemon, live (Upgrade 4)
 
 `python -m app.cli sync daemon` ran with the settings above on 2026-10-20 from 03:43 to
 06:29 UTC, against the database of the first sync. A sampler read `/proc/<pid>/stat`
@@ -473,9 +731,11 @@ suites ran (CPU figures are therefore upper bounds).
   3.7 at start-up, 20.7 for the GFS and map sync, 0.2 for the refused ECMWF sync and
   about 2.6 for 13 checks, 2 hourly batches and the kick polls.
 
-### Monthly CPU estimate
+### Monthly CPU estimate (Upgrade 4)
 
-The Hobby daemon quota is 10 Active CPU-hours a month. This is an extrapolation, not a
+Upgrade 4 assumed a Hobby daemon quota of 10 Active CPU-hours a month; Vercel now gives
+Hobby daemons 5 ("5 Active CPU-hours per month", https://vercel.com/docs/daemons/limits,
+read 2026-10-27). This is an extrapolation, not a
 measurement. It describes the full-retention cadence (a sync for every new model run); the
 free-database profile (`SYNC_TRIGGER_SOURCES=map`, `MAP_FIELD_CYCLES=06,18`) runs about 60
 syncs a month, each with the map layers and both spot families, instead of about 180, so its
@@ -502,8 +762,10 @@ spot-sync rows are smaller (not measured separately). It rests on these assumpti
 | Kick polls | < 1 ms measured locally (Upstash TLS not measured, 2 ms assumed) | 43,200 | < 0.03 |
 | **Total** | | | **4.4-7.9** |
 
-That is 44-79 % of the quota. The map layers are more than half of it, and their horizon
-and cycles are the levers: MAP_FIELD_STEPS, MAP_FIELD_MAX_LEAD_HOURS and MAP_FIELD_CYCLES.
+That is 44-79 % of the old 10-hour quota and 88-158 % of the current 5-hour one, which
+is why Swell 2.0 moved the spot refreshes out of the daemon. The map layers are more than
+half of it, and their horizon and cycles are the levers: MAP_FIELD_STEPS,
+MAP_FIELD_MAX_LEAD_HOURS and MAP_FIELD_CYCLES.
 
 "One sync per new run" is the optimistic case for GFS. Open-Meteo's GFS family has four
 model domains (GFS-Wave 0.16 and 0.25, GFS 0.13 and 0.25), and when the last one comes
