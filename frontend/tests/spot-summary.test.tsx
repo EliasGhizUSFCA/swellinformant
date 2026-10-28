@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { AttributionLinks } from "@/components/forecast-provenance";
-import { ModelInfo, RatingDetails, TidePreference } from "@/components/forecast/rating-details";
+import { HourVariables, ModelInfo, RatingDetails, TidePreference } from "@/components/forecast/rating-details";
 import { ConditionLists, RatingHeadline, WhyThisRating } from "@/components/rating";
 import { StaleBanner } from "@/components/stale-banner";
 import { WINDY_CREDIT } from "@/lib/provider";
@@ -177,6 +177,21 @@ describe("Why this rating? (spec 25)", () => {
     render(<TidePreference spot={{ ...spot, tide_preference: null } as SpotDetail} tide={null} components={{}} />);
     expect(screen.getByTestId("rating-tide")).toHaveTextContent("Preferred tide here: Not established");
     expect(screen.getByTestId("rating-tide-fit")).toHaveTextContent("Tide is not part of this rating");
+  });
+
+  it("leaves a tide weighted 0 out of the rating, though its fit is stored", () => {
+    // SYNTHETIC: SCORING_WEIGHTS_JSON set the tide's weight to 0.
+    render(<TidePreference spot={spot} tide={null} components={{ tide: 0.9, weights_used: { tide: 0, wind: 0.5, wave_size: 0.5 } }} />);
+    expect(screen.getByTestId("rating-tide-fit")).toHaveTextContent("Tide is not part of this rating");
+  });
+
+  it("names the wind by the hour's offshore class when the scoring sent one", () => {
+    const c = conditions();
+    const { unmount } = render(<HourVariables c={c} point={point({ offshore_class: "light offshore" } as Partial<ForecastPoint>)} step={null} units="ft" windUnit="km/h" />);
+    expect(screen.getByTestId("rating-variables")).toHaveTextContent("Wind8 km/h from NE · Light offshore");
+    unmount();
+    render(<HourVariables c={c} point={point()} step={null} units="ft" windUnit="km/h" />);
+    expect(screen.getByTestId("rating-variables")).toHaveTextContent("Wind8 km/h from NE · Offshore");
   });
 
   it("marks Windy run times estimated and credits the Windy database", () => {

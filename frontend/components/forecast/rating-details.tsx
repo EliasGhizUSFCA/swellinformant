@@ -4,7 +4,7 @@ import { ExternalLink } from "lucide-react";
 
 import { ConfidenceBadge } from "@/components/confidence";
 import { ProviderCredit } from "@/components/forecast/provider-credit";
-import { forecastConfidenceOf } from "@/lib/forecast-fields";
+import { forecastConfidenceOf, hourOutputs } from "@/lib/forecast-fields";
 import { compass, relativeTime, seconds, titleCase } from "@/lib/format";
 import { cycleLabel } from "@/lib/map-time";
 import { runTimeEstimated } from "@/lib/provider";
@@ -67,7 +67,10 @@ export function HourVariables({
   units: HeightUnit;
   windUnit: WindUnit;
 }) {
-  const relation = WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation;
+  // The hour's offshore-wind class ("Moderate offshore") when the scoring sent one, as the
+  // summary above shows it; else the relation alone ("Offshore").
+  const offshoreClass = hourOutputs(point ?? step?.quality).offshoreClass;
+  const relation = offshoreClass ? offshoreClass.charAt(0).toUpperCase() + offshoreClass.slice(1) : (WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation);
   return (
     <Section title="Every variable at this hour" testId="rating-variables">
       <dl>
@@ -98,7 +101,11 @@ export function HourVariables({
  * when the score used it (a spot without an established preference is never scored on tide).
  */
 export function TidePreference({ spot, tide, components }: { spot: SpotDetail; tide: TideBlock | null | undefined; components: Record<string, unknown> | null | undefined }) {
-  const fit = num(components?.tide);
+  // A tide weighted 0 (SCORING_WEIGHTS_JSON) keeps its fit in the components but is out of
+  // the score: the stored weights say so.
+  const weights = components?.weights_used;
+  const weight = weights && typeof weights === "object" ? num((weights as Record<string, unknown>).tide) : null;
+  const fit = weight === 0 ? null : num(components?.tide);
   const text = tide?.preference.text ?? (spot.tide_preference ? titleCase(spot.tide_preference) : "Not established");
   return (
     <Section title="Tide" testId="rating-tide">

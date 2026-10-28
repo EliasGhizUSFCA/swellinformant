@@ -269,6 +269,7 @@ export function ForecastBreakdown({
           members={run?.members}
           generatedAt={generatedAt}
           links={source?.attribution_links}
+          sourceCode={source?.code ?? c.source_code}
         />
       </Disclosure>
     </div>
