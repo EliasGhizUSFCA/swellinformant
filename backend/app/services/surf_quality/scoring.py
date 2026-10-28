@@ -53,7 +53,7 @@ from app.services.surf_quality.models import (
     SpotParams,
 )
 from app.services.surf_quality.nearshore import taper_transmission
-from app.services.surf_quality.reasons import condition_reasons
+from app.services.surf_quality.reasons import GOOD_FIT, POOR_FIT, condition_reasons
 from app.services.surf_quality.weights import DEFAULT_WEIGHTS, tagged_version
 
 # 2.0.0: breaking heights from the linear_wave_v2 nearshore model (energy-flux
@@ -466,7 +466,7 @@ def evaluate(
         tide_not_scored=excluded if sea.tide_stage is not None and tide_c is None else None,
     )
     details["favourable"], details["unfavourable"] = hour_reasons(
-        sea, spot, breaking, raw, used, details["contributions"], gates, driver, wfit
+        sea, spot, breaking, raw, used, details["contributions"], gates, fits, wfit
     )
     return QualityResult(
         score=score,
@@ -480,6 +480,35 @@ def evaluate(
     )
 
 
+def named_partition(fits: list[PartitionFit], attr: str, *, good: bool) -> PartitionFit | None:
+    """The partition a direction or period phrase names (``attr`` "direction_fit" or
+    "period_fit"); None when no partition has that fit (the bulk sea is described then).
+
+    A favourable phrase names the heaviest partition whose own fit is good (at least
+    reasons.GOOD_FIT; one exists whenever the weighted fit is), else the one adding most to
+    the weighted fit (largest weight x fit). An unfavourable phrase names the heaviest
+    partition whose own fit is poor (below reasons.POOR_FIT), else the one costing the
+    weighted fit most (largest weight x (1 - fit)), whose fit is below 1: its period is
+    shorter than the ideal, its direction outside the optimal range.
+
+    The partition that drives the surf (the largest share) is not always the one: with
+    shares 0.37 / 0.34 / 0.29 a 16 s swell can drive the surf while a 6 s swell and a 5 s
+    wind sea make the weighted period fit poor, and the phrase must then name a short
+    period, not the 16 s one."""
+    known = [(f, v) for f in fits if (v := getattr(f, attr)) is not None]
+    if not known:
+        return None
+    if good:
+        clear = [(f, v) for f, v in known if v >= GOOD_FIT]
+        if clear:
+            return max(clear, key=lambda fv: fv[0].weight)[0]
+        return max(known, key=lambda fv: fv[0].weight * fv[1])[0]
+    clear = [(f, v) for f, v in known if v < POOR_FIT]
+    if clear:
+        return max(clear, key=lambda fv: fv[0].weight)[0]
+    return max(known, key=lambda fv: fv[0].weight * (1.0 - fv[1]))[0]
+
+
 def hour_reasons(
     sea: SeaState,
     spot: SpotParams,
@@ -488,29 +517,38 @@ def hour_reasons(
     used: dict[str, float],
     points_lost: dict[str, float],
     gates: dict[str, float],
-    driver: PartitionFit | None,
+    fits: list[PartitionFit],
     wfit: windmod.WindFit | None,
 ) -> tuple[list[str], list[str]]:
-    """The hour's main favourable and unfavourable conditions (reasons.condition_reasons),
-    described by the partition that drives the surf (else the primary or bulk sea) and the
-    wind relation against the offshore direction the wind fit used."""
-    if driver is not None:
-        kind = PARTITION_WORDS.get(driver.kind, "swell")
-        period: float | None = driver.period_s
-        direction = driver.direction_deg
-    else:
-        kind, period, direction = "swell", _bulk_period(sea), _bulk_direction(sea)
+    """The hour's main favourable and unfavourable conditions (reasons.condition_reasons).
+
+    Each swell phrase names the partition behind its claim (:func:`named_partition`; the
+    primary or bulk sea without partition fits), so "well-aligned secondary swell" or "period
+    too short for this reef (8 s)" describe the partition that made the fit good or poor;
+    the wind relation is the one against the offshore direction the wind fit used."""
+
+    def kind(part: PartitionFit | None) -> str:
+        return "swell" if part is None else PARTITION_WORDS.get(part.kind, "swell")
+
+    def period(part: PartitionFit | None) -> float | None:
+        return _bulk_period(sea) if part is None else part.period_s
+
+    aligned = named_partition(fits, "direction_fit", good=True)
+    misaligned = named_partition(fits, "direction_fit", good=False)
+    off_direction = _bulk_direction(sea) if misaligned is None else misaligned.direction_deg
     blocked = (
-        direction is not None
-        and window_distance(direction, spot.swell_window_min, spot.swell_window_max) > 0
+        off_direction is not None
+        and window_distance(off_direction, spot.swell_window_min, spot.swell_window_max) > 0
     )
     return condition_reasons(
         raw,
         used_weights=used,
         points_lost=points_lost,
         gates=gates,
-        swell_kind=kind,
-        swell_period_s=period,
+        swell_kind=kind(aligned),
+        misaligned_kind=kind(misaligned),
+        swell_period_s=period(named_partition(fits, "period_fit", good=True)),
+        short_period_s=period(named_partition(fits, "period_fit", good=False)),
         swell_blocked=blocked,
         break_type=spot.break_type,
         face_min_ft=breaking.min_ft,

@@ -615,10 +615,17 @@ components): short plain phrases built only from the component fits the score us
 * a factor whose fit is at least 0.75 (the explanation's "good" cut-off) can be favourable,
   one below 0.4 unfavourable, and so is a size or period whose gate is below 1 (it holds the
   whole score down); fits in between are not a main condition;
-* swell: "well-aligned swell" (or "secondary swell", "wind sea": the partition that drives
-  the surf), "swell poorly aligned with the break", "swell mostly blocked at this break"
-  (outside the swell window); period: "good swell period (14 s)", "period too short for this
-  reef (8 s)" (the spot's break type); size: "good size for this break (4–6 ft)", "too small
+* swell: "well-aligned swell" (or "secondary swell", "wind sea"), "swell poorly aligned
+  with the break", "swell mostly blocked at this break" (outside the swell window); period:
+  "good swell period (14 s)", "period too short for this reef (8 s)" (the spot's break type).
+  Direction and period are scored over every partition (section 3e), so each phrase names
+  the partition behind its claim: a favourable one the partition that adds most to the
+  weighted fit (largest weight × fit), an unfavourable one the partition that costs it most
+  (largest weight × (1 − fit)), `scoring.named_partition`. That is not always the partition
+  that drives the surf: a small 16 s swell can carry the largest share while a 6 s swell and
+  a 5 s wind sea make the period fit poor, and the phrase is then "period too short for this
+  reef (6 s)", never "(16 s)" (the explanation sentence still describes the driving
+  partition, as in 2.1.0); size: "good size for this break (4–6 ft)", "too small
   (1.5–2 ft)", "too big for this break (13–16.5 ft)"; consistency: "mostly wind sea, little
   organised swell";
 * wind: favourable "glassy, near-calm wind" or strength + relation ("light offshore wind",
@@ -632,9 +639,12 @@ components): short plain phrases built only from the component fits the score us
   (favourable) or cost it, its gate included (unfavourable).
 
 Measured on the real run (section 3h), most frequent favourable phrases: good size (19,056 of
-25,000 hours), well-aligned swell (16,784), moderate offshore wind (4,401); unfavourable:
+25,000 hours), well-aligned swell (16,658), moderate offshore wind (4,401); unfavourable:
 period too short for this reef (7,116) or point (4,346), too small (3,648), onshore wind
-(2,244). 668 hours had no favourable phrase and 6,738 no unfavourable one. Rows scored
+(2,244). 668 hours had no favourable phrase and 6,738 no unfavourable one. Every direction
+and period phrase names a partition whose own fit supports it (0 exceptions among 37,525
+such phrases); naming the driving partition instead, as a first version did, contradicted
+the partition's own fit in 356 of them (e.g. "period too short for this reef (16 s)"). Rows scored
 before 2.2.0 have no lists (`null` in the API) until they are rescored (the served runs are
 rescored after the upgrade).
 
@@ -787,8 +797,10 @@ has no pandas, scikit-learn, SciPy, pyarrow, joblib or ecCodes (design D8):
 
 * the demo tide stages are plain Python, value for value the pandas rolling window they
   replaced (`tests/unit/test_tide_stages.py` compares the two on 400 SYNTHETIC series);
-  rescoring the demo data (12,000 hours) and the real run (25,000 hours) with the pandas code
-  and the plain one gave identical rows (0 differences, maximum absolute difference 0);
+  rescoring the demo data (12,000 hours, every one with a demo tide stage) and the real run
+  (25,000 hours, whose tide stages come from tide predictions, not the demo stages) with the
+  pandas code and the plain one gave identical rows (0 differences, maximum absolute
+  difference 0);
 * the **ML correction** of offshore Hs is optional and off by default
   (`ML_CORRECTIONS_ENABLED=false`, spec 2: no ML in the default path). The ML code stays
   (docs/ml-pipeline.md) and is imported only when the setting is on and an ACTIVE model

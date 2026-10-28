@@ -7,9 +7,11 @@ score did not use:
   the wind classes) can be favourable, one below 0.4 unfavourable, and so is a size or
   period whose limiting-factor gate is below 1 (it holds the whole score down); fits in
   between are not a main condition either way;
-* the swell phrases describe the partition that drives the surf (the largest share of the
-  breaking energy flux), named as the explanation names it ("swell", "secondary swell",
-  "wind sea");
+* each swell phrase names the partition behind its claim, as the explanation names
+  partitions ("swell", "secondary swell", "wind sea"): a favourable direction or period the
+  partition that adds most to the weighted fit, an unfavourable one the partition that costs
+  it most (``scoring.named_partition``), so a quoted period is never a long one called too
+  short;
 * the wind phrase uses the relation and strength classes of ``wind.py`` (directions are
   FROM bearings, so "offshore wind" blows from the land); an onshore or cross-onshore wind
   that is merely "workable" is listed as unfavourable, a light one included (spec 19:
@@ -63,6 +65,8 @@ def condition_reasons(
     swell_kind: str,
     swell_period_s: float | None,
     swell_blocked: bool,
+    misaligned_kind: str | None = None,
+    short_period_s: float | None = None,
     break_type: str | None,
     face_min_ft: float,
     face_max_ft: float,
@@ -80,10 +84,14 @@ def condition_reasons(
     ``used_weights``, = not scored);
     ``used_weights`` and ``points_lost``: the stored ``weights_used`` and ``contributions``;
     ``gates``: the gate values (``size_gate``, ``period_gate``; absent = 1);
-    ``swell_*``: the driving partition (``swell_blocked``: its direction is outside the
-    break's swell window); ``face_*``: the predicted breaking face heights and ``size_*`` the
+    ``swell_kind`` / ``swell_period_s``: the partition a favourable direction / period phrase
+    names; ``misaligned_kind`` / ``short_period_s`` (default: the same) the one an
+    unfavourable phrase names, ``swell_blocked`` whether that one's direction is outside the
+    break's swell window; ``face_*``: the predicted breaking face heights and ``size_*`` the
     spot's working range, in feet.
     """
+    bad_kind = swell_kind if misaligned_kind is None else misaligned_kind
+    bad_period_s = swell_period_s if short_period_s is None else short_period_s
     good: list[tuple[float, str]] = []
     bad: list[tuple[float, str]] = []
 
@@ -113,16 +121,17 @@ def condition_reasons(
     add(
         "swell_direction",
         f"well-aligned {swell_kind}",
-        f"{swell_kind} mostly blocked at this break"
+        f"{bad_kind} mostly blocked at this break"
         if swell_blocked
-        else f"{swell_kind} poorly aligned with the break",
+        else f"{bad_kind} poorly aligned with the break",
     )
     period = None if swell_period_s is None else _whole(swell_period_s)
+    short = None if bad_period_s is None else _whole(bad_period_s)
     where = BREAK_WORDS.get(break_type or "", "break")
     add(
         "swell_period",
         None if period is None else f"good swell period ({period} s)",
-        None if period is None else f"period too short for this {where} ({period} s)",
+        None if short is None else f"period too short for this {where} ({short} s)",
     )
     faces = f"{_feet(face_min_ft)}–{_feet(face_max_ft)} ft"
     add(

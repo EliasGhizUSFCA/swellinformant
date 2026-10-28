@@ -298,6 +298,60 @@ class TestPeriodAndSize:
         assert r.components["swell_period"] < 0.4
         assert "period too short for this reef (6 s)" in r.unfavourable
 
+    def test_the_period_phrase_names_the_partition_behind_it(self) -> None:
+        """A small 16 s swell drives the surf (the largest share, 0.37) while a 6 s swell and
+        a 5 s wind sea make the weighted period fit poor: the phrase names a short period,
+        never the 16 s one (the real run had 104 such hours before the fix)."""
+        reef = seeded("cloud-9")  # min period 9 s, ideal 13 s
+        d = mid_window(reef)
+        sea = hour(
+            reef,
+            6.0,
+            260.0,
+            primary_swell_height_m=0.6,
+            primary_swell_period_s=16.0,
+            secondary_swell_height_m=1.0,
+            secondary_swell_period_s=6.0,
+            secondary_swell_direction_deg=d,
+            wind_wave_height_m=1.0,
+            wind_wave_period_s=5.0,
+            wind_wave_direction_deg=d,
+        )
+        r = evaluate(sea, reef)
+        parts = r.details["direction_partitions"]
+        driver = max(parts, key=lambda p: p["weight"])
+        assert driver["kind"] == "primary_swell" and driver["period_fit"] == 1.0
+        assert driver["weight"] < 0.5 and r.components["swell_period"] < 0.4
+        assert "period too short for this reef (6 s)" in r.unfavourable
+        assert not any("16 s" in p for p in r.unfavourable + r.favourable)
+        # The explanation still describes the driving partition (unchanged from 2.1.0).
+        assert "@ 16 s" in r.explanation
+
+    def test_named_partition_names_one_whose_own_fit_says_so(self) -> None:
+        def part(kind: str, weight: float, fit: float | None) -> scoring.PartitionFit:
+            return scoring.PartitionFit(kind, weight, 1.0, 10.0, 90.0, fit, fit)
+
+        def named(fits: list[scoring.PartitionFit], good: bool) -> str | None:
+            found = scoring.named_partition(fits, "period_fit", good=good)
+            return None if found is None else found.kind
+
+        fits = [part("primary_swell", 0.4, 1.0), part("secondary_swell", 0.35, 0.1)]
+        fits.append(part("wind_sea", 0.25, None))  # no fit: never named
+        assert named(fits, good=True) == "primary_swell"
+        assert named(fits, good=False) == "secondary_swell"
+        # A good phrase names a partition with a good fit of its own, even a lighter one
+        # (0.4 x 0.9 < 0.6 x 0.7); a poor phrase one with a poor fit of its own.
+        mixed = [part("primary_swell", 0.6, 0.7), part("secondary_swell", 0.4, 0.9)]
+        assert named(mixed, good=True) == "secondary_swell"
+        poor = [part("primary_swell", 0.7, 0.45), part("wind_sea", 0.3, 0.2)]
+        assert named(poor, good=False) == "wind_sea"
+        # Without one, the largest gain or loss (whose fit is below 1).
+        middling = [part("primary_swell", 0.5, 0.6), part("wind_sea", 0.5, 0.45)]
+        assert named(middling, good=True) == "primary_swell"
+        assert named(middling, good=False) == "wind_sea"
+        assert named([part("wind_sea", 1.0, None)], good=True) is None
+        assert named([], good=False) is None
+
     def test_big_waves_are_not_universally_better(self) -> None:
         spot = EAST_FACING
         scores = [
