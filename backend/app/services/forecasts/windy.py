@@ -726,6 +726,14 @@ class WindyProvider(ForecastProvider):
             family="ncep_gfs",
         )
 
+    def update_interval_seconds(self, component: str) -> int:
+        """How often a component's model gets a new run (design D10 staleness; the refresh
+        reads it into ComponentRun.update_interval_seconds): GFS and GFS-Wave run every 6 h,
+        and gfsWave at Windy cannot update more often (Windy meteorologist, 2025)."""
+        if component not in COMPONENTS:
+            raise ValueError(f"unknown component {component!r}")
+        return int(CYCLE.total_seconds())
+
     # ---------------------------------------------------------------- health
     def _failure(self, kind: str, detail: str, retry_after_s: float | None = None) -> None:
         if self.record_health:

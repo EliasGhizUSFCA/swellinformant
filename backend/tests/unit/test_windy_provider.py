@@ -649,6 +649,13 @@ def test_the_source_names_the_windy_attribution_and_licence() -> None:
     assert URL == "https://api.windy.com/api/point-forecast/v2"
 
 
+def test_each_component_reports_the_six_hour_update_interval() -> None:
+    p = provider(WindyServer())
+    assert p.update_interval_seconds(WAVE) == p.update_interval_seconds(ATMOSPHERE) == 21600
+    with pytest.raises(ValueError, match="unknown component"):
+        p.update_interval_seconds("tide")
+
+
 def test_the_synthetic_fixture_u_v_follow_the_documented_convention() -> None:
     # A wind FROM the north (0 deg) blows towards the south: v < 0, u = 0.
     u, v = uv_from(5.0, 0.0)
