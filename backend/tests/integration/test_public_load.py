@@ -8,8 +8,8 @@ and the map conditions (``ROUTES``), from 64 threads at once through the ASGI ap
   companion timeline is computed with it), whatever the concurrency;
 * the upstream providers are never called: every forecast provider's ``current_run`` and
   ``fetch``, the provider factory and the real HTTP transports raise;
-* the database sees a bounded number of transactions and statements (engine events and
-  ``pg_stat_database``), not one per request;
+* the database sees a bounded number of transactions and statements (engine events, and
+  ``pg_stat_database``'s rollbacks, which leave autovacuum's work out), not one per request;
 * every visitor gets the same bytes for a route;
 * a new version published while the cache is warm is served from the next request on, the
   previous version's payloads are no longer served (nor kept in this process's memo), and
@@ -154,21 +154,47 @@ class DatabaseActivity:
         event.remove(engine, "before_cursor_execute", self.statement)
 
 
-def pg_transactions() -> int:
-    """Commits plus rollbacks of this database in pg_stat_database, after every pooled
-    connection flushed its counters (closed: a backend flushes its statistics on exit)."""
+def _pg_counts_now() -> tuple[int, int]:
+    """(rollbacks, commits) of this database in pg_stat_database, after every pooled
+    connection closed (a backend flushes its statistics when it exits)."""
     engine = get_engine()
     engine.dispose()
     time.sleep(0.5)
     with engine.connect() as conn:
         conn.execute(text("SELECT pg_stat_clear_snapshot()"))
-        value = conn.execute(
+        rollbacks, commits = conn.execute(
             text(
-                "SELECT xact_commit + xact_rollback FROM pg_stat_database "
+                "SELECT xact_rollback, xact_commit FROM pg_stat_database "
                 "WHERE datname = current_database()"
             )
-        ).scalar_one()
-    return int(value)
+        ).one()
+    engine.dispose()
+    return int(rollbacks), int(commits)
+
+
+# The rollbacks one reading adds itself (its read transaction; its connection's start-up
+# transaction commits).
+PG_READ_ROLLBACKS = 1
+
+
+def pg_counts(*, window_end: bool = False) -> tuple[int, int]:
+    """(rollbacks, commits) of this database in pg_stat_database, once settled: two
+    consecutive readings' rollbacks differ by no more than the first reading's own, so a
+    late flush lands outside the measured window. The start of a window is the second of
+    the two readings; its end (``window_end``) the first, the second only confirming it.
+
+    The rollbacks are what the load is bounded by: every transaction of a public read ends
+    with one (the request's session is closed, nothing is written), while autovacuum's
+    transactions commit (10 freshly filled tables added 32 commits and no rollback on
+    PostgreSQL 16 here) and autovacuum visits this database at any time. The commits are
+    printed, not bounded."""
+    previous = _pg_counts_now()
+    for _ in range(20):
+        current = _pg_counts_now()
+        if current[0] - previous[0] <= PG_READ_ROLLBACKS:
+            return previous if window_end else current
+        previous = current
+    return previous
 
 
 def percentile(values: list[float], q: float) -> float:
@@ -265,12 +291,12 @@ def test_a_thousand_visitors_share_one_computation_per_route_and_version(
     from app.main import app
 
     with TestClient(app) as client:
-        pg_before = pg_transactions()
+        pg_before = pg_counts()
         began = time.perf_counter()
         with DatabaseActivity() as activity:
             results = visit_all(client, VISITORS)
         wall = time.perf_counter() - began
-        pg_after = pg_transactions()
+        pg_after = pg_counts(window_end=True)
 
         for name, rows in results.items():
             assert len(rows) == VISITORS, name
@@ -287,7 +313,9 @@ def test_a_thousand_visitors_share_one_computation_per_route_and_version(
         }
         assert calls == []
         assert activity.transactions <= MAX_TRANSACTIONS, activity.transactions
-        assert pg_after - pg_before <= MAX_TRANSACTIONS + 5, (pg_before, pg_after)
+        # The database saw the engine's transactions (and the first reading's own), no more.
+        pg_rollbacks = pg_after[0] - pg_before[0]
+        assert activity.transactions <= pg_rollbacks <= MAX_TRANSACTIONS + 5, (pg_before, pg_after)
 
         # Warm: another 1,000 visitors read nothing from the database.
         with DatabaseActivity() as warm:
@@ -336,8 +364,9 @@ def test_a_thousand_visitors_share_one_computation_per_route_and_version(
         print(
             f"\n1,000 visitors x {len(ROUTES)} routes, {THREADS} threads, cold cache: "
             f"wall {wall:.2f} s, engine transactions {activity.transactions}, statements "
-            f"{activity.statements}, pg_stat_database transactions "
-            f"{pg_after - pg_before} (includes this test's own reads of it)\n"
+            f"{activity.statements}; pg_stat_database rollbacks {pg_rollbacks} (includes "
+            f"one of this test's own reads of it), commits {pg_after[1] - pg_before[1]} "
+            f"(connection start-ups and autovacuum's included)\n"
             f"{summary(results)}\n"
             f"warm cache (1,000 more visitors): engine transactions {warm.transactions}, "
             f"statements {warm.statements}\n{summary(again)}\n"
