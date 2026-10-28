@@ -183,7 +183,11 @@ def _swell_dates(s: dict[str, Any]) -> str:
     lead = s.get("lead_days")
     if lead is None:
         return text
-    ahead = "starts within a day" if lead < 1 else f"starts in about {round(lead)} days"
+    days = int(float(lead) + 0.5)  # conventional rounding (4.5 -> 5), as lead_phrase does
+    if lead < 1:
+        ahead = "starts within a day"
+    else:
+        ahead = f"starts in about {days} day{'s' if days != 1 else ''}"
     return f"{text} ({ahead}{', short notice' if s.get('short_notice') else ''})"
 
 

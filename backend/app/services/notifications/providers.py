@@ -34,6 +34,10 @@ from app.services.http import (
 
 logger = logging.getLogger(__name__)
 
+# Resend's 409 error name when a request with the same Idempotency-Key is still in progress
+# (https://resend.com/docs/dashboard/emails/idempotency-keys, "Possible responses").
+RESEND_CONCURRENT_KEY = "concurrent_idempotent_requests"
+
 
 @dataclass
 class EmailMessageData:
@@ -210,6 +214,13 @@ class ResendEmailProvider(_HttpEmailProvider):
             headers=headers,
             json=body,
         )
+        if resp.status_code == 409 and RESEND_CONCURRENT_KEY in resp.text:
+            # The first request with this key (e.g. one that timed out here) is still being
+            # processed: "it is safe to retry this request later" (Resend). It may well be
+            # delivering, so this is never a permanent failure.
+            raise TransientProviderError(
+                "resend: an earlier request with this idempotency key is still in progress"
+            )
         self._check(resp)
         return SendResult(self.name, resp.json().get("id"))
 

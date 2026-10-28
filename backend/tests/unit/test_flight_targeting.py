@@ -32,6 +32,7 @@ from app.services.flights.service import (
     queue_order,
 )
 from app.services.flights.windows import compute_travel_window
+from app.services.http import PermanentProviderError, TransientProviderError
 from app.services.matching.scoring import (
     SHORT_NOTICE_BOOST,
     height_fit,
@@ -394,6 +395,46 @@ def test_a_retried_send_reuses_the_same_key() -> None:
     msg = EmailMessageData(to="a@example.com", subject="s", text="t", idempotency_key="k-1")
     assert _resend(handler).send(msg).message_id == "email_2"
     assert keys == ["k-1", "k-1"]
+
+
+def test_a_concurrent_request_with_the_same_key_is_retried_later_not_failed() -> None:
+    """Resend answers 409 concurrent_idempotent_requests while the first request with the
+    key (e.g. one that timed out here) is still in progress: "it is safe to retry this
+    request later". The message may be on its way, so it must not be marked failed."""
+
+    def busy(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409,
+            json={
+                "statusCode": 409,
+                "name": "concurrent_idempotent_requests",
+                "message": "Another request with the same idempotency key is in progress.",
+            },
+        )
+
+    msg = EmailMessageData(to="a@example.com", subject="s", text="t", idempotency_key="k-2")
+    with pytest.raises(TransientProviderError):
+        _resend(busy).send(msg)
+
+    def reused(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409, json={"statusCode": 409, "name": "invalid_idempotent_request", "message": "x"}
+        )
+
+    # The key was used for a different payload: retrying is useless (a permanent error).
+    with pytest.raises(PermanentProviderError):
+        _resend(reused).send(msg)
+
+
+def test_how_far_ahead_the_swell_starts_is_rounded_conventionally() -> None:
+    def dates(lead: float) -> str:
+        _, text, _ = render_alert_email({**SNAP, "lead_days": lead, "short_notice": False}, LINKS)
+        line = next(x for x in text.splitlines() if x.startswith("Swell dates:"))
+        return line.removeprefix("Swell dates: Nov 5–7 ")
+
+    assert dates(4.5) == "(starts in about 5 days)"  # not banker's rounding (4)
+    assert dates(1.2) == "(starts in about 1 day)"
+    assert dates(0.4) == "(starts within a day)"
 
 
 # --------------------------------------------------------------------------- settings
