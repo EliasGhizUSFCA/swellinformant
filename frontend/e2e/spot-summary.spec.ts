@@ -118,8 +118,15 @@ test.describe("staleness and provider credit (synthetic)", () => {
     const banner = page.getByTestId("stale-banner");
     await expect(banner.getByTestId("stale-last-updated")).toHaveText("Forecast last updated 7 hours ago.");
     await expect(banner).toContainText("The latest refresh failed for this spot");
+    // The demo run itself is fresh (the API's `stale` is false): only the run's staleness caps
+    // the confidence classes, so the banner never claims a cap here.
+    await expect(banner).toContainText("Not a current forecast.");
+    await expect(banner).not.toContainText("capped at Moderate");
     await expect(page.getByTestId("outlook-stale")).toContainText("Forecast last updated 7 hours ago.");
     await expect(page.getByTestId("outlook-stale")).toContainText("Not a current forecast.");
+    // The reason is the banner's, just above; the summary's label stays short.
+    await expect(page.getByTestId("outlook-stale")).not.toContainText("The latest refresh failed");
+    await expect(page.getByTestId("timeline-stale")).not.toHaveAttribute("title", /capped/);
     await expect(page.getByTestId("timeline-stale")).toHaveText("Forecast last updated 7 hours ago");
   });
 

@@ -205,6 +205,16 @@ describe("staleness (spec 14)", () => {
     expect(b).toHaveTextContent("confidence is capped at Moderate");
   });
 
+  it("a spot stale only by its freshness says it is not current, never that its confidence was capped", () => {
+    // The API's run-level `stale` (which caps the classes) is false; only `freshness.stale` is set.
+    render(<StaleBanner stale={false} freshnessStale runAgeHours={2} lastUpdated="7 hours ago" reason="The latest refresh failed for this spot; the previous forecast is shown." />);
+    const b = screen.getByTestId("stale-banner");
+    expect(within(b).getByTestId("stale-last-updated")).toHaveTextContent("Forecast last updated 7 hours ago.");
+    expect(b).toHaveTextContent("The latest refresh failed for this spot; the previous forecast is shown. Not a current forecast.");
+    expect(b).not.toHaveTextContent("capped");
+    expect(b).not.toHaveTextContent("model run is");
+  });
+
   it("keeps the run-age wording without a freshness block, and shows nothing when fresh", () => {
     const { unmount } = render(<StaleBanner stale runAgeHours={20} />);
     expect(screen.getByTestId("stale-banner")).toHaveTextContent("The model run is 20 h old, so confidence is capped at Moderate.");

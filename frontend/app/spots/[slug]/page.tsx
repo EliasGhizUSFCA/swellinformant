@@ -72,14 +72,16 @@ const FLAG_LABEL: Record<string, string> = {
 const sentenceCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
- * "Forecast last updated 7 hours ago." for a spot whose served forecast is out of date (its
- * `freshness`), with the API's reason; nothing for a current forecast. Stale data is never
- * shown as current.
+ * "Forecast last updated 7 hours ago. Not a current forecast." on the summary of a spot whose
+ * served forecast is out of date (its `freshness`); nothing for a current forecast, so stale
+ * data is never shown as current. The reason is the page's banner's to give (it sits just
+ * above), so this label stays short. `withReason` adds it where no banner is shown (the
+ * forecast itself has not loaded).
  */
-function StaleNote({ freshness, className }: { freshness: Freshness | null; className?: string }) {
+function StaleNote({ freshness, withReason = false, className }: { freshness: Freshness | null; withReason?: boolean; className?: string }) {
   const now = useNowMs();
   if (!freshness?.stale) return null;
-  const reason = freshness.reason ? FRESHNESS_REASON_TEXT[freshness.reason] : null;
+  const reason = withReason && freshness.reason ? FRESHNESS_REASON_TEXT[freshness.reason] : null;
   return (
     <p className={className} data-testid="outlook-stale" role="status">
       <span className="font-semibold">{freshness.lastUpdatedAt ? `Forecast last updated ${updatedAgo(freshness.lastUpdatedAt, now)}.` : "Forecast out of date."}</span>
@@ -159,7 +161,7 @@ function SurfOutlook({
               </span>
             )}
           </div>
-          <StaleNote freshness={freshness} className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900" />
+          <StaleNote freshness={freshness} withReason={!fc} className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900" />
           {c && factorInput ? (
             <>
               <RatingHeadline className="mt-2" size="lg" inline label={c.label} score={c.score} reason={hourReason(hour, factorInput, units, windUnit)} />
@@ -313,7 +315,12 @@ function ForecastSection({
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {stale && (
-            <Badge variant="warn" data-testid="timeline-stale" title="This spot's forecast is out of date; confidence is capped at Moderate.">
+            <Badge
+              variant="warn"
+              data-testid="timeline-stale"
+              // Only the run's own staleness caps the confidence classes (the API's `stale`).
+              title={tl?.stale ? "This spot's forecast run is out of date; confidence is capped at Moderate." : "This spot's forecast was not updated with the latest run; it is not a current forecast."}
+            >
               {freshness?.stale && freshness.lastUpdatedAt ? `Forecast last updated ${updatedAgo(freshness.lastUpdatedAt, now)}` : "Stale data"}
             </Badge>
           )}
@@ -378,7 +385,8 @@ function ForecastStaleBanner({ fc, freshness }: { fc: SpotForecast; freshness: F
   const now = useNowMs();
   return (
     <StaleBanner
-      stale={fc.stale || !!freshness?.stale}
+      stale={fc.stale}
+      freshnessStale={!!freshness?.stale}
       alertsPaused={fc.alerts_paused}
       runAgeHours={runAgeHours(fc.run?.issued_at ?? null, now)}
       blend={fc.source?.code === "blend"}

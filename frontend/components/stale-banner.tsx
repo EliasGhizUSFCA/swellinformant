@@ -18,9 +18,15 @@ export function ageText(hours: number): string {
  * hours ago", from the spot's `freshness.last_updated_at`) leads with when this site last
  * updated the spot's forecast ("Forecast last updated 7 hours ago."), and `reason` says why
  * it is stale (e.g. its latest refresh failed while other spots updated).
+ *
+ * `stale` is the run's own staleness (the API's `stale`), the one that caps the confidence
+ * classes; `freshnessStale` is the spot's served-forecast staleness (`freshness.stale`), which
+ * the API reports separately and which caps nothing. A spot stale only by its freshness says
+ * when it was last updated and that it is not current, never that its confidence was capped.
  */
 export function StaleBanner({
   stale,
+  freshnessStale = false,
   alertsPaused = false,
   runAgeHours,
   blend = false,
@@ -29,6 +35,7 @@ export function StaleBanner({
   className,
 }: {
   stale: boolean | null | undefined;
+  freshnessStale?: boolean | null;
   alertsPaused?: boolean | null;
   runAgeHours?: number | null;
   blend?: boolean;
@@ -36,7 +43,7 @@ export function StaleBanner({
   reason?: string | null;
   className?: string;
 }) {
-  if (!stale) return null;
+  if (!stale && !freshnessStale) return null;
   const age = runAgeHours != null && Number.isFinite(runAgeHours) ? ageText(runAgeHours) : null;
   return (
     <Alert variant="warn" className={cn("mb-6", className)} data-testid="stale-banner">
@@ -49,7 +56,9 @@ export function StaleBanner({
           </span>
         )}
         {reason ? `${reason} ` : ""}
-        {age ? `${blend ? "Its oldest model run" : "The model run"} is ${age} old` : "A newer model run is overdue"}, so confidence is capped at Moderate.
+        {stale
+          ? `${age ? `${blend ? "Its oldest model run" : "The model run"} is ${age} old` : "A newer model run is overdue"}, so confidence is capped at Moderate.`
+          : "Not a current forecast."}
         {alertsPaused ? " New alerts are paused until fresh data arrives." : ""}
       </AlertDescription>
     </Alert>
