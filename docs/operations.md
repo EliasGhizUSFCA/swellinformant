@@ -126,8 +126,7 @@ entry but `sync-tick` (it checks on its own).
 | Entry | Task | When (classic) | Hosted (floor 60) |
 |---|---|---|---|
 | sync-tick (beat only) | `sync.tick` | every `SYNC_CHECK_MINUTES` (10) | the daemon checks every 10 min itself |
-| user-matching | `matching.match` | every 30 min | hourly |
-| flight-discovery | `flights.discover` | hourly | hourly |
+| matching-housekeeping | `matching.match` | daily 03:45 UTC (matching also runs after every publication, as a sync stage) | the same |
 | alert-generation | `alerts.generate` | every 15 min | hourly |
 | notification-delivery | `notifications.deliver` | every 2 min | hourly |
 | forecast-staleness-check | `forecasts.check_staleness` | hourly | hourly |

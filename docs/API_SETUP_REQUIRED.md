@@ -53,11 +53,13 @@ configuration" below) uses only these.
 | 8 | **Hosting on Vercel** (optional; the classic Docker Compose stack needs none of it) | The public website | A Vercel account (Hobby), and from the Vercel Marketplace a Neon Postgres and an Upstash Redis database | $0 on the free plans now; the paid plans in 1.4 once a paywall arrives | The hosted profile (section 5): `JOB_RUNNER`, `MIGRATE_ON_BUILD`, `CLIENT_IP_HEADER`, `CRON_SECRET` and the rest; `DATABASE_URL` and `DATABASE_URL_UNPOOLED` are set by the Marketplace, and `KV_URL` should be (if only the REST variables KV_REST_API_URL and KV_REST_API_TOKEN appear, copy the database's `rediss://` URL into `REDIS_URL`, `docs/deploy-vercel.md` step 4) |
 | 9 | A domain you own, for email from the hosted site | Account emails to other people from `*.vercel.app` | A registrar account (cost not researched here) and the email provider's DNS records (row 2) | registrar's price | `EMAIL_FROM` on that domain, `APP_BASE_URL` |
 
-Not needed and not recommended: **Windy** (2.9). Its terms forbid storing the data and
-building derived databases, which is what this app does; the provider is refused unless
-`WINDY_STORAGE_AUTHORIZED=true` (old name WINDY_TERMS_ACKNOWLEDGED, still read), and it costs
-990 EUR a year. Copernicus Marine (2.5) is not
-implemented.
+Not needed to start: **Windy** (2.9, step by step in `docs/WINDY_API_SETUP.md`). It is the
+preferred provider once it is licensed for this use, and Open-Meteo serves until then and
+stays the fallback. Windy's standard terms forbid storing the data and building derived
+databases, which is what this app does, so the provider is used only with
+`WINDY_STORAGE_AUTHORIZED=true` (old name WINDY_TERMS_ACKNOWLEDGED, still read), set once a
+written licence allows this use; the professional plan costs 990 EUR a year. Copernicus
+Marine (2.5) is not implemented.
 
 ### 1.3 The commercial-use question for Open-Meteo
 
@@ -308,11 +310,11 @@ configured, the spot API adds the Copernicus Marine credit link automatically.
 FES2022 (`TIDE_MODEL=fes2022`) needs a free AVISO+ account for the one-off extraction of the
 constants; the credentials are used only by that script, never by the running app.
 
-### 2.9 Windy Point Forecast API (gated, not recommended)
+### 2.9 Windy Point Forecast API (preferred once licensed; gated)
 
 | | |
 |---|---|
-| Purpose | Alternative GFS-based point forecasts (`FORECAST_PROVIDERS=windy`) |
+| Purpose | The preferred spot forecasts once licensed: Windy's `gfs` (wind, gust, pressure) and `gfsWave` (waves, swell, wind sea), one request of each per spot; Open-Meteo stands in while Windy is not eligible and when a Windy refresh fails (`docs/WINDY_API_SETUP.md`) |
 | Variables | Waves, swell and wind sea (height, period, direction; e.g. the wind-sea keys `wwaves_height-surface`, `wwaves_period-surface`, `wwaves_direction-surface`), wind and gusts |
 | Docs | <https://api.windy.com/point-forecast/docs> |
 | Account / key | Paid key, `WINDY_API_KEY` |
@@ -321,7 +323,7 @@ constants; the credentials are used only by that script, never by the running ap
 | Cost | 990 EUR per year for the professional plan ([pricing](https://api.windy.com/point-forecast/pricing)) |
 | Env vars | `WINDY_API_KEY`, `WINDY_STORAGE_AUTHORIZED`, `WEATHER_PROVIDER`, `WINDY_CHECK_MINUTES`, `WINDY_DAILY_REQUEST_LIMIT` |
 | Setup | Only with a written licence that allows storing and deriving: set `WINDY_API_KEY` and `WINDY_STORAGE_AUTHORIZED=true`; `WEATHER_PROVIDER=auto` (the hosted default) then uses Windy, or set `WEATHER_PROVIDER=windy` |
-| Test | Mock only: `pytest tests/unit/test_forecast_providers.py -k windy` |
+| Test | Health check (stores nothing): `python -m app.cli forecast provider-check --provider windy`; mocks: `pytest tests/unit/test_windy_provider.py tests/unit/test_forecast_providers.py -k windy` |
 
 ### 2.10 Flight providers
 

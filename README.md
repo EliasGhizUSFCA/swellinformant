@@ -534,7 +534,7 @@ terms, free tier, cost and setup: [`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_
 | Tides | NOAA CO-OPS (8 US spots), EOT20 harmonic constants computed locally (42 spots) (`TIDE_PROVIDERS`) | None; set `NOAA_COOPS_APPLICATION` to an app name | Tide curve, high/low waters, tide scoring where research supports it |
 | Buoy observations | NDBC (and CDIP via NDBC), AODN, Met Office (`OBSERVATIONS_ENABLED=true`) | None | Measured waves shown as measurements; forecast verification |
 | Key-free fallback | NOAA GFS-Wave + GFS and ECMWF open data, GRIB2 by byte range (`noaa_gfs`, `ecmwf_ifs`) | None | Same models, much larger downloads (below) |
-| Not recommended | Windy Point Forecast (`windy`) | Paid key; refused unless `WINDY_TERMS_ACKNOWLEDGED=true` (its terms forbid storing the data) | — |
+| Preferred once licensed | Windy Point Forecast (`windy`; `WEATHER_PROVIDER=auto` picks it when eligible) | Paid key; used only with `WINDY_STORAGE_AUTHORIZED=true`, set once a written licence allows storing it (its standard terms forbid that); see docs/WINDY_API_SETUP.md | Spot forecasts in place of Open-Meteo, which stays the fallback |
 
 Every value shown from these sources carries its credit and licence link (Open-Meteo CC BY
 4.0, "Copyright ECMWF … (modified)", NOAA, EOT20 CC BY 4.0, buoy providers): on the spot
@@ -970,7 +970,7 @@ Every external service, with its terms, free tier, cost, attribution and setup s
 | Forecasts: NOAA GFS-Wave + GFS, direct (key-free fallback) | `FORECAST_PROVIDERS=noaa_gfs` (with `ecmwf_ifs` for a second family), `NOAA_*` tuning | None: NOAA open data on AWS | `FORECAST_PROVIDERS=demo` (default) |
 | Forecasts: ECMWF IFS open data, direct (key-free fallback) | `FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs`, `ECMWF_*` tuning | None: CC BY 4.0 open data (attribution is shown automatically) | — |
 | Forecast uncertainty: GEFS-Wave ensemble | `GEFS_ENABLED=true` | None: NOAA open data | Heuristic ranges without it |
-| Forecasts: Windy Point Forecast (not recommended) | `FORECAST_PROVIDERS=windy` (or `open_meteo,windy`), `WINDY_API_KEY`, `WINDY_TERMS_ACKNOWLEDGED=true` (its terms forbid storing the data; refused without it) | api.windy.com/keys (paid Point Forecast plan) | — |
+| Forecasts: Windy Point Forecast (preferred once licensed) | `WINDY_API_KEY`, `WINDY_STORAGE_AUTHORIZED=true` (only with a written licence to store the data; refused without it), `WEATHER_PROVIDER=auto` or `windy`; check with `python -m app.cli forecast provider-check --provider windy` (docs/WINDY_API_SETUP.md) | api.windy.com/keys (paid Point Forecast plan) | Open-Meteo (the fallback) |
 | Tides | `TIDE_PROVIDERS=noaa_coops,harmonic_model` (default), `NOAA_COOPS_APPLICATION` (an identifier such as the app's name and URL; an e-mail address is refused and replaced by `APP_NAME`) | None: NOAA CO-OPS (US spots) and EOT20 constants (CC BY 4.0, "EOT20, Hart-Davis et al. 2021, DGFI-TUM/SEANOE", shown with the tide) | — |
 | Flights: Duffel | `FLIGHT_PROVIDER=duffel`, `DUFFEL_ACCESS_TOKEN` | app.duffel.com → Developers → Access tokens (`duffel_test_…` = sandbox) | `FLIGHT_PROVIDER=demo` (default) |
 | Flights: Amadeus Enterprise | `FLIGHT_PROVIDER=amadeus`, `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET`, `AMADEUS_BASE_URL` | Your Amadeus Enterprise account manager | — |

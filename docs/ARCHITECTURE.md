@@ -133,7 +133,7 @@ egress figures: docs/map-layers.md.
 | P | `sync.publish` | sync stage `publish` | Commits the publication: `published_at`, the served map run and the blend run; the map index serves that map run. |
 | C | `detection.detect` | sync stage `detect` | Clusters daylight timesteps into `swell_events`; updates / downgrades / expires existing events. |
 | D | `matching.match` | sync stage `match`; schedule every 30 min; a "match my search" kick | Evaluates every active saved search against candidate events → `opportunity_matches`. |
-| E | `flights.discover` | sync stage `flights`; schedule hourly; a "refresh flights" kick | Searches flights only for surf-matched opportunities; shared cache across users; buffer + tz logic; stores `flight_offers`. |
+| E | `flights.discover` | sync stage `flights` (after every publication's matching); a "refresh flights" kick; no timer since 2.0 (design D15) | Searches flights only for surf-matched opportunities; shared cache across users; buffer + tz logic; stores `flight_offers`. |
 | F | `alerts.generate` | sync stage `alerts`; schedule every 15 min | Decides whether an alert is due (new / improved / price drop), dedups, queues `notifications`. |
 | G | `notifications.deliver` | sync stage `deliver`; schedule every 2 min | Claims queued notifications (`FOR UPDATE SKIP LOCKED`), sends via provider, retries transient failures. |
 | H | `maintenance.cleanup` | beat daily 03:30 UTC | Retention: old forecasts/predictions/flight searches, expired tokens/sessions, job logs; marks stale data. The prediction archive is kept `RETENTION_ARCHIVE_DAYS`; map fields only for the two best servable runs (also pruned right after every acquisition that stores fields). |
