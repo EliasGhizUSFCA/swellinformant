@@ -556,6 +556,33 @@ def test_the_version_endpoint_answers_from_memory_for_a_few_seconds(
     assert asked == []  # within VERSION_MEMO_SECONDS: neither Redis nor the database
 
 
+def test_without_redis_the_forecast_endpoints_still_answer(
+    app_client: ApiClient, db: Session, two_runs: tuple[int, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Redis down: the version comes from one database statement per memo window (never an
+    error for the visitor), a seen report is still 204 (and stored nowhere), the status is
+    computed directly."""
+    older, _ = two_runs
+    version = publish(db, dict.fromkeys(active_ids(db), older))
+    refusing = redis.Redis(host="127.0.0.1", port=1, socket_connect_timeout=0.2)
+    monkeypatch.setattr(versions, "get_redis", lambda: refusing)
+    monkeypatch.setattr(public_cache, "get_redis_bytes", lambda: refusing)
+    resp: list[Any] = []
+    first = statements(lambda: resp.append(app_client.get("/api/forecasts/version")))
+    assert resp[0].status_code == 200 and resp[0].json()["version_id"] == version.id
+    assert len(first) == 1 and "forecast_versions" in first[0], first
+    assert statements(lambda: resp.append(app_client.get("/api/forecasts/version"))) == []
+    assert resp[1].json() == resp[0].json()
+    seen = app_client.client.post("/api/forecasts/seen", json={"version_id": version.id})
+    assert seen.status_code == 204
+    status = app_client.get("/api/forecasts/status")
+    assert status.status_code == 200 and status.json()["version"]["version_id"] == version.id
+    assert "x-forecast-version" not in status.headers
+    monkeypatch.setattr(versions, "get_redis", get_redis)
+    versions.reset_fail_open()
+    assert versions.seen_latencies() == []
+
+
 def test_first_served_is_recorded_once_redis_answers(
     db: Session, frozen: list[datetime], monkeypatch: pytest.MonkeyPatch
 ) -> None:
