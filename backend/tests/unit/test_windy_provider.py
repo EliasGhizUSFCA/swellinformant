@@ -23,7 +23,13 @@ import redis
 from app.core.config import Settings
 from app.core.redis import get_redis
 from app.services.forecasts import provider_manager, quota
-from app.services.forecasts.base import ATMOSPHERE, FORECAST_FIELDS, WAVE, SpotPoint
+from app.services.forecasts.base import (
+    ATMOSPHERE,
+    FORECAST_FIELDS,
+    WAVE,
+    PartlyReadRun,
+    SpotPoint,
+)
 from app.services.forecasts.windy import (
     CREDENTIALS_REASON,
     EXTRA_PRESSURE_KIND,
@@ -629,6 +635,37 @@ def test_every_request_failing_transiently_counts_as_unavailable() -> None:
     health = provider_manager.provider_health("windy")
     assert health is not None and health.last_failure_kind == provider_manager.UNAVAILABLE
     assert health.consecutive_unavailable == 1 and not health.blocking(NOW)
+
+
+def test_a_failed_sentinel_holds_back_only_its_own_component_when_partial() -> None:
+    """Design D6: the gfsWave sentinel timing out does not hold a new gfs run back. Without
+    ``partial`` the check raises as before; with it, the atmosphere run comes back alone and
+    names why the waves are unknown; nothing records a success."""
+    server = WindyServer(wave=lambda b: httpx.Response(503))
+    p = provider(server)
+    with pytest.raises(TransientProviderError):
+        p.current_run(NOW)
+    run = p.current_run(NOW, partial=True)
+    assert isinstance(run, PartlyReadRun) and set(run.unread) == {WAVE}
+    assert set(run.component_keys) == {ATMOSPHERE} and run.estimated
+    assert run.run_key == run.component_keys[ATMOSPHERE]
+    assert run.wave_model_run_at is None
+    assert run.atmosphere_model_run_at == datetime(2026, 10, 27, 0, tzinfo=UTC)
+    assert [(r.model, r.component) for r in run.model_runs] == [(GFS, ATMOSPHERE)]
+    health = provider_manager.provider_health("windy")
+    assert health is not None and health.last_failure_kind == provider_manager.UNAVAILABLE
+    assert health.last_success_at is None
+    # The readable component is fetched on its own with that run.
+    result = p.fetch([JBAY], run, frozenset({ATMOSPHERE}))
+    (first, *_) = result.records[JBAY.spot_id]
+    assert first.values["wind_speed_kmh"] is not None
+    assert first.values["sig_wave_height_m"] is None
+
+
+def test_partial_still_raises_when_no_sentinel_answers() -> None:
+    server = WindyServer(wave=lambda b: httpx.Response(503), gfs=lambda b: httpx.Response(503))
+    with pytest.raises(TransientProviderError):
+        provider(server).current_run(NOW, partial=True)
 
 
 def test_a_successful_check_records_success() -> None:

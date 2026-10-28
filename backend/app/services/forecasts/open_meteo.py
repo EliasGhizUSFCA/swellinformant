@@ -73,7 +73,7 @@ import json
 import logging
 import math
 import re
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
@@ -99,6 +99,7 @@ from app.services.forecasts.base import (
     ForecastProvider,
     ForecastRecord,
     ModelRunRef,
+    PartlyReadRun,
     RunInfo,
     SourceInfo,
     SpotPoint,
@@ -135,18 +136,6 @@ USER_AGENT = (
 HostKind = Literal["marine", "api"]
 # The order the two components of a run are read and listed in (wave domains first).
 COMPONENT_ORDER: tuple[str, ...] = (WAVE_COMPONENT, ATMOSPHERE)
-
-
-@dataclass(frozen=True)
-class PartlyReadRun(RunInfo):
-    """A run of which some components' metadata could not be read (``current_run(...,
-    partial=True)``): ``unread`` holds why, by component; ``component_keys`` and
-    ``model_runs`` name the readable components only (design D6: a marine host timing out
-    does not hold a new wind run back)."""
-
-    unread: Mapping[str, TransientProviderError] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
 
 
 DEFAULT_UPDATE_INTERVAL_S = 6 * 3600

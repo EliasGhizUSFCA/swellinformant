@@ -55,6 +55,7 @@ from app.services.forecasts.carry import (
     newest_cycle,
     older_than_stored,
     run_component_keys,
+    same_run,
 )
 from app.services.sync.types import (
     ComponentKind,
@@ -565,7 +566,9 @@ def _inits(run: RunInfo, component: str | None = None) -> list[datetime]:
 
 def _judge(seen: _Seen, known: KnownRuns) -> _Seen:
     """New, or current (the stored run, or an older one: monotonic detection)."""
-    if seen.available == seen.stored:
+    if seen.available == seen.stored or same_run(seen.available, seen.stored):
+        # (same_run: the stored run seen again under another estimated cycle label, e.g.
+        # Windy after its run state in Redis was lost: not new.)
         return seen
     assert seen.cycle is not None
     if (seen.stored_cycle is not None and seen.cycle < seen.stored_cycle) or older_than_stored(

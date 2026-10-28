@@ -212,7 +212,12 @@ the same times as windy.com and that gfsWave cannot update more often than every
 * **The labels live in Redis.** While Redis is unreachable a process keeps its own copy; a
   process that starts without either (or after Redis lost its data) estimates the cycle of
   the data it sees afresh, so unchanged data can get a newer label once the next cycle's
-  expected time has passed.
+  expected time has passed. The refresh treats such a key as the stored run (same model and
+  fingerprint, `carry.same_run`): it is neither refetched nor published again, and the
+  stored run keeps its first label.
+* **One component at a time**: when one model's sentinel request fails (a timeout, a 5xx),
+  the other model's run is still checked, planned and fetched (`current_run(partial=True)`,
+  as for Open-Meteo); the failed one is reported unknown and checked again next time.
 * The 4 h and 8 h are **estimates**: NOAA's GFS output is complete roughly 3.5-5 h after the
   cycle (Open-Meteo listed GFS-Wave 0.16° of 2026-10-27 06Z as available at 11:15 UTC, 5.3 h
   after the cycle, in the provider check run while writing this page), and Windy's own delay

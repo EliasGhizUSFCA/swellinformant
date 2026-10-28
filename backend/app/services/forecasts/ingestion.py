@@ -716,6 +716,10 @@ def refresh_source(
         else dict.fromkeys(COMPONENTS, available.run_key)
     )
     stored_keys = {c: stored[c].run_key for c in COMPONENTS if c in stored}
+    for c, key in stored_keys.items():
+        # The stored run seen again under another estimated label (Windy) is the stored run.
+        if key and avail.get(c) and avail[c] != key and carry.same_run(avail[c], key):
+            avail[c] = key
     if split:
         # A run stored before component keys existed (Upgrade 4) names both components in
         # one key: compare each component with the part naming its own model domains.

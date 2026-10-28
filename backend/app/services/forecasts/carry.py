@@ -54,6 +54,11 @@ WAVE_DERIVED = ("wave_power_kw_m", "wave_period_kind")
 # A model cycle inside a run key: every run key format has ":YYYYMMDDHH" stamps
 # (open_meteo "gfswave016:2026101912|gfs013:...", "noaa-gfs-fields:2026101912", ...).
 _CYCLE_STAMP = re.compile(r"(?<!\d)(\d{10})(?!\d)")
+# A run identified by a fingerprint of its data with an estimated cycle label (the Windy
+# adapter's component keys, e.g. "gfsWave~3fa2-c1d0-9b7e:2026102712"; windy.key_part).
+_FINGERPRINT_KEY = re.compile(
+    r"^(?P<model>[A-Za-z]+)~(?P<fp>[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}):(?P<cycle>\d{10})$"
+)
 
 
 def newest_cycle(run_key: str | None) -> datetime | None:
@@ -94,6 +99,20 @@ def domains_behind(available: str | None, stored: str | None) -> bool:
     if not have or not kept or have.keys() != kept.keys():
         return False
     return all(have[k] <= kept[k] for k in have) and any(have[k] < kept[k] for k in have)
+
+
+def same_run(available: str | None, stored: str | None) -> bool:
+    """Whether two component run keys name the same run: equal keys, or two
+    fingerprint-identified keys (Windy) of the same model and data fingerprint whose
+    estimated cycle labels differ. The label is an estimate made at the first sighting; when
+    the adapter's run state was lost (Redis emptied, a cold process) the same data can be
+    seen again later under a newer label, which is not a new run."""
+    if not available or not stored:
+        return False
+    if available == stored:
+        return True
+    a, b = _FINGERPRINT_KEY.match(available), _FINGERPRINT_KEY.match(stored)
+    return a is not None and b is not None and (a["model"], a["fp"]) == (b["model"], b["fp"])
 
 
 def older_than_stored(available: str | None, stored: str | None) -> bool:

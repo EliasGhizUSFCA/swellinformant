@@ -134,6 +134,17 @@ class RunInfo:
     testing: bool = False
 
 
+@dataclass(frozen=True)
+class PartlyReadRun(RunInfo):
+    """A run of which some components could not be read (``current_run(..., partial=True)``
+    of Open-Meteo, whose meta.json host timed out, or Windy, whose sentinel request failed):
+    ``unread`` holds why, by component; ``component_keys`` and ``model_runs`` name the
+    readable components only (design D6: one unreadable component does not hold a new run
+    of the other back)."""
+
+    unread: Mapping[str, Exception] = field(default_factory=lambda: MappingProxyType({}))
+
+
 @dataclass
 class FetchStats:
     """What one fetch cost upstream, stored as run.details["stats"] (dataclasses.asdict)."""

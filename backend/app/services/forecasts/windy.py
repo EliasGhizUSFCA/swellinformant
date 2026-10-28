@@ -97,6 +97,7 @@ from app.services.forecasts.base import (
     ForecastProvider,
     ForecastRecord,
     ModelRunRef,
+    PartlyReadRun,
     RunInfo,
     SourceInfo,
     SpotPoint,
@@ -818,11 +819,18 @@ class WindyProvider(ForecastProvider):
         return self._post(model, lat, lon)
 
     # ---------------------------------------------------------------- run identity
-    def current_run(self, now: datetime) -> RunInfo:
+    def current_run(self, now: datetime, *, partial: bool = False) -> RunInfo:
         """The newest Windy run of each component, from the sentinel fingerprints (Redis
-        state; a sentinel request only when its check is due)."""
+        state; a sentinel request only when its check is due).
+
+        ``partial`` (design D6, as Open-Meteo's ``current_run``): when one component's
+        sentinel request fails transiently, return the other component's run as a
+        :class:`PartlyReadRun` naming why (``unread``) instead of raising, so a new run of
+        the readable component is still planned and fetched. Raises when no component can
+        be read, and without ``partial`` when any cannot."""
         now = now.astimezone(UTC)
         seen: dict[str, SeenRun] = {}
+        unread: dict[str, TransientProviderError] = {}
         probed = False
         for component in (WAVE, ATMOSPHERE):
             model = MODELS[component]
@@ -840,7 +848,10 @@ class WindyProvider(ForecastProvider):
                 data = self.sentinel(model)
             except TransientProviderError as exc:
                 self._failure(provider_manager.UNAVAILABLE, str(exc))
-                raise
+                if not partial:
+                    raise
+                unread[component] = exc
+                continue
             state = state or ModelRunState(model)
             observed = state.observe(fingerprint(model, data), now)
             # A known older fingerprint answered again (a lagging Windy server) is never the
@@ -850,6 +861,11 @@ class WindyProvider(ForecastProvider):
             seen[component] = state.latest_run() or observed
             self.state.save(state)
             probed = True
+        if len(unread) == len(COMPONENTS):
+            raise next(iter(unread.values()))
+        if unread:
+            # No success is recorded: one sentinel failed (its failure stays counted).
+            return partly_read_run(seen, unread)
         if probed:
             self._success()
         return run_info(seen[WAVE], seen[ATMOSPHERE])
@@ -977,6 +993,28 @@ class WindyProvider(ForecastProvider):
 
 def _is_sentinel_spot(p: SpotPoint) -> bool:
     return any(is_sentinel(MODELS[c], *point_of(p, c)) for c in COMPONENTS)
+
+
+def partly_read_run(
+    seen: Mapping[str, SeenRun], unread: Mapping[str, TransientProviderError]
+) -> PartlyReadRun:
+    """The run of the components whose sentinel was read (``seen``), naming why the others
+    could not be read (``unread``; design D6)."""
+    order = [c for c in (WAVE, ATMOSPHERE) if c in seen]
+    keys = {c: key_part(MODELS[c], seen[c].fingerprint, seen[c].cycle) for c in order}
+    return PartlyReadRun(
+        run_key="|".join(keys[c] for c in order),
+        issued_at=min(seen[c].cycle for c in order),
+        wave_model_run_at=seen[WAVE].cycle if WAVE in seen else None,
+        atmosphere_model_run_at=seen[ATMOSPHERE].cycle if ATMOSPHERE in seen else None,
+        metadata_source=METADATA_SOURCE,
+        model_runs=tuple(
+            ModelRunRef(MODELS[c], seen[c].cycle, seen[c].first_seen_at, c) for c in order
+        ),
+        component_keys=MappingProxyType(keys),
+        estimated=True,
+        unread=MappingProxyType(dict(unread)),
+    )
 
 
 def run_info(wave: SeenRun, atmosphere: SeenRun) -> RunInfo:

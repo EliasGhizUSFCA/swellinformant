@@ -78,6 +78,9 @@ class SplitDemo(DemoForecastProvider):
     unreadable: ClassVar[set[str]] = set()
     # SYNTHETIC update intervals by component (Open-Meteo reads them from meta.json).
     intervals: ClassVar[dict[str, int]] = {"wave": 21600, "atmosphere": 3600}
+    # Data fingerprints by component (SYNTHETIC): when set, the run keys take the shape of
+    # the Windy adapter's ("<model>~<fingerprint>:<estimated cycle>", windy.key_part).
+    fingerprints: ClassVar[dict[str, str]] = {}
 
     def update_interval_seconds(self, component: str) -> int | None:
         return self.intervals.get(component)
@@ -98,6 +101,12 @@ class SplitDemo(DemoForecastProvider):
     def current_run(self, now: datetime, partial: bool = False) -> RunInfo:
         wave, wind = self.cycles["wave"], self.cycles["atmosphere"]
         keys = {"wave": f"demo-wave:{wave:%Y%m%d%H}", "atmosphere": f"demo-wind:{wind:%Y%m%d%H}"}
+        if self.fingerprints:
+            fp = self.fingerprints
+            keys = {
+                "wave": f"gfsWave~{fp['wave']}:{wave:%Y%m%d%H}",
+                "atmosphere": f"gfs~{fp['atmosphere']}:{wind:%Y%m%d%H}",
+            }
         refs = (
             ModelRunRef("demo-swell-generator", wave, component="wave"),
             ModelRunRef("demo-diurnal-wind", wind, component="atmosphere"),
@@ -168,6 +177,7 @@ def split(monkeypatch: pytest.MonkeyPatch) -> type[SplitDemo]:
     SplitDemo.tamper = {}
     SplitDemo.publishing = set()
     SplitDemo.unreadable = set()
+    SplitDemo.fingerprints = {}
     SplitDemo.entered = SplitDemo.gate = None
 
     def build(name: str, settings: object = None, overrides: Any = None) -> Any:
@@ -569,6 +579,38 @@ def test_an_unchanged_run_is_not_refreshed_and_the_check_reads_no_database(
     db.expire_all()
     assert db.scalar(select(func.count()).select_from(ForecastVersion)) == 1
     assert db.scalar(select(func.count()).select_from(SyncRun)) == 1
+
+
+def test_a_windy_run_seen_again_under_a_newer_estimated_label_is_not_refetched(
+    db: Session, few_spots: list[str], split: type[SplitDemo]
+) -> None:
+    """Windy has no model-run field: a run is a data fingerprint with an estimated cycle
+    label (design D3). When the adapter's run state is lost (Redis emptied, a cold process),
+    unchanged data are seen again under a newer label: the same run, never refetched or
+    published again, also by a forced sync; a new fingerprint still is."""
+    split.fingerprints = {"wave": "aaaa-bbbb-cccc", "atmosphere": "dddd-eeee-ffff"}
+    assert refresh()["status"] == "success"
+    v1 = published(db)
+    fetches = len(split.calls)
+    split.cycles["wave"] = C06  # the same wave data, relabelled one cycle newer
+    out = refresh()
+    assert out["status"] == "not_due" and not out["due"]
+    assert len(split.calls) == fetches
+    forced = orchestrator.run_sync(trigger="cli", force=True)
+    assert forced.status != "failed"
+    assert len(split.calls) == fetches  # not even a forced sync refetches it
+    db.expire_all()
+    assert published(db).id == v1.id
+    # A new atmosphere fingerprint: only the atmosphere is fetched; the waves keep the
+    # stored run and its original (00Z) label.
+    split.fingerprints = {"wave": "aaaa-bbbb-cccc", "atmosphere": "0123-4567-89ab"}
+    split.cycles["atmosphere"] = C06
+    assert refresh()["status"] == "success"
+    assert {c for _, c in split.calls[fetches:]} == {frozenset({"atmosphere"})}
+    v2 = published(db)
+    assert v2.id != v1.id
+    assert v2.wave_model_run == C00 and v2.wind_model_run == C06
+    assert v2.components["wave"]["run_key"] == "gfsWave~aaaa-bbbb-cccc:2026102700"
 
 
 def test_the_refresh_check_asks_only_the_spot_providers(

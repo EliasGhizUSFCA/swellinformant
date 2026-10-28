@@ -407,3 +407,75 @@ def test_a_stored_refresh_keeps_each_failed_spots_own_error() -> None:
     assert stored_spot_errors({"failed_spot_ids": [3]}, "the refresh failed") == {
         3: "the refresh failed"
     }
+
+
+# --------------------------------------------------------------------------- Windy run keys
+FP_WAVE = "3fa2-c1d0-9b7e"
+FP_WIND = "a0b1-c2d3-e4f5"
+
+
+def windy_run(wave: datetime, atmos: datetime, *, wave_fp: str = FP_WAVE) -> RunInfo:
+    """A Windy run (SYNTHETIC fingerprints): one data fingerprint per component, each with
+    the cycle the adapter estimated when it first saw it (windy.key_part)."""
+    from app.services.forecasts.windy import GFS, GFS_WAVE
+
+    keys = {
+        "wave": f"{GFS_WAVE}~{wave_fp}:{wave:%Y%m%d%H}",
+        "atmosphere": f"{GFS}~{FP_WIND}:{atmos:%Y%m%d%H}",
+    }
+    return RunInfo(
+        run_key=f"{keys['wave']}|{keys['atmosphere']}",
+        issued_at=min(wave, atmos),
+        wave_model_run_at=wave,
+        atmosphere_model_run_at=atmos,
+        metadata_source="windy_fingerprint",
+        model_runs=(
+            ModelRunRef(GFS_WAVE, wave, wave, component="wave"),
+            ModelRunRef(GFS, atmos, atmos, component="atmosphere"),
+        ),
+        component_keys=MappingProxyType(keys),
+        estimated=True,
+    )
+
+
+def windy_stored(run: RunInfo) -> KnownRuns:
+    return KnownRuns(
+        stored={
+            SRC: run.run_key,
+            f"{SRC}:wave": run.component_keys["wave"],
+            f"{SRC}:atmosphere": run.component_keys["atmosphere"],
+        },
+        map_cycle=None,
+        first_seen={},
+        attempts={},
+        loaded_at=C00,
+    )
+
+
+def test_same_run_matches_windy_keys_by_model_and_fingerprint_only() -> None:
+    from app.services.forecasts.carry import same_run
+    from app.services.forecasts.windy import GFS, GFS_WAVE, key_part, parse_key_part
+
+    full = "3fa2c1d09b7e" + "0" * 52
+    old, relabelled = key_part(GFS_WAVE, full, C00), key_part(GFS_WAVE, full, C06)
+    assert parse_key_part(old)[:2] == parse_key_part(relabelled)[:2]  # type: ignore[index]
+    assert same_run(old, relabelled) and same_run(relabelled, old) and same_run(old, old)
+    assert not same_run(old, key_part(GFS_WAVE, "ffff" + full[4:], C00))  # new data
+    assert not same_run(old, key_part(GFS, full, C00))  # another model
+    # Keys that carry a real model cycle (Open-Meteo, demo) are the same run only if equal.
+    assert not same_run(wave_key(C00), wave_key(C06)) and same_run(wave_key(C00), wave_key(C00))
+    assert not same_run(None, old) and not same_run(old, None)
+
+
+def test_a_windy_run_seen_again_under_a_newer_label_is_current(world: World) -> None:
+    """The adapter's run state was lost (Redis emptied): the unchanged wave data get a
+    newer estimated label. Same model and fingerprint: the stored run, not a new one."""
+    world.run = windy_run(C06, C00)
+    plan = plan_sync(None, settings=settings(), now=T0, known=windy_stored(windy_run(C00, C00)))
+    assert not plan.due and parts(plan) == {"wave": "current", "atmosphere": "current"}
+
+
+def test_a_new_windy_fingerprint_is_new(world: World) -> None:
+    world.run = windy_run(C06, C00, wave_fp="0123-4567-89ab")
+    plan = plan_sync(None, settings=settings(), now=T0, known=windy_stored(windy_run(C00, C00)))
+    assert plan.due and parts(plan) == {"wave": "new", "atmosphere": "current"}
