@@ -2,7 +2,9 @@
 
 One Redis counter per user and UTC day, the same pattern as the provider quota
 (app.core.redis.consume_quota): a search is counted before the provider is called, and a
-refused search is never counted. Only provider calls count: a shared cache hit
+refused search is never counted; a search the provider's own daily quota refused, or that
+failed transiently, is given back (:func:`refund_user_search`). Only provider calls count:
+a shared cache hit
 (app.services.flights.service.get_or_search) is free, so many users chasing the same swell
 share one search without spending each other's budget. Offer re-validation right before an
 alert is not a search and is not counted (it is bounded by the alert rules).
@@ -56,6 +58,16 @@ def consume_user_search(user_id: object, limit: int, now: datetime) -> int | Non
     except redis.RedisError as exc:
         logger.warning("Per-user flight budget unavailable (%s); continuing", type(exc).__name__)
         return None
+
+
+def refund_user_search(user_id: object, now: datetime) -> None:
+    """Give back a search counted by :func:`consume_user_search` that never reached the
+    provider or got no answer from it (the provider's daily quota refused it, or it failed
+    transiently): a provider outage must not use up the users' budgets for the day."""
+    try:
+        get_redis().decr(budget_key(user_id, now))
+    except redis.RedisError as exc:
+        logger.warning("Per-user flight budget refund failed (%s)", type(exc).__name__)
 
 
 def searches_used(user_id: object, now: datetime) -> int:

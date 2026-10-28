@@ -4,8 +4,9 @@ A provider is asked for flights only for:
 
 * a **new** surf-qualified match (status PENDING_FLIGHTS, set by matching),
 * a **material change** of a match: its recommended travel dates or destination airport
-  moved, or its forecast crossed back over the search's quality threshold (matching sets
-  the match back to PENDING_FLIGHTS; app.services.matching.service.evaluate_match),
+  moved, its surf window's hours moved so the stored flights no longer fit, or its
+  forecast crossed back over the search's quality threshold (matching sets the match back
+  to PENDING_FLIGHTS; app.services.matching.service.evaluate_match),
 * an **explicit user request** ("Re-check flights", ``flights_requested_at``),
 * a price re-check right before an alert is actually sent (notifications/alerts.py; an
   unusable fare sends the match back here once).
@@ -51,7 +52,11 @@ from app.models.enums import (
 )
 from app.services.flights.airports import gateway_fallbacks
 from app.services.flights.base import FlightProvider, FlightQuery, NormalizedOffer, Segment, Slice
-from app.services.flights.budget import UserFlightBudgetExceeded, consume_user_search
+from app.services.flights.budget import (
+    UserFlightBudgetExceeded,
+    consume_user_search,
+    refund_user_search,
+)
 from app.services.flights.filtering import OfferConstraints, filter_offers, rank_offers
 from app.services.flights.registry import AirportDirectory, build_flight_provider
 from app.services.flights.windows import (
@@ -209,6 +214,10 @@ def get_or_search(
 
     A provider search counts against ``user_id``'s daily budget first
     (UserFlightBudgetExceeded is raised before the provider is called); a cache hit is free.
+    The provider's exhausted daily quota (QuotaExceeded, also a PermanentProviderError) and
+    a transient failure propagate without being remembered as a failed search, and the
+    user's search is given back: nothing was searched, so the match waits for the next run
+    instead of being written off as "no flights" (it is never re-searched on a timer).
     """
     settings = get_settings()
     key = query.cache_key(provider.name)
@@ -221,9 +230,10 @@ def get_or_search(
     if cached is not None:
         stats.cache_hits += 1
         return cached
-    if user_id is not None:
-        consume_user_search(user_id, settings.flight_user_daily_quota, now)
-    stats.provider_queries += 1
+    counted = (
+        user_id is not None
+        and consume_user_search(user_id, settings.flight_user_daily_quota, now) is not None
+    )
     search = FlightSearch(
         provider=provider.name,
         cache_key=key,
@@ -240,7 +250,14 @@ def get_or_search(
     )
     try:
         offers = provider.search(query)
+    except (QuotaExceeded, TransientProviderError) as exc:
+        if counted:
+            refund_user_search(user_id, now)
+        if not isinstance(exc, QuotaExceeded):
+            stats.provider_queries += 1  # sent, but no answer
+        raise
     except PermanentProviderError as exc:
+        stats.provider_queries += 1
         # e.g. unsupported route/airport: remember the failure briefly to avoid hammering.
         search.status = FlightSearchStatus.FAILED
         search.error_message = str(exc)[:1000]
@@ -249,6 +266,7 @@ def get_or_search(
         db.flush()
         logger.warning("Flight search %s failed permanently: %s", key, exc)
         return search
+    stats.provider_queries += 1
     search.status = FlightSearchStatus.SUCCESS if offers else FlightSearchStatus.NO_RESULTS
     search.result_count = len(offers)
     search.expires_at = cache_expiry(offers, now, timedelta(hours=settings.flight_cache_ttl_hours))

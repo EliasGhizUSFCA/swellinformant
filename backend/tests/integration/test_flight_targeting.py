@@ -22,10 +22,11 @@ from app.models import FlightOffer, FlightSearch, Notification, OpportunityMatch
 from app.models.enums import QUALITY_ORDER, MatchStatus, NotificationStatus, QualityLabel
 from app.schemas.searches import SearchIn
 from app.services import accounts, searches
-from app.services.flights import demo, service
+from app.services.flights import budget, demo, service
 from app.services.flights.base import FlightQuery, NormalizedOffer, RevalidationResult
 from app.services.flights.registry import AirportDirectory
 from app.services.forecasts.ingestion import simulate_swell
+from app.services.http import QuotaExhaustedError, TransientProviderError
 from app.services.matching.service import match_all
 from app.services.notifications import alerts
 from app.services.notifications.alerts import generate_alerts
@@ -43,6 +44,8 @@ class CallLog:
         self.revalidations: list[str] = []
         # Destinations for which the (synthetic) provider has no flights at all.
         self.no_flights_to: set[str] = set()
+        # Raised instead of searching (an exhausted quota, an outage), when set.
+        self.refuse: Exception | None = None
 
 
 class CountingDemo(demo.DemoFlightProvider):
@@ -53,6 +56,8 @@ class CountingDemo(demo.DemoFlightProvider):
         self.log = log
 
     def search(self, query: FlightQuery) -> list[NormalizedOffer]:
+        if self.log.refuse is not None:
+            raise self.log.refuse
         self.log.searches.append(query)
         if query.destination in self.log.no_flights_to:
             return []
@@ -206,6 +211,90 @@ def test_a_material_change_searches_again_and_only_that_match(
     assert matches_of(db, mover)[0].status == MatchStatus.PENDING_FLIGHTS
     assert service.discover_flights(db).matches == 1
     assert matches_of(db, mover)[0].status == MatchStatus.FLIGHT_FOUND
+
+
+# --------------------------------------------------------------------------- surf window moved
+def test_a_surf_window_moving_within_the_same_dates_searches_again_only_if_flights_no_longer_fit(
+    db: Session, few_spots: list[str], calls: CallLog
+) -> None:
+    """Design D15 lists a moved surf window as a material change. Its dates are compared
+    through the recommended travel dates; a shift of hours within the same dates matters
+    only when the stored itinerary no longer gets there in time (or leaves too early)."""
+    user = make_user(db, "shift@example.com")
+    make_search(db, user)
+    swell(db)
+    run_pipeline(db, acquire=False)
+    (match,) = matches_of(db, user)
+    assert match.status == MatchStatus.FLIGHT_FOUND and match.best_offer_id is not None
+    first_offer = match.best_offer_id
+    searched = len(calls.searches)
+
+    def forecast_had_it_later() -> None:
+        # As if the previous forecast had the swell start 3 h later (same dates).
+        db.execute(
+            update(OpportunityMatch)
+            .where(OpportunityMatch.id == match.id)
+            .values(window_start=OpportunityMatch.window_start + timedelta(hours=3))
+        )
+        db.commit()
+
+    # 1. The hours moved, the flights still fit: nothing is searched, the trip is kept.
+    forecast_had_it_later()
+    match_all(db)
+    (kept,) = matches_of(db, user)
+    assert kept.status == MatchStatus.FLIGHT_FOUND and kept.best_offer_id == first_offer
+    assert service.discover_flights(db).matches == 0 and len(calls.searches) == searched
+
+    # 2. The hours moved and the stored outbound flight now lands after the swell starts
+    #    (synthetic arrival time): material, the trip is searched again (here from the
+    #    cache, whose other offers still fit).
+    late = kept.window_start + timedelta(hours=1)
+    offer = db.get(FlightOffer, first_offer)
+    assert offer is not None
+    segments = [dict(seg) for seg in offer.segments]
+    last_out = max(i for i, seg in enumerate(segments) if seg["direction"] == "outbound")
+    segments[last_out]["arrival_at"] = late.isoformat()
+    offer.segments = segments
+    offer.outbound_arrival_at = late
+    db.commit()
+    forecast_had_it_later()
+    match_all(db)
+    (moved,) = matches_of(db, user)
+    assert moved.status == MatchStatus.PENDING_FLIGHTS and moved.best_offer_id is None
+    assert service.discover_flights(db).matches == 1
+    (again,) = matches_of(db, user)
+    assert again.status == MatchStatus.FLIGHT_FOUND
+    assert again.best_offer_id is not None and again.best_offer_id != first_offer
+
+
+# --------------------------------------------------------------------------- provider refusals
+def test_an_exhausted_provider_quota_or_outage_leaves_the_match_waiting_and_costs_no_budget(
+    db: Session, few_spots: list[str], calls: CallLog
+) -> None:
+    """Nothing was searched, so nothing is remembered as "no flights": with no periodic
+    re-search a match written off here would never be searched again."""
+    user = make_user(db, "quota@example.com")
+    make_search(db, user)
+    swell(db)
+    surf_matches(db)
+    calls.refuse = QuotaExhaustedError("demo daily quota of 300 requests reached")
+    stats = service.discover_flights(db)
+    assert stats.quota_exhausted and stats.provider_queries == 0 and stats.surf_only == 0
+    assert count(db, FlightSearch) == 0  # not cached as a failed search for 3 hours
+    (match,) = matches_of(db, user)
+    assert match.status == MatchStatus.PENDING_FLIGHTS
+    assert budget.searches_used(user.id, utcnow()) == 0  # the user's search was given back
+
+    calls.refuse = TransientProviderError("demo HTTP 503")
+    stats = service.discover_flights(db)
+    assert stats.errors == 1 and not stats.quota_exhausted
+    assert matches_of(db, user)[0].status == MatchStatus.PENDING_FLIGHTS
+    assert budget.searches_used(user.id, utcnow()) == 0
+
+    calls.refuse = None  # the provider is back: the next run searches
+    stats = service.discover_flights(db)
+    assert matches_of(db, user)[0].status == MatchStatus.FLIGHT_FOUND
+    assert budget.searches_used(user.id, utcnow()) == stats.provider_queries > 0
 
 
 # --------------------------------------------------------------------------- budget

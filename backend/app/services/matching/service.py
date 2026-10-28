@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session, defer, lazyload
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.models import (
+    FlightOffer,
     OpportunityMatch,
     SavedSearch,
     SpotAirport,
@@ -164,6 +165,53 @@ def _surf_only_scores(match: OpportunityMatch, search: SavedSearch) -> None:
     match.overall_score = overall
 
 
+def _itinerary_still_fits(
+    db: Session,
+    match: OpportunityMatch,
+    spot: SurfSpot,
+    destination: SpotAirport,
+    tw: TravelWindow,
+    tw_airport: SpotAirport,
+    search: SavedSearch,
+    now: datetime,
+) -> bool:
+    """Whether the match's best itinerary still lands in time for the surf window (its
+    start less the transfer) and leaves after it ends (plus the transfer). Only these
+    bounds depend on the window's hours; its dates are compared separately. ``tw`` is the
+    travel window for ``tw_airport``; a kept gateway gets its own (its longer transfer)."""
+    if match.best_offer_id is None:
+        return True
+    window = tw
+    if destination is not tw_airport:
+        travel = search.travel
+        try:
+            window = compute_travel_window(
+                surf_start=tw.surf_start,
+                surf_end=tw.surf_end,
+                spot_tz=spot.timezone,
+                destination_iata=destination.airport_iata,
+                destination_tz=destination.airport.timezone,
+                transfer_minutes=destination.transfer_minutes,
+                arrival_buffer_days=travel.arrival_buffer_days,
+                departure_buffer_days=travel.departure_buffer_days,
+                min_days_at_destination=travel.min_days_at_destination,
+                max_trip_days=travel.max_trip_days,
+                now=now,
+            )
+        except InfeasibleWindow:
+            return False
+    # Two columns of the one offer (its segments and provider payload are never read here).
+    times = db.execute(
+        select(FlightOffer.outbound_arrival_at, FlightOffer.inbound_departure_at).where(
+            FlightOffer.id == match.best_offer_id
+        )
+    ).first()
+    if times is None:
+        return True
+    arrival, departure = times
+    return arrival <= window.arrive_by and window.depart_after <= departure <= window.depart_before
+
+
 def _clear_flights(match: OpportunityMatch) -> None:
     match.best_offer = None
     match.best_price = None
@@ -272,6 +320,7 @@ def evaluate_match(
         match.recommended_departure_date,
         match.destination_iata,
     )
+    previous_window = (match.window_start, match.window_end)
     _apply_window(match, event, window)
 
     if structural_reason is not None:
@@ -306,6 +355,17 @@ def evaluate_match(
     airport_changed = previous[2] != airport.airport_iata and kept_gateway is None
     changed = dates_changed or airport_changed
     destination = kept_gateway if kept_gateway is not None and not changed else airport
+    if (
+        not changed
+        and existing is not None
+        and match.status == MatchStatus.FLIGHT_FOUND
+        and previous_window != (window.start, window.end)
+        and not _itinerary_still_fits(db, match, spot, destination, tw, airport, search, now)
+    ):
+        # The surf window moved within the same travel dates and the stored flights no
+        # longer get there before it starts (or leave before it ends): a material change.
+        changed = True
+        destination = airport
     match.destination_iata = destination.airport_iata
     match.transfer_minutes = destination.transfer_minutes
     match.recommended_arrival_date = tw.recommended_arrival_date
