@@ -104,6 +104,8 @@ export function ForecastConfidence({
   notes,
   validTime,
   runIssuedAt,
+  waveRunIssuedAt,
+  windRunIssuedAt,
   blend = false,
   nowMs,
   legacyIndex,
@@ -116,6 +118,10 @@ export function ForecastConfidence({
   notes?: readonly string[] | null;
   validTime?: string | null;
   runIssuedAt?: string | null;
+  /** The wave and wind model runs, when they differ (a component refreshed alone keeps the
+   * other's run): both ages are named instead of the older run's alone. */
+  waveRunIssuedAt?: string | null;
+  windRunIssuedAt?: string | null;
   /** The run is a blend: its issue time is only its oldest member's, and is named so. */
   blend?: boolean;
   nowMs?: number;
@@ -131,7 +137,12 @@ export function ForecastConfidence({
   const notVerified = [...(reasons ?? []), ...(notes ?? [])].some((r) => r.trim() === NOT_VERIFIED_TEXT);
   const clock = useNowMs();
   const now = nowMs ?? clock;
-  const run = runIssuedAt ? modelRunText(runIssuedAt, now) : null;
+  const split = !blend && !!waveRunIssuedAt && !!windRunIssuedAt && Date.parse(waveRunIssuedAt) !== Date.parse(windRunIssuedAt);
+  const run = split
+    ? `wave ${modelRunText(waveRunIssuedAt, now)} · wind ${modelRunText(windRunIssuedAt, now)}`
+    : runIssuedAt
+      ? modelRunText(runIssuedAt, now)
+      : null;
   const valid = validTime ? validInText(validTime, now) : null;
   const index = legacyIndexText(legacyIndex);
   const timing = [valid ? `valid ${valid}` : null, run && blend ? `oldest ${run}` : run].filter((t): t is string => !!t).join(" · ");

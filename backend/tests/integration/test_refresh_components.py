@@ -393,6 +393,44 @@ def test_a_one_component_update_keeps_the_other_components_values_and_model_time
     assert r2.predictions_computed_at is not None
 
 
+def test_a_composed_run_names_each_components_own_model_run_in_the_api(
+    db: Session, few_spots: list[str], split: type[SplitDemo], client: TestClient
+) -> None:
+    """Review r1-frontend-FE-1: after a wave-only refresh the waves come from the 06Z run and
+    the wind from the 00Z run. The API names both, each with its own init and fetch time,
+    never only the older one (spec 10: correct source timestamps)."""
+    assert refresh()["status"] == "success"
+    split.cycles["wave"] = C06
+    assert refresh()["status"] == "success"
+    r2 = run_of(db, published(db))
+    timeline = client.get("/api/spots/pipeline/timeline").json()
+    members = timeline["provenance"]["members"]
+    by = {m["component"]: m for m in members}
+    assert set(by) == {"wave", "atmosphere"}
+    assert by["wave"]["init_time"].startswith("2026-10-27T06:00")
+    assert by["atmosphere"]["init_time"].startswith("2026-10-27T00:00")
+    assert by["wave"]["run_key"] == "demo-wave:2026102706"
+    assert by["atmosphere"]["run_key"] == "demo-wind:2026102700"
+    fetched = r2.details["components"]
+
+    def at(text: str) -> datetime:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+    for c in ("wave", "atmosphere"):
+        assert at(by[c]["retrieved_at"]) == at(fetched[c]["retrieved_at"])
+    assert at(by["wave"]["retrieved_at"]) > at(by["atmosphere"]["retrieved_at"])
+    forecast = client.get("/api/spots/pipeline/forecast").json()
+    assert {m["component"] for m in forecast["run"]["members"]} == {"wave", "atmosphere"}
+    current = client.get("/api/spots/pipeline").json()["current"]
+    assert current["wave_run_issued_at"].startswith("2026-10-27T06:00")
+    assert current["atmosphere_run_issued_at"].startswith("2026-10-27T00:00")
+    # Both components of one run: one entry, as before.
+    split.cycles["atmosphere"] = C06
+    assert refresh()["status"] == "success"
+    members = client.get("/api/spots/pipeline/timeline").json()["provenance"]["members"]
+    assert len(members) == 1 and members[0]["component"] is None
+
+
 def test_a_run_stored_before_components_existed_is_split_by_its_model_domains(
     db: Session, few_spots: list[str], split: type[SplitDemo]
 ) -> None:

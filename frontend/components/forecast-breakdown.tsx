@@ -13,6 +13,7 @@ import { WindDisputeNote } from "@/components/wind-dispute";
 import { forecastReasonsOf, modelRunText, rangeWords, validInText } from "@/lib/confidence";
 import { compass, formatSpotDateTime, heightRange, seconds, type Units } from "@/lib/format";
 import { cycleLabel } from "@/lib/map-time";
+import { componentRuns } from "@/lib/model-runs";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors } from "@/lib/rating";
 import { hourReason } from "@/lib/rating-sentence";
@@ -73,6 +74,9 @@ function MoreOffshoreData({ p, units, windUnit }: { p: ForecastPoint; units: Uni
 
 /** "NOAA GFS 18Z + ECMWF 12Z"-style short label of the model runs behind a step. */
 function runsLabel(c: Conditions, run: ForecastRunInfo | null | undefined, nowMs: number): string | null {
+  const parts = componentRuns(run?.members);
+  // Waves and wind from different model runs (one component refreshed alone): both named.
+  if (parts) return `${c.source_name ?? parts.wave.name} · wave run ${cycleLabel(parts.wave.init_time!)} · wind run ${cycleLabel(parts.atmosphere.init_time!)}`;
   const members = (run?.members ?? []).filter((m) => m.init_time);
   if (members.length > 1) return members.map((m) => `${m.name.split(" (")[0]} ${cycleLabel(m.init_time!)}`).join(" + ");
   if (members.length === 1) return `${c.source_name ?? members[0]!.name} ${cycleLabel(members[0]!.init_time!)}`;
@@ -191,6 +195,8 @@ export function ForecastBreakdown({
             notes={c.confidence_reasons}
             validTime={c.valid_time}
             runIssuedAt={c.run_issued_at}
+            waveRunIssuedAt={c.wave_run_issued_at}
+            windRunIssuedAt={c.atmosphere_run_issued_at}
             blend={c.source_code === "blend"}
             nowMs={now}
             showReason={false}

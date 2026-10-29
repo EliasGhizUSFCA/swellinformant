@@ -12,6 +12,7 @@ import { FAVOURABILITY_LABEL } from "@/components/forecast/wind-row";
 import { tideFit } from "@/lib/best-windows";
 import { arrowRotationDeg } from "@/lib/directions";
 import { forecastConfidenceOf, researchConfidenceOf } from "@/lib/forecast-fields";
+import { componentRuns, hoursAfterWaveRun } from "@/lib/model-runs";
 import { asQuality, QUALITY_COLORS, QUALITY_LABELS, QUALITY_RANK, WIND_RELATION_LABEL } from "@/lib/quality";
 import { score10 } from "@/lib/rating";
 import {
@@ -162,6 +163,10 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
   // The next high or low water after the selected time (the tide block's own event).
   const nextTide = model.tide?.events.find((e) => e.t > info.t);
   const interpolated = interpolationText(step, timeline.provenance?.members);
+  // Waves and wind from different model runs: the lead is the wave run's (the run that
+  // drives the rating), never the older component's.
+  const parts = componentRuns(timeline.provenance?.members);
+  const waveLead = parts ? hoursAfterWaveRun(parts, info.t) : null;
   return (
     <section className="rounded-2xl border bg-gradient-to-br from-secondary/60 via-card to-card p-3.5 sm:p-5" data-testid="selected-summary">
       <div className="flex items-start justify-between gap-3">
@@ -187,7 +192,11 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
                 {interpolated}
               </span>
             )}
-            {step.lead_hours != null && step.lead_hours >= 0 && <span>{Math.round(step.lead_hours)} h after the model run</span>}
+            {waveLead != null ? (
+              waveLead >= 0 && <span data-testid="summary-lead">{waveLead} h after the wave run</span>
+            ) : (
+              step.lead_hours != null && step.lead_hours >= 0 && <span data-testid="summary-lead">{Math.round(step.lead_hours)} h after the model run</span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-1">

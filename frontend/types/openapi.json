@@ -5571,6 +5571,30 @@
       ],
       "title": "Run Issued At"
      },
+     "wave_run_issued_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Run Issued At"
+     },
+     "atmosphere_run_issued_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Atmosphere Run Issued At"
+     },
      "method": {
       "anyOf": [
        {
@@ -11297,6 +11321,33 @@
        }
       ],
       "title": "Atmosphere Model"
+     },
+     "component": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "wave",
+         "atmosphere"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Component"
+     },
+     "retrieved_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Retrieved At"
      }
     },
     "type": "object",
@@ -11310,7 +11361,7 @@
      "atmosphere_model"
     ],
     "title": "RunMemberOut",
-    "description": "One model run behind a forecast (a blend member, or the single source itself)."
+    "description": "One model run behind a forecast: a blend member, the single source itself, or, for a\nrun whose wave and atmosphere components come from different model runs (a refresh of\none component carries the other forward), one entry per component."
    },
    "ScatterPoint": {
     "properties": {

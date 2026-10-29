@@ -7,6 +7,7 @@ import { ProviderCredit } from "@/components/forecast/provider-credit";
 import { forecastConfidenceOf, hourOutputs } from "@/lib/forecast-fields";
 import { compass, relativeTime, seconds, titleCase } from "@/lib/format";
 import { cycleLabel } from "@/lib/map-time";
+import { componentFetchedText, componentRuns } from "@/lib/model-runs";
 import { runTimeEstimated } from "@/lib/provider";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { num } from "@/lib/rating";
@@ -137,13 +138,16 @@ export function ModelInfo({ fc, c, version }: { fc: SpotForecast | null | undefi
   const waveRun = run?.wave_model_run_at ?? null;
   const fallbackRun = !atmosRun && !waveRun ? (run?.issued_at ?? c.run_issued_at ?? null) : null;
   const runText = (iso: string | null, estimated: boolean) => (iso ? `run ${cycleLabel(iso)}${estimated ? " (estimated)" : ""}` : "run time not reported");
+  // A component refreshed alone was fetched at another time than the carried one.
+  const parts = componentRuns(run?.members);
+  const fetchedText = (parts ? componentFetchedText(parts, new Date()) : null) ?? (run?.completed_at ? relativeTime(run.completed_at) : null);
   return (
     <Section title="Forecast models" testId="rating-models">
       <dl>
         <Row k="Provider" v={source?.name ?? c.source_name ?? null} />
         {source?.atmosphere_model && <Row k={`Wind: ${source.atmosphere_model}`} v={runText(atmosRun ?? fallbackRun, windEstimated)} />}
         {source?.wave_model && <Row k={`Waves: ${source.wave_model}`} v={runText(waveRun ?? fallbackRun, waveEstimated)} />}
-        <Row k="Fetched" v={run?.completed_at ? relativeTime(run.completed_at) : null} />
+        <Row k="Fetched" v={fetchedText} />
       </dl>
       {(windEstimated || waveEstimated) && (
         <p className="mt-0.5" data-testid="rating-models-estimated">

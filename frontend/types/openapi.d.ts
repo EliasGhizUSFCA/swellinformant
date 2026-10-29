@@ -2101,6 +2101,10 @@ export interface components {
             is_demo: boolean;
             /** Run Issued At */
             run_issued_at?: string | null;
+            /** Wave Run Issued At */
+            wave_run_issued_at?: string | null;
+            /** Atmosphere Run Issued At */
+            atmosphere_run_issued_at?: string | null;
             /** Method */
             method?: string | null;
             /** Algorithm Version */
@@ -3909,7 +3913,9 @@ export interface components {
         };
         /**
          * RunMemberOut
-         * @description One model run behind a forecast (a blend member, or the single source itself).
+         * @description One model run behind a forecast: a blend member, the single source itself, or, for a
+         *     run whose wave and atmosphere components come from different model runs (a refresh of
+         *     one component carries the other forward), one entry per component.
          */
         RunMemberOut: {
             /** Code */
@@ -3926,6 +3932,10 @@ export interface components {
             wave_model: string | null;
             /** Atmosphere Model */
             atmosphere_model: string | null;
+            /** Component */
+            component?: ("wave" | "atmosphere") | null;
+            /** Retrieved At */
+            retrieved_at?: string | null;
         };
         /** ScatterPoint */
         ScatterPoint: {

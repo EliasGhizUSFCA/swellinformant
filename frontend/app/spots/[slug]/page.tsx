@@ -221,6 +221,8 @@ function SurfOutlook({
                   notes={c.confidence_reasons}
                   validTime={c.valid_time}
                   runIssuedAt={c.run_issued_at}
+                  waveRunIssuedAt={c.wave_run_issued_at}
+                  windRunIssuedAt={c.atmosphere_run_issued_at}
                   blend={c.source_code === "blend"}
                   legacyIndex={c.confidence}
                 />

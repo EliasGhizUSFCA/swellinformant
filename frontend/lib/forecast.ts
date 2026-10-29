@@ -55,6 +55,8 @@ export function pointToConditions(p: ForecastPoint, fc: SpotForecast): Condition
     source_name: fc.source?.name ?? null,
     is_demo: fc.source?.is_demo ?? false,
     run_issued_at: fc.run?.issued_at ?? null,
+    wave_run_issued_at: fc.run?.wave_model_run_at ?? null,
+    atmosphere_run_issued_at: fc.run?.atmosphere_model_run_at ?? null,
     method: p.breaking_height_method ?? null,
     algorithm_version: p.algorithm_version ?? null,
     explanation: p.explanation,

@@ -109,6 +109,10 @@ class Conditions(HourOutputs, SeparateConfidences):
     source_name: str | None = None
     is_demo: bool = False
     run_issued_at: datetime | None = None
+    # The wave and atmosphere (wind) model runs behind this hour. A refresh of one component
+    # keeps the other's original run, so they can differ; run_issued_at is the older one.
+    wave_run_issued_at: datetime | None = None
+    atmosphere_run_issued_at: datetime | None = None
     method: str | None = None
     algorithm_version: str | None = None
     explanation: str | None = None
@@ -416,7 +420,9 @@ class ForecastSourceOut(BaseModel):
 
 
 class RunMemberOut(BaseModel):
-    """One model run behind a forecast (a blend member, or the single source itself)."""
+    """One model run behind a forecast: a blend member, the single source itself, or, for a
+    run whose wave and atmosphere components come from different model runs (a refresh of
+    one component carries the other forward), one entry per component."""
 
     code: str
     name: str
@@ -426,6 +432,9 @@ class RunMemberOut(BaseModel):
     init_time: datetime | None
     wave_model: str | None
     atmosphere_model: str | None
+    # Set on the per-component entries: which component, and when its data were fetched.
+    component: Literal["wave", "atmosphere"] | None = None
+    retrieved_at: datetime | None = None
 
 
 class ForecastRunOut(BaseModel):

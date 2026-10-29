@@ -204,6 +204,8 @@ def _conditions(
         source_name=source.name if source else None,
         is_demo=bool(source.is_demo) if source else False,
         run_issued_at=run.issued_at if run is not None else None,
+        wave_run_issued_at=run.wave_model_run_at if run is not None else None,
+        atmosphere_run_issued_at=run.atmosphere_model_run_at if run is not None else None,
         method=p.breaking_height_method,
         algorithm_version=p.algorithm_version,
         explanation=p.explanation,
@@ -880,9 +882,30 @@ def run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
     return _shared(db, ("members", run.id), lambda: _run_members(db, run))
 
 
+def _component_members(run: ForecastRun) -> list[RunMemberOut]:
+    """One entry per component when the run's wave and atmosphere data come from different
+    model runs (a component refreshed alone keeps the other's run, design D6): each with its
+    own init time, run key and fetch time. Empty when both share one run."""
+    wave, atmosphere = run.wave_model_run_at, run.atmosphere_model_run_at
+    if wave is None or atmosphere is None or wave == atmosphere:
+        return []
+    details = run.details or {}
+    keys = details.get("component_keys") or {}
+    parts = details.get("components") or {}
+    out: list[RunMemberOut] = []
+    for component, init in (("wave", wave), ("atmosphere", atmosphere)):
+        part = parts.get(component) if isinstance(parts, dict) else None
+        fetched = part.get("retrieved_at") if isinstance(part, dict) else None
+        member = _member_out(run.source, str(keys.get(component) or run.run_key), init)
+        member.component = component  # type: ignore[assignment]
+        member.retrieved_at = datetime.fromisoformat(str(fetched)) if fetched else None
+        out.append(member)
+    return out
+
+
 def _run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
     if run.source.kind != "blend":
-        return [_member_out(run.source, run.run_key, run.issued_at)]
+        return _component_members(run) or [_member_out(run.source, run.run_key, run.issued_at)]
     members = [m for m in (run.details or {}).get("members", []) if m.get("code")]
     codes = [str(m["code"]) for m in members]
     sources = {
