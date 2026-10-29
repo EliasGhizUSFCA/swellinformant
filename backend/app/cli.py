@@ -2,8 +2,9 @@
 
 python -m app.cli init-db          # alembic upgrade head + seed reference data + tide catalog
 python -m app.cli migrate          # alembic upgrade head
-python -m app.cli migrate --on-build   # the same, only where MIGRATE_ON_BUILD and VERCEL_ENV
-                                       # allow it (a build step); prints "skipped" otherwise
+python -m app.cli migrate --on-build   # init-db's migrate + seed, only where MIGRATE_ON_BUILD
+                                       # and VERCEL_ENV allow it (a build step); prints
+                                       # "skipped" otherwise
 python -m app.cli seed             # (re)load airports and surf spots from data/surf_spots, then
                                    # the tide station catalog (data/tide_stations.json)
 python -m app.cli pipeline         # run jobs A→G once, synchronously
@@ -71,11 +72,16 @@ def init_database(data_dir: str | None = None) -> dict[str, Any]:
 
 
 def migrate_on_build() -> tuple[int, dict[str, Any]]:
-    """``migrate --on-build``: migrate when MIGRATE_ON_BUILD allows it for this build.
+    """``migrate --on-build``: migrate and seed when MIGRATE_ON_BUILD allows it for this
+    build.
 
     off: never. production: only when VERCEL_ENV=production (preview builds and Neon
     preview branches are left alone). all: every build. Migrations use the direct
-    connection (migration_database_url, set by alembic/env.py). Returns (exit code, report).
+    connection (migration_database_url, set by alembic/env.py). Then the reference data
+    are seeded as ``init-db`` does (the 50 spots, airports, the tide catalog; idempotent):
+    without the optional sync daemon nothing else seeds a new database, and a deployment
+    without spots would publish nothing (review r2-spec-SPEC-2). A failed migration or seed
+    fails the build. Returns (exit code, report).
     """
     import os
 
@@ -101,7 +107,20 @@ def migrate_on_build() -> tuple[int, dict[str, Any]]:
     except Exception as exc:  # the build fails rather than deploying against an old schema
         error = redact(f"{type(exc).__name__}: {exc}")[:2000]
         return 1, {**report, "status": "failed", "error": error}
-    return 0, {**report, "status": "migrated"}
+    from app.services.seed import resolve_data_dir
+
+    try:
+        resolve_data_dir()
+    except FileNotFoundError as exc:
+        # An image without data/ (the lean api image of the local stack's smoke): nothing
+        # to seed from here. Health names an unseeded database (no_spots_seeded).
+        return 0, {**report, "status": "migrated", "seed": "skipped", "seed_reason": str(exc)}
+    try:
+        seeded = seed_database()
+    except Exception as exc:  # nor without the spots the site serves
+        error = redact(f"{type(exc).__name__}: {exc}")[:2000]
+        return 1, {**report, "status": "failed", "stage": "seed", "error": error}
+    return 0, {**report, "status": "migrated", **seeded}
 
 
 # Each module exposes ``register(subparsers) -> None`` (adding one parser named after the
@@ -170,7 +189,8 @@ def main(argv: list[str] | None = None) -> int:
     migrate_p.add_argument(
         "--on-build",
         action="store_true",
-        help="migrate only where MIGRATE_ON_BUILD and VERCEL_ENV allow it (build step)",
+        help="migrate and seed (as init-db) only where MIGRATE_ON_BUILD and VERCEL_ENV allow "
+        "it (build step)",
     )
     seed_p = sub.add_parser("seed")
     seed_p.add_argument("--data-dir", default=None)

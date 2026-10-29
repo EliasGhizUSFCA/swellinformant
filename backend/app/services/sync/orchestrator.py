@@ -1055,18 +1055,22 @@ def refresh_check(
                 "components": list((out.get("plan") or {}).get("components") or []),
             }
         )
-    background = _daemon_work(settings, now)
+    background = _daemon_work(settings, now, out)
     if background:
         out["background"] = background
     return out
 
 
-def _daemon_work(settings: Settings, now: datetime | None) -> dict[str, Any]:
+def _daemon_work(
+    settings: Settings, now: datetime | None, check: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """What a daemon would do between its checks, done here so it happens without one
     (app.services.sync.standin, JOB_RUNNER=daemon): the API's pending kicks (an explicit
-    "Re-check flights", a new saved search to match) and a notification retry that is due.
-    Two Redis commands and no database read when nothing is pending; never raises (the
-    kill switch stops syncs, not these)."""
+    "Re-check flights", a new saved search to match), a notification retry that is due and,
+    without a daemon, the data-health check that emails the admins (hourly with the hosted
+    profile, at once after a failed or partial refresh). A few Redis commands and no
+    database read when nothing is due; never raises (the kill switch stops syncs, not
+    these)."""
     from app.services.sync import standin
 
     out: dict[str, Any] = {}
@@ -1077,6 +1081,11 @@ def _daemon_work(settings: Settings, now: datetime | None) -> dict[str, Any]:
         delivery = standin.run_due_delivery(now, settings)
         if delivery:
             out["delivery"] = delivery
+        health = standin.run_due_data_health(
+            now, settings, urgent=standin.refresh_needs_health(check)
+        )
+        if health:
+            out["data_health"] = health
     except Exception:
         logger.exception("Pending background work after the refresh check failed")
         out["error"] = "background work failed"

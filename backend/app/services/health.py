@@ -409,6 +409,17 @@ def _check_sources(
                 Problem(f"forecast_{health.status}:{code}", "degraded", _source_message(health))
             )
     forecasts = [s for s in out if s.role == "forecast"]
+    if not db.scalar(select(SurfSpot.id).where(SurfSpot.is_active.is_(True)).limit(1)):
+        problems.append(
+            Problem(
+                "no_spots_seeded",
+                "failing",
+                "No surf spot is active in the database: the reference data were never "
+                "seeded (or every spot was deactivated), so nothing is refreshed or "
+                "published. Run `python -m app.cli init-db` once (docs/deploy-vercel.md step "
+                "6); a Vercel production build with MIGRATE_ON_BUILD=production seeds them.",
+            )
+        )
     if forecasts and all(s.status != "ok" for s in forecasts):
         problems.append(
             Problem(

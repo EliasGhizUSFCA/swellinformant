@@ -258,6 +258,9 @@ def cron_daily(authorization: str | None = Header(default=None)) -> JSONResponse
             "heartbeat_age_minutes": heartbeat_age_minutes(),
         }
         return JSONResponse(body, status_code=503, headers={"Cache-Control": PRIVATE_NO_STORE})
+    from app.services.sync.standin import note_data_health
+
+    note_data_health()  # the refresh backstop below does not run the check again
     email = result.get("email") or {}
     body = {
         "status": result.get("status"),

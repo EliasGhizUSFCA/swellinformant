@@ -16,7 +16,7 @@
 #   service "api" (one Python function)          api      lean image (no Celery, pandas,
 #                                                         ecCodes), no data/, read-only, 1 process
 #   daemon "sync" (Containerfile)                sync     the same Containerfile
-#   build: python -m app.cli migrate --on-build  migrate  one-shot init-db before api and sync
+#   build: python -m app.cli migrate --on-build  migrate  the same command, before api and sync
 #   Vercel Cron, daily 07:23 UTC                 cron     calls the watchdog through the edge
 #   Neon: pooled DATABASE_URL / direct _UNPOOLED pgbouncer (transaction mode) / postgres
 #   Upstash Redis (KV_URL)                       redis
@@ -200,14 +200,18 @@ services:
     logging: *logging
     restart: unless-stopped # the image ships its own health check
 
-  # The build-time migration of a production deployment: migrate, seed the 50 spots and the
-  # tide catalog (idempotent), over the direct URL. api and sync start after it succeeded.
+  # The build step of a production deployment, the api service's buildCommand in
+  # vercel.json exactly: migrate, seed the 50 spots and the tide catalog (idempotent), over
+  # the direct URL, as a production build (VERCEL_ENV=production) with MIGRATE_ON_BUILD.
+  # api and sync start after it succeeded.
   migrate:
     <<: *sync-image
-    command: ["python", "-m", "app.cli", "init-db"]
+    command: ["python", "-m", "app.cli", "migrate", "--on-build"]
     env_file: *env-file
     environment:
       <<: *app-env
+      VERCEL_ENV: production
+      MIGRATE_ON_BUILD: ${MIGRATE_ON_BUILD:-production}
       DATABASE_URL_UNPOOLED: ${VERCEL_LOCAL_DATABASE_URL_UNPOOLED:-postgresql+psycopg://swell:swell@postgres:5432/swell?application_name=swell-migrate}
     depends_on:
       postgres:

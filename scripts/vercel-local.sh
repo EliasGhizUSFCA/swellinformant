@@ -197,8 +197,9 @@ cmd_smoke() {
   if compose exec -T api test -e /data; then fail "the api image has /data"; else pass "the api image has no data/ directory"; fi
 
   # The api service's Vercel build command (vercel.json buildCommand) on the lean install: a
-  # production build migrates over the direct URL (DATABASE_URL_UNPOOLED); here the database
-  # is already at head, so it only checks the revision.
+  # production build migrates over the direct URL (DATABASE_URL_UNPOOLED) and seeds the
+  # spots; here the database is already at head and the api image has no data/, so it only
+  # checks the revision (the migrate service ran the same command with data/ before).
   local built
   if built="$(compose exec -T -e VERCEL_ENV=production api python -m app.cli migrate --on-build 2>&1)" \
     && printf '%s' "$built" | grep -q '"status": "migrated"'; then
@@ -297,6 +298,19 @@ with SessionLocal() as db:
   if [ "$code" = "401" ]; then pass "cron without a token: 401"; else fail "cron without a token: $code"; fi
   code="$(status_with_token "$base/api/internal/cron/daily" "$secret")"
   if [ "$code" = "200" ]; then pass "cron with the token: 200"; else fail "cron with the token: $code"; fi
+
+  # The refresh endpoint an external scheduler calls every 5 minutes: 401 without the
+  # token, 200 with it (a check, and a sync when a run is due; the daemon may hold the lease:
+  # "busy" is an answer too). The version endpoint the browsers poll names a version.
+  code="$(curl_local -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$base/api/internal/refresh")"
+  if [ "$code" = "401" ]; then pass "refresh without a token: 401"; else fail "refresh without a token: $code"; fi
+  code="$(status_with_token "$base/api/internal/refresh" "$secret")"
+  if [ "$code" = "200" ]; then pass "refresh with the token: 200"; else fail "refresh with the token: $code"; fi
+  if curl_local -fsS --max-time 20 "$base/api/forecasts/version" | grep -Eq '"version_id": ?[0-9]+'; then
+    pass "GET /api/forecasts/version names the published version"
+  else
+    fail "GET /api/forecasts/version names no version"
+  fi
 
   # Not a check of the stack: the data-health verdict of the API (GET /api/health/data), the
   # one the daily watchdog alerts on, as the deployed function would report it.

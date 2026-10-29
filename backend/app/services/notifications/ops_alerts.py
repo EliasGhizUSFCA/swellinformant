@@ -42,6 +42,12 @@ An item is only marked as alerted when at least one recipient's provider accepte
 the development inbox captured) the email; otherwise it stays due and the next run tries
 again. Logs carry counts only, never addresses.
 
+When the email provider refuses its own credentials (``provider_credentials:email_*``),
+no alert email can go out through it: the admins whose phone number is verified and opted
+in to SMS then get one SMS about it per UTC day (:func:`alert_email_refused_by_sms`,
+SMS_PROVIDER). Without such a number it shows only on /admin/freshness and in GET
+/api/health/data (docs/operations.md).
+
 When the database itself cannot be reached (e.g. Neon's compute suspended after its
 monthly quota), the report cannot be built and the admin addresses cannot be read: the
 daily watchdog then emails OPS_ALERT_EMAILS instead (:func:`alert_database_unreachable`),
@@ -63,7 +69,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.core.redis import get_redis
 from app.jobs.schedule import DATA_HEALTH_TASK
-from app.models import BackgroundJobLog, User
+from app.models import BackgroundJobLog, NotificationPreference, User
 from app.models.enums import JobStatus
 from app.services.health import (
     ADMIN_CHECKS_FAILED,
@@ -73,7 +79,11 @@ from app.services.health import (
     is_admin_problem_key,
     stamp,
 )
-from app.services.notifications.providers import EmailMessageData, build_email_provider
+from app.services.notifications.providers import (
+    EmailMessageData,
+    build_email_provider,
+    build_sms_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +369,77 @@ def send_alert(recipients: list[str], subject: str, text: str) -> dict[str, int]
     return {"sent": sent, "failed": failed}
 
 
+# --------------------------------------------------------------------------- refused email
+# Set (NX) for the UTC day an SMS about the email provider's refused key went out.
+EMAIL_REFUSED_SMS_KEY = "ops:email_refused_sms:{day}"
+EMAIL_REFUSED_SMS_TTL_SECONDS = 26 * 3600
+EMAIL_CREDENTIALS_PREFIX = "provider_credentials:email_"
+
+
+def admin_phones(db: Session) -> list[str]:
+    """The phone numbers of active admin accounts that may get SMS: verified and opted in,
+    not opted out since (``NotificationPreference.sms_ready``)."""
+    prefs = db.scalars(
+        select(NotificationPreference)
+        .join(User, User.id == NotificationPreference.user_id)
+        .where(
+            User.is_admin.is_(True),
+            User.is_active.is_(True),
+            NotificationPreference.phone_number.is_not(None),
+        )
+        .order_by(User.created_at)
+    ).all()
+    return [str(p.phone_number) for p in prefs if p.sms_ready]
+
+
+def alert_email_refused_by_sms(
+    db: Session, problems: list[Any], now: datetime, settings: Settings
+) -> dict[str, Any]:
+    """The email provider refused its own credentials (``provider_credentials:email_*``),
+    so the alert about it cannot be emailed through that provider (review r2-spec-SPEC-6):
+    tell the admins with a verified phone number by SMS (SMS_PROVIDER), at most once per
+    UTC day while it lasts. Returns counts, or the reason nothing was sent."""
+    refused = next((p for p in problems if p.key.startswith(EMAIL_CREDENTIALS_PREFIX)), None)
+    if refused is None:
+        return {"sent": 0, "skipped": "no refused email credentials"}
+    if settings.sms_provider == "disabled":
+        return {"sent": 0, "skipped": "SMS_PROVIDER=disabled"}
+    phones = admin_phones(db)
+    if not phones:
+        return {"sent": 0, "skipped": "no admin account with a verified phone number"}
+    key = EMAIL_REFUSED_SMS_KEY.format(day=now.astimezone(UTC).strftime("%Y%m%d"))
+    try:
+        if not get_redis().set(key, now.isoformat(), nx=True, ex=EMAIL_REFUSED_SMS_TTL_SECONDS):
+            return {"sent": 0, "skipped": "already sent today"}
+    except redis.RedisError as exc:
+        logger.warning("Refused-email SMS sent without its daily flag: %s", type(exc).__name__)
+    service = refused.key.removeprefix("provider_credentials:")
+    body = (
+        f"[{settings.app_name}] Admin alerts cannot be emailed: the email provider "
+        f"({service.removeprefix('email_')}) refused its credentials. Renew them; details on "
+        f"{settings.app_base_url}/admin/freshness"
+    )
+    sent = failed = 0
+    try:
+        provider = build_sms_provider(settings)
+    except Exception as exc:  # Twilio not configured
+        logger.warning("Refused-email SMS not sent: %s", type(exc).__name__)
+        return {"sent": 0, "failed": len(phones), "skipped": type(exc).__name__}
+    for phone in phones:
+        try:
+            provider.send(phone, body)
+            sent += 1
+        except Exception as exc:  # one failing number must not stop the rest
+            failed += 1
+            logger.warning("Refused-email SMS not sent to one admin: %s", type(exc).__name__)
+    if not sent:
+        try:  # nothing went out: the next check tries again
+            get_redis().delete(key)
+        except redis.RedisError:
+            logger.debug("refused-email SMS flag not cleared", exc_info=True)
+    return {"sent": sent, "failed": failed, "channel": provider.name}
+
+
 # --------------------------------------------------------------------------- no database
 # Set (NX) for the UTC day an OPS_ALERT_EMAILS alert about the database went out.
 DB_UNREACHABLE_KEY = "ops:db_unreachable_alert:{day}"
@@ -477,6 +558,10 @@ def run_data_health_check(db: Session, now: datetime | None = None) -> dict[str,
             email.update(counts, subject=subject)
             if counts["sent"]:
                 state = mark_sent(plan, now, repeat)
+            else:
+                # The email provider may be what refuses (its own key expired): another
+                # channel then carries that one problem.
+                email["sms"] = alert_email_refused_by_sms(db, problems, now, settings)
             logger.info(
                 "Data-health alert (%s): %d sent, %d failed",
                 report.alert_status,

@@ -14,6 +14,11 @@ jobs on its timers. Without a daemon:
   for a temporary reason is retried once its backoff has passed. The delivery job records
   the earliest retry time in Redis (:func:`note_next_delivery`); the endpoint reads that
   one key and runs ``notifications.deliver`` only when it is due.
+* :func:`run_due_data_health` (the refresh endpoint): ``ops.data_health``, which raises the
+  admin problems and emails the admins (spec 16), once DATA_HEALTH_CHECK_MINUTES have passed
+  since the endpoint last ran it, and at once after a refresh that failed, published part of
+  the spots or could not read a component. Not while a daemon runs (its heartbeat is in
+  Redis: it runs the check on its own timer). Two Redis commands when it is not due.
 * :func:`run_overdue_jobs` (the daily cron): every periodic job of the schedule whose
   newest run is older than its own interval (``schedule.max_interval``): maintenance
   cleanup, the matching housekeeping, tide acquisition, alert generation, delivery, the
@@ -50,6 +55,8 @@ logger = logging.getLogger(__name__)
 
 # Redis key: ISO time of the earliest queued notification's next attempt (no key: none).
 DELIVERY_DUE_KEY = "sync:delivery-due"
+# Redis key: ISO time the refresh endpoint last started ops.data_health (no daemon).
+DATA_HEALTH_AT_KEY = "sync:data-health-at"
 DELIVERY_DUE_TTL_SECONDS = 7 * 86400
 DELIVER_JOB = "notifications.deliver"
 # The order the daily cron runs overdue jobs in: cleanup first (it frees space), the
@@ -175,6 +182,64 @@ def run_due_delivery(
     if settings.job_runner != "daemon" or not delivery_due(now or utcnow()):
         return None
     return {"jobs": _job(DELIVER_JOB, job_spec(DELIVER_JOB).run, chain=False)}
+
+
+def refresh_needs_health(out: dict[str, Any] | None) -> bool:
+    """A refresh check whose sync failed or published part of the spots, or that could not
+    read a component's metadata: the admins hear of it without waiting for the interval."""
+    if not out:
+        return False
+    if out.get("status") in ("failed", "partial"):
+        return True
+    components = (out.get("plan") or {}).get("components") or []
+    return any(c.get("state") == "unknown" for c in components if isinstance(c, dict))
+
+
+def note_data_health(now: datetime | None = None, settings: Settings | None = None) -> None:
+    """Record that ``ops.data_health`` just ran (the daily cron's watchdog), so the refresh
+    check that follows in the same cron does not run it again. Best effort."""
+    settings = settings or get_settings()
+    interval = timedelta(minutes=settings.data_health_check_minutes)
+    try:
+        get_redis().set(
+            DATA_HEALTH_AT_KEY,
+            (now or utcnow()).isoformat(),
+            ex=int(2 * interval.total_seconds()),
+        )
+    except redis.RedisError as exc:
+        logger.warning("Data-health time not recorded: %s", type(exc).__name__)
+
+
+def run_due_data_health(
+    now: datetime | None = None, settings: Settings | None = None, *, urgent: bool = False
+) -> dict[str, Any] | None:
+    """Run ``ops.data_health`` from the refresh endpoint when no daemon runs it (the hosted
+    path without the optional daemon, :func:`daemon_optional`, and no daemon heartbeat in
+    Redis): once DATA_HEALTH_CHECK_MINUTES have passed since the endpoint last started it,
+    or at once when ``urgent`` (:func:`refresh_needs_health`). None when it is not due: two
+    Redis commands and no database read (review r2-spec-SPEC-3)."""
+    settings = settings or get_settings()
+    if not daemon_optional(settings):
+        return None
+    now = now or utcnow()
+    try:
+        client = get_redis()
+        if client.exists(state.HEARTBEAT_KEY):
+            return None  # a daemon runs the check on its own timer
+        raw = client.get(DATA_HEALTH_AT_KEY)
+    except redis.RedisError as exc:
+        logger.warning("Data-health time not read: %s", type(exc).__name__)
+        return None
+    interval = timedelta(minutes=settings.data_health_check_minutes)
+    if raw and not urgent:
+        try:
+            last: datetime | None = datetime.fromisoformat(str(raw))
+        except ValueError:
+            last = None
+        if last is not None and now - last < interval:
+            return None
+    note_data_health(now, settings)
+    return {"jobs": _job(DATA_HEALTH_TASK, job_spec(DATA_HEALTH_TASK).run, chain=False)}
 
 
 def _newest_starts(db: Session, names: list[str]) -> dict[str, datetime]:

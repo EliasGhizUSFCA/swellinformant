@@ -51,6 +51,10 @@ def hosted(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(settings, "cron_secret", SECRET)
     monkeypatch.setattr(settings, "tide_providers", "harmonic_model")  # local, no request
     get_redis().delete(sync_state.HEARTBEAT_KEY)
+    # The data-health check just ran (as after the daily cron): the tests of the other
+    # background work do not see it run as well; test_the_admins_hear_of_failed_refreshes...
+    # deletes the key.
+    standin.note_data_health(utcnow())
     yield
 
 
@@ -251,6 +255,63 @@ def test_the_daily_jobs_run_on_every_daily_cron(
     # The slack is not a second run the same day: an hour later nothing daily is due.
     later = standin.overdue_jobs(db, start + timedelta(hours=1), get_settings())
     assert not {"maintenance.cleanup", "matching.match", "tides.acquire"} & set(later), later
+
+
+def test_the_admins_hear_of_failed_refreshes_without_a_daemon_or_the_daily_cron(
+    db: Session, few_spots: list[str], hosted: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r2-spec-SPEC-3: without the daemon, ops.data_health (every spec-16 admin
+    alert) ran only from the daily cron. The refresh endpoint now runs it once
+    DATA_HEALTH_CHECK_MINUTES have passed and at once after a failed refresh: three failed
+    refreshes in a row (SYNTHETIC provider outage) email refresh_failures to the admins
+    before any daily cron; a check with nothing due runs no check."""
+    from app.models import User
+    from app.services.forecasts.demo import DemoForecastProvider
+    from app.services.http import TransientProviderError
+    from tests.conftest import outbox_messages
+
+    db.execute(BackgroundJobLog.__table__.delete())
+    db.add(
+        User(
+            email="standin-admin@example.com",
+            password_hash="synthetic-hash",
+            full_name="Synthetic Admin",
+            is_admin=True,
+            is_active=True,
+            email_verified_at=utcnow(),
+        )
+    )
+    db.commit()
+    get_redis().delete(standin.DATA_HEALTH_AT_KEY)
+
+    def outage(self: object, *args: object, **kwargs: object) -> object:
+        raise TransientProviderError("synthetic outage: HTTP 503 from the forecast provider")
+
+    monkeypatch.setattr(DemoForecastProvider, "fetch", outage)
+    retry = timedelta(minutes=get_settings().sync_retry_minutes + 1)
+    start = utcnow()
+    for i in range(3):
+        out = orchestrator.refresh_check(trigger="http", now=start + i * retry)
+        assert out["status"] == "failed", out
+        assert out["background"]["data_health"]["jobs"][0]["job"] == DATA_HEALTH_TASK
+    sent = [m for m in outbox_messages() if m.get("tag") == "ops_alert"]
+    assert any("forecast refreshes failed" in str(m["text"]) for m in sent), sent
+    assert {m["to"] for m in sent} == {"standin-admin@example.com"}
+    assert job_rows(db, DATA_HEALTH_TASK) == 3
+    # No failure (the refresh switched off, as when nothing is due): no check until
+    # DATA_HEALTH_CHECK_MINUTES have passed.
+    monkeypatch.setattr(get_settings(), "forecast_refresh_enabled", False)
+    quiet = orchestrator.refresh_check(trigger="http", now=start + 2 * retry + timedelta(minutes=1))
+    assert quiet["status"] == "disabled" and "data_health" not in quiet.get("background", {})
+    assert job_rows(db, DATA_HEALTH_TASK) == 3
+    hourly = start + 2 * retry + timedelta(minutes=get_settings().data_health_check_minutes + 1)
+    due = orchestrator.refresh_check(trigger="http", now=hourly)
+    assert due["background"]["data_health"]["jobs"][0]["job"] == DATA_HEALTH_TASK, due
+    assert job_rows(db, DATA_HEALTH_TASK) == 4
+    # While a daemon runs, it runs the check on its own timer.
+    get_redis().delete(standin.DATA_HEALTH_AT_KEY)
+    get_redis().set(sync_state.HEARTBEAT_KEY, "{}", ex=60)
+    assert standin.run_due_data_health(hourly, get_settings(), urgent=True) is None
 
 
 def test_data_health_reports_no_stopped_runner_without_the_optional_daemon(

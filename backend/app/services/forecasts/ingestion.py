@@ -78,6 +78,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 STUCK_RUN_AFTER = timedelta(hours=1)
+NO_SPOTS_MESSAGE = (
+    "no active surf spot in the database: seed it (python -m app.cli init-db, or a Vercel "
+    "production build with MIGRATE_ON_BUILD=production)"
+)
 # How far a carried component's source run may end before the end both component runs
 # reach when fetched now (provider.horizon_end) before it is fetched again: one native step
 # of GFS and GFS-Wave after 120 h (3 h), so the last step's alignment never causes a fetch.
@@ -824,6 +828,18 @@ def refresh_source(
     # Which spots need which components: the due ones, plus a carried one whose served
     # run does not hold the carried key.
     points = spot_points(db)
+    if not points:
+        # A database never seeded (or every spot deactivated): a failure, so the check
+        # backs off (SYNC_RETRY_MINUTES, SYNC_MAX_ATTEMPTS) instead of waking the database
+        # every few minutes; health names it (no_spots_seeded).
+        return RefreshOutcome(
+            source.code,
+            token,
+            base_key,
+            "failed",
+            message=NO_SPOTS_MESSAGE,
+            component_keys=target,
+        )
     if retry:
         wanted_spots = {int(s) for s in retry_spot_ids or ()}
         points = [p for p in points if p.spot_id in wanted_spots]

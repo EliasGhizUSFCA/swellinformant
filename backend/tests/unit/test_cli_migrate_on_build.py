@@ -2,7 +2,9 @@
 
 MIGRATE_ON_BUILD=off never migrates; production migrates only production builds
 (VERCEL_ENV=production), so preview builds and Neon preview branches are left alone; all
-migrates every build. A failed migration fails the build (exit 1). Alembic is patched.
+migrates every build. A migrating build then seeds the reference data as init-db does
+(review r2-spec-SPEC-2: without the optional daemon nothing else seeds a new database). A
+failed migration or seed fails the build (exit 1). Alembic and the seeding are patched.
 """
 
 from __future__ import annotations
@@ -14,9 +16,23 @@ import pytest
 from app import cli
 from app.core.config import get_settings
 
+SEEDED = {"seed": {"airports": 3, "spots_created": 2}, "tide_catalog": {"stations": 1}}
+
 
 @pytest.fixture
-def migrations(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+def seeds(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    calls: list[bool] = []
+
+    def seed() -> dict[str, object]:
+        calls.append(True)
+        return dict(SEEDED)  # SYNTHETIC counts
+
+    monkeypatch.setattr(cli, "seed_database", seed)
+    return calls
+
+
+@pytest.fixture
+def migrations(monkeypatch: pytest.MonkeyPatch, seeds: list[bool]) -> list[bool]:
     calls: list[bool] = []
     monkeypatch.setattr(cli, "migrate", lambda: calls.append(True))
     return calls
@@ -73,7 +89,34 @@ def test_production_migrates_a_production_build(
         "migrate_on_build": "production",
         "vercel_env": "production",
         "status": "migrated",
+        **SEEDED,
     }
+
+
+def test_a_migrating_build_seeds_the_reference_data(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    migrations: list[bool],
+    seeds: list[bool],
+) -> None:
+    code, out = on_build(monkeypatch, capsys, "all", "preview")
+    assert code == 0 and migrations == [True] and seeds == [True]
+    assert out["seed"] == SEEDED["seed"] and out["tide_catalog"] == SEEDED["tide_catalog"]
+    # A skipped build seeds nothing either.
+    code, out = on_build(monkeypatch, capsys, "production", "preview")
+    assert code == 0 and out["status"] == "skipped" and seeds == [True]
+
+
+def test_a_failed_seed_fails_the_build(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], migrations: list[bool]
+) -> None:
+    def broken() -> None:
+        raise FileNotFoundError("spots.json not found in any of: [...]")
+
+    monkeypatch.setattr(cli, "seed_database", broken)
+    code, out = on_build(monkeypatch, capsys, "all", "production")
+    assert code == 1 and out["status"] == "failed" and out["stage"] == "seed"
+    assert migrations == [True] and "spots.json" in str(out["error"])
 
 
 @pytest.mark.parametrize("vercel_env", [None, "preview", "production"])
@@ -105,3 +148,22 @@ def test_plain_migrate_ignores_the_build_setting(
     monkeypatch.setattr(get_settings(), "migrate_on_build", "off")
     assert cli.main(["migrate"]) == 0
     assert migrations == [True] and capsys.readouterr().out == "database migrated\n"
+
+
+def test_a_build_without_the_data_directory_migrates_and_skips_the_seed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    migrations: list[bool],
+    seeds: list[bool],
+) -> None:
+    """An image without data/ (the local stack's lean api image): nothing to seed from, the
+    build still succeeds (health then names an unseeded database, no_spots_seeded)."""
+    from app.services import seed
+
+    def missing(data_dir: object = None) -> None:
+        raise FileNotFoundError("spots.json not found in any of: ['/nowhere']")
+
+    monkeypatch.setattr(seed, "resolve_data_dir", missing)
+    code, out = on_build(monkeypatch, capsys, "all", "production")
+    assert code == 0 and out["status"] == "migrated" and out["seed"] == "skipped"
+    assert migrations == [True] and seeds == []

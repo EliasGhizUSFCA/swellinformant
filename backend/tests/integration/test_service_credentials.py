@@ -234,3 +234,47 @@ def test_a_development_inbox_records_no_credentials(db: Session, smtp_server: Se
             EmailMessageData(to="someone@example.com", subject="S", text="T", tag="test")
         )
     assert service_credentials.refused(["email_mailpit"]) == []
+
+
+def test_a_refused_email_key_reaches_the_admins_by_sms(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r2-spec-SPEC-6: the alert about a refused email key cannot be emailed through
+    that same provider. The admins with a verified, opted-in phone number get one SMS a day
+    (SMS_PROVIDER, the console outbox here); the email is still retried at every check."""
+    from app.models import NotificationPreference
+    from app.services.notifications import ops_alerts
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "email_provider", "resend")
+    monkeypatch.setattr(settings, "resend_api_key", "re_synthetic")
+    monkeypatch.setattr(settings, "sms_provider", "console")
+    make_admin(db)
+    admin = db.query(User).filter_by(email="creds-admin@example.com").one()
+    now = utcnow()
+    db.add(
+        NotificationPreference(
+            user_id=admin.id,
+            phone_number="+15555550123",  # SYNTHETIC (a fictional 555 number)
+            phone_verified_at=now,
+            sms_opt_in_at=now,
+            unsubscribe_token="synthetic-unsubscribe-token-sms",
+        )
+    )
+    db.commit()
+    refusing = ResendEmailProvider(settings, client=answer(401, {}), backoff_seconds=0)
+    monkeypatch.setattr(ops_alerts, "build_email_provider", lambda *a, **k: refusing)
+    message = EmailMessageData(to="someone@example.com", subject="S", text="T", tag="test")
+    with pytest.raises(PermanentProviderError):
+        refusing.send(message)
+    report = health_job()
+    assert "new:provider_credentials:email_resend" in report["alerts"]
+    assert report["email"]["sent"] == 0 and report["email"]["sms"]["sent"] == 1
+    sms = [m for m in outbox_messages() if m.get("kind") == "sms"]
+    assert [m["to"] for m in sms] == ["+15555550123"]
+    assert "refused its credentials" in str(sms[0]["text"])
+    # The email is still due (nothing accepted it); the SMS is not sent twice a day.
+    again = health_job()
+    assert "unsent:provider_credentials:email_resend" in again["alerts"]
+    assert again["email"]["sms"]["skipped"] == "already sent today"
+    assert len([m for m in outbox_messages() if m.get("kind") == "sms"]) == 1
