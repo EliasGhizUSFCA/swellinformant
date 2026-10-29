@@ -476,6 +476,10 @@ class DemoForecastProvider(ForecastProvider):
             component_keys=MappingProxyType(keys),
         )
 
+    def horizon_end(self, component: str, init: datetime, now: datetime) -> datetime | None:
+        # The generator's hours 0 .. forecast_days * 24 - 1 after the run (fetch below).
+        return init + timedelta(hours=self.forecast_days * 24 - 1)
+
     def fetch(
         self,
         spots: list[SpotPoint],

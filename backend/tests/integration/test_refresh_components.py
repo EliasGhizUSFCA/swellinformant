@@ -494,13 +494,20 @@ def test_a_component_still_being_published_is_carried_with_its_published_run(
     assert v2.components["atmosphere"]["changed"] is False
     assert r2.details["component_keys"]["atmosphere"] == "demo-wind:2026102700"
     assert differing(db, r1.id, r2.id, COMPONENT_FIELDS["atmosphere"]) == 0
-    # Once the wind run is served, it is refreshed alone.
+    # Once the wind run is served, it is refreshed. The demo's window starts at the older of
+    # the two runs, so the C06 waves of v2 end 6 h before two C06 runs reach: the same wave
+    # run is fetched again with the wind, or the forecast's end would freeze (review
+    # r2-backend-N2; before it, the wind was fetched alone and the end stayed at C00's).
     split.publishing = set()
     out = refresh()
     assert out["status"] == "success", out
-    assert split.calls[-1] == (sorted(few_spots), frozenset({"atmosphere"}))
+    assert split.calls[-1] == (sorted(few_spots), None)
     v3 = published(db)
     assert (v3.wave_model_run, v3.wind_model_run) == (C06, C06)
+    assert v3.components["wave"]["changed"] is False
+    assert v3.components["wave"]["run_key"] == f"demo-wave:{C06:%Y%m%d%H}"
+    r3 = run_of(db, v3)
+    assert r3.details["components"]["wave"]["refetched_spots"] == len(few_spots)
 
 
 def test_a_component_whose_metadata_cannot_be_read_is_carried_and_the_other_refreshed(
@@ -831,6 +838,126 @@ def test_an_hour_without_any_wave_height_is_never_scored(
     scored = db.scalar(select(func.count()).where(SurfQualityPrediction.forecast_id.in_(hollow)))
     assert scored == 0
     assert db.scalar(select(func.count()).where(SurfQualityPrediction.run_id == r2.id)) > 0
+
+
+def _published_span(db: Session) -> tuple[datetime, int, int]:
+    """(last valid time, rows, rows without a wave height or a wind speed) of the published
+    run."""
+    run = run_of(db, published(db))
+    hollow = func.count().filter(
+        (WaveForecast.sig_wave_height_m.is_(None)) | (WaveForecast.wind_speed_kmh.is_(None))
+    )
+    end, rows, missing = db.execute(
+        select(func.max(WaveForecast.valid_time), func.count(), hollow).where(
+            WaveForecast.run_id == run.id
+        )
+    ).one()
+    return end, int(rows), int(missing)
+
+
+def test_alternating_component_refreshes_keep_the_rolling_horizon(
+    db: Session, few_spots: list[str], split: type[SplitDemo]
+) -> None:
+    """Review r2-backend-N2 / r2-spec-R2-SPEC-1: GFS and GFS-Wave are published at different
+    times, so each cycle is normally an atmosphere-only and a wave-only refresh. Carried from
+    the previous composed run and cut to its hours (r1-F4), the forecast's end froze at the
+    last refresh that fetched both components (rows fell by 6 h a cycle). Two days of such
+    cycles: the published run reaches as far past the newest cycle as the first run reached
+    past its own, no row is lost and no hour lacks a component."""
+    assert refresh(C00 + timedelta(hours=4))["status"] == "success"
+    end0, rows0, _ = _published_span(db)
+    cycle = C00
+    for _ in range(8):
+        cycle += timedelta(hours=6)
+        for comp in ("atmosphere", "wave"):
+            split.cycles[comp] = cycle
+            out = refresh(cycle + timedelta(hours=4 if comp == "atmosphere" else 5))
+            assert out["status"] == "success", out
+            end, rows, missing = _published_span(db)
+            assert missing == 0 and rows == rows0, (comp, cycle, end, rows)
+    v = published(db)
+    assert (v.wave_model_run, v.wind_model_run) == (cycle, cycle)
+    assert end - cycle == end0 - C00, f"horizon frozen: ends {end}, first run ended {end0}"
+    # The carried run was fetched again only where the end would otherwise fall short: the
+    # wave refresh of each cycle (the demo's window starts at the older of the two runs).
+    refetches = [
+        r.details["components"]["atmosphere"].get("refetched_spots")
+        for r in db.scalars(select(ForecastRun).order_by(ForecastRun.id))
+    ]
+    assert refetches.count(len(few_spots)) == 8
+
+
+class DayWindow(SplitDemo):
+    """SYNTHETIC: Open-Meteo's windows (test_open_meteo_components checks the real adapter's
+    horizon_end against its fetch). A request covers FORECAST_DAYS from today 00:00 GMT and
+    keeps each component's hours up to FORECAST_DAYS after its own run, so a run read on a
+    later UTC day reaches up to 24 h further. ``now``: the refresh's time (set by the test)."""
+
+    now: ClassVar[datetime] = C00
+
+    @staticmethod
+    def window(component_inits: list[datetime], now: datetime) -> datetime:
+        days = get_settings().forecast_days
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return min(
+            [today + timedelta(hours=days * 24 - 1)]
+            + [init + timedelta(days=days) for init in component_inits]
+        )
+
+    def horizon_end(self, component: str, init: datetime, now: datetime) -> datetime | None:
+        return self.window([init], now)
+
+    def fetch(self, spots: Any, run: RunInfo, components: frozenset[str] | None = None) -> Any:
+        result = super().fetch(spots, run, components)
+        assert run.wave_model_run_at is not None and run.atmosphere_model_run_at is not None
+        inits = {"wave": run.wave_model_run_at, "atmosphere": run.atmosphere_model_run_at}
+        end = self.window([inits[c] for c in components or inits], self.now)
+        start = self.now.replace(hour=0, minute=0, second=0, microsecond=0)
+        for spot_id, recs in result.records.items():
+            result.records[spot_id] = [r for r in recs if start <= r.valid_time <= end]
+        return result
+
+
+def test_open_meteo_windows_roll_the_horizon_24_hours_a_day(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r2-backend-N2 with Open-Meteo's windows and the live order (GFS-Wave about
+    5 h 20 min after the cycle, GFS about 6 h 10 min): three days of component-only
+    refreshes. After every refresh the published run ends where both component runs reach
+    when read then (within HORIZON_SLACK), no hour lacks a component, and the carried run
+    is fetched again only on a few refreshes a day (when the window moved past it)."""
+
+    def build(name: str, settings: object = None, overrides: Any = None) -> Any:
+        return DayWindow(
+            forecast_days=get_settings().forecast_days + 2,
+            overrides=overrides,
+            natural_swells=False,
+        )
+
+    monkeypatch.setattr(registry, "build_provider", build)
+    monkeypatch.setattr(ingestion, "build_provider", build)
+    DayWindow.now = C00 + timedelta(hours=6, minutes=10)
+    assert refresh(DayWindow.now)["status"] == "success"
+    lags = {"wave": timedelta(hours=5, minutes=20), "atmosphere": timedelta(hours=6, minutes=10)}
+    full_fetches = 0
+    cycle = C00
+    for _ in range(12):  # three days of cycles
+        cycle += timedelta(hours=6)
+        for comp in ("wave", "atmosphere"):
+            split.cycles[comp] = cycle
+            DayWindow.now = cycle + lags[comp]
+            fetches = len(split.calls)
+            out = refresh(DayWindow.now)
+            assert out["status"] == "success", out
+            full_fetches += sum(1 for _, c in split.calls[fetches:] if c is None)
+            end, _, missing = _published_span(db)
+            ideal = DayWindow.window(list(split.cycles.values()), DayWindow.now)
+            assert missing == 0
+            assert ideal - ingestion.HORIZON_SLACK <= end <= ideal, (comp, DayWindow.now, end)
+    # The last refresh's window: three UTC days after the first one's.
+    days = get_settings().forecast_days
+    assert end == C00 + timedelta(days=3 + days, hours=-1)
+    assert 0 < full_fetches <= 2 * 3, f"{full_fetches} full fetches in 24 component refreshes"
 
 
 def test_a_version_marker_lost_after_publication_is_written_again_by_the_next_sync(

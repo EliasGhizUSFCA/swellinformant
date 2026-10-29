@@ -5,7 +5,10 @@ waves unchanged) stores the fetched rows with the other component's columns empt
 :func:`carry_component` fills them from the run each spot is served from, in ONE ``UPDATE
 ... FROM`` on the server: no forecast row travels through Python. Rows are matched on
 ``(spot_id, valid_time)``; an hour the source run does not have is then removed from the
-new run (:func:`drop_uncarried_hours`): never stored half filled, never filled in. The
+new run (:func:`drop_uncarried_hours`): never stored half filled, never filled in. So the
+end of a composed run is never later than its source run's: a spot whose source run ends
+well before the horizon (:func:`served_ends`) fetches the carried component again instead
+(``ingestion.refresh_source``), or the forecast's end would freeze. The
 carried values keep their own model run: the new run records the carried component's
 ORIGINAL run key, init times and retrieval time (``ingestion.refresh_source``).
 
@@ -262,6 +265,26 @@ def drop_uncarried_hours(
         {"spots": [s for s, _ in pairs], "runs": [r for _, r in pairs], "run_id": run_id},
     )
     return int(getattr(result, "rowcount", 0) or 0)
+
+
+def served_ends(db: Session, sources: Mapping[int, int]) -> dict[int, datetime]:
+    """{spot id: the last valid time its source run holds} (``sources``: spot id -> run id);
+    a spot whose run has no row of it is left out. One statement, one row per spot (an
+    index lookup per spot on the run's (run_id, spot_id, valid_time) key)."""
+    if not sources:
+        return {}
+    pairs = sorted(sources.items())
+    rows = db.execute(
+        text(
+            "SELECT m.spot_id, max(w.valid_time) FROM unnest(:spots, :runs) AS m(spot_id, run_id)"
+            " JOIN wave_forecasts AS w ON w.run_id = m.run_id AND w.spot_id = m.spot_id"
+            " GROUP BY m.spot_id"
+        ).bindparams(
+            bindparam("spots", type_=ARRAY(INTEGER)), bindparam("runs", type_=ARRAY(INTEGER))
+        ),
+        {"spots": [s for s, _ in pairs], "runs": [r for _, r in pairs]},
+    ).all()
+    return {int(spot_id): end for spot_id, end in rows if end is not None}
 
 
 def validate_spots(

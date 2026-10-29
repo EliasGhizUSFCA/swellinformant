@@ -227,6 +227,17 @@ class ForecastProvider(ABC):
         "atmosphere"); None = all. A provider that cannot fetch them separately ignores it
         and reports what it fetched in :attr:`FetchResult.components`."""
 
+    def horizon_end(self, component: str, init: datetime, now: datetime) -> datetime | None:
+        """The last valid time a fetch made at ``now`` of ``component``'s run initialised at
+        ``init`` reaches (an upper bound; None = unknown). Default: FORECAST_DAYS after the
+        run, as the Windy and NOAA adapters cut it. A refresh fetches a carried component
+        again, from the same run, when the published forecast would otherwise end well
+        before this (ingestion.refresh_source): a component-only refresh never shortens the
+        rolling horizon."""
+        from app.core.config import get_settings
+
+        return init + timedelta(days=get_settings().forecast_days)
+
 
 @functools.cache
 def _ssl_context() -> ssl.SSLContext:

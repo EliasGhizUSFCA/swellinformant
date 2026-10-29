@@ -732,6 +732,16 @@ class OpenMeteoFamilyProvider(ForecastProvider):
             )
         return metas
 
+    def horizon_end(self, component: str, init: datetime, now: datetime) -> datetime | None:
+        """A request's ``forecast_days`` window runs from today 00:00 GMT for ``days``
+        days, and :meth:`_records` keeps the hours up to ``days`` after the run: a run read
+        on a later UTC day reaches further (the horizon rolls 24 h a day)."""
+        today = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        return min(
+            init + timedelta(hours=self.days * 24),
+            today + timedelta(hours=self.days * 24 - 1),
+        )
+
     def _cycles_text(self) -> str:
         hours = self.cycle_hours or ()
         return "/".join(f"{h:02d}" for h in hours) + "Z"

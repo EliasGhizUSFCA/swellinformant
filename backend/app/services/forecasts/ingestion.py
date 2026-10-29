@@ -78,6 +78,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 STUCK_RUN_AFTER = timedelta(hours=1)
+# How far a carried component's source run may end before the end both component runs
+# reach when fetched now (provider.horizon_end) before it is fetched again: one native step
+# of GFS and GFS-Wave after 120 h (3 h), so the last step's alignment never causes a fetch.
+HORIZON_SLACK = timedelta(hours=3)
 INSERT_CHUNK = 2000
 MAP_FIELD_CHUNK = 50
 # forecast_sources.priority of the fields-only source: after every spot source.
@@ -618,6 +622,42 @@ def _component_init(info: RunInfo, component: str) -> datetime | None:
     return info.wave_model_run_at if component == WAVE else info.atmosphere_model_run_at
 
 
+def _target_inits(
+    available: RunInfo, stored: Mapping[str, ComponentRun], carried: Collection[str]
+) -> dict[str, datetime | None]:
+    """The model run of each component of the run being built: a carried one keeps its
+    published run, a fetched one is the provider's (as the stored ``RunInfo`` names them)."""
+    out: dict[str, datetime | None] = {}
+    for c in COMPONENTS:
+        kept = stored[c].init_time if c in carried and c in stored else None
+        out[c] = kept or _component_init(available, c)
+    return out
+
+
+def _composed_horizon(
+    provider: ForecastProvider, inits: Mapping[str, datetime | None], now: datetime
+) -> datetime | None:
+    """The last valid time both components reach when fetched now (the earlier of their
+    ``horizon_end``), or None when a run time or a provider's horizon is unknown."""
+    hook = getattr(provider, "horizon_end", None)
+    if not callable(hook):
+        return None
+    ends: list[datetime] = []
+    for c in sorted(COMPONENTS):
+        init = inits.get(c)
+        if init is None:
+            return None
+        try:
+            end = hook(c, init, now)
+        except Exception:  # a horizon only decides whether to fetch again
+            logger.debug("horizon_end failed for %s", c, exc_info=True)
+            return None
+        if not isinstance(end, datetime):
+            return None
+        ends.append(end)
+    return min(ends) if ends else None
+
+
 def _keep_components(record: ForecastRecord, components: frozenset[str]) -> ForecastRecord:
     """A copy of ``record`` with the values of other components emptied (they are carried)."""
     values = {
@@ -667,7 +707,10 @@ def refresh_source(
     * ``serving``: spot id -> the run it is served from (``versions.serving_runs``); a
       carried component is copied from that run when the run holds the carried key, else
       that spot fetches the component too (when the provider still serves the stored run),
-      else the spot fails and keeps its previous run.
+      else the spot fails and keeps its previous run. A spot whose served run ends more
+      than HORIZON_SLACK before the end both component runs reach now
+      (``provider.horizon_end``) fetches the carried component again from the run the
+      provider still serves, so the forecast keeps its rolling horizon.
     * ``retry_spot_ids``: with nothing due, refresh only these spots (a retry of the spots
       that failed; run key ``<key>#retry<n>``).
 
@@ -801,18 +844,37 @@ def refresh_source(
             ).where(ForecastRun.id.in_(sorted(set(serving.values()))))
         ).all()
     }
+    # A carried component is cut to the hours its source run holds (drop_uncarried_hours),
+    # and that run is the previous composed run, cut the same way: carried as is, the
+    # forecast would never reach past the last refresh that fetched both components while
+    # the provider's window rolls on (Open-Meteo: 24 h a day). So a spot whose served run
+    # ends more than HORIZON_SLACK before the end both runs reach now fetches the carried
+    # component again, from the run the provider still serves (review r2-backend-N2).
+    horizon = _composed_horizon(provider, _target_inits(available, stored, carried), now)
+    refetchable = {c for c in carried if avail[c] == target[c]} if changed else set()
+    ends: dict[int, datetime] = {}
+    if horizon is not None and refetchable:
+        ends = carry.served_ends(
+            db, {p.spot_id: serving[p.spot_id] for p in points if p.spot_id in serving}
+        )
     groups: dict[frozenset[str], list[SpotPoint]] = {}
     sources: dict[str, dict[int, int]] = {c: {} for c in carried}
     failed: dict[int, str] = {}
+    refetched: dict[str, int] = {}
     for p in points:
         need = set(changed)
         served = serving.get(p.spot_id)
         source_id, keys = runs.get(served, (None, {})) if served is not None else (None, {})
+        end = ends.get(p.spot_id)
+        short = horizon is not None and end is not None and end + HORIZON_SLACK < horizon
         for c in carried:
-            if served is not None and source_id == source.id and keys.get(c) == target[c]:
-                sources[c][p.spot_id] = served
-            else:
+            if served is None or source_id != source.id or keys.get(c) != target[c]:
                 need.add(c)
+            elif short and c in refetchable:
+                need.add(c)
+                refetched[c] = refetched.get(c, 0) + 1
+            else:
+                sources[c][p.spot_id] = served
         if not need:
             continue  # a retry of a spot that is up to date already
         unserved = sorted(c for c in need if target[c] != avail[c])
@@ -982,6 +1044,8 @@ def refresh_source(
                 "run_key": target[c],
                 "retrieved_at": retrieved[c],
                 "carried_from_run_id": main_source[c],
+                # Spots that fetched this carried run again to reach the horizon.
+                **({"refetched_spots": refetched[c]} if refetched.get(c) else {}),
             }
             for c in sorted(COMPONENTS)
         },

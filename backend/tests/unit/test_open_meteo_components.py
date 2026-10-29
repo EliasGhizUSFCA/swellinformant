@@ -246,3 +246,43 @@ def test_a_metadata_request_waits_at_most_ten_seconds() -> None:
     rec = Recorder()
     provider(rec, forecast_http_timeout_seconds=4).current_run(NOW)
     assert {c.extensions["timeout"]["read"] for c in rec.calls} == {4.0}
+
+
+@pytest.mark.parametrize(
+    ("now", "last"),
+    [
+        # Read on the next UTC day: the run's own 10 days (lead 240 h, a native step).
+        (datetime(2026, 10, 15, 5, 32, tzinfo=UTC), datetime(2026, 10, 24, 18, tzinfo=UTC)),
+        # Read on its own day: the request window ends today + 10 days - 1 h (23:00); the
+        # last native 3-hourly step before it is lead 219 h (21:00).
+        (datetime(2026, 10, 14, 23, 30, tzinfo=UTC), datetime(2026, 10, 23, 21, tzinfo=UTC)),
+    ],
+)
+@pytest.mark.parametrize("component", ["wave", "atmosphere"])
+def test_horizon_end_is_where_a_fetch_of_the_run_ends(
+    now: datetime, last: datetime, component: str
+) -> None:
+    """Review r2-backend-N2: a request's window (forecast_days from today 00:00 GMT, a
+    SYNTHETIC series of that window) and the run's own FORECAST_DAYS bound where a fetch of a
+    run ends, so the same run read on a later UTC day reaches further. horizon_end names that
+    end within one native step (ingestion.HORIZON_SLACK), never before it."""
+    from app.services.forecasts.ingestion import HORIZON_SLACK
+
+    init = datetime(2026, 10, 14, 18, tzinfo=UTC)
+    today = now.replace(hour=0, minute=0)
+    start = int((today - init).total_seconds() // 3600)
+    rec = Recorder(
+        meta=meta_at(init, init + timedelta(hours=5)),
+        override=synthetic_hourly(init, 10 * 24, start=start),
+    )
+    p = OpenMeteoProvider(
+        settings(forecast_days=10),
+        client=httpx.Client(transport=httpx.MockTransport(rec)),
+        backoff_seconds=0,
+        clock=lambda: now,
+    )
+    result = p.fetch([PIPELINE], p.current_run(now), frozenset({component}))
+    end = result.records[1][-1].valid_time
+    assert end == last
+    horizon = p.horizon_end(component, init, now)
+    assert horizon is not None and timedelta(0) <= horizon - end < HORIZON_SLACK
