@@ -471,6 +471,8 @@ export function matchSummary(sc: Scenario): MatchSummary {
     // Required since P8 (2.0); the values the fixture always implied (undefined = false).
     short_notice: false,
     best_offer_expired: false,
+    // Required since review r3 (the trips' data credits); the demo source asks for none.
+    attribution_links: [],
   };
 }
 

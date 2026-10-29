@@ -2,6 +2,7 @@ import { ArrowRight, CalendarDays, Plane } from "lucide-react";
 import Link from "next/link";
 
 import { ConfidenceBadge } from "@/components/confidence";
+import { AttributionLinks, mergeAttributionLinks } from "@/components/forecast-provenance";
 import { DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
 import { StaleBadge, StaleLine } from "@/components/stale-banner";
 import { freshnessOf, freshnessTitle } from "@/lib/forecast-fields";
@@ -74,4 +75,12 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
       </div>
     </Link>
   );
+}
+
+/** The data credit under a list of trips: each trip shows values derived from its swell's
+ * forecast (our breaking height, rating and surf window), so the sources' credit and licence
+ * links go with the list (Open-Meteo: "Weather data by Open-Meteo.com", on paid plans too;
+ * review r3-frontend-N4). Nothing when no trip's source asks for one (the demo source). */
+export function TripCredits({ matches, className }: { matches: readonly MatchSummary[] | null | undefined; className?: string }) {
+  return <AttributionLinks links={mergeAttributionLinks(matches)} className={className ?? "mt-3"} />;
 }

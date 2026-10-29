@@ -20,7 +20,7 @@ import { ToArrow } from "@/components/forecast/selected-summary";
 import { TimelineSelectionProvider, useTimelineActions, useTimelineSelection, useTimelineStore } from "@/components/forecast/timeline-selection";
 import { InfoPopover } from "@/components/info-popover";
 import { AppShell } from "@/components/layout/app-shell";
-import { OpportunityCard } from "@/components/opportunity-card";
+import { OpportunityCard, TripCredits } from "@/components/opportunity-card";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { DemoBadge } from "@/components/quality";
 import { RatingHeadline, WhyThisRating } from "@/components/rating";
@@ -602,6 +602,7 @@ export default function SpotPage() {
                     {(opps.data ?? []).map((m) => (
                       <OpportunityCard key={m.id} match={m} units={units} />
                     ))}
+                    <TripCredits matches={opps.data} className="mt-0" />
                   </div>
                 )}
               </section>

@@ -31,7 +31,7 @@ holds that version's data.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -273,6 +273,39 @@ def source_attribution_links(db: Session, run: ForecastRun) -> list[AttributionL
         for link in attribution_links_for(source):
             links.setdefault((link.label, link.href), link)
     return list(links.values())
+
+
+def attribution_links_by_run(
+    db: Session, run_ids: Iterable[int | None]
+) -> dict[int, list[AttributionLinkOut]]:
+    """:func:`source_attribution_links` of several runs at once (a list of trips): their
+    source ids and blend members in one statement (no run row is loaded whole), the sources
+    in one more. ``run_ids``: None is skipped; a run not found has no entry."""
+    ids = sorted({int(i) for i in run_ids if i is not None})
+    if not ids:
+        return {}
+    members = ForecastRun.details["members"]
+    rows = db.execute(
+        select(ForecastRun.id, ForecastRun.source_id, members).where(ForecastRun.id.in_(ids))
+    ).all()
+    sources = list(db.scalars(select(ForecastSource)))
+    by_id = {s.id: s for s in sources}
+    by_code = {s.code: s for s in sources}
+    out: dict[int, list[AttributionLinkOut]] = {}
+    for run_id, source_id, blend_members in rows:
+        source = by_id.get(source_id)
+        if source is None:
+            continue
+        of_run = [source]
+        if source.code == BLEND_CODE:
+            codes = [str(m["code"]) for m in blend_members or [] if m.get("code")]
+            of_run = [by_code[c] for c in codes if c in by_code]
+        links: dict[tuple[str, str], AttributionLinkOut] = {}
+        for src in of_run:
+            for link in attribution_links_for(src):
+                links.setdefault((link.label, link.href), link)
+        out[int(run_id)] = list(links.values())
+    return out
 
 
 def candidate_runs(db: Session, require_predictions: bool = True) -> list[ForecastRun]:

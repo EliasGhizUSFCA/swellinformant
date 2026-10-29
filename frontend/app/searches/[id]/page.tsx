@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 
 import { ConfidenceBadge } from "@/components/confidence";
 import { AppShell } from "@/components/layout/app-shell";
-import { OpportunityCard } from "@/components/opportunity-card";
+import { OpportunityCard, TripCredits } from "@/components/opportunity-card";
 import { EmptyState, PageHeader, SectionTitle } from "@/components/page-header";
 import { MatchStatusBadge, QualityBadge } from "@/components/quality";
 import { RequireAuth } from "@/components/require-auth";
@@ -74,6 +74,7 @@ function Detail({ user, id }: { user: User; id: string }) {
               <OpportunityCard key={m.id} match={m} units={units} />
             ))}
           </div>
+          <TripCredits matches={current} />
           <div className="mt-10">
             <SectionTitle>Matching history</SectionTitle>
             {history.length === 0 ? (

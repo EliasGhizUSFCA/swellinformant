@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { TopEventCards } from "@/components/event-card";
 import { AttributionLinks, mergeAttributionLinks } from "@/components/forecast-provenance";
 import { AppShell } from "@/components/layout/app-shell";
-import { OpportunityCard } from "@/components/opportunity-card";
+import { OpportunityCard, TripCredits } from "@/components/opportunity-card";
 import { EmptyState, PageHeader, SectionTitle } from "@/components/page-header";
 import { RequireAuth } from "@/components/require-auth";
 import { shortNoticeLabel, useSearchDefaults } from "@/components/search/use-search-defaults";
@@ -145,6 +145,7 @@ function Trips({ opps, units }: { opps: MatchSummary[]; units: Units }) {
           ))}
         </div>
       )}
+      <TripCredits matches={opps} className="mt-0" />
     </div>
   );
 }

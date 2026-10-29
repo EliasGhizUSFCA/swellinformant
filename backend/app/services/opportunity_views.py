@@ -33,12 +33,12 @@ from app.schemas.opportunities import (
     SliceOut,
     TravelWindowOut,
 )
-from app.schemas.spots import AirportOut, SpotAirportOut
+from app.schemas.spots import AirportOut, AttributionLinkOut, SpotAirportOut
 from app.services.flights.base import operating_carrier_names
 from app.services.flights.links import inspection_links
 from app.services.flights.registry import provider_label
 from app.services.flights.windows import InfeasibleWindow, compute_travel_window
-from app.services.forecasts.queries import run_id_is_stale
+from app.services.forecasts.queries import attribution_links_by_run, run_id_is_stale
 from app.services.matching.scoring import SHORT_NOTICE_BOOST, is_short_notice
 from app.services.spot_views import (
     daily_summaries,
@@ -93,15 +93,20 @@ def match_summary(
     m: OpportunityMatch,
     now: datetime | None = None,
     freshness: Mapping[int, SpotFreshnessOut] | None = None,
+    links: Mapping[int, list[AttributionLinkOut]] | None = None,
 ) -> MatchSummary:
     """``freshness``: {spot_id: freshness} of the served forecast already read for a list
-    of matches (else read for the match's spot)."""
+    of matches (else read for the match's spot); ``links``: {run id: attribution links} of
+    the swells' runs already read for the list (else read for the match's run)."""
     now = now or utcnow()
     db = object_session(m)
     if freshness is not None:
         spot_freshness = freshness.get(m.spot_id)
     else:
         spot_freshness = served_freshness(db, m.spot_id, now) if db is not None else None
+    run_id = m.swell_event.latest_run_id
+    if links is None:
+        links = attribution_links_by_run(db, [run_id]) if db is not None else {}
     offer = m.best_offer if m.status == MatchStatus.FLIGHT_FOUND else None
     return MatchSummary(
         id=m.id,
@@ -147,6 +152,7 @@ def match_summary(
         if offer is not None and m.currency and offer.currency != m.currency
         else None,
         freshness=spot_freshness,
+        attribution_links=list(links.get(run_id, [])) if run_id is not None else [],
         **event_confidence(m.swell_event, now),  # type: ignore[arg-type]
     )
 
@@ -187,7 +193,8 @@ def list_matches(
     ).limit(limit)
     rows = db.scalars(stmt).unique().all()
     freshness = events_freshness(db, now) if rows else {}
-    return [match_summary(m, now, freshness) for m in rows]
+    links = attribution_links_by_run(db, [m.swell_event.latest_run_id for m in rows])
+    return [match_summary(m, now, freshness, links) for m in rows]
 
 
 def _slice(offer: FlightOffer, direction: str) -> SliceOut:

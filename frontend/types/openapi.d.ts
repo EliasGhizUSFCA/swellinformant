@@ -3107,6 +3107,11 @@ export interface components {
             best_offer_expired: boolean;
             /** Quoted Currency */
             quoted_currency?: string | null;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
             event: components["schemas"]["EventOut"];
             /** Spot Airports */
             spot_airports: components["schemas"]["SpotAirportOut"][];
@@ -3243,6 +3248,11 @@ export interface components {
             best_offer_expired: boolean;
             /** Quoted Currency */
             quoted_currency?: string | null;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
         };
         /** Message */
         Message: {

@@ -8668,6 +8668,14 @@
       ],
       "title": "Quoted Currency"
      },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
+     },
      "event": {
       "$ref": "#/components/schemas/EventOut"
      },
@@ -9058,6 +9066,14 @@
        }
       ],
       "title": "Quoted Currency"
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",

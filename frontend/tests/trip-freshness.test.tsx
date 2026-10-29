@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EventCard } from "@/components/event-card";
-import { OpportunityCard } from "@/components/opportunity-card";
+import { OpportunityCard, TripCredits } from "@/components/opportunity-card";
 import { StaleLine } from "@/components/stale-banner";
 import { freshnessTitle } from "@/lib/forecast-fields";
 import type { MatchDetail, MatchSummary, SwellEvent } from "@/types/api";
@@ -186,5 +186,27 @@ describe("card stale wording follows the reason (review r3-frontend-N5)", () => 
     render(<OpportunityCard match={{ ...trip(CURRENT), freshness: waves } as unknown as MatchSummary} />);
     expect(screen.getByTestId("opportunity-card-stale")).toHaveTextContent("The wave run is overdue.");
     expect(screen.getByTestId("stale-badge")).toHaveAttribute("title", "The wave forecast is older than its model's update interval. It is not a current forecast.");
+  });
+});
+
+describe("trip lists credit their forecast's sources (review r3-frontend-N4)", () => {
+  // The credit the Open-Meteo GFS source asks for (backend forecasts/queries.py), as the API
+  // sends it on each trip.
+  const openMeteo = [
+    { label: "Weather data by Open-Meteo.com", href: "https://open-meteo.com/" },
+    { label: "CC BY 4.0", href: "https://creativecommons.org/licenses/by/4.0/" },
+  ];
+  const withLinks = (id: string, links: typeof openMeteo) => ({ ...trip(CURRENT), id, attribution_links: links }) as unknown as MatchSummary;
+
+  it("shows the credit once under a list of trips from the same source", () => {
+    render(<TripCredits matches={[withLinks("a", openMeteo), withLinks("b", openMeteo)]} />);
+    const credit = screen.getByTestId("attribution-links");
+    expect(credit).toHaveTextContent("Weather data by Open-Meteo.com");
+    expect(within(credit).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual(["https://open-meteo.com/", "https://creativecommons.org/licenses/by/4.0/"]);
+  });
+
+  it("shows nothing when no trip's source asks for a credit (the demo source)", () => {
+    render(<TripCredits matches={[withLinks("a", [])]} />);
+    expect(screen.queryByTestId("attribution-links")).toBeNull();
   });
 });

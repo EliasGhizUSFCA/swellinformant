@@ -189,6 +189,7 @@ function match(overrides: Partial<MatchSummary> = {}): MatchSummary {
     short_notice: true,
     best_offer_expired: false,
     quoted_currency: null,
+    attribution_links: [],
     ...overrides,
   };
 }

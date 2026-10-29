@@ -10,7 +10,13 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from app.schemas.forecasts import SpotFreshnessOut
-from app.schemas.spots import DailySummary, EventOut, SpotAirportOut, SpotMini
+from app.schemas.spots import (
+    AttributionLinkOut,
+    DailySummary,
+    EventOut,
+    SpotAirportOut,
+    SpotMini,
+)
 
 # Forecast and local confidence classes (documented heuristic classes, not probabilities).
 ConfidenceClass = Literal["high", "moderate", "low"]
@@ -139,6 +145,9 @@ class MatchSummary(BaseModel):
     best_offer_expired: bool = False
     # The provider's currency when ``best_price`` was converted into the search currency.
     quoted_currency: str | None = None
+    # The credits the sources of the swell's forecast run ask for next to values derived
+    # from their data (our breaking height, rating and surf window; review r3-frontend-N4).
+    attribution_links: list[AttributionLinkOut] = []
 
 
 class TravelWindowOut(BaseModel):

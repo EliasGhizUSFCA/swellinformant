@@ -294,3 +294,35 @@ def test_trips_and_their_event_carry_the_spots_freshness(
         assert fresh["version_id"] == second.id and fresh["stale"] is True
         assert fresh["reason"] == "refresh_failed"
     assert trip["stale"] is False  # the run itself is current
+
+
+def test_trip_lists_credit_the_sources_of_their_forecast(
+    make_client, db: Session, few_spots: list[str], only_simulated_swells: None, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Review r3-frontend-N4: a trip shows values derived from the forecast provider's data
+    (our breaking height, rating and surf window), so every trip carries the credit links
+    its swell's run asks for, as events do (Open-Meteo: "Weather data by Open-Meteo.com",
+    also on paid plans). The demo source asks for none; here it is credited as the
+    Open-Meteo GFS source is (SYNTHETIC: only the links are borrowed)."""
+    from app.services.forecasts import queries
+    from app.services.forecasts.registry import OPEN_METEO_NOAA_CODE
+
+    credited = queries.SOURCE_ATTRIBUTION_LINKS[OPEN_METEO_NOAA_CODE]
+    monkeypatch.setitem(queries.SOURCE_ATTRIBUTION_LINKS, "demo", credited)
+    owner: ApiClient = make_client()
+    owner.register("credits@example.com")
+    assert owner.post("/api/searches", search_payload()).status_code == 201
+    run_pipeline(db)
+    sim = owner.post("/api/dev/simulate-swell", {"spot_slug": "jeffreys-bay", "days_ahead": 7})
+    assert sim.status_code == 200, sim.text
+    want = [link.model_dump() for link in credited]
+    assert any("Open-Meteo.com" in link["label"] for link in want)
+    trips = owner.get("/api/opportunities").json()
+    assert trips and all(t["attribution_links"] == want for t in trips)
+    detail = owner.get(f"/api/opportunities/{trips[0]['id']}").json()
+    assert detail["attribution_links"] == want == detail["event"]["attribution_links"]
+    by_spot = owner.get("/api/spots/jeffreys-bay/opportunities").json()
+    assert by_spot and all(t["attribution_links"] == want for t in by_spot)
+    # Without credits asked for (the demo source as it is), the list carries none.
+    monkeypatch.delitem(queries.SOURCE_ATTRIBUTION_LINKS, "demo")
+    assert all(t["attribution_links"] == [] for t in owner.get("/api/opportunities").json())
