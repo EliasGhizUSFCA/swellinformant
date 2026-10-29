@@ -106,7 +106,9 @@ test.describe("live forecast updates (route-mocked versions)", () => {
     await expect(page.locator("path.spot-marker")).toHaveCount(50);
     const label = page.getByTestId("forecast-updated");
     await expect(label).toHaveAttribute("data-version-id", "101");
-    await expect(label).toContainText(/Forecast updated \d{2}:\d{2}/);
+    // The publication's clock time, with its date when that was another day (version 101 is
+    // 3 h old: on a run in the first 3 h after midnight it was published yesterday).
+    await expect(label).toContainText(/Forecast updated (?:[A-Z][a-z]{2} \d{1,2}, )?\d{2}:\d{2}/);
     await expect(page.getByTestId("forecast-updated-age")).toContainText("3 h ago");
 
     // Select J-Bay (isolated, so its own marker takes the tap) and a later time.
