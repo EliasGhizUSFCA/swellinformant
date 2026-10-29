@@ -373,9 +373,20 @@ Settings: `DATA_HEALTH_CHECK_MINUTES` (15), `DATA_HEALTH_ALERTS_ENABLED` (true),
 **Who runs it.** Celery beat in Docker; the daemon's own timer under `JOB_RUNNER=daemon`;
 on Vercel without the daemon (the hosted profile, no daemon heartbeat in Redis) the refresh
 endpoint runs it at the first call after `DATA_HEALTH_CHECK_MINUTES` (60 there) have passed,
-and at once after a refresh that failed, was partial or met an unreadable component (one
-Redis timestamp, `sync:data-health-at`: a call with nothing due costs two Redis commands and
-no database read), and the daily cron runs it as well. So without the daemon a scheduler
+and sooner after a refresh that failed or was partial, or when a component's metadata
+becomes unreadable (one Redis timestamp, `sync:data-health-at`: a call with nothing due
+costs two Redis commands and no database read), and the daily cron runs it as well. Sooner
+is never within `SYNC_RETRY_MINUTES` (15) of the last start, and a lasting unreadable
+component (a metadata outage, a refused provider setting) runs it only as it starts and once
+`PROVIDER_UNAVAILABLE_AFTER` (30 min) later, then hourly (`sync:data-health-signal`, two more
+Redis commands per check while it lasts; review r3-backend-R3-2): before, it woke the
+database at every 5-minute check.
+**Without the daemon set `MAP_FIELDS_ENABLED=false`.** The hosted profile keeps the map
+layers on for the daemon; with no daemon they are never synced, so data health stays
+degraded (`map_fields_missing`, `sync_heartbeat_stale`) and the admins get "Data health
+DEGRADED" again every `DATA_HEALTH_ALERT_REPEAT_HOURS` (12) among the real alerts. With
+`MAP_FIELDS_ENABLED=false` the map shows no overlay and data health stays `ok` (review
+r3-spec-SPEC-1, `tests/integration/test_daemonless_hosted.py`). So without the daemon a scheduler
 that stops calling the endpoint stops the hourly check with it: `refresh_scheduler_silent`
 is then raised by the daily cron, up to about 25 hours later on Hobby (docs/deploy-vercel.md
 step 7b names an external check for faster notice).
@@ -462,7 +473,7 @@ runs in docs/sync.md; monthly figures are arithmetic on them; none was measured 
 | Neon storage | 1 GB | the map layers of the two retained runs are about 142 MB with partitions (14 %); the free-database retention keeps about 1 day of forecasts and 7 days of archive | `database_size` at `DATA_HEALTH_DATABASE_MAX_GB` (0.85) |
 | Upstash commands | 500K a month | Swell 2.0 without the daemon: refresh checks about 60,500 a month (8,640 checks × 7 commands, the hourly data-health gate included); version polling up to about 172,800 a month per CDN region with a tab open all month (one origin GET per `FORECAST_VERSION_CDN_SECONDS`, 15), about 21,600 for 3 hours of open tabs a day; public pages about 32,000 (quiet site) to 324,000 (steady visitors, with the miss limit; Upgrade 4 estimate). About 114,000 (23 %) for a quiet site; about 557,000 with steady visitors and one region polled all month, over Free (docs/API_SETUP_REQUIRED.md 1.4: pay-as-you-go, or `FORECAST_VERSION_CDN_SECONDS=30`). The optional daemon adds about 76,000 (kick polls 43,200, checks about 13,000, the hourly batch 19,440). All arithmetic on measured unit costs | Vercel Storage, Upstash console; `scripts/vercel-local.sh status` counts the local stack's commands |
 | Upstash data | 250 MB | about 265 kB of cached public payloads an hour, kept 2 hours; no provider response cache (`PROVIDER_RESPONSE_CACHE_ENABLED=false`) | `redis_memory` |
-| Open-Meteo calls | 10,000 a day per IP address | 125 weighted calls per refresh of both components, 75 per wave-only refresh (measured live 2026-10-28/29); about 500 a day at 4 GFS cycles (arithmetic); checks read only the free `meta.json` | `python -m app.cli engine budget`; `/admin/freshness` usage |
+| Open-Meteo calls | 10,000 a day per IP address | 125 weighted calls per refresh of both components, 75 per wave-only refresh (measured live 2026-10-28/29); about 500 a day at 4 GFS cycles, about 500-650 with the horizon refetch of the other component on up to two refreshes a day (arithmetic; docs/sync.md, "One refresh"); checks read only the free `meta.json` | `python -m app.cli engine budget`; `/admin/freshness` usage |
 | QStash messages (the refresh scheduler on Hobby) | 1,000 a day | 288 a day for a 5-minute schedule, plus retries of failed deliveries | Upstash console |
 
 Signed-in visitors, measured at the final review (a clone of the live run, one process):

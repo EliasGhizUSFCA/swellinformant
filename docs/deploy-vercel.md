@@ -296,6 +296,14 @@ Active CPU-hours a month. Without the daemon the refresh endpoint also runs the 
 "Re-check flights" and "match my search" requests and due email retries, and the daily cron
 runs the periodic jobs (cleanup, matching housekeeping, tides, alerts, delivery); only the
 map overlay ages (it is then labelled stale).
+**Without the daemon** (you scale it to 0, or never deploy it), also set
+`MAP_FIELDS_ENABLED=false`: the map then shows no overlay and data health stays `ok`. With
+`MAP_FIELDS_ENABLED=true` and no daemon the map layers are never synced, so data health stays
+degraded (`map_fields_missing`, and `sync_heartbeat_stale`: "The optional sync daemon ... has
+written no heartbeat") and the admins get a "Data health DEGRADED" email every 12 h for as
+long as it lasts, among the real alerts (review r3-spec-SPEC-1;
+`tests/integration/test_daemonless_hosted.py` checks that the daemon-less settings email
+nothing).
 `GEFS_ENABLED=false` protects that budget; set it to `true` to show the GEFS ensemble
 spread. After moving Neon to Launch, change the last eight to the full-retention profile:
 `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`, `RETENTION_JOB_LOG_DAYS=30`,
@@ -343,8 +351,12 @@ A production build migrates **and seeds** the database (`migrate --on-build`, st
 spots, airports, the tide catalog; safe to repeat), so with `MIGRATE_ON_BUILD=production` and
 Vercel's system variables exposed this step is a head start. **It is required** when the build
 does not seed: its log shows `"status": "skipped"` (no `VERCEL_ENV` in the build, or
-`MIGRATE_ON_BUILD=off`) or `"seed": "skipped"`, and you do not keep the daemon (whose `init-db`
-seeds at start). A database without spots publishes nothing: the refresh answers `failed`
+`MIGRATE_ON_BUILD=off`), or the build failed at `"stage": "seed"` with "data/ not found from
+the api build" (the reference data live in the repository's `data/`, outside the api
+service's root `backend/`; whether Vercel's build of that service can read it is **not
+verified**: a build that cannot fails on an empty database rather than deploying a site
+without spots, and skips the seed, saying so, when the database is seeded already), and you
+do not keep the daemon (whose `init-db` seeds at start). A database without spots publishes nothing: the refresh answers `failed`
 with "no active surf spot in the database" and backs off, and `/api/health/data` and
 `/admin/freshness` report `no_spots_seeded`. `init-db` below fixes it; step 3 (`make-admin`)
 is needed in every case.
@@ -434,7 +446,8 @@ backstop check: the hosted profile leaves spot refreshes to the refresh endpoint
 call `/api/internal/refresh` every few minutes so a new GFS or GFS-Wave run reaches the site
 soon after Open-Meteo publishes it (spec section 9). A check with nothing new costs no
 database read and no forecast request (four small `meta.json` reads), so a 5-minute schedule
-is cheap.
+is cheap. Without the daemon this schedule and the daily cron are the only runners: set
+`MAP_FIELDS_ENABLED=false` as step 5 says, or data health stays degraded for the map layers.
 
 **On Hobby: Upstash QStash** (free: 1,000 messages a day; a 5-minute schedule uses 288;
 it waits up to 15 minutes for the answer, so a 300 s refresh fits;
@@ -539,17 +552,22 @@ the same call to the local Vercel-style stack.)
 
 - **When the daemon is stopped** (quota, crash): only the map layers age (labelled stale);
   the spot forecasts keep refreshing through the endpoint. Run the manual GitHub Actions sync
-  (section 8) if the map must not wait.
+  (section 8) if the map must not wait. If it stays stopped, set `MAP_FIELDS_ENABLED=false`
+  (step 5): otherwise data health stays degraded and the admins are reminded every 12 h.
 - **When the scheduler stops** (QStash paused, deleted, out of messages): the daily cron's
   backstop still refreshes once a day, and the admins get the `refresh_scheduler_silent`
   email at the next data-health check after 30 minutes of silence: with the daemon within
   about 90 minutes, without it only at the daily cron (up to about 25 hours; step 7b names
   faster external checks). Recreate the schedule (step 7b).
 - **Admin alerts without the daemon.** The refresh endpoint runs the data-health check
-  hourly (`DATA_HEALTH_CHECK_MINUTES=60`) and right after a failed or partial refresh, so a
-  late model run, refresh failures, a provider outage, refused credentials or a quota reach
-  the admins within the hour, not only at the daily cron. Each check wakes the database once
-  (budgeted in API_SETUP_REQUIRED.md 1.4).
+  hourly (`DATA_HEALTH_CHECK_MINUTES=60`), right after a failed or partial refresh, and when
+  a component's run metadata becomes unreadable (once as it starts and once 30 minutes later,
+  when `provider_unavailable` can be raised; then hourly while it lasts), never twice within
+  `SYNC_RETRY_MINUTES` (15). So a late model run, refresh failures, a provider outage,
+  refused credentials or a quota reach the admins within the hour, not only at the daily
+  cron, and a lasting outage wakes the database hourly, not at every 5-minute check (review
+  r3-backend-R3-2). Each check wakes the database once (budgeted in API_SETUP_REQUIRED.md
+  1.4).
 - **When the email provider refuses its own key** (`provider_credentials:email_*`), the alert
   about it cannot be emailed through that provider. Admins whose phone number is verified and
   opted in to SMS (Settings) get one SMS a day about it when `SMS_PROVIDER` is configured
@@ -680,7 +698,7 @@ checks that the committed workflow has no schedule, so that test must change wit
 |---|---|
 | Services (Beta) misbehaves | Two projects from the same repository: one with Root Directory `frontend/` (set `API_ROUTING=proxy` and `BACKEND_URL` to the API project's URL, so Next.js proxies `/api`), one with Root Directory `backend/`. Previews then need Related Projects and a Deployment Protection bypass header, and the external rewrite has a 120 s timeout. Daemons cannot be added to a project whose Root Directory is a subfolder, so the daemon would need its own project rooted at the repository root (not tried). |
 | The daemon does not build or start | Check its build log (Deployments, the production deployment) and the Daemons page. Known risks: the `Containerfile`'s optional `RUN --mount=type=secret,id=ca` (remove the mount if the builder rejects it), and the daemon root `./` being the repository root (Vercel fails the build "If the project's output directory is the same directory as a daemon's `root`"). If the root is the problem, move `data/` under `backend/`, move the `Containerfile` there (adjusting its `COPY` paths) and set the daemon's `root` to `backend/`. Meanwhile run the manual GitHub Actions sync (section 8). |
-| The api's build command fails | The build log shows the JSON from `migrate --on-build` (`status`, `error`). A database problem fails the build on purpose. To deploy anyway, set `MIGRATE_ON_BUILD=off` and let the daemon's `init-db` migrate. |
+| The api's build command fails | The build log shows the JSON from `migrate --on-build` (`status`, `stage`, `error`). A database problem fails the build on purpose, and so does an empty database the build cannot seed (`"stage": "seed"`, "data/ not found from the api build"). To deploy anyway, set `MIGRATE_ON_BUILD=off`, then run step 6 (`init-db`) yourself, or keep the daemon (its `init-db` migrates and seeds at start). |
 | The API function is too large | Run `scripts/vercel-build-check.sh --offline`: it lists the largest parts of the function. The API must install only the lean dependency set (`[project].dependencies`); the data libraries belong to the `sync` extra. |
 | The daemon's CPU quota runs out | Only the map layers stop updating (labelled stale); the spot forecasts, alerts and flight searches keep running through the refresh endpoint and the daily cron. Use the manual runner, set `GEFS_ENABLED=false` if you turned it on, or move to Pro. |
 | The spot forecasts update only once a day | No scheduler calls `/api/internal/refresh`: do step 7b (QStash on Hobby, a Vercel Cron entry on Pro). `/admin/freshness` shows who made the last check. |

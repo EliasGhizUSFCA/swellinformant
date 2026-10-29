@@ -152,12 +152,32 @@ Redis and the providers; they are reloaded from the database before and after ev
    they need (normally one: the due components for every spot), each one batched request
    per model: for Open-Meteo the marine request for `wave`, the forecast request for
    `atmosphere`.
+   **The rolling horizon.** Carried as is, the forecast would never reach past the last
+   refresh that fetched both components, while a provider's window rolls on (Open-Meteo: a
+   request covers FORECAST_DAYS from today 00:00 GMT, so the same run read on a later UTC
+   day reaches up to 24 h further). So a spot whose served run ends more than HORIZON_SLACK
+   (3 h, one GFS step after 120 h) before `provider.horizon_end` (where both component runs
+   end when fetched now; for Open-Meteo the component model's last native step) fetches the
+   carried component again, **from the same run** it is carried from, in the due
+   component's request (`details.components[c].refetched_spots`). With Open-Meteo GFS that
+   happens on about one or two component refreshes a day (when the UTC window moved past
+   the carried run). It is a deliberate trade-off against "no queries for unchanged runs"
+   (spec 8): the horizon (non-negotiable 8) needs it, and it costs those extra calls
+   (README F.4). The refetch is best effort (review r3-backend-R3-1): when its request
+   fails (a marine 5xx, a timeout, the call budget), or one spot's carried data fail, those
+   spots are fetched again once with the due components alone and keep the carried run with
+   its own end; when the provider does not serve the carried run now (its domain lags, a
+   newer run is being published), the refetch is dropped before any request
+   (`details.components[c].refetch_failed_spots`, and a warning). A failed refetch never
+   holds back the new run of the due component.
 3. **Store, then carry in the database.** The fetched rows are inserted with the other
    component's columns empty; one `UPDATE ... FROM` (`forecasts.carry.carry_component`)
    fills them from the source run, matched on spot and valid time, server-side (no forecast
-   row travels through Python). An hour the source run does not have stays empty and is
-   listed in `missing_fields` (never filled in): a 6-hour offset between the components
-   leaves the last hours of the horizon without the carried component.
+   row travels through Python). An hour the source run does not have is deleted
+   (`carry.drop_uncarried_hours`), never published half filled: scored without waves it
+   would read as flat water. The two components' runs can step differently (GFS and
+   GFS-Wave are hourly to 120 h, 3-hourly after), and a carried run that ends sooner cuts
+   the new run to its end (until the next refetch above).
 4. **Validate every spot** (`carry.validate_spots`, one aggregate statement): at least
    FORECAST_MIN_VALID_FRACTION (0.8) of the run's hours carry both a wave height and a wind
    speed, and no value is outside `carry.PHYSICAL_RANGES` (heights 0-30 m, periods 0-40 s,
@@ -289,7 +309,8 @@ counter per component in Redis, `sync:demo:advance`, so the planner of every pro
 it). The new run's values differ visibly and deterministically (wave heights x1.35, x0.75,
 x1.2, x0.85 and periods +2, -1.5, +1, -1 s; wind +12, -6, +8, -4 km/h and turned 45, -30,
 90, -60 degrees, by advance; hours of a simulated swell keep their values). The next refresh
-check detects it, fetches only that component and publishes a new version.
+check detects it, fetches that component (and the other one again from its same run when
+the horizon needs it, step 2 of "One refresh") and publishes a new version.
 
 ## The daemon (`python -m app.cli sync daemon`)
 
@@ -372,7 +393,10 @@ from the pages linked):
   newest run is older than its own interval (maintenance cleanup, matching housekeeping,
   tides, alerts, delivery, the staleness check; within 150 s, before its refresh backstop).
   Data health then reports a missing daemon heartbeat only as degraded, for the map layers
-  (`tests/integration/test_daemonless_hosted.py`).
+  (`tests/integration/test_daemonless_hosted.py`). That problem, and `map_fields_missing`,
+  last for as long as no daemon runs and the admins are reminded of them every 12 h: without
+  a daemon set MAP_FIELDS_ENABLED=false (the map shows no overlay and data health stays
+  `ok`; review r3-spec-SPEC-1), or keep the daemon.
 * **GitHub Actions** schedules (5-minute minimum, delayed or dropped runs, the "serverless
   application" clause of the terms) stay out: `data-sync.yml` is manual only.
 

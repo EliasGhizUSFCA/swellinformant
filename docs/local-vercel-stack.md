@@ -142,7 +142,9 @@ changed in `.env.vercel.local`.
 * the cron endpoint answers 401 without the token and 200 with it;
 * the refresh endpoint an external scheduler calls (`/api/internal/refresh`) answers 401
   without the token and 200 with it, and `GET /api/forecasts/version` names a published
-  version;
+  version (these three checks were added in review round 2 and **have not been run against
+  the stack yet**: the images were not rebuilt since; the 19 checks above passed on
+  2026-10-29, below);
 * not a check: a `note` line with the data-health verdict the API reports
   (`GET /api/health/data`, what the daily watchdog alerts on), as the deployed function
   would report it.
@@ -267,6 +269,23 @@ container reached the internet through the sandbox's proxy (compose overrides na
 preinstalled Chromium (`PLAYWRIGHT_CHROMIUM_PATH`).
 
 ### 2026-10-23, the whole stack on the final integration code
+
+**What this stack does not test: the daemon-less hosted path.** Here the sync daemon
+refreshes the spots, the ensemble and the map (`SYNC_DAEMON_KINDS=spots,ensemble,map`)
+and runs the periodic jobs, because nothing calls the refresh endpoint every 5 minutes. The
+setup `docs/deploy-vercel.md` describes (`SYNC_DAEMON_KINDS=map` or no daemon, a 5-minute
+scheduler calling `/api/internal/refresh`, the daily cron running the overdue jobs) is
+covered by `backend/tests/integration/test_daemonless_hosted.py` and
+`backend/tests/integration/test_hosted_first_deploy.py` only. To try it here, set
+`SYNC_DAEMON_KINDS=map` in `.env.vercel.local` and call the refresh endpoint from a loop
+(`while sleep 300; do curl -s -X POST -H "Authorization: Bearer $CRON_SECRET"
+http://localhost:3100/api/internal/refresh; done`); that variant was not run.
+
+Swell 2.0 (2026-10-29 01:35 UTC, the integration branch before the review rounds, demo
+data): `smoke` 19 of 19 shell checks (0 failed, 12 s) and 6 of 6 Playwright; data health
+`failing` only for `tides_stale:noaa_coops` (CO-OPS was not reachable from the sandbox).
+The review rounds since changed the stack (the migrate service runs the api's build command
+`migrate --on-build`, which now seeds; three smoke checks) without running it again.
 
 Run by the integration verifier with the steps above (`cp .env.vercel.example
 .env.vercel.local`, plus `MAP_FIELD_STEPS=0-24:3` and `MAP_FIELD_MAX_LEAD_HOURS=24`; this

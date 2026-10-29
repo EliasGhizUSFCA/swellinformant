@@ -1295,6 +1295,19 @@ on Vercel, Neon or Upstash). The main figures:
   transaction mode was tested, locally), the QStash schedule, the Vercel daemon (the Vercel
   CLI 64.5.0 refuses a `vercel.json` with `daemons` in `vercel build`), Neon's suspend and
   wake, and real Upstash command counts.
+* **The build-time seed on Vercel**: the reference data live in the repository's `data/`,
+  outside the api service's root `backend/`. Whether Vercel's build of that service can read
+  `../data` is not verified (`scripts/vercel-build-check.sh` builds with
+  `MIGRATE_ON_BUILD=off`, so it stops before the seed). A build that cannot read it fails on
+  an empty database (`"stage": "seed"`) instead of deploying a site without spots, and skips
+  the seed, saying so, when the database is seeded already; then `init-db` from a checkout
+  seeds it (docs/deploy-vercel.md step 6).
+* **The local Vercel-style stack** was last run on 2026-10-29 01:35 UTC, before the review
+  rounds (smoke 19 of 19 shell checks and 6 of 6 browser checks, demo data); the three smoke
+  checks added since (the refresh endpoint and the version endpoint) and the migrate
+  service's seeding build command were not run against it. Its daemon refreshes the spots
+  itself, so it does not test the daemon-less hosted path; that path is covered by
+  `tests/integration/test_daemonless_hosted.py` and `test_hosted_first_deploy.py`.
 * **Atmosphere-only live refresh never observed**: on 2026-10-29 Open-Meteo's servers
   answered GFS 0.13 00Z and 18Z alternately for over 36 minutes; three checks saw the new run
   and three syncs skipped it safely without fetching (no charge, no version). The path is

@@ -489,12 +489,16 @@ scripts/vercel-local.sh down
 `cp` makes the stack use live data (Open-Meteo for the spots, NOAA for the map layers);
 without `.env.vercel.local` it runs synthetic demo forecasts and no map layers. `up` builds
 and starts everything (the app at http://localhost:3100, every email it sends in Mailpit at
-http://localhost:18025), `sync --force` runs one sync now, `smoke` runs 19 shell checks and 6
+http://localhost:18025), `sync --force` runs one sync now, `smoke` runs 22 shell checks and 6
 browser checks, `down` stops it (`down --volumes` also deletes its database). For a short
 first test, add `MAP_FIELD_STEPS=0-24:3` and `MAP_FIELD_MAX_LEAD_HOURS=24` to
 `.env.vercel.local` (9 map hours instead of 61; 73.3 MB downloaded for them on 2026-10-23).
 Measured on 2026-10-23: `up` 216 s from scratch (with this sandbox's proxy overrides),
-`smoke` 19 of 19 and 6 of 6 with demo data and again with live data. If Open-Meteo
+`smoke` 19 of 19 and 6 of 6 with demo data and again with live data; again for Swell 2.0 on
+2026-10-29 (demo data): 19 of 19 and 6 of 6. The three shell checks added since (the
+refresh endpoint 401 and 200, the version endpoint) have not been run against the stack.
+The stack's daemon refreshes the spots itself (no scheduler), so it does not test the
+daemon-less hosted path ([`docs/local-vercel-stack.md`](docs/local-vercel-stack.md)). If Open-Meteo
 answers "Daily API request limit exceeded" (its free limit is per IP address), set `FORECAST_PROVIDERS=demo` in `.env.vercel.local`, run
 `scripts/vercel-local.sh up --no-build` and `sync --force` again, and try live data later.
 
@@ -524,8 +528,10 @@ only on Vercel's website; steps 4 and 6 run on your machine):
    `CORS_ORIGINS` and the email provider.
 4. The database: a production build migrates and seeds it (the api's build command
    `python -m app.cli migrate --on-build` with `MIGRATE_ON_BUILD=production`: the 50 spots,
-   airports, the tide catalog). **Required** when that build does not seed (its log says
-   `skipped`) and you do not keep the daemon: from `backend/` with the dev venv of section
+   airports, the tide catalog; a build that cannot read the repository's `data/` fails
+   on an empty database instead of deploying a site without spots). **Required** when that
+   build does not seed (its log says `skipped`, or it failed at `"stage": "seed"`) and you
+   do not keep the daemon: from `backend/` with the dev venv of section
    E.3, point `DATABASE_URL` and `DATABASE_URL_UNPOOLED` at Neon's direct URL (two `export`
    lines, docs/deploy-vercel.md step 6) and run `.venv/bin/python -m app.cli init-db`
    (idempotent; checked here against a local PostgreSQL, not against Neon). A database
@@ -550,7 +556,11 @@ only on Vercel's website; steps 4 and 6 run on your machine):
    in `vercel.json` instead. Check after 5-10 minutes: `/admin/freshness` (signed in as an
    admin) shows the refresh scheduler `checking`, its last check by `refresh endpoint
    (refresh)` less than 5 minutes ago, and `/status` a recent check. The `sync` daemon is
-   optional: it only refreshes the map layers.
+   optional: it only refreshes the map layers. **If you do not keep it**, scale it to 0 and
+   set `MAP_FIELDS_ENABLED=false`: the map then shows no overlay and data health stays
+   `ok`. With the profile's `MAP_FIELDS_ENABLED=true` and no daemon, data health stays
+   degraded (`map_fields_missing`, `sync_heartbeat_stale`) and the admins get a "Data
+   health DEGRADED" email every 12 h for as long as it lasts.
 
 Free now: no payments, no ads (Vercel Hobby and the free Open-Meteo API are
 non-commercial). What each service costs now and after a paywall:
@@ -637,10 +647,14 @@ older run. A check with nothing new makes no database query and no forecast requ
 * `FORECAST_REFRESH_ENABLED=false` is the kill switch: checks answer `disabled` and nothing
   is fetched.
 
-**Processing.** When a component has a newer servable run, the refresh fetches **only that
-component** for the 50 spots (one request per model domain), keeps the other component with
+**Processing.** When a component has a newer servable run, the refresh fetches that
+component for the 50 spots (one request per model domain), keeps the other component with
 its **original model time** (never labelled as the new run; hours the carried component does
-not have are dropped), normalises, scores every hour, validates the spots, stores the result
+not have are dropped). About once or twice a day (with Open-Meteo GFS, on the first
+component refresh after the UTC request window moved) the other component is fetched again
+**from its same run** with it, so the 10-day horizon keeps rolling; that refetch is best
+effort: when it fails, the new run is published with the other component carried and its
+own end ([`docs/sync.md`](docs/sync.md), "One refresh"). Then it normalises, scores every hour, validates the spots, stores the result
 as a **staged version** and publishes it (`forecast_versions`: version id, published time,
 wave and wind model runs, spots updated and stale). Then it detects swell events, matches the
 saved searches, searches flights where justified and sends alerts. Spots whose fetch failed
@@ -687,8 +701,8 @@ for a while and the version says so. Admins are emailed for `provider_unavailabl
 minutes), `model_run_late`, `refresh_failures` (3 in a row), `forecast_stale_spots`,
 `provider_credentials`, `quota_near` and `refresh_scheduler_silent` (no check for 30
 minutes) when the data-health check finds them. That check runs hourly on Vercel: without
-the daemon the refresh endpoint runs it (and at once after a failed or partial refresh), with
-it the daemon. A scheduler that stopped calling the endpoint stops that check too, so
+the daemon the refresh endpoint runs it (and sooner after a failed or partial refresh or a
+component whose metadata became unreadable), with it the daemon. A scheduler that stopped calling the endpoint stops that check too, so
 without the daemon `refresh_scheduler_silent` arrives only with the daily cron (up to about
 25 hours on Hobby; docs/deploy-vercel.md step 7b names an external check). When the email
 provider refuses its own key, the alert goes by SMS to admins with a verified phone number
@@ -762,8 +776,9 @@ another sync holds the lease), `--force` runs every stage now (runs already stor
 skipped), `--only` limits the acquisitions to `spots`, `ensemble` or `map`; `sync daemon`
 runs every background job in one process until stopped (`--once` for one iteration);
 `sync publish` publishes what is stored; `sync status` lists the newest syncs;
-`migrate --on-build` is the Vercel build step (it migrates only where `MIGRATE_ON_BUILD`
-allows). The full rules: [`docs/sync.md`](docs/sync.md).
+`migrate --on-build` is the Vercel build step (it migrates and seeds where
+`MIGRATE_ON_BUILD` allows, and fails the build when it finds no `data/` and the database
+has no spot). The full rules: [`docs/sync.md`](docs/sync.md).
 
 The spot timeline shows the model's own steps: GFS hourly to 120 h, then 3-hourly. Hours
 Open-Meteo itself interpolated are not stored (`OPEN_METEO_NATIVE_STEPS_ONLY=true`).
@@ -812,8 +827,10 @@ Open-Meteo itself interpolated are not stored (`OPEN_METEO_NATIVE_STEPS_ONLY=tru
 ### 4. Download volumes, before and after
 
 Swell 2.0 (one provider, Open-Meteo GFS + GFS-Wave): 125 weighted calls for a refresh of both
-components and 75 for a wave-only refresh (measured live, 2026-10-28 and 29), about 500 a
-day at 4 GFS cycles (5 % of Open-Meteo's daily limit; arithmetic); a check with nothing new
+components and 75 for a wave-only refresh (measured live, 2026-10-28 and 29; an
+atmosphere-only refresh is the difference, 50), about 500 a day at 4 GFS cycles, plus the
+horizon refetch of the other component on up to two refreshes a day (50 or 75 more each):
+about 500-650 a day, 5-6.5 % of Open-Meteo's daily limit (arithmetic); a check with nothing new
 reads only the free `meta.json` files ([`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md),
 section 1.4). The table below is the **Upgrade 3 measurement** (2026-10-16, the then-default
 schedule with the GFS and ECMWF families and GEFS-Wave; 00Z cycles, 50 spots, fresh
@@ -836,7 +853,7 @@ MB per NOAA cycle, about 0.85-0.9 GB per ECMWF cycle and 201.6 MB per GEFS-Wave 
 0.5 MB per set of cycles; the map layers are now three quarters of the remaining bandwidth
 (about 0.6 GB a day without the partition layers, `MAP_FIELD_PARTITIONS=off`). With that
 two-family schedule the free tier use was about 820 weighted calls a day, 8 % of
-Open-Meteo's daily limit (about 500 with Swell 2.0's single provider, above).
+Open-Meteo's daily limit (about 500-650 with Swell 2.0's single provider, above).
 
 ### 5. Real forecast data, step by step
 
@@ -1395,7 +1412,7 @@ searches): 21.28 MB per both-family sync pass. `--help` lists the options.
 | `connection refused … 5432` / `/api/health/ready` returns 503 with `"database": "unavailable"` | PostgreSQL isn't running or `DATABASE_URL` is wrong. Run `docker compose up -d postgres` and `docker compose ps` (wait for *healthy*). Outside Docker, `DATABASE_URL` must use `localhost`; inside compose it is set to `postgres` automatically |
 | `extension "btree_gist" is not available` during migration | A PostgreSQL build without contrib modules. Use the `postgres:16-alpine` image or Homebrew `postgresql@16`, which include it |
 | Redis `Connection refused` / readiness shows `"redis": "unavailable"` | Run `docker compose up -d redis`. Rate limiting fails open, but Celery and job locks need Redis |
-| Background jobs not executing | Under `JOB_RUNNER=daemon` with the hosted profile (Vercel, the local Vercel-style stack) there is no worker: the refresh endpoint runs the refresh and the pending kicks, a due email retry and the hourly data-health check at each call, and the daily cron (`GET /api/internal/cron/daily`, 07:00-07:59 UTC on Hobby) runs every periodic job whose last run is older than its interval (cleanup, matching housekeeping, tides, alerts, delivery, the staleness check). So check that the refresh scheduler calls (`/admin/freshness`, "Refresh scheduler") and that the daily cron ran (its answer, `jobs` key, and the job list on `/status`); the optional map daemon only refreshes the map layers (`scripts/vercel-local.sh status` locally shows its heartbeat and newest syncs). Under Celery: `docker compose ps` should show `worker` and `beat` healthy, and `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate worker and beat processes, and that a worker started with `-Q celery` alone never runs downloads |
+| Background jobs not executing | Under `JOB_RUNNER=daemon` with the hosted profile there is no worker. On Vercel without the optional daemon the refresh endpoint runs the refresh and the pending kicks, a due email retry and the hourly data-health check at each call, and the daily cron (`GET /api/internal/cron/daily`, 07:00-07:59 UTC on Hobby) runs every periodic job whose last run is older than its interval (cleanup, matching housekeeping, tides, alerts, delivery, the staleness check). So check that the refresh scheduler calls (`/admin/freshness`, "Refresh scheduler") and that the daily cron ran (its answer, `jobs` key, and the job list on `/status`); the optional map daemon only refreshes the map layers. The local Vercel-style stack has no external scheduler: its daemon refreshes the spots, the ensemble and the map (`SYNC_DAEMON_KINDS=spots,ensemble,map`) and runs the periodic jobs, so there check the daemon (`scripts/vercel-local.sh status` shows its heartbeat and newest syncs). Under Celery: `docker compose ps` should show `worker` and `beat` healthy, and `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate worker and beat processes, and that a worker started with `-Q celery` alone never runs downloads |
 | `beat` shows *unhealthy* | Its schedule file has not been written for 10 minutes: beat is stuck or cannot reach Redis. `docker compose logs beat`, then `docker compose restart beat` (run exactly one beat) |
 | No verification / alert email | In Docker, open Mailpit (http://localhost:8025). Console mode writes to the outbox file. The dashboard banner and `/notifications` show each email's status: `failed`/`rejected` carry the provider's reason; `accepted` means the provider took it but has not confirmed delivery (check the provider's logs, your domain's SPF/DKIM/DMARC, and spam folders) |
 | No data-health alert email although the status is degraded | Alerts go to active admin accounts with a verified address only (`python -m app.cli make-admin you@example.com`). Each problem is emailed once, then every `DATA_HEALTH_ALERT_REPEAT_HOURS` (12 h); `DATA_HEALTH_ALERTS_ENABLED=false` switches them off |
@@ -1496,7 +1513,11 @@ Checklist:
   above was measured without a CDN); Neon itself (only PgBouncer in transaction mode was
   tested, locally; `test_pgbouncer_mode` is skipped in CI without `TEST_PGBOUNCER_URL`); the
   QStash schedule (never deployed); the Vercel daemon (the Vercel CLI 64.5.0 refuses a
-  `vercel.json` with `daemons` in `vercel build`); a live **atmosphere-only** refresh (never
+  `vercel.json` with `daemons` in `vercel build`); the build-time seed on Vercel (whether the
+  api service's build, rooted at `backend/`, can read the repository's `data/`: a build that
+  cannot fails on an empty database, docs/deploy-vercel.md step 6); the local Vercel-style
+  stack since the review rounds (last run on 2026-10-29 before them; the daemon-less hosted
+  path is covered by tests only); a live **atmosphere-only** refresh (never
   observed: when GFS 0.13 moved to 00Z on 2026-10-29, Open-Meteo's servers answered 00Z and
   18Z alternately for over 36 minutes, so three checks saw the run and three syncs skipped
   it safely without fetching; the refresh is covered by tests with the demo provider); Windy
