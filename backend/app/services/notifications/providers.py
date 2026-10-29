@@ -147,8 +147,14 @@ class SmtpEmailProvider(EmailProvider):
                     server.login(s.smtp_username, s.smtp_password)
                 server.send_message(msg)
         except smtplib.SMTPAuthenticationError as exc:
-            # Expired or revoked SMTP credentials: the admins are alerted (spec 16; review
-            # r2-backend-N3), as for an HTTP provider's refused key.
+            code = int(exc.smtp_code or 0)
+            if 400 <= code < 500:
+                # smtplib raises this for any refused AUTH: a 4xx (RFC 4954 section 6: 454
+                # Temporary authentication failure) is the server's temporary failure, not
+                # a refused password: retried, no credentials problem (review r3-backend-R3-3).
+                raise TransientProviderError(f"SMTP auth temporarily unavailable ({code})") from exc
+            # Expired or revoked SMTP credentials (535, 534, 530): the admins are alerted
+            # (spec 16; review r2-backend-N3), as for an HTTP provider's refused key.
             if not self.captures:
                 service_credentials.record_refused(
                     "email", self.name, f"SMTP auth refused ({exc.smtp_code})"

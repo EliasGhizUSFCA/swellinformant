@@ -27,7 +27,7 @@ from app.services import service_credentials
 from app.services.flights.base import FlightQuery
 from app.services.flights.duffel import DuffelProvider
 from app.services.health import admin_problems
-from app.services.http import PermanentProviderError
+from app.services.http import PermanentProviderError, TransientProviderError
 from app.services.notifications.ops_alerts import run_data_health_check
 from app.services.notifications.providers import (
     EmailMessageData,
@@ -145,9 +145,12 @@ def test_another_providers_record_is_not_reported(
 
 class FakeSmtp(socketserver.StreamRequestHandler):
     """A SYNTHETIC SMTP server on localhost: refuses every AUTH with 535 while ``refuse``
-    is set (an expired or revoked password), else accepts it and the message."""
+    is set (an expired or revoked password), or with 454 while ``temporary`` is also set
+    (RFC 4954 section 6: its authentication backend is briefly down), else accepts it and
+    the message."""
 
     refuse: ClassVar[bool] = True
+    temporary: ClassVar[bool] = False
     messages: ClassVar[int] = 0
 
     def reply(self, line: str) -> None:
@@ -161,11 +164,12 @@ class FakeSmtp(socketserver.StreamRequestHandler):
                 self.reply("250-synthetic")
                 self.reply("250 AUTH PLAIN LOGIN")
             elif verb == "AUTH":
-                self.reply(
-                    "535 5.7.8 Authentication credentials invalid"
-                    if self.refuse
-                    else "235 2.7.0 Authentication successful"
-                )
+                if not self.refuse:
+                    self.reply("235 2.7.0 Authentication successful")
+                elif self.temporary:
+                    self.reply("454 4.7.0 Temporary authentication failure")
+                else:
+                    self.reply("535 5.7.8 Authentication credentials invalid")
             elif verb in ("MAIL", "RCPT", "RSET", "NOOP"):
                 self.reply("250 OK")
             elif verb == "DATA":
@@ -183,7 +187,7 @@ class FakeSmtp(socketserver.StreamRequestHandler):
 
 @pytest.fixture
 def smtp_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
-    FakeSmtp.refuse, FakeSmtp.messages = True, 0
+    FakeSmtp.refuse, FakeSmtp.temporary, FakeSmtp.messages = True, False, 0
     server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), FakeSmtp)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -224,6 +228,20 @@ def test_a_refused_smtp_password_is_a_problem_until_a_message_is_accepted(
     SmtpEmailProvider(smtp_server).send(message)
     assert FakeSmtp.messages == 1
     assert "provider_credentials:email_smtp" not in keys(db)
+
+
+def test_a_temporary_smtp_auth_failure_is_retried_and_no_credentials_problem(
+    db: Session, smtp_server: Settings
+) -> None:
+    """Review r3-backend-R3-3: smtplib raises SMTPAuthenticationError for any refused AUTH,
+    including 454 (a temporary server-side failure, not a wrong password). That is a
+    temporary error (the message is retried, spec 21) and no refused credentials."""
+    FakeSmtp.temporary = True
+    message = EmailMessageData(to="someone@example.com", subject="S", text="T", tag="test")
+    with pytest.raises(TransientProviderError, match="temporarily unavailable"):
+        SmtpEmailProvider(smtp_server).send(message)
+    assert "provider_credentials:email_smtp" not in keys(db)
+    assert service_credentials.refused(["email_smtp"]) == []
 
 
 def test_a_development_inbox_records_no_credentials(db: Session, smtp_server: Settings) -> None:
