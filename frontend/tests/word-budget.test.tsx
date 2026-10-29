@@ -315,7 +315,7 @@ describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
 
   it("opportunity cards of a spot whose refresh failed (review r2 FE-2)", () => {
     // SYNTHETIC: the version marks the spot stale; the match's run is current.
-    const freshness = { version_id: 4, last_updated_at: new Date(Date.now() - 9 * 3_600_000).toISOString(), stale: true, reason: "refresh_failed" };
+    const freshness = { version_id: 4, last_updated_at: new Date(Date.now() - 9 * 3_600_000).toISOString(), stale: true, reason: "refresh_failed" as const };
     render(<OpportunityCard match={match({ stale: false, freshness })} />);
     const card = screen.getByTestId("opportunity-card");
     expect(within(card).getByTestId("stale-badge")).toHaveTextContent("Out of date");
