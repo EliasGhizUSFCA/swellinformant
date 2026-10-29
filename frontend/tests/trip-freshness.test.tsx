@@ -12,7 +12,7 @@ import type { MatchDetail, MatchSummary, SwellEvent } from "@/types/api";
 // SYNTHETIC test data: an invented trip, spot and swell that exist only to exercise the
 // freshness labels of the trip page and the cards. Nothing here describes a real forecast.
 
-const hooks = vi.hoisted(() => ({ match: undefined as unknown }));
+const hooks = vi.hoisted(() => ({ match: undefined as unknown, search: undefined as unknown, searchMatches: [] as unknown[] }));
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "00000000-0000-4000-8000-0000000000c1" }),
@@ -27,10 +27,13 @@ vi.mock("@/components/require-auth", () => ({
 vi.mock("@/hooks/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/queries")>()),
   useOpportunity: () => ({ data: hooks.match, isLoading: false, error: null }),
+  useSearch: () => ({ data: hooks.search, isLoading: false, error: null }),
+  useSearchMatches: () => ({ data: hooks.searchMatches, isLoading: false, error: null }),
 }));
 
 // Imported after the mocks are registered (vi.mock is hoisted above imports).
 const { default: OpportunityPage } = await import("@/app/opportunities/[id]/page");
+const { default: SearchDetailPage } = await import("@/app/searches/[id]/page");
 
 const NOW = Date.now();
 const hoursFromNow = (h: number) => new Date(NOW + h * 3_600_000).toISOString();
@@ -208,5 +211,58 @@ describe("trip lists credit their forecast's sources (review r3-frontend-N4)", (
   it("shows nothing when no trip's source asks for a credit (the demo source)", () => {
     render(<TripCredits matches={[withLinks("a", [])]} />);
     expect(screen.queryByTestId("attribution-links")).toBeNull();
+  });
+
+  // A saved search (SYNTHETIC criteria) for the search page below.
+  const search = {
+    id: "00000000-0000-4000-8000-0000000000a1",
+    name: "Synthetic search",
+    status: "active",
+    wave_min_ft: 4,
+    wave_max_ft: 10,
+    min_quality: "good",
+    wind_requirement: "any",
+    destination_mode: "all",
+    destinations: {},
+    date_mode: "flexible",
+    horizon_days: 14,
+    travel: { arrival_buffer_days: 1, departure_buffer_days: 1, max_price: 900, currency: "USD", travelers: 1, direct_only: false, max_layovers: 1 },
+    alert_lead_min_days: 3,
+    alert_lead_max_days: 10,
+    origins: ["AAA"],
+    notification_channel: "email",
+    notify_on_updates: false,
+    notify_surf_only: true,
+  };
+  const past = (id: string, links: typeof openMeteo) => ({ ...withLinks(id, links), status: "expired", search_id: search.id }) as unknown as MatchSummary;
+
+  function renderSearch(matches: MatchSummary[]) {
+    hooks.search = search;
+    hooks.searchMatches = matches;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={client}>
+        <SearchDetailPage />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("credits a saved search's matching history when it has no current match (review r4-frontend-F2)", () => {
+    renderSearch([past("h1", openMeteo), past("h2", openMeteo)]);
+    expect(screen.getByText("No current matches")).toBeInTheDocument();
+    const [credit] = screen.getAllByTestId("attribution-links");
+    expect(screen.getAllByTestId("attribution-links")).toHaveLength(1);
+    expect(credit).toHaveTextContent("Weather data by Open-Meteo.com");
+  });
+
+  it("credits a source once when the current matches and the history share it", () => {
+    renderSearch([withLinks("c1", openMeteo), past("h1", openMeteo)]);
+    expect(screen.getAllByTestId("attribution-links")).toHaveLength(1);
+    cleanup();
+    const windy = [{ label: "Contains data from the Windy database", href: "https://www.windy.com/" }];
+    renderSearch([withLinks("c1", openMeteo), past("h1", windy)]);
+    const credits = screen.getAllByTestId("attribution-links");
+    expect(credits.map((c) => c.textContent)).toEqual([expect.stringContaining("Open-Meteo.com"), expect.stringContaining("Windy database")]);
+    expect(credits[1]).not.toHaveTextContent("Open-Meteo");
   });
 });

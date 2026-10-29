@@ -115,6 +115,8 @@ function Detail({ user, id }: { user: User; id: string }) {
                 </table>
               </div>
             )}
+            {/* Its ratings and confidence come from the forecast too (review r4-frontend-F2). */}
+            <TripCredits matches={history} except={current} className="mt-2" />
           </div>
         </section>
         <Card className="h-fit">

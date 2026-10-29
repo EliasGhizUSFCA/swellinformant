@@ -81,6 +81,17 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
  * forecast (our breaking height, rating and surf window), so the sources' credit and licence
  * links go with the list (Open-Meteo: "Weather data by Open-Meteo.com", on paid plans too;
  * review r3-frontend-N4). Nothing when no trip's source asks for one (the demo source). */
-export function TripCredits({ matches, className }: { matches: readonly MatchSummary[] | null | undefined; className?: string }) {
-  return <AttributionLinks links={mergeAttributionLinks(matches)} className={className ?? "mt-3"} />;
+export function TripCredits({
+  matches,
+  except,
+  className,
+}: {
+  matches: readonly MatchSummary[] | null | undefined;
+  /** Trips whose credit is already shown above on the page: their links are not repeated. */
+  except?: readonly MatchSummary[] | null;
+  className?: string;
+}) {
+  const shown = new Set(mergeAttributionLinks(except).map((l) => `${l.label}|${l.href}`));
+  const links = mergeAttributionLinks(matches).filter((l) => !shown.has(`${l.label}|${l.href}`));
+  return <AttributionLinks links={links} className={className ?? "mt-3"} />;
 }
