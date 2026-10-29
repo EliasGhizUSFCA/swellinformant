@@ -127,8 +127,10 @@ changed in `.env.vercel.local`.
 * the api service's Vercel build command, `python -m app.cli migrate --on-build` with
   `VERCEL_ENV=production`, runs on the lean image (the database is at head, so it only
   checks the revision);
-* PgBouncer's `SHOW CONFIG` says `pool_mode = transaction`, and `GET /api/spots` raises its
-  transaction counter (the API's queries go through the pooler);
+* PgBouncer's `SHOW CONFIG` says `pool_mode = transaction`, and `GET /api/health/ready`
+  raises its transaction counter (the API's queries go through the pooler). A `note` line
+  then shows the counter around `GET /api/spots`, which does not move once the published
+  version's snapshot is in Redis (the public reads do not wake the database);
 * a request with forged `X-Vercel-Forwarded-For`, `X-Forwarded-For` and `X-Real-IP` headers
   gets the rate-limit counter of the address the edge saw (the Docker network's gateway for
   a request from this machine), never one of the forged addresses. The API keys its counters

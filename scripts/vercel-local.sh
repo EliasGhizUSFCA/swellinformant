@@ -207,18 +207,25 @@ cmd_smoke() {
     fail "migrate --on-build on the api image: $(printf '%s' "$built" | tail -n 1)"
   fi
 
-  # PgBouncer in transaction mode, and the API's queries go through it.
+  # PgBouncer in transaction mode, and the API's queries go through it. GET /api/health/ready
+  # always asks the database (SELECT 1 on the API's pooled engine); a public read such as
+  # GET /api/spots may not: once a version's snapshot is in Redis it is answered from there
+  # without a transaction (app.services.public_cache), so it only gets a note.
   local mode before after
   mode="$(pgbouncer_admin "SHOW CONFIG" | awk -F'|' '$1 == "pool_mode" { print $2 }' || true)"
   if [ "$mode" = "transaction" ]; then pass "PgBouncer pool_mode = transaction"; else fail "PgBouncer pool_mode is '$mode'"; fi
   before="$(pgbouncer_xacts || true)"
-  curl_local -fsS --max-time 20 "$base/api/spots" >/dev/null || fail "GET /api/spots"
+  curl_local -fsS --max-time 20 "$base/api/health/ready" >/dev/null || fail "GET /api/health/ready"
   after="$(pgbouncer_xacts || true)"
   if [ -n "$before" ] && [ -n "$after" ] && [ "$after" -gt "$before" ]; then
-    pass "GET /api/spots ran its transactions through PgBouncer ($before -> $after)"
+    pass "GET /api/health/ready ran its database check through PgBouncer ($before -> $after)"
   else
     fail "PgBouncer saw no API transaction (total_xact_count '$before' -> '$after')"
   fi
+  before="$(pgbouncer_xacts || true)"
+  curl_local -fsS --max-time 20 "$base/api/spots" >/dev/null || fail "GET /api/spots"
+  after="$(pgbouncer_xacts || true)"
+  printf '  note  GET /api/spots: PgBouncer total_xact_count %s -> %s (unchanged when the snapshot came from Redis)\n' "${before:-?}" "${after:-?}"
 
   # The client IP: a client's own X-Vercel-Forwarded-For, X-Forwarded-For and X-Real-IP never
   # reach the API. The rate-limit counter of GET /api/health/data (bucket health-data) must
