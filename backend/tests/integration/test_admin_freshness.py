@@ -196,10 +196,13 @@ def test_every_metric_comes_from_the_recorded_pipeline(
             int(v2.id), published_at + timedelta(seconds=seconds), published_at=published_at
         )
 
-    # Flight searches and emails today (plus one search from yesterday, not counted).
-    _flight(db, "duffel", FlightSearchStatus.SUCCESS, now - timedelta(minutes=30))
-    _flight(db, "duffel", FlightSearchStatus.FAILED, now - timedelta(minutes=20))
-    _flight(db, "demo", FlightSearchStatus.SUCCESS, now - timedelta(minutes=10))
+    # Flight searches and emails today (plus one search from yesterday, not counted). The
+    # report counts searches since midnight UTC, so today's are placed between midnight and
+    # now: "30 minutes ago" was yesterday in the first half hour of every day.
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    _flight(db, "duffel", FlightSearchStatus.SUCCESS, today + (now - today) * 0.25)
+    _flight(db, "duffel", FlightSearchStatus.FAILED, today + (now - today) * 0.5)
+    _flight(db, "demo", FlightSearchStatus.SUCCESS, today + (now - today) * 0.75)
     _flight(db, "duffel", FlightSearchStatus.SUCCESS, now - timedelta(days=1, hours=1))
     user = db.scalar(select(User).where(User.email == "ops@example.com"))
     assert user is not None
