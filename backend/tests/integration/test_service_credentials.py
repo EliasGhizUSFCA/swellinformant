@@ -21,13 +21,14 @@ from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.jobs.runner import run_job
 from app.jobs.schedule import DATA_HEALTH_TASK
-from app.models import User
-from app.models.enums import CabinClass
+from app.models import Notification, NotificationPreference, User
+from app.models.enums import CabinClass, NotificationStatus, SearchStatus
 from app.services import service_credentials
 from app.services.flights.base import FlightQuery
 from app.services.flights.duffel import DuffelProvider
 from app.services.health import admin_problems
 from app.services.http import PermanentProviderError, TransientProviderError
+from app.services.notifications import delivery
 from app.services.notifications.ops_alerts import run_data_health_check
 from app.services.notifications.providers import (
     EmailMessageData,
@@ -147,10 +148,12 @@ class FakeSmtp(socketserver.StreamRequestHandler):
     """A SYNTHETIC SMTP server on localhost: refuses every AUTH with 535 while ``refuse``
     is set (an expired or revoked password), or with 454 while ``temporary`` is also set
     (RFC 4954 section 6: its authentication backend is briefly down), else accepts it and
-    the message."""
+    the message. ``refuse_at`` = (verb, reply) answers that one command (MAIL, RCPT or DATA)
+    with the given reply instead."""
 
     refuse: ClassVar[bool] = True
     temporary: ClassVar[bool] = False
+    refuse_at: ClassVar[tuple[str, str] | None] = None
     messages: ClassVar[int] = 0
 
     def reply(self, line: str) -> None:
@@ -170,6 +173,8 @@ class FakeSmtp(socketserver.StreamRequestHandler):
                     self.reply("454 4.7.0 Temporary authentication failure")
                 else:
                     self.reply("535 5.7.8 Authentication credentials invalid")
+            elif self.refuse_at is not None and verb == self.refuse_at[0]:
+                self.reply(self.refuse_at[1])
             elif verb in ("MAIL", "RCPT", "RSET", "NOOP"):
                 self.reply("250 OK")
             elif verb == "DATA":
@@ -188,6 +193,7 @@ class FakeSmtp(socketserver.StreamRequestHandler):
 @pytest.fixture
 def smtp_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
     FakeSmtp.refuse, FakeSmtp.temporary, FakeSmtp.messages = True, False, 0
+    FakeSmtp.refuse_at = None
     server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), FakeSmtp)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -242,6 +248,76 @@ def test_a_temporary_smtp_auth_failure_is_retried_and_no_credentials_problem(
         SmtpEmailProvider(smtp_server).send(message)
     assert "provider_credentials:email_smtp" not in keys(db)
     assert service_credentials.refused(["email_smtp"]) == []
+
+
+# RFC 5321 section 4.2.1: a 4yz reply is a transient failure, a 5yz reply a permanent one.
+# The replies are SYNTHETIC, worded as relays word them.
+REFUSALS = [
+    ("MAIL", "454 4.7.0 Throttling failure: Maximum sending rate exceeded", TransientProviderError),
+    ("MAIL", "421 4.7.0 Try again later, closing connection", TransientProviderError),
+    ("MAIL", "553 5.1.8 Sender address rejected", PermanentProviderError),
+    ("RCPT", "450 4.2.1 Receiving mail at a rate that prevents more", TransientProviderError),
+    ("RCPT", "451 4.7.1 Greylisted, please try again later", TransientProviderError),
+    ("RCPT", "550 5.1.1 No such user", PermanentProviderError),
+    ("DATA", "451 4.3.0 Local error in processing", TransientProviderError),
+    ("DATA", "554 5.7.1 Message rejected", PermanentProviderError),
+]
+
+
+@pytest.mark.parametrize(("verb", "reply", "error"), REFUSALS)
+def test_a_refused_smtp_command_is_temporary_or_permanent_by_its_reply_code(
+    db: Session, smtp_server: Settings, verb: str, reply: str, error: type[Exception]
+) -> None:
+    """Review r4-backend-R4-1: smtplib raises SMTPSenderRefused, SMTPRecipientsRefused or
+    SMTPDataError whatever the reply code. A relay's sending-rate limit or greylisting (4yz
+    at MAIL FROM or RCPT TO) is retried; a 5yz at DATA is not. Neither is a refused password."""
+    FakeSmtp.refuse = False
+    FakeSmtp.refuse_at = (verb, reply)
+    message = EmailMessageData(to="someone@example.com", subject="S", text="T", tag="test")
+    with pytest.raises(error) as raised:
+        SmtpEmailProvider(smtp_server).send(message)
+    assert type(raised.value) is error and reply[:3] in str(raised.value)
+    assert FakeSmtp.messages == 0
+    assert service_credentials.refused(["email_smtp"]) == []
+
+
+def test_an_alert_the_relay_throttles_is_queued_for_a_retry(
+    db: Session, smtp_server: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r4-backend-R4-1, through delivery: an alert email whose RCPT TO the relay
+    answers 451 stays QUEUED with its backoff (not FAILED); a 554 at DATA fails it at once.
+    The match's search lookup is stubbed ACTIVE: no match is needed to reach the provider."""
+    make_admin(db)
+    user = db.query(User).filter_by(email="creds-admin@example.com").one()
+    db.add(NotificationPreference(user_id=user.id, unsubscribe_token="synthetic-unsub-smtp"))
+    n = Notification(
+        user_id=user.id,
+        channel="email",
+        kind="new_opportunity",
+        status=NotificationStatus.SENDING,
+        dedup_key="synthetic-smtp-throttle",
+        recipient=user.email,
+        subject="Synthetic alert",
+        body_text="Synthetic alert body",
+        snapshot={},
+        events=[],
+        attempts=0,
+    )
+    db.add(n)
+    db.commit()
+    monkeypatch.setattr(delivery, "_search_status", lambda db, match_id: SearchStatus.ACTIVE)
+    FakeSmtp.refuse = False
+    FakeSmtp.refuse_at = ("RCPT", "451 4.7.1 Greylisted, please try again later")
+    now = utcnow()
+    stats = delivery.DeliveryStats()
+    delivery.send_one(db, n, delivery._Providers(), now, stats)
+    assert n.status == NotificationStatus.QUEUED and stats.retried == 1 and stats.failed == 0
+    assert n.next_attempt_at == now + delivery.backoff(1)
+    assert "451" in (n.last_error or "")
+    FakeSmtp.refuse_at = ("DATA", "554 5.7.1 Message rejected")
+    delivery.send_one(db, n, delivery._Providers(), now, stats)
+    assert n.status == NotificationStatus.FAILED and stats.failed == 1 and n.attempts == 2
+    assert FakeSmtp.messages == 0
 
 
 def test_a_development_inbox_records_no_credentials(db: Session, smtp_server: Settings) -> None:

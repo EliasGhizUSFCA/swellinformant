@@ -113,6 +113,17 @@ class ConsoleEmailProvider(EmailProvider):
         return SendResult(self.name, mid, captured=True)
 
 
+def _smtp_refusal(code: int, exc: Exception) -> TransientProviderError | PermanentProviderError:
+    """The error for a refused MAIL FROM, RCPT TO or DATA, by its reply code (review
+    r4-backend-R4-1). RFC 5321 section 4.2.1: a 4yz reply is a transient failure (a relay's
+    sending-rate limit 454/421, greylisting 450/451), retried like a network error; a 5yz
+    reply is permanent. smtplib raises the same exception class for both. Any other code is
+    not a refusal the RFC defines and is retried (NOTIFICATION_MAX_ATTEMPTS bounds it)."""
+    if 500 <= code < 600:
+        return PermanentProviderError(f"SMTP rejected message: {exc}")
+    return TransientProviderError(f"SMTP temporarily refused ({code}): {exc}")
+
+
 class SmtpEmailProvider(EmailProvider):
     name = "smtp"
     captures = False
@@ -160,8 +171,12 @@ class SmtpEmailProvider(EmailProvider):
                     "email", self.name, f"SMTP auth refused ({exc.smtp_code})"
                 )
             raise PermanentProviderError(f"SMTP rejected message: {exc}") from exc
-        except (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused) as exc:
-            raise PermanentProviderError(f"SMTP rejected message: {exc}") from exc
+        except smtplib.SMTPRecipientsRefused as exc:
+            # Every RCPT refused; the most temporary code decides (one recipient here).
+            codes = [int(code or 0) for code, _ in exc.recipients.values()]
+            raise _smtp_refusal(min(codes) if codes else 0, exc) from exc
+        except (smtplib.SMTPSenderRefused, smtplib.SMTPDataError) as exc:
+            raise _smtp_refusal(int(exc.smtp_code or 0), exc) from exc
         except (OSError, smtplib.SMTPException) as exc:
             raise TransientProviderError(f"SMTP unavailable: {exc}") from exc
         if not self.captures:
