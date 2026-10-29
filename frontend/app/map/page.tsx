@@ -96,6 +96,10 @@ export default function MapPage() {
   const fieldIndex = useFieldIndex();
   const index = fieldIndex.data;
   const fieldsAvailable = !!index?.available && index.valid_times.length > 0;
+  // MAP_FIELDS_ENABLED=false: the site switched the ocean layers off on purpose (the daemon-less
+  // setting). That is not an outage: no layer tabs, no "unavailable" notice, the spot markers and
+  // their arrows as always (review r4-spec-R4-SPEC-2). A missing `enabled` reads as enabled.
+  const fieldsOff = !!index && !index.available && index.enabled === false;
   // The "now" snapshot (cached) defines the spot range and the server's current hour.
   const nowSnapshot = useMapConditions(null);
   const range = useMemo(() => {
@@ -278,7 +282,7 @@ export default function MapPage() {
   const fieldTimeText = fieldTime ? longTimeLabel(fieldTime, tz) : "";
   // One short line for everyone; the backend's setup message (for whoever runs the site) is in
   // the legend. Its full text covered a block of the map on phones and ran under the spot list.
-  const notice = !fieldIndex.isLoading && !fieldsAvailable ? "Ocean layers are unavailable right now." : null;
+  const notice = !fieldIndex.isLoading && !fieldsAvailable && !fieldsOff ? "Ocean layers are unavailable right now." : null;
   const stale = mapStaleness(index, nowSnapshot.data, nowSnapshot.dataUpdatedAt).stale;
 
   const spotList = (
@@ -308,9 +312,16 @@ export default function MapPage() {
         {/* Top: layer tabs + pressure on the left, settings on the right. */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[1100] flex items-start gap-2 p-2 sm:p-3">
           <div ref={topRef} className="min-w-0 flex-1 space-y-2" data-testid="map-top-controls">
-            <div className="pointer-events-auto w-fit max-w-full">
-              <LayerTabs layer={layer} onLayer={(l) => updateSettings({ layer: l })} pressure={settings.pressure} onPressure={(p) => updateSettings({ pressure: p })} />
-            </div>
+            {/* Layers switched off: no tabs offering what can never load. */}
+            {fieldsOff ? (
+              <p role="status" data-testid="fields-off" className={cn("pointer-events-auto w-fit rounded-full px-3 py-1.5 text-xs", GLASS)}>
+                Spot forecasts only
+              </p>
+            ) : (
+              <div className="pointer-events-auto w-fit max-w-full">
+                <LayerTabs layer={layer} onLayer={(l) => updateSettings({ layer: l })} pressure={settings.pressure} onPressure={(p) => updateSettings({ pressure: p })} />
+              </div>
+            )}
             {/* Beside a selected out-of-date spot "updated just now" would call it current. */}
             <ForecastUpdated tone="map" stale={!!selected && !!freshnessOf(bySlug.get(selected))?.stale} className="pointer-events-auto ml-1" />
             {(notice || stale || isError || noForecastAnywhere || layerFields.error) && (
@@ -361,6 +372,7 @@ export default function MapPage() {
         {legendOpen && (
           <div className="absolute top-16 left-9 z-[1150]" style={{ bottom: bottomInset + 12 }}>
             <LegendDrawer
+              fieldsOff={fieldsOff}
               settings={settings}
               scale={scale}
               units={units}
@@ -480,7 +492,9 @@ export default function MapPage() {
             onZoom={onZoom}
             userLocation={userLocation}
             cover={isDesktop ? undefined : cover}
-            fieldLabel={fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : `Ocean layers unavailable, ${timeText}`}
+            fieldLabel={
+              fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : fieldsOff ? `Spot forecasts only, ${timeText}` : `Ocean layers unavailable, ${timeText}`
+            }
             // The map's credit strip names the source; its full attribution sentence is in the
             // legend (on a phone the sentence alone covered three lines of the map, and markers).
             fieldAttribution={index?.source?.name ?? index?.source?.attribution}

@@ -13,6 +13,7 @@ import type { Airport } from "@/types/api";
 
 const UNAVAILABLE: FieldIndex = {
   available: false,
+  enabled: true, // a failed read is an outage, not ocean layers switched off on purpose
   message: "Ocean layers could not be loaded right now.",
   valid_times: [],
   variables: [],

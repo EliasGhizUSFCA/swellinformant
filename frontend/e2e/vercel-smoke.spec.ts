@@ -92,6 +92,7 @@ test.describe("local Vercel-style stack", () => {
 
     const index = (await getJson(request, "/api/map/fields")) as {
       available: boolean;
+      enabled?: boolean;
       run_key: string | null;
       valid_times: string[];
       message: string | null;
@@ -117,6 +118,11 @@ test.describe("local Vercel-style stack", () => {
       await expect.poll(async () => Number((await field.getAttribute("data-painted")) ?? 0), { message: "ocean pixels painted", timeout: 60_000 }).toBeGreaterThan(10_000);
       // The model-run label carries the publication the map shows (status-ui).
       await expect(page.getByTestId("map-lead-time")).toHaveAttribute("data-published-at", index.published_at!);
+    } else if (index.enabled === false) {
+      // MAP_FIELDS_ENABLED=false (the stack's default) is a choice, not an outage: no layer
+      // tabs and no "unavailable" notice (review r4-spec-R4-SPEC-2; it showed the notice before).
+      await expect(page.getByTestId("fields-off")).toBeVisible();
+      await expect(page.getByTestId("fields-notice")).toHaveCount(0);
     } else {
       await expect(page.getByTestId("fields-notice")).toBeVisible();
     }

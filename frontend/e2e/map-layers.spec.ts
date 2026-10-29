@@ -679,6 +679,31 @@ test.describe("ocean layers (synthetic fields)", () => {
     expect(fieldRequests).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  test("with the ocean layers switched off the map offers none and shows no outage", async ({ page }) => {
+    // Review r4-spec-R4-SPEC-2: MAP_FIELDS_ENABLED=false (the documented daemon-less setting)
+    // is a choice. SYNTHETIC: the index the API sends then (enabled false), served by a mock.
+    await mockFieldsUnavailable(page, "Ocean layers are switched off (MAP_FIELDS_ENABLED=false).", false);
+    const fieldRequests: string[] = [];
+    page.on("request", (r) => {
+      if (/\/api\/map\/fields\/[a-z0-9_]+\?/.test(r.url())) fieldRequests.push(r.url());
+    });
+    const { errors } = await openMap(page);
+    await expect(page.getByTestId("fields-off")).toHaveText("Spot forecasts only");
+    await expect(page.getByTestId("fields-notice")).toHaveCount(0);
+    await expect(page.getByTestId("layer-tabs")).toHaveCount(0);
+    await expect(field(page)).toHaveAttribute("aria-label", /Spot forecasts only/);
+    // The markers, their arrows and the spot panel work as always.
+    await expect(page.locator("path.spot-marker")).toHaveCount(50);
+    await shot(page, "desktop-1440x900-fields-off");
+    await page.getByRole("button", { name: "Legend", exact: true }).click();
+    await expect(page.getByTestId("legend-scale")).toHaveCount(0);
+    await expect(page.getByTestId("map-legend")).toBeVisible();
+    await page.locator("path.spot-jeffreys-bay").click({ force: true });
+    await expect(page.getByTestId("panel-spot-name")).toHaveText("Jeffreys Bay (Supertubes)");
+    expect(fieldRequests).toEqual([]);
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe("ocean layers: geography, motion and bandwidth (synthetic fields)", () => {

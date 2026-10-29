@@ -6544,6 +6544,11 @@
       "type": "boolean",
       "title": "Available"
      },
+     "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "default": true
+     },
      "message": {
       "anyOf": [
        {

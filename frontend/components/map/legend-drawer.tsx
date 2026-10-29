@@ -125,7 +125,10 @@ export function LegendDrawer({
   index,
   particles,
   onClose,
+  fieldsOff = false,
 }: {
+  /** The site switched the ocean layers off (MAP_FIELDS_ENABLED=false): no layer colour scale. */
+  fieldsOff?: boolean;
   /** Display settings: the active layer, the pressure overlay, ... */
   settings: MapSettings;
   scale: LayerScale;
@@ -160,29 +163,32 @@ export function LegendDrawer({
         </button>
       </div>
 
-      <section aria-label={`${def.label} colour scale`}>
-        <div className="mb-1.5 text-xs font-semibold text-white" data-testid="legend-title">
-          {def.scaleTitle} ({layerUnit(layer, units)})
-        </div>
-        <div className="h-3 rounded-full ring-1 ring-white/15" style={{ background: cssGradient(scale.stops) }} data-testid="legend-scale" />
-        <div className="relative mt-1 h-4 text-[11px] text-white/80 tabular-nums" data-testid="legend-ticks">
-          {ticks.map((t, i) => (
-            <span
-              key={t.label}
-              className="absolute"
-              style={{ left: `${t.pos * 100}%`, transform: `translateX(${i === 0 && t.pos < 0.03 ? 0 : i === ticks.length - 1 && t.pos > 0.97 ? -100 : -50}%)` }}
-            >
-              {t.label}
-            </span>
-          ))}
-        </div>
-        <p className="mt-2 text-xs leading-relaxed text-white/80" data-testid="legend-about">
-          {def.about}
-        </p>
-        {pressure && (
-          <p className="mt-1.5 text-xs leading-relaxed text-white/70">Isobars: lines of equal air pressure every 4 hPa, labelled in hPa.</p>
-        )}
-      </section>
+      {/* No layers on this site: no colour scale for them (review r4-spec-R4-SPEC-2). */}
+      {!fieldsOff && (
+        <section aria-label={`${def.label} colour scale`}>
+          <div className="mb-1.5 text-xs font-semibold text-white" data-testid="legend-title">
+            {def.scaleTitle} ({layerUnit(layer, units)})
+          </div>
+          <div className="h-3 rounded-full ring-1 ring-white/15" style={{ background: cssGradient(scale.stops) }} data-testid="legend-scale" />
+          <div className="relative mt-1 h-4 text-[11px] text-white/80 tabular-nums" data-testid="legend-ticks">
+            {ticks.map((t, i) => (
+              <span
+                key={t.label}
+                className="absolute"
+                style={{ left: `${t.pos * 100}%`, transform: `translateX(${i === 0 && t.pos < 0.03 ? 0 : i === ticks.length - 1 && t.pos > 0.97 ? -100 : -50}%)` }}
+              >
+                {t.label}
+              </span>
+            ))}
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-white/80" data-testid="legend-about">
+            {def.about}
+          </p>
+          {pressure && (
+            <p className="mt-1.5 text-xs leading-relaxed text-white/70">Isobars: lines of equal air pressure every 4 hPa, labelled in hPa.</p>
+          )}
+        </section>
+      )}
 
       {flowOn && (crests.length > 0 || windShown) && (
         <section className="mt-3 space-y-2 border-t border-white/10 pt-3 text-xs leading-relaxed text-white/75" data-testid="legend-flow" aria-label="Animation">

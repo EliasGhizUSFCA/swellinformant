@@ -14,6 +14,7 @@ const core = (name: string) => ({ name, label: name, unit: "", display_min: 0, d
 const partition = (name: string, system: "primary" | "secondary" | "windsea") => ({ ...core(name), group: "partition" as const, system });
 const INDEX: FieldIndex = {
   available: true,
+  enabled: true,
   message: null,
   source: { code: "synthetic", name: "Synthetic", attribution: "Synthetic test data", is_demo: true },
   run_key: "run-1",

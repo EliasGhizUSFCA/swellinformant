@@ -9,6 +9,7 @@ import type { MapSnapshot } from "@/types/api";
 const CYCLE = "2026-10-11T18:00:00Z";
 const INDEX: FieldIndex = {
   available: true,
+  enabled: true,
   message: null,
   source: { code: "noaa_gfs_direct", name: "NOAA GFS-Wave + GFS (direct from NOAA open data)", attribution: "NOAA", is_demo: false },
   run_key: "noaa_gfs_direct:2026101118",

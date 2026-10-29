@@ -2414,6 +2414,11 @@ export interface components {
         FieldIndexOut: {
             /** Available */
             available: boolean;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
             /** Message */
             message?: string | null;
             source?: components["schemas"]["FieldSourceOut"] | null;
