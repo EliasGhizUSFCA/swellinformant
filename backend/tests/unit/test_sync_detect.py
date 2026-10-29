@@ -465,7 +465,10 @@ def test_a_run_with_a_model_domain_behind_the_stored_run_is_never_new(world: Wor
     [
         ("w:2026101906|a:2026101912", "w:2026101912|a:2026101912", True),
         ("w:2026101912|a:2026101912", "w:2026101906|a:2026101912", False),  # ahead
-        ("w:2026101912|a:2026101906", "w:2026101906|a:2026101912", False),  # mixed
+        # Mixed (one domain ahead, one behind): behind. Detection is monotonic per domain
+        # (review r1-backend-F1): a run built from it would name the older cycle, so it
+        # waits until every domain is at or past its stored cycle. (Was False before.)
+        ("w:2026101912|a:2026101906", "w:2026101906|a:2026101912", True),
         ("w:2026101906|a:2026101912", "w:2026101906|a:2026101912", False),  # the same
         ("w:2026101906|b:2026101912", "w:2026101912|a:2026101912", False),  # other domains
         ("demo:2026101906", "demo:2026101912", True),

@@ -613,6 +613,215 @@ def test_a_windy_run_seen_again_under_a_newer_estimated_label_is_not_refetched(
     assert v2.components["wave"]["run_key"] == "gfsWave~aaaa-bbbb-cccc:2026102700"
 
 
+class TwoDomainAtmosphere(SplitDemo):
+    """SYNTHETIC: the atmosphere component has two model domains (GFS 0.13 and 0.25 deg),
+    as Open-Meteo's GFS family does; the test sets each domain's cycle."""
+
+    domains: ClassVar[dict[str, datetime]] = {}
+
+    def current_run(self, now: datetime, partial: bool = False) -> RunInfo:
+        wave = self.cycles["wave"]
+        g13, g25 = self.domains["gfs013"], self.domains["gfs025"]
+        keys = {
+            "wave": f"gfswave025:{wave:%Y%m%d%H}",
+            "atmosphere": f"gfs013:{g13:%Y%m%d%H}|gfs025:{g25:%Y%m%d%H}",
+        }
+        return RunInfo(
+            run_key=f"{keys['wave']}|{keys['atmosphere']}",
+            issued_at=min(wave, g13, g25),
+            wave_model_run_at=wave,
+            atmosphere_model_run_at=min(g13, g25),
+            metadata_source="demo",
+            model_runs=(
+                ModelRunRef("gfswave025", wave, component="wave"),
+                ModelRunRef("gfs013", g13, component="atmosphere"),
+                ModelRunRef("gfs025", g25, component="atmosphere"),
+            ),
+            component_keys=MappingProxyType(keys),
+        )
+
+
+def test_a_lagging_domain_never_publishes_an_older_atmosphere_run(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r1-backend-F1: GFS 0.13 advanced to 06Z while a lagging metadata server
+    answers GFS 0.25 with the cycle BEFORE the published 00Z. Monotonic per domain: nothing
+    is fetched or published (a run built from it would name 18Z as its wind run), and the
+    atmosphere is refreshed once every domain is at or past its published cycle."""
+    TwoDomainAtmosphere.domains = {"gfs013": C00, "gfs025": C00}
+
+    def build(name: str, settings: object = None, overrides: Any = None) -> Any:
+        return TwoDomainAtmosphere(overrides=overrides, natural_swells=False)
+
+    monkeypatch.setattr(registry, "build_provider", build)
+    monkeypatch.setattr(ingestion, "build_provider", build)
+    assert refresh()["status"] == "success"
+    v1 = published(db)
+    assert v1.wind_model_run == C00
+    fetches = len(split.calls)
+    TwoDomainAtmosphere.domains = {"gfs013": C06, "gfs025": C00 - timedelta(hours=6)}
+    out = refresh()
+    assert out["status"] == "not_due" and not out["due"], out
+    (atmosphere,) = [c for c in out["plan"]["components"] if c["component"] == "atmosphere"]
+    assert atmosphere["state"] == "current"
+    assert "older than the stored run" in (atmosphere["detail"] or "")
+    assert len(split.calls) == fetches
+    assert published(db).id == v1.id
+    # Also when the refresh runs anyway (a forced sync): the component is not refetched.
+    forced = orchestrator.run_sync(trigger="cli", force=True, only=orchestrator.REFRESH_KINDS)
+    assert forced.status != "failed"
+    assert {c for _, c in split.calls[fetches:]} <= {frozenset({"wave"})}
+    assert published(db).wind_model_run == C00
+    # The lagging domain catches up: the new atmosphere run is refreshed, never older.
+    TwoDomainAtmosphere.domains = {"gfs013": C06, "gfs025": C06}
+    out = refresh()
+    assert out["status"] == "success", out
+    v2 = published(db)
+    assert v2.id != v1.id and v2.wind_model_run == C06
+
+
+class GfsSteps(SplitDemo):
+    """SYNTHETIC: GFS-style native steps (hourly to 120 h, 3-hourly after) counted from
+    each component's own model run, as Open-Meteo stores them: a component 6 h out of phase
+    with the carried one has hours the carried run lacks (its leads 121, 122, 124, 125 h)."""
+
+    @staticmethod
+    def _native(t: datetime, init: datetime) -> bool:
+        lead = (t - init).total_seconds() / 3600
+        return lead >= 0 and lead == int(lead) and (lead <= 120 or int(lead) % 3 == 0)
+
+    def fetch(self, spots: Any, run: RunInfo, components: frozenset[str] | None = None) -> Any:
+        result = super().fetch(spots, run, components)
+        assert run.wave_model_run_at is not None and run.atmosphere_model_run_at is not None
+        init = (
+            run.atmosphere_model_run_at
+            if components == frozenset({"atmosphere"})
+            else run.wave_model_run_at
+        )
+        for spot_id, recs in result.records.items():
+            result.records[spot_id] = [r for r in recs if self._native(r.valid_time, init)]
+        return result
+
+
+@pytest.mark.parametrize(("changed", "kept"), [("atmosphere", "wave"), ("wave", "atmosphere")])
+def test_no_published_hour_lacks_the_carried_component(
+    db: Session,
+    few_spots: list[str],
+    split: type[SplitDemo],
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+    kept: str,
+) -> None:
+    """Review r1-backend-F4: the fetched component's hours that the carried run does not
+    have (the runs step differently) are not published half filled: no published hour lacks
+    a wave height or a wind speed, and none is scored as flat water."""
+    from app.models import SurfQualityPrediction
+
+    def build(name: str, settings: object = None, overrides: Any = None) -> Any:
+        return GfsSteps(overrides=overrides, natural_swells=False)
+
+    monkeypatch.setattr(registry, "build_provider", build)
+    monkeypatch.setattr(ingestion, "build_provider", build)
+    assert refresh()["status"] == "success"
+    r1 = run_of(db, published(db))
+    split.cycles[changed] = C06
+    out = refresh()
+    assert out["status"] == "success", out
+    v2 = published(db)
+    r2 = run_of(db, v2)
+    assert r2.id != r1.id and v2.components[kept]["changed"] is False
+    column = {"wave": WaveForecast.sig_wave_height_m, "atmosphere": WaveForecast.wind_speed_kmh}
+    for field in column.values():
+        hollow = db.scalar(
+            select(func.count()).where(WaveForecast.run_id == r2.id, field.is_(None))
+        )
+        assert hollow == 0, f"{hollow} published hours without {field.key}"
+    # Every hour of the new run is an hour of the carried run (the 4 hours between 120 h
+    # and 126 h of the carried run that only the fetched run has were left out).
+    extra_hours = db.scalar(
+        text(
+            "SELECT count(*) FROM wave_forecasts n WHERE n.run_id = :new AND NOT EXISTS ("
+            " SELECT 1 FROM wave_forecasts o WHERE o.run_id = :old AND o.spot_id = n.spot_id"
+            " AND o.valid_time = n.valid_time)"
+        ),
+        {"new": r2.id, "old": r1.id},
+    )
+    assert extra_hours == 0
+    flat = db.scalar(
+        select(func.count()).where(
+            SurfQualityPrediction.run_id == r2.id,
+            SurfQualityPrediction.score == 0,
+            SurfQualityPrediction.forecast_id.in_(
+                select(WaveForecast.id).where(
+                    WaveForecast.run_id == r2.id, WaveForecast.sig_wave_height_m.is_(None)
+                )
+            ),
+        )
+    )
+    assert flat == 0
+
+
+def test_an_hour_without_any_wave_height_is_never_scored(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defence in depth (review r1-backend-F4): an hour that reached a run without a wave
+    height of any kind has no score, never "poor" with score 0 (unknown waves are not
+    flat water)."""
+    from app.models import SurfQualityPrediction
+
+    def build(name: str, settings: object = None, overrides: Any = None) -> Any:
+        return GfsSteps(overrides=overrides, natural_swells=False)
+
+    monkeypatch.setattr(registry, "build_provider", build)
+    monkeypatch.setattr(ingestion, "build_provider", build)
+    assert refresh()["status"] == "success"
+    # As before the fix: the hours the carried wave run lacks are kept half filled.
+    monkeypatch.setattr(
+        ingestion.carry, "drop_uncarried_hours", lambda db, **kwargs: 0, raising=True
+    )
+    split.cycles["atmosphere"] = C06
+    assert refresh()["status"] == "success"
+    r2 = run_of(db, published(db))
+    hollow = list(
+        db.scalars(
+            select(WaveForecast.id).where(
+                WaveForecast.run_id == r2.id, WaveForecast.sig_wave_height_m.is_(None)
+            )
+        )
+    )
+    assert len(hollow) == 4 * len(few_spots)  # leads 121, 122, 124 and 125 h of the waves
+    scored = db.scalar(select(func.count()).where(SurfQualityPrediction.forecast_id.in_(hollow)))
+    assert scored == 0
+    assert db.scalar(select(func.count()).where(SurfQualityPrediction.run_id == r2.id)) > 0
+
+
+def test_a_version_marker_lost_after_publication_is_written_again_by_the_next_sync(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r1-backend-F2: a process killed between the publication and the marker write
+    (after "match") left the previous version's marker, which has no expiry. The next sync
+    that takes the lease finds it behind the published version and writes it again."""
+    from app.services.forecasts import serving
+
+    assert refresh()["status"] == "success"
+    v1 = published(db)
+    split.cycles["wave"] = C06
+    with monkeypatch.context() as m:  # the process dies after the publication committed
+        m.setattr(orchestrator, "_write_marker", lambda ctx: None)
+        m.setattr(orchestrator, "remember", lambda known, result, now=None: known)
+        refresh()
+    v2 = published(db)
+    assert v2.id != v1.id and marker_version() == v1.id
+    out = refresh(utcnow() + timedelta(minutes=5))
+    assert out["sync_run_id"] is not None, out  # the run seen again takes the lease
+    assert marker_version() == v2.id
+    serving.clear_memo()
+    assert serving.version_marker(db)["version_id"] == v2.id
+    # Nothing new afterwards: the checks read no database and leave the marker alone.
+    assert refresh(utcnow() + timedelta(minutes=10))["status"] == "not_due"
+    assert marker_version() == v2.id
+
+
 def test_the_refresh_check_asks_only_the_spot_providers(
     db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
 ) -> None:

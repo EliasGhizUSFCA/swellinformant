@@ -440,6 +440,22 @@ def _missing_swell(f: ScoringForecast) -> bool:
     return period is None or direction is None
 
 
+def _no_wave_height(f: ScoringForecast) -> bool:
+    """No wave height of any kind at this hour (bulk, swell partitions, wind sea): nothing
+    to rate. Scored, the hour would read as flat water (score 0, "poor") although the
+    waves are unknown, not small."""
+    return all(
+        h is None
+        for h in (
+            f.sig_wave_height_m,
+            f.primary_swell_height_m,
+            f.secondary_swell_height_m,
+            f.tertiary_swell_height_m,
+            f.wind_wave_height_m,
+        )
+    )
+
+
 def compute_predictions_for_run(
     db: Session,
     run_id: int,
@@ -448,8 +464,8 @@ def compute_predictions_for_run(
     *,
     shared: PassReads | None = None,
 ) -> int:
-    """Score every forecast hour of the run. ``shared``: the pass's :class:`PassReads`
-    (read here when not given)."""
+    """Score every forecast hour of the run that has a wave height. ``shared``: the pass's
+    :class:`PassReads` (read here when not given)."""
     run = db.get(ForecastRun, run_id)
     if run is None or run.status not in (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL):
         return 0
@@ -474,6 +490,8 @@ def compute_predictions_for_run(
     weights = effective_weights(settings.scoring_weights)
     by_spot: dict[int, list[ScoringForecast]] = defaultdict(list)
     for row in scoring_forecasts(db, run.id):
+        if _no_wave_height(row):
+            continue  # unknown waves are never rated (a refresh stores no such hour)
         by_spot[row.spot_id].append(row)
 
     rows: list[dict[str, object]] = []

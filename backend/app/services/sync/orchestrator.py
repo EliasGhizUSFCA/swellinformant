@@ -739,6 +739,30 @@ def _write_marker(ctx: _Sync) -> None:
         logger.warning("Version marker not written after sync %s", ctx.row_id, exc_info=True)
 
 
+def _marker_behind() -> bool:
+    """Whether the version marker in Redis names another version than the published one.
+    The marker has no expiry and is written after "match": a process killed in between (a
+    hard kill, the Function's maxDuration, OOM) leaves the previous version's marker, and
+    the browsers would keep the old version until the next publication. One indexed select;
+    False when there is no marker (the version endpoint re-seeds a missing one) or on any
+    error."""
+    try:
+        from app.models.version import ForecastVersion
+        from app.services.forecasts.versions import PUBLISHED, read_version_marker
+
+        marker = read_version_marker()
+        if marker is None:
+            return False
+        with SessionLocal() as db:
+            published = db.scalar(
+                select(ForecastVersion.id).where(ForecastVersion.status == PUBLISHED).limit(1)
+            )
+        return published is not None and marker.get("version_id") != published
+    except Exception:
+        logger.warning("Version marker not compared with the published version", exc_info=True)
+        return False
+
+
 def _note_published(sync_run_id: int, *, prewarm: bool) -> None:
     """The public snapshot cache's hook (app.services.public_cache.note_published): every
     public snapshot is computed afresh from the next request on, and no request reads the
@@ -913,6 +937,11 @@ def run_sync(
             error=_text(exc),
         )
         raise
+    if not ctx.marker_due and _marker_behind():
+        # A sync that published nothing finds the marker on another version than the
+        # published one (an earlier sync died before writing it): written again here.
+        logger.warning("Version marker behind the published version: written again")
+        ctx.marker_due = True
     _write_marker(ctx)  # stopped or lost before "match": what was published is served
     done = {s.name for s in stages}
     reason = "lease lost" if lost else "stopped"

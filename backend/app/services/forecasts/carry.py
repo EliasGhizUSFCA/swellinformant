@@ -4,10 +4,10 @@ A refresh that fetches only one component of a spot source (design D6: a new win
 waves unchanged) stores the fetched rows with the other component's columns empty, then
 :func:`carry_component` fills them from the run each spot is served from, in ONE ``UPDATE
 ... FROM`` on the server: no forecast row travels through Python. Rows are matched on
-``(spot_id, valid_time)``; an hour the source run does not have stays empty (it is listed in
-``missing_fields``, never filled in). The carried values keep their own model run: the new
-run records the carried component's ORIGINAL run key, init times and retrieval time
-(``ingestion.refresh_source``).
+``(spot_id, valid_time)``; an hour the source run does not have is then removed from the
+new run (:func:`drop_uncarried_hours`): never stored half filled, never filled in. The
+carried values keep their own model run: the new run records the carried component's
+ORIGINAL run key, init times and retrieval time (``ingestion.refresh_source``).
 
 :func:`validate_spots` then checks every spot of the new run (design D9): at least
 FORECAST_MIN_VALID_FRACTION of its hours carry both a wave height and a wind speed, and no
@@ -92,13 +92,16 @@ def domain_cycles(run_key: str | None) -> dict[str, datetime] | None:
 
 
 def domains_behind(available: str | None, stored: str | None) -> bool:
-    """True when the available run has the stored run's model domains, none on a newer
-    cycle and at least one on an older one: a lagging metadata server (Open-Meteo's servers
-    can disagree for minutes) offers part of the previous run, which is never new."""
+    """True when the available run has the stored run's model domains and at least one of
+    them is on an older cycle than the stored one, whatever the others say. Detection is
+    monotonic per domain: a lagging metadata server (Open-Meteo's servers can disagree for
+    an hour) offers a domain of the previous run beside an advanced one, and such a mix is
+    never new; the component waits until every domain is at or past its stored cycle (a
+    published run built from it would name the older cycle as its model run)."""
     have, kept = domain_cycles(available), domain_cycles(stored)
     if not have or not kept or have.keys() != kept.keys():
         return False
-    return all(have[k] <= kept[k] for k in have) and any(have[k] < kept[k] for k in have)
+    return any(have[k] < kept[k] for k in have)
 
 
 def same_run(available: str | None, stored: str | None) -> bool:
@@ -117,7 +120,8 @@ def same_run(available: str | None, stored: str | None) -> bool:
 
 def older_than_stored(available: str | None, stored: str | None) -> bool:
     """Monotonic detection: the available key names an older run than the stored one (an
-    older newest cycle, or some domains behind and none ahead). Never new."""
+    older newest cycle, or any model domain behind its stored cycle, even beside a domain
+    that advanced). Never new."""
     if not available or not stored or available == stored:
         return False
     have, kept = newest_cycle(available), newest_cycle(stored)
@@ -225,6 +229,37 @@ def carry_component(db: Session, *, run_id: int, component: str, sources: Mappin
             "fields": list(fields),
             "run_id": run_id,
         },
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
+def drop_uncarried_hours(
+    db: Session, *, run_id: int, component: str, sources: Mapping[int, int]
+) -> int:
+    """Delete the rows of run ``run_id`` at valid times the carried ``component``'s source
+    run does not have (``sources``: spot id -> the run the component is carried from), so no
+    hour of the new run is half filled. The two components' runs can step differently: GFS
+    and GFS-Wave are hourly to 120 h, 3-hourly after, so a 06Z atmosphere beside a carried
+    00Z wave run has hours at 121, 122, 124 and 125 h of the wave run, and hours past its
+    horizon, where no wave value exists (and the reverse for a wave-only refresh). Such an
+    hour would be scored as flat water, or without the wind; a fetch of both components of
+    one cycle never stores it either. One statement; the caller commits."""
+    if component not in COMPONENT_FIELDS:
+        raise ValueError(f"unknown component {component!r}")
+    if not sources:
+        return 0
+    pairs = sorted(sources.items())
+    result = db.execute(
+        text(
+            "DELETE FROM wave_forecasts AS n"
+            " USING unnest(:spots, :runs) AS m(spot_id, run_id)"
+            " WHERE n.run_id = :run_id AND n.spot_id = m.spot_id AND NOT EXISTS ("
+            " SELECT 1 FROM wave_forecasts AS o WHERE o.run_id = m.run_id"
+            " AND o.spot_id = m.spot_id AND o.valid_time = n.valid_time)"
+        ).bindparams(
+            bindparam("spots", type_=ARRAY(INTEGER)), bindparam("runs", type_=ARRAY(INTEGER))
+        ),
+        {"spots": [s for s, _ in pairs], "runs": [r for _, r in pairs], "run_id": run_id},
     )
     return int(getattr(result, "rowcount", 0) or 0)
 

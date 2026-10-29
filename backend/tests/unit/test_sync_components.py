@@ -171,6 +171,32 @@ def test_a_component_with_a_domain_behind_the_stored_run_is_never_new(world: Wor
     assert "older than the stored run" in (part(plan, "atmosphere").detail or "")
 
 
+def test_a_component_with_one_domain_ahead_and_one_behind_is_never_new(world: World) -> None:
+    """Monotonic per domain (review r1-backend-F1): GFS 0.13 advanced to 06Z while a lagging
+    metadata server answers GFS 0.25 with the cycle BEFORE the stored 00Z. The newest cycle is
+    newer than stored, but a run built from it would name 18Z as its model run: current
+    until every domain is at or past the stored cycle."""
+    c18 = C00 - timedelta(hours=6)
+    world.run = om_run(C00, C06, atmos025=c18)
+    plan = plan_sync(None, settings=settings(), now=T0, known=stored(C00, C00))
+    assert not plan.due and parts(plan) == {"wave": "current", "atmosphere": "current"}
+    assert "older than the stored run" in (part(plan, "atmosphere").detail or "")
+    # Once the lagging domain catches up, the new atmosphere run is due.
+    world.run = om_run(C00, C06, atmos025=C00)
+    plan = plan_sync(None, settings=settings(), now=T0, known=stored(C00, C00))
+    assert plan.due and parts(plan) == {"wave": "current", "atmosphere": "new"}
+
+
+def test_older_than_stored_is_monotonic_per_domain() -> None:
+    from app.services.forecasts.carry import older_than_stored
+
+    stored_key = "gfs013:2026102900|gfs025:2026102900"
+    assert older_than_stored("gfs013:2026102906|gfs025:2026102818", stored_key) is True
+    assert older_than_stored("gfs013:2026102906|gfs025:2026102900", stored_key) is False
+    assert older_than_stored("gfs013:2026102906|gfs025:2026102906", stored_key) is False
+    assert older_than_stored(stored_key, stored_key) is False
+
+
 def legacy(wave: datetime, atmos: datetime) -> KnownRuns:
     """What Upgrade 4 stored: one whole-source run key, no component keys."""
     return KnownRuns(

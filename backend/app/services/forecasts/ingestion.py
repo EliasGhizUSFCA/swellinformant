@@ -1037,6 +1037,9 @@ def refresh_source(
     run = refreshed
     for c in carried:
         carry.carry_component(db, run_id=run_id, component=c, sources=sources[c])
+        # An hour the carried run lacks (the runs step differently, or it ends sooner) is
+        # not published half filled: scored without waves it would read as flat water.
+        carry.drop_uncarried_hours(db, run_id=run_id, component=c, sources=sources[c])
     scope = [p.spot_id for g in groups.values() for p in g]
     verdicts = carry.validate_spots(db, run_id, settings.forecast_min_valid_fraction, scope)
     for spot_id, reason in verdicts.items():
