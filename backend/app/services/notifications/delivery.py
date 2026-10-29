@@ -246,4 +246,10 @@ def deliver_pending(db: Session, now: datetime | None = None, limit: int = 100) 
         db.commit()
     if stats.claimed:
         logger.info("Notification delivery: %s", stats.as_dict())
+    if get_settings().job_runner == "daemon":
+        # Without a daemon timer, the refresh endpoint retries a delivery once its backoff
+        # passed: it reads the earliest retry time from Redis (app.services.sync.standin).
+        from app.services.sync.standin import note_next_delivery
+
+        note_next_delivery(db)
     return stats

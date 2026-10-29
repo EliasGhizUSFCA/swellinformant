@@ -1028,7 +1028,9 @@ def refresh_check(
     database asleep. Returns ``{status: disabled | not_due | busy | <sync status>, plan,
     sync_run_id, version_ids, published_at, stages, refreshes, timings}``; every call is
     recorded in Redis (``state.write_refresh_check``, with ``caller``: ``refresh`` for the
-    endpoint, ``cron_daily`` for the backstop) for the scheduler-silence alert.
+    endpoint, ``cron_daily`` for the backstop) for the scheduler-silence alert. Then, under
+    JOB_RUNNER=daemon, the work a daemon would do between its checks
+    (:func:`_daemon_work`), summarised as ``background`` when anything ran.
     """
     started, cpu0 = time.monotonic(), cpu_seconds()
     settings = get_settings()
@@ -1036,21 +1038,48 @@ def refresh_check(
         state.write_refresh_check(
             {"caller": caller, "trigger": trigger, "status": "disabled", "due": False}
         )
-        return {"status": "disabled", "reason": DISABLED_REASON}
-    out = _refresh_check(trigger, now, settings, started, cpu0)
-    state.write_refresh_check(
-        {
-            "caller": caller,
-            "trigger": trigger,
-            "status": out.get("status"),
-            "due": bool(out.get("due")),
-            "sync_run_id": out.get("sync_run_id"),
-            "version_ids": list(out.get("version_ids") or []),
-            # What the check saw per component (state, detail): monitoring reads a provider
-            # whose metadata is unknown from here when no daemon writes a heartbeat.
-            "components": list((out.get("plan") or {}).get("components") or []),
-        }
-    )
+        out: dict[str, Any] = {"status": "disabled", "reason": DISABLED_REASON}
+    else:
+        out = _refresh_check(trigger, now, settings, started, cpu0)
+        state.write_refresh_check(
+            {
+                "caller": caller,
+                "trigger": trigger,
+                "status": out.get("status"),
+                "due": bool(out.get("due")),
+                "sync_run_id": out.get("sync_run_id"),
+                "version_ids": list(out.get("version_ids") or []),
+                # What the check saw per component (state, detail): monitoring reads a
+                # provider whose metadata is unknown from here when no daemon writes a
+                # heartbeat.
+                "components": list((out.get("plan") or {}).get("components") or []),
+            }
+        )
+    background = _daemon_work(settings, now)
+    if background:
+        out["background"] = background
+    return out
+
+
+def _daemon_work(settings: Settings, now: datetime | None) -> dict[str, Any]:
+    """What a daemon would do between its checks, done here so it happens without one
+    (app.services.sync.standin, JOB_RUNNER=daemon): the API's pending kicks (an explicit
+    "Re-check flights", a new saved search to match) and a notification retry that is due.
+    Two Redis commands and no database read when nothing is pending; never raises (the
+    kill switch stops syncs, not these)."""
+    from app.services.sync import standin
+
+    out: dict[str, Any] = {}
+    try:
+        kicks = standin.run_kicks(settings)
+        if kicks:
+            out["kicks"] = kicks
+        delivery = standin.run_due_delivery(now, settings)
+        if delivery:
+            out["delivery"] = delivery
+    except Exception:
+        logger.exception("Pending background work after the refresh check failed")
+        out["error"] = "background work failed"
     return out
 
 

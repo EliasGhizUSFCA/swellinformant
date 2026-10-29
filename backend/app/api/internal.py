@@ -10,15 +10,17 @@ the FORECAST_REFRESH_ENABLED kill switch, ``not_due``, ``busy`` when another syn
 the lease, else the sync's status), the plan, the sync run, the version ids published and
 the timings. A busy or failed refresh is still a 200 (the scheduler must not retry: the next
 check retries on its own, with backoff), an unexpected error a 503. Idempotent: duplicate
-deliveries find nothing due or the lease taken.
+deliveries find nothing due or the lease taken. Under JOB_RUNNER=daemon it also runs the
+API's pending kicks (an explicit "Re-check flights", a new saved search to match) and a
+notification retry that is due (``background``), so these need no daemon.
 
 ``GET /api/internal/cron/daily`` is the daily watchdog Vercel Cron calls with
 ``Authorization: Bearer $CRON_SECRET``:
 
 * 404 (the same body as an unknown route) when CRON_SECRET is not set;
 * 401 when the bearer token does not match (constant-time comparison);
-* 200 ``{status, problems, alerts_sent, heartbeat_age_minutes, refresh}`` otherwise, with
-  ``Cache-Control: private, no-store``.
+* 200 ``{status, problems, alerts_sent, heartbeat_age_minutes, jobs, refresh}`` otherwise,
+  with ``Cache-Control: private, no-store``.
 
 The watchdog runs the ``ops.data_health`` job (app.services.notifications.ops_alerts: the
 data-health report, and an email to the admins when a problem appears, rises, repeats or
@@ -26,8 +28,11 @@ clears) through the job runner, so its log row carries the alert state the next 
 and a problem is not reported twice. It is independent of the sync daemon: it still alerts
 when the daemon has stopped (its heartbeat goes stale) or when Redis refuses commands (the
 job then runs without its Redis lock, and the report names ``redis_unavailable``). After the
-watchdog it also runs one refresh check (the backstop for a scheduler that stopped calling
-the refresh route) and adds its summary as ``refresh``. ``status`` is the report's overall
+watchdog, under JOB_RUNNER=daemon, it runs the periodic jobs no daemon ran on time
+(``jobs``: maintenance cleanup, the matching housekeeping, tide acquisition, alerts,
+delivery, ...; app.services.sync.standin: on Vercel Hobby the daemon is optional), then one
+refresh check (the backstop for a scheduler that stopped calling the refresh route) and
+adds its summary as ``refresh``. ``status`` is the report's overall
 status (ok, degraded, failing), or ``skipped`` when another run of the job held its lock;
 ``alerts_sent`` lists the alerts (``<reason>:<problem key>``) the admins were emailed;
 ``heartbeat_age_minutes`` is the age of the daemon's last check (None when there is no
@@ -221,6 +226,21 @@ def _refresh_backstop() -> dict[str, Any]:
     }
 
 
+def _overdue_jobs() -> dict[str, Any] | None:
+    """JOB_RUNNER=daemon: the periodic jobs no daemon ran on time (the daemon is optional on
+    Vercel Hobby), run now (app.services.sync.standin.run_overdue_jobs); None under Celery,
+    whose beat runs them. Never raises."""
+    if get_settings().job_runner != "daemon":
+        return None
+    from app.services.sync.standin import run_overdue_jobs
+
+    try:
+        return run_overdue_jobs()
+    except Exception as exc:
+        logger.exception("Daily stand-in jobs failed")
+        return {"error": f"jobs_failed:{type(exc).__name__}"}
+
+
 @router.get(CRON_DAILY_PATH)
 def cron_daily(authorization: str | None = Header(default=None)) -> JSONResponse:
     _authorize(authorization)
@@ -244,6 +264,7 @@ def cron_daily(authorization: str | None = Header(default=None)) -> JSONResponse
         "problems": list(result.get("problems") or []),
         "alerts_sent": list(result.get("alerts") or []) if email.get("sent") else [],
         "heartbeat_age_minutes": heartbeat_age_minutes(),
+        "jobs": _overdue_jobs(),
         "refresh": _refresh_backstop(),
     }
     logger.info(

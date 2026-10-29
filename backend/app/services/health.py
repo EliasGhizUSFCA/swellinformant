@@ -28,7 +28,12 @@ It checks, with plain reasons:
 * **Heartbeat**: under JOB_RUNNER=celery, the newest finished job of any kind (this
   check's own job excluded). Under JOB_RUNNER=daemon, the sync daemon's heartbeat in Redis
   (written at every check), stale after ``max(3 x SYNC_CHECK_MINUTES,
-  DATA_HEALTH_HEARTBEAT_MINUTES)`` unless a sync with a valid lease is running.
+  DATA_HEALTH_HEARTBEAT_MINUTES)`` unless a sync with a valid lease is running. When the
+  daemon is optional (``spots`` not in SYNC_DAEMON_KINDS, the hosted profile: the refresh
+  endpoint refreshes the spots and the daily cron stands in for its timers,
+  app.services.sync.standin), a missing heartbeat only means the map layers age: degraded
+  in the standalone map-field mode, nothing otherwise; the sync block's last check is then
+  the newer of the heartbeat and the refresh endpoint's last check.
 * **Sync** (``DataHealthOut.sync``): the runner, the last check, the newest and the newest
   published sync with their stages, the components of the last check (daemon), and the
   CPU used this month against SYNC_CPU_BUDGET_HOURS (degraded above 80 %). The two newest
@@ -49,7 +54,8 @@ It checks, with plain reasons:
 
 Overall status: ``failing`` when the product cannot serve fresh forecasts (no forecast
 source is fresh), the job runner is down (Celery: no background job has finished for
-DATA_HEALTH_HEARTBEAT_MINUTES; daemon: its heartbeat is stale) or the licence check fails;
+DATA_HEALTH_HEARTBEAT_MINUTES; daemon: its heartbeat is stale, unless the daemon is
+optional) or the licence check fails;
 ``degraded`` for any other problem; ``ok`` otherwise.
 
 **Admin problems** (design D12; :func:`admin_problems`, ``data_health(admin=True)``): the
@@ -73,7 +79,10 @@ de-duplication, reminders and recovery notices as every other problem:
   refresh syncs all failed or were abandoned (map-only syncs and skipped checks ignored).
 * ``provider_credentials:<provider>``: the provider refused the key (HTTP 401/403, Windy's
   "Invalid API key") or answered with a Windy TESTING key, in the newest attempt of its
-  source or in the recorded provider health (the providers package).
+  source or in the recorded provider health (the providers package). Also
+  ``provider_credentials:flights_<provider>`` and ``provider_credentials:email_<provider>``
+  (failing): the configured flight or email provider refused its credentials and no
+  request was accepted since (app.services.service_credentials).
 * ``provider_unavailable:<source>``: the provider's run metadata has been unreadable for
   PROVIDER_UNAVAILABLE_AFTER (30 min): new runs cannot be detected. When the metadata was
   first seen unknown is kept in Redis (METADATA_UNKNOWN_KEY) by these checks.
@@ -160,6 +169,7 @@ from app.schemas.sync import (
     SyncStageOut,
     SyncStoredRunOut,
 )
+from app.services import service_credentials
 from app.services.forecasts import provider_manager, versions
 from app.services.forecasts.base import ATMOSPHERE, WAVE
 from app.services.forecasts.open_meteo import free_api_refused
@@ -174,6 +184,7 @@ from app.services.map_fields import map_fields_mode, served_run
 from app.services.sync import state
 from app.services.sync.detect import newest_cycle
 from app.services.sync.published import latest_publication
+from app.services.sync.standin import daemon_optional
 from app.services.sync.types import STAGE_JOB_NAMES, SYNC_OWNED_TASKS, SYNC_TICK_JOB
 from app.services.tides.health import constants_file_present, tide_freshness
 from app.services.usage import RECENT_RUNS, usage_report
@@ -193,6 +204,9 @@ SYNC_STAGE_SCHEDULE = "in each sync"
 # The daemon's heartbeat is stale after this many check intervals (or
 # DATA_HEALTH_HEARTBEAT_MINUTES, whichever is longer).
 HEARTBEAT_CHECKS = 3
+# With an optional daemon the daily cron (Vercel's "once a day", within an hour of its time)
+# runs the periodic jobs it would run: a job is expected at least this often.
+STANDIN_GAP = timedelta(hours=26)
 # A Celery runner is down when no job finished for this many of its shortest intervals (or
 # DATA_HEALTH_HEARTBEAT_MINUTES, whichever is longer).
 JOB_HEARTBEAT_INTERVALS = 2
@@ -465,17 +479,25 @@ def expected_jobs(settings: Settings) -> list[ExpectedJob]:
     Under JOB_RUNNER=daemon only the entries the daemon runs on its timers are expected
     (app.services.sync.daemon.periodic_entries: not the sync's own jobs, SYNC_OWNED_TASKS,
     sync.tick included, nor a task without a job spec); its Redis heartbeat stands for the
-    sync check.
+    sync check. When the daemon is optional (``standin.daemon_optional``: spot syncs belong
+    to the refresh endpoint) each of them is expected at least every :data:`STANDIN_GAP`,
+    the daily cron's stand-in run.
     """
     jobs: dict[str, ExpectedJob] = {}
+    optional = daemon_optional(settings)
     for entry in build_schedule(settings).values():
         name, sched = entry.task, entry.schedule
         if not settings.runs_celery and (name in SYNC_OWNED_TASKS or name not in JOB_SPECS):
             continue
         gap = max_interval(sched)
+        text = describe_schedule(sched)
+        if optional and name != DATA_HEALTH_TASK and gap < STANDIN_GAP:
+            # Without the (optional) daemon the daily cron runs the job once it is overdue
+            # (app.services.sync.standin): at least once a day.
+            gap, text = STANDIN_GAP, f"{text} by the daemon; without it, daily (cron)"
         known = jobs.get(name)
         if known is None or (known.max_gap is not None and gap < known.max_gap):
-            jobs[name] = ExpectedJob(name, describe_schedule(sched), gap)
+            jobs[name] = ExpectedJob(name, text, gap)
     for stage_job in sync_stage_jobs(settings):
         jobs.setdefault(stage_job, ExpectedJob(stage_job, SYNC_STAGE_SCHEDULE, None))
     return sorted(jobs.values(), key=lambda j: j.name)
@@ -485,6 +507,11 @@ def runner_hint(settings: Settings) -> str:
     """Which processes run the jobs, for problem messages."""
     if settings.runs_celery:
         return "the scheduler (beat) or the worker"
+    if daemon_optional(settings):
+        return (
+            "the sync daemon, or without it the daily cron (/api/internal/cron/daily) and the "
+            "refresh endpoint"
+        )
     return "the sync daemon (on Vercel: the project's Daemons)"
 
 
@@ -1201,6 +1228,40 @@ def heartbeat_problem(
     )
 
 
+def optional_daemon_problem(
+    settings: Settings,
+    heartbeat: state.Heartbeat | None,
+    now: datetime,
+    *,
+    sync_running: bool,
+) -> Problem | None:
+    """The daemon is optional (``standin.daemon_optional``: the refresh endpoint refreshes
+    the spot forecasts, the daily cron runs the periodic jobs): without a fresh heartbeat
+    only the map layers it syncs age (degraded, and only when it is meant to sync them in
+    the standalone map-field mode); otherwise nothing is wrong. A silent refresh scheduler
+    is ``refresh_scheduler_silent``'s (admin problems)."""
+    if "map" not in settings.sync_daemon_kind_list or map_fields_mode(settings) != "standalone":
+        return None
+    limit = heartbeat_limit_minutes(settings)
+    if sync_running or (heartbeat is not None and now - heartbeat.at <= timedelta(minutes=limit)):
+        return None
+    when = (
+        "has written no heartbeat (none in Redis, or older than 6 h)"
+        if heartbeat is None
+        else f"last checked at {stamp(heartbeat.at)}, {ago(now - heartbeat.at)} ago (limit "
+        f"{limit} min)"
+    )
+    return Problem(
+        "sync_heartbeat_stale",
+        "degraded",
+        f"The optional sync daemon (SYNC_DAEMON_KINDS={settings.sync_daemon_kinds}) {when}: "
+        "the map layers are not refreshed and the map overlay ages (it is labelled out of "
+        "date). Spot forecasts keep refreshing through /api/internal/refresh and the daily "
+        "cron runs the periodic jobs. Check the daemon (on Vercel: the project's Daemons, "
+        "and its CPU quota) if the overlay matters.",
+    )
+
+
 def failed_syncs_problem(finished: Sequence[SyncRun]) -> Problem | None:
     """Degraded when the newest SYNC_FAILURES_IN_A_ROW finished syncs (newest first) all
     failed or were abandoned. The error text goes to the admin email only."""
@@ -1260,10 +1321,16 @@ def _check_sync(
     else:
         if heartbeat is not None:
             last_check_at = heartbeat.at
+        optional = daemon_optional(settings)
+        if optional and redis_available:
+            # The spot runner is the refresh endpoint: its last check counts as one.
+            checked = read_refresh_check()
+            at = as_datetime(checked.get("at")) if checked else None
+            if at is not None and (last_check_at is None or at > last_check_at):
+                last_check_at = at
         if redis_available:  # otherwise redis_unavailable explains it
-            problem = heartbeat_problem(
-                settings, heartbeat, now, sync_running=_sync_running(db, now)
-            )
+            judge = optional_daemon_problem if optional else heartbeat_problem
+            problem = judge(settings, heartbeat, now, sync_running=_sync_running(db, now))
             if problem is not None:
                 stale = True
                 problems.append(problem)
@@ -1748,7 +1815,7 @@ class CredentialFailure:
     provider: str  # FORECAST_PROVIDERS token (or the source code when it has none)
     source: str | None
     at: datetime | None
-    kind: str  # credentials | testing_key
+    kind: str  # credentials | testing_key | service (a flight or email provider)
     detail: str | None
 
 
@@ -1817,6 +1884,34 @@ def _health_failures(health: Mapping[str, Mapping[str, Any]]) -> list[Credential
     return out
 
 
+# The setting that holds each service's credentials, for the problem text.
+SERVICE_KEY_SETTINGS = {
+    "flights_duffel": "DUFFEL_ACCESS_TOKEN",
+    "flights_amadeus": "AMADEUS_CLIENT_ID / AMADEUS_CLIENT_SECRET",
+    "email_resend": "RESEND_API_KEY",
+    "email_sendgrid": "SENDGRID_API_KEY",
+}
+
+
+def _service_failures(settings: Settings) -> list[CredentialFailure]:
+    """The configured flight and email providers' refused credentials (HTTP 401/403,
+    recorded by app.services.service_credentials until a request is accepted again)."""
+    services = [
+        service_credentials.service_name("flights", settings.flight_provider),
+        service_credentials.service_name("email", settings.email_provider),
+    ]
+    return [
+        CredentialFailure(
+            provider=str(r["service"]),
+            source=None,
+            at=as_datetime(r.get("at")),
+            kind="service",
+            detail=_redacted(r.get("detail")),
+        )
+        for r in service_credentials.refused(services)
+    ]
+
+
 def _redacted(text: Any) -> str | None:
     """Recorded error text (another package's record) redacted and shortened."""
     return redact(str(text))[:DETAIL_MAX_CHARS] if text else None
@@ -1851,6 +1946,23 @@ def credential_problems(
     standing_in = selection.get("fallback_from")
     problems: list[Problem] = []
     for provider, f in sorted(by_provider.items()):
+        if f.kind == "service":
+            kind, _, name = provider.partition("_")
+            what = "flight searches" if kind == "flights" else "alert and account emails"
+            setting = SERVICE_KEY_SETTINGS.get(provider, "its key")
+            problems.append(
+                Problem(
+                    f"provider_credentials:{provider}",
+                    "failing",
+                    f"{'Flight' if kind == 'flights' else 'Email'} provider {name} refused the "
+                    "credentials (HTTP 401/403: invalid, expired or revoked)"
+                    + (f" at {stamp(f.at)}" if f.at else "")
+                    + f", so {what} fail. Renew {setting} in the deployment's environment "
+                    "(docs/API_SETUP_REQUIRED.md).",
+                    detail=f.detail,
+                )
+            )
+            continue
         what = (
             "answered with a TESTING key (trial data are shuffled and are never stored or "
             "published)"
@@ -2324,7 +2436,11 @@ def admin_inputs(
             db, settings, now, heartbeat=heartbeat, refresh_check=refresh_check, syncs=syncs
         ),
         metadata=track_metadata(observed, write=track),
-        credential_failures=[*_attempt_failures(db, codes), *_health_failures(health)],
+        credential_failures=[
+            *_attempt_failures(db, codes),
+            *_health_failures(health),
+            *_service_failures(settings),
+        ],
         source_names=source_names(db, {k.split(":", 1)[0] for k in observed} | codes),
     )
 

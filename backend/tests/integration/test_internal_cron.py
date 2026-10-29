@@ -1,7 +1,7 @@
 """GET /api/internal/cron/daily, the daily watchdog. Owned by the api-serverless package.
 
 404 without CRON_SECRET (the body of an unknown route), 401 for a wrong token, otherwise
-200 ``{status, problems, alerts_sent, heartbeat_age_minutes, refresh}`` with
+200 ``{status, problems, alerts_sent, heartbeat_age_minutes, jobs, refresh}`` with
 ``Cache-Control: private, no-store`` (``refresh``: the summary of the refresh check the
 watchdog runs as the backstop of the refresh scheduler, Swell 2.0 design D8; tested in
 test_refresh_components.py). The watchdog runs the ``ops.data_health`` job, so admins are
@@ -34,7 +34,9 @@ pytestmark = pytest.mark.integration
 
 SECRET = "s3cret-token-for-the-watchdog"
 AUTH = {"Authorization": f"Bearer {SECRET}"}
-BODY_KEYS = {"status", "problems", "alerts_sent", "heartbeat_age_minutes", "refresh"}
+# "jobs" (review r1-spec-SPEC-2): the periodic jobs no daemon ran on time, run by the cron
+# under JOB_RUNNER=daemon (None under Celery); tested in test_daemonless_hosted.py.
+BODY_KEYS = {"status", "problems", "alerts_sent", "heartbeat_age_minutes", "jobs", "refresh"}
 
 
 @pytest.fixture

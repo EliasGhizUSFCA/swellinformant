@@ -26,6 +26,7 @@ from pathlib import Path
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.services import service_credentials
 from app.services.http import (
     PermanentProviderError,
     TransientProviderError,
@@ -174,6 +175,8 @@ class _HttpEmailProvider(EmailProvider):
 
     def _check(self, resp: httpx.Response) -> None:
         if resp.status_code in (401, 403):
+            # An expired or revoked API key: the admins are alerted (spec 16).
+            service_credentials.record_refused("email", self.name, f"HTTP {resp.status_code}")
             raise PermanentProviderError(
                 f"{self.name} authentication failed (HTTP {resp.status_code})"
             )
@@ -181,6 +184,7 @@ class _HttpEmailProvider(EmailProvider):
             raise PermanentProviderError(
                 f"{self.name} rejected message: HTTP {resp.status_code} {resp.text[:200]}"
             )
+        service_credentials.record_accepted("email", self.name)
 
 
 class ResendEmailProvider(_HttpEmailProvider):
