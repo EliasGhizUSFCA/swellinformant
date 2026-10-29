@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConditionsSummary } from "@/components/conditions";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
 import { AttributionLinks, ForecastProvenance } from "@/components/forecast-provenance";
-import { ageText, StaleBanner, StaleBadge } from "@/components/stale-banner";
+import { ageText, StaleBanner, StaleBadge, StaleLine } from "@/components/stale-banner";
 import { cycleLabel } from "@/lib/map-time";
 import type { Conditions, RunMember, SwellEvent, SystemStatus } from "@/types/api";
 
@@ -335,5 +335,17 @@ describe("forecast provenance", () => {
     expect(cycleLabel("2026-12-31T00:00:00Z")).toBe("00Z Dec 31");
     render(<ForecastProvenance source={{ name: "Synthetic source", is_demo: false }} run={{ issued_at: "2026-10-11T06:00:00Z" }} />);
     expect(screen.getByTestId("provenance-members")).toHaveTextContent("Model run: 06Z Oct 11");
+  });
+});
+
+describe("StaleLine (review r1-frontend-FE-2)", () => {
+  it("says when a stale spot was last updated and that it is not current", () => {
+    const nowMs = Date.parse("2026-10-29T12:00:00Z");
+    const { rerender } = render(
+      <StaleLine freshness={{ versionId: 4, lastUpdatedAt: "2026-10-29T03:00:00Z", stale: true, reason: "refresh_failed" }} nowMs={nowMs} />,
+    );
+    expect(screen.getByTestId("stale-line")).toHaveTextContent("Forecast last updated 9 hours ago. Not a current forecast.");
+    rerender(<StaleLine freshness={{ versionId: 4, lastUpdatedAt: "2026-10-29T11:00:00Z", stale: false, reason: null }} nowMs={nowMs} />);
+    expect(screen.queryByTestId("stale-line")).toBeNull();
   });
 });

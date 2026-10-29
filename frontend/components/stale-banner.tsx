@@ -2,6 +2,8 @@ import { AlertTriangle, Clock } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import type { Freshness } from "@/lib/forecast-fields";
+import { updatedAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** "20 h" / "3 days" for a model run's age. */
@@ -77,5 +79,27 @@ export function StaleBadge({ stale, dark = false, className }: { stale: boolean 
     >
       <Clock aria-hidden="true" /> Out of date
     </Badge>
+  );
+}
+
+/** One line for a card whose served forecast is out of date (its `freshness.stale`): "Forecast
+ * last updated 9 hours ago. Not a current forecast." Nothing when the forecast is current, so a
+ * stale spot's rating is never shown as current (spec 14). */
+export function StaleLine({
+  freshness,
+  nowMs,
+  className,
+  "data-testid": testId = "stale-line",
+}: {
+  freshness: Freshness | null | undefined;
+  nowMs?: number;
+  className?: string;
+  "data-testid"?: string;
+}) {
+  if (!freshness?.stale) return null;
+  return (
+    <p className={cn("text-xs font-medium text-amber-800", className)} data-testid={testId}>
+      {freshness.lastUpdatedAt ? `Forecast last updated ${updatedAgo(freshness.lastUpdatedAt, nowMs)}.` : "Forecast out of date."} Not a current forecast.
+    </p>
   );
 }

@@ -266,6 +266,7 @@ export default function MapPage() {
       spots={visible}
       total={spots.length}
       conditions={(slug) => bySlug.get(slug)?.conditions}
+      freshness={(slug) => freshnessOf(bySlug.get(slug))}
       onSelect={setSelected}
       open={listIsOpen}
       onOpenChange={setListOpen}
