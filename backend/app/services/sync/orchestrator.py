@@ -1068,9 +1068,9 @@ def _daemon_work(
     (app.services.sync.standin, JOB_RUNNER=daemon): the API's pending kicks (an explicit
     "Re-check flights", a new saved search to match), a notification retry that is due and,
     without a daemon, the data-health check that emails the admins (hourly with the hosted
-    profile, at once after a failed or partial refresh). A few Redis commands and no
-    database read when nothing is due; never raises (the kill switch stops syncs, not
-    these)."""
+    profile, sooner after a failed or partial refresh or an unreadable component:
+    standin.run_due_data_health). A few Redis commands and no database read when nothing
+    is due; never raises (the kill switch stops syncs, not these)."""
     from app.services.sync import standin
 
     out: dict[str, Any] = {}
@@ -1082,7 +1082,7 @@ def _daemon_work(
         if delivery:
             out["delivery"] = delivery
         health = standin.run_due_data_health(
-            now, settings, urgent=standin.refresh_needs_health(check)
+            now, settings, signal=standin.refresh_health_signal(check)
         )
         if health:
             out["data_health"] = health

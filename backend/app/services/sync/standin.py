@@ -16,9 +16,12 @@ jobs on its timers. Without a daemon:
   one key and runs ``notifications.deliver`` only when it is due.
 * :func:`run_due_data_health` (the refresh endpoint): ``ops.data_health``, which raises the
   admin problems and emails the admins (spec 16), once DATA_HEALTH_CHECK_MINUTES have passed
-  since the endpoint last ran it, and at once after a refresh that failed, published part of
-  the spots or could not read a component. Not while a daemon runs (its heartbeat is in
-  Redis: it runs the check on its own timer). Two Redis commands when it is not due.
+  since the endpoint last ran it, and sooner after a refresh that failed or published part
+  of the spots, or when a component's metadata becomes unreadable (:func:`refresh_health_
+  signal`; never twice within SYNC_RETRY_MINUTES, and a lasting unreadable component only
+  when it starts and once PROVIDER_UNAVAILABLE_AFTER later). Not while a daemon runs (its
+  heartbeat is in Redis: it runs the check on its own timer). Two Redis commands when it is
+  not due.
 * :func:`run_overdue_jobs` (the daily cron): every periodic job of the schedule whose
   newest run is older than its own interval (``schedule.max_interval``): maintenance
   cleanup, the matching housekeeping, tide acquisition, alert generation, delivery, the
@@ -32,6 +35,7 @@ failed job is logged and reported in the summary.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -57,6 +61,12 @@ logger = logging.getLogger(__name__)
 DELIVERY_DUE_KEY = "sync:delivery-due"
 # Redis key: ISO time the refresh endpoint last started ops.data_health (no daemon).
 DATA_HEALTH_AT_KEY = "sync:data-health-at"
+# Redis key: the lasting unreadable-metadata signal (refresh_health_signal) that ran the
+# check, when it was first seen and whether its follow-up ran. It outlives the gap between
+# two refresh checks (a scheduler silent this long is a problem of its own,
+# REFRESH_SCHEDULER_EXPECTED_MINUTES); once no check sees the signal, it expires.
+DATA_HEALTH_SIGNAL_KEY = "sync:data-health-signal"
+DATA_HEALTH_SIGNAL_TTL_SECONDS = 30 * 60
 DELIVERY_DUE_TTL_SECONDS = 7 * 86400
 DELIVER_JOB = "notifications.deliver"
 # The order the daily cron runs overdue jobs in: cleanup first (it frees space), the
@@ -184,15 +194,63 @@ def run_due_delivery(
     return {"jobs": _job(DELIVER_JOB, job_spec(DELIVER_JOB).run, chain=False)}
 
 
+def refresh_health_signal(out: dict[str, Any] | None) -> str | None:
+    """What of a refresh check the admins hear of without waiting for the interval: a sync
+    that failed or published part of the spots, or a component whose metadata could not be
+    read. ``"<status>|<kind:component,...>"`` (the unreadable components), or None."""
+    if not out:
+        return None
+    status = str(out.get("status") or "")
+    components = (out.get("plan") or {}).get("components") or []
+    unknown = sorted(
+        {
+            f"{c.get('kind')}:{c.get('component')}"
+            for c in components
+            if isinstance(c, dict) and c.get("state") == "unknown"
+        }
+    )
+    if status in ("failed", "partial") or unknown:
+        return f"{status}|{','.join(unknown)}"
+    return None
+
+
 def refresh_needs_health(out: dict[str, Any] | None) -> bool:
     """A refresh check whose sync failed or published part of the spots, or that could not
-    read a component's metadata: the admins hear of it without waiting for the interval."""
-    if not out:
-        return False
-    if out.get("status") in ("failed", "partial"):
+    read a component's metadata (:func:`refresh_health_signal`)."""
+    return refresh_health_signal(out) is not None
+
+
+def _lasting_signal_due(client: Any, signal: str, now: datetime) -> bool:
+    """For a signal of unreadable metadata only: True when it starts (a new signal), and
+    once more when it has lasted PROVIDER_UNAVAILABLE_AFTER (that admin problem needs a
+    check after that time); False while it lasts otherwise, so a metadata outage or a
+    refused provider setting wakes the database hourly, not at every check (review
+    r3-backend-R3-2). One GET and one SET or EXPIRE."""
+    from app.services.health import PROVIDER_UNAVAILABLE_AFTER
+
+    raw = client.get(DATA_HEALTH_SIGNAL_KEY)
+    try:
+        stored = json.loads(raw) if raw else None
+    except ValueError:
+        stored = None
+    if not isinstance(stored, dict) or stored.get("signal") != signal:
+        record = {"signal": signal, "since": now.isoformat(), "followed": False}
+        client.set(DATA_HEALTH_SIGNAL_KEY, json.dumps(record), ex=DATA_HEALTH_SIGNAL_TTL_SECONDS)
         return True
-    components = (out.get("plan") or {}).get("components") or []
-    return any(c.get("state") == "unknown" for c in components if isinstance(c, dict))
+    try:
+        since: datetime | None = datetime.fromisoformat(str(stored.get("since")))
+    except ValueError:
+        since = None
+    if (
+        not stored.get("followed")
+        and since is not None
+        and now - since >= PROVIDER_UNAVAILABLE_AFTER
+    ):
+        record = {**stored, "followed": True}
+        client.set(DATA_HEALTH_SIGNAL_KEY, json.dumps(record), ex=DATA_HEALTH_SIGNAL_TTL_SECONDS)
+        return True
+    client.expire(DATA_HEALTH_SIGNAL_KEY, DATA_HEALTH_SIGNAL_TTL_SECONDS)
+    return False
 
 
 def note_data_health(now: datetime | None = None, settings: Settings | None = None) -> None:
@@ -211,33 +269,50 @@ def note_data_health(now: datetime | None = None, settings: Settings | None = No
 
 
 def run_due_data_health(
-    now: datetime | None = None, settings: Settings | None = None, *, urgent: bool = False
+    now: datetime | None = None,
+    settings: Settings | None = None,
+    *,
+    urgent: bool = False,
+    signal: str | None = None,
 ) -> dict[str, Any] | None:
     """Run ``ops.data_health`` from the refresh endpoint when no daemon runs it (the hosted
     path without the optional daemon, :func:`daemon_optional`, and no daemon heartbeat in
     Redis): once DATA_HEALTH_CHECK_MINUTES have passed since the endpoint last started it,
-    or at once when ``urgent`` (:func:`refresh_needs_health`). None when it is not due: two
-    Redis commands and no database read (review r2-spec-SPEC-3)."""
+    or sooner for a refresh check's ``signal`` (:func:`refresh_health_signal`; ``urgent``:
+    as a failed refresh's). Sooner is never within SYNC_RETRY_MINUTES of the last start: a
+    failed or partial refresh runs it (its retries are that far apart, and refresh_failures
+    needs three in a row), an unreadable component only as it starts and once more when it
+    has lasted PROVIDER_UNAVAILABLE_AFTER (:func:`_lasting_signal_due`). None when it is not
+    due: two Redis commands and no database read (review r2-spec-SPEC-3; a signal adds
+    up to two)."""
     settings = settings or get_settings()
     if not daemon_optional(settings):
         return None
     now = now or utcnow()
+    interval = timedelta(minutes=settings.data_health_check_minutes)
     try:
         client = get_redis()
         if client.exists(state.HEARTBEAT_KEY):
             return None  # a daemon runs the check on its own timer
         raw = client.get(DATA_HEALTH_AT_KEY)
+        try:
+            last: datetime | None = datetime.fromisoformat(str(raw)) if raw else None
+        except ValueError:
+            last = None
+        soon = urgent or signal is not None
+        if (
+            soon
+            and last is not None
+            and now - last < timedelta(minutes=settings.sync_retry_minutes)
+        ):
+            soon = False  # it ran moments ago
+        if soon and signal is not None and signal.split("|", 1)[0] not in ("failed", "partial"):
+            soon = _lasting_signal_due(client, signal, now)
     except redis.RedisError as exc:
         logger.warning("Data-health time not read: %s", type(exc).__name__)
         return None
-    interval = timedelta(minutes=settings.data_health_check_minutes)
-    if raw and not urgent:
-        try:
-            last: datetime | None = datetime.fromisoformat(str(raw))
-        except ValueError:
-            last = None
-        if last is not None and now - last < interval:
-            return None
+    if not soon and last is not None and now - last < interval:
+        return None
     note_data_health(now, settings)
     return {"jobs": _job(DATA_HEALTH_TASK, job_spec(DATA_HEALTH_TASK).run, chain=False)}
 

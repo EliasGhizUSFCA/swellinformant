@@ -314,6 +314,69 @@ def test_the_admins_hear_of_failed_refreshes_without_a_daemon_or_the_daily_cron(
     assert standin.run_due_data_health(hourly, get_settings(), urgent=True) is None
 
 
+def test_a_lasting_metadata_outage_runs_the_check_as_it_starts_and_once_more(
+    db: Session, few_spots: list[str], hosted: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r3-backend-R3-2: a component whose metadata cannot be read (an outage, a
+    refused provider setting) made every 5-minute check urgent, so ops.data_health woke the
+    database 12 times an hour for as long as it lasted (each run finding nothing new). It
+    now runs as the outage starts and once PROVIDER_UNAVAILABLE_AFTER later (when that
+    admin problem can be raised), then hourly; a failed refresh and a new unreadable
+    component still run it at once, never twice within SYNC_RETRY_MINUTES."""
+    from app.services.forecasts.demo import DemoForecastProvider
+    from app.services.health import PROVIDER_UNAVAILABLE_AFTER
+    from app.services.http import TransientProviderError
+
+    monkeypatch.setattr(get_settings(), "data_health_check_minutes", 60)  # the hosted profile's
+    assert orchestrator.refresh_check(trigger="http")["status"] in ("success", "partial")
+    db.execute(BackgroundJobLog.__table__.delete())
+    db.commit()
+    start = utcnow()
+    standin.note_data_health(start)  # it just ran
+    get_redis().delete(standin.DATA_HEALTH_SIGNAL_KEY)
+
+    def down(self: object, *args: object, **kwargs: object) -> object:
+        raise TransientProviderError("synthetic: meta.json timed out")
+
+    monkeypatch.setattr(DemoForecastProvider, "current_run", down)
+    ran: list[int] = []
+    for i in range(12):  # one hour of 5-minute checks
+        out = orchestrator.refresh_check(trigger="http", now=start + timedelta(minutes=5 * i))
+        assert out["status"] == "not_due", out
+        assert "unknown" in [c.get("state") for c in out["plan"]["components"]]
+        assert standin.refresh_needs_health(out)
+        if (out.get("background") or {}).get("data_health"):
+            ran.append(5 * i)
+    retry = get_settings().sync_retry_minutes
+    first = next(m for m in range(0, 60, 5) if m >= retry)  # not within the retry gap
+    follow = first + int(PROVIDER_UNAVAILABLE_AFTER.total_seconds() // 60)
+    assert ran == [first, follow], ran
+    assert job_rows(db, DATA_HEALTH_TASK) == 2
+    # The next hours: hourly while it lasts.
+    later = [
+        orchestrator.refresh_check(trigger="http", now=start + timedelta(minutes=5 * i))
+        for i in range(12, 36)
+    ]
+    assert sum(1 for o in later if (o.get("background") or {}).get("data_health")) == 2
+    # A failed refresh still runs it at once, but not within SYNC_RETRY_MINUTES of a run;
+    # so does another component becoming unreadable.
+    last = start + timedelta(minutes=5 * 35)
+    settings = get_settings()
+    soon = last + timedelta(minutes=1)
+    assert standin.run_due_data_health(soon, settings, signal="failed|") is None
+    gap = last + timedelta(minutes=retry + 1)
+    assert standin.run_due_data_health(gap, settings, signal="failed|") is not None
+    other = gap + timedelta(minutes=retry + 1)
+    assert standin.run_due_data_health(other, settings, signal="partial|spots:wave") is not None
+    new = other + timedelta(minutes=retry + 1)
+    signal = "not_due|spots:atmosphere,spots:wave,spots:x"
+    assert standin.run_due_data_health(new, settings, signal=signal) is not None
+    assert (
+        standin.run_due_data_health(new + timedelta(minutes=retry + 1), settings, signal=signal)
+        is None
+    )
+
+
 def test_data_health_reports_no_stopped_runner_without_the_optional_daemon(
     db: Session, hosted: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
