@@ -286,3 +286,63 @@ def test_horizon_end_is_where_a_fetch_of_the_run_ends(
     assert end == last
     horizon = p.horizon_end(component, init, now)
     assert horizon is not None and timedelta(0) <= horizon - end < HORIZON_SLACK
+
+
+@pytest.mark.parametrize(
+    ("init", "now", "last"),
+    [
+        # 00Z read at 08:00: the window ends today + 10 days - 1 h (23:00) at lead 239 h;
+        # ECMWF is 6-hourly after 144 h, so its last step there is lead 234 h (18:00).
+        (
+            datetime(2026, 10, 14, 0, tzinfo=UTC),
+            datetime(2026, 10, 14, 8, tzinfo=UTC),
+            datetime(2026, 10, 23, 18, tzinfo=UTC),
+        ),
+        # 12Z read at 20:00: lead 227 h at 23:00; the last 6-hourly step is lead 222 h.
+        (
+            datetime(2026, 10, 14, 12, tzinfo=UTC),
+            datetime(2026, 10, 14, 20, tzinfo=UTC),
+            datetime(2026, 10, 23, 18, tzinfo=UTC),
+        ),
+    ],
+)
+@pytest.mark.parametrize("component", ["wave", "atmosphere"])
+def test_the_ecmwf_horizon_end_is_its_last_native_step(
+    init: datetime, now: datetime, last: datetime, component: str
+) -> None:
+    """Review r3-backend-R3-4: only the model's own steps are stored
+    (OPEN_METEO_NATIVE_STEPS_ONLY), and ECMWF IFS / ecWAM are 6-hourly after 144 h, so a
+    horizon_end at the window's 23:00 lay 5 h after the last stored step: more than
+    ingestion.HORIZON_SLACK, so with FORECAST_PROVIDERS=open_meteo_ecmwf every
+    component-only refresh fetched the other component again for every spot. The end is
+    the last native step a fetch stores (SYNTHETIC hourly series), so a run that ends there
+    is not short."""
+    from app.services.forecasts.ingestion import HORIZON_SLACK
+    from app.services.forecasts.open_meteo import is_native_step
+    from app.services.forecasts.open_meteo_ecmwf import OpenMeteoEcmwfProvider
+
+    today = now.replace(hour=0, minute=0)
+    start = int((today - init).total_seconds() // 3600)
+    rec = Recorder(
+        meta=meta_at(init, init + timedelta(hours=7), end_hours=360),
+        override=synthetic_hourly(init, 10 * 24, start=start),  # the window: 10 days
+    )
+    p = OpenMeteoEcmwfProvider(
+        settings(forecast_days=10),
+        client=httpx.Client(transport=httpx.MockTransport(rec)),
+        backoff_seconds=0,
+        clock=lambda: now,
+    )
+    model = p.wave_models()[0] if component == "wave" else p.atmos_model()
+    assert model in ("ecmwf_wam025", "ecmwf_ifs025")
+    horizon = p.horizon_end(component, init, now)
+    assert horizon == last
+    assert is_native_step(model, (last - init).total_seconds() / 3600)
+    result = p.fetch([PIPELINE], p.current_run(now), frozenset({component}))
+    stored_end = result.records[1][-1].valid_time
+    assert stored_end == horizon
+    # ingestion's test for a carried run that ends short of the horizon:
+    assert not stored_end + HORIZON_SLACK < horizon
+    # Without native thinning every hour is stored, up to the window's end.
+    hourly = OpenMeteoEcmwfProvider(settings(forecast_days=10, open_meteo_native_steps_only=False))
+    assert hourly.horizon_end(component, init, now) == today + timedelta(hours=10 * 24 - 1)

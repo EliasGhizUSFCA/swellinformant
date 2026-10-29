@@ -735,12 +735,29 @@ class OpenMeteoFamilyProvider(ForecastProvider):
     def horizon_end(self, component: str, init: datetime, now: datetime) -> datetime | None:
         """A request's ``forecast_days`` window runs from today 00:00 GMT for ``days``
         days, and :meth:`_records` keeps the hours up to ``days`` after the run: a run read
-        on a later UTC day reaches further (the horizon rolls 24 h a day)."""
+        on a later UTC day reaches further (the horizon rolls 24 h a day). With
+        OPEN_METEO_NATIVE_STEPS_ONLY only the model's own steps are stored, so the end is the
+        component model's last native step at or before that bound: 6-hourly after 144 h for
+        ECMWF, where the bound can fall 5 h after it (review r3-backend-R3-4), more than
+        ingestion.HORIZON_SLACK, so every component-only refresh would fetch the other
+        component again."""
         today = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        return min(
+        bound = min(
             init + timedelta(hours=self.days * 24),
             today + timedelta(hours=self.days * 24 - 1),
         )
+        if not self.settings.open_meteo_native_steps_only:
+            return bound
+        models = self.wave_models() if component == WAVE_COMPONENT else [self.atmos_model()]
+        if not models:
+            return bound
+        end = bound.replace(minute=0, second=0, microsecond=0)
+        # At most one native step back (6 h): never past the run's own start.
+        while end > init:
+            if is_native_step(models[0], (end - init).total_seconds() / 3600.0):
+                return end
+            end -= timedelta(hours=1)
+        return bound
 
     def _cycles_text(self) -> str:
         hours = self.cycle_hours or ()
