@@ -277,9 +277,24 @@ setup `docs/deploy-vercel.md` describes (`SYNC_DAEMON_KINDS=map` or no daemon, a
 scheduler calling `/api/internal/refresh`, the daily cron running the overdue jobs) is
 covered by `backend/tests/integration/test_daemonless_hosted.py` and
 `backend/tests/integration/test_hosted_first_deploy.py` only. To try it here, set
-`SYNC_DAEMON_KINDS=map` in `.env.vercel.local` and call the refresh endpoint from a loop
-(`while sleep 300; do curl -s -X POST -H "Authorization: Bearer $CRON_SECRET"
-http://localhost:3100/api/internal/refresh; done`); that variant was not run.
+`SYNC_DAEMON_KINDS=map` in `.env.vercel.local` and call the refresh endpoint from a loop with
+the stack's own secret: the api container's `CRON_SECRET` (the value in `.env.vercel.local`,
+else the compose default `local-vercel-stack-cron-secret`; your shell's `$CRON_SECRET` is
+not set by any step here, and an empty one answers 401), read the way `vercel-local.sh
+smoke` reads it:
+
+```bash
+secret="$(docker compose -f docker-compose.vercel.yml --env-file .env.vercel.local \
+  exec -T api printenv CRON_SECRET | tr -d '\r')"
+while sleep 300; do
+  curl -fsS -o /dev/null -X POST -H "Authorization: Bearer $secret" \
+    http://localhost:3100/api/internal/refresh || echo "refresh failed"
+done
+```
+
+`-f` makes a refused call (401) print "refresh failed" instead of failing silently. That
+variant was not run (review r4-spec-R4-SPEC-4 corrected the secret; the loop as first
+written sent the unset shell variable).
 
 Swell 2.0 (2026-10-29 01:35 UTC, the integration branch before the review rounds, demo
 data): `smoke` 19 of 19 shell checks (0 failed, 12 s) and 6 of 6 Playwright; data health

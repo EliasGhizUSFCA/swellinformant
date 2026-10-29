@@ -297,7 +297,8 @@ Active CPU-hours a month. Without the daemon the refresh endpoint also runs the 
 runs the periodic jobs (cleanup, matching housekeeping, tides, alerts, delivery); only the
 map overlay ages (it is then labelled stale).
 **Without the daemon** (you scale it to 0, or never deploy it), also set
-`MAP_FIELDS_ENABLED=false`: the map then shows no overlay and data health stays `ok`. With
+`MAP_FIELDS_ENABLED=false`: the map then shows the spot markers only (a "Spot forecasts only"
+note, no layer tabs and no outage notice) and data health stays `ok`. With
 `MAP_FIELDS_ENABLED=true` and no daemon the map layers are never synced, so data health stays
 degraded (`map_fields_missing`, and `sync_heartbeat_stale`: "The optional sync daemon ... has
 written no heartbeat") and the admins get a "Data health DEGRADED" email every 12 h for as
@@ -350,13 +351,21 @@ which only writes the messages to the function's log and a temporary outbox file
 A production build migrates **and seeds** the database (`migrate --on-build`, step 7: the 50
 spots, airports, the tide catalog; safe to repeat), so with `MIGRATE_ON_BUILD=production` and
 Vercel's system variables exposed this step is a head start. **It is required** when the build
-does not seed: its log shows `"status": "skipped"` (no `VERCEL_ENV` in the build, or
-`MIGRATE_ON_BUILD=off`), or the build failed at `"stage": "seed"` with "data/ not found from
-the api build" (the reference data live in the repository's `data/`, outside the api
-service's root `backend/`; whether Vercel's build of that service can read it is **not
-verified**: a build that cannot fails on an empty database rather than deploying a site
-without spots, and skips the seed, saying so, when the database is seeded already), and you
-do not keep the daemon (whose `init-db` seeds at start). A database without spots publishes nothing: the refresh answers `failed`
+does not seed:
+
+* **The build failed at `"stage": "seed"`** with "data/ not found from the api build" (the
+  reference data live in the repository's `data/`, outside the api service's root
+  `backend/`; whether Vercel's build of that service can read it is **not verified**: a
+  build that cannot fails on an empty database rather than deploying a site without spots,
+  and skips the seed, saying so, when the database is seeded already). Run `init-db` below
+  **whether or not you keep the daemon**: a failed build deploys nothing, the daemon
+  included, so its `init-db` never runs. Then redeploy: the next build finds the spots and
+  skips the seed. Alternatively set `MIGRATE_ON_BUILD=off` and keep the daemon, whose
+  `init-db` seeds at start (section 9).
+* **The build's log shows `"status": "skipped"`** (no `VERCEL_ENV` in the build, or
+  `MIGRATE_ON_BUILD=off`) and you do not keep the daemon (whose `init-db` seeds at start).
+
+A database without spots publishes nothing: the refresh answers `failed`
 with "no active surf spot in the database" and backs off, and `/api/health/data` and
 `/admin/freshness` report `no_spots_seeded`. `init-db` below fixes it; step 3 (`make-admin`)
 is needed in every case.

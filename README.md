@@ -529,13 +529,19 @@ only on Vercel's website; steps 4 and 6 run on your machine):
 4. The database: a production build migrates and seeds it (the api's build command
    `python -m app.cli migrate --on-build` with `MIGRATE_ON_BUILD=production`: the 50 spots,
    airports, the tide catalog; a build that cannot read the repository's `data/` fails
-   on an empty database instead of deploying a site without spots). **Required** when that
-   build does not seed (its log says `skipped`, or it failed at `"stage": "seed"`) and you
-   do not keep the daemon: from `backend/` with the dev venv of section
-   E.3, point `DATABASE_URL` and `DATABASE_URL_UNPOOLED` at Neon's direct URL (two `export`
-   lines, docs/deploy-vercel.md step 6) and run `.venv/bin/python -m app.cli init-db`
-   (idempotent; checked here against a local PostgreSQL, not against Neon). A database
-   without spots publishes nothing; `/api/health/data` then reports `no_spots_seeded`.
+   on an empty database instead of deploying a site without spots). Run `init-db` by hand
+   (from `backend/` with the dev venv of section E.3, point `DATABASE_URL` and
+   `DATABASE_URL_UNPOOLED` at Neon's direct URL, two `export` lines, docs/deploy-vercel.md
+   step 6, then `.venv/bin/python -m app.cli init-db`; idempotent; checked here against a
+   local PostgreSQL, not against Neon):
+   * **Required** when the build failed at `"stage": "seed"`, **whether or not you keep the
+     daemon**: a failed build deploys nothing, the daemon included, so its `init-db` never
+     runs. Run `init-db`, then redeploy (step 5): the next build finds the spots and skips
+     the seed. (Or set `MIGRATE_ON_BUILD=off` and keep the daemon, whose `init-db` seeds at
+     start: docs/deploy-vercel.md section 9.)
+   * **Required** when the build's log says `skipped` and you do not keep the daemon.
+   A database without spots publishes nothing; `/api/health/data` then reports
+   `no_spots_seeded`.
 5. Redeploy production, then check `https://<project>.vercel.app/api/health/ready` and run
    the first refresh by hand:
    `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh`
@@ -557,8 +563,8 @@ only on Vercel's website; steps 4 and 6 run on your machine):
    admin) shows the refresh scheduler `checking`, its last check by `refresh endpoint
    (refresh)` less than 5 minutes ago, and `/status` a recent check. The `sync` daemon is
    optional: it only refreshes the map layers. **If you do not keep it**, scale it to 0 and
-   set `MAP_FIELDS_ENABLED=false`: the map then shows no overlay and data health stays
-   `ok`. With the profile's `MAP_FIELDS_ENABLED=true` and no daemon, data health stays
+   set `MAP_FIELDS_ENABLED=false`: the map then shows the spot markers only (a "Spot
+   forecasts only" note, no layer tabs and no outage notice) and data health stays `ok`. With the profile's `MAP_FIELDS_ENABLED=true` and no daemon, data health stays
    degraded (`map_fields_missing`, `sync_heartbeat_stale`) and the admins get a "Data
    health DEGRADED" email every 12 h for as long as it lasts.
 
@@ -1407,7 +1413,7 @@ searches): 21.28 MB per both-family sync pass. `--help` lists the options.
 |---------|---------------|
 | **Map:** grey or black map with markers, "Map tiles couldn't load" | Only on the Streets basemap: the tile server is unreachable (network, firewall, content blocker) or the URL is wrong. Open a tile URL from the browser's Network tab. The configured tile host is allowed by the CSP automatically; add others with `MAP_TILE_HOSTS`. The default dark basemap needs no tiles |
 | **Map:** "API KEY REQUIRED" tiles | CARTO raster basemaps require a key. Set `NEXT_PUBLIC_CARTO_API_KEY` and rebuild the frontend (`docker compose build frontend && docker compose up -d`), or use the default basemap |
-| **Map:** ocean layers missing, "Ocean layers are unavailable right now" | Map layers need `MAP_FIELDS_ENABLED` (unset = on with a live spot provider, off with demo only; `GET /api/map/fields` says which). Run `python -m app.cli engine map-fields` once to fetch a cycle. A field whose run or valid time does not match the request is never drawn: the map re-reads the field index (at most every 30 s) and shows what the index lists |
+| **Map:** ocean layers missing, "Ocean layers are unavailable right now" | Map layers need `MAP_FIELDS_ENABLED` (unset = on with a live spot provider, off with demo only; `GET /api/map/fields` says which). With `MAP_FIELDS_ENABLED=false` they are off on purpose: the map shows "Spot forecasts only" and no layer tabs instead (the index answers `enabled: false`). Run `python -m app.cli engine map-fields` once to fetch a cycle. A field whose run or valid time does not match the request is never drawn: the map re-reads the field index (at most every 30 s) and shows what the index lists |
 | **Map:** layers drawn but no particles or crests | Settings → "animated flow" is off (it switches the particles and crests off). With the system's reduced-motion setting they are drawn still (arrows, still crests). A wave system the run lacks is greyed out in the chooser ("Not available for this model run"), and crests are not drawn under 0.2 m |
 | **Wind direction looks wrong:** "offshore" where you expect onshore, or arrows the wrong way | Text and data say where the wind comes FROM; arrows on the charts and the map point where it travels TO (an arrow pointing east is a wind from the west). Offshore means from land to sea at that break: the spot's researched `offshore_wind_direction` (`data/surf_spots/`) decides it, never the compass alone. "Sources disagree about which wind is offshore" means the research is disputed (`python -m app.cli research lint`). "Models disagree on the wind direction" means GFS and ECMWF blow from directions more than 60° apart: the blend takes the direction of the mean wind vector and forecast confidence is at most Moderate. The map's 0.5° wind can differ from the spot's own point wind near coasts |
 | **Stale forecasts:** "Forecast out of date" banner, chip or badge | The run behind the forecast is older than its source's own limit: its cycle interval + publication lag + `FORECAST_REFRESH_MINUTES` + 2 h, about 17.2 h for the GFS family and 24.7 h for the ECMWF family (`FORECAST_STALE_HOURS`, 18 h, applies only to demo, Windy and the blend fallback; `docs/FORECAST_SOURCES.md`, "Staleness"); map layers after `MAP_FIELD_STALE_AFTER_HOURS` (21 h). Usually the provider is unreachable, or nothing calls the refresh: in Docker beat and worker; on Vercel the refresh scheduler of docs/deploy-vercel.md step 7b (QStash on Hobby, a Vercel Cron entry on Pro), with the daily cron as a once-a-day backstop. Check `/admin/freshness` (signed in as an admin: the "Refresh scheduler" row shows the last refresh check and who made it, and each stale spot with its reason) and `/status` (its sync section shows the last check and each component's state, for example "waiting" while Open-Meteo is still publishing a run); in Docker `docker compose logs worker`, or `python -m app.cli sync check`. With the hosted profile (`SYNC_TRIGGER_SOURCES=spots`) every new GFS or GFS-Wave run is refreshed within one scheduler interval of its publication; a spot whose own refresh failed keeps its previous forecast and says so. Forecast confidence is then at most Moderate; alerts pause only at twice that age (`STALE_ALERT_FACTOR`) |

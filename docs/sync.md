@@ -395,8 +395,9 @@ from the pages linked):
   Data health then reports a missing daemon heartbeat only as degraded, for the map layers
   (`tests/integration/test_daemonless_hosted.py`). That problem, and `map_fields_missing`,
   last for as long as no daemon runs and the admins are reminded of them every 12 h: without
-  a daemon set MAP_FIELDS_ENABLED=false (the map shows no overlay and data health stays
-  `ok`; review r3-spec-SPEC-1), or keep the daemon.
+  a daemon set MAP_FIELDS_ENABLED=false (the map shows the spot markers only, with a "Spot
+  forecasts only" note and no layer tabs, and data health stays `ok`; reviews r3-spec-SPEC-1
+  and r4-spec-R4-SPEC-2), or keep the daemon.
 * **GitHub Actions** schedules (5-minute minimum, delayed or dropped runs, the "serverless
   application" clause of the terms) stay out: `data-sync.yml` is manual only.
 

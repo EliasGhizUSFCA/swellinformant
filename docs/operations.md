@@ -385,8 +385,10 @@ database at every 5-minute check.
 layers on for the daemon; with no daemon they are never synced, so data health stays
 degraded (`map_fields_missing`, `sync_heartbeat_stale`) and the admins get "Data health
 DEGRADED" again every `DATA_HEALTH_ALERT_REPEAT_HOURS` (12) among the real alerts. With
-`MAP_FIELDS_ENABLED=false` the map shows no overlay and data health stays `ok` (review
-r3-spec-SPEC-1, `tests/integration/test_daemonless_hosted.py`). So without the daemon a scheduler
+`MAP_FIELDS_ENABLED=false` the map shows the spot markers only (a "Spot forecasts only" note,
+no layer tabs and no outage notice: the field index answers `enabled: false`; review
+r4-spec-R4-SPEC-2) and data health stays `ok` (review r3-spec-SPEC-1,
+`tests/integration/test_daemonless_hosted.py`). So without the daemon a scheduler
 that stops calling the endpoint stops the hourly check with it: `refresh_scheduler_silent`
 is then raised by the daily cron, up to about 25 hours later on Hobby (docs/deploy-vercel.md
 step 7b names an external check for faster notice).
