@@ -326,7 +326,7 @@ function ForecastSection({
         <div className="flex flex-wrap items-center gap-1.5">
           {/* The version label defers to the spot's own staleness (run or freshness): a spot whose
               refresh failed keeps older data, so "updated just now" would call it current. */}
-          <ForecastUpdated stale={stale} />
+          <ForecastUpdated stale={stale} updatedAt={freshness?.lastUpdatedAt ?? null} timeZone={tl?.timezone ?? undefined} />
           {stale && (
             <Badge
               variant="warn"

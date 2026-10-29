@@ -2,7 +2,7 @@
 
 import "leaflet/dist/leaflet.css";
 
-import { svg, type Map as LeafletMap, type PathOptions } from "leaflet";
+import { svg, type CircleMarker as LeafletCircleMarker, type Map as LeafletMap, type PathOptions } from "leaflet";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CircleMarker, MapContainer, Tooltip, useMap, useMapEvents, ZoomControl } from "react-leaflet";
 
@@ -209,6 +209,10 @@ function ZoomWatcher({ onZoom }: { onZoom?: (z: number) => void }) {
  * changed and a zoom or pan touches none; `lng` is the spot's world copy nearest the view.
  * `surface` "dark" (the dark basemap) uses the brighter-is-better ramp made for dark
  * backgrounds (at least 3:1 against them); "light" (the Streets tiles) the default ramp.
+ * `quietWhenSelected` (phones, where the spot's sheet covers most of the map): the selected
+ * marker's tooltip is closed when it is selected or tapped again. The sheet shows the same
+ * numbers, and the tooltip would open under the top controls or past the screen's edges
+ * (review r1-frontend-FE-3). Keyboard focus still opens it.
  */
 export const SpotMarker = memo(function SpotMarker({
   spot,
@@ -220,6 +224,7 @@ export const SpotMarker = memo(function SpotMarker({
   highlight,
   onSelect,
   surface = "light",
+  quietWhenSelected = false,
 }: {
   spot: SpotSummary;
   lng: number;
@@ -230,14 +235,28 @@ export const SpotMarker = memo(function SpotMarker({
   highlight: boolean;
   onSelect: (slug: string) => void;
   surface?: "light" | "dark";
+  quietWhenSelected?: boolean;
 }) {
+  const ref = useRef<LeafletCircleMarker>(null);
+  const quiet = quietWhenSelected && selected;
+  const quietRef = useRef(quiet);
+  useEffect(() => {
+    quietRef.current = quiet;
+    // The tap that selected the spot opened the tooltip (Leaflet opens it on click).
+    if (quiet) ref.current?.closeTooltip();
+  }, [quiet]);
   const center = useMemo<[number, number]>(() => [spot.latitude, lng], [spot.latitude, lng]);
   const fill = colorForScore(score, surface);
   const pathOptions = useMemo(() => ({ color: "#ffffff", weight: selected ? 3 : 1.5, fillColor: fill, fillOpacity: 0.95 }), [selected, fill]);
   const slug = spot.slug;
   const eventHandlers = useMemo(
     () => ({
-      click: () => onSelect(slug),
+      click: (e: { target: LeafletCircleMarker }) => {
+        onSelect(slug);
+        // A tap on the selected marker: Leaflet's own click handler (bound with the tooltip,
+        // after this one) opens the tooltip again; closed once it ran.
+        if (quietRef.current) window.setTimeout(() => e.target.closeTooltip(), 0);
+      },
       // Leaflet makes markers focusable (their tooltip opens on focus): Enter or Space opens
       // the spot, as a click does.
       keydown: (e: { originalEvent: KeyboardEvent }) => {
@@ -251,6 +270,7 @@ export const SpotMarker = memo(function SpotMarker({
   );
   return (
     <CircleMarker
+      ref={ref}
       center={center}
       radius={markerRadius(selected, highlight)}
       pathOptions={pathOptions}
@@ -386,6 +406,7 @@ function ForecastMap(props: ForecastMapProps) {
                 highlight={!!m?.highlight}
                 onSelect={onSelect}
                 surface={basemap === "dark" ? "dark" : "light"}
+                quietWhenSelected={!!cover}
               />
             );
           })}

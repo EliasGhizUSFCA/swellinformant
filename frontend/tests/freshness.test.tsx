@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConditionsSummary } from "@/components/conditions";
@@ -6,6 +6,7 @@ import { ForecastBreakdown } from "@/components/forecast-breakdown";
 import { AttributionLinks, ForecastProvenance } from "@/components/forecast-provenance";
 import { ageText, StaleBanner, StaleBadge, StaleLine } from "@/components/stale-banner";
 import { cycleLabel } from "@/lib/map-time";
+import { HEIGHT_UNIT_KEY, resetHeightUnitMemory } from "@/lib/units";
 import type { Conditions, RunMember, SwellEvent, SystemStatus } from "@/types/api";
 
 // SYNTHETIC test data: invented forecast hours, runs and swells that exist only to exercise
@@ -15,12 +16,14 @@ const hooks = vi.hoisted(() => ({
   events: { data: undefined as SwellEvent[] | undefined, isLoading: false, isError: false },
   status: { data: undefined as SystemStatus | undefined },
   map: { data: undefined as { range_end: string | null } | undefined },
+  me: { data: undefined as { profile: { units: string } } | undefined },
 }));
 
 vi.mock("@/hooks/queries", () => ({
   useEvents: () => hooks.events,
   useSystemStatus: () => hooks.status,
   useMapConditions: () => hooks.map,
+  useMe: () => hooks.me,
 }));
 
 // Imported after the mock is registered (vi.mock is hoisted above imports).
@@ -154,6 +157,9 @@ beforeEach(() => {
   hooks.events = { data: [event()], isLoading: false, isError: false };
   hooks.status = { data: status() };
   hooks.map = { data: undefined };
+  hooks.me = { data: undefined };
+  window.localStorage.removeItem(HEIGHT_UNIT_KEY);
+  resetHeightUnitMemory();
 });
 
 describe("landing page freshness (LiveSwells)", () => {
@@ -180,6 +186,23 @@ describe("landing page freshness (LiveSwells)", () => {
     hooks.events = { data: [event({ stale: true })], isLoading: false, isError: false };
     render(<LiveSwells />);
     expect(screen.getByTestId("forecast-freshness")).toHaveAttribute("data-freshness", "stale");
+  });
+
+  it("shows the swells in the site-wide height unit, signed out too (review r1-frontend-FE-8)", () => {
+    render(<LiveSwells />);
+    expect(document.body.textContent).toContain("5–7 ft");
+    cleanup();
+    // The visitor chose metres on a spot page or the map (this browser's choice).
+    window.localStorage.setItem(HEIGHT_UNIT_KEY, "m");
+    render(<LiveSwells />);
+    expect(document.body.textContent).toContain("1.5–2.1 m");
+    expect(document.body.textContent).not.toContain("5–7 ft");
+    cleanup();
+    // Signed in without a browser choice: the account's unit.
+    window.localStorage.removeItem(HEIGHT_UNIT_KEY);
+    hooks.me = { data: { profile: { units: "m" } } };
+    render(<LiveSwells />);
+    expect(document.body.textContent).toContain("1.5–2.1 m");
   });
 
   it("says demo for synthetic forecasts", () => {

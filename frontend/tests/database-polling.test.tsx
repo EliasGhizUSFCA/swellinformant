@@ -79,7 +79,8 @@ async function refocus() {
 
 describe("database reads of an open page", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Mid-hour: no hourly re-read of the public data inside the test (review r1-frontend-FE-6).
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.UTC(2026, 9, 28, 12, 10) });
   });
   afterEach(() => {
     focusManager.setFocused(undefined);
@@ -118,7 +119,11 @@ describe("database reads of an open page", () => {
 
 describe("the forecast version poll, the one read on a timer", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // A fixed clock with no UTC hour change in the 15 minutes below: when the hour changes the
+    // public reads on screen are read once more, by design (staleness by age, review
+    // r1-frontend-FE-6; tests/forecast-version.test.tsx). With the wall clock this test failed
+    // whenever it ran in the last quarter of an hour.
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.UTC(2026, 9, 28, 12, 10) });
   });
   afterEach(() => {
     vi.useRealTimers();

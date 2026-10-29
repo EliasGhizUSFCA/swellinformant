@@ -49,8 +49,11 @@ const CITY_ZOOM = 4;
 const SHEET_FRACTION = 0.72;
 /** Short, wide screens (phones in landscape): the spot panel is a side sheet this wide (px). */
 const SIDE_SHEET_WIDTH = 360;
-/** Phones: CSS pixels under the layer tabs at the top of the map. */
+/** Phones: CSS pixels under the layer tabs at the top of the map, until the top controls (the
+ * tabs, the "Forecast updated" pill and any notices) are measured. */
 const TABS_INSET = 64;
+/** Room left between the top controls and a selected spot (CSS pixels). */
+const TOP_MARGIN = 8;
 
 export default function MapPage() {
   const { data: spots = [], isLoading, isError } = useSpots();
@@ -228,6 +231,21 @@ export default function MapPage() {
   const [bottomInset, setBottomInset] = useState(96);
   // The timeline alone (without the locate row above it), from the bottom of the map.
   const [timelineInset, setTimelineInset] = useState(76);
+  // The top controls' bottom edge in the map (the tabs, the pill drawn under them once a
+  // version is known, and the notices): a selected spot lands below it (review r1-frontend-FE-3).
+  const topRef = useRef<HTMLDivElement>(null);
+  const [topInset, setTopInset] = useState(TABS_INSET);
+  useEffect(() => {
+    const el = topRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const root = el.parentElement?.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      if (root) setTopInset(Math.max(TABS_INSET, Math.round(box.bottom - root.top) + TOP_MARGIN));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   useEffect(() => {
     const el = bottomRef.current;
     if (!el) return;
@@ -249,9 +267,9 @@ export default function MapPage() {
   const cover = useCallback(
     (size: { y: number }) =>
       sideSheet
-        ? { top: TABS_INSET, right: SIDE_SHEET_WIDTH, bottom: timelineInset, left: 0 }
-        : { top: TABS_INSET, right: 0, bottom: size.y * SHEET_FRACTION, left: 0 },
-    [sideSheet, timelineInset],
+        ? { top: topInset, right: SIDE_SHEET_WIDTH, bottom: timelineInset, left: 0 }
+        : { top: topInset, right: 0, bottom: size.y * SHEET_FRACTION, left: 0 },
+    [sideSheet, timelineInset, topInset],
   );
   // The canvas keeps the previous step's field until the next one arrives: describe what it shows.
   const fieldTime = layerFields.servedValidTime ?? at;
@@ -287,11 +305,12 @@ export default function MapPage() {
       >
         {/* Top: layer tabs + pressure on the left, settings on the right. */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[1100] flex items-start gap-2 p-2 sm:p-3">
-          <div className="min-w-0 flex-1 space-y-2">
+          <div ref={topRef} className="min-w-0 flex-1 space-y-2" data-testid="map-top-controls">
             <div className="pointer-events-auto w-fit max-w-full">
               <LayerTabs layer={layer} onLayer={(l) => updateSettings({ layer: l })} pressure={settings.pressure} onPressure={(p) => updateSettings({ pressure: p })} />
             </div>
-            <ForecastUpdated tone="map" className="pointer-events-auto ml-1" />
+            {/* Beside a selected out-of-date spot "updated just now" would call it current. */}
+            <ForecastUpdated tone="map" stale={!!selected && !!freshnessOf(bySlug.get(selected))?.stale} className="pointer-events-auto ml-1" />
             {(notice || stale || isError || noForecastAnywhere || layerFields.error) && (
               <div className="pointer-events-auto flex w-fit max-w-full flex-col gap-1.5 pl-1">
                 {/* The newest model run is out of date: the layers and markers still show it. */}

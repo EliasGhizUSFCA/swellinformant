@@ -17,10 +17,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useSearch, useSearchMatches } from "@/hooks/queries";
 import { formatCalendarDate, formatMoney, formatRange, heightRange, titleCase, type Units } from "@/lib/format";
 import { asQuality, QUALITY_LABELS } from "@/lib/quality";
+import { useHeightUnit } from "@/lib/units";
 import type { User } from "@/types/api";
 
 function Detail({ user, id }: { user: User; id: string }) {
-  const units = (user.profile.units as Units) ?? "ft";
+  // The site-wide height unit: this browser's ft / m choice, else the account's.
+  const [units] = useHeightUnit((user.profile.units as Units | undefined) ?? "ft");
   const search = useSearch(id);
   const matches = useSearchMatches(id);
   if (search.isLoading) return <Skeleton className="h-96" />;

@@ -82,6 +82,13 @@ async function versioned(page: Page, mock: VersionMock, pattern: RegExp, patch: 
   });
 }
 
+/** Version 102 updated this spot (SYNTHETIC): its `freshness.last_updated_at` moves to the
+ * publication. A spot page names and announces only a version that updated the spot. */
+function updatedNow(json: unknown) {
+  const f = (json as { freshness?: { last_updated_at?: string | null } | null }).freshness;
+  if (f) f.last_updated_at = new Date(Date.now() - 5_000).toISOString();
+}
+
 const marker = (page: Page) => page.evaluate(() => (window as unknown as { __liveMarker?: number }).__liveMarker);
 const setMarker = (page: Page) => page.evaluate(() => ((window as unknown as { __liveMarker?: number }).__liveMarker = 42));
 
@@ -161,7 +168,11 @@ test.describe("live forecast updates (route-mocked versions)", () => {
         s.breaking.typical_ft = Math.round((s.breaking.typical_ft + 1.5) * 10) / 10;
         s.breaking.sets_ft = Math.round((s.breaking.sets_ft + 1.5) * 10) / 10;
       }
+      updatedNow(json);
     });
+    // The spot's other reads of version 102 say it was updated too (review r1-frontend-FE-5).
+    await versioned(page, mock, new RegExp(`/api/spots/${SLUG}/forecast`), updatedNow);
+    await versioned(page, mock, new RegExp(`/api/spots/${SLUG}(\\?|$)`), updatedNow);
     await page.route(/tile\.openstreetmap\.org|basemaps\.cartocdn\.com/, (r) => r.fulfill({ status: 204 }));
     await page.goto(`/spots/${SLUG}`);
     const scroller = page.getByTestId("timeline-scroller");

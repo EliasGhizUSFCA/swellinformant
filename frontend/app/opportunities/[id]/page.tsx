@@ -42,7 +42,7 @@ import {
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingReason } from "@/lib/rating";
 import { offshoreHeightText, zoneLabel } from "@/lib/timeline";
-import { formatWind, useWindUnit } from "@/lib/units";
+import { formatWind, useHeightUnit, useWindUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { FlightSlice, MatchDetail, Offer, User } from "@/types/api";
 
@@ -171,7 +171,8 @@ function Measure({ label, children }: { label: React.ReactNode; children: React.
 }
 
 function Detail({ user, m }: { user: User; m: MatchDetail }) {
-  const units = (user.profile.units as Units) ?? "ft";
+  // The site-wide height unit: this browser's ft / m choice, else the account's.
+  const [units] = useHeightUnit((user.profile.units as Units | undefined) ?? "ft");
   const [windUnit] = useWindUnit();
   const tz = m.spot.timezone;
   const queryClient = useQueryClient();

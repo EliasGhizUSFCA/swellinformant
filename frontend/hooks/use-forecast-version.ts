@@ -32,13 +32,14 @@
  * if the tab stayed visible from the answer that showed the previous version until the new data
  * was painted (a tab opened or shown late would measure its own absence). The signed-in
  * opportunity lists (no-store database reads) are re-read once SETTLE_MS later, after the
- * refresh's matching ran.
+ * refresh's matching ran. When the UTC hour changes, the public reads on screen are read again
+ * (with `&h=<hour>`): a spot whose forecast went out of date by age is then shown so.
  */
 
 import { useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { createContext, createElement, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 
-import { ApiError, FORECAST_VERSION_PATH, get, sendSeenBeacon, versionParam, withParams, withVersion, type ForecastVersion } from "@/lib/api";
+import { ApiError, FORECAST_VERSION_PATH, get, sendSeenBeacon, versionParam, withParams, type ForecastVersion } from "@/lib/api";
 
 /** NEXT_PUBLIC_FORECAST_VERSION_POLL_MS when it is not set (or not a number). */
 export const DEFAULT_POLL_MS = 20_000;
@@ -52,8 +53,9 @@ export const INIT_TIMEOUT_MS = 2_500;
 export const SETTLE_MS = 45_000;
 /** The map's field index (hooks/map-fields.ts), refreshed when the map run changes. */
 export const FIELD_INDEX_KEY = ["map-fields-index"] as const;
-/** Signed-in lists that matching changes after a publication (no-store reads). */
-const SETTLED_LISTS = new Set(["opportunities", "spot-opportunities", "search-matches", "opportunity"]);
+/** Signed-in lists that matching and the alerts change after a publication (no-store reads):
+ * the opportunities and the alerts sent ("Alerts sent", "Recent alerts" on the dashboard). */
+const SETTLED_LISTS = new Set(["opportunities", "spot-opportunities", "search-matches", "opportunity", "notifications"]);
 
 /** The poll interval in ms from NEXT_PUBLIC_FORECAST_VERSION_POLL_MS (inlined at build time). */
 export function pollIntervalMs(raw: string | undefined = process.env.NEXT_PUBLIC_FORECAST_VERSION_POLL_MS): number {
@@ -169,6 +171,10 @@ export class ForecastVersionStore {
   onRepeat: (() => void) | null = null;
   /** How many times the tab was hidden while the store was in use. */
   hides = 0;
+  /** The UTC hour (YYYYMMDDHH) the public reads were last re-read for, added to their URLs as
+   * `&h=` (null until the first hour change after the page loaded: the URLs stay as they
+   * were). See {@link connectStore}. */
+  hourParam: number | null = null;
   private state: VersionState = INITIAL;
   private readonly listeners = new Set<() => void>();
   private readonly waiters = new Set<() => void>();
@@ -191,6 +197,9 @@ export class ForecastVersionStore {
   }
 
   getState = (): VersionState => this.state;
+
+  /** The store's clock (epoch ms). */
+  clock = (): number => this.now();
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -433,9 +442,31 @@ export async function readUnder(client: QueryClient, id: number | null): Promise
   return !results.some((r) => r.status === "rejected" && retryable(r.reason));
 }
 
+const HOUR_MS = 3_600_000;
+
+/** The UTC hour of `ms` as a number, YYYYMMDDHH (the hour the server computes its public
+ * snapshots for: app.services.public_cache). */
+export function utcHourParam(ms: number): number {
+  const d = new Date(ms);
+  return d.getUTCFullYear() * 1_000_000 + (d.getUTCMonth() + 1) * 10_000 + d.getUTCDate() * 100 + d.getUTCHours();
+}
+
 /** The provider's reaction to a new version or map run (exported for tests). */
 export function connectStore(store: ForecastVersionStore, client: QueryClient, report: (id: number) => void = sendSeenBeacon): () => void {
   const reported = new Set<number>();
+  // Staleness that comes from age (a spot not updated for hours) changes without a new
+  // version: the server recomputes the public snapshots each UTC hour. When an answer of the
+  // poll finds a new hour, the public reads on screen are read again, under URLs that name
+  // the hour (`&h=`), so neither the browser nor the CDN hands back last hour's copy.
+  let hour = Math.floor(store.clock() / HOUR_MS);
+  const checkHour = () => {
+    const now = store.clock();
+    const current = Math.floor(now / HOUR_MS);
+    if (current === hour) return;
+    hour = current;
+    store.hourParam = utcHourParam(now);
+    void client.invalidateQueries({ predicate: (q) => isVersionedKey(q.queryKey), refetchType: visible() ? "active" : "none" });
+  };
   let cancelRender: (() => void) | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   // The version waiting for its data (a failed read: tried again at the next answer), and
@@ -473,6 +504,7 @@ export function connectStore(store: ForecastVersionStore, client: QueryClient, r
   };
 
   store.onChange = (change) => {
+    checkHour();
     const { previous, next, replaced } = change;
     if (previous && previous.map_run_id !== next.map_run_id) void client.invalidateQueries({ queryKey: FIELD_INDEX_KEY });
     if (!replaced) return;
@@ -490,6 +522,7 @@ export function connectStore(store: ForecastVersionStore, client: QueryClient, r
     }, SETTLE_MS);
   };
   store.onRepeat = () => {
+    checkHour();
     if (pending && !busy) void switchTo(pending);
   };
   return () => {
@@ -567,13 +600,15 @@ export function useVersionedRead(): VersionedRead {
     () => ({
       v,
       url: async (path, queryKey, signal) => {
-        if (!store || store.getState().status !== "init") return withVersion(path, keyVersion(queryKey));
+        // `&h=`: the hour of an hourly re-read (connectStore), only on a versioned URL.
+        const at = (v: number | null) => withParams(path, { v, h: v == null ? null : (store?.hourParam ?? null) });
+        if (!store || store.getState().status !== "init") return at(keyVersion(queryKey) ?? null);
         await store.settled(signal);
         // Let React re-render with the version first: the key changes and this read is
         // cancelled, so the data is fetched once, under its versioned key and URL.
         await new Promise((resolve) => setTimeout(resolve, 0));
         if (signal.aborted) throw abortError(signal);
-        return withVersion(path, keyVersionOf(store.getState()));
+        return at(keyVersionOf(store.getState()));
       },
     }),
     [store, v],

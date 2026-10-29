@@ -7,7 +7,7 @@ import { ageText, ForecastUpdated, updatedClock } from "@/components/forecast-up
 import { SpotForecastTimeline } from "@/components/forecast/forecast-timeline";
 import { SelectionStore, TimelineSelectionProvider } from "@/components/forecast/timeline-selection";
 import { useFieldIndex } from "@/hooks/map-fields";
-import { useMapConditions, useOpportunities, useSpot, useSpotTimeline } from "@/hooks/queries";
+import { useMapConditions, useNotifications, useOpportunities, useSpot, useSpotTimeline } from "@/hooks/queries";
 import {
   connectStore,
   DEFAULT_POLL_MS,
@@ -24,6 +24,7 @@ import {
   sameExceptVersion,
   SETTLE_MS,
   useForecastVersion,
+  utcHourParam,
   versionKey,
 } from "@/hooks/use-forecast-version";
 import * as api from "@/lib/api";
@@ -36,6 +37,10 @@ import { jbay } from "./timeline-helpers";
 // fixture with made-up changes); only the ids, times and the changed values matter.
 
 const POLL = 20_000;
+// The clock of the tests that read through connectStore: in the middle of a UTC hour, so the
+// hourly re-read of the public data (review r1-frontend-FE-6) never lands inside a test that
+// counts reads (with the wall clock they failed when run in the last minutes of an hour).
+const MID_HOUR = Date.UTC(2026, 9, 29, 12, 10);
 
 function version(id: number | null, extra: Partial<ForecastVersion> = {}): ForecastVersion {
   return {
@@ -281,7 +286,7 @@ function setup(first: ForecastVersion | null, { failing = false } = {}) {
 const spotDetail = (id: number) => ({ slug: "pipeline", name: "Pipeline", best_upcoming: { score: 40 + id } });
 
 describe("versioned public reads", () => {
-  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true, now: MID_HOUR }));
 
   it("a first page load reads the data once, with the version in its key and URL", async () => {
     const { wrapper } = setup(version(5));
@@ -431,6 +436,27 @@ describe("versioned public reads", () => {
   });
 });
 
+describe("staleness by age (review r1-frontend-FE-6)", () => {
+  // 10:59:30 UTC: the hour changes half a minute after the page loaded.
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.UTC(2026, 9, 29, 10, 59, 30) }));
+
+  it("reads the public data on screen again when the UTC hour changes, under a URL naming the hour", async () => {
+    const { wrapper } = setup(version(1));
+    const get = vi.spyOn(api, "get").mockImplementation(async () => spotDetail(1));
+    renderHook(() => useSpot("pipeline"), { wrapper });
+    const reads = () => get.mock.calls.map((c) => c[0]).filter((u) => u.startsWith("/api/spots/pipeline"));
+    await waitFor(() => expect(reads()).toEqual(["/api/spots/pipeline?v=1"]));
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    expect(reads()).toEqual(["/api/spots/pipeline?v=1"]); // same hour: nothing read again
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    await waitFor(() => expect(reads()).toEqual(["/api/spots/pipeline?v=1", "/api/spots/pipeline?v=1&h=2026102911"]));
+    // Once per hour.
+    await act(() => vi.advanceTimersByTimeAsync(POLL * 5));
+    expect(reads()).toHaveLength(2);
+    expect(utcHourParam(Date.UTC(2026, 0, 2, 3, 59))).toBe(2026010203);
+  });
+});
+
 describe("after a new version is on screen", () => {
   // A fixed clock a few minutes after the versions' publication times (10:01, 10:02 UTC), with
   // no quarter hour in between: in every time zone they fall on the clock's local day, so the
@@ -479,6 +505,73 @@ describe("after a new version is on screen", () => {
     expect(beacon).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("forecast-updated")).not.toHaveAttribute("data-highlight");
     delete (navigator as { sendBeacon?: unknown }).sendBeacon;
+  });
+
+  // Review r1-frontend-FE-5/FE-9: a spot page names the spot's own update, in the spot's zone.
+  function SpotPage({ updatedAt }: { updatedAt: (v: number) => string }) {
+    const spot = useSpot("pipeline");
+    const v = (spot.data as { best_upcoming?: { score: number } } | undefined)?.best_upcoming?.score;
+    return (
+      <div>
+        <ForecastUpdated updatedAt={v == null ? null : updatedAt(v - 40)} timeZone="Pacific/Honolulu" />
+        <span data-testid="score">{v}</span>
+      </div>
+    );
+  }
+
+  it("on a spot page shows the spot's update time, and announces only a version that updated it", async () => {
+    const { server, store, client } = setup(version(1));
+    vi.spyOn(api, "get").mockImplementation(async (path: string) => spotDetail(Number(new URL(path, "http://x").searchParams.get("v"))));
+    // Versions 1 and 2 leave this spot as it was at 09:40 UTC (version 2 retried other spots);
+    // version 3 updates it at 10:03 UTC.
+    const updatedAt = (v: number) => (v >= 3 ? "2026-10-27T10:03:00Z" : "2026-10-27T09:40:00Z");
+    render(
+      <QueryClientProvider client={client}>
+        <ForecastVersionProvider store={store}>
+          <SpotPage updatedAt={updatedAt} />
+        </ForecastVersionProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("41"));
+    const label = () => screen.getByTestId("forecast-updated");
+    // 09:40 UTC is 23:40 the day before in Honolulu (HST): the date is named, then the zone.
+    expect(label()).toHaveTextContent("Forecast updated Oct 26, 23:40 HST");
+    expect(label()).toHaveAttribute("data-updated-at", "2026-10-27T09:40:00Z");
+    expect(screen.getByTestId("forecast-updated-age")).toHaveTextContent("25 min ago");
+
+    server.current = version(2);
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("42"));
+    await waitFor(() => expect(label()).toHaveAttribute("data-version-id", "2"));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    // A version that did not touch this spot: neither announced nor highlighted.
+    expect(screen.getByTestId("forecast-updated-announcement")).toHaveTextContent("");
+    expect(label()).not.toHaveAttribute("data-highlight");
+    expect(label()).toHaveTextContent("23:40 HST");
+
+    server.current = version(3);
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("43"));
+    await waitFor(() => expect(screen.getByTestId("forecast-updated-announcement")).toHaveTextContent("New forecast loaded"));
+    expect(label()).toHaveAttribute("data-highlight");
+    expect(label()).toHaveTextContent("Forecast updated 00:03 HST");
+  });
+
+  it("draws no label beside an out-of-date selection (the map passes stale)", async () => {
+    const { store, client } = setup(version(1));
+    vi.spyOn(api, "get").mockImplementation(async () => spotDetail(1));
+    render(
+      <QueryClientProvider client={client}>
+        <ForecastVersionProvider store={store}>
+          <ForecastUpdated tone="map" stale />
+          <Page />
+        </ForecastVersionProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("score")).toHaveTextContent("41"));
+    // Only Page's own label (not stale) is drawn; the map's stale one keeps its live region.
+    expect(screen.getAllByTestId("forecast-updated")).toHaveLength(1);
+    expect(screen.getAllByTestId("forecast-updated-announcement")).toHaveLength(2);
   });
 
   it("does not report a version learned after the tab was hidden (its latency would include the absence)", async () => {
@@ -643,29 +736,38 @@ describe("after a new version is on screen", () => {
 
   it("reads the signed-in opportunities again once, after the refresh's matching", async () => {
     const { server, wrapper } = setup(version(1));
-    const get = vi.spyOn(api, "get").mockImplementation(async (path: string) => (path.startsWith("/api/opportunities") ? [] : spotDetail(1)));
+    const get = vi.spyOn(api, "get").mockImplementation(async (path: string) =>
+      path.startsWith("/api/opportunities") ? [] : path.startsWith("/api/notifications") ? { items: [], total: 0 } : spotDetail(1),
+    );
     renderHook(
       () => {
         useSpot("pipeline");
         useOpportunities();
+        // The dashboard's "Alerts sent" / "Recent alerts" (review r1-frontend-FE-7).
+        useNotifications(0, 5);
       },
       { wrapper },
     );
     const reads = () => get.mock.calls.filter((c) => c[0].startsWith("/api/opportunities")).length;
+    const alerts = () => get.mock.calls.filter((c) => c[0].startsWith("/api/notifications")).length;
     await waitFor(() => expect(reads()).toBe(1));
+    await waitFor(() => expect(alerts()).toBe(1));
     server.current = version(2);
     await act(() => vi.advanceTimersByTimeAsync(POLL));
     expect(reads()).toBe(1);
+    expect(alerts()).toBe(1);
     await act(() => vi.advanceTimersByTimeAsync(SETTLE_MS));
     await waitFor(() => expect(reads()).toBe(2));
+    await waitFor(() => expect(alerts()).toBe(2));
     await act(() => vi.advanceTimersByTimeAsync(SETTLE_MS * 4));
     expect(reads()).toBe(2);
+    expect(alerts()).toBe(2);
   });
 });
 
 describe("the spot timeline across versions", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: MID_HOUR });
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ left: 0, right: 1000, top: 0, bottom: 600, width: 1000, height: 600, x: 0, y: 0, toJSON: () => ({}) });
   });
 
@@ -749,7 +851,7 @@ describe("forecast updated label", () => {
       </QueryClientProvider>,
     );
     expect(container).toBeEmptyDOMElement();
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: MID_HOUR });
     const { wrapper } = setup(version(null));
     const { result } = renderHook(() => useForecastVersion(), { wrapper });
     await waitFor(() => expect(result.current.status).toBe("known"));
@@ -760,7 +862,7 @@ describe("forecast updated label", () => {
 
 // A plain query outside the versioned set is never touched by a new version.
 describe("other reads", () => {
-  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true, now: MID_HOUR }));
 
   it("keep their keys and are not read again", async () => {
     const { server, wrapper } = setup(version(1));

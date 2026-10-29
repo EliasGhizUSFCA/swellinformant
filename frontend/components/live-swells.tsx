@@ -5,8 +5,10 @@ import Link from "next/link";
 import { EventCard } from "@/components/event-card";
 import { AttributionLinks, mergeAttributionLinks, useNowMs } from "@/components/forecast-provenance";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useEvents, useMapConditions, useSystemStatus } from "@/hooks/queries";
+import { useEvents, useMapConditions, useMe, useSystemStatus } from "@/hooks/queries";
 import { modelRunText } from "@/lib/confidence";
+import type { Units } from "@/lib/format";
+import { useHeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { MapSnapshot, SwellEvent, SystemStatus } from "@/types/api";
 
@@ -42,6 +44,9 @@ function freshnessText(f: ForecastFreshness): string {
 export function LiveSwells() {
   const { data, isLoading, isError } = useEvents(4, 57);
   const { data: status } = useSystemStatus();
+  // The site-wide height unit (this browser's ft / m choice, else the account's, else feet).
+  const { data: user } = useMe();
+  const [units] = useHeightUnit((user?.profile.units as Units | undefined) ?? "ft");
   // The landing page has no demo ribbon: never call synthetic forecasts real, and never
   // call model output "live".
   const now = useNowMs();
@@ -76,7 +81,7 @@ export function LiveSwells() {
         <>
           <div className="grid gap-3 sm:grid-cols-2">
             {data.map((e) => (
-              <EventCard key={e.id} event={e} dark />
+              <EventCard key={e.id} event={e} units={units} dark />
             ))}
           </div>
           {/* The cards show these sources' model swell and wind: credited next to them. */}

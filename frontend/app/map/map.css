@@ -42,7 +42,14 @@
     line-height: 1.35;
   }
 }
+/* A long tooltip (the spot's detail line, "Forecast last updated ...") wraps inside the screen
+   instead of running past both edges of a phone: its natural width, at most the screen's less a
+   margin (Leaflet's tooltip pane has no width, so a plain white-space: normal would wrap every
+   word). */
 .forecast-map .leaflet-tooltip {
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  white-space: normal;
   background: rgba(21, 25, 29, 0.94);
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.12);

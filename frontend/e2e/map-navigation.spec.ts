@@ -548,7 +548,11 @@ for (const viewport of [
       await shot(page, `nav-phone-${viewport.width}x${viewport.height}-controls`);
 
       const tabsBottom = boxes.tabs!.y + boxes.tabs!.height;
+      let top = tabsBottom;
+      const topBottom = () => top;
       for (const slug of ["pipeline", "cloudbreak", "nazare"]) {
+        const stack = (await page.getByTestId("map-top-controls").boundingBox())!;
+        top = Math.max(tabsBottom, stack.y + stack.height);
         await page.locator(`path.spot-${slug}`).dispatchEvent("click");
         const panel = page.getByTestId("map-spot-panel");
         await expect(panel).toBeVisible();
@@ -561,7 +565,7 @@ for (const viewport of [
             async () => {
               const box = await panel.boundingBox();
               const c = await markerCentre(page, slug);
-              return !!box && c.y > tabsBottom && (short ? c.x < box.x : c.y < box.y);
+              return !!box && c.y > topBottom() && (short ? c.x < box.x : c.y < box.y);
             },
             { message: `${slug} lands clear of the sheet`, timeout: 10_000 },
           )
@@ -570,6 +574,12 @@ for (const viewport of [
         const sheet = (await panel.boundingBox())!;
         const m = await markerCentre(page, slug);
         expect(m.y, `${slug} below the tabs`).toBeGreaterThan(tabsBottom);
+        // Below the whole top stack too: the "Forecast updated" pill under the tabs and any
+        // notice (review r1-frontend-FE-3: the pill covered the spot and its tooltip).
+        expect(m.y, `${slug} below the top controls (bottom ${topBottom()})`).toBeGreaterThan(topBottom());
+        // The sheet shows the spot's numbers: the tap's tooltip is closed, not drawn under the
+        // top controls or past the screen's edges.
+        await expect(page.locator(".leaflet-tooltip")).toHaveCount(0);
         expect(m.x).toBeGreaterThan(0);
         if (short) {
           // Landscape: a side sheet below Settings; the marker, and the whole timeline, sit left of it.

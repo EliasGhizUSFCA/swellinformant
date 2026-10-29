@@ -25,6 +25,7 @@ import { errorMessage, post } from "@/lib/api";
 import { deliveryStatus } from "@/lib/delivery";
 import { formatDate, heightRange, relativeTime, titleCase, type Units } from "@/lib/format";
 import { QUALITY_LABELS, asQuality } from "@/lib/quality";
+import { useHeightUnit } from "@/lib/units";
 import type { MatchSummary, User } from "@/types/api";
 
 function Stat({ icon, label, value, href }: { icon: React.ReactNode; label: string; value: React.ReactNode; href?: string }) {
@@ -149,7 +150,8 @@ function Trips({ opps, units }: { opps: MatchSummary[]; units: Units }) {
 }
 
 function Dashboard({ user }: { user: User }) {
-  const units = (user.profile.units as Units) ?? "ft";
+  // The site-wide height unit: this browser's ft / m choice, else the account's.
+  const [units] = useHeightUnit((user.profile.units as Units | undefined) ?? "ft");
   const queryClient = useQueryClient();
   const searches = useSearches();
   const opportunities = useOpportunities();
@@ -324,7 +326,8 @@ function Dashboard({ user }: { user: User }) {
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               <Row k="Home airport" v={user.profile.home_airport ?? "Not set"} />
-              <Row k="Units" v={units === "m" ? "Metres" : "Feet"} />
+              {/* The account's saved setting (this browser's ft / m choice may differ). */}
+              <Row k="Units" v={user.profile.units === "m" ? "Metres" : "Feet"} />
               <Row
                 k="Email alerts"
                 v={
