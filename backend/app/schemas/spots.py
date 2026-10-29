@@ -78,12 +78,14 @@ class SpotAirportOut(BaseModel):
     notes: str
 
 
-class Conditions(SeparateConfidences):
+class Conditions(HourOutputs, SeparateConfidences):
     """One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:
 
     * raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and
       wind fields), and
-    * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``).
+    * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``, and the
+      hour outputs of the quality model, as on the hour's ForecastPoint and timeline step,
+      so a summary hour reads the same favourable / unfavourable conditions as its chart).
     """
 
     valid_time: datetime

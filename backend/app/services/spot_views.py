@@ -228,6 +228,7 @@ def _conditions(
         is_daylight=p.is_daylight,
         **api_fields(p, stale=stale),
         **wind_fields(p.components, f.extra),
+        **hour_outputs(p),
     )
 
 

@@ -113,6 +113,25 @@ def test_the_forecast_and_timeline_carry_the_hour_outputs(
         assert quality["forecast_confidence"]["kind"] == "heuristic"
         assert quality["model_version"] == "2.2.0"
 
+    # The summary hours (the spot page's "best upcoming" and "current", the map's
+    # conditions) carry the same hour outputs as the hour's forecast point and timeline
+    # step, so a summary reads the same conditions sentence before and after the charts
+    # load, and on the map as on the spot page.
+    detail = app_client.get("/api/spots/pipeline").json()
+    snapshot = app_client.get("/api/map/conditions").json()
+    on_map = next(s for s in snapshot["spots"] if s["slug"] == "pipeline")
+    hours = [h for h in (detail["best_upcoming"], detail["current"], on_map["conditions"]) if h]
+    assert detail["best_upcoming"] is not None and hours
+    points = app_client.get("/api/spots/pipeline/forecast?days=10").json()["points"]
+    for hour in hours:
+        assert all(k in hour for k in HOUR_KEYS), hour.keys()
+        pred = stored[hour["valid_time"].replace("Z", "+00:00")]
+        assert hour["favourable"] == pred.components["favourable"]
+        assert hour["unfavourable"] == pred.components["unfavourable"]
+        assert hour["model_version"] == pred.algorithm_version
+        point = next(p for p in points if p["valid_time"] == hour["valid_time"])
+        assert {k: hour[k] for k in HOUR_KEYS} == {k: point[k] for k in HOUR_KEYS}
+
 
 def test_the_combined_local_confidence_is_gone_from_the_schema() -> None:
     """Spec 20: research and forecast confidence are never combined. The combined "local

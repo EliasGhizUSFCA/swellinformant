@@ -2041,12 +2041,22 @@ export interface components {
          *
          *     * raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and
          *       wind fields), and
-         *     * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``).
+         *     * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``, and the
+         *       hour outputs of the quality model, as on the hour's ForecastPoint and timeline step,
+         *       so a summary hour reads the same favourable / unfavourable conditions as its chart).
          */
         Conditions: {
             forecast_confidence?: components["schemas"]["ForecastConfidenceOut"] | null;
             /** Research Confidence */
             research_confidence?: ("high" | "moderate" | "low") | null;
+            /** Favourable */
+            favourable?: string[] | null;
+            /** Unfavourable */
+            unfavourable?: string[] | null;
+            /** Offshore Class */
+            offshore_class?: string | null;
+            /** Model Version */
+            model_version?: string | null;
             /**
              * Valid Time
              * Format: date-time

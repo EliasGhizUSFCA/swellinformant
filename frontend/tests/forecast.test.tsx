@@ -76,6 +76,23 @@ describe("pointToConditions", () => {
     expect("local_confidence_reason" in c).toBe(false);
   });
 
+  it("keeps the hour outputs of the quality model, so the breakdown reads the API's own conditions", () => {
+    const outputs = {
+      favourable: ["light offshore wind", "well-aligned swell"],
+      unfavourable: ["small swell"],
+      offshore_class: "light offshore",
+      model_version: "2.2.0",
+    };
+    const c = pointToConditions(point(outputs), FORECAST);
+    expect({ favourable: c.favourable, unfavourable: c.unfavourable, offshore_class: c.offshore_class, model_version: c.model_version }).toEqual(outputs);
+    render(<ForecastBreakdown c={c} tz="UTC" units="ft" />);
+    expect(screen.getByTestId("forecast-breakdown")).toHaveTextContent(/light offshore wind/i);
+    // Hours scored before 2.2.0 have none: null, never a guess.
+    const old = pointToConditions(point({ favourable: undefined, unfavourable: null }), FORECAST);
+    expect(old.favourable).toBeNull();
+    expect(old.unfavourable).toBeNull();
+  });
+
   it("maps missing confidences to null", () => {
     const c = pointToConditions(point({ forecast_confidence: undefined, research_confidence: null }), FORECAST);
     expect(c.forecast_confidence).toBeNull();

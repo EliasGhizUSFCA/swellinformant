@@ -597,7 +597,11 @@ are reasoned, not calibrated: no observation dataset exists to fit them.
 ## 3g. Per-hour outputs (spec 18)
 
 Every forecast hour has, in `GET /api/spots/{slug}/forecast` (`points[]`) and
-`GET /api/spots/{slug}/timeline` (`steps[].quality`), besides the score and its class:
+`GET /api/spots/{slug}/timeline` (`steps[].quality`), besides the score and its class (the
+summary hours, `current` and `best_upcoming` of `GET /api/spots` and `/api/spots/{slug}` and
+the `conditions` of `GET /api/map/conditions`, carry the same `favourable`, `unfavourable`,
+`offshore_class` and `model_version` as that hour's point, so a summary reads the same
+conditions as its chart):
 
 | Field | Meaning |
 |---|---|

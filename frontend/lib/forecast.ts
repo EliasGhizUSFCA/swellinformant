@@ -62,6 +62,11 @@ export function pointToConditions(p: ForecastPoint, fc: SpotForecast): Condition
     // The two separate confidences of the hour (spec 20: never combined).
     forecast_confidence: p.forecast_confidence ?? null,
     research_confidence: p.research_confidence ?? null,
+    // The hour outputs of the quality model, as the API's own Conditions carry them.
+    favourable: p.favourable ?? null,
+    unfavourable: p.unfavourable ?? null,
+    offshore_class: p.offshore_class ?? null,
+    model_version: p.model_version ?? null,
     confidence_reasons: p.confidence_reasons ?? [],
     lead_hours: p.lead_hours ?? null,
     forecast_confidence_reasons: p.forecast_confidence_reasons ?? [],
