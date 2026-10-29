@@ -7,7 +7,7 @@ with their URLs and the date they were read.
 
 What was checked here, and how, is in section 10. In short: the configuration validates
 against Vercel's published schema; an offline `vercel build` of the repository succeeds
-(`RESULT: ok`; on 2026-10-29 a 128.2 MiB API function with `maxDuration` 300 s; CI runs the
+(`RESULT: ok`; on 2026-10-29 a 128.3 MiB API function with `maxDuration` 300 s; CI runs the
 same check on every push); the sync
 daemon's image builds from the `Containerfile` Vercel uses; `vercel dev -L` serves the site
 and the API; and the manual GitHub runner's steps run end to end on a development machine.
