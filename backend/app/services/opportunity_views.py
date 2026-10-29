@@ -40,6 +40,7 @@ from app.services.flights.registry import provider_label
 from app.services.flights.windows import InfeasibleWindow, compute_travel_window
 from app.services.forecasts.queries import attribution_links_by_run, run_id_is_stale
 from app.services.matching.scoring import SHORT_NOTICE_BOOST, is_short_notice
+from app.services.public_cache import public_now
 from app.services.spot_views import (
     daily_summaries,
     event_out,
@@ -72,9 +73,19 @@ def get_owned_match(db: Session, user: User, match_id: uuid.UUID) -> Opportunity
     return match
 
 
+def judged_at(now: datetime) -> datetime:
+    """The instant a trip's forecast is judged current or out of date (freshness, the run's
+    staleness and the confidence cap it sets): the start of the UTC hour, the instant every
+    public snapshot (the spot page, its event cards, the map) is computed for
+    (public_cache.public_now). A trip card and the event card of the same swell beside it
+    then never disagree (spec 14; review r4-frontend-F1). Lead times use the real time."""
+    return public_now(now)
+
+
 def event_confidence(event: SwellEvent, now: datetime) -> dict[str, object]:
     """Forecast confidence at the event's peak hour, exactly as EventOut shows it
-    (``peak_confidence`` with the read-time staleness cap), plus ``stale``."""
+    (``peak_confidence`` with the read-time staleness cap), plus ``stale``. ``now``: the
+    instant the forecast is judged at (:func:`judged_at`)."""
     db = object_session(event)
     stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
     fields = peak_confidence(event, stale=stale)
@@ -96,14 +107,16 @@ def match_summary(
     links: Mapping[int, list[AttributionLinkOut]] | None = None,
 ) -> MatchSummary:
     """``freshness``: {spot_id: freshness} of the served forecast already read for a list
-    of matches (else read for the match's spot); ``links``: {run id: attribution links} of
-    the swells' runs already read for the list (else read for the match's run)."""
+    of matches (else read for the match's spot, at :func:`judged_at`); ``links``: {run id:
+    attribution links} of the swells' runs already read for the list (else read for the
+    match's run)."""
     now = now or utcnow()
+    judged = judged_at(now)
     db = object_session(m)
     if freshness is not None:
         spot_freshness = freshness.get(m.spot_id)
     else:
-        spot_freshness = served_freshness(db, m.spot_id, now) if db is not None else None
+        spot_freshness = served_freshness(db, m.spot_id, judged) if db is not None else None
     run_id = m.swell_event.latest_run_id
     if links is None:
         links = attribution_links_by_run(db, [run_id]) if db is not None else {}
@@ -153,7 +166,7 @@ def match_summary(
         else None,
         freshness=spot_freshness,
         attribution_links=list(links.get(run_id, [])) if run_id is not None else [],
-        **event_confidence(m.swell_event, now),  # type: ignore[arg-type]
+        **event_confidence(m.swell_event, judged),  # type: ignore[arg-type]
     )
 
 
@@ -192,7 +205,7 @@ def list_matches(
         OpportunityMatch.window_start,
     ).limit(limit)
     rows = db.scalars(stmt).unique().all()
-    freshness = events_freshness(db, now) if rows else {}
+    freshness = events_freshness(db, judged_at(now)) if rows else {}
     links = attribution_links_by_run(db, [m.swell_event.latest_run_id for m in rows])
     return [match_summary(m, now, freshness, links) for m in rows]
 
@@ -329,7 +342,8 @@ def limitations(
 
 def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
     now = utcnow()
-    fresh = served_freshness(db, m.spot_id, now)
+    judged = judged_at(now)
+    fresh = served_freshness(db, m.spot_id, judged)
     freshness = {m.spot_id: fresh} if fresh is not None else {}
     summary = match_summary(m, now, freshness)
     event: SwellEvent = m.swell_event
@@ -393,7 +407,7 @@ def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
                 )
     return MatchDetail(
         **summary.model_dump(),
-        event=event_out(event, now, include_history=True, freshness=freshness),
+        event=event_out(event, now, include_history=True, freshness=freshness, judged=judged),
         spot_airports=[
             SpotAirportOut(
                 airport=AirportOut.model_validate(a.airport),
@@ -435,7 +449,7 @@ def notification_out(n: Notification, now: datetime | None = None) -> Notificati
     match = n.match
     confidence: dict[str, object] = {}
     if match is not None:
-        confidence = event_confidence(match.swell_event, now or utcnow())
+        confidence = event_confidence(match.swell_event, judged_at(now or utcnow()))
         confidence.pop("stale")
     return NotificationOut(
         id=n.id,

@@ -296,6 +296,83 @@ def test_trips_and_their_event_carry_the_spots_freshness(
     assert trip["stale"] is False  # the run itself is current
 
 
+def test_a_trip_and_the_public_event_judge_the_forecast_at_the_same_instant(
+    make_client, db: Session, few_spots: list[str], only_simulated_swells: None
+) -> None:  # type: ignore[no-untyped-def]
+    """Review r4-frontend-F1 (spec 14): the public spot page and its event cards are
+    computed for the start of the UTC hour (public_cache.public_now); a trip was judged at
+    the real time. A component that passes its age limit between the two showed the same
+    swell "Out of date" in its trip card and current in the event card beside it. The
+    published wind component here passes its limit half-way between the hour start and the
+    setup (SYNTHETIC retrieval time): every read must give the same answer."""
+    from dataclasses import replace
+
+    from sqlalchemy import select
+
+    from app.core.config import get_settings
+    from app.core.database import utcnow
+    from app.models import SurfSpot
+    from app.services.forecasts import serving, versions
+    from app.services.public_cache import public_now
+
+    owner: ApiClient = make_client()
+    owner.register("same-instant@example.com")
+    assert owner.post("/api/searches", search_payload()).status_code == 201
+    run_pipeline(db)
+    sim = owner.post("/api/dev/simulate-swell", {"spot_slug": "jeffreys-bay", "days_ahead": 7})
+    assert sim.status_code == 200, sim.text
+    current = versions.current_version(db)
+    assert current is not None
+    comps = versions.component_runs_of(current)
+    now = utcnow()
+    hour = public_now(now)
+    limit = versions._component_limit(comps["atmosphere"], get_settings())
+    retrieved = hour - limit + (now - hour) / 2  # current at the hour start, stale now
+    comps["atmosphere"] = replace(comps["atmosphere"], retrieved_at=retrieved)
+    staged = versions.stage_version(
+        db,
+        provider=current.provider or "demo",
+        source_code=current.source_code or "demo",
+        forecast_run_id=current.forecast_run_id,
+        components=comps,
+        spot_runs=versions.spot_runs_of(current),
+        previous=current,
+    )
+    second = versions.publish_version(db, staged)
+    serving.refresh_version_marker(db)
+    serving.clear_memo()
+    jbay = db.scalar(select(SurfSpot.id).where(SurfSpot.slug == "jeffreys-bay"))
+    assert jbay is not None
+    [trip] = [t for t in owner.get("/api/opportunities").json() if t["spot"]["id"] == jbay]
+    detail = owner.get(f"/api/opportunities/{trip['id']}").json()
+    [here] = owner.get("/api/spots/jeffreys-bay/opportunities").json()
+    [event] = [
+        e for e in owner.get("/api/spots/jeffreys-bay/events").json() if e["id"] == trip["event_id"]
+    ]
+    spot = owner.get("/api/spots/jeffreys-bay").json()
+    reads = {
+        "trip": trip,
+        "trip detail": detail,
+        "trip detail event": detail["event"],
+        "spot page trip": here,
+        "spot page event": event,
+    }
+    assert {name: r["freshness"]["version_id"] for name, r in reads.items()} == dict.fromkeys(
+        reads, second.id
+    )
+    freshness = {name: r["freshness"]["stale"] for name, r in reads.items()}
+    stale = {name: r["stale"] for name, r in reads.items()}
+    confidence = {name: r["forecast_confidence_class"] for name, r in reads.items()}
+    assert len(set(freshness.values())) == 1, freshness
+    assert len(set(stale.values())) == 1, stale
+    assert len(set(confidence.values())) == 1, confidence
+    assert spot["freshness"]["stale"] == trip["freshness"]["stale"]
+    if public_now() == hour:  # the hour did not turn during the test
+        # The wind run is past its limit now, not at the hour start every page is judged at.
+        assert versions.spot_freshness(second, utcnow())[jbay].stale is True
+        assert set(freshness.values()) == {False}
+
+
 def test_trip_lists_credit_the_sources_of_their_forecast(
     make_client, db: Session, few_spots: list[str], only_simulated_swells: None, monkeypatch
 ) -> None:  # type: ignore[no-untyped-def]

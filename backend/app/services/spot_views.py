@@ -140,18 +140,23 @@ def event_out(
     *,
     links: AttributionMemo | None = None,
     freshness: Mapping[int, SpotFreshnessOut] | None = None,
+    judged: datetime | None = None,
 ) -> EventOut:
     """``links``: the attribution links already read for the events' runs (a list of events
     from a few runs then reads each run's once). ``freshness``: {spot_id: freshness} of the
-    served forecast already read for a list of events (else read for the event's spot)."""
+    served forecast already read for a list of events (else read for the event's spot).
+    ``judged``: the instant the forecast's staleness is judged at, when it is not ``now``
+    (a trip judges it at the hour start, as the public snapshots; ``now`` keeps the lead
+    time)."""
     now = now or utcnow()
+    judged = judged or now
     # The read-time staleness rule, as for the same hour in the forecast (_conditions).
     db = object_session(event)
-    stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
+    stale = db is not None and run_id_is_stale(db, event.latest_run_id, judged)
     if freshness is not None:
         spot_freshness = freshness.get(event.spot_id)
     else:
-        spot_freshness = served_freshness(db, event.spot_id, now) if db is not None else None
+        spot_freshness = served_freshness(db, event.spot_id, judged) if db is not None else None
     return EventOut(
         id=event.id,
         spot=spot_mini(event.spot),

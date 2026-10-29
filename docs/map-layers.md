@@ -814,7 +814,10 @@ GEFS statistics, 9 map hours) or the demo provider, with the app's clock frozen
   25,000 rows, 3,816,821 compared values, 0 mismatches, max abs diff 0.0.
 * **Public snapshot cache** (`app/services/public_cache.py`): `/api/spots`,
   `/api/map/conditions`, the spot detail, forecast, timeline and events and
-  `/api/events` are computed for the start of the current UTC hour, at most once per
+  `/api/events` are computed for the start of the current UTC hour (the trips, which are
+  per user and never cached, judge their forecast's freshness, staleness and confidence cap
+  at that same instant, so a trip card and the event card of its swell agree; review
+  r4-frontend-F1), at most once per
   key `public:v1:<epoch>:<marker>:<YYYYmmddTHH>:<route>[:<sha256 of the params, 24 hex>]`,
   stored zlib-compressed for 2 hours (`PAYLOAD_TTL_SECONDS`) and kept in each
   process's memo (up to 32 MB). `public:v1` is production's namespace (VERCEL_ENV
