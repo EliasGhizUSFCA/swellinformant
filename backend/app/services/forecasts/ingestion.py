@@ -1134,9 +1134,11 @@ def refresh_source(
 
     def fetch_group(parts: frozenset[str], group: list[SpotPoint]) -> BaseException | None:
         """Fetch ``parts`` for ``group`` and store the records. A failure of the request is
-        the error of every spot of the group (``errors``) and is returned."""
+        the error of every spot of the group (``errors``) and is returned; what it was
+        answered and charged still counts in the run's stats."""
         nonlocal count, fields_summary
         components = None if parts == COMPONENTS else parts
+        group_before = _counters(provider)
         try:
             if not split:
                 result = provider.fetch(group, available)
@@ -1159,6 +1161,11 @@ def refresh_source(
                 logger.error("Forecast fetch failed for %s: %s", source.code, _error_text(exc))
             else:
                 logger.exception("Forecast refresh of %s failed unexpectedly", source.code)
+            # The failed request's responses, statuses and weighted calls, from the provider's
+            # tally (review r4-backend-R4-2): another group's success must not hide them from
+            # the admin dashboard's failed requests and API calls (spec 16).
+            if (spent := failed_fetch_stats(provider, group_before)) is not None:
+                stats.append(spent)
             return exc
         stored_spots.update(s for s, recs in records.items() if recs)
         errors.update({k: v for k, v in result.errors.items() if k not in result.records})
@@ -1173,6 +1180,7 @@ def refresh_source(
         return -len(g[1]), sorted(g[0])
 
     group_errors: list[tuple[list[SpotPoint], BaseException]] = []
+    fallback_groups: dict[str, int] = {}
     for parts, group in sorted(groups.items(), key=by_size):
         if (failure := fetch_group(parts, group)) is not None:
             group_errors.append((group, failure))
@@ -1190,6 +1198,7 @@ def refresh_source(
                     again.setdefault(parts - refetching[p.spot_id], []).append(p)
                     errors.pop(p.spot_id, None)
         for parts, group in sorted(again.items(), key=by_size):
+            fallback_groups["+".join(sorted(parts))] = len(group)
             if (failure := fetch_group(parts, group)) is not None:
                 group_errors.append((group, failure))
         for s in fell_back:
@@ -1257,6 +1266,8 @@ def refresh_source(
         "warnings": warnings[:50],
         "stats": total,
         "fetch_groups": {"+".join(sorted(g)): len(ps) for g, ps in groups.items()},
+        # Spots fetched again without a failed horizon refetch, by the parts they fetched.
+        **({"fallback_groups": fallback_groups} if fallback_groups else {}),
         "retryable": retryable,
         **({"map_fields": fields_summary} if fields_summary is not None else {}),
     }

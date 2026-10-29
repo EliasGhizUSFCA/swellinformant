@@ -219,7 +219,8 @@ gigabytes, without losing accuracy. What the adapters do (`forecasts/open_meteo.
 * **Retries and bookkeeping** (`forecasts/ingestion.py`, `services/sync/`): providers
   run one after another; each run records its own `started_at`, its cost in
   `details.stats` (bytes on the wire, HTTP responses by status, weighted calls; also for a
-  FAILED run) and its model runs. Any exception ends only that provider's run, FAILED,
+  FAILED run, and for a request that failed while the run's other requests succeeded, such
+  as a failed horizon refetch) and its model runs. Any exception ends only that provider's run, FAILED,
   never RUNNING. Since Upgrade 4 the acquisition runs as the `spots` stage of a sync: a
   failed component is retried `SYNC_RETRY_MINUTES` (15) later, or after the provider's own
   wait, at most `SYNC_MAX_ATTEMPTS` (6) times per model run (docs/sync.md). The provider

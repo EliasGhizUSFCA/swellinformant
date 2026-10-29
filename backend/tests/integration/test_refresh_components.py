@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any, ClassVar
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
@@ -38,6 +39,7 @@ from app.services.forecasts import ingestion, registry
 from app.services.forecasts.base import (
     COMPONENT_FIELDS,
     FetchResult,
+    FetchStats,
     ForecastRecord,
     ModelRunRef,
     RunInfo,
@@ -45,11 +47,12 @@ from app.services.forecasts.base import (
 from app.services.forecasts.demo import DemoForecastProvider
 from app.services.forecasts.open_meteo import PartlyReadRun
 from app.services.forecasts.versions import current_version, serving_runs, version_payload
-from app.services.http import RunNotServedError, TransientProviderError
+from app.services.http import HttpTally, RunNotServedError, TransientProviderError
 from app.services.sync import cli as sync_cli
 from app.services.sync import orchestrator, state
 from app.services.sync import refresh as refresh_module
 from app.services.sync.detect import plan_sync
+from app.services.usage import forecast_requests
 from tests.conftest import ApiClient
 from tests.sync_fixtures import count_queries
 
@@ -1058,6 +1061,51 @@ def test_a_spot_whose_horizon_refetch_fails_alone_is_refreshed_with_the_wind_onl
     ]
     r3 = _assert_new_wind_with_waves_carried(db, r2, len(few_spots), 1)
     assert r3.details["components"]["wave"]["refetched_spots"] == len(few_spots) - 1
+
+
+def test_a_failed_refetch_request_still_counts_in_the_runs_request_stats(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r4-backend-R4-2: the refetch request with the waves fails (answered 503 three
+    times, as request_with_retries raises after its attempts), and the wind-only fetch of
+    the same spots answers 200. The run's stats, which the admin dashboard sums for its
+    failed requests and API calls (usage.forecast_requests, spec 16), count all four
+    responses, not only the successful one. SYNTHETIC tally and weighted calls, kept as the
+    HTTP adapters keep them (HttpTally, weighted_calls_total, FetchStats.between)."""
+    tally = HttpTally()
+    monkeypatch.setattr(SplitDemo, "tally", tally, raising=False)
+    monkeypatch.setattr(SplitDemo, "weighted_calls_total", 0.0, raising=False)
+    r2 = _short_waves_then_new_wind(db, split)
+    real = SplitDemo.fetch
+
+    def answer(status: int) -> None:
+        request = httpx.Request("GET", "https://marine.invalid/v1")
+        tally(httpx.Response(status, content=b"{}", request=request))
+        SplitDemo.weighted_calls_total += 1.0
+
+    def fetch(self: SplitDemo, spots: Any, run: RunInfo, components: Any = None) -> Any:
+        before = tally.snapshot()
+        if components is None or "wave" in components:
+            for _ in range(3):
+                answer(503)
+            raise TransientProviderError("synthetic: marine HTTP 503 after 3 attempts")
+        answer(200)
+        result = real(self, spots, run, components)
+        result.stats = FetchStats.between(before, tally.snapshot(), 1.0)
+        return result
+
+    monkeypatch.setattr(SplitDemo, "fetch", fetch)
+    out = refresh(C06 + timedelta(hours=6, minutes=10))
+    assert out["status"] == "success", out
+    r3 = _assert_new_wind_with_waves_carried(db, r2, len(few_spots), len(few_spots))
+    stats = r3.details["stats"]
+    assert stats["http_status_counts"] == {"503": 3, "200": 1}, stats
+    assert stats["requests"] == r3.request_count == 4
+    assert stats["weighted_calls"] == 4.0
+    assert r3.details["fetch_groups"] == {"atmosphere+wave": len(few_spots)}
+    assert r3.details["fallback_groups"] == {"atmosphere": len(few_spots)}
+    [entry] = [e for e in forecast_requests(db) if e.source == r3.source.code]
+    assert entry.failed_requests >= 3
 
 
 def test_a_carried_run_not_served_now_is_carried_instead_of_blocking_the_refresh(
