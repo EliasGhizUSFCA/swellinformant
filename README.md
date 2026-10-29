@@ -723,8 +723,10 @@ next version and, in its `plan`, the wave component `new` and the atmosphere `cu
 (carried forward). `component=atmosphere` or `both` simulate the others. Run on 2026-10-29
 against a local API (demo provider, `JOB_RUNNER=daemon`): the first refresh published version
 1, the wave-only refresh version 2 in 15.2 s (10.1 CPU s), and `/api/forecasts/version` then
-named version 2. Without a valid token the endpoint answers 401 (404 when `CRON_SECRET` is
-not set). The whole flow, including the browser, is tested by `frontend/e2e/live-update.spec.ts`.
+named version 2. Re-run after review r2 (same day, with the test suites running beside it):
+version 1, then version 2 with the wave `new` and the atmosphere `current` in the plan, and
+401 for a wrong token. Without a valid token the endpoint answers 401 (404 when
+`CRON_SECRET` is not set). The whole flow, including the browser, is tested by `frontend/e2e/live-update.spec.ts`.
 
 **What still runs on a timer**, and why: `tides.acquire` daily at 02:20 UTC (tide predictions
 change slowly), `observations.ingest` hourly when `OBSERVATIONS_ENABLED`, the verification
@@ -734,7 +736,8 @@ every 2 minutes (retries), and the staleness and data-health checks; each at lea
 `JOB_INTERVAL_FLOOR_MINUTES` apart (60 on Vercel). There is no flight-search timer: flights
 are searched after a publication's matching and on "Re-check flights". On a hosted
 deployment without the daemon, the refresh endpoint runs "Re-check flights", "match my
-search" and due email retries, and the daily cron runs the periodic jobs that are overdue
+search", due email retries and the hourly data-health check, and the daily cron runs the
+periodic jobs that are overdue
 ([`docs/MATCHING_AND_FLIGHTS.md`](docs/MATCHING_AND_FLIGHTS.md), section 0).
 
 The map layers (`MAP_FIELDS_ENABLED`, NOAA NODD GRIB) have their own runs: a new cycle of
