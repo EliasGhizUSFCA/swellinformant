@@ -529,8 +529,8 @@ only on Vercel's website; steps 4 and 6 run on your machine):
 4. The database: a production build migrates and seeds it (the api's build command
    `python -m app.cli migrate --on-build` with `MIGRATE_ON_BUILD=production`: the 50 spots,
    airports, the tide catalog; a build that cannot read the repository's `data/` fails
-   on an empty database instead of deploying a site without spots). Run `init-db` by hand
-   (from `backend/` with the dev venv of section E.3, point `DATABASE_URL` and
+   on an empty database instead of deploying a site without spots). When it is needed, run
+   `init-db` by hand (from `backend/` with the dev venv of section E.3, point `DATABASE_URL` and
    `DATABASE_URL_UNPOOLED` at Neon's direct URL, two `export` lines, docs/deploy-vercel.md
    step 6, then `.venv/bin/python -m app.cli init-db`; idempotent; checked here against a
    local PostgreSQL, not against Neon):
@@ -1337,9 +1337,9 @@ instead of the console capture file. The e2e suite uses the demo forecast, synth
 fields and tides from route mocks, and mock flights only; it never claims real email
 delivery or real fares.
 
-**Latest full run** (Swell 2.0, after review round 3; the Upgrade 4 run is in
-docs/UPGRADE_REPORT.md section 40). Run on 2026-10-29 by the review-round-3 fixer on
-`wf6/int`, on this development machine, on commit 95cbbaa: the code of 1775c67 (the last
+**Latest full run** (Swell 2.0, after review round 4; the Upgrade 4 run is in
+docs/UPGRADE_REPORT.md section 40). Run on 2026-10-29 by the review-round-4 fixer on
+`wf6/int`, on this development machine, on commit c85474f: the code of 27ccda0 (the last
 commit that changes code or tests) plus the round's documentation. The commit after it
 changes only the results tables (this one, docs/UPGRADE_REPORT.md section 49 and
 docs/architecture_audit.md 8.4), the file list of docs/architecture_audit.md 8.2 and the
@@ -1352,23 +1352,26 @@ API function's size in the docs.
 | Upgrade of a copy of a real database (at 0006: 50 spots, 25,000 forecast rows and predictions) to 0008, then from 0008 to head | pass: row counts and a checksum (md5) of the forecast rows identical before and after; `alembic check` clean; no version until the first refresh |
 | `pytest tests/unit` | 2,894 passed, 6 skipped (the lean-install tests) |
 | `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` (a lean install from `uv.lock`) | 32 passed, a demo spot-only refresh in the lean install included |
-| `pytest tests/integration` | 657 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 21.6 min |
-| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 622 passed (52 files) |
+| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 22.4 min. `test_map_fields.py::test_a_fields_only_run_never_changes_spot_forecasts` passes in this run but fails when run alone, also on the round-3 code (each pipeline re-run publishes a new forecast version, so its `freshness.version_id` differs): a test-order dependence, not changed here and listed in docs/UPGRADE_REPORT.md section 51 |
+| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 628 passed (53 files) |
 | `npm ci`, `npm run build` | pass |
-| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 154 passed (15.6 min), `e2e/live-update.spec.ts` and `live-update-mocked.spec.ts` included (the live-update spec through the real refresh: publication to the open map 3.1 s and the spot page 4.0 s with the e2e build's 2 s poll). The run before it, on the same commit: 153 passed, 1 failed: `map-performance.spec.ts` (Chromium), the crest-dash frame draw time p95 6.5 ms over its 5 ms bound, a timing bound on this shared machine; no map code changed in review round 3, and the test passed in the 154-test run |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 155 passed (14.2 min), `e2e/live-update.spec.ts` and `live-update-mocked.spec.ts` included (the live-update spec through the real refresh: publication to the open map 3.9 s and the spot page 3.4 s with the e2e build's 2 s poll), and the new map case with the ocean layers switched off |
 | `scripts/vercel-build-check.sh --offline` | `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29); the daily cron is in the output config |
 | `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.7 of 200 MB |
 | `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass |
-| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh`, `scripts/export-openapi.sh` | clean (no shell script changed in review round 3) |
+| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh`, `scripts/export-openapi.sh` | clean (no shell script changed in review round 4) |
 | `npm audit --omit=dev` | 1 moderate advisory (fast-uri below 3.1.9, under @hookform/resolvers and ajv; docs/decisions.md ADR-037). Dev-only: Vitest 3's tinypool (2 critical) and @vitest/mocker (moderate), not upgraded |
-| The local Vercel-style stack | not run in review rounds 2 and 3 (last run 2026-10-29 01:35 UTC, before them: smoke 19 of 19 and 6 of 6); docs/UPGRADE_REPORT.md section 51 |
+| The local Vercel-style stack | not run in review rounds 2 to 4 (last run 2026-10-29 01:35 UTC, before them: smoke 19 of 19 and 6 of 6); docs/UPGRADE_REPORT.md section 51 |
 
 Earlier rounds on the same branch: review round 1 (the code of 5b9ce29) 2,882 unit, 638
 integration, 604 Vitest and 154 e2e tests passed; review round 2 (a4560d6) 2,889, 650, 614
-and 154. Every test added since is counted above; none was removed or weakened. One
-expectation changed on purpose: the build seed without `data/` now fails on an empty
-database and skips only when spots exist, so its unit test is split into those two cases
-(review r3-spec-SPEC-6).
+and 154; review round 3 (1775c67) 2,894, 657, 622 and 154. Every test added since is
+counted above; none was removed or weakened. Expectations changed on purpose: the build
+seed without `data/` now fails on an empty database and skips only when spots exist, so
+its unit test is split into those two cases (review r3-spec-SPEC-6); the Vercel smoke's
+map check with the ocean layers off (`MAP_FIELDS_ENABLED=false`, the stack's default)
+expects the "Spot forecasts only" note instead of the outage notice (review
+r4-spec-R4-SPEC-2; the smoke was not run in review round 4).
 
 **Continuous integration** (`.github/workflows/ci.yml`, GitHub Actions) runs on every
 push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python 3.13, uv

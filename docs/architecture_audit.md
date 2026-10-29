@@ -1412,7 +1412,7 @@ report keep their own figures. No module, table or record was deleted.
 
 ### 8.2 Files created and modified, per package
 
-`git diff --stat 18a5bee..95cbbaa` (the code and documentation of the final review round): 345 files changed, 87939 insertions(+), 3649 deletions(-). Per package (the
+`git diff --stat 18a5bee..c85474f` (the code and documentation of the final review round): 356 files changed, 88649 insertions(+), 3687 deletions(-). Per package (the
 foundation commits, then each package's merge into `wf6/int`, then the integration and
 review fixes on `wf6/int`):
 
@@ -1481,6 +1481,11 @@ review fixes on `wf6/int`):
 * Added: `backend/tests/integration/test_hosted_first_deploy.py`, `frontend/components/trip-freshness.tsx`, `frontend/tests/trip-freshness.test.tsx`
 * Modified: `README.md`, `backend/app/api/internal.py`, `backend/app/cli.py`, `backend/app/schemas/opportunities.py`, `backend/app/schemas/spots.py`, `backend/app/services/forecasts/base.py`, `backend/app/services/forecasts/carry.py`, `backend/app/services/forecasts/demo.py`, `backend/app/services/forecasts/ingestion.py`, `backend/app/services/forecasts/open_meteo.py`, `backend/app/services/forecasts/queries.py`, `backend/app/services/health.py`, `backend/app/services/notifications/ops_alerts.py`, `backend/app/services/notifications/providers.py`, `backend/app/services/opportunity_views.py`, `backend/app/services/service_credentials.py`, `backend/app/services/spot_views.py`, `backend/app/services/sync/orchestrator.py`, `backend/app/services/sync/standin.py`, `backend/tests/integration/test_daemonless_hosted.py`, `backend/tests/integration/test_forecast_serving.py`, `backend/tests/integration/test_public_and_opportunity_api.py`, `backend/tests/integration/test_refresh_components.py`, `backend/tests/integration/test_service_credentials.py`, `backend/tests/unit/test_cli_migrate_on_build.py`, `backend/tests/unit/test_open_meteo_components.py`, `docker-compose.vercel.yml`, `docs/API_SETUP_REQUIRED.md`, `docs/UPGRADE_REPORT.md`, `docs/architecture_audit.md`, `docs/deploy-vercel.md`, `docs/local-vercel-stack.md`, `docs/operations.md`, `docs/sync.md`, `frontend/app/dashboard/page.tsx`, `frontend/app/map/page.tsx`, `frontend/app/opportunities/[id]/page.tsx`, `frontend/app/searches/[id]/page.tsx`, `frontend/app/spots/[slug]/page.tsx`, `frontend/components/event-card.tsx`, `frontend/components/forecast-breakdown.tsx`, `frontend/components/forecast-updated.tsx`, `frontend/components/forecast/rating-details.tsx`, `frontend/components/live-swells.tsx`, `frontend/components/opportunity-card.tsx`, `frontend/components/stale-banner.tsx`, `frontend/e2e/confidence.mock.ts`, `frontend/hooks/use-forecast-version.ts`, `frontend/lib/forecast-fields.ts`, `frontend/lib/model-runs.ts`, `frontend/tests/forecast-version.test.tsx`, `frontend/tests/freshness.test.tsx`, `frontend/tests/spot-summary.test.tsx`, `frontend/tests/word-budget.test.tsx`, `frontend/types/openapi.d.ts`, `frontend/types/openapi.json`, `scripts/vercel-local.sh`
 
+**Review round 4 on `wf6/int`: SMTP reply codes, a failed request's cost in the run's stats, trips judged at the hour start, data credits on /spots and the saved search's history, switched-off map layers, the first-deploy seed after a failed build** (1 added, 39 modified)
+
+* Added: `frontend/tests/spots-credits.test.tsx`
+* Modified: `README.md`, `backend/app/schemas/map_fields.py`, `backend/app/schemas/spots.py`, `backend/app/services/forecasts/ingestion.py`, `backend/app/services/health.py`, `backend/app/services/map_fields.py`, `backend/app/services/notifications/providers.py`, `backend/app/services/opportunity_views.py`, `backend/app/services/spot_views.py`, `backend/tests/integration/test_map_fields.py`, `backend/tests/integration/test_public_and_opportunity_api.py`, `backend/tests/integration/test_refresh_components.py`, `backend/tests/integration/test_service_credentials.py`, `docs/FORECAST_SOURCES.md`, `docs/UPGRADE_REPORT.md`, `docs/architecture_audit.md`, `docs/deploy-vercel.md`, `docs/local-vercel-stack.md`, `docs/map-layers.md`, `docs/operations.md`, `docs/sync.md`, `frontend/app/map/page.tsx`, `frontend/app/searches/[id]/page.tsx`, `frontend/app/spots/page.tsx`, `frontend/components/layout/site-footer.tsx`, `frontend/components/map/legend-drawer.tsx`, `frontend/components/opportunity-card.tsx`, `frontend/e2e/confidence.mock.ts`, `frontend/e2e/map-fields.mock.ts`, `frontend/e2e/map-layers.spec.ts`, `frontend/e2e/vercel-smoke.spec.ts`, `frontend/hooks/map-fields.ts`, `frontend/tests/map-colors.test.ts`, `frontend/tests/map-fields-hooks.test.tsx`, `frontend/tests/map-freshness.test.tsx`, `frontend/tests/map-legend.test.tsx`, `frontend/tests/trip-freshness.test.tsx`, `frontend/types/openapi.d.ts`, `frontend/types/openapi.json`
+
 ### 8.3 Measurements
 
 All on this development machine (4 vCPUs shared with other work, local PostgreSQL 16 and
@@ -1501,8 +1506,8 @@ Redis 7, outbound HTTPS through a proxy); none on Vercel, Neon or Upstash.
 
 ### 8.4 Test results
 
-Run on 2026-10-29 by the review-round-3 fixer on `wf6/int`, on this development machine,
-on commit 95cbbaa: the code of 1775c67 (the last commit that changes code or tests) plus
+Run on 2026-10-29 by the review-round-4 fixer on `wf6/int`, on this development machine,
+on commit c85474f: the code of 27ccda0 (the last commit that changes code or tests) plus
 the round's documentation. The commit after it changes only the results tables (this
 one, README "Latest full run" and docs/UPGRADE_REPORT.md section 49), the file list of
 8.2 and the API function's size in the docs.
@@ -1514,23 +1519,26 @@ one, README "Latest full run" and docs/UPGRADE_REPORT.md section 49), the file l
 | Upgrade of a copy of a real database (at 0006: 50 spots, 25,000 forecast rows and predictions) to 0008, then from 0008 to head | pass: row counts and a checksum (md5) of the forecast rows identical before and after; `alembic check` clean; no version until the first refresh |
 | `pytest tests/unit` | 2,894 passed, 6 skipped (the lean-install tests) |
 | `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` (a lean install from `uv.lock`) | 32 passed, a demo spot-only refresh in the lean install included |
-| `pytest tests/integration` | 657 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 21.6 min |
-| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 622 passed (52 files) |
+| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 22.4 min. `test_map_fields.py::test_a_fields_only_run_never_changes_spot_forecasts` passes in this run but fails when run alone, also on the round-3 code (each pipeline re-run publishes a new forecast version, so its `freshness.version_id` differs): a test-order dependence, not changed here and listed in docs/UPGRADE_REPORT.md section 51 |
+| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 628 passed (53 files) |
 | `npm ci`, `npm run build` | pass |
-| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 154 passed (15.6 min), `e2e/live-update.spec.ts` and `live-update-mocked.spec.ts` included (the live-update spec through the real refresh: publication to the open map 3.1 s and the spot page 4.0 s with the e2e build's 2 s poll). The run before it, on the same commit: 153 passed, 1 failed: `map-performance.spec.ts` (Chromium), the crest-dash frame draw time p95 6.5 ms over its 5 ms bound, a timing bound on this shared machine; no map code changed in review round 3, and the test passed in the 154-test run |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 155 passed (14.2 min), `e2e/live-update.spec.ts` and `live-update-mocked.spec.ts` included (the live-update spec through the real refresh: publication to the open map 3.9 s and the spot page 3.4 s with the e2e build's 2 s poll), and the new map case with the ocean layers switched off |
 | `scripts/vercel-build-check.sh --offline` | `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29); the daily cron is in the output config |
 | `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.7 of 200 MB |
 | `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass |
-| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh`, `scripts/export-openapi.sh` | clean (no shell script changed in review round 3) |
+| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh`, `scripts/export-openapi.sh` | clean (no shell script changed in review round 4) |
 | `npm audit --omit=dev` | 1 moderate advisory (fast-uri below 3.1.9, under @hookform/resolvers and ajv; docs/decisions.md ADR-037). Dev-only: Vitest 3's tinypool (2 critical) and @vitest/mocker (moderate), not upgraded |
-| The local Vercel-style stack | not run in review rounds 2 and 3 (last run 2026-10-29 01:35 UTC, before them: smoke 19 of 19 and 6 of 6); docs/UPGRADE_REPORT.md section 51 |
+| The local Vercel-style stack | not run in review rounds 2 to 4 (last run 2026-10-29 01:35 UTC, before them: smoke 19 of 19 and 6 of 6); docs/UPGRADE_REPORT.md section 51 |
 
 Earlier rounds on the same branch: review round 1 (the code of 5b9ce29) 2,882 unit, 638
 integration, 604 Vitest and 154 e2e tests passed; review round 2 (a4560d6) 2,889, 650, 614
-and 154. Every test added since is counted above; none was removed or weakened. One
-expectation changed on purpose: the build seed without `data/` now fails on an empty
-database and skips only when spots exist, so its unit test is split into those two cases
-(review r3-spec-SPEC-6).
+and 154; review round 3 (1775c67) 2,894, 657, 622 and 154. Every test added since is
+counted above; none was removed or weakened. Expectations changed on purpose: the build
+seed without `data/` now fails on an empty database and skips only when spots exist, so
+its unit test is split into those two cases (review r3-spec-SPEC-6); the Vercel smoke's
+map check with the ocean layers off (`MAP_FIELDS_ENABLED=false`, the stack's default)
+expects the "Spot forecasts only" note instead of the outage notice (review
+r4-spec-R4-SPEC-2; the smoke was not run in review round 4).
 
 The intermittent `test_free_tier_egress.py` narrow-reads failure seen during integration
 (integration notes: once in a full run, never alone) did not recur in two full integration runs with the diagnostic plugin on 2026-10-29 (637 and 638 passed). Its cause was found by
