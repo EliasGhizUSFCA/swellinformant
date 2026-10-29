@@ -210,8 +210,8 @@ Not emulated:
 * **HTTPS, the Firewall, Deployment Protection, preview deployments** (daemons run only in
   production on Vercel), **the build machine** (the Next.js and Python builds run in Docker
   here), and Vercel Cron's timing (Hobby runs a daily job anywhere within its hour).
-* **The daemon quota.** The Hobby daemon has 10 Active CPU-hours a month; here only the
-  1-CPU limit applies. The heartbeat and `/status` report the CPU used
+* **The daemon quota.** The Hobby daemon has 5 Active CPU-hours a month
+  (https://vercel.com/docs/daemons/limits); here only the 1-CPU limit applies. The heartbeat and `/status` report the CPU used
   (`SYNC_CPU_BUDGET_HOURS`).
 * **Build arguments.** Vercel passes every environment variable to the daemon's image build
   as a build argument; compose passes none. The Containerfile declares no `ARG`, so the

@@ -365,7 +365,14 @@ from the pages linked):
   (https://vercel.com/docs/daemons/limits). The hosted profile sets SYNC_DAEMON_KINDS=map,
   so the daemon only refreshes the optional GRIB map layers (MAP_FIELD_CYCLES 06,18); without
   it the map overlay ages and is labelled stale while the spot forecasts keep refreshing
-  through the endpoint.
+  through the endpoint. The daemon's other work has stand-ins
+  (`app/services/sync/standin.py`): the refresh endpoint takes the API's kicks ("Re-check
+  flights", a saved search to match; one Redis EVAL when none is pending) and a due
+  notification retry (one Redis GET), and the daily cron runs every periodic job whose
+  newest run is older than its own interval (maintenance cleanup, matching housekeeping,
+  tides, alerts, delivery, the staleness check; within 150 s, before its refresh backstop).
+  Data health then reports a missing daemon heartbeat only as degraded, for the map layers
+  (`tests/integration/test_daemonless_hosted.py`).
 * **GitHub Actions** schedules (5-minute minimum, delayed or dropped runs, the "serverless
   application" clause of the terms) stay out: `data-sync.yml` is manual only.
 

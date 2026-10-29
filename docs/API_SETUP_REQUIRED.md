@@ -29,8 +29,8 @@ configuration" below) uses only these.
 
 | Area | Service | Cost | Licence, and what the app shows | Limits and notes |
 |---|---|---|---|---|
-| Spot forecasts | Open-Meteo free tier: GFS family (`open_meteo`) and ECMWF family (`open_meteo_ecmwf`) | Free | Data CC BY 4.0; a credit and licence link is printed next to every value derived from it (2.1) | **Non-commercial use only** (1.3). Per IP address: 600 calls a minute, 5,000 an hour, 10,000 a day, 300,000 a month; the app uses about 820 weighted calls a day (8 %) when it syncs every new run, about 534 (5 %) with the free-database cadence of the hosted setup (computed from the measured calls per run, 2.1) |
-| Forecast uncertainty | NOAA GEFS-Wave ensemble statistics | Free | NOAA open data, "can be used as desired"; credited "(modified)" (2.3) | 69.4 MB per run, 4 runs a day; off in the hosted profile (`GEFS_ENABLED=false`, to protect the daemon's CPU quota) |
+| Spot forecasts | Open-Meteo free tier: NOAA GFS + GFS-Wave (`open_meteo`), chosen by `WEATHER_PROVIDER=auto` until Windy is licensed | Free | Data CC BY 4.0; a credit and licence link is printed next to every value derived from it (2.1) | **Non-commercial use only** (1.3). Per IP address: 600 calls a minute, 5,000 an hour, 10,000 a day, 300,000 a month. Measured (Swell 2.0, live, 2026-10-28/29): 125 weighted calls for a refresh of both components, 75 for a wave-only refresh; a check with nothing new costs none. At 4 GFS cycles a day that is about 500 weighted calls a day (5 %; arithmetic on the measured calls) |
+| Forecast uncertainty (optional) | NOAA GEFS-Wave ensemble statistics | Free | NOAA open data, "can be used as desired"; credited "(modified)" (2.3) | 69.4 MB per run, 4 runs a day; off in the recommended configuration and the hosted profile (`GEFS_ENABLED=false`) |
 | Map layers | NOAA NODD byte ranges (GFS 0.5° atmosphere, GFS-Wave 0.25°) | Free | as GEFS-Wave (2.2) | About 0.96 GB a day with the partition layers |
 | Spot forecasts, fallback | NOAA GFS / GFS-Wave and ECMWF open data, direct GRIB | Free | NOAA as above; ECMWF CC BY 4.0, commercial use allowed with attribution (2.4) | Off by default (about 1.9 GB per NOAA cycle) |
 | Tides | NOAA CO-OPS (8 US spots), EOT20 harmonic constants (42 spots) | Free | CO-OPS public domain, NOS requests attribution; EOT20 CC BY 4.0, credited with its changes and DOI (2.7, 2.8) | No account; set an application name (`NOAA_COOPS_APPLICATION`) |
@@ -52,6 +52,7 @@ configuration" below) uses only these.
 | 7 | Size the database alert from the disk (no account) | The data-health database-size alert | None | — | `DATA_HEALTH_DATABASE_MAX_GB` (default 20, above the computed two-year steady state of about 17 GB with the default retention; lower it for a small disk, docs/operations.md; 0.85 on Neon Free) |
 | 8 | **Hosting on Vercel** (optional; the classic Docker Compose stack needs none of it) | The public website | A Vercel account (Hobby), and from the Vercel Marketplace a Neon Postgres and an Upstash Redis database | $0 on the free plans now; the paid plans in 1.4 once a paywall arrives | The hosted profile (section 5): `JOB_RUNNER`, `MIGRATE_ON_BUILD`, `CLIENT_IP_HEADER`, `CRON_SECRET` and the rest; `DATABASE_URL` and `DATABASE_URL_UNPOOLED` are set by the Marketplace, and `KV_URL` should be (if only the REST variables KV_REST_API_URL and KV_REST_API_TOKEN appear, copy the database's `rediss://` URL into `REDIS_URL`, `docs/deploy-vercel.md` step 4) |
 | 9 | A domain you own, for email from the hosted site | Account emails to other people from `*.vercel.app` | A registrar account (cost not researched here) and the email provider's DNS records (row 2) | registrar's price | `EMAIL_FROM` on that domain, `APP_BASE_URL` |
+| 10 | **A scheduler for the forecast refresh** (hosted setup) | Spot forecasts that follow every new model run (spec section 9); without one the hosted site refreshes once a day | On Vercel Hobby: an Upstash QStash schedule (the Upstash account of row 8, its QStash token; `docs/deploy-vercel.md` step 7b). On Vercel Pro: a second Vercel Cron entry instead, no account | QStash Free: 1,000 messages a day; a 5-minute schedule uses 288 (https://upstash.com/pricing/qstash) | `CRON_SECRET` (the schedule forwards it as the bearer token); the QStash token stays on your machine, never in the app or the repository |
 
 Not needed to start: **Windy** (2.9, step by step in `docs/WINDY_API_SETUP.md`). It is the
 preferred provider once it is licensed for this use, and Open-Meteo serves until then and
@@ -82,8 +83,8 @@ The recommended setup is free only while the app is non-commercial. Open-Meteo's
 So: a private, free app without ads or subscriptions fits the free tier. Ads,
 subscriptions, a paid tier or earning from the flight offers point to a paid plan, and so
 does a deployment on shared hosting (for the per-IP limit) ("Standard: 1M calls/month. Professional: 5M calls/month. Enterprise:
-50M+ calls/month." [pricing](https://open-meteo.com/en/pricing); the app's about 24,600
-weighted calls a month fit the Standard plan). The data licence (CC BY 4.0 with a link next to
+50M+ calls/month." [pricing](https://open-meteo.com/en/pricing); the app's about 15,000
+weighted calls a month, about 500 a day at 4 GFS cycles, fit the Standard plan). The data licence (CC BY 4.0 with a link next to
 the data) applies on every plan and the app already meets it. The only change is
 `OPEN_METEO_API_KEY` (the adapter then uses the `customer-api` and `customer-marine-api`
 hosts; mock-tested, not tried with a real key). Whether a given business model is commercial
@@ -100,17 +101,21 @@ It prints `{"missing": [...]}` and exits with 1 if anything is missing.
 ### 1.4 Hosting on Vercel: what it costs now and after a paywall
 
 The hosted setup (`docs/deploy-vercel.md`; test it first on your machine,
-`docs/local-vercel-stack.md`). "What this app uses" comes from measurements on replayed
-real data and from arithmetic on them, as cited; nothing here was measured on a real Vercel
-deployment yet.
+`docs/local-vercel-stack.md`). "What this app uses" comes from measurements on this
+development machine (live Open-Meteo refreshes, demo-data refreshes through the refresh
+endpoint, the local Vercel-style stack) and from arithmetic on them, as cited; nothing here
+was measured on a real Vercel deployment yet. Swell 2.0 (2026-10-29) recomputed this table:
+the spot forecasts refresh in the API function for every new GFS and GFS-Wave run, called
+every 5 minutes by a scheduler; the daemon is optional and refreshes only the map layers.
 
 | Service | Now: free | What this app uses of it | Later: paywall |
 |---|---|---|---|
-| **Vercel** (the website, the API as one Python function, the sync daemon, the daily cron) | **Hobby**, $0: "restricted to non-commercial personal use only". Daemons: "1 GiB or 2 GiB (1 vCPU) \| 10 Active CPU-hours per month"; "When a Hobby team reaches the quota, Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro." Cron: "Hobby accounts are limited to daily cron jobs." Runtime logs are kept 1 hour. On Hobby Vercel "may use Your Content to train our artificial intelligence" | Daemon CPU estimated at 4.4-7.9 CPU-hours a month when every new model run is synced (`docs/sync.md`, "Monthly CPU estimate": an extrapolation from this sandbox, not a Vercel measurement); the free-database cadence syncs about 60 times a month instead of about 180, so it should use less (not measured). The API function measured 127.3 MiB in the offline Vercel build (limit 500 MiB) | **Pro** before the site asks for any payment: "$20/month Pro platform fee", "Every Pro plan has $20 in monthly credit." Daemons on Pro are "billed for Active CPU and Provisioned Memory" (rate not read; check the Usage page after a week) |
-| **Neon Postgres** (Vercel Marketplace) | **Free**: "100 CU-hours/project, 1 GB Postgres storage per project ... and 5 GB of egress per project." Out of CU-hours or egress, the compute is suspended until the next billing period; over 1 GB, writes fail | With the free-database profile (section 5): **2.01 GB of egress a month in the background (40 %)**, about 20 CU-hours a month in the background and at most about 37 with steady anonymous visitors (`docs/map-layers.md`, "Free database budget": measured unit costs times the cadence, CU-hours are arithmetic on stated assumptions). Signed-in views are extra: each reads the database (`/api/auth/me` 5 statements, a dashboard about 27, measured). With a quiet site (100 views a day) the total is 2.41 GB; steady traffic (1,000 views a day) would need 5.37 GB, more than Free | **Launch**: "$0.106 per CU-hr $0.35 per GB-month", 500 GB of egress included; then the full-retention profile (section 5), which needs about 4.32 GB of background egress a month |
-| **Upstash Redis** (Vercel Marketplace) | **Free**: "Free tier includes 250MB data size and 500K commands per month." | About 79,000 commands a month from the daemon; about 111,000 a month with a quiet site and about 386,000 (77 %) with steady visitors, plus at most about 17,000 for the per-visitor limit on public cache misses (2 commands per computed key; about 403,000, 81 %, in all) (`docs/map-layers.md`: measured commands per job, check and page view times the stated traffic) | pay-as-you-go "$0.2 per 100K" commands with a budget cap, or a Fixed plan from $10 a month |
+| **Vercel** (the website, the API as one Python function with the forecast refresh, the daily cron, the optional map-layer daemon) | **Hobby**, $0: "restricted to non-commercial personal use only". Daemons: "1 GiB or 2 GiB (1 vCPU) \| 5 Active CPU-hours per month" (https://vercel.com/docs/daemons/limits, re-read 2026-10-27); "When a Hobby team reaches the quota, Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro." Cron: "Hobby accounts are limited to daily cron jobs." Functions: 4 Active CPU-hours a month. Runtime logs are kept 1 hour. On Hobby Vercel "may use Your Content to train our artificial intelligence" | Function CPU: a spot refresh measured 8.5-11.3 CPU seconds on this machine (demo and live data, `docs/sync.md` "Measured (2.0)"); at about 8 component refreshes a day that is about 0.6-0.8 CPU-hours a month (arithmetic, not a Vercel measurement), and a check with nothing new under 0.02 CPU seconds. The daemon is optional and refreshes only the map layers; its CPU on Vercel is not measured. The API function measured 128.2 MiB in the offline Vercel build (limit 500 MiB), `maxDuration` 300 s | **Pro** before the site asks for any payment: "$20/month Pro platform fee", "Every Pro plan has $20 in monthly credit." Daemons on Pro are "billed for Active CPU and Provisioned Memory" (rate not read; check the Usage page after a week) |
+| **Neon Postgres** (Vercel Marketplace) | **Free**: "100 CU-hours/project, 1 GB Postgres storage per project ... and 5 GB of egress per project." Out of CU-hours or egress, the compute is suspended until the next billing period; over 1 GB, writes fail | With the free-database profile (section 5). **Egress**: one spot refresh sends 6.2-9.5 MB from the database to the app (measured on demo data through the refresh endpoint, 2026-10-27 and 29: `docs/sync.md` "Measured (2.0)", `scripts/measure_refresh_egress.py`), almost all of it the scoring and swell detection reading the new run back; a check with nothing new reads nothing. At 4 GFS cycles a day with the wave and the atmosphere refreshed separately (8 refreshes) that is about 1.5-2.3 GB a month (30-46 %, arithmetic), up to about 3.4 GB when the late GFS 0.25 domain makes a third refresh per cycle. Visitors add to it: a quiet site (100 views a day) added about 0.40 GB a month in the Upgrade 4 measurement (`docs/map-layers.md`, not re-measured for 2.0); steady traffic (1,000 views a day) may not fit. **Compute**: every refresh wakes the database; at 8-12 wakes a day (refreshes and the daily cron) and 0.25 CU until 5 idle minutes after each, about 5-8 CU-hours a month (arithmetic on those assumptions); the optional daemon's hourly periodic jobs would add about 15 (Upgrade 4 figure); signed-in views are extra (`/api/auth/me` 5 statements, a dashboard about 27, measured) | **Launch**: "$0.106 per CU-hr $0.35 per GB-month", 500 GB of egress included; then the full-retention profile (section 5) |
+| **Upstash Redis** (Vercel Marketplace) | **Free**: "Free tier includes 250MB data size and 500K commands per month." | Swell 2.0, without the daemon: **refresh checks** about 43,000 a month (a 5-minute schedule is 8,640 checks a month × 5 commands: 3 measured on a live check plus the stand-in's 2, one for pending kicks and one for a due email retry, counted in the code); a refresh adds about 41 (measured). **Version polling** (`GET /api/forecasts/version`): the CDN shares the answer for `FORECAST_VERSION_CDN_SECONDS` (15), so the origin sees at most one request per 15 s per CDN region while any tab is open, each at most one Redis GET (a 5-second memo per process, measured): up to about 172,800 a month per region with a tab open all month, far less for a quiet site (3 hours of open tabs a day: about 21,600). **Public pages**: about 32,000 a month with a quiet site and about 307,000 with steady visitors plus at most 17,000 for the per-visitor miss limit (the Upgrade 4 estimate, `docs/map-layers.md`, not re-measured for 2.0). In all: about 97,000 a month (19 %) for a quiet site; with steady visitors and one region polled all month about 540,000, **more than Free's 500K**. The optional daemon adds about 76,000 (kick polls, checks, hourly jobs; Upgrade 4 figure). All arithmetic on the measured unit costs; not measured on Upstash | pay-as-you-go "$0.2 per 100K" commands with a budget cap (540,000 commands cost about $1.08 a month), or a Fixed plan from $10 a month. `FORECAST_VERSION_CDN_SECONDS=30` halves the version polling at the cost of up to 15 s more before an open page sees a new version (the target is 60 s) |
+| **Upstash QStash** (the refresh scheduler on Hobby, `docs/deploy-vercel.md` step 7b) | **Free**: 1,000 messages a day, 10 active schedules (https://upstash.com/pricing/qstash) | 288 messages a day for a 5-minute schedule (29 %), plus retries of a failed delivery | pay-as-you-go; on Vercel Pro a Vercel Cron entry replaces it |
 | **Resend** (email) and a domain | "$0 / mo 3,000 emails / mo 100 emails a day" (2.11), with a sending domain you control (SPF, DKIM, DMARC) | Verification, password reset, swell alerts, admin alerts. Before you have a domain: `EMAIL_FROM=Swell Travel Agent <onboarding@resend.dev>`, which Resend delivers only to the address of your Resend account (register, verify and `make-admin` with it; `OPS_ALERT_EMAILS` too). Sign-up stays open: visitors can create accounts, but their verification, password-reset and alert emails reach nobody until the domain is verified, so do not publicise the site yet | Pro "$20 / mo 50,000 emails / mo" above 3,000 emails a month |
-| **Open-Meteo** (spot forecasts) | free API, non-commercial only (1.3) | about 534 weighted calls a day with the free-database cadence (2 GFS-family runs × 142.9 + 2 ECMWF-family runs × 124.3, the calls measured per run in 2.1; a retried acquisition adds to it) | `COMMERCIAL_USE=true` plus `OPEN_METEO_API_KEY` (Standard plan: 1M calls a month; **confirm the price at checkout**) |
+| **Open-Meteo** (spot forecasts) | free API, non-commercial only (1.3) | 125 weighted calls per refresh of both components and 75 per wave-only refresh (measured live, 2026-10-28 and 29; the atmosphere alone is the difference, about 50); about 500 a day at 4 GFS cycles (5 % of the 10,000; arithmetic), about 15,000 a month. Checks for new runs read only the free `meta.json` files (no weighted calls) | `COMMERCIAL_USE=true` plus `OPEN_METEO_API_KEY` (Standard plan: 1M calls a month; **confirm the price at checkout**) |
 | **GitHub** (CI, and the manual emergency `data-sync.yml` workflow) | "GitHub Actions usage is free for self-hosted runners and for public repositories that use standard GitHub-hosted runners." The repository stays public | CI on every push and pull request; `data-sync.yml` only when run by hand (no schedule, `docs/deploy-vercel.md` section 8) | Actions minutes of a private repository were not researched |
 
 The paywall itself (a payment provider, plans, access control for paying accounts) is not
@@ -120,11 +125,11 @@ built; for the hosting it is a configuration change only (`docs/deploy-vercel.md
 ### Recommended live configuration
 
 ```env
-FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf
-FORECAST_BLEND_ENABLED=true
-GEFS_ENABLED=true
-GEFS_STAT_FIELDS=HTSGW,PERPW
-GEFS_CYCLES=00,06,12,18
+WEATHER_PROVIDER=auto
+FORECAST_PROVIDERS=
+FORECAST_BLEND_ENABLED=false
+GEFS_ENABLED=false
+FORECAST_DAYS=10
 MAP_FIELDS_ENABLED=
 MAP_FIELD_STEPS=0-120:3,120-240:6
 MAP_FIELD_CYCLES=00,12
@@ -134,14 +139,25 @@ NOAA_COOPS_APPLICATION=SwellTravelAgent
 OPEN_METEO_API_KEY=
 ```
 
-This is the classic Docker Compose stack's setup; the Vercel setup uses the hosted profile of
-section 5 (GEFS off, the free-database sync cadence). Two independent model families are
-blended; GEFS-Wave adds the ensemble spread (Hs and Tp
-only); an empty `MAP_FIELDS_ENABLED` means automatic (standalone map layers with a live
-provider); `NOAA_COOPS_APPLICATION` takes an application name, for example
-"SwellTravelAgent (+https://your.site)"; `OPEN_METEO_API_KEY` stays empty unless the app is
-commercial (1.3). Apart from the application name, only `FORECAST_PROVIDERS` and
-`GEFS_ENABLED` differ from the defaults.
+Swell 2.0 (design D5, spec section 2: "do not repeatedly cross-reference numerous weather
+providers"): one provider. `WEATHER_PROVIDER=auto` uses Windy once it is licensed
+(`WINDY_API_KEY` set and `WINDY_STORAGE_AUTHORIZED=true`, `docs/WINDY_API_SETUP.md`) and
+Open-Meteo's NOAA GFS + GFS-Wave until then; Open-Meteo stays the fallback. With one family
+the wave and the wind refresh independently, each as soon as its own model run is servable,
+and the other component is carried forward with its original model time.
+`FORECAST_PROVIDERS` stays empty (it is derived from `WEATHER_PROVIDER`). An empty
+`MAP_FIELDS_ENABLED` means automatic (standalone map layers with a live provider);
+`NOAA_COOPS_APPLICATION` takes an application name, for example "SwellTravelAgent
+(+https://your.site)"; `OPEN_METEO_API_KEY` stays empty unless the app is commercial (1.3).
+The Vercel setup uses the hosted profile of section 5, which sets the same provider choice.
+
+**Advanced, off by default: the two-family blend and the GEFS ensemble.** Setting
+`FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf` with `FORECAST_BLEND_ENABLED=true` blends
+Open-Meteo's GFS and ECMWF families, and `GEFS_ENABLED=true` adds the GEFS-Wave ensemble
+spread (Hs and Tp only; 69.4 MB per run). The blend replaces the per-component refreshes
+with family-level syncs (no wave-only or wind-only refresh, no carry-forward: the Upgrade 4
+behaviour, design D5) and adds the ECMWF family's calls (124.3 weighted calls per run,
+measured 2026-10-14). It is not recommended for Swell 2.0.
 
 **Upgrading an existing `.env`:** deployments whose `.env` was copied from an older
 `.env.example` set `OPEN_METEO_WAVE_MODEL` and `OPEN_METEO_ATMOS_MODEL` explicitly. These

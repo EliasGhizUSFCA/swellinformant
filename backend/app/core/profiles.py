@@ -12,18 +12,21 @@ of the local Vercel-style stack); docs/deploy-vercel.md lists them.
   (Swell 2.0, design D2/D5/D8). One weather provider chosen by WEATHER_PROVIDER=auto (Windy
   once it is eligible, else Open-Meteo GFS + GFS-Wave; FORECAST_PROVIDERS is not set), no
   blend, no GEFS ensemble, a 10-day horizon. The spot refreshes run in a Vercel Function
-  (GET|POST /api/internal/refresh, called by a scheduler); the optional sync daemon only
-  refreshes the GRIB map layers (SYNC_DAEMON_KINDS=map) within Hobby's 5 Active CPU-hours
-  a month (SYNC_CPU_BUDGET_HOURS=5).
+  (GET|POST /api/internal/refresh, called every 5 minutes by a scheduler: QStash on Hobby,
+  docs/deploy-vercel.md step 7b); the optional sync daemon only refreshes the GRIB map
+  layers (SYNC_DAEMON_KINDS=map) within Hobby's 5 Active CPU-hours a month
+  (SYNC_CPU_BUDGET_HOURS=5). Without it the refresh endpoint and the daily cron run its
+  other work (app.services.sync.standin).
 * :data:`FREE_DATABASE_PROFILE`: what fits Neon Free. Storage (1 GB): about 1 day of
   forecast history and 1 week of verification archive and job logs, pruned after every
   sync, and no prediction archive. Syncs: a new spot model run triggers one
   (SYNC_TRIGGER_SOURCES=spots: the website follows every GFS run, spec section 9); the map
   layers keep the 06Z and 18Z cycles (MAP_FIELD_CYCLES=06,18) for the optional overlay. The
   Upgrade 4 cadence (SYNC_TRIGGER_SOURCES=map: two syncs a day, about 1.9 GB of egress a
-  month measured on the replayed 2026-10-16 run, docs/map-layers.md) stays available. The
-  egress of a spot-only refresh of the single provider is not measured here yet (the
-  refresh package measures it with scripts/measure_db_egress.py).
+  month measured on the replayed 2026-10-16 run, docs/map-layers.md) stays available. A
+  spot-only refresh sends 6.2-9.5 MB from the database (measured on demo data,
+  scripts/measure_refresh_egress.py, docs/sync.md "Measured (2.0)"): about 1.5-2.3 GB a
+  month at 8 component refreshes a day (docs/API_SETUP_REQUIRED.md, 1.4).
 * :data:`FULL_RETENTION_PROFILE`: the retention and sync cadence to restore after upgrading
   the database (Neon Launch). It equals the Settings defaults, except that it turns the
   prediction archive on (PREDICTION_ARCHIVE_ENABLED=true; off by default, design D5).

@@ -21,6 +21,24 @@ arrives. Under Celery a housekeeping run also chains flights and alerts (they on
 new or changed matches); the sync daemon runs it on its own and leaves the rest to the next
 publication.
 
+**Timers on a hosted deployment without the daemon** (Vercel Hobby: the daemon is optional
+and refreshes only the map layers, `SYNC_DAEMON_KINDS=map`; `app/services/sync/standin.py`).
+The timers above are the daemon's and Celery beat's. Without a daemon:
+
+* the refresh endpoint (`/api/internal/refresh`, called every 5 minutes) runs the API's
+  pending requests ("Re-check flights": `flights.discover` for those matches; a saved or
+  resumed search: `matching.match`), each followed by the stages after it, and retries a
+  delivery whose backoff has passed (the delivery job records the earliest retry time in
+  Redis);
+* the daily cron (`/api/internal/cron/daily`, 07:00-07:59 UTC on Hobby) runs every periodic
+  job whose newest run is older than its own interval: the matching housekeeping, alerts
+  (held alerts), delivery, maintenance cleanup, tides and the staleness check.
+
+So "Re-check flights" and a new saved search are handled within about 5 minutes, failed
+emails are retried on time, and held alerts (an email verified later, a daily cap reset)
+wait for the next publication's alert stage (each new model run, about every 6 hours) or
+the daily cron instead of 15 minutes.
+
 **The periodic flight search is gone.** Swell 2.0 removed the hourly `flight-discovery`
 timer and the `FLIGHT_REFRESH_HOURS` (12 h) re-search of every match. `FLIGHT_REFRESH_HOURS`
 is no longer a setting: Settings ignore unknown keys (`extra="ignore"`), so an old env file

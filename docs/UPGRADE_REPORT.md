@@ -1,7 +1,8 @@
 # Upgrade report: debugging, research and forecasting
 
 > Chronological record: each section describes the state on its date. Current setup:
-> README.md and docs/deploy-vercel.md; the owner checklist is section 44.
+> README.md and docs/deploy-vercel.md; the owner checklist is section 44 (with the refresh
+> schedule of docs/deploy-vercel.md step 7b added by Swell 2.0, section 46).
 
 Branch `claude/funny-hamilton-49k2m3`, 2026-10-11. Details live in the linked documents;
 everything stated as verified below was run, with the results shown.
@@ -9,9 +10,11 @@ everything stated as verified below was run, with the results shown.
 Contents: sections 1-8 (debugging, research, forecasting, 2026-10-11), Phase 2 (sections
 9-13: map redesign, simplified frontend, confidence), Phase 3 (sections 14-18:
 evidence-based spot profiles, validation, operations), **Upgrade 3 (2026-10, sections
-19-37: forecasting, map, weather visualisation and UI)** and **Upgrade 4 (2026-10, sections
+19-37: forecasting, map, weather visualisation and UI)**, **Upgrade 4 (2026-10, sections
 38-45: a website on Vercel, data synced to model runs, the wave look; the owner checklist is
-section 44)** at the end.
+section 44)** and **Swell 2.0 (2026-10, sections 46-51: automatic model-run detection,
+per-component refreshes, versioned publication, live page updates, researched spots,
+targeted flights, freshness monitoring)** at the end.
 
 ## 1. Bugs fixed
 
@@ -1043,6 +1046,12 @@ The first production deploy is the test of these:
     the first sync can wait up to 90 minutes while the map cycle and the GFS spot run of the
     same cycle wait for each other); the map shows the wave layer; the watchdog answers 200
     to `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily`.
+    (Swell 2.0 changed this step: the spot forecasts no longer come from the daemon, which
+    is optional and refreshes only the map layers. Run the first refresh by hand,
+    `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh`,
+    which answers `"status": "success"` with a version id, and **schedule it every 5
+    minutes** with Upstash QStash: docs/deploy-vercel.md step 7b. Without the schedule the
+    spot forecasts refresh only once a day.)
 12. **Make yourself admin** after registering and verifying your email address (your Resend
     account's address while you use the testing sender, step 6):
     `.venv/bin/python -m app.cli make-admin you@example.com` with the dev venv and the same
@@ -1117,3 +1126,166 @@ Left open:
 * **Vitest 3 → 5** for the dev-only advisories; Next.js 16.4.2 once it is two weeks old.
 * **Commit message 41572a4** says one mutation set the publication time to now; it actually
   set it to now() minus 1 day (history is not rewritten).
+
+---
+
+# Swell 2.0 (2026-10, sections 46-51)
+
+The owner's master prompt of 2026-10-26 (spec sections 1-37): the forecasts follow the
+weather models automatically, one provider (Open-Meteo now, Windy once licensed), researched
+spot conditions, versioned publication that open pages pick up without a reload, targeted
+flight searches, admin freshness monitoring, all deployable on Vercel. The audit, the plan
+and the implementation status with the per-package file lists:
+[`docs/architecture_audit.md`](architecture_audit.md) (sections 1-7, and 8 for what was
+built). How to run, set up and deploy it: README sections E.7 and F.2,
+[`docs/deploy-vercel.md`](deploy-vercel.md), [`docs/API_SETUP_REQUIRED.md`](API_SETUP_REQUIRED.md).
+
+## 46. Architecture changes
+
+* **Detection**: a refresh check reads only the providers' run metadata (Open-Meteo
+  `meta.json` per model domain, used 10 minutes after its availability time; Windy's
+  sentinel fingerprint). The wave and the atmosphere are separate components; a component is
+  new only when each of its model domains is at or past the stored run.
+* **Refresh**: `GET|POST /api/internal/refresh` (Bearer `CRON_SECRET`) runs in the API
+  function, called every 5 minutes by Upstash QStash on Hobby or Vercel Cron on Pro; it
+  fetches only the changed component, carries the other forward with its own model time,
+  scores, validates, stages and publishes a **forecast version** (`forecast_versions`), then
+  runs detection, matching, flights, alerts and delivery. Partial failures publish the good
+  spots and retry the others; failed spots keep their previous forecast, labelled stale.
+* **Serving**: every public read is cached per version and requested with
+  `?v=`; `GET /api/forecasts/version` is the small endpoint open tabs poll every 20 s.
+* **Frontend**: versioned query keys; a new version is swapped in without a reload, keeping
+  the selected spot and time; the "Forecast updated … · N min ago" label and an
+  announcement for screen readers; stale labels everywhere a rating is shown.
+* **Provider**: `WEATHER_PROVIDER=auto` (Windy when licensed and authorised to store, else
+  Open-Meteo GFS + GFS-Wave; Open-Meteo is the fallback); the blend, ECMWF and GEFS are kept
+  but off.
+* **Scoring 2.2.0** with per-hour outputs, structured reasons, researched spot conditions
+  (data/surf_spot_research), research and forecast confidence kept apart.
+* **Flights and alerts**: searches only for a new or materially changed match, on request,
+  and right before an alert; per-search alert lead times (2-10 days by default), short-notice
+  ranking; no flight timer.
+* **Monitoring**: `/admin/freshness` and admin-only email alerts (model run late, refresh
+  failures, stale spots, provider credentials including flight and email keys, quotas,
+  silent scheduler).
+* **Hosting**: the daemon is optional (map layers only); without it the refresh endpoint and
+  the daily cron run its other work.
+
+## 47. Definition of Done (spec section 36)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Vercel production build succeeds | offline build verified; no real deployment | `scripts/vercel-build-check.sh --offline`: `RESULT: ok`, API function 128.2 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29) |
+| Hosted database works | locally verified through PgBouncer in transaction mode (as Neon's pooler); Neon itself not tried | `tests/integration/test_pgbouncer_mode.py` (3 passed against a local PgBouncer on 2026-10-29; skipped in CI without `TEST_PGBOUNCER_URL`) |
+| Open-Meteo acquisition works | verified live | refreshes of 2026-10-28 and 29 (section 50) |
+| Windy adapter implemented | implemented, tested with recorded and synthetic responses; no key | `tests/unit/test_windy_provider.py`, `tests/integration/test_windy_acquisition.py` |
+| Windy activation instructions complete | done | `docs/WINDY_API_SETUP.md` (`tests/unit/test_windy_setup_doc.py`) |
+| Windy storage disabled without authorisation | done | `WINDY_STORAGE_AUTHORIZED`; `tests/unit/test_provider_manager.py`, `test_windy_provider.py` |
+| All 50 spots configured | done | `data/surf_spots/`, seeded by `init-db` (50 spots) |
+| Profiles contain sourced research | done (quoted claims only; "not documented" where no source says it) | `data/surf_spots/research_conditions.json`, `docs/surf_spot_research/`, `tests/unit/test_spot_research_docs.py` |
+| Scores generated; offshore scoring works | done | scoring 2.2.0, `tests/unit/test_surf_quality.py`, `test_wind.py`, `tests/integration/test_scoring_outputs.py` |
+| Central acquisition | done: one refresh for all users, no per-visitor fetching | the refresh endpoint; `tests/integration/test_refresh_components.py` |
+| Shared storage under the provider's licence | Open-Meteo CC BY 4.0 with the credit next to the data; Windy only with written authorisation | `docs/API_SETUP_REQUIRED.md` 2.1, 2.9 |
+| Model update detection works | verified live (a natural wave-only refresh) and in tests | section 50; `tests/unit/test_sync_detect.py`, `test_open_meteo_components.py` |
+| Automatic processing works | the endpoint and its stand-ins are tested; the 5-minute schedule (QStash) is documented, not deployed | `tests/integration/test_refresh_components.py`, `test_daemonless_hosted.py`, `test_internal_cron.py`; docs/deploy-vercel.md step 7b |
+| Versioning works; reliable publication | done | `tests/integration/test_forecast_versions.py`, `test_refresh_components.py` (marker self-heal) |
+| Cache invalidation works | done in the app; the real CDN not verified | `tests/integration/test_forecast_serving.py`, `test_public_snapshot_cache.py` |
+| Active sessions detect updates; markers and charts update | done | `frontend/e2e/live-update.spec.ts` (a simulated run through the real backend, both projects), `live-update-mocked.spec.ts`, `tests/forecast-version.test.tsx` |
+| Stale forecasts identified; partial failures handled | done | `tests/integration/test_forecast_versions.py` (stale spots served from their previous run), `test_refresh_components.py` (retries back off); `frontend/e2e/map-markers.spec.ts`, `tests/freshness.test.tsx` |
+| New swell events detected; searches matched | done | `tests/integration/test_pipeline.py`, `frontend/e2e/full-flow.spec.ts` |
+| Flight API with real credentials or a clearly labelled test adapter | test adapter ("Mock fares"); Duffel and Amadeus adapters tested with recorded responses, no credentials | `tests/unit/test_flight_providers.py` (and the flight tests), the UI's mock labels |
+| Flight requests targeted and deduplicated | done | `tests/integration/test_flight_targeting.py`, `tests/unit/test_flight_targeting.py` |
+| Email verification works; notifications work | done (Mailpit in the local stack: 23 messages on 2026-10-29) | `tests/integration/test_auth_api.py`, `test_email_delivery.py`, `test_free_tier_egress.py` |
+| API usage monitorable | done | `/admin/freshness` usage group, `quota_near` alerts; `tests/integration/test_admin_freshness.py` |
+| Frontend simple and responsive | done | the Pixel 7 project of the e2e suite |
+| Tests pass | yes | section 49 |
+| README updated | done | README A, C, E.7, F.2, M |
+| Unverified integrations and limitations documented | done | section 51, README M |
+
+## 48. Final deliverables (spec section 37)
+
+| # | Deliverable | Where |
+|---|---|---|
+| 1 | Architecture changes | section 46; docs/architecture_audit.md section 8 |
+| 2 | Files created and modified | docs/architecture_audit.md 8.2 (per package) |
+| 3 | Vercel configuration | `vercel.json`, `.vercelignore`, `Containerfile`, `backend/app/core/profiles.py`; docs/deploy-vercel.md |
+| 4 | Open-Meteo integration | `backend/app/services/forecasts/open_meteo.py` |
+| 5 | Windy ready for credentials | `backend/app/services/forecasts/windy.py`, `provider_manager.py`; docs/WINDY_API_SETUP.md |
+| 6 | Source and licensing configuration | `WEATHER_PROVIDER`, `WINDY_STORAGE_AUTHORIZED`, `COMMERCIAL_USE` (core/config.py); attribution in every forecast payload |
+| 7 | Schema and migrations | `backend/alembic/versions/0009_forecast_versions.py`, `backend/app/models/version.py` |
+| 8 | Fifty spot research profiles | `data/surf_spots/research_conditions.json`, `docs/surf_spot_research/` |
+| 9 | Scoring engine | `backend/app/services/surf_quality/` (scoring 2.2.0); docs/SURF_SCORING.md |
+| 10 | Model-update detection | `backend/app/services/sync/detect.py`, `forecasts/carry.py` |
+| 11 | Centralised refresh | `backend/app/api/internal.py`, `services/sync/orchestrator.py`, `refresh.py`, `standin.py` |
+| 12 | Versioning and publication | `backend/app/services/forecasts/versions.py`, `serving.py`, `services/sync/publish.py` |
+| 13 | Frontend live updates | `frontend/hooks/use-forecast-version.ts`, `components/forecast-updated.tsx` |
+| 14 | Map and chart integration | `frontend/app/map/page.tsx`, `components/map/`, `components/forecast/` |
+| 15 | Personalised flights | `backend/app/services/flights/` (service.py, budget.py, airports.py); docs/MATCHING_AND_FLIGHTS.md |
+| 16 | Email notifications | `backend/app/services/notifications/` |
+| 17 | Freshness monitoring | `backend/app/services/admin_freshness.py`, `frontend/app/admin/freshness/` |
+| 18 | API usage reporting | `backend/app/services/usage.py`; the dashboard's usage group |
+| 19 | Test results | section 49 |
+| 20 | Deployment and setup instructions | README E.7 and F.2, docs/deploy-vercel.md, docs/API_SETUP_REQUIRED.md |
+| 21 | Known limitations and unresolved external dependencies | section 51 and README M |
+
+## 49. Test results
+
+Run on 2026-10-29 by the review-round-1 fixer on `wf6/int`, on this development
+machine: the backend suites on the code of commit 5b9ce29, the e2e suite on d4fa28f (which changes only
+an e2e test); the documentation commit after them changes no code.
+
+| Check | Result |
+|---|---|
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (412 files formatted, 219 files type-checked) |
+| `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
+| Upgrade of a copy of a real database (at 0006: 50 spots, 25,000 forecast rows and predictions) to head | pass: 0007, 0008 and 0009 in 1.4 s; forecast rows and predictions identical before and after (md5); no version until the first refresh |
+| `pytest tests/unit` | 2,882 passed, 6 skipped (the lean-install tests) |
+| `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` (a lean install from `uv.lock`) | 32 passed, a demo spot-only refresh in the lean install included |
+| `pytest tests/integration` | 638 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`); 637 passed in the run before the alert-order fix |
+| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 604 passed (51 files) |
+| `npm ci`, `npm run build` | pass |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 154 passed (15.6 min; the live-update spec through the real refresh: publication to the open map 4.3 s and the spot page 4.2 s with the e2e build's 2 s poll). The run before it: 152 passed, 2 failed, one test in both projects (a read count the FE-5 fix had not updated; fixed in d4fa28f) |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`, API function 128.2 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29); the daily cron is in the output config |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.6 of 200 MB |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass |
+| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh` | clean |
+| `npm audit --omit=dev` | 1 moderate advisory (fast-uri below 3.1.9, under @hookform/resolvers and ajv; docs/decisions.md ADR-037). Dev-only: Vitest 3's tinypool (2 critical) and @vitest/mocker (moderate), not upgraded in this round |
+
+## 50. Measurements
+
+The full table is in docs/architecture_audit.md, 8.3 (all on this development machine, none
+on Vercel, Neon or Upstash). The main figures:
+
+* A live Open-Meteo refresh of both components: 125 weighted calls, 12.1 s of refresh (38.7 s
+  wall with proxy timeouts in the metadata check); a natural wave-only refresh of the 00Z
+  GFS-Wave run: 75 weighted calls, 20.3 s of refresh, the wind carried with its 18Z time.
+* A check with nothing new: four `meta.json` requests, 1.2-1.7 s, no data request, no
+  database query.
+* From publication to the new data on an open page: p50 13.8 s (16 samples, 9.7-22.9 s,
+  20 s poll, local Vercel-style stack without a CDN).
+* Database egress of a spot refresh: 6.3-9.5 MB from the database to the app (demo data).
+* The API function: `RESULT: ok`, API function 128.2 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29); the lean API imports in 1.5-1.8 s cold.
+* 4,000 requests through the local edge, 64 at a time: 0 errors, p50 222-314 ms.
+
+## 51. Not verified, limitations and external dependencies
+
+* **Not deployed**: no real Vercel deployment was made. Unverified until the first one:
+  Vercel's CDN caching of the versioned reads and of `/api/forecasts/version` (the
+  publication-to-page latency was measured without a CDN), Neon (only PgBouncer in
+  transaction mode was tested, locally), the QStash schedule, the Vercel daemon (the Vercel
+  CLI 64.5.0 refuses a `vercel.json` with `daemons` in `vercel build`), Neon's suspend and
+  wake, and real Upstash command counts.
+* **Atmosphere-only live refresh never observed**: on 2026-10-29 Open-Meteo's servers
+  answered GFS 0.13 00Z and 18Z alternately for over 36 minutes; three checks saw the new run
+  and three syncs skipped it safely without fetching (no charge, no version). The path is
+  covered by tests with the demo provider and by the wave-only live refresh.
+* **No Windy key** (the activation is configuration only, tested with recorded and synthetic
+  responses), **no Duffel or Amadeus credentials** (demo fares, labelled "Mock fares").
+* **Budgets are arithmetic** on unit costs measured here (docs/API_SETUP_REQUIRED.md 1.4):
+  Upstash Free fits a quiet site; steady traffic with a tab open in a CDN region all month
+  can pass 500K commands (pay-as-you-go about $1 a month at 540K).
+* **The 60 s freshness target** depends on the scheduler's 5-minute interval and Open-Meteo's
+  publication (the refresh waits 10 minutes after a run's availability time); from
+  publication, open pages measured p50 13.8 s without a CDN.
+* **Hobby is non-commercial** (Vercel and the free Open-Meteo API); a paywall needs Vercel
+  Pro and an Open-Meteo plan first (section 44).

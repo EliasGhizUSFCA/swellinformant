@@ -12,25 +12,41 @@ You save a search once: which waves you want (size, quality, wind), where you wo
 when you can travel, your budget and home airports. Background workers then run around
 the clock, without the browser open:
 
-1. fetch wave and wind forecasts for every spot centrally, once per model run for all users:
-   small Open-Meteo point requests for two independent model families (NOAA GFS / GFS-Wave
-   and ECMWF IFS / WAM; a few hundred kB per run), the GEFS-Wave ensemble for uncertainty,
-   and tide predictions; then blend the independent models (direct GRIB reads from the NOAA
-   and ECMWF open-data buckets remain a key-free fallback);
+1. detect each new weather model run automatically (a free metadata check every few
+   minutes) and fetch wave and wind forecasts for every spot centrally, once per model run
+   for all users: small Open-Meteo point requests (NOAA GFS and GFS-Wave; Windy once it is
+   licensed), the wave and the wind each as soon as its own run is available, plus tide
+   predictions; then publish a new forecast version that open pages pick up by themselves;
 2. turn the offshore forecast into **our prediction** of breaking wave height at each break
    (a physical nearshore model with an uncertainty range) and a separate, spot-specific
    surf-quality score;
-3. detect upcoming **swell events** 5–10 days ahead;
+3. detect upcoming **swell events** from 1 to 10 days ahead (each saved search sets how far
+   ahead it wants alerts, 2 to 10 days by default);
 4. match events against each saved search;
 5. search flights that land **before** the swell (default: arrive 2 days early, leave
    1 day after), within budget, with time zones handled properly;
 6. send one alert per opportunity, with follow-ups only when something material
    changes (better forecast, price drop, dates moved).
 
-Everything runs locally in **demo mode** with no API keys: synthetic forecasts and mock
-fares, clearly labelled as such everywhere. Live providers switch on through environment
-variables; the recommended live forecast setup needs no key for non-commercial use
-(section F).
+The Docker Compose stack runs in **demo mode** with no API keys: synthetic forecasts and
+mock fares, clearly labelled as such everywhere. Live providers switch on through
+environment variables; the recommended live forecast setup needs no key for non-commercial
+use (section F).
+
+**What changed in Swell 2.0 (2026-10).** The forecasts now follow the weather models
+automatically: a refresh check every 5 minutes reads only the providers' run metadata, and
+when a new wave or wind run is available it refreshes just that component for the 50 spots,
+keeps the other with its original model time, scores, publishes a **versioned** forecast and
+re-runs detection, matching, flight searches and alerts (section F.2). Open pages notice the
+new version within about 20 seconds and update the map markers, charts and lists without a
+reload ("Forecast updated 14:32 · just now"). One weather provider (Open-Meteo GFS +
+GFS-Wave now, Windy once licensed, by configuration only) replaces the multi-model blend;
+each of the 50 spots has sourced research conditions with a research confidence kept apart
+from the forecast confidence; flight searches are targeted per saved search with its own
+alert lead time; admins get a freshness dashboard (`/admin/freshness`) and email alerts. The
+architecture and what was built: [`docs/architecture_audit.md`](docs/architecture_audit.md);
+the results and the remaining limits: [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md),
+"Swell 2.0", and section M.
 
 What changed in each upgrade, with the measurements behind it:
 [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md). The forecasting upgrade of 2026-10 started
@@ -46,7 +62,9 @@ follows the owner's screenshot: a smooth blue → violet → magenta → pink wa
 and many short, soft crest dashes drifting with the waves (section H). A paywall later is a
 configuration change of the hosting (Vercel Pro, an Open-Meteo key, Neon Launch); the
 payment part itself is not built. The owner checklist (free now, paywall later) and the
-evidence are in [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Upgrade 4".
+evidence are in [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Upgrade 4". (Swell 2.0
+replaced the coordinated sync for the spot forecasts with per-component refreshes and
+versions, above.)
 
 ## B. Features
 
@@ -67,12 +85,15 @@ evidence are in [`docs/UPGRADE_REPORT.md`](docs/UPGRADE_REPORT.md), "Upgrade 4".
 
 **Forecast pipeline** (section F)
 
-* Open-Meteo point forecasts for two independent model families, GFS and ECMWF (the
-  recommended live setup), and direct NOAA GFS-Wave + GFS and ECMWF IFS ingestion (GRIB2 by
-  HTTP byte range, no keys) as a key-free fallback; GEFS-Wave ensemble mean/spread, a Windy
-  adapter (refused unless its terms are acknowledged) and a demo generator.
-* Source dependency families and a multi-model blend (no equal averaging; wind direction
-  from the mean wind vector), with per-step disagreement flags between independent models.
+* One weather provider for the spot forecasts (`WEATHER_PROVIDER=auto`): Open-Meteo's NOAA
+  GFS + GFS-Wave point forecasts now, the Windy Point Forecast adapter once its licence
+  allows storing the data (`WINDY_STORAGE_AUTHORIZED`), Open-Meteo as its fallback, and a
+  demo generator. Automatic model-run detection, per-component refreshes (wave and wind
+  independently) and versioned publication (section F.2).
+* Advanced and off by default: Open-Meteo's ECMWF family and a two-family blend (no equal
+  averaging; wind direction from the mean wind vector), the GEFS-Wave ensemble spread, and
+  direct NOAA GFS-Wave + GFS and ECMWF IFS ingestion (GRIB2 by HTTP byte range, no keys) as
+  a key-free fallback.
 * Model-run tracking, per-source staleness, retention, and an immutable archive of every
   prediction issued (for verification at each lead time).
 * Tides: NOAA CO-OPS predictions at the 8 US spots and EOT20 model tides at the other 42
@@ -189,23 +210,27 @@ Browser ──▶ frontend (Next.js :3000) ──/api/* proxy──▶ backend (
   tests.
 * Background work runs in one of two runners (`JOB_RUNNER`). In this Docker Compose stack
   it is Celery (`celery`): beat runs the sync check (`sync.tick`, every
-  `SYNC_CHECK_MINUTES`) and the periodic jobs, and the worker runs them. On Vercel it is one
-  long-lived process, the **sync daemon** (`python -m app.cli sync daemon`, `daemon`). Both
-  run the same sync when a provider publishes a new model run: spots → map → blend →
-  predictions → publish → detection → matching → flights → alerts → delivery
+  `SYNC_CHECK_MINUTES`) and the periodic jobs, and the worker runs them. On Vercel the spot
+  refresh runs in the API function, `GET|POST /api/internal/refresh`, called every 5 minutes
+  by a scheduler, and an optional long-lived **sync daemon** (`python -m app.cli sync
+  daemon`, `daemon`) refreshes the map layers. A new model run of a component (wave or wind)
+  goes through: fetch that component → carry the other forward → scores → stage and publish
+  a forecast version → detection → matching → flights → alerts → delivery
   ([`docs/sync.md`](docs/sync.md)). Data downloads (`forecasts.*`, `tides.*`,
   `observations.*`, `verification.*`, `sync.tick`) run on the `bulk` queue, everything else
   (emails, alerts, matching) on `celery`.
 
-**Hosted on Vercel** (Upgrade 4; [`docs/deploy-vercel.md`](docs/deploy-vercel.md)):
+**Hosted on Vercel** (Upgrade 4, Swell 2.0; [`docs/deploy-vercel.md`](docs/deploy-vercel.md)):
 
 ```
 Browser ──▶ Vercel ──/api/*──▶ service "api" (FastAPI as one Python function) ──▶ Neon Postgres (pooled URL)
-              │                                                    └────────▶ Upstash Redis (KV_URL)
-              └── everything else ──▶ service "web" (Next.js)
-daemon "sync" (python -m app.cli sync daemon) ──▶ provider metadata every 10 min; on a new run: one sync
-                                                ──▶ Neon (direct URL), Upstash, Open-Meteo, NOAA NODD, email
-Vercel Cron, once a day ──▶ GET /api/internal/cron/daily (watchdog: data health, admin email)
+   │          │                                                    └────────▶ Upstash Redis (KV_URL)
+   │          └── everything else ──▶ service "web" (Next.js)
+   └── every 20 s while visible: GET /api/forecasts/version (CDN-cached 15 s) → new version → re-read the data
+QStash (Hobby) or Vercel Cron (Pro), every 5 min ──▶ POST /api/internal/refresh (Bearer CRON_SECRET):
+     metadata check; on a new wave or wind run: refresh that component, publish a version, match, alert
+Vercel Cron, once a day ──▶ GET /api/internal/cron/daily (data health, overdue periodic jobs, refresh backstop)
+daemon "sync" (optional) ──▶ the GRIB map layers (SYNC_DAEMON_KINDS=map) ──▶ NOAA NODD
 ```
 
 Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (jobs table and design
@@ -256,7 +281,10 @@ cd swellinformant
 cp .env.example .env
 ```
 
-Copying `.env.example` is optional: every value has a working demo default. `.env` is
+Copy `.env.example` for a demo setup: it sets the demo providers (synthetic forecasts, mock
+fares, console email). Without a `.env`, Docker Compose still uses demo forecasts, but app
+processes started by hand use the code defaults, and `WEATHER_PROVIDER=auto` then makes live
+Open-Meteo calls (section E.3). `.env` is
 git-ignored; never commit it. The backend reads `.env` from the repository root (also when
 started from `backend/`), and Docker Compose reads it for variable substitution. To try the
 developer tools described below (simulate a swell, read captured emails), set
@@ -470,18 +498,18 @@ answers "Daily API request limit exceeded" (its free limit is per IP address), s
 
 The build itself can be checked without a Vercel account:
 `scripts/vercel-build-check.sh --offline` runs Vercel's own `vercel build` (CLI 64.5.0) on a
-temporary copy and checks the bundle sizes (on 2026-10-23: `RESULT: ok`, API function
-127.3 MiB of 500 MiB). CI runs it on every push.
+temporary copy and checks the bundle sizes (on 2026-10-29: `RESULT: ok`, API function
+128.2 MiB of 500 MiB, `maxDuration` 300 s). CI runs it on every push.
 
 ### 7. Deploy to Vercel
 
 Step by step, with what each step looks like and what to check:
 [`docs/deploy-vercel.md`](docs/deploy-vercel.md), section 4. In short (steps 1-3 and 5 run
-only on Vercel's website; step 4 runs on your machine):
+only on Vercel's website; steps 4 and 6 run on your machine):
 
 1. Vercel, Hobby plan: add a project from this GitHub repository and **leave the Root
    Directory at the repository root** (`vercel.json` defines the `web` and `api` services,
-   the `sync` daemon and the daily cron).
+   the optional `sync` daemon and the daily cron).
 2. Vercel Marketplace: add **Neon Postgres** (Free, AWS us-east-1) and connect it to the
    project, and **Upstash Redis** (Free), connected to Production and Development only;
    they set `DATABASE_URL` and `DATABASE_URL_UNPOOLED`, and `KV_URL`. Check: if only
@@ -497,9 +525,27 @@ only on Vercel's website; step 4 runs on your machine):
    direct URL (two `export` lines, docs/deploy-vercel.md step 6) and run
    `.venv/bin/python -m app.cli init-db` (the daemon also runs it at every start; this
    command was checked here against a local PostgreSQL, not against Neon).
-5. Redeploy production, then check `https://<project>.vercel.app/api/health/ready`, the
-   Vercel dashboard's Daemons page (one `sync` instance) and `/status` (the daemon's last
-   check, then a published sync).
+5. Redeploy production, then check `https://<project>.vercel.app/api/health/ready` and run
+   the first refresh by hand:
+   `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh`
+   answers `"status": "success"` with a version id (`not_due` once one is published), and
+   `/api/forecasts/version` names it.
+6. **Schedule the refresh every 5 minutes** (docs/deploy-vercel.md step 7b). Without this
+   step the spot forecasts refresh only once a day (the daily cron's backstop). On Hobby,
+   Upstash QStash (free: 1,000 messages a day; this uses 288):
+
+   ```bash
+   curl -XPOST -H "Authorization: Bearer $QSTASH_TOKEN" \
+     -H "Upstash-Cron: */5 * * * *" \
+     -H "Upstash-Forward-Authorization: Bearer $CRON_SECRET" \
+     "https://qstash.upstash.io/v2/schedules/https://<project>.vercel.app/api/internal/refresh"
+   ```
+
+   On Pro, add `{"path": "/api/internal/refresh", "schedule": "*/5 * * * *"}` to `crons`
+   in `vercel.json` instead. Check after 5-10 minutes: `/admin/freshness` (signed in as an
+   admin) shows the refresh scheduler `checking`, its last check by `refresh endpoint
+   (refresh)` less than 5 minutes ago, and `/status` a recent check. The `sync` daemon is
+   optional: it only refreshes the map layers.
 
 Free now: no payments, no ads (Vercel Hobby and the free Open-Meteo API are
 non-commercial). What each service costs now and after a paywall:
@@ -527,9 +573,9 @@ terms, free tier, cost and setup: [`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_
 
 | Data | Provider (setting) | Key or account | Used for |
 |---|---|---|---|
-| Spot forecasts, GFS family | Open-Meteo Marine + Forecast API: NCEP GFS-Wave 0.16°/0.25° and GFS (`open_meteo`) | None for non-commercial use; commercial use needs a paid plan and `OPEN_METEO_API_KEY` | Waves with swell partitions, wind, gust, pressure at each spot |
-| Spot forecasts, ECMWF family | Open-Meteo: ECMWF WAM and IFS 0.25° (`open_meteo_ecmwf`) | as above | Second, independent model family for the blend |
-| Forecast uncertainty | NOAA GEFS-Wave ensemble mean and spread (`GEFS_ENABLED=true`) | None (NOAA open data) | Uncertainty ranges and forecast confidence |
+| Spot forecasts (the default) | Open-Meteo Marine + Forecast API: NCEP GFS-Wave 0.16°/0.25° and GFS (`WEATHER_PROVIDER=auto` or `open_meteo`) | None for non-commercial use; commercial use needs a paid plan and `OPEN_METEO_API_KEY` | Waves with swell partitions, wind, gust, pressure at each spot |
+| Spot forecasts, ECMWF family (advanced, off) | Open-Meteo: ECMWF WAM and IFS 0.25° (`open_meteo_ecmwf` in `FORECAST_PROVIDERS`) | as above | A second model family for the blend; replaces the per-component refreshes with family-level syncs |
+| Forecast uncertainty (optional, off) | NOAA GEFS-Wave ensemble mean and spread (`GEFS_ENABLED=true`) | None (NOAA open data) | Uncertainty ranges |
 | Map layers | NOAA GFS-Wave `global.0p25` and GFS `pgrb2.0p50` by HTTP byte range (`MAP_FIELDS_ENABLED`, automatic) | None | Wind, pressure, wave height, period, direction and partitions on the map |
 | Tides | NOAA CO-OPS (8 US spots), EOT20 harmonic constants computed locally (42 spots) (`TIDE_PROVIDERS`) | None; set `NOAA_COOPS_APPLICATION` to an app name | Tide curve, high/low waters, tide scoring where research supports it |
 | Buoy observations | NDBC (and CDIP via NDBC), AODN, Met Office (`OBSERVATIONS_ENABLED=true`) | None | Measured waves shown as measurements; forecast verification |
@@ -540,40 +586,150 @@ Every value shown from these sources carries its credit and licence link (Open-M
 4.0, "Copyright ECMWF … (modified)", NOAA, EOT20 CC BY 4.0, buoy providers): on the spot
 page, the map panel and best-spots list, swell cards, opportunity pages and alert emails.
 
-### 2. When data is pulled: the synced pipeline
+### 2. Weather setup and automatic updates (Swell 2.0)
 
-Since Upgrade 4 no forecast is downloaded on a fixed timer. Every `SYNC_CHECK_MINUTES` (10)
-the runner reads only the providers' **metadata** (Open-Meteo's `meta.json`, which is not
-charged to the call budget, and NOAA `.idx` HEAD requests; the daemon makes no database
-query for it). When a provider has published a model run newer than the stored one, it runs
-**one sync**: the spot forecasts, the ensemble and the world map layers of that run are
-fetched, blended, scored and **published together**, then swells are detected and searches
-matched, flights refreshed and alerts sent. A run already stored is never fetched again.
-The full rules: [`docs/sync.md`](docs/sync.md).
+**Choosing the provider.** One weather provider serves the spot forecasts:
 
-| Data | Synced when | What it reads |
-|---|---|---|
-| Spot forecasts, GFS family (`open_meteo`) | Open-Meteo publishes a new GFS run (4 cycles a day; its four model domains appeared 5.3 to 8.7 h after the cycle in the runs observed, and one was still missing 9.3 h after it once) | point forecasts for the active seeded surf spots only (50), one request per model |
-| Spot forecasts, ECMWF family (`open_meteo_ecmwf`) | Open-Meteo serves a new 00Z or 12Z run unmixed (7.0-8.5 h after the cycle) | as above |
-| Map layers (`MAP_FIELDS_ENABLED`) | a new cycle of `MAP_FIELD_CYCLES` (00, 12) is published on NOAA NODD; the GFS spot run and the map of the same cycle wait up to `SYNC_COALESCE_MINUTES` (90) for each other | the whole world at 0.5°, 61 map hours (`MAP_FIELD_STEPS=0-120:3,120-240:6`) |
-| GEFS-Wave (`GEFS_ENABLED=true`) | acquired by the next sync after a new run (it does not start one) | ensemble mean and spread of Hs and Tp |
+| `WEATHER_PROVIDER` | Uses |
+|---|---|
+| `auto` (the default) | Windy once it is eligible (`WINDY_API_KEY` set and `WINDY_STORAGE_AUTHORIZED=true`, set only with a written licence that allows storing the data; [`docs/WINDY_API_SETUP.md`](docs/WINDY_API_SETUP.md)), else Open-Meteo's NOAA GFS + GFS-Wave. Open-Meteo stays the fallback when Windy fails |
+| `open_meteo` | Open-Meteo GFS + GFS-Wave (no key for non-commercial use) |
+| `windy` | Windy only (refused without the key and the storage authorisation) |
+| `demo` | synthetic forecasts, labelled as such (Docker Compose, `.env.example` and the tests set it) |
 
-**On Neon Free** (the hosted free-database profile) a sync runs only for a new map cycle,
-06Z and 18Z (`SYNC_TRIGGER_SOURCES=map`, `MAP_FIELD_CYCLES=06,18`), and takes the newest spot
-runs of both families with it: spot forecasts then change twice a day. That keeps the
-database's reads at about 2.01 GB a month of Neon Free's 5 GB
-([`docs/map-layers.md`](docs/map-layers.md), "Free database budget", which also lists what it
-costs in freshness).
+`FORECAST_DAYS` (10) is the horizon. `FORECAST_PROVIDERS` is an advanced override and stays
+empty; the two-family blend and the GEFS ensemble are off by default and not recommended
+(they replace the per-component refreshes with family-level syncs:
+[`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md), "Recommended live
+configuration"). Check what the settings select, with one free metadata request:
 
-What still runs on a timer, and why: `tides.acquire` daily at 02:20 UTC (tide predictions
-change slowly; one request per station), `observations.ingest` hourly when
-`OBSERVATIONS_ENABLED` (buoys report all the time), the two verification jobs when
-`VERIFICATION_ENABLED`, `maintenance.cleanup` daily at 03:30 UTC (retention), and the
-per-user jobs between syncs (matching every 30 min, flights hourly, alerts every 15 min,
-delivery every 2 min, the staleness and data-health checks), each at least
-`JOB_INTERVAL_FLOOR_MINUTES` apart (60 on Vercel, so the database wakes at most hourly).
+```bash
+cd backend && python -m app.cli forecast provider-check
+```
 
-The sync from the command line (from `backend/`; each prints JSON):
+It prints the selection and its reasons, Windy's eligibility, the recorded provider health
+and a live check (Open-Meteo: one `meta.json`; Windy: one sentinel request) as JSON, and
+stores nothing; exit 0 when every checked provider is healthy, 1 otherwise
+(`--provider open_meteo` or `--provider windy` checks one).
+
+**Detection.** The app never downloads a forecast to find out whether it changed. A
+**refresh check** reads only the providers' metadata: Open-Meteo's `meta.json` per model
+domain (free, not charged to the call budget; its availability time, used 10 minutes later,
+`OPEN_METEO_AVAILABILITY_WAIT_MINUTES`, because Open-Meteo's servers can disagree for a
+while), or Windy's sentinel fingerprint. The wave and the wind (atmosphere) are separate
+components with their own model runs. A component is new only when every one of its model
+domains is at or past the stored run, so a lagging server never makes the site go back to an
+older run. A check with nothing new makes no database query and no forecast request.
+
+**Check frequency.**
+
+* Hosted (Vercel): `GET|POST /api/internal/refresh` with `Authorization: Bearer
+  $CRON_SECRET`, **every 5 minutes**, called by Upstash QStash on Hobby or a Vercel Cron
+  entry on Pro (set it up in [`docs/deploy-vercel.md`](docs/deploy-vercel.md), step 7b). The
+  daily Vercel cron (`/api/internal/cron/daily`) runs one more check as a backstop.
+* Docker Compose and local processes: Celery beat's `sync.tick` or the daemon
+  (`python -m app.cli sync daemon`) every `SYNC_CHECK_MINUTES` (10).
+* `FORECAST_REFRESH_ENABLED=false` is the kill switch: checks answer `disabled` and nothing
+  is fetched.
+
+**Processing.** When a component has a newer servable run, the refresh fetches **only that
+component** for the 50 spots (one request per model domain), keeps the other component with
+its **original model time** (never labelled as the new run; hours the carried component does
+not have are dropped), normalises, scores every hour, validates the spots, stores the result
+as a **staged version** and publishes it (`forecast_versions`: version id, published time,
+wave and wind model runs, spots updated and stale). Then it detects swell events, matches the
+saved searches, searches flights where justified and sends alerts. Spots whose fetch failed
+keep their previous forecast, are marked stale and are retried (5, 15, 45 minutes later); a
+version is never published with incomplete records as complete. Superseded versions are kept
+`RETENTION_FORECAST_DAYS` (1 on Neon Free, 10 by default). Measured on this machine: a live
+Open-Meteo refresh of both components 125 weighted calls, a wave-only refresh 75 and 20.3 s;
+a demo refresh 12-15 s and 8.5-11.3 CPU s; a check with nothing new under 2 s
+([`docs/sync.md`](docs/sync.md), "Measured (2.0)").
+
+**Cache invalidation.** The published version id lives in Redis (the version marker). Every
+public read (`/api/spots`, `/api/map/conditions`, a spot's forecast and timeline, events) is
+cached per version (the snapshots that depend on the time also per UTC hour), and the
+browser asks with `?v=<version_id>`: a URL that
+names the current version is cacheable by the CDN (`s-maxage=300`), one that names another
+version answers `no-store`, so no cache serves an old forecast as the new one.
+
+**Browser updates.** An open, visible tab polls `GET /api/forecasts/version` (a small JSON;
+the CDN shares it for `FORECAST_VERSION_CDN_SECONDS`, 15) every 20 seconds
+(`NEXT_PUBLIC_FORECAST_VERSION_POLL_MS`). On a new version it re-reads the data on screen
+under the new version's URLs and swaps it in without a reload, keeping the selected spot and
+time: map markers, ratings, charts, swell and wind, tide, confidence, best windows and the
+signed-in lists (opportunities, alerts). The label "Forecast updated 14:32 AEDT · 5 min ago"
+shows when the forecast on screen was published (on a spot page: when that spot was last
+updated, in the spot's zone), is highlighted briefly, and screen readers hear "New forecast
+loaded". Once an hour the tab also re-reads the public data, so a spot that went out of date
+by age is shown as such. Measured in the local Vercel-style stack (no CDN): from publication
+to the new data on screen p50 13.8 s (16 samples, 9.7-22.9 s).
+
+**Status checks.**
+
+| Where | What |
+|---|---|
+| `GET /api/forecasts/version` | the published version: id, published time, wave and wind model runs, spots updated and stale |
+| `GET /api/forecasts/status`, `/status` | public freshness: each component's model run, stale spots, the last refresh check |
+| `/admin/freshness` (admin accounts) | model runs and their expected next run, refresh jobs and their timings, the refresh scheduler, stale spots, provider health and fallbacks, API usage (Open-Meteo, Windy, flights), how fast open pages saw each version |
+| `/api/health/data` | data health with the problems admins are emailed about |
+
+**When the provider is unavailable.** The site keeps serving the last published version and
+labels stale spots "Forecast last updated N hours ago. Not a current forecast."; it never
+calls stale data current. A check that cannot read the metadata leaves that component
+`unknown` until the next check. Windy failures (key, quota, outage) fall back to Open-Meteo
+for a while and the version says so. Admins are emailed for `provider_unavailable` (30
+minutes), `model_run_late`, `refresh_failures` (3 in a row), `forecast_stale_spots`,
+`provider_credentials`, `quota_near` and `refresh_scheduler_silent` (no check for 30
+minutes); the runbooks are in [`docs/operations.md`](docs/operations.md).
+
+**Try it locally (demo provider).** With the demo provider, `ENABLE_DEV_ENDPOINTS=true` and
+a `CRON_SECRET` of 16 or more characters in `.env`, and the API on `localhost:8000`: run a
+first refresh, register on the site (section E.5), then make the demo provider offer a new
+wave run and refresh again. Open a spot page or the map in the browser first: it switches to
+the new version within about 20 seconds, without a reload.
+
+```bash
+export CRON_SECRET='the value in .env'
+API=http://localhost:8000
+curl -s -X POST -H "Authorization: Bearer $CRON_SECRET" "$API/api/internal/refresh"
+# sign in (the dev endpoint needs an account), with the CSRF cookie the API sets
+J=$(mktemp)
+curl -s -c "$J" "$API/api/auth/csrf" > /dev/null
+curl -s -b "$J" -c "$J" -H "X-CSRF-Token: $(awk '$6 == "sta_csrf" {print $7}' "$J")" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"your password"}' "$API/api/auth/login"
+curl -s -b "$J" -H "X-CSRF-Token: $(awk '$6 == "sta_csrf" {print $7}' "$J")" \
+  -X POST "$API/api/dev/simulate-model-run?component=wave"
+curl -s -X POST -H "Authorization: Bearer $CRON_SECRET" "$API/api/internal/refresh"
+curl -s "$API/api/forecasts/version"
+```
+
+The first refresh answers `"status": "success"` with version 1 (or `not_due` when a runner
+already published it); the second, after the simulated run, `"status": "success"` with the
+next version and, in its `plan`, the wave component `new` and the atmosphere `current`
+(carried forward). `component=atmosphere` or `both` simulate the others. Run on 2026-10-29
+against a local API (demo provider, `JOB_RUNNER=daemon`): the first refresh published version
+1, the wave-only refresh version 2 in 15.2 s (10.1 CPU s), and `/api/forecasts/version` then
+named version 2. Without a valid token the endpoint answers 401 (404 when `CRON_SECRET` is
+not set). The whole flow, including the browser, is tested by `frontend/e2e/live-update.spec.ts`.
+
+**What still runs on a timer**, and why: `tides.acquire` daily at 02:20 UTC (tide predictions
+change slowly), `observations.ingest` hourly when `OBSERVATIONS_ENABLED`, the verification
+jobs when `VERIFICATION_ENABLED`, `maintenance.cleanup` daily at 03:30 UTC (retention), the
+matching housekeeping daily at 03:45 UTC, alerts every 15 minutes (held alerts), delivery
+every 2 minutes (retries), and the staleness and data-health checks; each at least
+`JOB_INTERVAL_FLOOR_MINUTES` apart (60 on Vercel). There is no flight-search timer: flights
+are searched after a publication's matching and on "Re-check flights". On a hosted
+deployment without the daemon, the refresh endpoint runs "Re-check flights", "match my
+search" and due email retries, and the daily cron runs the periodic jobs that are overdue
+([`docs/MATCHING_AND_FLIGHTS.md`](docs/MATCHING_AND_FLIGHTS.md), section 0).
+
+The map layers (`MAP_FIELDS_ENABLED`, NOAA NODD GRIB) have their own runs: a new cycle of
+`MAP_FIELD_CYCLES` is fetched by the daemon or Celery (never by the refresh endpoint); the
+map overlay is labelled out of date when it ages.
+
+The sync from the command line (from `backend/`; each prints JSON or a plan):
 
 ```bash
 python -m app.cli sync check
@@ -588,16 +744,14 @@ python -m app.cli migrate --on-build
 `sync check` prints the plan (what is new, waiting or current) from the metadata alone;
 `sync run` syncs whatever has a newer run (exit 0 success, partial or skipped; 1 failed; 3
 another sync holds the lease), `--force` runs every stage now (runs already stored are still
-skipped), `--only` limits the acquisitions to `spots`, `ensemble` or `map`; `sync daemon` runs every background job in
-one process until stopped (`--once` for one iteration), as on Vercel; `sync publish`
-publishes what is stored; `sync status` lists the newest syncs; `migrate --on-build` is the
-Vercel build step (it migrates only where `MIGRATE_ON_BUILD` allows). Measured on
-2026-10-23 with the hosted profile: after a sync, `sync check` made 0 SQL statements and 8
-metadata requests (3,588 bytes), and a forced re-sync over stored data changed no data row.
+skipped), `--only` limits the acquisitions to `spots`, `ensemble` or `map`; `sync daemon`
+runs every background job in one process until stopped (`--once` for one iteration);
+`sync publish` publishes what is stored; `sync status` lists the newest syncs;
+`migrate --on-build` is the Vercel build step (it migrates only where `MIGRATE_ON_BUILD`
+allows). The full rules: [`docs/sync.md`](docs/sync.md).
 
-The spot timeline shows the models' own steps: with the recommended setup hourly to 120 h,
-then 3-hourly (6-hourly beyond 144 h for an ECMWF-only run). Hours Open-Meteo itself
-interpolated are not stored (`OPEN_METEO_NATIVE_STEPS_ONLY=true`).
+The spot timeline shows the model's own steps: GFS hourly to 120 h, then 3-hourly. Hours
+Open-Meteo itself interpolated are not stored (`OPEN_METEO_NATIVE_STEPS_ONLY=true`).
 
 ### 3. Caching and storage limits
 
@@ -662,14 +816,16 @@ use is about 820 weighted calls a day, 8 % of Open-Meteo's daily limit.
 
 ### 5. Real forecast data, step by step
 
-Recommended setup: both Open-Meteo families, GEFS-Wave, the map layers (standalone, automatic
-with a live provider) and tides. In Docker, put this in `.env` and restart on a fresh
-database (`docker compose down -v`, then `docker compose up --build -d`); beat then runs
-every job on its own:
+Recommended setup (Swell 2.0): one provider, Open-Meteo GFS + GFS-Wave until Windy is
+licensed, the map layers (standalone, automatic with a live provider) and tides. In Docker,
+put this in `.env` and restart on a fresh database (`docker compose down -v`, then
+`docker compose up --build -d`); beat then checks for new model runs every 10 minutes and
+runs every job on its own:
 
 ```env
-FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf
-GEFS_ENABLED=true
+WEATHER_PROVIDER=auto
+FORECAST_PROVIDERS=
+GEFS_ENABLED=false
 NOAA_COOPS_APPLICATION=SwellTravelAgent
 ```
 
@@ -687,11 +843,9 @@ Then run the jobs in order (tides and the ensemble first, so the predictions can
 cd backend
 source .venv/bin/activate
 export DATABASE_URL=postgresql+psycopg://swell:swell@localhost:5432/swell_live
-export FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf
-export GEFS_ENABLED=true
+export WEATHER_PROVIDER=open_meteo FORECAST_PROVIDERS=
 python -m app.cli init-db
 python -m app.cli tides acquire
-python -m app.cli engine ensemble
 python -m app.cli pipeline
 python -m app.cli engine map-fields --max-lead-hours 24
 python -m app.cli engine budget
@@ -703,7 +857,11 @@ keeps showing the published run (`SYNC_PUBLISH_GATE`) until the next sync or
 `python -m app.cli sync publish`. `--max-lead-hours 24`
 reads the first 9 map hours (about 71 MB); leave it out to read the whole cycle (61 map
 hours, about 0.48 GB). In the same terminal, `uvicorn app.main:app --port 8000` serves that
-database to the frontend. Verified on 2026-10-16 by running the block in an interactive zsh
+database to the frontend, and the refresh endpoint (section F.2) keeps it current once
+`CRON_SECRET` is set. The single-provider refresh was run live on 2026-10-28 and 29
+(`orchestrator.refresh_check`, what the endpoint runs; docs/sync.md "Measured (2.0)"): both
+components 125 weighted calls, a wave-only refresh 75. The block itself was last verified on
+2026-10-16 with the then-recommended two-family setup, by running it in an interactive zsh
 (against the compose PostgreSQL, on a shifted host port): `init-db`,
 tides (56 stations, 140,624 B from CO-OPS), GEFS-Wave (2,050 rows, 69.4 MB), the map fields
 (9 of 9 hours with partitions, 71.3 MB) and the budget all succeeded. That afternoon
@@ -1132,22 +1290,27 @@ instead of the console capture file. The e2e suite uses the demo forecast, synth
 fields and tides from route mocks, and mock flights only; it never claims real email
 delivery or real fares.
 
-**Latest full run** (2026-10-23, the Upgrade 4 integration branch `wf4i2/main`, run by the
-integration verifier on this tree's code):
+**Latest full run** (Swell 2.0, after review round 1; the Upgrade 4 run is in
+docs/UPGRADE_REPORT.md section 40). Run on 2026-10-29 by the review-round-1 fixer on
+`wf6/int`, on this development machine: the backend suites on the code of commit 5b9ce29, the e2e suite on d4fa28f (which changes only
+an e2e test); the documentation commit after them changes no code.
 
-| Command | Result |
+| Check | Result |
 |---|---|
-| `ruff format --check .`, `ruff check .`, `mypy app` | pass (366 files formatted, 199 files type-checked) |
-| `alembic upgrade head` + `alembic check` (empty database) | pass: 0001 to 0008 applied, no new operations |
-| `pytest tests/unit` | 2,040 passed, 4 skipped (the lean-install tests; with `LEAN_PYTHON` pointing at a lean venv they pass, 27 of 27) |
-| `pytest tests/integration` | 503 passed, 3 skipped (the PgBouncer tests; against the local Vercel-style stack's PgBouncer they pass, 3 of 3) |
-| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 486 passed |
-| `npm run build` (proxy) and `API_ROUTING=platform` build | pass |
-| `./scripts/run-e2e.sh` (Chromium + Pixel 7) | 127 passed, twice (13.2 and 12.5 min), no flaky test |
-| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`; API function 127.3 MiB (limit 500 MiB) |
-| `scripts/vercel-local.sh up`, `sync --force`, `smoke` | 19 of 19 shell checks and 6 of 6 Playwright smoke tests, with demo data and with live data |
-| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.2 of 200 MB |
-| `npm audit --omit=dev`; pip-audit on `uv.lock` | 0 vulnerabilities; none known (after Next.js 16.4.1 and certifi 2026.10.19). At the final review (2026-10-24) npm reported a high advisory in zod 4.6.5 that GitHub had reviewed after this run (GHSA-mrhx-c7xc-m3w5); with zod 4.6.6 no high or critical one remains, and one moderate: fast-uri below 3.1.9, under @hookform/resolvers and ajv, not fixed (docs/decisions.md, ADR-037) |
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (412 files formatted, 219 files type-checked) |
+| `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
+| Upgrade of a copy of a real database (at 0006: 50 spots, 25,000 forecast rows and predictions) to head | pass: 0007, 0008 and 0009 in 1.4 s; forecast rows and predictions identical before and after (md5); no version until the first refresh |
+| `pytest tests/unit` | 2,882 passed, 6 skipped (the lean-install tests) |
+| `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` (a lean install from `uv.lock`) | 32 passed, a demo spot-only refresh in the lean install included |
+| `pytest tests/integration` | 638 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`); 637 passed in the run before the alert-order fix |
+| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 604 passed (51 files) |
+| `npm ci`, `npm run build` | pass |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 154 passed (15.6 min; the live-update spec through the real refresh: publication to the open map 4.3 s and the spot page 4.2 s with the e2e build's 2 s poll). The run before it: 152 passed, 2 failed, one test in both projects (a read count the FE-5 fix had not updated; fixed in d4fa28f) |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`, API function 128.2 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29); the daily cron is in the output config |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.6 of 200 MB |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass |
+| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh` | clean |
+| `npm audit --omit=dev` | 1 moderate advisory (fast-uri below 3.1.9, under @hookform/resolvers and ajv; docs/decisions.md ADR-037). Dev-only: Vitest 3's tinypool (2 critical) and @vitest/mocker (moderate), not upgraded in this round |
 
 **Continuous integration** (`.github/workflows/ci.yml`, GitHub Actions) runs on every
 push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python 3.13, uv
@@ -1202,7 +1365,7 @@ searches): 21.28 MB per both-family sync pass. `--help` lists the options.
 | **App authentication:** login refused, "Missing or invalid CSRF token", logged out | Sessions are HttpOnly cookies on the frontend's origin: use the app through http://localhost:3000, not the API port. With HTTPS set `COOKIE_SECURE=true`, without it `false`. `LOGIN_MAX_FAILURES` (8) failed logins lock an account for `LOGIN_LOCKOUT_MINUTES` (15) |
 | **Excessive memory:** worker killed, or a job stays "running" until `job_stuck` | The prediction job peaks at about 0.6 GB, the map-field job at about 0.57 GB, GEFS at about 0.42 GB (measured 2026-10-16) and the GRIB fallbacks more (`docs/operations.md` §5 and §6). Give the worker more memory or lower `WORKER_CONCURRENCY`, or move downloads to the `bulk-worker` profile; `/status` shows `job_stuck` until the lock TTL expires. Redis near `REDIS_MAXMEMORY` (256 MB) shows as `redis_memory`: with `noeviction` writes then fail, so raise the cap rather than enabling eviction. In the browser the map's field cache is capped at 64 MB |
 | `/status` or `/api/health/data` says *degraded* or *failing* | Each reason names the source, job or layer and its limit. Follow the incident playbook in [`docs/operations.md`](docs/operations.md); `scripts/check-health.sh` prints the same reasons from a shell. "No future tide predictions from NOAA CO-OPS" means the worker cannot reach `api.tidesandcurrents.noaa.gov` (no outbound network or DNS from the containers); EOT20 tides are computed locally and still work. A database above `DATA_HEALTH_DATABASE_MAX_GB` is an alert only (size it from the disk) |
-| `/status` says `sync_heartbeat_stale` (failing) | The sync daemon has stopped checking for new model runs: on Vercel, look at the project's Daemons page and the daemon's CPU quota (10 Active CPU-hours a month on Hobby; when it runs out the daemons stop until the 1st of next month). Playbooks: [`docs/operations.md`](docs/operations.md), section 5 |
+| `/status` says `sync_heartbeat_stale` (failing) | The sync daemon has stopped checking for new model runs: on Vercel, look at the project's Daemons page and the daemon's CPU quota (5 Active CPU-hours a month on Hobby; when it runs out the daemons stop until the 1st of next month). With the hosted profile the daemon is optional and only the map layers age (degraded); the spot forecasts keep refreshing through `/api/internal/refresh`. Playbooks: [`docs/operations.md`](docs/operations.md), section 5 |
 | `/status` says `sync_failed` or `licence` | `sync_failed`: the last two syncs failed (the admin email carries the error; `python -m app.cli sync status` lists them). `licence`: `COMMERCIAL_USE=true` without `OPEN_METEO_API_KEY`, so the Open-Meteo sources refuse to run |
 | The map is blank or says "No forecast has been ingested yet" after an upgrade | Keep `FORECAST_PROVIDERS` the same as before the upgrade: the spot list and the map serve only runs of the configured sources, so a database filled by `open_meteo,open_meteo_ecmwf` and served with `demo` shows no forecast. Run `python -m app.cli migrate` (migration 0008 records one publication of the data stored before Upgrade 4) |
 | `connection refused … 5432` / `/api/health/ready` returns 503 with `"database": "unavailable"` | PostgreSQL isn't running or `DATABASE_URL` is wrong. Run `docker compose up -d postgres` and `docker compose ps` (wait for *healthy*). Outside Docker, `DATABASE_URL` must use `localhost`; inside compose it is set to `postgres` automatically |
@@ -1224,10 +1387,12 @@ searches): 21.28 MB per both-family sync pass. `--help` lists the options.
 
 ## L. Deployment
 
-**Recommended: Vercel** (Upgrade 4). Section E.7 and
-[`docs/deploy-vercel.md`](docs/deploy-vercel.md): the web and api services and the sync
-daemon in one Vercel project, Neon Postgres and Upstash Redis from the Vercel Marketplace, a
-daily cron watchdog; test it first with the local Vercel-style stack (section E.6).
+**Recommended: Vercel** (Upgrade 4, Swell 2.0). Section E.7 and
+[`docs/deploy-vercel.md`](docs/deploy-vercel.md): the web and api services (the forecast
+refresh runs in the api function) and the optional map-layer daemon in one Vercel project,
+Neon Postgres and Upstash Redis from the Vercel Marketplace, a 5-minute refresh schedule
+(Upstash QStash on Hobby, Vercel Cron on Pro) and the daily cron; test it first with the
+local Vercel-style stack (section E.6).
 Operations on Vercel (quotas, meters, runbooks): [`docs/operations.md`](docs/operations.md).
 
 **Any container host.** A production deployment on your own servers needs the same five
@@ -1290,6 +1455,35 @@ Checklist:
   admin alerts with de-duplication and recovery notices), the backup, restore and
   restore-drill scripts and the compose `backup` profile (docs/operations.md).
 
+**Swell 2.0: verified here, and what is not verified yet**
+
+* Verified on this development machine (2026-10-27 to 29; docs/UPGRADE_REPORT.md, "Swell
+  2.0"): the refresh endpoint with live Open-Meteo data (a refresh of both components, 125
+  weighted calls; a natural wave-only refresh of the 00Z GFS-Wave run, 75 weighted calls,
+  the wind carried forward with its 18Z model time); demo refreshes through the local
+  Vercel-style stack with open browsers updating without a reload (publication to new data
+  on screen p50 13.8 s, 16 samples, no CDN); a load test through the local edge (4,000
+  requests, 64 at a time, 0 errors; a new version reached every route 3.2 s after
+  publication);
+  the daemon-less hosted path (kicks, delivery retries and overdue periodic jobs run by the
+  refresh endpoint and the daily cron, `tests/integration/test_daemonless_hosted.py`).
+* **Not verified** (needs a real deployment or accounts this project does not have yet):
+  Vercel's CDN caching of the versioned reads and of `/api/forecasts/version` (the latency
+  above was measured without a CDN); Neon itself (only PgBouncer in transaction mode was
+  tested, locally; `test_pgbouncer_mode` is skipped in CI without `TEST_PGBOUNCER_URL`); the
+  QStash schedule (never deployed); the Vercel daemon (the Vercel CLI 64.5.0 refuses a
+  `vercel.json` with `daemons` in `vercel build`); a live **atmosphere-only** refresh (never
+  observed: when GFS 0.13 moved to 00Z on 2026-10-29, Open-Meteo's servers answered 00Z and
+  18Z alternately for over 36 minutes, so three checks saw the run and three syncs skipped
+  it safely without fetching; the refresh is covered by tests with the demo provider); Windy
+  (no key: the adapter, the testing-key refusal, the fallback and the activation are tested
+  with recorded and synthetic responses only, docs/WINDY_API_SETUP.md); real flight prices
+  (no Duffel or Amadeus credentials: the demo fares are labelled "Mock fares").
+* Hosting budgets in docs/API_SETUP_REQUIRED.md 1.4 are arithmetic on unit costs measured
+  here, not measurements on Vercel, Neon or Upstash. With steady traffic and an open tab in a
+  CDN region all month, the Upstash commands can pass the free 500K (pay-as-you-go then costs
+  about $1 a month).
+
 **Upgrade 4: verified here, and what only a real deployment can show**
 
 * Verified on 2026-10-23 (docs/UPGRADE_REPORT.md, "Upgrade 4"): the offline Vercel build;
@@ -1304,8 +1498,9 @@ Checklist:
   counts, the daily cron invocation, previews, and the GitHub Actions jobs on GitHub.
 * A brand-new hosted deployment gets its NOAA CO-OPS tide predictions at the daemon's start
   (the start-up catch-up runs every periodic job that has not succeeded within its longest
-  gap, `SYNC_DAEMON_CATCH_UP`), not at the next 02:20 UTC; data health flags tides never
-  acquired 3 h after the catalog was loaded (`tides_missing:<provider>`).
+  gap, `SYNC_DAEMON_CATCH_UP`), not at the next 02:20 UTC; without the daemon (Swell 2.0)
+  at the next daily cron, which runs the overdue `tides.acquire`. Data health flags tides
+  never acquired 3 h after the catalog was loaded (`tides_missing:<provider>`).
 
 **Demo-only**
 

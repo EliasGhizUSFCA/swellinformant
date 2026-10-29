@@ -225,7 +225,7 @@ rebuild after a code-only change took 1.6 s (the dependency layer is cached).
 | Redis | used memory above `DATA_HEALTH_REDIS_MAX_FRACTION` (0.8) of its cap (Redis's `maxmemory`, or `REDIS_MAXMEMORY` when Redis runs without one); an evicting `maxmemory-policy` (not checked under `JOB_RUNNER=daemon`, which has no broker); Redis not answering | degraded |
 | Sync daemon heartbeat (`JOB_RUNNER=daemon`) | the daemon's heartbeat in Redis is missing or older than max(3 × `SYNC_CHECK_MINUTES`, `DATA_HEALTH_HEARTBEAT_MINUTES`), 30 min by default, and no sync with a valid lease is running | **failing** |
 | Syncs | the two newest finished syncs both failed or were abandoned | degraded |
-| CPU budget (`SYNC_CPU_BUDGET_HOURS`, 10 on Vercel) | this month's CPU of the background jobs (job logs, a Redis counter, the daemon's own) above 80 % of the budget | degraded |
+| CPU budget (`SYNC_CPU_BUDGET_HOURS`, 5 on Vercel) | this month's CPU of the background jobs (job logs, a Redis counter, the daemon's own) above 80 % of the budget | degraded |
 | Licence | `COMMERCIAL_USE=true` with an Open-Meteo source and no `OPEN_METEO_API_KEY` | **failing** |
 | Tides | no future predictions from a provider, or the tide model's constants file unreadable where it is deployed | degraded |
 
@@ -388,7 +388,7 @@ already open stay open meanwhile (no recovery notice is sent for a check that di
 | `provider_unavailable:<source>` | degraded | the provider's run metadata could not be read for 30 min (`unknown` components in the daemon's or the refresh endpoint's check, or Windy's consecutive transient failures). When it was first seen unknown is kept in Redis (`ops:metadata-unknown:v1`), so the duration counts across checks; the resolution is the alert job's own interval | the provider's status page; from the server `python -m app.cli forecast provider-check` (one free metadata request) once the providers package is merged; outbound access and DNS of the host |
 | `provider_fallback:<provider>` | degraded | Open-Meteo stands in for Windy: the provider manager holds a fallback after a credential, testing-key, quota or availability failure, or the published version says `fallback_from` | the site keeps updating from Open-Meteo. Fix the cause shown (often `provider_credentials` or `quota_near:windy_day`); Windy is tried again automatically when the hold ends, and a successful Windy refresh ends it at once |
 | `quota_near:<counter>` | degraded | `QUOTA_ALERT_FRACTION` (0.8) of a provider allowance is used: `open_meteo_day`, `open_meteo_month` (weighted calls), `windy_day` (requests), `flights_<provider>_day` (`FLIGHT_DAILY_QUOTA`). Clears when the window resets or the limit is raised | the dashboard's usage group; "Open-Meteo refuses requests" below. A paid plan raises the limits (`OPEN_METEO_CALLS_PER_*`, `WINDY_DAILY_REQUEST_LIMIT`, `FLIGHT_DAILY_QUOTA`) |
-| `refresh_scheduler_silent` | degraded | no refresh check for `REFRESH_SCHEDULER_EXPECTED_MINUTES` (30; at least 3 × `SYNC_CHECK_MINUTES` when Celery or a daemon whose `SYNC_DAEMON_KINDS` include `spots` is the runner, as for the daemon's heartbeat; never while a sync one of them started runs under a valid lease): neither the refresh endpoint `/api/internal/refresh` nor the daily backstop recorded one, no daemon that checks spots (`SYNC_DAEMON_KINDS` with `spots`) wrote a heartbeat, Celery's `sync.tick` did not run, and no sync they started began. Before any check was ever recorded it fires once background jobs have been logged for that long. Off at `REFRESH_SCHEDULER_EXPECTED_MINUTES=0`, and while `FORECAST_REFRESH_ENABLED=false` | check the scheduler that calls `/api/internal/refresh` (QStash or cron-job.org, docs/sync.md "Scheduling options"; the route needs `CRON_SECRET`, at least 16 characters), the daemon or Celery beat. A deployment that relies on the daily cron alone (no external scheduler) should set it to 0: the largest accepted value, 1440, is shorter than a Hobby cron's day plus its ±59 min window |
+| `refresh_scheduler_silent` | degraded | no refresh check for `REFRESH_SCHEDULER_EXPECTED_MINUTES` (30; at least 3 × `SYNC_CHECK_MINUTES` when Celery or a daemon whose `SYNC_DAEMON_KINDS` include `spots` is the runner, as for the daemon's heartbeat; never while a sync one of them started runs under a valid lease): neither the refresh endpoint `/api/internal/refresh` nor the daily backstop recorded one, no daemon that checks spots (`SYNC_DAEMON_KINDS` with `spots`) wrote a heartbeat, Celery's `sync.tick` did not run, and no sync they started began. Before any check was ever recorded it fires once background jobs have been logged for that long. Off at `REFRESH_SCHEDULER_EXPECTED_MINUTES=0`, and while `FORECAST_REFRESH_ENABLED=false` | check the scheduler that calls `/api/internal/refresh` (QStash or cron-job.org, docs/sync.md "Scheduling options", docs/deploy-vercel.md step 7b; the route needs `CRON_SECRET`, at least 16 characters), the daemon or Celery beat. Do not silence it with 0 on a hosted deployment: without a scheduler the spot forecasts refresh only once a day (the daily cron's backstop), which breaks the freshness goal (spec section 9). Only a deployment that knowingly runs on the daily cron alone, accepting that trade-off, sets 0 (the largest accepted value, 1440, is shorter than a Hobby cron's day plus its ±59 min window) |
 
 The alert path has a blind spot by construction: if the worker, Redis or the email
 provider is down, no email goes out. That is why the external monitor in §2 step 6
@@ -399,10 +399,15 @@ matters.
 Vercel Cron calls `GET /api/internal/cron/daily` once a day (`23 7 * * *` UTC; on Hobby
 "at any point within the specified hour", and a failed call is not retried) with
 `Authorization: Bearer $CRON_SECRET`. It runs `ops.data_health` inside the API function,
-independently of the daemon, so a stopped daemon (quota used up, crash) is still noticed:
-its heartbeat goes stale and the admins get the `sync_heartbeat_stale` email. It answers
-404 when `CRON_SECRET` is not set, 401 on a wrong or missing token, and 200
-`{status, problems, alerts_sent, heartbeat_age_minutes}` otherwise. When the database itself
+independently of the daemon and the refresh scheduler, so a silent scheduler
+(`refresh_scheduler_silent`) or, where the daemon is meant to refresh the map layers, a
+stopped daemon (`sync_heartbeat_stale`) is still noticed. Then, under `JOB_RUNNER=daemon`, it
+runs every periodic job whose newest run is older than its own interval (maintenance cleanup,
+the matching housekeeping, tide acquisition, alerts, delivery, the staleness check; at most
+150 s, `app/services/sync/standin.py`), so these run at least daily without a daemon, and
+last one refresh check as a backstop. It answers 404 when `CRON_SECRET` is not set, 401 on a
+wrong or missing token, and 200 `{status, problems, alerts_sent, heartbeat_age_minutes,
+jobs, refresh}` otherwise. When the database itself
 cannot be reached (for example Neon's compute suspended after its quota) the admins cannot
 be read from it: the watchdog then answers 503 and emails `OPS_ALERT_EMAILS` instead, at most
 once per UTC day (`alerts_sent` lists `new:database_unreachable`). Measured in the local
@@ -432,14 +437,15 @@ runs in docs/sync.md; monthly figures are arithmetic on them; none was measured 
 
 | Meter | Free allowance | This app | Watch it |
 |---|---|---|---|
-| Daemon Active CPU (Vercel Hobby) | 10 CPU-hours a month; when used up "Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro" | estimated 4.4-7.9 CPU-hours a month when every new model run is synced (docs/sync.md, "Monthly CPU estimate"; the map layers are more than half of it); the free-database cadence syncs about 60 times a month instead of about 180 (not measured). Measured in the local stack on 2026-10-23: a sync of the 9-hour map layers 38.6 s and 30.9 CPU s (Open-Meteo refused the spots), a sync of the GFS spot forecasts 58.9 s and 10.5 CPU s; an idle daemon used 1.35-2.1 CPU s an hour (docs/sync.md) | `/status` CPU meter and `sync_cpu_budget` at 80 % of `SYNC_CPU_BUDGET_HOURS` (10); the daemon's usage charts on Vercel |
-| Function Active CPU (Vercel Hobby) | 4 CPU-hours a month | not measured | Vercel Usage |
-| Neon egress (bytes the database sends) | 5 GB a month | background 2.01 GB a month with the free-database profile (40 %): 60 syncs × 21.28 MB + 720 hourly batches × 0.87 MB + daily jobs and start-ups; a quiet site adds about 0.40 GB (2.41 GB in all); steady traffic (1,000 views a day) would need 5.37 GB | Neon console (usage); `scripts/measure_db_egress.py` to re-measure a change |
-| Neon compute | 100 CU-hours a month; scale to zero after 5 idle minutes | about 20 CU-hours a month in the background, at most about 37 with steady anonymous visitors (assumptions: 0.25 CU, active until 5 min after a wake's last statement). Signed-in visitors are not in that figure: every signed-in page view reads the database (measured below). Anything that reaches the database at least every 5 minutes keeps it awake all month: 720 h × 0.25 CU = 180 CU-hours | Neon console |
+| Daemon Active CPU (Vercel Hobby; the daemon is optional in 2.0 and refreshes only the map layers) | 5 CPU-hours a month (https://vercel.com/docs/daemons/limits, re-read 2026-10-27); when used up "Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro" | not measured for the map-only daemon. Upgrade 4 measurements in the local stack (2026-10-23): a sync of the 9-hour map layers 38.6 s and 30.9 CPU s; an idle daemon used 1.35-2.1 CPU s an hour (docs/sync.md) | `/status` CPU meter and `sync_cpu_budget` at 80 % of `SYNC_CPU_BUDGET_HOURS` (5); the daemon's usage charts on Vercel |
+| Function Active CPU (Vercel Hobby) | 4 CPU-hours a month | the spot refreshes: 8.5-11.3 CPU s each (measured on this machine, docs/sync.md "Measured (2.0)"), about 0.6-0.8 CPU-hours a month at 8 a day (arithmetic); a check with nothing new under 0.02 CPU s | Vercel Usage |
+| Neon egress (bytes the database sends) | 5 GB a month | Swell 2.0: 6.2-9.5 MB per spot refresh (measured on demo data through the refresh endpoint, docs/sync.md "Measured (2.0)"); at 8 component refreshes a day about 1.5-2.3 GB a month (30-46 %), up to 3.4 GB with a third refresh per GFS cycle (arithmetic); a check with nothing new reads nothing. A quiet site added about 0.40 GB a month in the Upgrade 4 measurement (not re-measured) | Neon console (usage); `scripts/measure_refresh_egress.py` and `scripts/measure_db_egress.py` to re-measure a change |
+| Neon compute | 100 CU-hours a month; scale to zero after 5 idle minutes | Swell 2.0 without the daemon: about 5-8 CU-hours a month for 8-12 wakes a day (the refreshes and the daily cron; assumptions: 0.25 CU, active until 5 min after a wake's last statement; arithmetic). The optional daemon's hourly jobs add about 15 (Upgrade 4). Signed-in visitors are not in that figure: every signed-in page view reads the database (measured below). Anything that reaches the database at least every 5 minutes keeps it awake all month: 720 h × 0.25 CU = 180 CU-hours | Neon console |
 | Neon storage | 1 GB | the map layers of the two retained runs are about 142 MB with partitions (14 %); the free-database retention keeps about 1 day of forecasts and 7 days of archive | `database_size` at `DATA_HEALTH_DATABASE_MAX_GB` (0.85) |
-| Upstash commands | 500K a month | about 79,000 a month from the daemon (checks about 13,000, kick polls 43,200, the hourly batch 19,440: 4 commands per job run, the job lock and the CPU counter, 7 for data health; 60 syncs about 2,760; daily jobs 240); about 111,000 with a quiet site, about 386,000 (77 %) with steady visitors, plus 1-2 commands per public cache miss for the per-visitor miss limit (at most about 17,000 a month with steady visitors, 12 computed keys an hour: about 403,000, 81 %, in all) | Vercel Storage, Upstash console; `scripts/vercel-local.sh status` counts the local stack's commands |
+| Upstash commands | 500K a month | Swell 2.0 without the daemon: refresh checks about 43,000 a month (8,640 checks × 5 commands); version polling up to about 172,800 a month per CDN region with a tab open all month (one origin GET per `FORECAST_VERSION_CDN_SECONDS`, 15), about 21,600 for 3 hours of open tabs a day; public pages about 32,000 (quiet site) to 324,000 (steady visitors, with the miss limit; Upgrade 4 estimate). About 97,000 (19 %) for a quiet site; about 540,000 with steady visitors and one region polled all month, over Free (docs/API_SETUP_REQUIRED.md 1.4: pay-as-you-go, or `FORECAST_VERSION_CDN_SECONDS=30`). The optional daemon adds about 76,000 (kick polls 43,200, checks about 13,000, the hourly batch 19,440). All arithmetic on measured unit costs | Vercel Storage, Upstash console; `scripts/vercel-local.sh status` counts the local stack's commands |
 | Upstash data | 250 MB | about 265 kB of cached public payloads an hour, kept 2 hours; no provider response cache (`PROVIDER_RESPONSE_CACHE_ENABLED=false`) | `redis_memory` |
-| Open-Meteo calls | 10,000 a day per IP address | about 534 weighted calls a day with the free-database cadence (computed from the measured calls per run) | `python -m app.cli engine budget` |
+| Open-Meteo calls | 10,000 a day per IP address | 125 weighted calls per refresh of both components, 75 per wave-only refresh (measured live 2026-10-28/29); about 500 a day at 4 GFS cycles (arithmetic); checks read only the free `meta.json` | `python -m app.cli engine budget`; `/admin/freshness` usage |
+| QStash messages (the refresh scheduler on Hobby) | 1,000 a day | 288 a day for a 5-minute schedule, plus retries of failed deliveries | Upstash console |
 
 Signed-in visitors, measured at the final review (a clone of the live run, one process):
 every signed-in page view runs `/api/auth/me` (5 SELECTs, 3.2 kB); a dashboard view about
@@ -612,10 +618,14 @@ same database and Redis) prints the plan: `current` (stored), `new` (a sync is d
 ### Daemon quota reached (Vercel Hobby)
 
 **What you see.** `sync_cpu_budget` (degraded) first, at 80 % of `SYNC_CPU_BUDGET_HOURS`
-(10); then `sync_heartbeat_stale` (failing): "When a Hobby team reaches the quota, Vercel
-stops the team's daemons until the first of the next month (UTC) or until the team
-upgrades to Pro." The site keeps serving the last published data; the daily watchdog emails
-the admins.
+(5); then, with the hosted profile (the daemon optional, `SYNC_DAEMON_KINDS=map`),
+`sync_heartbeat_stale` as **degraded**: "When a Hobby team reaches the quota, Vercel stops
+the team's daemons until the first of the next month (UTC) or until the team upgrades to
+Pro." Only the map layers stop updating (the overlay is labelled out of date); the spot
+forecasts keep refreshing through `/api/internal/refresh`, and the daily cron runs the
+periodic jobs. (A deployment whose daemon also syncs the spots, `SYNC_DAEMON_KINDS`
+with `spots`, reports it as failing: there the data stops.) The daily watchdog emails the
+admins.
 
 **What to do.** (Vercel) Check the Daemons page and the daemon's usage. Until the 1st: run
 syncs by hand when the data must not wait, with the manual GitHub workflow "Data sync
@@ -972,7 +982,7 @@ hosting, runner and sync settings of Upgrade 4) and `.env.example`.
 | `SYNC_TRIGGER_SOURCES`, `MAP_FIELD_CYCLES` | `spots,map`, `00,12` (free database: `map`, `06,18`) | which new runs start a sync, and the map cycles read |
 | `SYNC_LEASE_MINUTES` | 45 (15 under the daemon) | the one-sync-at-a-time lease |
 | `SYNC_RETRY_MINUTES`, `SYNC_MAX_ATTEMPTS` | 15, 6 | retries of a failed acquisition per model run |
-| `SYNC_CPU_BUDGET_HOURS` | none (10 on Vercel) | `sync_cpu_budget` above 80 % of it |
+| `SYNC_CPU_BUDGET_HOURS` | none (5 on Vercel) | `sync_cpu_budget` above 80 % of it |
 | `JOB_INTERVAL_FLOOR_MINUTES` | 0 (60 on Vercel) | every periodic job at most this often |
 | `CRON_SECRET` | none (route answers 404) | Bearer token of the daily watchdog |
 | `SYNC_PRUNE_EACH_PASS` | false (true on Neon Free) | prune superseded predictions and map fields after every sync |

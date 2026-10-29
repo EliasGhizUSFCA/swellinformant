@@ -1373,5 +1373,154 @@ Further owner decisions raised by the audits, with the plan's default:
 
 ## 8. Implementation status
 
-Not written yet. It will be appended after integration and will record what was built, what
-differs from sections 4-5, the measured publication-to-visible latency, and the test results.
+Written after integration and the first review round (2026-10-29, branch `wf6/int`; the
+commits are on top of 18a5bee). Sections 1-7 above are the audit and the plan as they stood
+before the work; this section records what was built, where it differs from sections 4 and
+5, what was measured and the test results. The owner-facing summary, the Definition of Done
+and the deliverables are in docs/UPGRADE_REPORT.md, "Swell 2.0".
+
+### 8.1 The decisions as built
+
+| D | Status | Where | Differences from the plan, and fixes from the review |
+|---|---|---|---|
+| D1 | built | the stack is unchanged: FastAPI, SQLAlchemy 2, Alembic (migration 0009), Neon, Upstash | — |
+| D2 | built | `WEATHER_PROVIDER` (core/config.py), `provider_manager.py`, `python -m app.cli forecast provider-check` | — |
+| D3 | built | forecasts/windy.py, provider_manager.py, quota.py; docs/WINDY_API_SETUP.md | the run identity is the per-component sentinel fingerprint (same-run keys, partly read checks); never exercised with a real key |
+| D4 | built | provider_manager.py; the fallback runs inside the refresh (sync/refresh.py) | — |
+| D5 | built | hosted profile and Settings defaults: one family, no blend, no GEFS, `FORECAST_DAYS=10` | the docs still recommended the blend and GEFS until review r1 (finding SPEC-4); now off by default and described as advanced |
+| D6 | built | forecasts/carry.py, sync/detect.py, forecasts/ingestion.py `refresh_source` | review r1: detection is monotonic per model domain (F1: a lagging GFS 0.25 server could make the site go back a cycle); hours the carried component lacks are dropped and never scored (F4); a composed run names each component's own model run on the spot page and the map panel (FE-1) |
+| D7 | built | `forecast_versions` (models/version.py, migration 0009), forecasts/versions.py, sync/publish.py, forecasts/serving.py | review r1: a run that dies between publication and the marker write rewrites the marker at the next sync (F2) |
+| D8 | built | `GET\|POST /api/internal/refresh` (api/internal.py, sync/orchestrator.py `refresh_check`); `vercel.json` keeps only the daily cron; the QStash schedule is documented (docs/deploy-vercel.md step 7b), not deployed | review r1: the daemon was optional in name only (F3, SPEC-2): explicit flight re-checks, "match my search", email retries and the periodic jobs ran only under the daemon or Celery, and data health failed without it. sync/standin.py now runs the kicks and due retries from the refresh endpoint and the overdue periodic jobs from the daily cron; health judges the daemon only for the map layers. The deploy guide had no scheduler step (SPEC-1): added |
+| D9 | built | per-spot status and stale marking (versions `spot_runs`), retries 5/15/45 min | — |
+| D10 | built | `FORECAST_STALE_THRESHOLD_MINUTES` (and per model); staleness labels in the UI | review r1: stale spots are marked in the map's best-spots list and on /spots (FE-2); an open tab re-reads the public data each UTC hour, so staleness by age reaches it (FE-6) |
+| D11 | built | api/forecasts.py (version, seen, status), `?v=` keys and URLs (frontend hooks/use-forecast-version.ts), CDN headers | review r1: label fixes (FE-4, FE-5, FE-9), alerts lists re-read after a version (FE-7) |
+| D12 | built | api/admin.py, services/admin_freshness.py, usage.py, /admin/freshness, the admin problems in health.py | review r1: refused flight and email keys raise `provider_credentials:flights_<p>` / `email_<p>` (SPEC-7, services/service_credentials.py) |
+| D13 | built | scoring 2.2.0: surf_quality/outputs.py, reasons.py, weights.py; separate research and forecast confidences | — |
+| D14 | built | data/surf_spots/research_conditions.json, docs/surf_spot_research/ (50 spots and a README) | — |
+| D15 | built | flights/service.py, budget.py, airports.py; per-search lead times (migration 0009) | review r1: alerts are decided in a fixed order (best opportunity first), not the database's row order (the root cause of an intermittent integration failure; section 8.4) |
+| D16 | built | as D5, D6, D8 and D11 | the hosting budgets were recomputed for 2.0 in review r1 (SPEC-6; docs/API_SETUP_REQUIRED.md 1.4) |
+
+Section 5 as built: everything listed in 5.1 and 5.2 is kept and switched as planned. Every
+removal in 5.3 was made (the flight-discovery timer and `FLIGHT_REFRESH_HOURS`, the
+30-minute matching timer, the map query's 300 s timer, the combined local confidence in the
+API and UI, cross-component coalescing, the clock-based Windy run identity, the map-only
+trigger, pandas in predict, the 5-day detection floor); the stale "10 Active CPU-hours"
+statements were corrected in review r1 (SPEC-6). No module, table or record was deleted.
+
+### 8.2 Files created and modified, per package
+
+`git diff --stat 18a5bee..HEAD` at the time of writing: 341 files changed, 84210 insertions(+), 2780 deletions(-). Per package (the
+foundation commits, then each package's merge into `wf6/int`, then the integration and
+review fixes on `wf6/int`):
+
+**Foundation: settings, the provider contract with independent components, `forecast_versions` (migration 0009), demo forecasts kept explicit** (7 added, 28 modified)
+
+* Added: `backend/alembic/versions/0009_forecast_versions.py`, `backend/app/models/version.py`, `backend/app/services/forecasts/versions.py`, `backend/tests/integration/test_forecast_versions.py`, `backend/tests/unit/test_forecast_components.py`, `backend/tests/unit/test_forecast_versions.py`, `backend/tests/unit/test_weather_provider_settings.py`
+* Modified: `.env.example`, `.env.vercel.example`, `.github/workflows/data-sync.yml`, `backend/app/core/config.py`, `backend/app/core/profiles.py`, `backend/app/models/__init__.py`, `backend/app/models/search.py`, `backend/app/services/forecasts/base.py`, `backend/app/services/forecasts/demo.py`, `backend/app/services/forecasts/ecmwf.py`, `backend/app/services/forecasts/ensemble.py`, `backend/app/services/forecasts/noaa.py`, `backend/app/services/forecasts/open_meteo.py`, `backend/app/services/forecasts/windy.py`, `backend/tests/conftest.py`, `backend/tests/integration/test_public_and_opportunity_api.py`, `backend/tests/unit/test_compose_classic.py`, `backend/tests/unit/test_free_database_cadence.py`, `backend/tests/unit/test_lean_imports.py`, `backend/tests/unit/test_local_vercel_stack.py`, `backend/tests/unit/test_settings_hosting.py`, `docker-compose.vercel.yml`, `docker-compose.yml`, `docs/API_SETUP_REQUIRED.md`, `docs/deploy-vercel.md`, `frontend/app/layout.tsx`, `frontend/e2e/full-flow.spec.ts`, `scripts/run-e2e.sh`
+
+**P10 docs-audit: docs/architecture_audit.md** (1 added, 0 modified)
+
+* Added: `docs/architecture_audit.md`
+* Modified: none
+
+**P7 research: per-spot research conditions and docs/surf_spot_research** (54 added, 2 modified)
+
+* Added: `backend/tests/unit/test_spot_research_docs.py`, `data/surf_spots/research_conditions.json`, `docs/surf_spot_research/README.md`, `scripts/generate_spot_research_docs.py`, `docs/surf_spot_research/<spot>.md` (50 spots)
+* Modified: `data/surf_spots/README.md`, `docs/research-confidence.md`
+
+**P1 providers: Windy adapter, provider manager, quota usage snapshot** (10 added, 6 modified)
+
+* Added: `backend/app/services/forecasts/provider_cli.py`, `backend/app/services/forecasts/provider_manager.py`, `backend/tests/integration/test_windy_acquisition.py`, `backend/tests/unit/test_forecast_usage.py`, `backend/tests/unit/test_provider_check_cli.py`, `backend/tests/unit/test_provider_manager.py`, `backend/tests/unit/test_windy_provider.py`, `backend/tests/unit/test_windy_setup_doc.py`, `backend/tests/windy_fixtures.py`, `docs/WINDY_API_SETUP.md`
+* Modified: `backend/app/cli.py`, `backend/app/services/forecasts/quota.py`, `backend/app/services/forecasts/registry.py`, `backend/app/services/forecasts/windy.py`, `backend/tests/unit/test_forecast_providers.py`, `docs/FORECAST_SOURCES.md`
+
+**P2 refresh: per-component detection, refresh endpoint, versioned publication** (6 added, 29 modified)
+
+* Added: `backend/app/services/forecasts/carry.py`, `backend/app/services/sync/refresh.py`, `backend/tests/integration/test_refresh_components.py`, `backend/tests/unit/test_open_meteo_components.py`, `backend/tests/unit/test_sync_components.py`, `scripts/measure_refresh_egress.py`
+* Modified: `backend/app/api/dev.py`, `backend/app/api/internal.py`, `backend/app/core/middleware.py`, `backend/app/services/forecasts/demo.py`, `backend/app/services/forecasts/ingestion.py`, `backend/app/services/forecasts/open_meteo.py`, `backend/app/services/maintenance.py`, `backend/app/services/sync/cli.py`, `backend/app/services/sync/daemon.py`, `backend/app/services/sync/detect.py`, `backend/app/services/sync/orchestrator.py`, `backend/app/services/sync/publish.py`, `backend/app/services/sync/state.py`, `backend/app/services/sync/types.py`, `backend/tests/integration/test_internal_cron.py`, `backend/tests/integration/test_migration_0008.py`, `backend/tests/integration/test_pipeline.py`, `backend/tests/integration/test_prune_pass.py`, `backend/tests/integration/test_sync_orchestrator.py`, `backend/tests/integration/test_sync_spot_scope.py`, `backend/tests/unit/test_foundation_stubs.py`, `backend/tests/unit/test_free_database_cadence.py`, `backend/tests/unit/test_local_vercel_stack.py`, `backend/tests/unit/test_sync_contracts.py`, `backend/tests/unit/test_sync_detect.py`, `backend/tests/unit/test_vercel_deploy.py`, `docker/edge/Caddyfile`, `docs/sync.md`, `vercel.json`
+
+**P3 serving: published-version reads, version/seen/status endpoints, versioned cache marker** (7 added, 17 modified)
+
+* Added: `backend/app/api/forecasts.py`, `backend/app/schemas/forecasts.py`, `backend/app/services/forecasts/serving.py`, `backend/tests/integration/test_forecast_serving.py`, `backend/tests/integration/test_public_load.py`, `backend/tests/unit/test_forecast_serving.py`, `scripts/load_test_public.py`
+* Modified: `backend/app/api/map_fields.py`, `backend/app/api/spots.py`, `backend/app/api/system.py`, `backend/app/api/timeline.py`, `backend/app/core/http_cache.py`, `backend/app/core/middleware.py`, `backend/app/main.py`, `backend/app/schemas/spots.py`, `backend/app/schemas/timeline.py`, `backend/app/services/forecasts/queries.py`, `backend/app/services/public_cache.py`, `backend/app/services/spot_views.py`, `backend/app/services/swell_detection/service.py`, `backend/app/services/tides/api.py`, `backend/app/services/timeline.py`, `backend/tests/integration/test_public_snapshot_cache.py`, `backend/tests/unit/test_http_cache.py`
+
+**P6 scoring: scoring 2.2.0 per-hour outputs, separate confidences, lean predict** (9 added, 29 modified)
+
+* Added: `backend/app/services/surf_quality/outputs.py`, `backend/app/services/surf_quality/reasons.py`, `backend/app/services/surf_quality/weights.py`, `backend/tests/fixtures/scoring/scores_2_1_0.json`, `backend/tests/integration/test_lean_predict.py`, `backend/tests/integration/test_scoring_outputs.py`, `backend/tests/unit/test_scoring_conditions.py`, `backend/tests/unit/test_scoring_weights.py`, `backend/tests/unit/test_tide_stages.py`
+* Modified: `.env.example`, `backend/app/core/config.py`, `backend/app/schemas/spots.py`, `backend/app/schemas/timeline.py`, `backend/app/services/forecasts/archive.py`, `backend/app/services/ml/hook.py`, `backend/app/services/spot_views.py`, `backend/app/services/surf_quality/forecast_confidence.py`, `backend/app/services/surf_quality/models.py`, `backend/app/services/surf_quality/predict.py`, `backend/app/services/surf_quality/scoring.py`, `backend/app/services/surf_quality/wind.py`, `backend/app/services/timeline.py`, `backend/tests/integration/test_blend.py`, `backend/tests/integration/test_egress_columns.py`, `backend/tests/integration/test_forecast_confidence.py`, `backend/tests/integration/test_free_tier_egress.py`, `backend/tests/integration/test_migration_0008.py`, `backend/tests/integration/test_public_and_opportunity_api.py`, `backend/tests/integration/test_rescore_wind.py`, `backend/tests/integration/test_retention_bounds.py`, `backend/tests/unit/test_lean_imports.py`, `backend/tests/unit/test_matching_wind.py`, `backend/tests/unit/test_surf_quality.py`, `backend/tests/unit/test_surf_scoring_doc.py`, `backend/tests/unit/test_wind.py`, `docker-compose.yml`, `docs/SURF_SCORING.md`, `docs/ml-pipeline.md`
+
+**P8 flights: targeted flight searches, per-search alert lead time, alert emails** (8 added, 40 modified)
+
+* Added: `backend/app/services/flights/airports.py`, `backend/app/services/flights/budget.py`, `backend/tests/integration/test_flight_targeting.py`, `backend/tests/integration/test_search_lead_times_api.py`, `backend/tests/unit/test_flight_targeting.py`, `frontend/components/search/use-search-defaults.ts`, `frontend/e2e/search-lead-time.spec.ts`, `frontend/tests/search-lead-time.test.ts`
+* Modified: `.env.example`, `backend/app/api/opportunities.py`, `backend/app/api/searches.py`, `backend/app/core/config.py`, `backend/app/jobs/schedule.py`, `backend/app/schemas/opportunities.py`, `backend/app/schemas/searches.py`, `backend/app/services/flights/amadeus.py`, `backend/app/services/flights/base.py`, `backend/app/services/flights/duffel.py`, `backend/app/services/flights/links.py`, `backend/app/services/flights/service.py`, `backend/app/services/matching/scoring.py`, `backend/app/services/matching/service.py`, `backend/app/services/notifications/alerts.py`, `backend/app/services/notifications/delivery.py`, `backend/app/services/notifications/providers.py`, `backend/app/services/notifications/templates.py`, `backend/app/services/notifications/transactional.py`, `backend/app/services/opportunity_views.py`, `backend/app/services/searches.py`, `backend/tests/integration/test_data_health.py`, `backend/tests/integration/test_forecast_confidence.py`, `backend/tests/integration/test_pipeline.py`, `backend/tests/integration/test_sync_daemon.py`, `backend/tests/unit/test_celery_routing.py`, `backend/tests/unit/test_job_schedule_floor.py`, `backend/tests/unit/test_notification_providers.py`, `backend/tests/unit/test_sync_health.py`, `docs/MATCHING_AND_FLIGHTS.md`, `frontend/app/dashboard/page.tsx`, `frontend/app/opportunities/[id]/page.tsx`, `frontend/app/searches/[id]/page.tsx`, `frontend/app/searches/new/page.tsx`, `frontend/components/opportunity-card.tsx`, `frontend/components/search/search-wizard.tsx`, `frontend/lib/validation.ts`, `frontend/tests/word-budget.test.tsx`, `frontend/types/openapi.d.ts`, `frontend/types/openapi.json`
+
+**P9 monitoring: admin freshness dashboard, admin-only alerts, usage report** (16 added, 7 modified)
+
+* Added: `backend/app/api/admin.py`, `backend/app/schemas/admin.py`, `backend/app/services/admin_freshness.py`, `backend/app/services/usage.py`, `backend/tests/admin_fixtures.py`, `backend/tests/integration/test_admin_alerts.py`, `backend/tests/integration/test_admin_freshness.py`, `backend/tests/unit/test_admin_problems.py`, `frontend/app/admin/freshness/page.tsx`, `frontend/components/admin/freshness-dashboard.tsx`, `frontend/components/admin/freshness-format.ts`, `frontend/components/admin/freshness-sections.tsx`, `frontend/components/admin/freshness-types.ts`, `frontend/components/admin/use-admin-freshness.ts`, `frontend/e2e/admin-freshness.spec.ts`, `frontend/tests/admin-freshness.test.tsx`
+* Modified: `backend/app/main.py`, `backend/app/services/health.py`, `backend/app/services/notifications/ops_alerts.py`, `docs/operations.md`, `frontend/app/status/page.tsx`, `frontend/types/openapi.d.ts`, `frontend/types/openapi.json`
+
+**P4 live: version polling, versioned query keys, forecast-updated label, live-update e2e** (5 added, 9 modified)
+
+* Added: `frontend/components/forecast-updated.tsx`, `frontend/e2e/live-update-mocked.spec.ts`, `frontend/e2e/live-update.spec.ts`, `frontend/hooks/use-forecast-version.ts`, `frontend/tests/forecast-version.test.tsx`
+* Modified: `frontend/app/map/page.tsx`, `frontend/app/spots/[slug]/page.tsx`, `frontend/components/providers.tsx`, `frontend/e2e/confidence.spec.ts`, `frontend/hooks/map-fields.ts`, `frontend/hooks/queries.ts`, `frontend/lib/api.ts`, `frontend/tests/database-polling.test.tsx`, `scripts/run-e2e.sh`
+
+**P5 ui: map markers, spot summary, separate confidences, stale labels** (15 added, 31 modified)
+
+* Added: `frontend/components/forecast/provider-credit.tsx`, `frontend/components/forecast/rating-details.tsx`, `frontend/components/map/spot-glyphs.tsx`, `frontend/e2e/map-markers.spec.ts`, `frontend/e2e/spot-summary.spec.ts`, `frontend/lib/best-windows.ts`, `frontend/lib/forecast-fields.ts`, `frontend/lib/map-markers.ts`, `frontend/lib/provider.ts`, `frontend/lib/rating-sentence.ts`, `frontend/tests/chart-annotations.test.tsx`, `frontend/tests/forecast-fields.test.ts`, `frontend/tests/height-unit.test.tsx`, `frontend/tests/map-glyphs.test.tsx`, `frontend/tests/spot-summary.test.tsx`
+* Modified: `frontend/app/map/map.css`, `frontend/app/map/page.tsx`, `frontend/app/notifications/page.tsx`, `frontend/app/opportunities/[id]/page.tsx`, `frontend/app/spots/[slug]/page.tsx`, `frontend/components/confidence.tsx`, `frontend/components/event-card.tsx`, `frontend/components/forecast-breakdown.tsx`, `frontend/components/forecast-provenance.tsx`, `frontend/components/forecast/forecast-timeline.tsx`, `frontend/components/forecast/quality-strip.tsx`, `frontend/components/forecast/selected-summary.tsx`, `frontend/components/forecast/tide-row.tsx`, `frontend/components/forecast/why-this-forecast.tsx`, `frontend/components/map/forecast-map.tsx`, `frontend/components/map/legend-drawer.tsx`, `frontend/components/map/spot-panel.tsx`, `frontend/components/map/surf-map.tsx`, `frontend/components/opportunity-card.tsx`, `frontend/components/rating.tsx`, `frontend/components/stale-banner.tsx`, `frontend/e2e/confidence.spec.ts`, `frontend/e2e/map-navigation.spec.ts`, `frontend/lib/confidence.ts`, `frontend/lib/format.ts`, `frontend/lib/glossary.ts`, `frontend/lib/units.ts`, `frontend/tests/confidence.test.tsx`, `frontend/tests/forecast.test.tsx`, `frontend/tests/selected-summary.test.tsx`, `frontend/tests/word-budget.test.tsx`
+
+**Integration on `wf6/int`: cross-package seams, the review round 1 fixes and the 2.0 documentation** (7 added, 112 modified)
+
+* Added: `backend/app/services/service_credentials.py`, `backend/app/services/sync/standin.py`, `backend/tests/integration/test_daemonless_hosted.py`, `backend/tests/integration/test_refresh_fallback.py`, `backend/tests/integration/test_service_credentials.py`, `frontend/lib/model-runs.ts`, `frontend/tests/model-runs.test.tsx`
+* Modified: `.env.vercel.example`, `.github/workflows/ci.yml`, `README.md`, `backend/app/api/internal.py`, `backend/app/core/profiles.py`, `backend/app/core/redis.py`, `backend/app/schemas/opportunities.py`, `backend/app/schemas/spots.py`, `backend/app/schemas/timeline.py`, `backend/app/services/flights/amadeus.py`, `backend/app/services/flights/duffel.py`, `backend/app/services/forecasts/base.py`, `backend/app/services/forecasts/carry.py`, `backend/app/services/forecasts/ingestion.py`, `backend/app/services/forecasts/open_meteo.py`, `backend/app/services/forecasts/provider_manager.py`, `backend/app/services/forecasts/queries.py`, `backend/app/services/forecasts/windy.py`, `backend/app/services/health.py`, `backend/app/services/notifications/alerts.py`, `backend/app/services/notifications/delivery.py`, `backend/app/services/notifications/providers.py`, `backend/app/services/opportunity_views.py`, `backend/app/services/public_cache.py`, `backend/app/services/spot_views.py`, `backend/app/services/surf_quality/forecast_confidence.py`, `backend/app/services/surf_quality/predict.py`, `backend/app/services/swell_detection/service.py`, `backend/app/services/sync/detect.py`, `backend/app/services/sync/orchestrator.py`, `backend/app/services/sync/refresh.py`, `backend/app/services/timeline.py`, `backend/app/services/usage.py`, `backend/tests/integration/test_admin_freshness.py`, `backend/tests/integration/test_forecast_confidence.py`, `backend/tests/integration/test_forecast_serving.py`, `backend/tests/integration/test_free_tier_egress.py`, `backend/tests/integration/test_internal_cron.py`, `backend/tests/integration/test_pipeline.py`, `backend/tests/integration/test_public_and_opportunity_api.py`, `backend/tests/integration/test_refresh_components.py`, `backend/tests/integration/test_scoring_outputs.py`, `backend/tests/unit/test_admin_problems.py`, `backend/tests/unit/test_forecast_confidence.py`, `backend/tests/unit/test_lean_imports.py`, `backend/tests/unit/test_provider_manager.py`, `backend/tests/unit/test_reason_split.py`, `backend/tests/unit/test_staleness.py`, `backend/tests/unit/test_sync_components.py`, `backend/tests/unit/test_sync_detect.py`, `backend/tests/unit/test_timeline.py`, `backend/tests/unit/test_wind_dispute.py`, `backend/tests/unit/test_windy_provider.py`, `docker/edge/Caddyfile`, `docs/API_SETUP_REQUIRED.md`, `docs/ARCHITECTURE.md`, `docs/MATCHING_AND_FLIGHTS.md`, `docs/SURF_SCORING.md`, `docs/UPGRADE_REPORT.md`, `docs/WINDY_API_SETUP.md`, `docs/architecture_audit.md`, `docs/deploy-vercel.md`, `docs/local-vercel-stack.md`, `docs/operations.md`, `docs/sync.md`, `frontend/app/dashboard/page.tsx`, `frontend/app/map/map.css`, `frontend/app/map/page.tsx`, `frontend/app/opportunities/[id]/page.tsx`, `frontend/app/page.tsx`, `frontend/app/searches/[id]/page.tsx`, `frontend/app/searches/page.tsx`, `frontend/app/spots/[slug]/page.tsx`, `frontend/app/spots/page.tsx`, `frontend/components/conditions.tsx`, `frontend/components/confidence.tsx`, `frontend/components/forecast-breakdown.tsx`, `frontend/components/forecast-provenance.tsx`, `frontend/components/forecast-updated.tsx`, `frontend/components/forecast/rating-details.tsx`, `frontend/components/forecast/selected-summary.tsx`, `frontend/components/live-swells.tsx`, `frontend/components/map/forecast-map.tsx`, `frontend/components/map/spot-list.tsx`, `frontend/components/stale-banner.tsx`, `frontend/components/status/sync-status.tsx`, `frontend/e2e/confidence.mock.ts`, `frontend/e2e/confidence.spec.ts`, `frontend/e2e/live-update-mocked.spec.ts`, `frontend/e2e/live-update.spec.ts`, `frontend/e2e/map-navigation.spec.ts`, `frontend/e2e/spot-summary.spec.ts`, `frontend/e2e/vercel-smoke.spec.ts`, `frontend/hooks/map-fields.ts`, `frontend/hooks/use-forecast-version.ts`, `frontend/lib/api.ts`, `frontend/lib/confidence.ts`, `frontend/lib/forecast.ts`, `frontend/tests/confidence.test.tsx`, `frontend/tests/database-polling.test.tsx`, `frontend/tests/forecast-version.test.tsx`, `frontend/tests/forecast.test.tsx`, `frontend/tests/freshness.test.tsx`, `frontend/tests/map-fields-hooks.test.tsx`, `frontend/tests/map-markers.test.tsx`, `frontend/tests/map-spot-list.test.tsx`, `frontend/tests/status-sync.test.tsx`, `frontend/tests/word-budget.test.tsx`, `frontend/types/api.ts`, `frontend/types/openapi.d.ts`, `frontend/types/openapi.json`, `scripts/vercel-local.sh`
+
+### 8.3 Measurements
+
+All on this development machine (4 vCPUs shared with other work, local PostgreSQL 16 and
+Redis 7, outbound HTTPS through a proxy); none on Vercel, Neon or Upstash.
+
+| What | Measured | Where |
+|---|---|---|
+| Live Open-Meteo refresh, both components (2026-10-29 01:17 UTC, 18Z run) | 38.7 s wall: check 26.5 s (two TLS handshake timeouts through the proxy), refresh 12.1 s (spots 5.06 s / 0.94 CPU s, predict 5.75 s / 4.21 CPU s, detect 0.96 s, publish 40 ms); 125.0 weighted calls; 50 spots | integration deploy notes |
+| Live natural wave-only refresh (2026-10-29 05:31 UTC, GFS-Wave 00Z) | 47.1 s wall: check 26.8 s (two ConnectTimeouts), refresh 20.3 s (spots 6.14 s, predict 7.01 s, detect 1.78 s, match 134 ms); 75.0 weighted calls; the wind carried forward with its 18Z run; 2 marine data requests | same |
+| Checks with nothing new (live) | 4 `meta.json` requests, 1.2-1.7 s wall (13-15 s with a proxy timeout), 0 data requests, 0 weighted calls; 98 checks from 03:48 to 05:31 UTC | same |
+| Open-Meteo servers disagreeing (2026-10-29 06:06-06:50 UTC) | GFS 0.13 `meta.json` answered 00Z and 18Z alternately (e.g. 4 × 00Z, 3 × 18Z of 8); three syncs saw the new run and skipped it without fetching; an atmosphere-only refresh was not reached | same |
+| Demo refresh through the endpoint | 12.2-12.5 s wall, 8.5-9.7 CPU s (2026-10-27); local Vercel-style stack 19.3 s on 1 vCPU, 9.8 CPU s; lean install 12.4 s / 9.1 CPU s; this review's README check 15.2 s / 10.1 CPU s with the integration suite running | docs/sync.md "Measured (2.0)" |
+| Publication to new data on an open page | p50 13.8 s (16 samples, 9.7-22.9 s; 20 s poll, no CDN, local stack); the admin dashboard's beacons p50 20 s, p95 22 s (28 beacons) | integration deploy notes |
+| Database egress per spot refresh (demo) | 6.29-7.45 MB DB → app (2026-10-29), 8.30-9.45 MB (2026-10-27); a check reads nothing | docs/sync.md, `scripts/measure_refresh_egress.py` |
+| Load through the local edge | 4,000 requests, 64 concurrent, 0 errors, p50 222-314 ms, p95 705-956 ms (1 vCPU API); a new version reached all routes 3.2 s after publication | integration deploy notes |
+| Lean API | cold `import app.main` 1.47-1.79 s; the refresh path adds 22-29 ms of imports | same |
+| Vercel build (offline) | `RESULT: ok`, API function 128.2 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29) | `scripts/vercel-build-check.sh --offline` |
+
+### 8.4 Test results
+
+Run on 2026-10-29 by the review-round-1 fixer on `wf6/int`, on this development
+machine: the backend suites on the code of commit 5b9ce29, the e2e suite on d4fa28f (which changes only
+an e2e test); the documentation commit after them changes no code.
+
+| Check | Result |
+|---|---|
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (412 files formatted, 219 files type-checked) |
+| `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
+| Upgrade of a copy of a real database (at 0006: 50 spots, 25,000 forecast rows and predictions) to head | pass: 0007, 0008 and 0009 in 1.4 s; forecast rows and predictions identical before and after (md5); no version until the first refresh |
+| `pytest tests/unit` | 2,882 passed, 6 skipped (the lean-install tests) |
+| `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` (a lean install from `uv.lock`) | 32 passed, a demo spot-only refresh in the lean install included |
+| `pytest tests/integration` | 638 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`); 637 passed in the run before the alert-order fix |
+| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 604 passed (51 files) |
+| `npm ci`, `npm run build` | pass |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 154 passed (15.6 min; the live-update spec through the real refresh: publication to the open map 4.3 s and the spot page 4.2 s with the e2e build's 2 s poll). The run before it: 152 passed, 2 failed, one test in both projects (a read count the FE-5 fix had not updated; fixed in d4fa28f) |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`, API function 128.2 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29); the daily cron is in the output config |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.6 of 200 MB |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass |
+| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh` | clean |
+| `npm audit --omit=dev` | 1 moderate advisory (fast-uri below 3.1.9, under @hookform/resolvers and ajv; docs/decisions.md ADR-037). Dev-only: Vitest 3's tinypool (2 critical) and @vitest/mocker (moderate), not upgraded in this round |
+
+The intermittent `test_free_tier_egress.py` narrow-reads failure seen during integration
+(integration notes: once in a full run, never alone) did not recur in two full integration runs with the diagnostic plugin on 2026-10-29 (637 and 638 passed). Its cause was found by
+analysis and proved with a deterministic reproduction: the alert candidate query had no
+ORDER BY, and when two overlapping saved searches of one user surface the same swell the
+one alert (keyed by user and event) was told from whichever match the database returned
+first. With the candidate rows answered in the opposite order, only
+`notifications[2].snapshot.window_end` and `.confidence` differed, the signature of the
+observed failure (only the notifications differed). Alerts are now decided in
+`alerts.candidate_order`; `test_alerts_do_not_depend_on_the_database_row_order` fails without
+it.

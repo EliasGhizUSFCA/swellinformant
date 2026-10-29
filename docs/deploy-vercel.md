@@ -7,7 +7,8 @@ with their URLs and the date they were read.
 
 What was checked here, and how, is in section 10. In short: the configuration validates
 against Vercel's published schema; an offline `vercel build` of the repository succeeds
-(`RESULT: ok`, a 127.1 MiB API function; CI runs the same check on every push); the sync
+(`RESULT: ok`; on 2026-10-29 a 128.2 MiB API function with `maxDuration` 300 s; CI runs the
+same check on every push); the sync
 daemon's image builds from the `Containerfile` Vercel uses; `vercel dev -L` serves the site
 and the API; and the manual GitHub runner's steps run end to end on a development machine.
 No real deployment was made while this was written: the first production deploy is the step
@@ -15,17 +16,21 @@ that proves the daemon builds and starts on Vercel (daemons cannot be previewed)
 
 ## 1. What runs where
 
-One Vercel project, built from the repository root, with two services and one daemon
-(`vercel.json`):
+One Vercel project, built from the repository root, with two services, a scheduler that
+calls the refresh endpoint, the daily cron and an optional daemon (`vercel.json`). Swell 2.0
+moved the spot refreshes out of the daemon into the API function (design D8,
+docs/architecture_audit.md); a deployment needs no daemon for the spot forecasts, alerts or
+flight searches.
 
 | Part | What | Where it comes from |
 |---|---|---|
 | `web` service | the Next.js site; every path except `/api` | `frontend/` (`framework: nextjs`) |
-| `api` service | FastAPI as one Python function (`app.main:app`), `maxDuration` 60 s | `backend/` (`framework: fastapi`) |
+| `api` service | FastAPI as one Python function (`app.main:app`), `maxDuration` 300 s (a spot refresh runs in it) | `backend/` (`framework: fastapi`) |
+| forecast refresh | `GET\|POST /api/internal/refresh` with `Authorization: Bearer $CRON_SECRET`: a free metadata check of the spot model runs and, when a new wave or wind run is servable, a spot-only refresh (fetch, score, publish a new forecast version, detection, matching, flights, alerts). It also runs the API's pending "Re-check flights" and "match my search" requests and a due email retry | the `api` service; **called every 5 minutes by a scheduler you set up in step 7b** (Upstash QStash on Hobby, a Vercel Cron entry on Pro) |
 | routing | `/api/(.*)` goes to `api`, everything else to `web` (vercel.json `rewrites`) | Vercel's router; Next.js adds no `/api` rewrite on Vercel (`API_ROUTING=platform`) |
-| `sync` daemon | `python -m app.cli sync daemon`: watches the model runs and syncs spots, map layers and alerts together | the repo-root `Containerfile`, 1 instance in `iad1`, 2 GiB / 1 vCPU; after `SIGTERM` it finishes its current sync stage, for up to 600 s (`terminationGracePeriodSeconds`) |
-| daily watchdog | Vercel Cron, `GET /api/internal/cron/daily` at 07:23 UTC with `Authorization: Bearer $CRON_SECRET`; emails admins when the daemon or the data is stale | vercel.json `crons` |
-| database | Neon Postgres (Vercel Marketplace), Free plan now | `DATABASE_URL` (pooled, the API) and `DATABASE_URL_UNPOOLED` (direct, the daemon and migrations) |
+| `sync` daemon (optional) | `python -m app.cli sync daemon` with `SYNC_DAEMON_KINDS=map`: refreshes only the optional GRIB map layers (the wave and wind colour fields of the map). Without it the map overlay ages and is labelled stale; the spot forecasts, alerts and flight searches keep running through the refresh endpoint and the daily cron | the repo-root `Containerfile`, 1 instance in `iad1`, 2 GiB / 1 vCPU, within Hobby's 5 Active CPU-hours a month; after `SIGTERM` it finishes its current sync stage, for up to 600 s (`terminationGracePeriodSeconds`) |
+| daily cron | Vercel Cron, `GET /api/internal/cron/daily` at 07:23 UTC with `Authorization: Bearer $CRON_SECRET`: the data-health check (emails admins when the data, the scheduler or the daemon is stale), then the periodic jobs no daemon ran on time (cleanup, matching housekeeping, tides, alerts, delivery, staleness check; 150 s budget), then one refresh check as a backstop | vercel.json `crons` |
+| database | Neon Postgres (Vercel Marketplace), Free plan now | `DATABASE_URL` (pooled, the API and the refresh) and `DATABASE_URL_UNPOOLED` (direct, the daemon and migrations) |
 | Redis | Upstash Redis (Vercel Marketplace), Free plan now | `KV_URL` (the app reads it when `REDIS_URL` is unset) |
 | migrations | the api service's build command, `python -m app.cli migrate --on-build`; with `MIGRATE_ON_BUILD=production` it migrates production builds only; the daemon also runs `init-db` at every start | vercel.json `services.api.buildCommand` |
 
@@ -38,9 +43,10 @@ Content-Security-Policy work exactly as on the classic Docker stack.
 |---|---|---|
 | Vercel | **Hobby**: "restricted to non-commercial personal use only". Free. | **Pro** ($20/month platform fee, $20 monthly usage credit) **before** the site asks for any payment: a paywall is "Any method of requesting or processing payment from visitors of the site", and ads count too. Donations do not. |
 | Open-Meteo (spot forecasts) | free API, non-commercial only | `COMMERCIAL_USE=true` plus `OPEN_METEO_API_KEY` (a paid plan). With the flag set and no key, the app refuses the free hosts. |
-| Neon | Free: 100 CU-hours, 1 GB storage and 5 GB egress per project. The free-database profile keeps about 1 day of forecast history and 1 week of verification archive, and syncs only for the 06Z and 18Z map cycles: about 2.01 GB of egress a month in the background (40 %) and about 20 CU-hours, at most about 37 with steady anonymous visitors (docs/map-layers.md, "Free database budget"); every signed-in page view also reads the database (`/api/auth/me`: 5 statements, measured), so signed-in traffic adds compute for the hours it spans. | Launch ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then restore full retention (section 4, step 5). |
-| Upstash | Free: 250 MB and 500K commands a month | pay-as-you-go ($0.2 per 100K commands, with a budget cap) or a Fixed plan (from $10/month) |
-| Daemon | Hobby quota: 10 Active CPU-hours a month (estimate for this app: 4.4-7.9 when every new model run is synced, docs/sync.md; less with the free-database cadence) | Pro: billed for Active CPU and memory; optional `JOB_INTERVAL_FLOOR_MINUTES=0`, `SYNC_CHECK_MINUTES=5`, a 4Gi daemon |
+| Neon | Free: 100 CU-hours, 1 GB storage and 5 GB egress per project. The free-database profile keeps about 1 day of forecast history and 1 week of verification archive, and refreshes the spots for every new GFS and GFS-Wave run (`SYNC_TRIGGER_SOURCES=spots`). A spot refresh sends 6.2-9.5 MB from the database to the app (measured on demo data, docs/sync.md "Measured (2.0)"); at about 8 component refreshes a day that is about 1.5-2.3 GB a month (arithmetic; up to 3.4 GB when GFS 0.25's late domain adds a third refresh per cycle), and a refresh check with nothing new reads nothing. Every signed-in page view also reads the database (`/api/auth/me`: 5 statements, measured), so signed-in traffic adds compute for the hours it spans. Details: docs/API_SETUP_REQUIRED.md, 1.4. | Launch ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then restore full retention (section 4, step 5). |
+| Upstash | Free: 250 MB and 500K commands a month. A quiet site fits; steady traffic all month, with the version polling of open pages, can pass 500K (docs/API_SETUP_REQUIRED.md, 1.4) | pay-as-you-go ($0.2 per 100K commands, with a budget cap) or a Fixed plan (from $10/month) |
+| Upstash QStash (the 5-minute scheduler) | Free: 1,000 messages a day; a 5-minute schedule uses 288 | pay-as-you-go |
+| Daemon (optional) | Hobby quota: 5 Active CPU-hours a month (https://vercel.com/docs/daemons/limits). It only refreshes the map layers (`SYNC_DAEMON_KINDS=map`); not measured on Vercel | Pro: billed for Active CPU and memory; optional `JOB_INTERVAL_FLOOR_MINUTES=0`, `SYNC_CHECK_MINUTES=5`, a 4Gi daemon |
 | Logs | runtime logs kept 1 hour | 1 day on Pro |
 
 Also worth knowing on Hobby: Vercel's terms say "if you are on a Hobby plan or trial Pro
@@ -284,8 +290,12 @@ PREDICTION_ARCHIVE_ENABLED=false
 Swell 2.0 (docs/architecture_audit.md): one weather provider, `WEATHER_PROVIDER=auto` (Windy
 once `WINDY_API_KEY` is set and `WINDY_STORAGE_AUTHORIZED=true`, else Open-Meteo GFS and
 GFS-Wave; `FORECAST_PROVIDERS` stays unset), no blend, a 10-day horizon. The spot refreshes
-run in a Vercel Function called by a scheduler; the optional sync daemon only refreshes the
-GRIB map layers (`SYNC_DAEMON_KINDS=map`) within Hobby's 5 Active CPU-hours a month.
+run in the API function, called every 5 minutes by the scheduler of step 7b; the optional
+sync daemon only refreshes the GRIB map layers (`SYNC_DAEMON_KINDS=map`) within Hobby's 5
+Active CPU-hours a month. Without the daemon the refresh endpoint also runs the API's
+"Re-check flights" and "match my search" requests and due email retries, and the daily cron
+runs the periodic jobs (cleanup, matching housekeeping, tides, alerts, delivery); only the
+map overlay ages (it is then labelled stale).
 `GEFS_ENABLED=false` protects that budget; set it to `true` to show the GEFS ensemble
 spread. After moving Neon to Launch, change the last eight to the full-retention profile:
 `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`, `RETENTION_JOB_LOG_DAYS=30`,
@@ -301,7 +311,7 @@ database budget").
 |---|---|---|---|
 | `APP_ENV` | `production` | `development` | production refuses a development secret key, dev endpoints, insecure cookies and email providers that only capture mail |
 | `SECRET_KEY` | 64 random characters | a different random value | required in production (the development default is refused); it keys the rate-limit counters; `python3.13 -c "import secrets; print(secrets.token_urlsafe(48))"` (the interpreter of README D) or `openssl rand -base64 48` |
-| `CRON_SECRET` | 16+ random characters | not needed | Vercel Cron sends it as `Authorization: Bearer ...`; without it the watchdog route answers 404 |
+| `CRON_SECRET` | 16+ random characters | not needed | Vercel Cron and the refresh scheduler (step 7b) send it as `Authorization: Bearer ...`; without it the refresh and cron routes answer 404 |
 | `COOKIE_SECURE` | `true` | `true` | the site is HTTPS-only |
 | `APP_BASE_URL` | `https://<project>.vercel.app` | leave unset | links in emails |
 | `API_BASE_URL` | `https://<project>.vercel.app` | leave unset | email-provider webhook validation |
@@ -386,14 +396,84 @@ Then check, in this order:
 |---|---|
 | `https://<project>.vercel.app/api/health/ready` | `{"status":"ok","checks":{"database":"ok","redis":"ok"}}` |
 | `https://<project>.vercel.app/` | the home page |
-| Vercel dashboard: Daemons, `sync` | one running instance; its logs show `init-db`, then the first metadata check |
-| `https://<project>.vercel.app/status` | the sync section: the daemon's last check and, after the first sync, a published sync |
-| `/api/health/data` | `sync.runner` is `daemon` |
+| the first refresh, by hand (below) | HTTP 200 with `"status": "success"` and a `version_ids` list (or `not_due` when a refresh already ran) |
+| `https://<project>.vercel.app/api/forecasts/version` | a `version_id`, `published_at`, `wave_model_run` and `wind_model_run`, `spots_updated` 50 |
+| `https://<project>.vercel.app/status` | the sync section: the refresh endpoint's last check and a published version |
+| Vercel dashboard: Daemons, `sync` (only if you keep the daemon) | one running instance; its logs show `init-db`, then the first metadata check of the map layers |
 
-The first sync starts as soon as the daemon sees model runs newer than the (empty)
-database. In the local Vercel-style stack a full live sync (spots, map layers, blend,
-predictions, publish) took 193.9 s (docs/local-vercel-stack.md); on Vercel's 1 vCPU it may
-take longer.
+Start the first refresh yourself instead of waiting for the scheduler (step 7b); it fetches
+the 50 spots, scores and publishes version 1:
+
+```bash
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh
+```
+
+`404` means `CRON_SECRET` is not set on the deployment, `401` that the token does not match.
+The answer is JSON: `status` is `success` (a new version), `not_due` (nothing new: the plan
+says why for each component), `busy` (another refresh holds the lease), `skipped`, `failed`
+(the next check retries with backoff) or `disabled` (`FORECAST_REFRESH_ENABLED=false`).
+Measured outside Vercel: a live Open-Meteo refresh of both components took 38.7 s (12.1 s of
+it the refresh itself; the rest TLS handshake timeouts of the test machine's proxy) and a
+wave-only refresh 47.1 s (20.3 s refresh), well inside `maxDuration` 300 s; a check with
+nothing new 1.2-1.7 s (docs/sync.md, "Measured (2.0)"). Not measured on Vercel itself.
+
+### Step 7b. Schedule the forecast refresh (every 5 minutes)
+
+**Without this step the spot forecasts refresh only once a day**, when the daily cron runs its
+backstop check: the hosted profile leaves spot refreshes to the refresh endpoint
+(`SYNC_DAEMON_KINDS=map`), and Hobby's Vercel Cron runs at most once a day. Something must
+call `/api/internal/refresh` every few minutes so a new GFS or GFS-Wave run reaches the site
+soon after Open-Meteo publishes it (spec section 9). A check with nothing new costs no
+database read and no forecast request (four small `meta.json` reads), so a 5-minute schedule
+is cheap.
+
+**On Hobby: Upstash QStash** (free: 1,000 messages a day; a 5-minute schedule uses 288;
+it waits up to 15 minutes for the answer, so a 300 s refresh fits;
+https://upstash.com/pricing/qstash). Create a QStash account at console.upstash.com (the
+Upstash account of step 4 works), copy the `QSTASH_TOKEN` from the QStash page, then create
+the schedule once, from your machine:
+
+```bash
+export QSTASH_TOKEN='...'          # from the Upstash console, QStash tab
+export CRON_SECRET='...'           # the same value as the deployment's CRON_SECRET
+curl -XPOST -H "Authorization: Bearer $QSTASH_TOKEN" \
+  -H "Upstash-Cron: */5 * * * *" \
+  -H "Upstash-Forward-Authorization: Bearer $CRON_SECRET" \
+  "https://qstash.upstash.io/v2/schedules/https://<project>.vercel.app/api/internal/refresh"
+```
+
+QStash forwards the `Upstash-Forward-`-prefixed header as `Authorization` and answers with a
+`scheduleId`; the schedule then shows in the console under Schedules, where you can pause or
+delete it. Do not put the token or the secret in the repository. If you change
+`CRON_SECRET`, delete the schedule and create it again with the new value. QStash retries a
+failed delivery 3 times; the endpoint answers 200 for busy and failed refreshes, so only real
+errors (503) are retried. (Alternatives: cron-job.org, free and down to once a minute, but it
+closes the connection after 30 s, so whether a longer refresh finishes is not verified;
+docs/sync.md, "Scheduling options".)
+
+**On Pro: Vercel Cron.** Add a second entry to `crons` in `vercel.json`:
+
+```json
+{ "path": "/api/internal/refresh", "schedule": "*/5 * * * *" }
+```
+
+Vercel sends `CRON_SECRET` as the `Authorization` header by itself. This entry fails a Hobby
+deployment ("Hobby accounts are limited to daily cron jobs"), so it is not in the
+repository's `vercel.json`.
+
+**Check it** (wait 5-10 minutes after creating the schedule):
+
+| Check | Expect |
+|---|---|
+| `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh` | 200 with `"status": "not_due"` or `"success"` |
+| `/admin/freshness` (signed in as an admin, step 6) | the "Refresh scheduler" row: `checking`, last check less than 5 minutes ago, by `refresh endpoint (refresh)` (the daily cron's backstop shows as `refresh endpoint (cron_daily)` once a day) |
+| `/status` | the sync section's last check is a few minutes old |
+| QStash console, Logs | a delivery every 5 minutes, HTTP 200 |
+
+Keep `REFRESH_SCHEDULER_EXPECTED_MINUTES` at its default (30): when no refresh check arrives
+for 30 minutes the admins get the `refresh_scheduler_silent` email, so a stopped schedule is
+noticed. Setting it to 0 silences that alert; do it only if you knowingly run on the daily
+cron alone, which refreshes the spots once a day and breaks the freshness goal.
 
 With the CLI (section 7): `vercel daemons ls`, `vercel daemons inspect sync`,
 `vercel logs --query 'source:daemon'`. Hobby keeps runtime logs for 1 hour only; the
@@ -404,8 +484,13 @@ lasting record is the `sync_runs` table, the job logs and `/status`.
 Vercel Cron calls `GET /api/internal/cron/daily` once a day (`23 7 * * *`, UTC). On Hobby
 "Vercel may invoke these cron jobs at any point within the specified hour", so expect it
 between 07:00 and 07:59 UTC, and a failed call is not retried. It runs the
-data-health check and emails the admins when the daemon's heartbeat or the data is stale,
-so a stopped daemon (quota used up, crash) is still noticed. Try it by hand:
+data-health check and emails the admins when the data is stale, the refresh scheduler is
+silent or (when the daemon is meant to refresh the map layers) its heartbeat is stale. Then
+it runs every periodic job whose last run is older than its own interval (maintenance
+cleanup, the matching housekeeping, tide acquisition, alerts, delivery, the staleness check;
+within 150 s, answer key `jobs`), so these run daily with no daemon, and last one refresh
+check (answer key `refresh`), the backstop for a scheduler that stopped calling. Try it by
+hand:
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily
@@ -427,13 +512,18 @@ the same call to the local Vercel-style stack.)
 
   | Quota | Limit | What happens | Where to see it |
   |---|---|---|---|
-  | Daemon Active CPU | 10 hours a month | "Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro"; the site keeps working, the data stops updating | `/status` (warns at 80 % of `SYNC_CPU_BUDGET_HOURS`), the daemon's usage charts |
+  | Daemon Active CPU (optional daemon) | 5 hours a month | "Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro"; the site keeps working and the spot forecasts keep refreshing through the endpoint; the map layers age | `/status` (warns at 80 % of `SYNC_CPU_BUDGET_HOURS`), the daemon's usage charts |
   | Function Active CPU | 4 hours a month | over a Hobby limit "you will have to wait until 30 days have passed before you can use the feature again" | Vercel Usage |
   | Neon | 100 CU-hours, 1 GB, 5 GB egress | out of CU-hours or egress the compute is suspended until the next billing period; over 1 GB writes fail | Vercel Storage, Neon console; `/api/health/data` (database size) |
-  | Upstash | 500K commands a month | | Vercel Storage |
+  | Upstash | 500K commands a month | over the limit commands are refused until the next month (rate limits fail open; the version marker and caches stop working) | Vercel Storage |
+  | QStash | 1,000 messages a day | the schedule's deliveries stop for the rest of the day | Upstash console |
 
-- **When the daemon is stopped** (quota, crash): the watchdog emails the admins; run the
-  manual GitHub Actions sync (section 8) if the data must not wait.
+- **When the daemon is stopped** (quota, crash): only the map layers age (labelled stale);
+  the spot forecasts keep refreshing through the endpoint. Run the manual GitHub Actions sync
+  (section 8) if the map must not wait.
+- **When the scheduler stops** (QStash paused, deleted, out of messages): the admins get the
+  `refresh_scheduler_silent` email after 30 minutes and the daily cron's backstop still
+  refreshes once a day; recreate the schedule (step 7b).
 
 ## 6. Preview deployments
 
@@ -560,7 +650,8 @@ checks that the committed workflow has no schedule, so that test must change wit
 | The daemon does not build or start | Check its build log (Deployments, the production deployment) and the Daemons page. Known risks: the `Containerfile`'s optional `RUN --mount=type=secret,id=ca` (remove the mount if the builder rejects it), and the daemon root `./` being the repository root (Vercel fails the build "If the project's output directory is the same directory as a daemon's `root`"). If the root is the problem, move `data/` under `backend/`, move the `Containerfile` there (adjusting its `COPY` paths) and set the daemon's `root` to `backend/`. Meanwhile run the manual GitHub Actions sync (section 8). |
 | The api's build command fails | The build log shows the JSON from `migrate --on-build` (`status`, `error`). A database problem fails the build on purpose. To deploy anyway, set `MIGRATE_ON_BUILD=off` and let the daemon's `init-db` migrate. |
 | The API function is too large | Run `scripts/vercel-build-check.sh --offline`: it lists the largest parts of the function. The API must install only the lean dependency set (`[project].dependencies`); the data libraries belong to the `sync` extra. |
-| The daemon's CPU quota runs out | The site keeps serving the last published data; the watchdog emails admins. Use the manual runner, set `GEFS_ENABLED=false` if you turned it on, or move to Pro. |
+| The daemon's CPU quota runs out | Only the map layers stop updating (labelled stale); the spot forecasts, alerts and flight searches keep running through the refresh endpoint and the daily cron. Use the manual runner, set `GEFS_ENABLED=false` if you turned it on, or move to Pro. |
+| The spot forecasts update only once a day | No scheduler calls `/api/internal/refresh`: do step 7b (QStash on Hobby, a Vercel Cron entry on Pro). `/admin/freshness` shows who made the last check. |
 
 ## 10. What was checked, and how
 
@@ -656,7 +747,7 @@ Read 2026-10-18 for the design (research) and re-read 2026-10-22 where marked.
 | Daemons, production only | "During the beta phase, daemons only run in production environments." | same |
 | Daemons, not in `vercel dev` | "`vercel dev` currently doesn't run daemons." | same |
 | Daemon root | "Projects with a root directory such as `apps/web` can't add daemons yet." | https://vercel.com/docs/daemons/limits (re-read 2026-10-22) |
-| Hobby daemon quota | "1 GiB or 2 GiB (1 vCPU) \| 10 Active CPU-hours per month"; "When a Hobby team reaches the quota, Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro." | same |
+| Hobby daemon quota | "1 GiB or 2 GiB (1 vCPU) \| 5 Active CPU-hours per month" (https://vercel.com/docs/daemons/limits, re-read 2026-10-27, docs/architecture_audit.md; read as 10 on 2026-10-18); "When a Hobby team reaches the quota, Vercel stops the team's daemons until the first of the next month (UTC) or until the team upgrades to Pro." | same |
 | Waiting is free | "Time spent waiting, such as long polling an empty queue, doesn't count" | https://vercel.com/docs/daemons |
 | Daemon build args | "Vercel passes your deployment's environment variables to the build as build arguments" | https://vercel.com/docs/daemons/config-reference (re-read 2026-10-22) |
 | Daemon output-directory rule | "If the project's output directory is the same directory as a daemon's `root`, the build fails." | same |
