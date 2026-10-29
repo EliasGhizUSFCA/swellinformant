@@ -210,7 +210,11 @@ test.describe("live forecast updates (route-mocked versions)", () => {
     await expect(page.getByTestId("summary-time")).toHaveText(time!);
     expect(await scroller.evaluate((el) => el.scrollLeft)).toBe(scrollLeft);
     expect(await marker(page)).toBe(42);
-    expect(mock.reads.get("102")?.length).toBe(1);
+    // Each of the spot's reads that this test serves happened once under ?v=102. (Since review
+    // r1-frontend-FE-5 the forecast and the spot detail are served through the mock as well,
+    // so their freshness can name the update: three reads, where only the timeline was before.)
+    const reads102 = (mock.reads.get("102") ?? []).map((u) => new URL(u, "http://x").pathname).sort();
+    expect(reads102).toEqual([`/api/spots/${SLUG}`, `/api/spots/${SLUG}/forecast`, `/api/spots/${SLUG}/timeline`]);
     expect(mock.reads.get("none") ?? []).toEqual([]);
     await expect.poll(() => mock.seen, { timeout: 5_000 }).toEqual([102]);
     console.log(`spot page: version 102 on screen ${shownAfter} ms after the switch (poll ${POLL_MS} ms)`);
