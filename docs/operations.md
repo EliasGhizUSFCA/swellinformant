@@ -1,17 +1,18 @@
 # Operations: deploy, monitor, back up, recover
 
-How to run Swell Travel Agent unattended, on Vercel (Upgrade 4) or on one server, notice
-when its data goes stale, keep backups that restore, and size the machine. Numbers in
+How to run Swell Travel Agent unattended, on Vercel (Upgrade 4, Swell 2.0) or on one
+server, notice when its data goes stale, keep backups that restore, and size the machine. Numbers in
 sections 2, 4, 6 and 8 were measured on 2026-10-12 or 2026-10-13 on the Docker Compose stack
 with live providers (`FORECAST_PROVIDERS=noaa_gfs,ecmwf_ifs`, `GEFS_ENABLED=true`), unless
 they say otherwise; the hosted figures (sections 1 and 3) come from the Upgrade 4
 measurements of 2026-10-20 to 2026-10-23, cited where they appear. "Verification record" at
 the end lists what was and was not run.
 
-Since Upgrade 4 the weather data is pulled when a provider publishes a new model run, by one
-coordinated sync, not on fixed timers (docs/sync.md has the rules). Deploying on Vercel step
-by step: docs/deploy-vercel.md; testing that setup on your machine first:
-docs/local-vercel-stack.md.
+Since Upgrade 4 the weather data is pulled when a provider publishes a new model run, not on
+fixed timers; since Swell 2.0 the wave and the wind are refreshed separately, as soon as each
+has a new run, and every refresh publishes a forecast version (docs/sync.md has the rules).
+Deploying on Vercel step by step: docs/deploy-vercel.md; testing that setup on your machine
+first: docs/local-vercel-stack.md.
 
 ## 1. What runs
 
@@ -51,16 +52,17 @@ source wait until 00:00 UTC (or the next month) instead. A run that Open-Meteo i
 publishing, or whose servers disagree for a few minutes about it, is `deferred`: no failed
 attempt is counted and a later check takes it. The other providers sync normally meanwhile.
 
-### Hosted on Vercel (Upgrade 4)
+### Hosted on Vercel (Upgrade 4, Swell 2.0)
 
 | Part | Role | Instances | Health |
 |---|---|---|---|
 | `web` service | the Next.js site, every path except `/api` | Vercel scales it | `GET /` |
-| `api` service | FastAPI as one Python function (`app.main:app`, maxDuration 60 s), the lean install (no Celery, no data libraries) | Vercel scales it | `GET /api/health/ready` |
-| `sync` daemon | `python -m app.cli sync daemon` from the repo-root `Containerfile`: checks for new model runs, syncs, runs the periodic jobs | **1** in `iad1`, 2 GiB / 1 vCPU, 600 s shutdown grace | its Redis heartbeat (`sync_heartbeat_stale`) |
-| daily cron | Vercel Cron: `GET /api/internal/cron/daily` at 07:23 UTC (Hobby: anywhere in that hour), the watchdog (section 3) | 1 a day | Vercel's Cron Jobs page |
+| `api` service | FastAPI as one Python function (`app.main:app`, `maxDuration` 300 s), the lean install (no Celery, no data libraries); it also runs the forecast refresh | Vercel scales it | `GET /api/health/ready` |
+| forecast refresh | `GET\|POST /api/internal/refresh` (Bearer `CRON_SECRET`), called every 5 minutes by Upstash QStash (Hobby) or a Vercel Cron entry (Pro): the metadata check, a spot-only refresh of the component with a new run, a new forecast version, detection, matching, flights, alerts; also the API's kicks, due email retries and the hourly data-health check without the daemon | one call at a time (a Postgres lease; a second answers `busy`) | `/admin/freshness` "Refresh scheduler"; `refresh_scheduler_silent` |
+| daily cron | Vercel Cron: `GET /api/internal/cron/daily` at 07:23 UTC (Hobby: anywhere in that hour): the watchdog (section 3), the periodic jobs no daemon ran on time, one refresh check as a backstop | 1 a day | Vercel's Cron Jobs page |
+| `sync` daemon (optional) | `python -m app.cli sync daemon` from the repo-root `Containerfile` with `SYNC_DAEMON_KINDS=map`: only the GRIB map layers and the periodic jobs; without it set `MAP_FIELDS_ENABLED=false` | 0 or 1 in `iad1`, 2 GiB / 1 vCPU, 600 s shutdown grace | its Redis heartbeat (`sync_heartbeat_stale`, degraded only, for the map layers) |
 | Neon Postgres | all persistent state; the API uses the pooled URL (PgBouncer), the daemon and migrations the direct one | Neon | `GET /api/health/ready` |
-| Upstash Redis | rate limits, job locks, Open-Meteo call budgets, the daemon's heartbeat, known runs and kick flags, the public snapshot cache; no Celery broker | Upstash | `GET /api/health/ready` |
+| Upstash Redis | rate limits, job locks, Open-Meteo call budgets, the forecast version marker, the public snapshot cache, the known runs, the daemon's heartbeat and kick flags; no Celery broker | Upstash | `GET /api/health/ready` |
 
 The same image runs anywhere: the local Vercel-style stack (docs/local-vercel-stack.md)
 runs this topology in Docker, with Caddy for Vercel's router, PgBouncer for Neon's pooler
@@ -70,14 +72,18 @@ and plain Redis for Upstash.
 
 Before Upgrade 4, beat fetched the spot forecasts and the map layers every
 `FORECAST_REFRESH_MINUTES` (180), GEFS-Wave at fixed times, and ran a prediction safety net
-and an hourly detection. Those five entries are gone. Now every `SYNC_CHECK_MINUTES` (10)
-the runner reads the providers' metadata only (Open-Meteo's `meta.json`, NOAA `.idx` HEAD
-requests) and, when a run is newer than the stored one, runs one sync of 12 stages under a
-database lease (one sync at a time): spots → ensemble → map → blend → predict → publish →
-detect → match → flights → alerts → deliver → prune. A run already stored is never fetched
-again, so duplicate triggers are harmless. The daemon's idle check makes no database query
-(measured: 0 SQL statements and 0 pool checkouts after a sync), so a scale-to-zero database
-stays asleep between syncs.
+and an hourly detection. Those five entries are gone. Now each runner (the refresh endpoint
+every 5 minutes on Vercel, the daemon or Celery's `sync.tick` every `SYNC_CHECK_MINUTES`, 10)
+reads the providers' metadata only (Open-Meteo's `meta.json`, NOAA `.idx` HEAD requests,
+Windy's sentinel fingerprint) and, when a component has a newer run than the published one,
+runs one sync under a database lease (one sync at a time): spots → ensemble → map → blend →
+predict → publish → detect → match → flights → alerts → deliver → prune, each stage only when
+it has something to do (the refresh endpoint never runs the map stage). The spot stage
+fetches only the component with the new run and carries the other with its own model run;
+publish stages and publishes a forecast version (docs/sync.md). A run already stored is
+never fetched again, so duplicate triggers are harmless. A check with nothing new makes no
+database query (measured: 0 SQL statements and 0 pool checkouts after a sync; 0 bytes of
+database egress through the endpoint), so a scale-to-zero database stays asleep.
 
 Still on timers, and why:
 
@@ -125,7 +131,7 @@ entry but `sync-tick` (it checks on its own).
 
 | Entry | Task | When (classic) | Hosted (floor 60) |
 |---|---|---|---|
-| sync-tick (beat only) | `sync.tick` | every `SYNC_CHECK_MINUTES` (10) | the daemon checks every 10 min itself |
+| sync-tick (beat only) | `sync.tick` | every `SYNC_CHECK_MINUTES` (10) | the refresh endpoint every 5 min (the scheduler); the optional daemon checks the map layers every 10 min itself |
 | matching-housekeeping | `matching.match` | daily 03:45 UTC (matching also runs after every publication, as a sync stage) | the same |
 | alert-generation | `alerts.generate` | every 15 min | hourly |
 | notification-delivery | `notifications.deliver` | every 2 min | hourly |
@@ -135,7 +141,13 @@ entry but `sync-tick` (it checks on its own).
 | tide-acquisition (with `TIDE_PROVIDERS`) | `tides.acquire` | daily 02:20 UTC | the same |
 | observation-ingest (with `OBSERVATIONS_ENABLED`) | `observations.ingest` | hourly | hourly |
 | point-forecast-archive, verification (with `VERIFICATION_ENABLED`) | `verification.collect_point_forecasts`, `verification.run` | 00:50, 06:50, 12:50, 18:50; 04:10 UTC | the same |
-| (Vercel Cron) | `ops.data_health` through `GET /api/internal/cron/daily` | | daily 07:23 UTC, `vercel.json` |
+| (Vercel Cron) | `ops.data_health`, the overdue periodic jobs and one refresh check, through `GET /api/internal/cron/daily` | | daily 07:23 UTC, `vercel.json` |
+
+Without the daemon (the hosted default once `MAP_FIELDS_ENABLED=false`), the "Hosted"
+column's timers do not run; instead the refresh endpoint runs the kicks, a due delivery retry
+and the data-health check (hourly, and early after a failed or partial refresh), and the
+daily cron runs every periodic job whose last run is older than its interval
+(`app/services/sync/standin.py`, `tests/integration/test_daemonless_hosted.py`).
 
 The old acquisition tasks (`forecasts.acquire`, `forecasts.map_fields`,
 `forecasts.acquire_ensemble`) can still be run by hand; a hand-run acquisition does not
@@ -606,8 +618,8 @@ exact comparison.
 ## 5. Incident playbook
 
 Start from `/status` or `scripts/check-health.sh`: every reason names what is late and
-by how much. The first six runbooks are for the hosted setup (Upgrade 4); the rest apply
-everywhere. Commands marked "(Vercel)" run only on Vercel's website or against the
+by how much. The first six runbooks are for the hosted setup (Upgrade 4, Swell 2.0); the
+rest apply everywhere. Commands marked "(Vercel)" run only on Vercel's website or against the
 deployment.
 
 ### Data is stale
@@ -630,8 +642,10 @@ same database and Redis) prints the plan: `current` (stored), `new` (a sync is d
    Under Celery, or a daemon whose `SYNC_DAEMON_KINDS` include `spots`,
    `sync_heartbeat_stale` (failing) means that runner stopped: restart it (or worker and
    beat).
-2. `waiting` with "not served yet" for `open_meteo_ecmwf`: normal between ECMWF runs
-   (Open-Meteo serves its 06Z/18Z run then; this source reads only 00Z and 12Z).
+2. `waiting` with "not served yet": a component whose run Open-Meteo is still publishing
+   (it becomes servable 10 minutes after its availability time). With the advanced ECMWF
+   family (`open_meteo_ecmwf`, off by default) it is also normal between ECMWF runs
+   (Open-Meteo serves its 06Z/18Z run then; that source reads only 00Z and 12Z).
 3. `failed` or repeated `sync_failed`: `python -m app.cli sync status` shows the stages and
    the error of each sync; then the provider's runbook below.
 4. With the hosted and free-database profiles (`SYNC_TRIGGER_SOURCES=spots`) every new GFS
@@ -648,16 +662,16 @@ same database and Redis) prints the plan: `current` (stored), `new` (a sync is d
    layers, use the manual GitHub workflow "Data sync (manual)"
    (docs/deploy-vercel.md section 8): it applies the hosted profile, `APP_ENV=production`
    and `DB_USE_UNPOOLED=true` itself. `force` runs every stage (runs already stored are
-   still skipped); a run that reports the lease busy means the daemon is syncing right now:
-   wait and run it again. A run from your own machine (from `backend/` with the dev venv of
+   still skipped); a run that reports the lease busy means a refresh or the daemon is
+   syncing right now: wait and run it again. A run from your own machine (from `backend/` with the dev venv of
    README E.3, which has the `sync` extra the map layers need: `python -m app.cli sync run`,
    or `sync run --force`) only with the Production environment loaded: the hosted-profile
    block of docs/deploy-vercel.md step 5, your Production variables (`APP_ENV=production`,
    `SECRET_KEY`, a real `EMAIL_PROVIDER`, `APP_BASE_URL`) and `DB_USE_UNPOOLED=true`. Never
    with only `DATABASE_URL`: the defaults are synthetic demo forecasts and console email,
    and the sync would publish them to the live site. First run `python -m app.cli sync
-   check` and confirm the components name `open_meteo` / `open_meteo_ecmwf`, not `demo`.
-   Exit 3 means the daemon holds the lease: wait and try again.
+   check` and confirm the components name the provider `open_meteo` (or `windy` once licensed), not `demo`.
+   Exit 3 means another sync (a refresh or the daemon) holds the lease: wait and try again.
 
 ### Daemon quota reached (Vercel Hobby)
 
@@ -680,7 +694,7 @@ docs/deploy-vercel.md step 5, your Production variables (`APP_ENV=production`, `
 a real `EMAIL_PROVIDER`, `APP_BASE_URL`) and `DB_USE_UNPOOLED=true`. Never with only
 `DATABASE_URL`: the defaults are synthetic demo forecasts and console email, and the sync
 would publish them to the live site. First run `python -m app.cli sync check` and confirm
-the components name `open_meteo` / `open_meteo_ecmwf`, not `demo`. Then reduce the cost for
+the components name the provider `open_meteo` (or `windy` once licensed), not `demo`. Then reduce the cost for
 the rest of the month: `GEFS_ENABLED=false` if you turned it on, `MAP_FIELD_PARTITIONS=off`,
 or a shorter map horizon (`MAP_FIELD_STEPS`, `MAP_FIELD_MAX_LEAD_HOURS`); the map layers are
 more than half of the estimate. A permanent fix is Vercel Pro. Environment changes reach new

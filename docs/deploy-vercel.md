@@ -2,8 +2,10 @@
 
 How to put Swell Travel Agent on Vercel, test it on your own machine first, and keep it
 running on the free plans until a paywall arrives. It follows the design decisions D1-D16
-of Upgrade 4. Quotes from Vercel, Neon, Upstash and GitHub are at the end (section 11),
-with their URLs and the date they were read.
+of Upgrade 4 and, for the forecast refresh, decision D8 of Swell 2.0 (docs/decisions.md,
+ADR-045: the refresh runs in the API function, called by a scheduler; the daemon is
+optional). Quotes from Vercel, Neon, Upstash, QStash, cron-job.org and GitHub are at the end
+(section 11), with their URLs and the date they were read.
 
 What was checked here, and how, is in section 10. In short: the configuration validates
 against Vercel's published schema; an offline `vercel build` of the repository succeeds
@@ -478,9 +480,18 @@ QStash forwards the `Upstash-Forward-`-prefixed header as `Authorization` and an
 delete it. Do not put the token or the secret in the repository. If you change
 `CRON_SECRET`, delete the schedule and create it again with the new value. QStash retries a
 failed delivery 3 times; the endpoint answers 200 for busy and failed refreshes, so only real
-errors (503) are retried. (Alternatives: cron-job.org, free and down to once a minute, but it
-closes the connection after 30 s, so whether a longer refresh finishes is not verified;
-docs/sync.md, "Scheduling options".)
+errors (503) are retried.
+
+**Alternative on Hobby: cron-job.org** (free, "Every cronjob can be executed up to 60 times an
+hour", custom headers allowed, so `Authorization: Bearer <CRON_SECRET>` can be sent;
+https://cron-job.org/en/faq/, read 2026-10-27). Its limit: "If your URL/script does not finish
+after 30 seconds, it will timeout and we will close the connection". A check with nothing new
+answered in 1.2-1.7 s here, but a refresh that fetches and scores took 12-20 s plus its
+metadata check (up to 47 s with this machine's proxy timeouts), and whether the Vercel
+function finishes a refresh after the caller has hung up was **not tested**. It also
+disables a job "when it subsequently fails more than 25 times". Use it only if QStash is not
+an option, and watch `/admin/freshness` for refreshes that stop half-way (`sync_runs` left
+`running` until the lease expires).
 
 **On Pro: Vercel Cron.** Add a second entry to `crons` in `vercel.json`:
 
@@ -633,8 +644,9 @@ those two documented facts; not tried.) Let Vercel build production deployments.
 
 `.github/workflows/data-sync.yml` runs one sync (`python -m app.cli sync run --trigger
 github`) on a GitHub-hosted runner, against the production database. It is for
-emergencies (the daemon is stopped, for example its CPU quota is used up) and backfills;
-the daemon stays the scheduler.
+emergencies and backfills (for example the map layers while the optional daemon is stopped,
+or a forced re-sync); the refresh endpoint and its scheduler (step 7b) stay the runner of the
+spot forecasts.
 
 **Set up once** (repository Settings, Secrets and variables, Actions):
 
@@ -783,8 +795,21 @@ Docker 29.8.2 with Compose 5.6.0. Results of 2026-10-23 unless a date is given.
   workflow then passed `toJSON(vars)`, so all repository variables would have been printed
   (found at the final review; it now reads only the public settings it lists). Not run on
   GitHub itself.
+- **Swell 2.0** (2026-10-29). The offline build on the final tree: `RESULT: ok`, the api
+  function python3.13 with `maxDuration` 300 s, 3,469 files, 128.3 MiB; the daily cron in
+  the output config (review round 4, commit c85474f). The deployment verifier ran the local
+  Vercel-style stack on b810116 (before the review rounds): `POST /api/internal/refresh`
+  answered 401 without and with a wrong token; two concurrent calls gave one `busy` (71 ms)
+  and one success (version 1); 14 simulated model runs published versions 2-15, and open
+  pages in a browser through the edge followed every one without a reload (16 of 16 page
+  updates, publication to new data on screen p50 13.8 s at the 20 s poll); 1,000 simulated
+  visitors through the edge got one body per route with 0 errors. A live Open-Meteo refresh
+  of both components and a natural wave-only refresh ran through the endpoint on a scratch
+  database (docs/sync.md, "Measured (2.0)"). The QStash schedule and cron-job.org were not
+  set up (no account); a 5-minute POST loop stood in for them.
 - **Not checked here**: a real deployment (no Vercel account was used), the daemon image
-  build and start on Vercel, Neon and Upstash themselves, the cron invocation, previews.
+  build and start on Vercel, Neon and Upstash themselves, the cron invocation, QStash,
+  previews, the CDN's caching of the versioned reads.
 
 ## 11. Sources
 
@@ -832,6 +857,14 @@ Read 2026-10-18 for the design (research) and re-read 2026-10-22 where marked.
 | Scheduled workflows | "The schedule event can be delayed during periods of high loads of GitHub Actions workflow runs. ... some queued jobs may be dropped."; "In a public repository, scheduled workflows are automatically disabled when no repository activity has occurred in 60 days." | https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows, https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows |
 | Public-repo Actions | "GitHub Actions usage is free for self-hosted runners and for public repositories that use standard GitHub-hosted runners." | https://docs.github.com/en/billing/concepts/product-billing/github-actions |
 | Secrets and forks | "With the exception of GITHUB_TOKEN , secrets are not passed to the runner when a workflow is triggered from a forked repository." | https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets |
+| Pro cron frequency (read 2026-10-27) | "**Pro** ... Once per minute ... Per-minute" | https://vercel.com/docs/cron-jobs/usage-and-pricing |
+| Function duration (read 2026-10-27) | "Hobby: 300s default and maximum. Pro and Enterprise: 300s default, 800s maximum, and 1800s extended maximum Beta." | https://vercel.com/docs/functions/limitations |
+| Function memory (read 2026-10-27) | "Hobby: 2 GB, Pro and Ent: 4 GB" | same |
+| QStash Free (read 2026-10-27) | "Max Messages per Day \| 1,000"; "Max Active Schedules \| 10"; "Max HTTP Response Duration \| 15 minutes"; "Scheduled messages are billed once for each time the schedule triggers." | https://upstash.com/pricing/qstash |
+| QStash retries (read 2026-10-27) | "By default, we retry a failed delivery 3 times." | https://upstash.com/docs/qstash/features/retry |
+| QStash schedules (read 2026-10-27) | "It can take up to 60 seconds for the schedule to be loaded on an active node and triggered for the first time." | https://upstash.com/docs/qstash/features/schedules |
+| cron-job.org (read 2026-10-27) | "Every cronjob can be executed up to 60 times an hour, i.e. every minute."; "If your URL/script does not finish after 30 seconds, it will timeout and we will close the connection"; "Yes, our service supports arbitrary custom headers."; disabled "when it subsequently fails more than 25 times" | https://cron-job.org/en/faq/ |
+| Open-Meteo on Vercel (read 2026-10-27) | "If you are using providers like Vercel, Netlify, Render, or Google Sheets you might be rate-limited earlier then expected." | https://open-meteo.com/en/terms |
 
 Not verified: the exact labels of Vercel's dashboard screens (the steps follow the
 documentation's wording); which variable names Upstash injects today (`KV_URL` on

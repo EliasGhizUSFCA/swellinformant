@@ -1149,7 +1149,7 @@ Left open:
 
 ---
 
-# Swell 2.0 (2026-10, sections 46-51)
+# Swell Travel Agent 2.0 (2026-10, sections 46-51)
 
 The owner's master prompt of 2026-10-26 (spec sections 1-37): the forecasts follow the
 weather models automatically, one provider (Open-Meteo now, Windy once licensed), researched
@@ -1157,34 +1157,41 @@ spot conditions, versioned publication that open pages pick up without a reload,
 flight searches, admin freshness monitoring, all deployable on Vercel. The audit, the plan
 and the implementation status with the per-package file lists:
 [`docs/architecture_audit.md`](architecture_audit.md) (sections 1-7, and 8 for what was
-built). How to run, set up and deploy it: README sections E.7 and F.2,
-[`docs/deploy-vercel.md`](deploy-vercel.md), [`docs/API_SETUP_REQUIRED.md`](API_SETUP_REQUIRED.md).
+built and what remains); the decisions as records:
+[`docs/decisions.md`](decisions.md), ADR-038 to ADR-053. How to run, set up and deploy it:
+README sections E, F.2, I and L, [`docs/deploy-vercel.md`](deploy-vercel.md),
+[`docs/API_SETUP_REQUIRED.md`](API_SETUP_REQUIRED.md) and
+[`docs/WINDY_API_SETUP.md`](WINDY_API_SETUP.md). Built on branch `wf6/int` from 18a5bee:
+a foundation, ten packages, an integration, a deployment verification, four review rounds
+with their fixes, and this documentation pass.
 
 ## 46. Architecture changes
 
-* **Detection**: a refresh check reads only the providers' run metadata (Open-Meteo
-  `meta.json` per model domain, used 10 minutes after its availability time; Windy's
-  sentinel fingerprint). The wave and the atmosphere are separate components; a component is
-  new only when each of its model domains is at or past the stored run.
-* **Refresh**: `GET|POST /api/internal/refresh` (Bearer `CRON_SECRET`) runs in the API
-  function, called every 5 minutes by Upstash QStash on Hobby or Vercel Cron on Pro; it
-  fetches only the changed component, carries the other forward with its own model time,
-  scores, validates, stages and publishes a **forecast version** (`forecast_versions`), then
-  runs detection, matching, flights, alerts and delivery. Partial failures publish the good
-  spots and retry the others; failed spots keep their previous forecast, labelled stale.
-* **Serving**: every public read is cached per version and requested with
-  `?v=`; `GET /api/forecasts/version` is the small endpoint open tabs poll every 20 s.
-* **Frontend**: versioned query keys; a new version is swapped in without a reload, keeping
-  the selected spot and time; the "Forecast updated … · N min ago" label and an
-  announcement for screen readers; stale labels everywhere a rating is shown.
+The two systems of spec section 2, as built:
+
+* **System A, the global surf forecast (user-independent).** A **refresh check** reads only
+  the providers' run metadata (Open-Meteo `meta.json` per model domain, used 10 minutes after
+  its availability time; Windy's sentinel fingerprint). The wave and the atmosphere are
+  separate components; a component is new only when each of its model domains is at or past
+  the stored run. On a new run, `GET|POST /api/internal/refresh` (Bearer `CRON_SECRET`) runs
+  in the API function, called every 5 minutes by Upstash QStash on Hobby or Vercel Cron on
+  Pro: it fetches only the changed component for the 50 spots, carries the other forward
+  with its own model time, validates every spot, scores every hour (scoring 2.2.0), stages
+  and publishes a **forecast version** (`forecast_versions`) in one transaction, and
+  re-evaluates the swell events. Failed spots keep their previous forecast, labelled stale,
+  and are retried alone. No visitor ever triggers a provider request.
+* **Serving and the website.** Every public read is cached per version and requested with
+  `?v=<version_id>`; `GET /api/forecasts/version` is the small endpoint open tabs poll every
+  20 s while visible; a new version is swapped in without a reload, keeping the selected spot
+  and time, with a "Forecast updated hh:mm" label and an announcement for screen readers.
+* **System B, personalised flights.** After each publication the saved searches are
+  matched (each with its own alert lead time, 2-10 days by default; 3-7 days ranked first);
+  flights are searched only for a new or materially changed match, on request, and right
+  before an alert; alerts are de-duplicated and sent only on a new match or a material
+  change.
 * **Provider**: `WEATHER_PROVIDER=auto` (Windy when licensed and authorised to store, else
   Open-Meteo GFS + GFS-Wave; Open-Meteo is the fallback); the blend, ECMWF and GEFS are kept
   but off.
-* **Scoring 2.2.0** with per-hour outputs, structured reasons, researched spot conditions
-  (data/surf_spot_research), research and forecast confidence kept apart.
-* **Flights and alerts**: searches only for a new or materially changed match, on request,
-  and right before an alert; per-search alert lead times (2-10 days by default), short-notice
-  ranking; no flight timer.
 * **Monitoring**: `/admin/freshness` and admin-only email alerts (model run late, refresh
   failures, stale spots, provider credentials including flight and email keys, quotas,
   silent scheduler).
@@ -1195,58 +1202,178 @@ built). How to run, set up and deploy it: README sections E.7 and F.2,
 
 | Item | Status | Evidence |
 |---|---|---|
-| Vercel production build succeeds | offline build verified; no real deployment | `scripts/vercel-build-check.sh --offline`: `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29) |
-| Hosted database works | locally verified through PgBouncer in transaction mode (as Neon's pooler); Neon itself not tried | `tests/integration/test_pgbouncer_mode.py` (3 passed against a local PgBouncer on 2026-10-29; skipped in CI without `TEST_PGBOUNCER_URL`) |
-| Open-Meteo acquisition works | verified live | refreshes of 2026-10-28 and 29 (section 50) |
-| Windy adapter implemented | implemented, tested with recorded and synthetic responses; no key | `tests/unit/test_windy_provider.py`, `tests/integration/test_windy_acquisition.py` |
-| Windy activation instructions complete | done | `docs/WINDY_API_SETUP.md` (`tests/unit/test_windy_setup_doc.py`) |
-| Windy storage disabled without authorisation | done | `WINDY_STORAGE_AUTHORIZED`; `tests/unit/test_provider_manager.py`, `test_windy_provider.py` |
-| All 50 spots configured | done | `data/surf_spots/`, seeded by `init-db` (50 spots) |
-| Profiles contain sourced research | done (quoted claims only; "not documented" where no source says it) | `data/surf_spots/research_conditions.json`, `docs/surf_spot_research/`, `tests/unit/test_spot_research_docs.py` |
-| Scores generated; offshore scoring works | done | scoring 2.2.0, `tests/unit/test_surf_quality.py`, `test_wind.py`, `tests/integration/test_scoring_outputs.py` |
-| Central acquisition | done: one refresh for all users, no per-visitor fetching | the refresh endpoint; `tests/integration/test_refresh_components.py` |
-| Shared storage under the provider's licence | Open-Meteo CC BY 4.0 with the credit next to the data; Windy only with written authorisation | `docs/API_SETUP_REQUIRED.md` 2.1, 2.9 |
+| Vercel production build succeeds | offline build verified; no real deployment | `scripts/vercel-build-check.sh --offline`: `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29); CI runs it on every push |
+| Hosted database works | locally verified through PgBouncer in transaction mode (as Neon's pooler); Neon itself not tried | `tests/integration/test_pgbouncer_mode.py` (3 passed against a local PgBouncer on 2026-10-29; skipped in CI without a PgBouncer URL); a lean demo refresh through PgBouncer succeeded (202 transactions) |
+| Open-Meteo acquisition works | verified live | refreshes of 2026-10-28 and 29 through the endpoint: both components 125 weighted calls, a natural wave-only 00Z refresh 75 (section 50) |
+| Windy adapter implemented | implemented, tested with recorded and synthetic responses; no key | `tests/unit/test_windy_provider.py`, `tests/integration/test_windy_acquisition.py`, `tests/integration/test_refresh_fallback.py` |
+| Windy activation instructions complete | done | `docs/WINDY_API_SETUP.md` (every step of spec 6 checked by `tests/unit/test_windy_setup_doc.py`) |
+| Windy storage disabled without authorisation | done | `WINDY_STORAGE_AUTHORIZED`; `tests/unit/test_provider_manager.py`, `test_windy_provider.py`; the provider check reported `not_configured` with 0 requests |
+| All 50 spots configured | done | `data/surf_spots/`, seeded by `init-db` and the build (50 spots) |
+| Profiles contain sourced research | done (quoted claims only; "not documented" where no source says it) | `data/surf_spots/research_conditions.json`, `docs/surf_spot_research/` (50 + an index), `tests/unit/test_spot_research_docs.py`, `scripts/generate_spot_research_docs.py --check` exit 0 |
+| Scores generated; offshore scoring works | done | scoring 2.2.0; opposing-coastline tests in `tests/unit/test_scoring_conditions.py`; `test_surf_quality.py`, `test_wind.py`, `tests/integration/test_scoring_outputs.py` |
+| Central acquisition | done: one refresh for all users, no per-visitor fetching | the refresh endpoint; 1,000 simulated visitors caused no provider call and 9-12 database commits (section 50) |
+| Shared storage under the provider's licence | Open-Meteo CC BY 4.0 with the credit next to the data on every page and email (also /spots and the trip lists since review rounds 3-4); Windy only with written authorisation | `docs/API_SETUP_REQUIRED.md` 2.1, 2.9; `tests/integration/test_public_and_opportunity_api.py` (credits) |
 | Model update detection works | verified live (a natural wave-only refresh) and in tests | section 50; `tests/unit/test_sync_detect.py`, `test_open_meteo_components.py` |
-| Automatic processing works | the endpoint and its stand-ins are tested; the 5-minute schedule (QStash) is documented, not deployed | `tests/integration/test_refresh_components.py`, `test_daemonless_hosted.py`, `test_internal_cron.py`; docs/deploy-vercel.md step 7b |
-| Versioning works; reliable publication | done | `tests/integration/test_forecast_versions.py`, `test_refresh_components.py` (marker self-heal) |
-| Cache invalidation works | done in the app; the real CDN not verified | `tests/integration/test_forecast_serving.py`, `test_public_snapshot_cache.py` |
-| Active sessions detect updates; markers and charts update | done | `frontend/e2e/live-update.spec.ts` (a simulated run through the real backend, both projects), `live-update-mocked.spec.ts`, `tests/forecast-version.test.tsx` |
-| Stale forecasts identified; partial failures handled | done | `tests/integration/test_forecast_versions.py` (stale spots served from their previous run), `test_refresh_components.py` (retries back off); `frontend/e2e/map-markers.spec.ts`, `tests/freshness.test.tsx` |
+| Automatic processing works | the endpoint and its stand-ins are tested and ran through a 5-minute loop; the QStash schedule is documented, not deployed | `tests/integration/test_refresh_components.py`, `test_daemonless_hosted.py`, `test_internal_cron.py`; docs/deploy-vercel.md step 7b |
+| Versioning works; reliable publication | done | `tests/integration/test_forecast_versions.py`, `test_refresh_components.py` (marker self-heal); the local stack published 17 versions, always exactly one published |
+| Cache invalidation works | done in the app; the real CDN not verified | `tests/integration/test_forecast_serving.py`, `test_public_snapshot_cache.py`, `test_public_load.py`; under load a new version reached every route 3.2 s after publication |
+| Active sessions detect updates; markers and charts update | done | `frontend/e2e/live-update.spec.ts` (spec 32 steps 1-12 through the real backend, both projects), `live-update-mocked.spec.ts`, `tests/forecast-version.test.tsx`; 16 of 16 page updates on the local stack |
+| Stale forecasts identified; partial failures handled | done | `tests/integration/test_forecast_versions.py` (stale spots served from their previous run), `test_refresh_components.py` (retries back off); `frontend/e2e/map-markers.spec.ts`, `tests/freshness.test.tsx`, `tests/trip-freshness.test.tsx` |
 | New swell events detected; searches matched | done | `tests/integration/test_pipeline.py`, `frontend/e2e/full-flow.spec.ts` |
-| Flight API with real credentials or a clearly labelled test adapter | test adapter ("Mock fares"); Duffel and Amadeus adapters tested with recorded responses, no credentials | `tests/unit/test_flight_providers.py` (and the flight tests), the UI's mock labels |
+| Flight API with real credentials or a clearly labelled test adapter | test adapter ("Mock fares"); Duffel and Amadeus adapters tested with recorded responses, no credentials | `tests/unit/test_flight_providers.py`, the UI's mock labels |
 | Flight requests targeted and deduplicated | done | `tests/integration/test_flight_targeting.py`, `tests/unit/test_flight_targeting.py` |
-| Email verification works; notifications work | done (Mailpit in the local stack: 23 messages on 2026-10-29) | `tests/integration/test_auth_api.py`, `test_email_delivery.py`, `test_free_tier_egress.py` |
-| API usage monitorable | done | `/admin/freshness` usage group, `quota_near` alerts; `tests/integration/test_admin_freshness.py` |
-| Frontend simple and responsive | done | the Pixel 7 project of the e2e suite |
+| Email verification works; notifications work | done (Mailpit in the local stack: 23 messages on 2026-10-29) | `tests/integration/test_auth_api.py`, `test_email_delivery.py`, `test_service_credentials.py` (SMTP reply codes) |
+| API usage monitorable | done | `/admin/freshness` usage group, `quota_near` alerts; `tests/integration/test_admin_freshness.py`; `python -m app.cli engine budget` |
+| Frontend simple and responsive | done | the always-visible summary and "Why this rating?" (`e2e/spot-summary.spec.ts`), the Pixel 7 project of the e2e suite |
 | Tests pass | yes | section 49 |
-| README updated | done | README A, C, E.7, F.2, M |
-| Unverified integrations and limitations documented | done | section 51, README M |
+| README updated | done | README A, B, E (local development and Vercel), F.2 (weather setup and automatic updates), I (flight API, email), J, K, L, M; every CLI command and script it names is checked by `tests/unit/test_readme_commands.py` |
+| Unverified integrations and limitations documented | done | section 51, README M, docs/architecture_audit.md 8.5 |
 
 ## 48. Final deliverables (spec section 37)
 
-| # | Deliverable | Where |
-|---|---|---|
-| 1 | Architecture changes | section 46; docs/architecture_audit.md section 8 |
-| 2 | Files created and modified | docs/architecture_audit.md 8.2 (per package) |
-| 3 | Vercel configuration | `vercel.json`, `.vercelignore`, `Containerfile`, `backend/app/core/profiles.py`; docs/deploy-vercel.md |
-| 4 | Open-Meteo integration | `backend/app/services/forecasts/open_meteo.py` |
-| 5 | Windy ready for credentials | `backend/app/services/forecasts/windy.py`, `provider_manager.py`; docs/WINDY_API_SETUP.md |
-| 6 | Source and licensing configuration | `WEATHER_PROVIDER`, `WINDY_STORAGE_AUTHORIZED`, `COMMERCIAL_USE` (core/config.py); attribution in every forecast payload |
-| 7 | Schema and migrations | `backend/alembic/versions/0009_forecast_versions.py`, `backend/app/models/version.py` |
-| 8 | Fifty spot research profiles | `data/surf_spots/research_conditions.json`, `docs/surf_spot_research/` |
-| 9 | Scoring engine | `backend/app/services/surf_quality/` (scoring 2.2.0); docs/SURF_SCORING.md |
-| 10 | Model-update detection | `backend/app/services/sync/detect.py`, `forecasts/carry.py` |
-| 11 | Centralised refresh | `backend/app/api/internal.py`, `services/sync/orchestrator.py`, `refresh.py`, `standin.py` |
-| 12 | Versioning and publication | `backend/app/services/forecasts/versions.py`, `serving.py`, `services/sync/publish.py` |
-| 13 | Frontend live updates | `frontend/hooks/use-forecast-version.ts`, `components/forecast-updated.tsx` |
-| 14 | Map and chart integration | `frontend/app/map/page.tsx`, `components/map/`, `components/forecast/` |
-| 15 | Personalised flights | `backend/app/services/flights/` (service.py, budget.py, airports.py); docs/MATCHING_AND_FLIGHTS.md |
-| 16 | Email notifications | `backend/app/services/notifications/` |
-| 17 | Freshness monitoring | `backend/app/services/admin_freshness.py`, `frontend/app/admin/freshness/` |
-| 18 | API usage reporting | `backend/app/services/usage.py`; the dashboard's usage group |
-| 19 | Test results | section 49 |
-| 20 | Deployment and setup instructions | README E.7 and F.2, docs/deploy-vercel.md, docs/API_SETUP_REQUIRED.md |
-| 21 | Known limitations and unresolved external dependencies | section 51 and README M |
+**1. Summary of architecture changes.** Section 46; the decisions as built with their
+reasons and consequences in docs/decisions.md ADR-038 to ADR-053 and
+docs/architecture_audit.md 8.1.
+
+**2. Files created and modified.** `git diff --stat 18a5bee` on the tree of this
+documentation pass: <!-- diffstat -->359 files changed (150 added, 209 modified), 90,223 insertions, 3,830 deletions<!-- /diffstat -->. By area:
+
+<!-- diffarea -->
+| Area | Added | Modified | Lines added | Lines removed |
+|---|---|---|---|---|
+| `backend/app` | 20 | 71 | 13,451 | 1,040 |
+| `backend/alembic` | 1 | 0 | 162 | 0 |
+| `backend/tests` | 36 | 44 | 13,541 | 232 |
+| frontend (app, components, hooks, lib) | 19 | 45 | 4,483 | 421 |
+| frontend/tests and frontend/e2e | 17 | 20 | 4,411 | 133 |
+| frontend/types (generated OpenAPI types) | 0 | 3 | 5,598 | 1,139 |
+| `data` | 1 | 1 | 28,332 | 0 |
+| `docs/surf_spot_research` | 51 | 0 | 12,762 | 0 |
+| docs (other) | 2 | 14 | 4,954 | 630 |
+| `scripts` | 3 | 2 | 1,742 | 6 |
+| configuration and CI | 0 | 9 | 787 | 229 |
+<!-- /diffarea -->
+
+The per-package lists of every file (foundation, the ten packages, the integration and each
+review round) are in docs/architecture_audit.md 8.2.
+
+**3. Vercel configuration.** `vercel.json`: services `web` (`frontend/`, Next.js) and `api`
+(`backend/`, FastAPI, entrypoint `app.main:app`, build command
+`python -m app.cli migrate --on-build`, `maxDuration` 300 s, tests and ML models left out of
+the bundle), `/api/(.*)` routed to `api`, the optional daemon `sync` (the repo-root
+`Containerfile`, 1 instance in `iad1`, 2Gi, 600 s shutdown grace) and the daily cron
+`/api/internal/cron/daily` at `23 7 * * *`. The 5-minute refresh schedule lives in QStash on
+Hobby (a sub-daily Vercel Cron fails a Hobby deploy) or as a second cron entry on Pro.
+`.vercelignore`; the hosted profile (`backend/app/core/profiles.py`, `profile_env("hosted",
+"free-database")`), equal to `.env.vercel.example` and the block of docs/deploy-vercel.md
+step 5 (tests enforce it). Verified by the offline `vercel build` (`RESULT: ok`).
+
+**4. Open-Meteo integration.** `backend/app/services/forecasts/open_meteo.py`: the Marine API
+(`ncep_gfswave016`, else `ncep_gfswave025`) and the Forecast API (`gfs_global`) for all 50
+spots in one batched request per model; run detection from `meta.json` per domain
+(availability time + 10 minutes, monotonic, per component, `unknown` on a timeout);
+component-only fetches; only the models' native steps stored; the nearest sea cell
+(`cell_selection=sea`); a weighted-call budget charged in Redis before each request
+(`quota.py`); the commercial `customer-*` hosts with `OPEN_METEO_API_KEY`; the CC BY 4.0
+credit and links with the data. Verified live (section 50); unit and integration tests with
+recorded responses.
+
+**5. Windy ready for credentials.** `backend/app/services/forecasts/windy.py` (gfs + gfsWave,
+u/v to speed and direction FROM, testing-key refusal, invalid-key detection, sentinel
+fingerprint detection, a daily counter), `provider_manager.py` (selection, health,
+fallback), `python -m app.cli forecast provider-check`. Activation is configuration only:
+`WINDY_API_KEY`, `WINDY_STORAGE_AUTHORIZED=true` after a written licence, `WEATHER_PROVIDER`
+`auto` or `windy`, redeploy, health check, test refresh, verify the version
+(docs/WINDY_API_SETUP.md).
+
+**6. Source and licensing configuration.** `WEATHER_PROVIDER`, `FORECAST_PROVIDERS`
+(advanced), `WINDY_STORAGE_AUTHORIZED` (a key is not a licence), `OPEN_METEO_COMMERCIAL`
+(alias `COMMERCIAL_USE`; production refuses `true` without a key); the credits per provider
+in every forecast payload (`attribution_links`, the version's `attribution`) and on every
+page and email that shows derived values. Every setting with its default:
+docs/API_SETUP_REQUIRED.md section 6.
+
+**7. Schema and migrations.** Alembic `0009_forecast_versions`: the `forecast_versions`
+table (status, provider, components and per-spot runs as JSONB, counts, the detection to
+publication times, a unique partial index for one published version) and
+`saved_searches.alert_lead_min_days` / `alert_lead_max_days` with a CHECK; the model in
+`backend/app/models/version.py`. Verified: upgrade, downgrade and `alembic check` on an
+empty database; an upgrade of a copy of a real database kept every row count and the
+forecast rows' checksum.
+
+**8. Fifty spot research profiles.** `data/surf_spots/research_conditions.json` (the
+section 17 fields, each value citing claims of the existing evidence: 468 sources, 1,730
+claims) and `docs/surf_spot_research/<slug>.md` for the 50 spots plus an index, generated by
+`scripts/generate_spot_research_docs.py`; "not documented" where no source says it; research
+confidence 35 Moderate and 15 Low, none High.
+
+**9. Scoring engine.** `backend/app/services/surf_quality/` at version 2.2.0: deterministic,
+per-spot, 0-100 with components for direction, height, period, wind and tide; per hour the
+favourable and unfavourable reasons, the offshore class, the breaking height, research
+confidence and forecast confidence (a labelled heuristic) kept apart; weights configurable
+(`SCORING_WEIGHTS_JSON`); docs/SURF_SCORING.md. No ML in the default path.
+
+**10. Model-update detection.** `backend/app/services/sync/detect.py` (per-component plans:
+new, waiting, current, failed, unknown), `forecasts/open_meteo.py` (`meta.json`),
+`forecasts/windy.py` (fingerprints). A check with nothing new reads no forecast and makes no
+database query.
+
+**11. Centralised refresh.** `backend/app/api/internal.py` (the refresh endpoint and the
+daily cron), `services/sync/orchestrator.py` (`refresh_check`, the lease, the stages),
+`refresh.py`, `forecasts/carry.py` (carry-forward, validation), `forecasts/ingestion.py`,
+`sync/standin.py` (the daemon's work without a daemon). Partial failures publish the good
+spots and retry the rest (5, 15, 45 minutes).
+
+**12. Versioning and publication.** `backend/app/services/forecasts/versions.py` (stage,
+publish in one transaction, serving runs, staleness, the version payload and Redis marker),
+`serving.py` (published-version reads), `services/sync/publish.py`,
+`services/public_cache.py` (snapshots per version).
+
+**13. Frontend live updates.** `frontend/hooks/use-forecast-version.ts` (poll while visible,
+versioned query keys, the hourly re-read, the seen beacon), `components/forecast-updated.tsx`
+(the label and the announcement), `hooks/queries.ts`, `lib/api.ts`. The critical live-update
+test, `frontend/e2e/live-update.spec.ts`, runs spec 32 steps 1-12 through the real backend.
+
+**14. Map and chart integration.** `frontend/app/map/page.tsx` and `components/map/`
+(quality-coloured markers with wind and swell arrows and height labels, consistent FROM/TO
+conventions, bounded navigation and date-line wrapping, "Spot forecasts only" when the
+ocean layers are off), `components/forecast/` and `app/spots/[slug]/` (the always-visible
+summary, "Why this rating?", best windows, tide suitability, metres or feet, separate
+confidences, stale labels with the last update and the reason).
+
+**15. Personalised flights.** `backend/app/services/flights/` (`service.py`, `budget.py`,
+`airports.py`), `services/matching/`; per-search lead times in the wizard
+(`frontend/components/search/`); docs/MATCHING_AND_FLIGHTS.md. Searches only when justified,
+one shared cache per trip, per-user and per-provider daily budgets, all origins, up to 3
+layovers, operating carriers shown, gateway fallback for small regional airports.
+
+**16. Email notifications.** `backend/app/services/notifications/`: verification, password
+reset and alert emails with the fields of spec 29, de-duplication per user, swell, channel,
+kind and fingerprint, follow-ups only on material changes, an idempotency key per message,
+retries of temporary failures (SMTP reply codes classified), one-click unsubscribe,
+preferences re-checked at send time; admin alerts only to verified admins.
+
+**17. Freshness monitoring.** `backend/app/services/admin_freshness.py`, `api/admin.py`,
+`frontend/app/admin/freshness/` (every spec 16 metric), the admin problems in
+`services/health.py` and their emails in `notifications/ops_alerts.py`; the public `/status`
+and `/api/health/data` stay. docs/operations.md section 3.
+
+**18. API usage reporting.** `backend/app/services/usage.py` and `forecasts/quota.py`
+(`usage_snapshot`): Open-Meteo weighted calls per minute, hour, day and month against their
+limits, Windy requests today, flight searches today per provider and per user, emails
+today; on `/admin/freshness` and through `quota_near`; `python -m app.cli engine budget`
+prints the Open-Meteo budget.
+
+**19. Test results.** Section 49.
+
+**20. Deployment and setup instructions.** README E (local development), E.7 and L
+(Vercel), F.2 (weather setup and automatic updates), I (flight API, email);
+docs/deploy-vercel.md (step by step, the scheduler, production checks);
+docs/API_SETUP_REQUIRED.md (every external service, the database and Vercel sections, every
+setting); docs/WINDY_API_SETUP.md; docs/local-vercel-stack.md; docs/operations.md.
+
+**21. Known limitations and unresolved external dependencies.** Section 51 and
+docs/architecture_audit.md 8.5; README M.
 
 ## 49. Test results
 
@@ -1283,6 +1410,17 @@ its unit test is split into those two cases (review r3-spec-SPEC-6); the Vercel 
 map check with the ocean layers off (`MAP_FIELDS_ENABLED=false`, the stack's default)
 expects the "Spot forecasts only" note instead of the outage notice (review
 r4-spec-R4-SPEC-2; the smoke was not run in review round 4).
+
+**The final documentation pass** (2026-10-30, on top of e29141a; documentation, the two env
+examples, one new and one extended unit test, no application code) re-ran: `ruff format
+--check .` and `ruff check .` (425 files), `mypy app` (219 files, no issues), `pytest
+tests/unit` with `LEAN_PYTHON` (2,917 passed, 0 skipped, 93.5 s: the 15 tests of the new
+`tests/unit/test_readme_commands.py` and 2 new ones in `test_api_setup_doc.py` included),
+the 117 doc-reading unit tests, `docker compose config -q` with `.env.example` and with
+`.env.vercel.example`, `scripts/generate_spot_research_docs.py --check` (exit 0) and
+`scripts/measure_refresh_egress.py` (docs/sync.md, "Measured (2.0)"). The integration
+suite, Vitest, the e2e suite and the offline Vercel build were not re-run: none of them reads
+a file this pass changed.
 
 ## 50. Measurements
 
@@ -1344,3 +1482,14 @@ on Vercel, Neon or Upstash). The main figures:
   publication, open pages measured p50 13.8 s without a CDN.
 * **Hobby is non-commercial** (Vercel and the free Open-Meteo API); a paywall needs Vercel
   Pro and an Open-Meteo plan first (section 44).
+* **A timing bound on a shared machine**: `frontend/e2e/map-performance.spec.ts` failed once
+  in review round 3 (a frame-time p95 of 6.5 ms against its 5 ms bound) and passed in the
+  re-run on the same commit; no map code had changed.
+* **A setting nothing reads**: `FORECAST_DAILY_REQUEST_QUOTA` (5000) is still declared in
+  `Settings` but no code reads it since the per-provider budgets (`OPEN_METEO_CALLS_*`,
+  `WINDY_DAILY_REQUEST_LIMIT`) replaced it (found in the documentation pass; documented in
+  docs/API_SETUP_REQUIRED.md section 6, not removed).
+* **Owner steps** before production: the refresh schedule (docs/deploy-vercel.md step 7b),
+  `MAP_FIELDS_ENABLED=false` without the daemon, a verified email domain, Duffel's written
+  confirmation before real fares, Windy's written licence and logo before Windy data; the
+  full list is in docs/architecture_audit.md 8.5.

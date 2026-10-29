@@ -634,6 +634,14 @@ only the spot providers, and the version marker is written after `match`):
   to the source run's); 23.3 s wall, 9.2 CPU s. The refresh check's Redis record named the
   unknown component with its error.
 
+**Documentation pass, 2026-10-30** (same sandbox, on the final tree, demo provider):
+`backend/.venv/bin/python scripts/measure_refresh_egress.py --redis-url
+redis://localhost:6379/12 --database <scratch>` took 48 s in all: first refresh (both
+components) 13.7 s wall / 11.8 CPU s, 6.32 MB database to app and 56.53 MB app to database,
+42 Redis commands; wave-only 13.1 s / 11.0 CPU s, 7.31 MB; atmosphere-only 13.5 s / 10.8
+CPU s, 7.51 MB; the checks with nothing new 0 database bytes and 4 Redis commands each. The
+same as the deployment verifier's 6.29, 7.26 and 7.45 MB of 2026-10-29.
+
 **Monthly Function CPU (extrapolation, not a measurement).** Vercel Hobby includes 4
 Active CPU-hours of Functions a month (https://vercel.com/docs/plans/hobby, read
 2026-10-27). With a 5-minute QStash schedule (8,640 checks a month at about 0.02 CPU s, the

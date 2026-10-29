@@ -84,6 +84,8 @@ calibrated).
 
 ## ADR-007 An immutable prediction archive outside forecast retention
 
+**Status (Swell 2.0).** Kept but off by default: `PREDICTION_ARCHIVE_ENABLED=false`, on in
+the full-retention profile (ADR-042).
 **Context.** Forecast runs are deleted after `RETENTION_FORECAST_DAYS`; what was forecast at a
 given lead cannot be reconstructed afterwards.
 **Decision.** After each scoring job the authoritative run is copied, 3-hourly to 240 h, into
@@ -464,6 +466,10 @@ deploy.
 
 ## ADR-022 (D2) The background pipeline is one long-lived process, a Vercel Daemon
 
+**Status (Swell 2.0).** Superseded for the spot forecasts by ADR-045: the refresh runs in the
+API function, called by a scheduler, and the daemon is optional (map layers only). Vercel
+cut the Hobby daemon quota to 5 Active CPU-hours a month (https://vercel.com/docs/daemons/limits,
+read 2026-10-27), so the 4.4-7.9 CPU-hours below would be 88-158 % of it.
 **Context.** Hobby cron runs once a day; Functions share 4 Active CPU-hours with the API and
 cannot hold the data libraries; GitHub's terms rule out a scheduled production worker.
 **Decision.** `python -m app.cli sync daemon` from the repo-root `Containerfile`, one
@@ -482,6 +488,10 @@ Hobby quota; extrapolated from this sandbox, docs/sync.md), against the proposal
 
 ## ADR-023 (D3) Syncs are event-driven by provider metadata and published together
 
+**Status (Swell 2.0).** Amended by ADR-043 and ADR-044: the wave and the atmosphere are
+refreshed separately (no 90-minute coalescing across them, `SYNC_COALESCE_MINUTES` 0), each
+refresh publishes a forecast version, and the free-database profile now triggers on every
+new spot run (`SYNC_TRIGGER_SOURCES=spots`).
 **Context.** "All of the weather data should be pulled when the forecast updates."
 **Decision.** Every `SYNC_CHECK_MINUTES` (10) the runner reads only metadata (Open-Meteo
 `meta.json`, NODD `.idx` HEADs); a newer run than the stored one starts one coordinated,
@@ -715,3 +725,270 @@ validation), so only a visitor's own browser was exposed. By the same rule, zod 
 high or critical advisory and one moderate one, fast-uri below 3.1.9 (GHSA-w74x-v6f9-j3xg,
 GHSA-xhq7-xmqj-769h, GHSA-wjr9-j795-jxcr, GHSA-333x-w4r6-6crp; 3.1.9 was published
 2026-10-19), a dependency of ajv under @hookform/resolvers; not fixed in this review.
+
+# Swell Travel Agent 2.0 (2026-10): forecasts that follow the models, versions, targeted flights
+
+The owner's master prompt of 2026-10-26 (spec sections 1-37). The design proposed decisions
+D1-D16 (docs/architecture_audit.md, section 4, with the alternatives and costs considered);
+they are recorded here as built, after integration and four review rounds (2026-10-29).
+Status, context, decision and consequences for each; what was measured is in
+docs/UPGRADE_REPORT.md, sections 49-50, and docs/architecture_audit.md, section 8.
+
+## ADR-038 (D1) Keep FastAPI, SQLAlchemy 2, Alembic, Neon, Upstash and the existing auth
+
+**Status.** Accepted, built.
+**Context.** The spec prefers Next.js server code but says not to migrate unnecessarily.
+The backend is about 54k lines of Python, much of it numeric, with 41k lines of tests;
+Vercel deploys FastAPI as one Python function in Services mode (Python generally available
+on Vercel since 2026-10-15).
+**Decision.** No migration. The spec's TypeScript layout (`lib/weather/providers/...`) maps
+to `backend/app/services/forecasts/*` (docs/architecture_audit.md, 4.11). Anything the API
+or the refresh path imports stays lean (no pandas, scikit-learn, scipy, pyarrow, joblib or
+ecCodes at module level).
+**Consequences.** The API function measured 128.3 MiB of Vercel's 500 MB Python limit in the
+offline build, with `maxDuration` 300 s; a cold `import app.main` took 1.47-1.80 s in a lean
+install; `tests/unit/test_lean_imports.py` (32 tests with `LEAN_PYTHON`) runs a demo
+spot-only refresh in the lean install. Vercel Services is still a Beta.
+
+## ADR-039 (D2) One weather provider, chosen by WEATHER_PROVIDER
+
+**Status.** Accepted, built.
+**Context.** Spec section 5: Windy preferred once usable, Open-Meteo now and as fallback,
+both behind one interface, configured by environment only.
+**Decision.** `WEATHER_PROVIDER` = `auto` (default) / `open_meteo` / `windy` / `demo`.
+`auto` selects Windy only when `WINDY_API_KEY` is set **and** `WINDY_STORAGE_AUTHORIZED=true`,
+else Open-Meteo; production refuses `windy` while it is not eligible. `FORECAST_PROVIDERS`
+stays as an advanced explicit override. `.env.example`, Docker Compose and the tests set
+`demo`; the hosted profile sets `auto`. `python -m app.cli forecast provider-check` prints
+the selection, its reasons and a live health check, and stores nothing.
+**Consequences.** Without a Windy licence `auto` stays on Open-Meteo, by design. Measured:
+the provider check with Windy unconfigured reported `not_configured` with 0 requests; with
+Open-Meteo it read one `meta.json`.
+
+## ADR-040 (D3) Windy only with a written storage licence; testing data never
+
+**Status.** Accepted, built; not exercised with a real key.
+**Context.** Windy's standard terms forbid storing the data, derived databases and
+redistribution; the Testing tier "Returns randomly shuffled and slightly modified data"; the
+Point Forecast response has no model-run field and Windy documents no webhook or metadata
+endpoint (https://api.windy.com/point-forecast/docs, read 2026-10-27).
+**Decision.** `WINDY_STORAGE_AUTHORIZED` gates every store, score and publication of Windy
+data. Every response is checked for the testing warning; testing data fail the refresh with
+`windy_testing_key` and are never stored. One `gfs` and one `gfsWave` request per spot (100
+for a full refresh of 50 spots, 50 for one component). New runs are found by a per-model
+sentinel fingerprint every `WINDY_CHECK_MINUTES` inside each cycle's expected window; run
+times are labelled `estimated`. A daily counter (`WINDY_DAILY_REQUEST_LIMIT`, reset 00:00
+UTC). Attribution "Contains data from the Windy database"; the logo is an owner step.
+**Consequences.** Activation is configuration only (docs/WINDY_API_SETUP.md). Open: Windy's
+real delay after a cycle, whether paid responses are deterministic (fingerprints need it),
+the body of a quota error, the price of a storage licence.
+
+## ADR-041 (D4) A provider manager with health checks and a runtime fallback
+
+**Status.** Accepted, built.
+**Context.** Spec section 35.4: Open-Meteo is the fallback.
+**Decision.** `provider_manager.py`: `active_provider()`, `health_check()`, `fallback_for()`.
+When Windy is primary and a refresh fails with a credential, testing-key, quota or
+availability error, the same refresh runs on Open-Meteo at once; the version records
+`provider` `open_meteo` and `fallback_from` `windy`; the fallback holds 60 minutes (a quota
+until 00:00 UTC); 3 transient failures in a row count as unavailable. One primary provider at
+a time, no cross-referencing.
+**Consequences.** Consecutive versions can come from different providers with different
+steps (Windy 3-hourly, GFS hourly to 120 h); each version names its provider and the admins
+get `provider_fallback`. Tested with recorded and synthetic responses
+(`tests/integration/test_refresh_fallback.py`).
+
+## ADR-042 (D5) One model family by default; the rest kept but off; 10 days
+
+**Status.** Accepted, built.
+**Context.** Spec section 2: "Do NOT ... repeatedly cross-reference numerous weather
+providers"; non-negotiable 8: a rolling 10-day horizon.
+**Decision.** Every profile uses one family: Open-Meteo NOAA GFS + GFS-Wave. Kept and
+switchable, off by default: the ECMWF family and the blend, GEFS-Wave, the direct NOAA and
+ECMWF GRIB providers, ML corrections (`ML_CORRECTIONS_ENABLED=false`) and the prediction
+archive (`PREDICTION_ARCHIVE_ENABLED=false`). `FORECAST_DAYS` 10 (at most 16). No code was
+deleted.
+**Consequences.** Measured live: 125 weighted calls for a refresh of both components and 75
+for a wave-only refresh (Upgrade 3's two-family schedule used about 820 a day; 2.0 about
+500-650, arithmetic). Forecast confidence loses the independent-family disagreement input.
+With the blend switched on, the family-level syncs of Upgrade 4 apply instead of ADR-043.
+
+## ADR-043 (D6) Wave and atmosphere refresh independently; the other is carried
+
+**Status.** Accepted, built; revised in review rounds 1-3.
+**Context.** Spec section 10: a new wind run must update the wind and keep the waves with
+their original model time. GFS-Wave and the two GFS atmosphere domains were measured
+46-107 minutes apart for one cycle.
+**Decision.** Each spot source has two components with their own run keys, availability and
+detection state; a component is due when one of its domains advanced (monotonically: a
+lagging server never takes the site back) and is servable. A refresh fetches only the due
+component and carries the other from the spot's served run in the database
+(`carry.carry_component`), with its own run time; an hour the carried run lacks is deleted,
+never published half filled; every spot is validated (`FORECAST_MIN_VALID_FRACTION` 0.8,
+physical ranges). Scores are recomputed for the whole new run.
+**Consequences.** When a spot's served run ends more than 3 h before the provider's horizon
+the carried component is fetched again **from the same run**, so the 10-day horizon keeps
+rolling: a deliberate trade-off against spec section 8 ("no queries for unchanged runs"),
+on about one or two refreshes a day (up to about 150 weighted calls a day). That refetch is
+best effort: a failure never holds back the due component (review r3). Measured live: a
+natural wave-only refresh of the 00Z GFS-Wave run kept the wind with its 18Z time. An
+atmosphere-only refresh was never observed live (Open-Meteo's servers disagreed about the
+GFS 0.13 run for over 36 minutes; three refreshes skipped it safely).
+
+## ADR-044 (D7) Versioned publication: stage, then publish in one transaction
+
+**Status.** Accepted, built.
+**Context.** Spec section 11: a unique id per published forecast, never in-progress data in
+the published snapshot. Before 2.0, spot pages could serve runs that were never published.
+**Decision.** Table `forecast_versions` (migration 0009): `staging`, `published`,
+`superseded`, `failed`; per-spot `spot_runs`, per-component `components` with each model run,
+counts and the detection-to-publication times. A refresh stages a version after
+acquisition, scoring and validation and publishes it in one transaction under an advisory
+lock (the previous one superseded); a unique partial index allows one published version; a
+version with zero updated spots is refused. Public reads serve only the published version
+(`versions.serving_runs`); before the first version the Upgrade 4 selection is used. Prune
+keeps every run the published and the previous published version reference.
+**Consequences.** On the local Vercel-style stack 17 versions were published with always
+exactly one published. A run that dies between publication and the Redis marker rewrites
+the marker at the next sync (review r1).
+
+## ADR-045 (D8) The refresh runs in the API function, called by a scheduler; the daemon is optional
+
+**Status.** Accepted, built; the scheduler itself not deployed (no account).
+**Context.** Vercel Hobby cron runs once a day (a sub-daily expression fails the
+deployment); the Hobby daemon quota fell to 5 Active CPU-hours a month, below the Upgrade 4
+estimate of 4.4-7.9; Daemons are a production-only Public Beta; spec section 13 prefers
+scheduler → secure endpoint (https://vercel.com/docs/cron-jobs/usage-and-pricing,
+https://vercel.com/docs/daemons/limits, read 2026-10-27).
+**Decision.** `GET|POST /api/internal/refresh` (Bearer `CRON_SECRET`, constant-time compare,
+404 without the secret): the kill switch `FORECAST_REFRESH_ENABLED`, the Postgres lease
+(`busy` answers 200), a free metadata plan and, when due, a spot-only sync inside the
+function's 300 s. Called every 5 minutes by Upstash QStash on Hobby (288 of the free 1,000
+messages a day) or a Vercel Cron entry on Pro; the daily cron runs one more check as a
+backstop. The daemon (`SYNC_DAEMON_KINDS=map`) refreshes only the optional map layers.
+Without it, `app/services/sync/standin.py` runs its other work: the refresh endpoint takes
+the API's kicks, due email retries and the hourly data-health check; the daily cron runs the
+overdue periodic jobs; set `MAP_FIELDS_ENABLED=false`. The api build command migrates and
+seeds the reference data.
+**Consequences.** Measured outside Vercel: 401 without or with a wrong token, two concurrent
+calls gave one `busy` (71 ms) and one success; a live refresh of both components 38.7 s wall
+(12.1 s of refresh); a check with nothing new 1.2-1.7 s. Not verified: the QStash schedule,
+cron-job.org (it closes the connection after 30 s), whether Vercel's api build can read
+`../data` (a build that cannot fails on an empty database), and a silent scheduler is
+noticed without the daemon only by the daily cron (up to about 25 hours).
+
+## ADR-046 (D9) Partial failures: publish the good spots, keep and retry the others
+
+**Status.** Accepted, built.
+**Context.** Spec section 14: 47 of 50 spots succeed, 3 fail.
+**Decision.** A spot whose data failed keeps its previous run in the new version, `stale`
+with its redacted error; the sync is `partial`; only those spots are retried, 5, 15 and 45
+minutes later, at most `SYNC_MAX_ATTEMPTS`; a newer run supersedes the retry. A whole
+component that fails publishes nothing.
+**Consequences.** Open-Meteo answers all 50 spots in one request, so a failed request fails
+every spot and becomes a component retry. A failed request's responses and weighted calls
+are still counted in the run's stats (review r4).
+
+## ADR-047 (D10) Staleness: the model's interval plus a configurable grace
+
+**Status.** Accepted, built.
+**Context.** Spec sections 5 and 14: a configurable threshold, "Forecast last updated 7
+hours ago", never stale shown as current.
+**Decision.** A spot is stale when a component is older than its model's update interval
+(Open-Meteo's `update_interval_seconds`, 6 h for GFS; Windy 6 h) plus
+`FORECAST_STALE_THRESHOLD_MINUTES` (360; per model `FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL`),
+or when its latest refresh failed while other spots updated. The per-source run staleness of
+ADR-015 stays for the confidence cap and the alert pause.
+**Consequences.** Two separate rules, shown separately on the pages; an open tab re-reads the
+public data once an hour so staleness by age reaches it without a new version (review r1).
+
+## ADR-048 (D11) Live updates by polling a small, CDN-shared version endpoint
+
+**Status.** Accepted, built; the CDN not verified.
+**Context.** Spec section 12: open pages update by themselves within about 60 s of a
+publication; a version-check endpoint is acceptable. WebSockets on Vercel close at the
+function's maximum duration (300 s on Hobby).
+**Decision.** `GET /api/forecasts/version` answers from Redis or a 5-second memo (one
+database read re-seeds a missing marker), CDN `s-maxage` 15. A visible tab polls it every 20
+s (`NEXT_PUBLIC_FORECAST_VERSION_POLL_MS`) and at once when it becomes visible; a new id
+re-reads the public queries under `?v=<version_id>` URLs, keeps the selected spot and time,
+updates "Forecast updated hh:mm" and announces it. A request naming another version answers
+`no-store`. Latency is measured by a beacon (`POST /api/forecasts/seen`) and shown to admins.
+**Consequences.** Measured: from publication to new data on screen p50 13.8 s on the local
+stack at the 20 s poll (16 samples, no CDN); 3.4-3.9 s in the e2e suite with a 2 s poll; at
+most one Redis GET per poll per process every 5 s. Upstash Free can be exceeded with steady
+traffic and a tab open in a CDN region all month (pay-as-you-go about $1 a month,
+arithmetic).
+
+## ADR-049 (D12) Admin freshness monitoring and admin-only alerts
+
+**Status.** Accepted, built.
+**Context.** Spec section 16; users must never get admin failure emails.
+**Decision.** `GET /api/admin/freshness` and `/admin/freshness` (admins only, never cached):
+provider and fallback, each component's model run, detection, acquisition, scoring and
+publication times, stale spots, failed requests, API usage (Open-Meteo, Windy, flights,
+emails), processing times, upstream-to-publication and publication-to-browser latency, the
+last refresh jobs. New admin problems: `model_run_late`, `forecast_stale_spots`,
+`refresh_failures`, `provider_credentials` (also refused flight and email keys),
+`provider_unavailable`, `provider_fallback`, `quota_near`, `refresh_scheduler_silent`,
+emailed to verified admins only; an email key the provider refuses is reported by SMS to
+admins who opted in, else on the dashboard. The public `/status` and `/api/health/data`
+stay.
+**Consequences.** Neon, Upstash and Vercel usage are still read in their own consoles.
+
+## ADR-050 (D13) Scoring 2.2.0: structured reasons, two separate confidences
+
+**Status.** Accepted, built.
+**Context.** Spec sections 18-20: deterministic, research-driven scoring; research and
+forecast confidence never combined.
+**Decision.** Each hour gains `favourable` / `unfavourable` reasons, `offshore_class`,
+`breaking_height` where defensible, `research_confidence`, `forecast_confidence` (a labelled
+heuristic) and `model_version`; weights configurable (`SCORING_WEIGHTS_JSON`); light onshore
+below about 8.6 km/h is capped at "workable"; the combined local confidence is removed from
+the API, the UI and alerts.
+**Consequences.** Opposing-coastline tests prove the same wind scores opposite at
+ocean-beach-sf and cloud-9. The weights remain reasoned defaults, not fitted (no nearshore
+observations).
+
+## ADR-051 (D14) Spot research documents generated from quoted claims only
+
+**Status.** Accepted, built.
+**Context.** Spec section 17: researched conditions per spot, no fabricated values.
+**Decision.** `data/surf_spots/research_conditions.json` holds the section 17 fields, each
+value citing claim ids of the existing evidence; `scripts/generate_spot_research_docs.py`
+writes `docs/surf_spot_research/<slug>.md` for all 50 spots; a field without a quote reads
+"not documented"; a unit test fails when a document is out of date.
+**Consequences.** Many fields read "not documented"; 15 spots are Low overall, none High
+(research methodology v1.2).
+
+## ADR-052 (D15) Targeted, deduplicated flight searches; per-search lead times
+
+**Status.** Accepted, built; real providers untested.
+**Context.** Spec sections 26-28: flights only when necessary, never every route for every
+user; short-notice markets first.
+**Decision.** Searches only for a new match, a material change, an explicit "Re-check
+flights" and right before an alert; no flight timer. One shared cache per trip until the
+earlier of `FLIGHT_CACHE_TTL_HOURS` and the first offer's expiry; `FLIGHT_USER_DAILY_QUOTA`
+(20) with round-robin across users; every origin's first-choice date within the per-match
+budget; up to 3 layovers honoured; per-search alert lead times (2-10 days by default) and a
+3-7 day short-notice boost. The labelled demo provider is the default; Duffel's agreement
+forbids metasearch use, so production needs its written confirmation; Amadeus is Enterprise
+only.
+**Consequences.** An unchanged forecast never searches again (tested). With Duffel and no
+orders, about $37.50 a month at the 300-a-day quota (arithmetic on its 1500:1 search fee).
+Small regional airports fall back to the spot's international gateway when they return no
+offers.
+
+## ADR-053 (D16) Cost: one provider, free checks, one-component refreshes
+
+**Status.** Accepted, built.
+**Context.** Spec section 30: minimal recurring cost, no production LLM calls.
+**Decision.** One provider, metadata-only detection, one-component refreshes, a 10-day
+horizon, spot-only refreshes in the function, version polling only while a tab is visible,
+deterministic scoring.
+**Consequences.** Measured unit costs: 125 / 75 weighted calls per refresh (about 5-6.5 % of
+Open-Meteo's free daily limit a day); 6.3-7.5 MB of database egress per demo refresh and 0
+bytes for a check with nothing new; 288 QStash messages a day. The monthly budgets in
+docs/API_SETUP_REQUIRED.md 1.4 are arithmetic on those, not measured on Vercel, Neon or
+Upstash. Hobby and the free Open-Meteo API are non-commercial: a paywall needs Vercel Pro and
+an Open-Meteo plan first.

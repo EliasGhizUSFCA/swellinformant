@@ -1373,11 +1373,13 @@ Further owner decisions raised by the audits, with the plan's default:
 
 ## 8. Implementation status
 
-Written after integration and the first review round (2026-10-29, branch `wf6/int`; the
-commits are on top of 18a5bee). Sections 1-7 above are the audit and the plan as they stood
-before the work; this section records what was built, where it differs from sections 4 and
-5, what was measured and the test results. The owner-facing summary, the Definition of Done
-and the deliverables are in docs/UPGRADE_REPORT.md, "Swell 2.0".
+Written after integration and kept up to date through four review rounds and the final
+documentation pass (2026-10-29 and 30, branch `wf6/int`; the commits are on top of 18a5bee).
+Sections 1-7 above are the audit and the plan as they stood before the work; this section
+records what was built (8.1, 8.2), what was measured (8.3), the test results (8.4) and what
+remains (8.5). The decisions as records: docs/decisions.md, ADR-038 to ADR-053. The
+owner-facing summary, the Definition of Done and the 21 deliverables are in
+docs/UPGRADE_REPORT.md, "Swell Travel Agent 2.0".
 
 ### 8.1 The decisions as built
 
@@ -1412,7 +1414,7 @@ report keep their own figures. No module, table or record was deleted.
 
 ### 8.2 Files created and modified, per package
 
-`git diff --stat 18a5bee..c85474f` (the code and documentation of the final review round): 356 files changed, 88649 insertions(+), 3687 deletions(-). Per package (the
+`git diff --stat 18a5bee..c85474f` (the code and documentation of the final review round): 356 files changed, 88649 insertions(+), 3687 deletions(-); with the final documentation pass: <!-- diffstat -->359 files changed (150 added, 209 modified), 90,223 insertions, 3,830 deletions<!-- /diffstat -->. Per package (the
 foundation commits, then each package's merge into `wf6/int`, then the integration and
 review fixes on `wf6/int`):
 
@@ -1486,6 +1488,11 @@ review fixes on `wf6/int`):
 * Added: `frontend/tests/spots-credits.test.tsx`
 * Modified: `README.md`, `backend/app/schemas/map_fields.py`, `backend/app/schemas/spots.py`, `backend/app/services/forecasts/ingestion.py`, `backend/app/services/health.py`, `backend/app/services/map_fields.py`, `backend/app/services/notifications/providers.py`, `backend/app/services/opportunity_views.py`, `backend/app/services/spot_views.py`, `backend/tests/integration/test_map_fields.py`, `backend/tests/integration/test_public_and_opportunity_api.py`, `backend/tests/integration/test_refresh_components.py`, `backend/tests/integration/test_service_credentials.py`, `docs/FORECAST_SOURCES.md`, `docs/UPGRADE_REPORT.md`, `docs/architecture_audit.md`, `docs/deploy-vercel.md`, `docs/local-vercel-stack.md`, `docs/map-layers.md`, `docs/operations.md`, `docs/sync.md`, `frontend/app/map/page.tsx`, `frontend/app/searches/[id]/page.tsx`, `frontend/app/spots/page.tsx`, `frontend/components/layout/site-footer.tsx`, `frontend/components/map/legend-drawer.tsx`, `frontend/components/opportunity-card.tsx`, `frontend/e2e/confidence.mock.ts`, `frontend/e2e/map-fields.mock.ts`, `frontend/e2e/map-layers.spec.ts`, `frontend/e2e/vercel-smoke.spec.ts`, `frontend/hooks/map-fields.ts`, `frontend/tests/map-colors.test.ts`, `frontend/tests/map-fields-hooks.test.tsx`, `frontend/tests/map-freshness.test.tsx`, `frontend/tests/map-legend.test.tsx`, `frontend/tests/trip-freshness.test.tsx`, `frontend/types/openapi.d.ts`, `frontend/types/openapi.json`
 
+**Final documentation pass on `wf6/int`: the README's spec-33 sections, the settings reference, the 2.0 decision records and deliverables** (1 added, 12 modified)
+
+* Added: `backend/tests/unit/test_readme_commands.py`
+* Modified: `.env.example`, `.env.vercel.example`, `README.md`, `backend/tests/unit/test_api_setup_doc.py`, `docs/API_SETUP_REQUIRED.md`, `docs/ARCHITECTURE.md`, `docs/UPGRADE_REPORT.md`, `docs/architecture_audit.md`, `docs/decisions.md`, `docs/deploy-vercel.md`, `docs/operations.md`, `docs/sync.md`
+
 ### 8.3 Measurements
 
 All on this development machine (4 vCPUs shared with other work, local PostgreSQL 16 and
@@ -1540,6 +1547,17 @@ map check with the ocean layers off (`MAP_FIELDS_ENABLED=false`, the stack's def
 expects the "Spot forecasts only" note instead of the outage notice (review
 r4-spec-R4-SPEC-2; the smoke was not run in review round 4).
 
+**The final documentation pass** (2026-10-30, on top of e29141a; documentation, the two env
+examples, one new and one extended unit test, no application code) re-ran: `ruff format
+--check .` and `ruff check .` (425 files), `mypy app` (219 files, no issues), `pytest
+tests/unit` with `LEAN_PYTHON` (2,917 passed, 0 skipped, 93.5 s: the 15 tests of the new
+`tests/unit/test_readme_commands.py` and 2 new ones in `test_api_setup_doc.py` included),
+the 117 doc-reading unit tests, `docker compose config -q` with `.env.example` and with
+`.env.vercel.example`, `scripts/generate_spot_research_docs.py --check` (exit 0) and
+`scripts/measure_refresh_egress.py` (docs/sync.md, "Measured (2.0)"). The integration
+suite, Vitest, the e2e suite and the offline Vercel build were not re-run: none of them reads
+a file this pass changed.
+
 The intermittent `test_free_tier_egress.py` narrow-reads failure seen during integration
 (integration notes: once in a full run, never alone) did not recur in two full integration runs with the diagnostic plugin on 2026-10-29 (637 and 638 passed). Its cause was found by
 analysis and proved with a deterministic reproduction: the alert candidate query had no
@@ -1550,3 +1568,74 @@ first. With the candidate rows answered in the opposite order, only
 observed failure (only the notifications differed). Alerts are now decided in
 `alerts.candidate_order`; `test_alerts_do_not_depend_on_the_database_row_order` fails without
 it.
+
+### 8.5 What remains
+
+Nothing below blocks a first deployment; each item says what would close it.
+
+**Needs a real deployment or an account (cannot be verified here)**
+
+* Vercel itself: no deployment was made. Unverified until the first one: the CDN's caching of
+  the versioned reads and of `/api/forecasts/version` (the publication-to-page latency was
+  measured without a CDN), Neon (only PgBouncer in transaction mode was tested), Neon's
+  suspend and wake and its CU-hour accounting, real Upstash command counts, the daemon's
+  build and start, and whether the api build (rooted at `backend/`) can read the
+  repository's `data/` for the build-time seed (a build that cannot fails on an empty
+  database, docs/deploy-vercel.md step 6).
+* The scheduler: the QStash schedule was never created (a 5-minute POST loop stood in for it);
+  cron-job.org is documented as unverified for refreshes longer than its 30 s.
+* Windy: no key. The activation, the testing-key refusal and the fallback are tested with
+  recorded and synthetic responses only; Windy's delay after a cycle, whether paid answers
+  are deterministic (the fingerprint detection needs it), the quota error's body and the
+  price of a storage licence are open (docs/WINDY_API_SETUP.md, "What is not verified yet").
+* Open-Meteo's commercial hosts (`OPEN_METEO_API_KEY`), Duffel, Amadeus Enterprise, Resend,
+  SendGrid and Twilio: mock-tested only. Email delivery is verified end to end with Mailpit.
+
+**Verified here only in part**
+
+* The local Vercel-style stack was last run before the review rounds (2026-10-29 01:35 UTC:
+  smoke 19 of 19 and 6 of 6); the three smoke checks added since and the smoke's changed
+  expectation for switched-off map layers were not run against it. Its daemon refreshes the
+  spots itself, so it does not test the daemon-less hosted path, which is covered by
+  `tests/integration/test_daemonless_hosted.py` and `test_hosted_first_deploy.py`.
+* A live atmosphere-only refresh was never observed (Open-Meteo's servers answered GFS 0.13
+  00Z and 18Z alternately for over 36 minutes; three syncs skipped it safely). Each such flap
+  costs a sync row, a lease and up to 13 s; waiting for a stable metadata answer (seen twice)
+  before starting a sync would avoid it (not built).
+* When GFS 0.13 and GFS 0.25 publish a cycle at different times, the atmosphere key changes
+  twice, which may cost two atmosphere refreshes per cycle (about 50 weighted calls each,
+  derived, not observed to completion).
+* The hosting budgets (docs/API_SETUP_REQUIRED.md 1.4) are arithmetic on unit costs measured
+  here; steady traffic with a tab open in a CDN region all month can pass Upstash Free's 500K
+  commands.
+
+**Known gaps in the code and the tests**
+
+* `backend/tests/integration/test_map_fields.py::test_a_fields_only_run_never_changes_spot_forecasts`
+  passes in the full integration run but fails alone (its control re-run publishes a new
+  forecast version, so `freshness.version_id` differs); the fix belongs to the test.
+* `frontend/e2e/map-performance.spec.ts` failed once on a shared machine (a frame-time p95 of
+  6.5 ms against its 5 ms bound) and passed in the re-run.
+* `FORECAST_DAILY_REQUEST_QUOTA` is declared in `Settings` but read by no code (the
+  per-provider budgets replaced it); documented as such in docs/API_SETUP_REQUIRED.md
+  section 6.
+* Optional follow-ups the integrator listed: `frontend/lib/forecast-fields.ts` readers take
+  `unknown` rather than the generated types (they tolerate hours scored before 2.2.0); the
+  admin dashboard's hook polls the version itself instead of the shared store;
+  `ComponentRun.update_interval_seconds` is filled only where the provider exposes it; there
+  is no `/api/spots/:id/quality` alias (per-step quality is in `/timeline`).
+* `npm audit --omit=dev`: one moderate advisory (fast-uri, ADR-037); the dev-only Vitest 3
+  advisories need Vitest 5.
+* The browser tests ran in Chromium and its Pixel 7 emulation only.
+
+**Owner steps**
+
+* Before production: decide whether the site is commercial (then Vercel Pro and an
+  Open-Meteo plan), create the refresh schedule (docs/deploy-vercel.md step 7b), and set
+  `MAP_FIELDS_ENABLED=false` when the daemon is not kept.
+* Windy: the written licence (storage, derived scoring, display to all visitors), then the
+  Windy logo next to the credit line.
+* Duffel: its written confirmation that this use is not "metasearch", before real fares.
+* A domain verified with the email provider before the site is publicised.
+* Scoring weights, breaking heights and both confidence classes stay reasoned defaults until
+  nearshore observations exist to fit or verify them.
