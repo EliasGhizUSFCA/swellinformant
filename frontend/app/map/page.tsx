@@ -56,7 +56,9 @@ const TABS_INSET = 64;
 const TOP_MARGIN = 8;
 
 export default function MapPage() {
-  const { data: spots = [], isLoading, isError } = useSpots();
+  // A failed background re-read (a new hour, a refocus) keeps the spots on screen: the
+  // notice is for a first load that failed.
+  const { data: spots = [], isLoading, isLoadingError: isError } = useSpots();
   const { data: user } = useMe();
   const [settings, updateMapSettings] = useMapSettings();
   // One height unit for the whole site (the spot charts too): this browser's choice, else the

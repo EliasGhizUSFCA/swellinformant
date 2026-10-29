@@ -13,7 +13,7 @@ import type { Conditions, RunMember, SwellEvent, SystemStatus } from "@/types/ap
 // the freshness labels. Nothing here describes a real forecast, model run or surf spot.
 
 const hooks = vi.hoisted(() => ({
-  events: { data: undefined as SwellEvent[] | undefined, isLoading: false, isError: false },
+  events: { data: undefined as SwellEvent[] | undefined, isLoading: false, isError: false, isLoadingError: false },
   status: { data: undefined as SystemStatus | undefined },
   map: { data: undefined as { range_end: string | null } | undefined },
   me: { data: undefined as { profile: { units: string } } | undefined },
@@ -154,7 +154,7 @@ function status(opts: { demo?: boolean; stale?: boolean; issuedH?: number } = {}
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
-  hooks.events = { data: [event()], isLoading: false, isError: false };
+  hooks.events = { data: [event()], isLoading: false, isError: false, isLoadingError: false };
   hooks.status = { data: status() };
   hooks.map = { data: undefined };
   hooks.me = { data: undefined };
@@ -173,7 +173,7 @@ describe("landing page freshness (LiveSwells)", () => {
 
   it("renders a stale run as out of date (and never live)", () => {
     hooks.status = { data: status({ stale: true, issuedH: 40 }) };
-    hooks.events = { data: [event({ stale: true })], isLoading: false, isError: false };
+    hooks.events = { data: [event({ stale: true })], isLoading: false, isError: false, isLoadingError: false };
     render(<LiveSwells />);
     const label = screen.getByTestId("forecast-freshness");
     expect(label).toHaveAttribute("data-freshness", "stale");
@@ -182,8 +182,19 @@ describe("landing page freshness (LiveSwells)", () => {
     expect(document.body.textContent).not.toMatch(/\blive\b/i);
   });
 
+  it("keeps the cards when a background re-read failed; the notice is for a failed first load (review r2 FE-3)", () => {
+    hooks.events = { data: [event()], isLoading: false, isError: true, isLoadingError: false };
+    render(<LiveSwells />);
+    expect(document.body.textContent).not.toContain("The forecast service is unavailable right now.");
+    expect(document.body.textContent).toContain("5–7 ft");
+    cleanup();
+    hooks.events = { data: undefined, isLoading: false, isError: true, isLoadingError: true };
+    render(<LiveSwells />);
+    expect(document.body.textContent).toContain("The forecast service is unavailable right now.");
+  });
+
   it("an event whose run went stale marks the panel out of date even before every source is stale", () => {
-    hooks.events = { data: [event({ stale: true })], isLoading: false, isError: false };
+    hooks.events = { data: [event({ stale: true })], isLoading: false, isError: false, isLoadingError: false };
     render(<LiveSwells />);
     expect(screen.getByTestId("forecast-freshness")).toHaveAttribute("data-freshness", "stale");
   });

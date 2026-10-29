@@ -42,7 +42,8 @@ function freshnessText(f: ForecastFreshness): string {
 
 /** Upcoming swell events from the forecast (public), shown on the landing page. */
 export function LiveSwells() {
-  const { data, isLoading, isError } = useEvents(4, 57);
+  // A failed background re-read keeps the cards: the notice is for a first load that failed.
+  const { data, isLoading, isLoadingError: isError } = useEvents(4, 57);
   const { data: status } = useSystemStatus();
   // The site-wide height unit (this browser's ft / m choice, else the account's, else feet).
   const { data: user } = useMe();

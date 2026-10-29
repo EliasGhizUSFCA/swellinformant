@@ -7,7 +7,7 @@ import { ageText, ForecastUpdated, updatedClock } from "@/components/forecast-up
 import { SpotForecastTimeline } from "@/components/forecast/forecast-timeline";
 import { SelectionStore, TimelineSelectionProvider } from "@/components/forecast/timeline-selection";
 import { useFieldIndex } from "@/hooks/map-fields";
-import { useMapConditions, useNotifications, useOpportunities, useSpot, useSpotTimeline } from "@/hooks/queries";
+import { useMapConditions, useNotifications, useOpportunities, useSpot, useSpotEvents, useSpotTimeline } from "@/hooks/queries";
 import {
   connectStore,
   DEFAULT_POLL_MS,
@@ -454,6 +454,51 @@ describe("staleness by age (review r1-frontend-FE-6)", () => {
     await act(() => vi.advanceTimersByTimeAsync(POLL * 5));
     expect(reads()).toHaveLength(2);
     expect(utcHourParam(Date.UTC(2026, 0, 2, 3, 59))).toBe(2026010203);
+  });
+
+  it("keeps the data on screen when the hour's re-read fails, and tries again at the next answer (review r2 FE-3)", async () => {
+    const { wrapper } = setup(version(1));
+    let failing = true;
+    const get = vi.spyOn(api, "get").mockImplementation(async (url: string) => {
+      // Every open tab re-reads at the top of the hour: a 503 for the hour's URLs.
+      if (url.includes("&h=") && failing) throw new api.ApiError(503, "unavailable", "Service unavailable");
+      return spotDetail(1);
+    });
+    const { result } = renderHook(() => useSpot("pipeline"), { wrapper });
+    const reads = () => get.mock.calls.map((c) => c[0]).filter((u) => u.startsWith("/api/spots/pipeline"));
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    await act(() => vi.advanceTimersByTimeAsync(40_000)); // the answer of 11:00:10: a new hour
+    await waitFor(() => expect(reads()).toEqual(["/api/spots/pipeline?v=1", "/api/spots/pipeline?v=1&h=2026102911"]));
+    // The page keeps its data, with no "could not load" state (a first load's error).
+    expect(result.current.data).toEqual(spotDetail(1));
+    expect(result.current.isLoadingError).toBe(false);
+    // The next answer of the poll tries again (not only at the next hour) ...
+    failing = false;
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(reads()).toHaveLength(3));
+    expect(reads()[2]).toBe("/api/spots/pipeline?v=1&h=2026102911");
+    expect(result.current.isError).toBe(false);
+    // ... and once it succeeded the hour is done.
+    await act(() => vi.advanceTimersByTimeAsync(POLL * 4));
+    expect(reads()).toHaveLength(3);
+  });
+
+  it("reads each query once, under the new version, when a new version arrives with the new hour (review r2 FE-4)", async () => {
+    const { server, wrapper } = setup(version(2));
+    const get = vi.spyOn(api, "get").mockImplementation(async (url: string) => (url.includes("v=3") ? spotDetail(3) : spotDetail(2)));
+    const { result } = renderHook(() => ({ spot: useSpot("pipeline"), events: useSpotEvents("pipeline") }), { wrapper });
+    const reads = () => get.mock.calls.map((c) => c[0]).filter((u) => u.startsWith("/api/spots/pipeline"));
+    await waitFor(() => expect(result.current.spot.data).toEqual(spotDetail(2)));
+    expect(reads()).toEqual(["/api/spots/pipeline?v=2", "/api/spots/pipeline/events?v=2"]);
+    // The first answer of the new hour (11:00:10) also names version 3.
+    await act(() => vi.advanceTimersByTimeAsync(20_000));
+    server.current = version(3);
+    await act(() => vi.advanceTimersByTimeAsync(POLL));
+    await waitFor(() => expect(result.current.spot.data).toEqual(spotDetail(3)));
+    // No read of the old version for the new hour: one read per query, under version 3.
+    expect(reads().slice(2).sort()).toEqual(["/api/spots/pipeline/events?v=3&h=2026102911", "/api/spots/pipeline?v=3&h=2026102911"]);
+    await act(() => vi.advanceTimersByTimeAsync(POLL * 3));
+    expect(reads()).toHaveLength(4);
   });
 });
 

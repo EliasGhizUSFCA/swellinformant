@@ -33,7 +33,9 @@
  * was painted (a tab opened or shown late would measure its own absence). The signed-in
  * opportunity lists (no-store database reads) are re-read once SETTLE_MS later, after the
  * refresh's matching ran. When the UTC hour changes, the public reads on screen are read again
- * (with `&h=<hour>`): a spot whose forecast went out of date by age is then shown so.
+ * (with `&h=<hour>`): a spot whose forecast went out of date by age is then shown so. That
+ * re-read keeps the data on screen, and a read that fails is tried again at the next answer;
+ * an answer that also brings a new version reads only under the new version.
  */
 
 import { useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
@@ -458,14 +460,38 @@ export function connectStore(store: ForecastVersionStore, client: QueryClient, r
   // version: the server recomputes the public snapshots each UTC hour. When an answer of the
   // poll finds a new hour, the public reads on screen are read again, under URLs that name
   // the hour (`&h=`), so neither the browser nor the CDN hands back last hour's copy.
+  //
+  // The re-read works like a version switch: the data on screen stays until the new copy
+  // arrives, and a read that fails (every open tab re-reads at the top of the hour) neither
+  // puts the page in an error state nor waits for the next hour: the next answer tries again.
   let hour = Math.floor(store.clock() / HOUR_MS);
-  const checkHour = () => {
+  let hourBusy = false;
+  /** The hour of a new version's reads, which name it themselves (no separate re-read). */
+  const noteHour = () => {
     const now = store.clock();
     const current = Math.floor(now / HOUR_MS);
     if (current === hour) return;
     hour = current;
     store.hourParam = utcHourParam(now);
-    void client.invalidateQueries({ predicate: (q) => isVersionedKey(q.queryKey), refetchType: visible() ? "active" : "none" });
+  };
+  const rereadHour = async () => {
+    const now = store.clock();
+    const current = Math.floor(now / HOUR_MS);
+    // A hidden tab re-reads when it is shown again (the poll answers at once then).
+    if (current === hour || hourBusy || !visible()) return;
+    hourBusy = true;
+    store.hourParam = utcHourParam(now);
+    const reads = client
+      .getQueryCache()
+      .findAll({ type: "active", predicate: (q) => isVersionedKey(q.queryKey) })
+      .flatMap((q) => {
+        const queryFn = q.options.queryFn;
+        return typeof queryFn === "function" ? [client.fetchQuery({ queryKey: q.queryKey, queryFn, staleTime: 0 })] : [];
+      });
+    const results = await Promise.allSettled(reads);
+    hourBusy = false;
+    if (!connected) return;
+    if (!results.some((r) => r.status === "rejected" && retryable(r.reason))) hour = Math.max(hour, current);
   };
   let cancelRender: (() => void) | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -504,8 +530,11 @@ export function connectStore(store: ForecastVersionStore, client: QueryClient, r
   };
 
   store.onChange = (change) => {
-    checkHour();
     const { previous, next, replaced } = change;
+    // A new version is read whole under the new hour's URLs (switchTo); any other answer
+    // re-reads the data on screen when the hour changed.
+    if (replaced) noteHour();
+    else void rereadHour();
     if (previous && previous.map_run_id !== next.map_run_id) void client.invalidateQueries({ queryKey: FIELD_INDEX_KEY });
     if (!replaced) return;
     // The new version's public reads are read first; the keys move once they are cached.
@@ -522,8 +551,11 @@ export function connectStore(store: ForecastVersionStore, client: QueryClient, r
     }, SETTLE_MS);
   };
   store.onRepeat = () => {
-    checkHour();
-    if (pending && !busy) void switchTo(pending);
+    if (pending && !busy) {
+      // The pending version's reads name the current hour themselves.
+      noteHour();
+      void switchTo(pending);
+    } else void rereadHour();
   };
   return () => {
     connected = false;

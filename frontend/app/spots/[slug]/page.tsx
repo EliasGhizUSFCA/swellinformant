@@ -341,7 +341,8 @@ function ForecastSection({
       </CardHeader>
       <CardContent className="px-3 pb-4 sm:px-5 sm:pb-5">
         {query.isLoading && <Skeleton className="h-[34rem]" />}
-        {query.isError && (
+        {/* Only a first load that failed: a failed background re-read keeps the timeline. */}
+        {query.isLoadingError && (
           <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-10 text-center text-sm text-muted-foreground" data-testid="timeline-error">
             <p>The forecast timeline could not be loaded.</p>
             <button type="button" onClick={() => query.refetch()} className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 font-medium text-ink hover:bg-muted">
