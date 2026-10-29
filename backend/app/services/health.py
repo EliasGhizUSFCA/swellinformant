@@ -1269,7 +1269,8 @@ def optional_daemon_problem(
         "the map layers are not refreshed and the map overlay ages (it is labelled out of "
         "date). Spot forecasts keep refreshing through /api/internal/refresh and the daily "
         "cron runs the periodic jobs. Check the daemon (on Vercel: the project's Daemons, "
-        "and its CPU quota) if the overlay matters.",
+        "and its CPU quota) if the overlay matters; without a daemon set "
+        "MAP_FIELDS_ENABLED=false (the map then shows no overlay and this is not reported).",
     )
 
 

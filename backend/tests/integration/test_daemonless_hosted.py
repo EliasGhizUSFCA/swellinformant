@@ -399,3 +399,52 @@ def test_data_health_reports_no_stopped_runner_without_the_optional_daemon(
     monkeypatch.setattr(get_settings(), "sync_daemon_kinds", "spots,ensemble,map")
     keys = {p.key: p.severity for p in data_health(db).problems}
     assert keys.get("sync_heartbeat_stale") == "failing"
+
+
+def test_without_the_daemon_the_documented_settings_send_the_admins_no_reminders(
+    db: Session,
+    few_spots: list[str],
+    client: TestClient,
+    hosted: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review r3-spec-SPEC-1: the hosted profile keeps MAP_FIELDS_ENABLED=true and
+    SYNC_DAEMON_KINDS=map, so without the daemon the map layers are never synced: data health
+    stays degraded (map_fields_missing, sync_heartbeat_stale) and the daily cron emails the
+    admins "Data health DEGRADED" again every 12 h. The documented daemon-less variant
+    (docs/deploy-vercel.md: MAP_FIELDS_ENABLED=false) reports nothing and emails nothing;
+    the profile as it is tells the admins how to stop the reminders."""
+    from app.models import User
+    from tests.conftest import outbox_messages
+
+    monkeypatch.setattr(get_settings(), "data_health_check_minutes", 60)  # the hosted profile's
+    db.add(
+        User(
+            email="daemonless-admin@example.com",
+            password_hash="synthetic-hash",
+            full_name="Synthetic Admin",
+            is_admin=True,
+            is_active=True,
+            email_verified_at=utcnow(),
+        )
+    )
+    db.commit()
+    assert orchestrator.refresh_check(trigger="http")["status"] in ("success", "partial")
+
+    def alerts() -> list[dict[str, object]]:
+        return [m for m in outbox_messages() if m.get("tag") == "ops_alert"]
+
+    # The documented daemon-less settings (the `hosted` fixture: MAP_FIELDS_ENABLED=false).
+    before = len(alerts())
+    out = client.get(CRON_DAILY_PATH, headers=AUTH)
+    assert out.status_code == 200, out.text
+    body = out.json()
+    assert body["status"] == "ok" and body["problems"] == [], body
+    assert body["alerts_sent"] == [] and len(alerts()) == before
+    # The profile as pasted (MAP_FIELDS_ENABLED=true), still without a daemon: degraded, and
+    # the problem says how to stop it.
+    monkeypatch.setattr(get_settings(), "map_fields_enabled", True)
+    report = data_health(db)
+    keys = {p.key: p for p in report.problems}
+    assert {"map_fields_missing", "sync_heartbeat_stale"} <= set(keys)
+    assert "MAP_FIELDS_ENABLED=false" in keys["sync_heartbeat_stale"].message

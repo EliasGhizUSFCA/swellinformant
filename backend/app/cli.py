@@ -71,6 +71,17 @@ def init_database(data_dir: str | None = None) -> dict[str, Any]:
     return {"migrated": True, **seed_database(data_dir)}
 
 
+def _active_spot_count() -> int:
+    """The active surf spots in the database (one count)."""
+    from sqlalchemy import func, select
+
+    from app.core.database import SessionLocal
+    from app.models import SurfSpot
+
+    with SessionLocal() as db:
+        return int(db.scalar(select(func.count()).where(SurfSpot.is_active.is_(True))) or 0)
+
+
 def migrate_on_build() -> tuple[int, dict[str, Any]]:
     """``migrate --on-build``: migrate and seed when MIGRATE_ON_BUILD allows it for this
     build.
@@ -81,7 +92,8 @@ def migrate_on_build() -> tuple[int, dict[str, Any]]:
     are seeded as ``init-db`` does (the 50 spots, airports, the tide catalog; idempotent):
     without the optional sync daemon nothing else seeds a new database, and a deployment
     without spots would publish nothing (review r2-spec-SPEC-2). A failed migration or seed
-    fails the build. Returns (exit code, report).
+    fails the build, and so does a build that finds no data/ while the database has no
+    active spot (review r3-spec-SPEC-6). Returns (exit code, report).
     """
     import os
 
@@ -112,9 +124,23 @@ def migrate_on_build() -> tuple[int, dict[str, Any]]:
     try:
         resolve_data_dir()
     except FileNotFoundError as exc:
-        # An image without data/ (the lean api image of the local stack's smoke): nothing
-        # to seed from here. Health names an unseeded database (no_spots_seeded).
-        return 0, {**report, "status": "migrated", "seed": "skipped", "seed_reason": str(exc)}
+        # No data/ to seed from. A database already seeded (the local stack's smoke runs the
+        # command on the lean api image) is fine; an empty one would deploy a site that
+        # publishes nothing, so the build fails (review r3-spec-SPEC-6).
+        try:
+            spots = _active_spot_count()
+        except Exception as count_exc:
+            error = redact(f"{type(count_exc).__name__}: {count_exc}")[:2000]
+            return 1, {**report, "status": "failed", "stage": "seed", "error": error}
+        if not spots:
+            error = (
+                f"data/ not found from the api build and the database has no active spot: "
+                f"{exc}. Seed it (python -m app.cli init-db from a checkout) or make the "
+                "repository's data/ visible to the build"
+            )
+            return 1, {**report, "status": "failed", "stage": "seed", "error": error[:2000]}
+        reason = f"{exc} ({spots} active spots already seeded)"
+        return 0, {**report, "status": "migrated", "seed": "skipped", "seed_reason": reason}
     try:
         seeded = seed_database()
     except Exception as exc:  # nor without the spots the site serves

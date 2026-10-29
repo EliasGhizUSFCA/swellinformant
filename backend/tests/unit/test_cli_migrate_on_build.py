@@ -150,20 +150,52 @@ def test_plain_migrate_ignores_the_build_setting(
     assert migrations == [True] and capsys.readouterr().out == "database migrated\n"
 
 
-def test_a_build_without_the_data_directory_migrates_and_skips_the_seed(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    migrations: list[bool],
-    seeds: list[bool],
-) -> None:
-    """An image without data/ (the local stack's lean api image): nothing to seed from, the
-    build still succeeds (health then names an unseeded database, no_spots_seeded)."""
+def _no_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import seed
 
     def missing(data_dir: object = None) -> None:
         raise FileNotFoundError("spots.json not found in any of: ['/nowhere']")
 
     monkeypatch.setattr(seed, "resolve_data_dir", missing)
+
+
+def test_a_build_without_the_data_directory_skips_the_seed_of_a_seeded_database(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    migrations: list[bool],
+    seeds: list[bool],
+) -> None:
+    """An image without data/ (the local stack's lean api image) against a database that is
+    seeded already (50 active spots, SYNTHETIC count): nothing to seed from, the build
+    succeeds and says why it did not seed."""
+    _no_data_dir(monkeypatch)
+    monkeypatch.setattr(cli, "_active_spot_count", lambda: 50)
     code, out = on_build(monkeypatch, capsys, "all", "production")
     assert code == 0 and out["status"] == "migrated" and out["seed"] == "skipped"
+    assert "50 active spots already seeded" in str(out["seed_reason"])
     assert migrations == [True] and seeds == []
+
+
+def test_a_build_without_the_data_directory_fails_on_an_empty_database(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    migrations: list[bool],
+    seeds: list[bool],
+) -> None:
+    """Review r3-spec-SPEC-6: the data live at the repository root, outside the api service's
+    root (backend/). A build that cannot see them used to succeed unseeded, and the site then
+    published nothing until someone ran init-db by hand. With no active spot the build fails
+    and says what to do; a database whose count cannot be read fails it too."""
+    _no_data_dir(monkeypatch)
+    monkeypatch.setattr(cli, "_active_spot_count", lambda: 0)
+    code, out = on_build(monkeypatch, capsys, "production", "production")
+    assert code == 1 and out["status"] == "failed" and out["stage"] == "seed"
+    assert "data/ not found from the api build" in str(out["error"])
+    assert "init-db" in str(out["error"]) and migrations == [True] and seeds == []
+
+    def unreadable() -> int:
+        raise RuntimeError("could not connect: password=hunter2x")
+
+    monkeypatch.setattr(cli, "_active_spot_count", unreadable)
+    code, out = on_build(monkeypatch, capsys, "all", "production")
+    assert code == 1 and out["stage"] == "seed" and "hunter2x" not in str(out["error"])
