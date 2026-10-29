@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import redis
@@ -65,6 +65,12 @@ DAILY_ORDER = (
 # Stop starting jobs after this many seconds of the daily cron's run, leaving room in the
 # Function's maxDuration (300 s) for the refresh backstop that follows.
 DAILY_BUDGET_SECONDS = 150.0
+# A daily cron fires anywhere within its hour on Vercel Hobby, and each job of its run
+# starts after the run's ``now`` (the watchdog and the jobs before it first): a job of a
+# 24 h or longer interval is due once it is within this of its interval, or a job that
+# started seconds into one day's run would wait for the day after the next (review
+# r2-backend-N1).
+STANDIN_SLACK = timedelta(hours=2)
 
 
 def daemon_optional(settings: Settings | None = None) -> bool:
@@ -182,8 +188,9 @@ def _newest_starts(db: Session, names: list[str]) -> dict[str, datetime]:
 
 def overdue_jobs(db: Session, now: datetime, settings: Settings | None = None) -> list[str]:
     """The periodic jobs (``daemon.periodic_entries``, without the data-health check the
-    cron runs itself) whose newest run started longer ago than their interval, in
-    :data:`DAILY_ORDER` then name order."""
+    cron runs itself) whose newest run started longer ago than their interval (less
+    :data:`STANDIN_SLACK` for an interval of a day or more), in :data:`DAILY_ORDER` then
+    name order."""
     from app.services.sync.daemon import periodic_entries
 
     settings = settings or get_settings()
@@ -194,7 +201,11 @@ def overdue_jobs(db: Session, now: datetime, settings: Settings | None = None) -
         gap = max_interval(entry.schedule)
         gaps[entry.task] = min(gap, gaps.get(entry.task, gap))
     newest = _newest_starts(db, sorted(gaps))
-    due = [t for t, gap in gaps.items() if t not in newest or now - newest[t] > gap]
+
+    def overdue_after(gap: timedelta) -> timedelta:
+        return gap - STANDIN_SLACK if gap >= timedelta(hours=24) else gap
+
+    due = [t for t, gap in gaps.items() if t not in newest or now - newest[t] > overdue_after(gap)]
     rank = {name: i for i, name in enumerate(DAILY_ORDER)}
     return sorted(due, key=lambda t: (rank.get(t, len(rank)), t))
 

@@ -4,10 +4,11 @@
 The forecast providers' refused keys are recorded by their own path (the newest attempt of
 each source, and the provider manager's recorded health). The flight provider (Duffel,
 Amadeus) and the email provider (Resend, SendGrid) answer HTTP 401/403 for an expired or
-revoked key; the search or message then fails permanently and nothing else would tell an
-admin. Here such a refusal is recorded in Redis under ``service-credentials:v1:<service>``
-(``service`` is ``flights_<provider>`` or ``email_<provider>``; a preview deployment keeps
-its own keys, ``app.core.redis.deployment_scope``) and the next accepted request clears it.
+revoked key, an SMTP server 535 (authentication refused); the search or message then fails
+permanently and nothing else would tell an admin. Here such a refusal is recorded in
+Redis under ``service-credentials:v1:<service>`` (``service`` is ``flights_<provider>`` or
+``email_<provider>``; a preview deployment keeps its own keys,
+``app.core.redis.deployment_scope``) and the next accepted request clears it.
 ``app.services.health`` turns a record into the admin problem
 ``provider_credentials:<service>`` (failing), which ``ops_alerts`` emails to the admins, and
 whose recovery notice follows the clearing.

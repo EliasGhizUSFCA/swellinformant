@@ -26,7 +26,7 @@ from app.core.database import utcnow
 from app.core.redis import get_redis
 from app.jobs.schedule import DATA_HEALTH_TASK
 from app.models import BackgroundJobLog, FlightOffer, FlightSearch, Notification, OpportunityMatch
-from app.models.enums import NotificationStatus
+from app.models.enums import JobStatus, NotificationStatus
 from app.services.health import STANDIN_GAP, data_health, expected_jobs
 from app.services.pipeline import run_pipeline
 from app.services.sync import orchestrator, standin
@@ -208,6 +208,49 @@ def test_the_daily_cron_runs_the_jobs_no_daemon_ran_once(
     second = client.get(CRON_DAILY_PATH, headers=AUTH).json()["jobs"]
     assert second["overdue"] == [] and second["jobs"] == []
     assert job_rows(db, "maintenance.cleanup") == 1
+
+
+@pytest.mark.parametrize("earlier", [timedelta(0), timedelta(minutes=50)])
+def test_the_daily_jobs_run_on_every_daily_cron(
+    db: Session, hosted: None, earlier: timedelta
+) -> None:
+    """Review r2-backend-N1: each job of a daily cron's run starts after the run's ``now``
+    (the watchdog and the jobs before it first), so with a strict 24 h interval the next
+    day's cron at the same time, or up to an hour earlier (Vercel Hobby fires within the
+    hour), skipped the 24 h jobs, which then ran every other day. SYNTHETIC job-log rows:
+    day 1's run began at 03:00:03; the jobs started 0-12 s after it."""
+    from datetime import UTC, datetime
+
+    db.execute(BackgroundJobLog.__table__.delete())
+    start = datetime(2026, 10, 27, 3, 0, 3, tzinfo=UTC)
+    offsets = {
+        "maintenance.cleanup": 0,
+        "matching.match": 4,
+        "flights.discover": 5,
+        "alerts.generate": 6,
+        DELIVER: 7,
+        "tides.acquire": 9,
+        "forecasts.check_staleness": 12,
+    }
+    for name, seconds in offsets.items():
+        at = start + timedelta(seconds=seconds)
+        db.add(
+            BackgroundJobLog(
+                job_name=name,
+                status=JobStatus.SUCCESS,
+                started_at=at,
+                finished_at=at + timedelta(seconds=1),
+                duration_ms=1000,
+                details={},
+            )
+        )
+    db.commit()
+    due = standin.overdue_jobs(db, start + timedelta(days=1) - earlier, get_settings())
+    for name in ("maintenance.cleanup", "matching.match", "tides.acquire"):
+        assert name in due, (name, due)
+    # The slack is not a second run the same day: an hour later nothing daily is due.
+    later = standin.overdue_jobs(db, start + timedelta(hours=1), get_settings())
+    assert not {"maintenance.cleanup", "matching.match", "tides.acquire"} & set(later), later
 
 
 def test_data_health_reports_no_stopped_runner_without_the_optional_daemon(

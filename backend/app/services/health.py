@@ -1890,6 +1890,7 @@ SERVICE_KEY_SETTINGS = {
     "flights_amadeus": "AMADEUS_CLIENT_ID / AMADEUS_CLIENT_SECRET",
     "email_resend": "RESEND_API_KEY",
     "email_sendgrid": "SENDGRID_API_KEY",
+    "email_smtp": "SMTP_USERNAME / SMTP_PASSWORD",
 }
 
 

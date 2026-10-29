@@ -146,14 +146,20 @@ class SmtpEmailProvider(EmailProvider):
                 if s.smtp_username and s.smtp_password:
                     server.login(s.smtp_username, s.smtp_password)
                 server.send_message(msg)
-        except (
-            smtplib.SMTPRecipientsRefused,
-            smtplib.SMTPSenderRefused,
-            smtplib.SMTPAuthenticationError,
-        ) as exc:
+        except smtplib.SMTPAuthenticationError as exc:
+            # Expired or revoked SMTP credentials: the admins are alerted (spec 16; review
+            # r2-backend-N3), as for an HTTP provider's refused key.
+            if not self.captures:
+                service_credentials.record_refused(
+                    "email", self.name, f"SMTP auth refused ({exc.smtp_code})"
+                )
+            raise PermanentProviderError(f"SMTP rejected message: {exc}") from exc
+        except (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused) as exc:
             raise PermanentProviderError(f"SMTP rejected message: {exc}") from exc
         except (OSError, smtplib.SMTPException) as exc:
             raise TransientProviderError(f"SMTP unavailable: {exc}") from exc
+        if not self.captures:
+            service_credentials.record_accepted("email", self.name)
         return SendResult(self.name, str(msg["Message-ID"]), captured=self.captures)
 
 

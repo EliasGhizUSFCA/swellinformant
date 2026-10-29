@@ -7,8 +7,11 @@ Resend refuse the key with HTTP 401, then accept it again. Accounts are SYNTHETI
 
 from __future__ import annotations
 
+import socketserver
+import threading
+from collections.abc import Iterator
 from datetime import date
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import pytest
@@ -26,7 +29,12 @@ from app.services.flights.duffel import DuffelProvider
 from app.services.health import admin_problems
 from app.services.http import PermanentProviderError
 from app.services.notifications.ops_alerts import run_data_health_check
-from app.services.notifications.providers import EmailMessageData, ResendEmailProvider
+from app.services.notifications.providers import (
+    EmailMessageData,
+    MailpitEmailProvider,
+    ResendEmailProvider,
+    SmtpEmailProvider,
+)
 from tests.conftest import outbox_messages
 
 pytestmark = pytest.mark.integration
@@ -133,3 +141,96 @@ def test_another_providers_record_is_not_reported(
     service_credentials.record_refused("flights", "amadeus", "HTTP 401")
     monkeypatch.setattr(get_settings(), "flight_provider", "duffel")
     assert not any(k.startswith("provider_credentials:flights_") for k in keys(db))
+
+
+class FakeSmtp(socketserver.StreamRequestHandler):
+    """A SYNTHETIC SMTP server on localhost: refuses every AUTH with 535 while ``refuse``
+    is set (an expired or revoked password), else accepts it and the message."""
+
+    refuse: ClassVar[bool] = True
+    messages: ClassVar[int] = 0
+
+    def reply(self, line: str) -> None:
+        self.wfile.write(f"{line}\r\n".encode())
+
+    def handle(self) -> None:
+        self.reply("220 synthetic ESMTP")
+        while raw := self.rfile.readline():
+            verb = raw.decode(errors="replace").strip().split(" ", 1)[0].upper()
+            if verb in ("EHLO", "HELO"):
+                self.reply("250-synthetic")
+                self.reply("250 AUTH PLAIN LOGIN")
+            elif verb == "AUTH":
+                self.reply(
+                    "535 5.7.8 Authentication credentials invalid"
+                    if self.refuse
+                    else "235 2.7.0 Authentication successful"
+                )
+            elif verb in ("MAIL", "RCPT", "RSET", "NOOP"):
+                self.reply("250 OK")
+            elif verb == "DATA":
+                self.reply("354 End data with <CR><LF>.<CR><LF>")
+                while (line := self.rfile.readline()) and line not in (b".\r\n", b".\n"):
+                    pass
+                FakeSmtp.messages += 1
+                self.reply("250 OK queued")
+            elif verb == "QUIT":
+                self.reply("221 Bye")
+                return
+            else:
+                self.reply("502 Command not implemented")
+
+
+@pytest.fixture
+def smtp_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
+    FakeSmtp.refuse, FakeSmtp.messages = True, 0
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), FakeSmtp)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    settings = get_settings()
+    for name, value in {
+        "email_provider": "smtp",
+        "smtp_host": "127.0.0.1",
+        "smtp_port": server.server_address[1],
+        "smtp_use_tls": False,
+        "smtp_use_ssl": False,
+        "smtp_username": "synthetic-user",
+        "smtp_password": "synthetic-password",
+    }.items():
+        monkeypatch.setattr(settings, name, value)
+    try:
+        yield settings
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_refused_smtp_password_is_a_problem_until_a_message_is_accepted(
+    db: Session, smtp_server: Settings
+) -> None:
+    """Review r2-backend-N3: EMAIL_PROVIDER=smtp with an expired or revoked password (the
+    server answers 535) raises provider_credentials:email_smtp; the next accepted message
+    clears it."""
+    message = EmailMessageData(
+        to="someone@example.com", subject="Synthetic", text="Synthetic body", tag="test"
+    )
+    with pytest.raises(PermanentProviderError, match="SMTP rejected"):
+        SmtpEmailProvider(smtp_server).send(message)
+    (problem,) = [p for p in admin_problems(db) if p.key == "provider_credentials:email_smtp"]
+    assert problem.severity == "failing" and "SMTP_USERNAME / SMTP_PASSWORD" in problem.message
+    assert problem.detail is not None and "535" in problem.detail
+    FakeSmtp.refuse = False
+    SmtpEmailProvider(smtp_server).send(message)
+    assert FakeSmtp.messages == 1
+    assert "provider_credentials:email_smtp" not in keys(db)
+
+
+def test_a_development_inbox_records_no_credentials(db: Session, smtp_server: Settings) -> None:
+    """Mailpit captures messages locally: its answers say nothing about a real provider's
+    credentials, so they are never recorded."""
+    with pytest.raises(PermanentProviderError):
+        MailpitEmailProvider(smtp_server).send(
+            EmailMessageData(to="someone@example.com", subject="S", text="T", tag="test")
+        )
+    assert service_credentials.refused(["email_mailpit"]) == []
