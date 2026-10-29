@@ -500,6 +500,66 @@ describe("staleness by age (review r1-frontend-FE-6)", () => {
     await act(() => vi.advanceTimersByTimeAsync(POLL * 3));
     expect(reads()).toHaveLength(4);
   });
+
+  it("marks the reads another page cached stale at the hour, so that page reads again when shown (review r3 FE-N2)", async () => {
+    const { client, wrapper } = setup(version(1));
+    // A long staleTime, as the map's conditions have (5 min): without the hour's mark the
+    // page shown again would show last hour's copy.
+    client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, staleTime: 5 * 60_000 } });
+    const get = vi.spyOn(api, "get").mockImplementation(async (url: string) => (url.includes("/events") ? [] : spotDetail(1)));
+    function SpotRead() {
+      useSpot("pipeline");
+      return null;
+    }
+    function EventsRead() {
+      useSpotEvents("pipeline");
+      return null;
+    }
+    function App({ spot }: { spot: boolean }) {
+      return (
+        <>
+          {spot && <SpotRead />}
+          <EventsRead />
+        </>
+      );
+    }
+    const { rerender } = render(<App spot />, { wrapper });
+    const reads = () => get.mock.calls.map((c) => c[0]).filter((u) => u.startsWith("/api/spots/pipeline"));
+    await waitFor(() => expect(reads().sort()).toEqual(["/api/spots/pipeline/events?v=1", "/api/spots/pipeline?v=1"]));
+    rerender(<App spot={false} />); // the spot's page is left: its read stays cached (inactive)
+    await act(() => vi.advanceTimersByTimeAsync(40_000)); // 11:00:10: a new hour
+    await waitFor(() => expect(reads()).toContain("/api/spots/pipeline/events?v=1&h=2026102911"));
+    const cached = client.getQueryCache().find({ queryKey: ["spot", "pipeline", { v: 1 }] });
+    expect(cached?.isActive()).toBe(false);
+    expect(cached?.state.isInvalidated).toBe(true);
+    expect(reads()).not.toContain("/api/spots/pipeline?v=1&h=2026102911"); // not read while hidden
+    rerender(<App spot />); // shown again within its staleTime
+    await waitFor(() => expect(reads()).toContain("/api/spots/pipeline?v=1&h=2026102911"));
+  });
+
+  it("tries a failing hour's re-read once per try and backs off over the answers (review r3 FE-N3)", async () => {
+    const { client, wrapper } = setup(version(1));
+    // The app's retry rule (components/providers.tsx): a 5xx read is retried twice.
+    client.setDefaultOptions({
+      queries: { ...client.getDefaultOptions().queries, retry: (count, error) => !(error instanceof api.ApiError && error.status < 500) && count < 2 },
+    });
+    const get = vi.spyOn(api, "get").mockImplementation(async (url: string) => {
+      if (url.includes("&h=")) throw new api.ApiError(503, "unavailable", "Service unavailable");
+      return spotDetail(1);
+    });
+    const { result } = renderHook(() => useSpot("pipeline"), { wrapper });
+    const hourReads = () => get.mock.calls.map((c) => c[0]).filter((u) => u.includes("&h="));
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    await act(() => vi.advanceTimersByTimeAsync(40_000)); // the answer of 11:00:10: the first try
+    await waitFor(() => expect(hourReads()).toHaveLength(1));
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(hourReads()).toHaveLength(1); // one attempt, not the client's three
+    // Eleven more answers (11:00:30 .. 11:03:50): tries at the 2nd, 4th and 8th of the hour.
+    for (let i = 0; i < 11; i++) await act(() => vi.advanceTimersByTimeAsync(POLL));
+    expect(hourReads()).toHaveLength(4);
+    expect(result.current.data).toEqual(spotDetail(1));
+    expect(result.current.isLoadingError).toBe(false);
+  });
 });
 
 describe("after a new version is on screen", () => {

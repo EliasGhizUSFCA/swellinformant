@@ -438,13 +438,18 @@ export async function readUnder(client: QueryClient, id: number | null): Promise
     .findAll({ type: "active", predicate: (q) => isVersionedKey(q.queryKey) && keyVersion(q.queryKey) !== id })
     .flatMap((q) => {
       const queryFn = q.options.queryFn;
-      return typeof queryFn === "function" ? [client.fetchQuery({ queryKey: withKeyVersion(q.queryKey, id), queryFn })] : [];
+      // One attempt: the next answer of the poll is the retry (review r3-frontend-N3).
+      return typeof queryFn === "function" ? [client.fetchQuery({ queryKey: withKeyVersion(q.queryKey, id), queryFn, retry: false })] : [];
     });
   const results = await Promise.allSettled(reads);
   return !results.some((r) => r.status === "rejected" && retryable(r.reason));
 }
 
 const HOUR_MS = 3_600_000;
+/** After failed hourly re-reads, the poll answers let pass before the next try double
+ * (0, 1, 3, 7, ...), up to this long (review r3-frontend-N3: an API outage at the top of the
+ * hour, when every open tab re-reads, is not met with more load). */
+export const HOUR_RETRY_MAX_MS = 5 * 60_000;
 
 /** The UTC hour of `ms` as a number, YYYYMMDDHH (the hour the server computes its public
  * snapshots for: app.services.public_cache). */
@@ -463,35 +468,62 @@ export function connectStore(store: ForecastVersionStore, client: QueryClient, r
   //
   // The re-read works like a version switch: the data on screen stays until the new copy
   // arrives, and a read that fails (every open tab re-reads at the top of the hour) neither
-  // puts the page in an error state nor waits for the next hour: the next answer tries again.
+  // puts the page in an error state nor waits for the next hour: the next answer tries again,
+  // and while it keeps failing, later answers further apart (HOUR_RETRY_MAX_MS).
   let hour = Math.floor(store.clock() / HOUR_MS);
   let hourBusy = false;
+  // Failed hourly re-reads in a row, and the poll answers to let pass before the next one.
+  let hourFailures = 0;
+  let hourSkip = 0;
+  /** The versioned reads cached by pages not on screen hold last hour's copy: they are read
+   * again (under the new `&h=`) when such a page is shown again, not now (review
+   * r3-frontend-N2). */
+  const markOtherPagesStale = () => {
+    void client.invalidateQueries({ predicate: (q) => isVersionedKey(q.queryKey) && !q.isActive(), refetchType: "none" });
+  };
   /** The hour of a new version's reads, which name it themselves (no separate re-read). */
   const noteHour = () => {
     const now = store.clock();
     const current = Math.floor(now / HOUR_MS);
     if (current === hour) return;
     hour = current;
+    hourFailures = hourSkip = 0;
     store.hourParam = utcHourParam(now);
+    markOtherPagesStale();
   };
   const rereadHour = async () => {
     const now = store.clock();
     const current = Math.floor(now / HOUR_MS);
     // A hidden tab re-reads when it is shown again (the poll answers at once then).
     if (current === hour || hourBusy || !visible()) return;
+    if (hourSkip > 0) {
+      hourSkip -= 1;
+      return;
+    }
     hourBusy = true;
     store.hourParam = utcHourParam(now);
+    markOtherPagesStale();
     const reads = client
       .getQueryCache()
       .findAll({ type: "active", predicate: (q) => isVersionedKey(q.queryKey) })
       .flatMap((q) => {
         const queryFn = q.options.queryFn;
-        return typeof queryFn === "function" ? [client.fetchQuery({ queryKey: q.queryKey, queryFn, staleTime: 0 })] : [];
+        // One attempt each (the client's default retries a 5xx twice): the next try is a
+        // later answer of the poll, after the backoff below.
+        return typeof queryFn === "function" ? [client.fetchQuery({ queryKey: q.queryKey, queryFn, staleTime: 0, retry: false })] : [];
       });
     const results = await Promise.allSettled(reads);
     hourBusy = false;
     if (!connected) return;
-    if (!results.some((r) => r.status === "rejected" && retryable(r.reason))) hour = Math.max(hour, current);
+    if (!results.some((r) => r.status === "rejected" && retryable(r.reason))) {
+      hour = Math.max(hour, current);
+      hourFailures = hourSkip = 0;
+      return;
+    }
+    // The next answer tries again, then every 2nd, 4th, 8th, ... answer, at most
+    // HOUR_RETRY_MAX_MS apart.
+    hourFailures += 1;
+    hourSkip = Math.min(2 ** (hourFailures - 1) - 1, Math.max(1, Math.floor(HOUR_RETRY_MAX_MS / store.pollMs)));
   };
   let cancelRender: (() => void) | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
