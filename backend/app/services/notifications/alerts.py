@@ -645,10 +645,31 @@ def _record_suppressed(
     return recorded
 
 
+def candidate_order(row: tuple[OpportunityMatch, Any]) -> tuple[Any, ...]:
+    """The order alerts are decided in: the best opportunity first (``overall_score``), then
+    the soonest window, then the saved search and the spot (stable ids), the match id last.
+
+    Never the database's row order, which follows the plan and where rows happen to lie on
+    disk: when overlapping searches of one user surface the same swell, the one alert (keyed
+    by user and event, :func:`dedup_key`) is told from whichever match comes first, and under
+    the daily cap the first matches are the ones alerted. Without a fixed order both changed
+    from run to run (the intermittent failure of
+    tests/integration/test_free_tier_egress.py's narrow-reads chain)."""
+    match = row[0]
+    return (
+        -match.overall_score,
+        match.window_start,
+        str(match.search_id),
+        match.spot_id,
+        str(match.id),
+    )
+
+
 def _alert_candidates(
     db: Session, now: datetime
 ) -> list[tuple[OpportunityMatch, ForecastRun | None]]:
-    """The matches an alert may be due for, each with its event's forecast run.
+    """The matches an alert may be due for, each with its event's forecast run, in
+    :func:`candidate_order`.
 
     Database egress: a match's event (and its spot) and its best offer are read once each
     for all candidates (``selectinload``: 19 events and 15 offers for 57 matches of three
@@ -680,7 +701,10 @@ def _alert_candidates(
         if run_ids
         else {}
     )
-    return [(match, runs.get(run_id) if run_id is not None else None) for match, run_id in rows]
+    return sorted(
+        ((match, runs.get(run_id) if run_id is not None else None) for match, run_id in rows),
+        key=candidate_order,
+    )
 
 
 def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
