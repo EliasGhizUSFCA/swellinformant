@@ -132,3 +132,20 @@ export const FRESHNESS_REASON_TEXT: Record<string, string> = {
   wave_age: "The wave forecast is older than its model's update interval.",
   age: "This forecast is older than its model's update interval.",
 };
+
+/** The same reasons in a few words, for a card's stale line (review r3-frontend-N5). */
+export const FRESHNESS_REASON_SHORT: Record<string, string> = {
+  missing: "No forecast loaded.",
+  refresh_failed: "Its latest refresh failed.",
+  atmosphere_age: "The wind run is overdue.",
+  wave_age: "The wave run is overdue.",
+  age: "Its model run is overdue.",
+};
+
+/** The tooltip of a card's "Out of date" tag for a spot stale by its `freshness`: why, from
+ * the API's reason (a wave-only refresh did update a spot whose wind is past its update
+ * interval, so "not updated with the latest refresh" is said only for a failed refresh). */
+export function freshnessTitle(f: Freshness | null | undefined): string {
+  const why = f?.reason ? FRESHNESS_REASON_TEXT[f.reason] : undefined;
+  return why ? `${why} It is not a current forecast.` : "This spot's forecast is not current.";
+}

@@ -15,7 +15,7 @@ import { PageHeader, SectionTitle } from "@/components/page-header";
 import { DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
 import { RatingHeadline } from "@/components/rating";
 import { RequireAuth } from "@/components/require-auth";
-import { StaleBanner } from "@/components/stale-banner";
+import { TripStaleBanner, TripUpdatedLine } from "@/components/trip-freshness";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -227,7 +227,7 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
         }
       />
 
-      <StaleBanner stale={m.stale || e.stale} />
+      <TripStaleBanner match={m} />
 
       {m.status === "surf_only" && (
         <Alert variant="warn" className="mb-6">
@@ -297,7 +297,7 @@ function Detail({ user, m }: { user: User; m: MatchDetail }) {
                   <WindDisputeNote note={e.wind_dispute_note} reasons={e.confidence_reasons} className="mt-1 font-normal" />
                 </Measure>
               </dl>
-              <p className="text-xs text-muted-foreground">Forecast updated {relativeTime(e.last_updated_at)}.</p>
+              <TripUpdatedLine match={m} />
               {/* The swell and wind above are these sources' model data: credited next to them. */}
               <AttributionLinks links={e.attribution_links} />
               {/* The swell's peak-hour classes from the API ("Not assessed yet" when it has none). */}

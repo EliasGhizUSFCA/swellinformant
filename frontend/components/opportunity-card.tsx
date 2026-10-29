@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ConfidenceBadge } from "@/components/confidence";
 import { DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
 import { StaleBadge, StaleLine } from "@/components/stale-banner";
-import { freshnessOf } from "@/lib/forecast-fields";
+import { freshnessOf, freshnessTitle } from "@/lib/forecast-fields";
 import { formatCalendarDate, formatMoney, formatRange, heightRange, leadLabel, type Units } from "@/lib/format";
 import type { MatchSummary } from "@/types/api";
 
@@ -64,7 +64,7 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
             <ConfidenceBadge value={match.forecast_confidence_class} />
             <StaleBadge
               stale={match.stale || fresh?.stale}
-              title={match.stale ? undefined : "This spot's forecast was not updated with the latest refresh; it is not a current forecast."}
+              title={match.stale ? undefined : freshnessTitle(fresh)}
             />
           </span>
           <span className="flex items-center gap-1 text-xs font-medium text-ocean opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">

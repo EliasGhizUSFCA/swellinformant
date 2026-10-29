@@ -1,8 +1,9 @@
 import { AlertTriangle, Clock } from "lucide-react";
 
+import { useNowMs } from "@/components/forecast-provenance";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import type { Freshness } from "@/lib/forecast-fields";
+import { FRESHNESS_REASON_SHORT, type Freshness } from "@/lib/forecast-fields";
 import { updatedAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -93,23 +94,37 @@ export function StaleBadge({
 }
 
 /** One line for a card whose served forecast is out of date (its `freshness.stale`): "Forecast
- * last updated 9 hours ago. Not a current forecast." Nothing when the forecast is current, so a
- * stale spot's rating is never shown as current (spec 14). */
-export function StaleLine({
-  freshness,
-  nowMs,
-  className,
-  "data-testid": testId = "stale-line",
-}: {
+ * last updated 9 hours ago. Not a current forecast." and why, in a few words (the API's
+ * `freshness.reason`: "Its latest refresh failed.", "The wind run is overdue."). Nothing when
+ * the forecast is current, so a stale spot's rating is never shown as current (spec 14).
+ * Without `nowMs` its age follows the clock (once a minute) on an open page. */
+export function StaleLine(props: {
   freshness: Freshness | null | undefined;
   nowMs?: number;
   className?: string;
   "data-testid"?: string;
 }) {
-  if (!freshness?.stale) return null;
+  if (!props.freshness?.stale) return null;
+  return <StaleLineText {...props} freshness={props.freshness} />;
+}
+
+function StaleLineText({
+  freshness,
+  nowMs,
+  className,
+  "data-testid": testId = "stale-line",
+}: {
+  freshness: Freshness;
+  nowMs?: number;
+  className?: string;
+  "data-testid"?: string;
+}) {
+  const clock = useNowMs();
+  const when = freshness.lastUpdatedAt ? `Forecast last updated ${updatedAgo(freshness.lastUpdatedAt, nowMs ?? clock)}.` : "Forecast out of date.";
+  const why = freshness.reason ? FRESHNESS_REASON_SHORT[freshness.reason] : undefined;
   return (
     <p className={cn("text-xs font-medium text-amber-800", className)} data-testid={testId}>
-      {freshness.lastUpdatedAt ? `Forecast last updated ${updatedAgo(freshness.lastUpdatedAt, nowMs)}.` : "Forecast out of date."} Not a current forecast.
+      {[when, "Not a current forecast.", why].filter(Boolean).join(" ")}
     </p>
   );
 }

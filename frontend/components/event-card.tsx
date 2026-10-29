@@ -8,7 +8,7 @@ import { DemoBadge } from "@/components/quality";
 import { RatingHeadline } from "@/components/rating";
 import { StaleBadge, StaleLine } from "@/components/stale-banner";
 import { WindDisputeNote } from "@/components/wind-dispute";
-import { currentFirst, freshnessOf, outOfDate } from "@/lib/forecast-fields";
+import { currentFirst, freshnessOf, freshnessTitle, outOfDate } from "@/lib/forecast-fields";
 import { compass, formatRange, heightRange, leadLabel, seconds, type Units } from "@/lib/format";
 import { colorForScore, WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingReason } from "@/lib/rating";
@@ -103,7 +103,7 @@ export function EventCard({
         <StaleBadge
           stale={event.stale || fresh?.stale}
           dark={dark}
-          title={event.stale ? undefined : "This spot's forecast was not updated with the latest refresh; it is not a current forecast."}
+          title={event.stale ? undefined : freshnessTitle(fresh)}
         />
         {event.is_demo && <DemoBadge />}
       </div>
