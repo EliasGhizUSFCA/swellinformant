@@ -13,7 +13,7 @@ import { WindDisputeNote } from "@/components/wind-dispute";
 import { forecastReasonsOf, modelRunText, rangeWords, validInText } from "@/lib/confidence";
 import { compass, formatSpotDateTime, heightRange, seconds, type Units } from "@/lib/format";
 import { cycleLabel } from "@/lib/map-time";
-import { componentRuns } from "@/lib/model-runs";
+import { componentRuns, conditionsMembers } from "@/lib/model-runs";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingFactors } from "@/lib/rating";
 import { hourReason } from "@/lib/rating-sentence";
@@ -80,6 +80,14 @@ function runsLabel(c: Conditions, run: ForecastRunInfo | null | undefined, nowMs
   const members = (run?.members ?? []).filter((m) => m.init_time);
   if (members.length > 1) return members.map((m) => `${m.name.split(" (")[0]} ${cycleLabel(m.init_time!)}`).join(" + ");
   if (members.length === 1) return `${c.source_name ?? members[0]!.name} ${cycleLabel(members[0]!.init_time!)}`;
+  // No run members (the map's conditions): the hour's own component runs, both named, never
+  // only the older one (`run_issued_at`).
+  const own = componentRuns(conditionsMembers(c));
+  if (own) {
+    const wave = modelRunText(own.wave.init_time, nowMs);
+    const wind = modelRunText(own.atmosphere.init_time, nowMs);
+    if (wave && wind) return `${c.source_name ?? "Forecast source"} · wave ${wave} · wind ${wind}`;
+  }
   if (!c.run_issued_at) return c.source_name ?? null;
   const age = modelRunText(c.run_issued_at, nowMs);
   // A blend's issue time is only its oldest member's.
@@ -272,7 +280,7 @@ export function ForecastBreakdown({
           source={source ?? (c.source_name ? { name: c.source_name, is_demo: c.is_demo ?? false } : null)}
           // A blend's own issue time is only its oldest member's: not shown as "the" run.
           run={run ?? (c.run_issued_at && c.source_code !== "blend" ? { issued_at: c.run_issued_at } : null)}
-          members={run?.members}
+          members={run?.members ?? conditionsMembers(c)}
           generatedAt={generatedAt}
           links={source?.attribution_links}
           sourceCode={source?.code ?? c.source_code}

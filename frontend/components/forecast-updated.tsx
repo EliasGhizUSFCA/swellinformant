@@ -34,6 +34,17 @@ export function updatedClock(iso: string, nowMs: number, timeZone?: string): str
   return sameDay ? clock(timeZone).format(t) : `${day(timeZone).format(t)}, ${clock(timeZone).format(t)}`;
 }
 
+/** The label's title: the version's own publication time and, on a spot page, when that
+ * spot's forecast was last updated (it can be older: a version may retry other spots only),
+ * both in the clock's zone (`timeZone`; the viewer's by default). */
+export function updatedTitle(versionId: number, publishedIso: string, updatedAt: string | null | undefined, timeZone?: string): string {
+  const published = Date.parse(publishedIso);
+  const updated = updatedAt ? Date.parse(updatedAt) : NaN;
+  const spot = Number.isFinite(updated) ? `; this spot's forecast was last updated ${full(timeZone).format(new Date(updated))}` : "";
+  const when = Number.isFinite(published) ? `, published ${full(timeZone).format(new Date(published))}` : "";
+  return `Forecast version ${versionId}${when}${spot}. Open pages pick up new versions by themselves.`;
+}
+
 /** Epoch ms now, re-read every `everyMs` (a local clock for relative ages, no request). */
 function useNow(everyMs: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -124,7 +135,7 @@ export function ForecastUpdated({
           data-published-at={published}
           data-updated-at={shownIso}
           data-highlight={highlight ? "" : undefined}
-          title={`Forecast version ${version.version_id}, published ${full().format(new Date(at))}. Open pages pick up new versions by themselves.`}
+          title={updatedTitle(version.version_id, published, updatedAt, timeZone)}
           className={cn(
             "inline-flex w-fit items-center gap-1.5 rounded-full text-xs whitespace-nowrap tabular-nums transition-colors duration-700",
             // On short screens (phones in landscape) the map keeps its little height for the map:

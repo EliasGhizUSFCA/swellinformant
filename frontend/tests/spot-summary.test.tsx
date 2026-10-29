@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { AttributionLinks } from "@/components/forecast-provenance";
 import { HourVariables, ModelInfo, RatingDetails, TidePreference } from "@/components/forecast/rating-details";
@@ -200,6 +200,25 @@ describe("Why this rating? (spec 25)", () => {
     expect(models).toHaveTextContent("run 18Z Oct 27 (estimated)");
     expect(screen.getByTestId("rating-models-estimated")).toBeVisible();
     expect(screen.getByRole("link", { name: WINDY_CREDIT })).toHaveAttribute("href", "https://www.windy.com/");
+  });
+
+  it("ages the fetch time with a ticking clock on a page left open", () => {
+    // Review r2-frontend-R2-FE-6: "Fetched" was computed once at render.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-28T04:14:00Z")); // 14 minutes after the fetch
+      render(<ModelInfo fc={forecast("open_meteo_noaa")} c={conditions()} />);
+      const fetched = () => within(screen.getByTestId("rating-models")).getByText(/ago/);
+      expect(fetched()).toHaveTextContent("14 minutes ago");
+      act(() => {
+        vi.advanceTimersByTime(2.5 * 3_600_000);
+      });
+      // 2 h 44 min after the fetch, which relativeTime rounds to 3 hours.
+      expect(fetched()).toHaveTextContent("3 hours ago");
+      expect(screen.getByTestId("rating-models")).not.toHaveTextContent("14 minutes ago");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("takes the version's own run flags when the page has them", () => {

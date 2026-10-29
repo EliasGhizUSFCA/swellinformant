@@ -548,6 +548,12 @@ describe("after a new version is on screen", () => {
     expect(screen.getByTestId("forecast-updated-announcement")).toHaveTextContent("");
     expect(label()).not.toHaveAttribute("data-highlight");
     expect(label()).toHaveTextContent("23:40 HST");
+    // Review r2-frontend-R2-FE-5: the title names the version's own publication (10:02 UTC)
+    // and the spot's older update, both in the clock's zone; never the update as "published".
+    expect(label().getAttribute("title")).toBe(
+      "Forecast version 2, published Tue, Oct 27, 00:02 HST; this spot's forecast was last updated Mon, Oct 26, 23:40 HST. " +
+        "Open pages pick up new versions by themselves.",
+    );
 
     server.current = version(3);
     await act(() => vi.advanceTimersByTimeAsync(POLL));

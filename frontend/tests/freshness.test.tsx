@@ -261,6 +261,34 @@ describe("ConditionsSummary (model output, never 'Now')", () => {
     expect(document.body.textContent).not.toMatch(/\blive\b/i);
   });
 
+  it("names both component runs of a composed hour without run members (the map's panel)", () => {
+    // Review r2-frontend-R2-FE-1: a wave-only refresh left the waves on a newer run than the
+    // wind; the map's conditions carry the two runs but no `run`.
+    const c = conditions({
+      run_issued_at: hoursFromNow(-11),
+      wave_run_issued_at: hoursFromNow(-5),
+      atmosphere_run_issued_at: hoursFromNow(-11),
+    });
+    render(<ForecastBreakdown c={c} tz="UTC" units="ft" nowMs={NOW} />);
+    expect(screen.getByTestId("raw-model-runs")).toHaveTextContent(
+      "Synthetic test source (not real data) · wave model run 5 h ago · wind model run 11 h ago",
+    );
+    const provenance = screen.getByTestId("forecast-provenance");
+    expect(within(provenance).getByTestId("provenance-members")).toHaveTextContent(
+      `Wave run ${cycleLabel(hoursFromNow(-5))} · Wind run ${cycleLabel(hoursFromNow(-11))}`,
+    );
+    // The older run is never shown alone as "the" model run.
+    expect(provenance).not.toHaveTextContent(/Model run:/);
+    expect(screen.getByTestId("raw-model-runs")).not.toHaveTextContent(/· model run 11 h ago$/);
+  });
+
+  it("keeps one model run when both components share it", () => {
+    const c = conditions({ wave_run_issued_at: hoursFromNow(-16), atmosphere_run_issued_at: hoursFromNow(-16) });
+    render(<ForecastBreakdown c={c} tz="UTC" units="ft" nowMs={NOW} />);
+    expect(screen.getByTestId("raw-model-runs")).toHaveTextContent("Synthetic test source (not real data) · model run 16 h ago");
+    expect(screen.getByTestId("provenance-members")).toHaveTextContent(`Model run: ${cycleLabel(hoursFromNow(-16))}`);
+  });
+
   it("writes wind and swell directions as where they come FROM (WINDVIZ-12)", () => {
     // 40 deg = NE, 220 deg = SW (synthetic fixture values).
     const { unmount } = render(<ConditionsSummary c={conditions()} tz="UTC" units="ft" nowMs={NOW} />);

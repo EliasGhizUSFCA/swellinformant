@@ -1,6 +1,6 @@
 import { relativeTime } from "@/lib/format";
 import { cycleLabel } from "@/lib/map-time";
-import type { RunMember } from "@/types/api";
+import type { Conditions, RunMember } from "@/types/api";
 
 /** The wave and wind (atmosphere) model runs of a forecast whose components come from
  * different runs: a refresh of one component keeps the other's original run (the API then
@@ -13,6 +13,29 @@ export function componentRuns(members: readonly RunMember[] | null | undefined):
   const wave = members?.find((m) => m.component === "wave" && m.init_time);
   const atmosphere = members?.find((m) => m.component === "atmosphere" && m.init_time);
   return wave && atmosphere ? { wave, atmosphere } : null;
+}
+
+/** The per-component runs a forecast hour names itself (`wave_run_issued_at`,
+ * `atmosphere_run_issued_at`: the map's conditions carry no `run.members`) as members
+ * {@link componentRuns} reads, when the two differ; null when they are one run, unknown,
+ * or a blend's (whose times are only its oldest member's). */
+export function conditionsMembers(c: Conditions): RunMember[] | null {
+  const wave = c.wave_run_issued_at;
+  const wind = c.atmosphere_run_issued_at;
+  if (c.source_code === "blend" || !wave || !wind) return null;
+  if (Date.parse(wave) === Date.parse(wind)) return null;
+  const base = {
+    code: c.source_code ?? "",
+    name: c.source_name ?? "Forecast source",
+    family: "",
+    run_key: "",
+    wave_model: null,
+    atmosphere_model: null,
+  };
+  return [
+    { ...base, init_time: wave, component: "wave" },
+    { ...base, init_time: wind, component: "atmosphere" },
+  ];
 }
 
 /** "Wave run 07Z Oct 29 · Wind run 01Z Oct 29". */

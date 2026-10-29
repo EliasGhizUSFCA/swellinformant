@@ -3,6 +3,7 @@
 import { ExternalLink } from "lucide-react";
 
 import { ConfidenceBadge } from "@/components/confidence";
+import { useNowMs } from "@/components/forecast-provenance";
 import { ProviderCredit } from "@/components/forecast/provider-credit";
 import { forecastConfidenceOf, hourOutputs } from "@/lib/forecast-fields";
 import { compass, relativeTime, seconds, titleCase } from "@/lib/format";
@@ -138,9 +139,11 @@ export function ModelInfo({ fc, c, version }: { fc: SpotForecast | null | undefi
   const waveRun = run?.wave_model_run_at ?? null;
   const fallbackRun = !atmosRun && !waveRun ? (run?.issued_at ?? c.run_issued_at ?? null) : null;
   const runText = (iso: string | null, estimated: boolean) => (iso ? `run ${cycleLabel(iso)}${estimated ? " (estimated)" : ""}` : "run time not reported");
-  // A component refreshed alone was fetched at another time than the carried one.
+  // A component refreshed alone was fetched at another time than the carried one. The ages
+  // follow a ticking clock: on a page left open they keep up with the header's.
+  const now = new Date(useNowMs());
   const parts = componentRuns(run?.members);
-  const fetchedText = (parts ? componentFetchedText(parts, new Date()) : null) ?? (run?.completed_at ? relativeTime(run.completed_at) : null);
+  const fetchedText = (parts ? componentFetchedText(parts, now) : null) ?? (run?.completed_at ? relativeTime(run.completed_at, now) : null);
   return (
     <Section title="Forecast models" testId="rating-models">
       <dl>
