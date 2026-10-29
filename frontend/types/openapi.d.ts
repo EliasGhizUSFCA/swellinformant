@@ -4344,6 +4344,11 @@ export interface components {
             /** Research Class */
             research_class?: string | null;
             freshness?: components["schemas"]["SpotFreshnessOut"] | null;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
             /** Forecast Latitude */
             forecast_latitude: number;
             /** Forecast Longitude */
@@ -4533,6 +4538,11 @@ export interface components {
             /** Research Class */
             research_class?: string | null;
             freshness?: components["schemas"]["SpotFreshnessOut"] | null;
+            /**
+             * Attribution Links
+             * @default []
+             */
+            attribution_links: components["schemas"]["AttributionLinkOut"][];
         };
         /** SpotTimelineOut */
         SpotTimelineOut: {

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { ConfidenceBadge } from "@/components/confidence";
+import { AttributionLinks, mergeAttributionLinks } from "@/components/forecast-provenance";
 import { AppShell } from "@/components/layout/app-shell";
 import { PageHeader } from "@/components/page-header";
 import { QualityBadge } from "@/components/quality";
@@ -101,6 +102,9 @@ export default function SpotsPage() {
           </section>
         ))}
       </div>
+      {/* The ratings, heights and swells above come from each spot's forecast run: its sources'
+          credit and licence links (Open-Meteo CC BY 4.0; review r4-spec-R4-SPEC-1). */}
+      <AttributionLinks links={mergeAttributionLinks(spots)} className="mt-8" />
     </AppShell>
   );
 }

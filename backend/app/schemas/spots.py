@@ -263,6 +263,9 @@ class SpotSummary(SpotMini):
     research_class: str | None = None
     # How fresh the spot's served forecast is (published version, last update, stale).
     freshness: SpotFreshnessOut | None = None
+    # Credit and licence links of the sources behind the spot's served run, shown with the
+    # values derived from it (its ratings, breaking heights and next swell).
+    attribution_links: list[AttributionLinkOut] = []
 
 
 class PhysicalProfileOut(BaseModel):

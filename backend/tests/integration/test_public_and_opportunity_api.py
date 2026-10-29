@@ -296,6 +296,30 @@ def test_trips_and_their_event_carry_the_spots_freshness(
     assert trip["stale"] is False  # the run itself is current
 
 
+def test_the_spot_list_credits_the_sources_of_its_ratings(
+    app_client: ApiClient, db: Session, few_spots: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r4-spec-R4-SPEC-1 (non-negotiable 5): /spots shows every spot's rating,
+    breaking height and next swell from its served run, so each spot carries the credit
+    links that run's sources ask for, as events and trips do. The demo source asks for none;
+    here it is credited as the Open-Meteo GFS source is (SYNTHETIC: only the links are
+    borrowed). A spot nothing is served for has none."""
+    from app.services.forecasts import queries
+    from app.services.forecasts.registry import OPEN_METEO_NOAA_CODE
+
+    credited = queries.SOURCE_ATTRIBUTION_LINKS[OPEN_METEO_NOAA_CODE]
+    monkeypatch.setitem(queries.SOURCE_ATTRIBUTION_LINKS, "demo", credited)
+    run_pipeline(db)
+    want = [link.model_dump() for link in credited]
+    assert any("Open-Meteo.com" in link["label"] for link in want)
+    spots = app_client.get("/api/spots").json()
+    served = [s for s in spots if s["slug"] in few_spots]
+    assert served and all(s["best_upcoming"] is not None for s in served)
+    assert all(s["attribution_links"] == want for s in served)
+    assert all(s["attribution_links"] == [] for s in spots if s["slug"] not in few_spots)
+    assert app_client.get("/api/spots/pipeline").json()["attribution_links"] == want
+
+
 def test_a_trip_and_the_public_event_judge_the_forecast_at_the_same_instant(
     make_client, db: Session, few_spots: list[str], only_simulated_swells: None
 ) -> None:  # type: ignore[no-untyped-def]

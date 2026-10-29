@@ -12549,6 +12549,14 @@
        }
       ]
      },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
+     },
      "forecast_latitude": {
       "type": "number",
       "title": "Forecast Latitude"
@@ -13098,6 +13106,14 @@
         "type": "null"
        }
       ]
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",

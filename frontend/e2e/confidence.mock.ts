@@ -281,6 +281,7 @@ export function spotDetail(sc: Scenario): SpotDetail {
     next_event: null,
     upcoming_event_count: 1,
     research_class: sc.research?.research_class ?? null,
+    attribution_links: [],
     forecast_latitude: -34.1,
     forecast_longitude: 24.95,
     swell_window_min: 150,

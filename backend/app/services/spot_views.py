@@ -450,9 +450,13 @@ def _summary(
     now: datetime,
     links: AttributionMemo | None = None,
     freshness: SpotFreshnessOut | None = None,
+    run: ForecastRun | None = None,
 ) -> SpotSummary:
+    """``run``: the run served for the spot, whose sources' credit links go with the values
+    derived from it (the current and best hours; review r4-spec-R4-SPEC-1)."""
     first, counts = events
     upcoming = first.get(spot.id)
+    db = object_session(run) if run is not None else None
     return SpotSummary(
         **_summary_fields(spot),  # type: ignore[arg-type]
         current=current.get(spot.id),
@@ -467,6 +471,9 @@ def _summary(
         upcoming_event_count=counts.get(spot.id, 0),
         research_class=research_class,
         freshness=freshness,
+        attribution_links=run_attribution_links(db, run, links)
+        if db is not None and run is not None
+        else [],
     )
 
 
@@ -481,9 +488,19 @@ def spot_summaries(
     events = _active_events(db, now)
     research = research_classes(db)  # one query for all spots
     freshness = freshness_by_spot(db, runs, now)
-    links: AttributionMemo = {}
+    links: AttributionMemo = {}  # each run's credit links read once for the list
     return [
-        _summary(s, current, best, events, research.get(s.id), now, links, freshness.get(s.id))
+        _summary(
+            s,
+            current,
+            best,
+            events,
+            research.get(s.id),
+            now,
+            links,
+            freshness.get(s.id),
+            runs.get(s.id),
+        )
         for s in spots
     ]
 
@@ -506,6 +523,7 @@ def spot_detail(
         research.research_class if research else None,
         now,
         freshness=freshness_by_spot(db, runs, now).get(spot.id),
+        run=runs.get(spot.id),
     )
     return SpotDetail(
         **summary.model_dump(),
