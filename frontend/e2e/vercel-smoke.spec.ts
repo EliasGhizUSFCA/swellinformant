@@ -221,6 +221,9 @@ test.describe("local Vercel-style stack", () => {
     expect(ok.status).toBe(200);
     expect(ok.headers.get("cache-control")).toContain("no-store");
     const body = (await ok.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["alerts_sent", "heartbeat_age_minutes", "problems", "status"]);
+    // "refresh": the daily cron also runs one forecast refresh check, the backstop for a
+    // scheduler that stopped calling /api/internal/refresh (backend/app/api/internal.py).
+    expect(Object.keys(body).sort()).toEqual(["alerts_sent", "heartbeat_age_minutes", "problems", "refresh", "status"]);
+    expect(typeof (body.refresh as { status?: unknown }).status).toBe("string");
   });
 });
