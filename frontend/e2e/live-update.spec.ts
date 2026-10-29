@@ -52,6 +52,8 @@ interface VersionOut {
 interface EventOut {
   id: string;
   status: string;
+  start_time: string;
+  end_time: string;
   version: number;
   last_updated_at: string;
   history: Array<{ run_key?: string }>;
@@ -124,10 +126,16 @@ test.describe.serial("live update pipeline (spec 32)", () => {
       origins: ["SFO"],
       travel: { max_price: 3000, max_flight_hours: 40 },
     })) as { id: string };
-    const sim = await apiPost(page, "/api/dev/simulate-swell", { spot_slug: SLUG, days_ahead: 5.8, duration_hours: 48, deliver: false });
+    const swellHours = 48;
+    const sim = await apiPost(page, "/api/dev/simulate-swell", { spot_slug: SLUG, days_ahead: 5.8, duration_hours: swellHours, deliver: false });
     expect(sim.simulation.status).toBe("success");
     const eventsBefore = (await apiGet(page.request, `/api/spots/${SLUG}/events`)) as EventOut[];
-    const event = eventsBefore.find((e) => e.status === "active");
+    // The event of this simulated swell: earlier specs in the same database can leave other
+    // active J-Bay events (full-flow.spec.ts adds one 2 days ahead, before the search's
+    // default alert lead time), so the first active event is not necessarily this one.
+    const swellStart = Date.parse(sim.swell_start as string);
+    const swellEnd = swellStart + swellHours * 3_600_000;
+    const event = eventsBefore.find((e) => e.status === "active" && Date.parse(e.start_time) <= swellEnd && Date.parse(e.end_time) >= swellStart);
     expect(event, "the simulated J-Bay swell event").toBeTruthy();
     const matchesBefore = (await apiGet(page.request, `/api/searches/${search.id}/matches`)) as Array<{ id: string; event_id: string }>;
     expect(matchesBefore.some((m) => m.event_id === event!.id), "the saved search matched the swell").toBe(true);
