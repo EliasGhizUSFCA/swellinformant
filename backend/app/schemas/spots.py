@@ -241,6 +241,9 @@ class EventOut(BaseModel):
     # Credit and licence links of the sources behind the event's forecast run (every
     # member's for a blend), shown next to the event's model values.
     attribution_links: list[AttributionLinkOut] = []
+    # How fresh the spot's served forecast is (the published version's spot status: a spot
+    # whose refresh failed is stale although its run is not), as on SpotSummary (spec 14).
+    freshness: SpotFreshnessOut | None = None
 
 
 class SpotSummary(SpotMini):

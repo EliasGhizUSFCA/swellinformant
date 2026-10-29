@@ -2388,6 +2388,7 @@ export interface components {
              * @default []
              */
             attribution_links: components["schemas"]["AttributionLinkOut"][];
+            freshness?: components["schemas"]["SpotFreshnessOut"] | null;
         };
         /** ExperimentSummary */
         ExperimentSummary: {
@@ -3093,6 +3094,7 @@ export interface components {
              * @default false
              */
             stale: boolean;
+            freshness?: components["schemas"]["SpotFreshnessOut"] | null;
             /**
              * Short Notice
              * @default false
@@ -3228,6 +3230,7 @@ export interface components {
              * @default false
              */
             stale: boolean;
+            freshness?: components["schemas"]["SpotFreshnessOut"] | null;
             /**
              * Short Notice
              * @default false

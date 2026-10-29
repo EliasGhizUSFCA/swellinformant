@@ -3,18 +3,21 @@ import Link from "next/link";
 
 import { ConfidenceBadge } from "@/components/confidence";
 import { DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
-import { StaleBadge } from "@/components/stale-banner";
+import { StaleBadge, StaleLine } from "@/components/stale-banner";
+import { freshnessOf } from "@/lib/forecast-fields";
 import { formatCalendarDate, formatMoney, formatRange, heightRange, leadLabel, type Units } from "@/lib/format";
 import type { MatchSummary } from "@/types/api";
 
 /**
  * A matched trip: overall match, our breaking-wave estimate and rating at the peak, the surf
  * window and the best flight, with the swell's forecast confidence from the API ("Not
- * assessed yet" when it has none), confidence at the break when that is lower, and an "Out of
- * date" tag when the forecast run behind the match is stale.
+ * assessed yet" when it has none), and an "Out of date" tag when the forecast run behind the
+ * match is stale or the published version marks its spot stale (`freshness`, with the
+ * spot's last update; spec 14).
  */
 export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; units?: Units }) {
   const tz = match.spot.timezone;
+  const fresh = freshnessOf(match);
   return (
     <Link
       href={`/opportunities/${match.id}`}
@@ -55,10 +58,14 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
             <span>{match.status_reason ?? "No eligible flight found yet."}</span>
           )}
         </div>
+        <StaleLine freshness={fresh} className="mt-2" data-testid="opportunity-card-stale" />
         <div className="mt-2 flex items-center justify-between gap-2">
           <span className="flex flex-wrap items-center gap-1.5">
             <ConfidenceBadge value={match.forecast_confidence_class} />
-            <StaleBadge stale={match.stale} />
+            <StaleBadge
+              stale={match.stale || fresh?.stale}
+              title={match.stale ? undefined : "This spot's forecast was not updated with the latest refresh; it is not a current forecast."}
+            />
           </span>
           <span className="flex items-center gap-1 text-xs font-medium text-ocean opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
             Details <ArrowRight className="size-3.5" />

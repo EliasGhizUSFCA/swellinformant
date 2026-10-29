@@ -8,7 +8,7 @@ reports that spot's ``freshness`` (``serving.freshness_by_spot``, design D10).
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Hashable, Iterator, Sequence
+from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, cast, get_args
@@ -139,13 +139,19 @@ def event_out(
     include_history: bool = False,
     *,
     links: AttributionMemo | None = None,
+    freshness: Mapping[int, SpotFreshnessOut] | None = None,
 ) -> EventOut:
     """``links``: the attribution links already read for the events' runs (a list of events
-    from a few runs then reads each run's once)."""
+    from a few runs then reads each run's once). ``freshness``: {spot_id: freshness} of the
+    served forecast already read for a list of events (else read for the event's spot)."""
     now = now or utcnow()
     # The read-time staleness rule, as for the same hour in the forecast (_conditions).
     db = object_session(event)
     stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
+    if freshness is not None:
+        spot_freshness = freshness.get(event.spot_id)
+    else:
+        spot_freshness = served_freshness(db, event.spot_id, now) if db is not None else None
     return EventOut(
         id=event.id,
         spot=spot_mini(event.spot),
@@ -175,6 +181,7 @@ def event_out(
         source_code=event.source_code,
         history=event.history if include_history else [],
         stale=stale,
+        freshness=spot_freshness,
         # The credits its forecast run's sources ask for next to their data (Open-Meteo,
         # ECMWF, NOAA); cards show the swell, wind and our estimate from that run.
         attribution_links=(
@@ -445,7 +452,13 @@ def _summary(
         **_summary_fields(spot),  # type: ignore[arg-type]
         current=current.get(spot.id),
         best_upcoming=best.get(spot.id),
-        next_event=event_out(upcoming, now, links=links) if upcoming is not None else None,
+        next_event=(
+            event_out(
+                upcoming, now, links=links, freshness={spot.id: freshness} if freshness else {}
+            )
+            if upcoming is not None
+            else None
+        ),
         upcoming_event_count=counts.get(spot.id, 0),
         research_class=research_class,
         freshness=freshness,
@@ -848,12 +861,18 @@ def authoritative_run(db: Session, spot_id: int, now: datetime) -> ForecastRun |
     return _served_runs(db, now).get(spot_id)
 
 
+def events_freshness(db: Session, now: datetime) -> dict[int, SpotFreshnessOut]:
+    """{spot_id: freshness} of every served spot at ``now`` (read once per ``now`` inside
+    :func:`shared_hour_reads`), for a list of events or matches."""
+    return _shared(
+        db, ("freshness", now), lambda: freshness_by_spot(db, _served_runs(db, now), now)
+    )
+
+
 def served_freshness(db: Session, spot_id: int, now: datetime) -> SpotFreshnessOut | None:
     """The spot's freshness at ``now`` (``serving.freshness_by_spot``; read once per ``now``
     inside :func:`shared_hour_reads`); None for a spot nothing is served for."""
-    return _shared(
-        db, ("freshness", now), lambda: freshness_by_spot(db, _served_runs(db, now), now)
-    ).get(spot_id)
+    return events_freshness(db, now).get(spot_id)
 
 
 def forecast_source_out(db: Session, run: ForecastRun) -> ForecastSourceOut:
@@ -997,7 +1016,8 @@ def upcoming_events(
         .limit(limit)
     ).all()
     links: AttributionMemo = {}
-    return [event_out(e, now, links=links) for e in rows]
+    freshness = events_freshness(db, now) if rows else {}
+    return [event_out(e, now, links=links, freshness=freshness) for e in rows]
 
 
 def spot_events(db: Session, spot: SurfSpot, now: datetime | None = None) -> list[EventOut]:
@@ -1013,7 +1033,9 @@ def spot_events(db: Session, spot: SurfSpot, now: datetime | None = None) -> lis
         .order_by(SwellEvent.start_time)
     ).all()
     links: AttributionMemo = {}
-    return [event_out(e, now, links=links) for e in rows]
+    fresh = served_freshness(db, spot.id, now) if rows else None
+    freshness = {spot.id: fresh} if fresh is not None else {}
+    return [event_out(e, now, links=links, freshness=freshness) for e in rows]
 
 
 def event_counts(db: Session) -> dict[str, int]:

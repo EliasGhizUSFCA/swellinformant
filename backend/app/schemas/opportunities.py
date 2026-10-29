@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from app.schemas.forecasts import SpotFreshnessOut
 from app.schemas.spots import DailySummary, EventOut, SpotAirportOut, SpotMini
 
 # Forecast and local confidence classes (documented heuristic classes, not probabilities).
@@ -129,6 +130,9 @@ class MatchSummary(BaseModel):
     forecast_confidence_class: ConfidenceClass | None = None
     # The forecast run behind the match is older than its source's stale limit.
     stale: bool = False
+    # How fresh the spot's served forecast is (the published version's spot status: a spot
+    # whose refresh failed is stale although its run is not; spec 14).
+    freshness: SpotFreshnessOut | None = None
     # The swell starts SHORT_NOTICE_MIN_DAYS to _MAX_DAYS ahead (ranked first, spec 28).
     short_notice: bool = False
     # The best fare's quote has expired: a past price, re-check before booking.

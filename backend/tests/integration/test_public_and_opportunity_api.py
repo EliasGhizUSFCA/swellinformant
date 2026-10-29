@@ -244,3 +244,53 @@ def test_map_snapshot_reports_its_runs_freshness(
     fc = app_client.get("/api/spots/pipeline/forecast").json()
     assert fc["alerts_paused"] is False and fc["stale"] is False
     assert fc["run"]["members"] and fc["run"]["members"][0]["code"] == "demo"
+
+
+def test_trips_and_their_event_carry_the_spots_freshness(
+    make_client, db: Session, few_spots: list[str], only_simulated_swells: None
+) -> None:  # type: ignore[no-untyped-def]
+    """Review r2 FE-2 (spec 14): a trip to a spot whose refresh failed is not shown as
+    current. The match's run is not stale by age; the published version marks the spot
+    stale, and the trip, its detail and its event say so with the spot's ``freshness``."""
+    from sqlalchemy import select
+
+    from app.models import SurfSpot
+    from app.services.forecasts import serving, versions
+
+    owner: ApiClient = make_client()
+    owner.register("owner@example.com")
+    assert owner.post("/api/searches", search_payload()).status_code == 201
+    run_pipeline(db)
+    sim = owner.post("/api/dev/simulate-swell", {"spot_slug": "jeffreys-bay", "days_ahead": 7})
+    assert sim.status_code == 200, sim.text
+    top = owner.get("/api/opportunities").json()[0]
+    assert top["spot"]["slug"] == "jeffreys-bay"
+    assert top["freshness"]["stale"] is False and top["freshness"]["version_id"]
+    # The next version: J-Bay's refresh failed (SYNTHETIC failure), it keeps its run.
+    current = versions.current_version(db)
+    assert current is not None
+    jbay = db.scalar(select(SurfSpot.id).where(SurfSpot.slug == "jeffreys-bay"))
+    spot_runs = {
+        sid: versions.SpotRun(entry.run_id, versions.STALE, entry.last_updated_at, "synthetic")
+        if sid == jbay
+        else entry
+        for sid, entry in versions.spot_runs_of(current).items()
+    }
+    staged = versions.stage_version(
+        db,
+        provider=current.provider or "demo",
+        source_code=current.source_code or "demo",
+        forecast_run_id=current.forecast_run_id,
+        components=versions.component_runs_of(current),
+        spot_runs=spot_runs,
+        previous=current,
+    )
+    second = versions.publish_version(db, staged)
+    serving.refresh_version_marker(db)
+    serving.clear_memo()
+    trip = owner.get("/api/opportunities").json()[0]
+    detail = owner.get(f"/api/opportunities/{trip['id']}").json()
+    for fresh in (trip["freshness"], detail["freshness"], detail["event"]["freshness"]):
+        assert fresh["version_id"] == second.id and fresh["stale"] is True
+        assert fresh["reason"] == "refresh_failed"
+    assert trip["stale"] is False  # the run itself is current

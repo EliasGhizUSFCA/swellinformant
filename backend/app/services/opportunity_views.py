@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -21,6 +22,7 @@ from app.models import (
     User,
 )
 from app.models.enums import MatchStatus
+from app.schemas.forecasts import SpotFreshnessOut
 from app.schemas.opportunities import (
     LinkOut,
     MatchDetail,
@@ -38,7 +40,14 @@ from app.services.flights.registry import provider_label
 from app.services.flights.windows import InfeasibleWindow, compute_travel_window
 from app.services.forecasts.queries import run_id_is_stale
 from app.services.matching.scoring import SHORT_NOTICE_BOOST, is_short_notice
-from app.services.spot_views import daily_summaries, event_out, forecast_points, spot_mini
+from app.services.spot_views import (
+    daily_summaries,
+    event_out,
+    events_freshness,
+    forecast_points,
+    served_freshness,
+    spot_mini,
+)
 from app.services.surf_quality.breaking import (
     METHOD_APPROX_V1,
     METHOD_CALIBRATED,
@@ -80,8 +89,19 @@ def event_confidence(event: SwellEvent, now: datetime) -> dict[str, object]:
     }
 
 
-def match_summary(m: OpportunityMatch, now: datetime | None = None) -> MatchSummary:
+def match_summary(
+    m: OpportunityMatch,
+    now: datetime | None = None,
+    freshness: Mapping[int, SpotFreshnessOut] | None = None,
+) -> MatchSummary:
+    """``freshness``: {spot_id: freshness} of the served forecast already read for a list
+    of matches (else read for the match's spot)."""
     now = now or utcnow()
+    db = object_session(m)
+    if freshness is not None:
+        spot_freshness = freshness.get(m.spot_id)
+    else:
+        spot_freshness = served_freshness(db, m.spot_id, now) if db is not None else None
     offer = m.best_offer if m.status == MatchStatus.FLIGHT_FOUND else None
     return MatchSummary(
         id=m.id,
@@ -126,6 +146,7 @@ def match_summary(m: OpportunityMatch, now: datetime | None = None) -> MatchSumm
         quoted_currency=offer.currency
         if offer is not None and m.currency and offer.currency != m.currency
         else None,
+        freshness=spot_freshness,
         **event_confidence(m.swell_event, now),  # type: ignore[arg-type]
     )
 
@@ -164,7 +185,9 @@ def list_matches(
         boosted.desc(),
         OpportunityMatch.window_start,
     ).limit(limit)
-    return [match_summary(m, now) for m in db.scalars(stmt).unique().all()]
+    rows = db.scalars(stmt).unique().all()
+    freshness = events_freshness(db, now) if rows else {}
+    return [match_summary(m, now, freshness) for m in rows]
 
 
 def _slice(offer: FlightOffer, direction: str) -> SliceOut:
@@ -299,7 +322,9 @@ def limitations(
 
 def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
     now = utcnow()
-    summary = match_summary(m, now)
+    fresh = served_freshness(db, m.spot_id, now)
+    freshness = {m.spot_id: fresh} if fresh is not None else {}
+    summary = match_summary(m, now, freshness)
     event: SwellEvent = m.swell_event
     travel = m.search.travel
     daily = []
@@ -361,7 +386,7 @@ def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
                 )
     return MatchDetail(
         **summary.model_dump(),
-        event=event_out(event, now, include_history=True),
+        event=event_out(event, now, include_history=True, freshness=freshness),
         spot_airports=[
             SpotAirportOut(
                 airport=AirportOut.model_validate(a.airport),

@@ -68,13 +68,23 @@ export function StaleBanner({
 }
 
 /** A compact "Out of date" tag for cards whose forecast run is stale (nothing when fresh). */
-export function StaleBadge({ stale, dark = false, className }: { stale: boolean | null | undefined; dark?: boolean; className?: string }) {
+export function StaleBadge({
+  stale,
+  dark = false,
+  className,
+  title = "The forecast run behind this is older than its stale limit; confidence is capped at Moderate.",
+}: {
+  stale: boolean | null | undefined;
+  dark?: boolean;
+  className?: string;
+  title?: string;
+}) {
   if (!stale) return null;
   return (
     <Badge
       variant="warn"
       className={cn(dark && "border-amber-300/40 bg-amber-400/15 text-amber-100", className)}
-      title="The forecast run behind this is older than its stale limit; confidence is capped at Moderate."
+      title={title}
       data-testid="stale-badge"
     >
       <Clock aria-hidden="true" /> Out of date

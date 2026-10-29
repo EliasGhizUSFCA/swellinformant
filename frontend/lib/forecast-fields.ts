@@ -100,6 +100,19 @@ export function freshnessOf(x: unknown): Freshness | null {
   };
 }
 
+/** A card's forecast is not current: its run is past its stale limit (the API's `stale`)
+ * or the published version marks its spot stale (`freshness.stale`: e.g. the spot's latest
+ * refresh failed while other spots updated). */
+export function outOfDate(x: { stale?: boolean | null; freshness?: unknown } | null | undefined): boolean {
+  return !!x && (x.stale === true || freshnessOf(x)?.stale === true);
+}
+
+/** `items` with the out-of-date ones after the current ones (each group keeps its order):
+ * a stale spot's swell is never ranked as the best upcoming one. */
+export function currentFirst<T extends { stale?: boolean | null; freshness?: unknown }>(items: readonly T[]): T[] {
+  return [...items.filter((x) => !outOfDate(x)), ...items.filter((x) => outOfDate(x))];
+}
+
 /** The first freshness block found among `sources` (e.g. the forecast, the timeline and the
  * spot itself), stale if any of them says so: a spot is never shown as current while one of
  * its payloads is marked stale. */

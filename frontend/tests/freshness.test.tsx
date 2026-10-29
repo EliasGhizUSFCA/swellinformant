@@ -2,9 +2,11 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConditionsSummary } from "@/components/conditions";
+import { EventCard, TopEventCards } from "@/components/event-card";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
 import { AttributionLinks, ForecastProvenance } from "@/components/forecast-provenance";
 import { ageText, StaleBanner, StaleBadge, StaleLine } from "@/components/stale-banner";
+import { currentFirst, outOfDate } from "@/lib/forecast-fields";
 import { cycleLabel } from "@/lib/map-time";
 import { HEIGHT_UNIT_KEY, resetHeightUnitMemory } from "@/lib/units";
 import type { Conditions, RunMember, SwellEvent, SystemStatus } from "@/types/api";
@@ -160,6 +162,58 @@ beforeEach(() => {
   hooks.me = { data: undefined };
   window.localStorage.removeItem(HEIGHT_UNIT_KEY);
   resetHeightUnitMemory();
+});
+
+describe("event cards of a spot whose forecast is out of date (review r2 FE-2, spec 14)", () => {
+  // SYNTHETIC: the published version marks the spot stale (its latest refresh failed; last
+  // updated 9 hours ago); the event's own run is not stale by age.
+  const staleSpot = {
+    version_id: 4,
+    last_updated_at: hoursFromNow(-9),
+    stale: true,
+    reason: "refresh_failed",
+  } as const;
+  const current = { ...staleSpot, last_updated_at: hoursFromNow(-1), stale: false, reason: null };
+  const named = (slug: string, name: string) => ({ ...event().spot, slug, name });
+
+  it("tags the card out of date and says when the spot was last updated", () => {
+    render(<EventCard event={event({ stale: false, freshness: staleSpot })} featured />);
+    expect(screen.getByTestId("stale-badge")).toHaveTextContent("Out of date");
+    expect(screen.getByTestId("event-card-stale")).toHaveTextContent("Forecast last updated 9 hours ago. Not a current forecast.");
+    cleanup();
+    render(<EventCard event={event({ stale: false, freshness: current })} featured />);
+    expect(screen.queryByTestId("stale-badge")).toBeNull();
+    expect(screen.queryByTestId("event-card-stale")).toBeNull();
+  });
+
+  it("orders current swells first and never features a stale spot's as the best", () => {
+    const a = event({ id: "00000000-0000-4000-8000-0000000000a1", spot: named("stale-reef", "Stale Reef"), peak_score: 95, freshness: staleSpot });
+    const b = event({ id: "00000000-0000-4000-8000-0000000000a2", spot: named("fresh-point", "Fresh Point"), peak_score: 70, freshness: current });
+    expect(outOfDate(a)).toBe(true);
+    expect(outOfDate(b)).toBe(false);
+    expect(outOfDate(event({ stale: true }))).toBe(true);
+    expect(currentFirst([a, b]).map((e) => e.spot.slug)).toEqual(["fresh-point", "stale-reef"]);
+    render(<TopEventCards events={[a, b]} />);
+    const cards = screen.getAllByTestId("event-card");
+    expect(cards.map((c) => c.getAttribute("href"))).toEqual(["/spots/fresh-point", "/spots/stale-reef"]);
+    expect(cards[0]).toHaveTextContent("Best upcoming surf");
+    expect(cards[1]).not.toHaveTextContent("Best upcoming surf");
+    cleanup();
+    // Every swell out of date: none is "Best upcoming surf".
+    render(<TopEventCards events={[a]} />);
+    expect(screen.getByTestId("event-card")).not.toHaveTextContent("Best upcoming surf");
+    expect(screen.getByTestId("event-card-stale")).toBeVisible();
+  });
+
+  it("lists a stale spot's swell after the current ones on the landing page", () => {
+    const a = event({ id: "00000000-0000-4000-8000-0000000000a1", spot: named("stale-reef", "Stale Reef"), freshness: staleSpot });
+    const b = event({ id: "00000000-0000-4000-8000-0000000000a2", spot: named("fresh-point", "Fresh Point"), freshness: current });
+    hooks.events = { data: [a, b], isLoading: false, isError: false, isLoadingError: false };
+    render(<LiveSwells />);
+    const cards = screen.getAllByTestId("event-card");
+    expect(cards.map((c) => c.getAttribute("href"))).toEqual(["/spots/fresh-point", "/spots/stale-reef"]);
+    expect(within(cards[1]!).getByTestId("event-card-stale")).toHaveTextContent("Not a current forecast.");
+  });
 });
 
 describe("landing page freshness (LiveSwells)", () => {

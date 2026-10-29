@@ -7,6 +7,7 @@ import { AttributionLinks, mergeAttributionLinks, useNowMs } from "@/components/
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEvents, useMapConditions, useMe, useSystemStatus } from "@/hooks/queries";
 import { modelRunText } from "@/lib/confidence";
+import { currentFirst } from "@/lib/forecast-fields";
 import type { Units } from "@/lib/format";
 import { useHeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
@@ -81,7 +82,8 @@ export function LiveSwells() {
       {data && data.length > 0 && (
         <>
           <div className="grid gap-3 sm:grid-cols-2">
-            {data.map((e) => (
+            {/* A stale spot's swell is listed after the current ones. */}
+            {currentFirst(data).map((e) => (
               <EventCard key={e.id} event={e} units={units} dark />
             ))}
           </div>

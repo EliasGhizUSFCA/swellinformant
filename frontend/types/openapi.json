@@ -6443,6 +6443,16 @@
       "type": "array",
       "title": "Attribution Links",
       "default": []
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SpotFreshnessOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -8627,6 +8637,16 @@
       "title": "Stale",
       "default": false
      },
+     "freshness": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SpotFreshnessOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
      "short_notice": {
       "type": "boolean",
       "title": "Short Notice",
@@ -9007,6 +9027,16 @@
       "type": "boolean",
       "title": "Stale",
       "default": false
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SpotFreshnessOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      },
      "short_notice": {
       "type": "boolean",

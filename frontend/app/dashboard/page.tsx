@@ -7,7 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { toast } from "sonner";
 
-import { EventCard } from "@/components/event-card";
+import { TopEventCards } from "@/components/event-card";
 import { AttributionLinks, mergeAttributionLinks } from "@/components/forecast-provenance";
 import { AppShell } from "@/components/layout/app-shell";
 import { OpportunityCard } from "@/components/opportunity-card";
@@ -238,13 +238,7 @@ function Dashboard({ user }: { user: User }) {
               Top surf forecasts
             </SectionTitle>
             {events.isLoading && <Skeleton className="h-40" />}
-            <div className="grid gap-3 sm:grid-cols-2" data-testid="top-events">
-              {(events.data ?? []).map((e, i) => (
-                <div key={e.id} className={i === 0 ? "min-w-0 sm:col-span-2" : "min-w-0"}>
-                  <EventCard event={e} units={units} featured={i === 0} />
-                </div>
-              ))}
-            </div>
+            <TopEventCards events={events.data ?? []} units={units} />
             {events.data?.length === 0 && <p className="text-sm text-muted-foreground">No Good-or-better swells in the current forecast.</p>}
             <AttributionLinks links={mergeAttributionLinks(events.data)} className="mt-3" />
           </div>

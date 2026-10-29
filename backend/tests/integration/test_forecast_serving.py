@@ -299,6 +299,44 @@ def test_the_version_wins_and_a_stale_spot_keeps_its_previous_run(
     assert status["spots_served"] == len(ids)
 
 
+def test_event_cards_carry_the_spots_freshness(
+    app_client: ApiClient, db: Session, two_runs: tuple[int, int]
+) -> None:
+    """Review r2 FE-2 (spec 14): an event whose spot's refresh failed is not shown as
+    current. Its run is not stale by age (``stale`` stays false), but the version marks the
+    spot stale, and every event payload says so with the spot's ``freshness``."""
+    _, newer = two_runs
+    ids = active_ids(db)
+    publish(db, dict.fromkeys(ids, newer))
+    serving.refresh_version_marker(db)
+    events = app_client.get("/api/events?limit=50&min_score=0").json()
+    assert events, "the SYNTHETIC demo runs detect at least one swell"
+    assert all(e["freshness"]["stale"] is False for e in events)
+    slug = events[0]["spot"]["slug"]
+    second = publish(db, dict.fromkeys(ids, newer), stale=frozenset({spot_id(db, slug)}))
+    serving.refresh_version_marker(db)
+
+    def check(event: dict[str, Any]) -> None:
+        fresh = event["freshness"]
+        assert fresh["version_id"] == second.id
+        assert fresh["stale"] is (event["spot"]["slug"] == slug), event["spot"]["slug"]
+        if fresh["stale"]:
+            assert fresh["reason"] == "refresh_failed" and fresh["last_updated_at"]
+            assert event["stale"] is False  # the run itself is current
+
+    listed = app_client.get("/api/events?limit=50&min_score=0").json()
+    assert {e["spot"]["slug"] for e in listed} >= {slug}
+    for e in listed:
+        check(e)
+    for e in app_client.get(f"/api/spots/{slug}/events").json():
+        check(e)
+    one = app_client.get(f"/api/events/{events[0]['id']}").json()
+    check(one)
+    summary = next(s for s in app_client.get("/api/spots").json() if s["slug"] == slug)
+    if summary["next_event"] is not None:
+        check(summary["next_event"])
+
+
 def test_a_spot_whose_refresh_failed_gets_a_new_timeline_etag(
     app_client: ApiClient, db: Session, two_runs: tuple[int, int]
 ) -> None:
