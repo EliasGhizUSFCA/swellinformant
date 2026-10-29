@@ -960,6 +960,122 @@ def test_open_meteo_windows_roll_the_horizon_24_hours_a_day(
     assert 0 < full_fetches <= 2 * 3, f"{full_fetches} full fetches in 24 component refreshes"
 
 
+def _fail_wave_requests(monkeypatch: pytest.MonkeyPatch, slugs: set[str] | None = None) -> None:
+    """SYNTHETIC: every data request that includes the waves fails (``slugs`` None: the
+    whole request raises, as a marine 5xx or timeout), or only these spots' wave data fail;
+    the atmosphere requests answer."""
+    real = SplitDemo.fetch
+
+    def fetch(self: SplitDemo, spots: Any, run: RunInfo, components: Any = None) -> Any:
+        if components is not None and "wave" not in components:
+            return real(self, spots, run, components)
+        if slugs is None:
+            self.calls.append((sorted(p.slug for p in spots), components))
+            raise TransientProviderError("synthetic: the marine data request timed out")
+        result = real(self, spots, run, components)
+        for p in spots:
+            if p.slug in slugs:
+                result.records.pop(p.spot_id, None)
+                result.errors[p.spot_id] = "synthetic: wave data HTTP 502 for this spot"
+        return result
+
+    monkeypatch.setattr(SplitDemo, "fetch", fetch)
+
+
+def _short_waves_then_new_wind(db: Session, split: type[SplitDemo]) -> ForecastRun:
+    """v1 C00/C00, then a wave-only C06 refresh (v2: its waves end at the carried C00
+    wind's end, short of two C06 runs), then the atmosphere moves to C06. Returns v2's run."""
+    assert refresh(C00 + timedelta(hours=4))["status"] == "success"
+    split.cycles["wave"] = C06
+    assert refresh(C06 + timedelta(hours=5))["status"] == "success"
+    r2 = run_of(db, published(db))
+    split.cycles["atmosphere"] = C06
+    return r2
+
+
+def _assert_new_wind_with_waves_carried(
+    db: Session, r2: ForecastRun, spots: int, refetch_failed: int
+) -> ForecastRun:
+    v3 = published(db)
+    r3 = run_of(db, v3)
+    assert (v3.wave_model_run, v3.wind_model_run) == (C06, C06)
+    assert (v3.spots_updated, v3.spots_failed) == (spots, 0)
+    # The waves are labelled with their own (carried) run, never refetched as new.
+    assert v3.components["wave"]["changed"] is False
+    assert v3.components["wave"]["run_key"] == f"demo-wave:{C06:%Y%m%d%H}"
+    assert v3.components["atmosphere"]["changed"] is True
+    assert r3.status == ForecastRunStatus.SUCCESS and r3.details["retryable"] is False
+    assert r3.details["components"]["wave"]["refetch_failed_spots"] == refetch_failed
+    assert differing(db, r2.id, r3.id, COMPONENT_FIELDS["wave"]) == 0
+    assert differing(db, r2.id, r3.id, COMPONENT_FIELDS["atmosphere"]) > 0
+    end, _, missing = _published_span(db)
+    assert missing == 0
+    return r3
+
+
+def test_a_failed_horizon_refetch_still_publishes_the_new_wind_with_the_waves_carried(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r3-backend-R3-1: the carried waves end short of the horizon, so they are
+    fetched again with the new wind in one request. When that request fails (a marine 5xx,
+    a timeout, a call budget) the new wind is still published (spec 5: new wind -> update
+    wind, retain the wave data; spec 14: publish what succeeded): the spots are fetched
+    again with the wind alone and the waves carried from their served run, with its end.
+    Before the fix the refresh failed for every spot, and every retry failed the same way."""
+    r2 = _short_waves_then_new_wind(db, split)
+    end2 = db.scalar(select(func.max(WaveForecast.valid_time)).where(WaveForecast.run_id == r2.id))
+    _fail_wave_requests(monkeypatch)
+    calls = len(split.calls)
+    out = refresh(C06 + timedelta(hours=6, minutes=10))
+    assert out["status"] == "success", out
+    assert split.calls[calls:] == [
+        (sorted(few_spots), None),  # the refetch of the waves with the wind: it fails
+        (sorted(few_spots), frozenset({"atmosphere"})),  # the wind alone
+    ]
+    r3 = _assert_new_wind_with_waves_carried(db, r2, len(few_spots), len(few_spots))
+    assert "refetched_spots" not in r3.details["components"]["wave"]
+    assert r3.details["components"]["wave"]["carried_from_run_id"] == r2.id
+    assert any("horizon refetch" in w for w in r3.details["warnings"])
+    # The carried run keeps its own end; nothing is retried (the wind is published).
+    assert _published_span(db)[0] == end2
+    assert refresh(C06 + timedelta(hours=6, minutes=15))["status"] == "not_due"
+
+
+def test_a_spot_whose_horizon_refetch_fails_alone_is_refreshed_with_the_wind_only(
+    db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r3-backend-R3-1, one spot: its wave data fail in the refetch request (Open-
+    Meteo then has no records for it), the others' succeed. That spot alone is fetched again
+    with the wind only and its waves carried; every spot is updated."""
+    r2 = _short_waves_then_new_wind(db, split)
+    _fail_wave_requests(monkeypatch, {"pipeline"})
+    calls = len(split.calls)
+    out = refresh(C06 + timedelta(hours=6, minutes=10))
+    assert out["status"] == "success", out
+    assert split.calls[calls:] == [
+        (sorted(few_spots), None),
+        (["pipeline"], frozenset({"atmosphere"})),
+    ]
+    r3 = _assert_new_wind_with_waves_carried(db, r2, len(few_spots), 1)
+    assert r3.details["components"]["wave"]["refetched_spots"] == len(few_spots) - 1
+
+
+def test_a_carried_run_not_served_now_is_carried_instead_of_blocking_the_refresh(
+    db: Session, few_spots: list[str], split: type[SplitDemo]
+) -> None:
+    """Review r3-backend-R3-1: the provider does not serve the carried wave run now (its
+    domain is lagging, or a newer wave run is being published). Only the refetch needs it:
+    the wind is fetched alone and the waves carried, instead of skipping the refresh."""
+    r2 = _short_waves_then_new_wind(db, split)
+    split.publishing = {"wave"}
+    calls = len(split.calls)
+    out = refresh(C06 + timedelta(hours=6, minutes=10))
+    assert out["status"] == "success", out
+    assert split.calls[calls:] == [(sorted(few_spots), frozenset({"atmosphere"}))]
+    r3 = _assert_new_wind_with_waves_carried(db, r2, len(few_spots), len(few_spots))
+    assert any("horizon refetch skipped" in w for w in r3.details["warnings"])
+
+
 def test_a_version_marker_lost_after_publication_is_written_again_by_the_next_sync(
     db: Session, few_spots: list[str], split: type[SplitDemo], monkeypatch: pytest.MonkeyPatch
 ) -> None:

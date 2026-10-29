@@ -876,7 +876,11 @@ def refresh_source(
     groups: dict[frozenset[str], list[SpotPoint]] = {}
     sources: dict[str, dict[int, int]] = {c: {} for c in carried}
     failed: dict[int, str] = {}
-    refetched: dict[str, int] = {}
+    # spot id -> the carried components it fetches again for the horizon only. That fetch
+    # is best effort (review r3-backend-R3-1): when it fails, or the provider does not serve
+    # that component's run now, the spot is refreshed with the due components alone and the
+    # others are carried from its served run, as without the refetch.
+    refetching: dict[int, set[str]] = {}
     for p in points:
         need = set(changed)
         served = serving.get(p.spot_id)
@@ -888,7 +892,7 @@ def refresh_source(
                 need.add(c)
             elif short and c in refetchable:
                 need.add(c)
-                refetched[c] = refetched.get(c, 0) + 1
+                refetching.setdefault(p.spot_id, set()).add(c)
             else:
                 sources[c][p.spot_id] = served
         if not need:
@@ -901,8 +905,27 @@ def refresh_source(
                 if avail[gone] is None
                 else "the provider no longer serves that run"
             )
+            refetching.pop(p.spot_id, None)
             continue
         groups.setdefault(frozenset(need), []).append(p)
+
+    def without_refetch(spot_ids: Collection[int]) -> None:
+        """Carry the horizon-only components of these spots from their served runs instead
+        of fetching them (``groups``, ``sources`` and ``refetching`` are updated)."""
+        moved = {s for s in spot_ids if refetching.get(s)}
+        if not moved:
+            return
+        regrouped: dict[frozenset[str], list[SpotPoint]] = {}
+        for parts, group in groups.items():
+            for p in group:
+                key = parts - refetching[p.spot_id] if p.spot_id in moved else parts
+                regrouped.setdefault(key, []).append(p)
+        groups.clear()
+        groups.update(regrouped)
+        for s in moved:
+            for c in refetching.pop(s):
+                sources[c][s] = serving[s]
+
     for c in carried:
         for spot_id in list(sources[c]):
             if not any(p.spot_id == spot_id for g, ps in groups.items() if c not in g for p in ps):
@@ -984,12 +1007,17 @@ def refresh_source(
         component_keys=MappingProxyType(dict(target)) if split else MappingProxyType({}),
         estimated=available.estimated,
     )
-    fetched = frozenset().union(*groups)
     servable = getattr(provider, "ensure_servable", None)
-    if callable(servable):
+    # Per carried component: the spots whose horizon refetch fell back to carrying it.
+    refetch_failed: Counter[str] = Counter()
+    refetch_notes: list[str] = []
+
+    def not_servable(components: frozenset[str]) -> RefreshOutcome | None:
+        """None when the provider serves the run's ``components`` now, else the outcome."""
+        assert callable(servable)
         try:
             if split and _accepts_components(servable):
-                servable(info, components=fetched)
+                servable(info, components=components)
             else:
                 servable(available)
         except RunNotServedError as exc:
@@ -1016,6 +1044,31 @@ def refresh_source(
                 retryable=failure.retryable,
                 retry_after_s=failure.retry_after_s,
             )
+        return None
+
+    if callable(servable):
+        fetched = frozenset().union(*groups)
+        blocked = not_servable(fetched)
+        if blocked is not None and refetching:
+            # Without the components fetched again only for the horizon.
+            required = frozenset().union(
+                *(
+                    parts - refetching.get(p.spot_id, set())
+                    for parts, g in groups.items()
+                    for p in g
+                )
+            )
+            if required != fetched and not_servable(required) is None:
+                for comps in refetching.values():
+                    refetch_failed.update(comps)
+                refetch_notes.append(
+                    f"horizon refetch skipped ({blocked.message[:300]}): the carried run is "
+                    "kept with its own end"
+                )
+                without_refetch(list(refetching))
+                blocked = None
+        if blocked is not None:
+            return blocked
 
     run = db.scalar(
         select(ForecastRun).where(
@@ -1060,8 +1113,6 @@ def refresh_source(
                 "run_key": target[c],
                 "retrieved_at": retrieved[c],
                 "carried_from_run_id": main_source[c],
-                # Spots that fetched this carried run again to reach the horizon.
-                **({"refetched_spots": refetched[c]} if refetched.get(c) else {}),
             }
             for c in sorted(COMPONENTS)
         },
@@ -1076,10 +1127,15 @@ def refresh_source(
     errors: dict[int, str] = {}
     warnings: list[str] = []
     stats: list[dict[str, Any] | None] = []
-    group_failures: list[BaseException] = []
     fields_summary: dict[str, Any] | None = None
     slugs = {p.spot_id: p.slug for p in spot_points(db)}
-    for parts, group in sorted(groups.items(), key=lambda g: (-len(g[1]), sorted(g[0]))):
+    stored_spots: set[int] = set()
+    new_run: ForecastRun = run
+
+    def fetch_group(parts: frozenset[str], group: list[SpotPoint]) -> BaseException | None:
+        """Fetch ``parts`` for ``group`` and store the records. A failure of the request is
+        the error of every spot of the group (``errors``) and is returned."""
+        nonlocal count, fields_summary
         components = None if parts == COMPONENTS else parts
         try:
             if not split:
@@ -1092,29 +1148,81 @@ def refresh_source(
                 spot_id: [_keep_components(r, parts) for r in recs]
                 for spot_id, recs in result.records.items()
             }
-            count += store_records(db, run, records)
-            fields_summary = _store_result_fields(db, run, result, run_key) or fields_summary
+            count += store_records(db, new_run, records)
+            fields_summary = _store_result_fields(db, new_run, result, run_key) or fields_summary
             db.commit()
         except Exception as exc:
             db.rollback()
-            group_failures.append(exc)
             for p in group:
                 errors[p.spot_id] = _error_text(exc)
             if isinstance(exc, ProviderError):
                 logger.error("Forecast fetch failed for %s: %s", source.code, _error_text(exc))
             else:
                 logger.exception("Forecast refresh of %s failed unexpectedly", source.code)
-            continue
+            return exc
+        stored_spots.update(s for s, recs in records.items() if recs)
         errors.update({k: v for k, v in result.errors.items() if k not in result.records})
         for k, v in result.errors.items():
             if k in result.records:
                 errors.setdefault(k, v)
-        warnings += result.warnings
+        warnings.extend(result.warnings)
         stats.append(fetch_stats_detail(result, provider))
+        return None
+
+    def by_size(g: tuple[frozenset[str], list[SpotPoint]]) -> tuple[int, list[str]]:
+        return -len(g[1]), sorted(g[0])
+
+    group_errors: list[tuple[list[SpotPoint], BaseException]] = []
+    for parts, group in sorted(groups.items(), key=by_size):
+        if (failure := fetch_group(parts, group)) is not None:
+            group_errors.append((group, failure))
+    # A spot whose horizon refetch failed (the request of its group, or its own data) is
+    # refreshed as without it (review r3-backend-R3-1): with the due components alone, the
+    # others carried from its served run with that run's end. Rows it got are kept and the
+    # refetched components are carried over them; a spot without rows is fetched again,
+    # once, without the refetched components.
+    fell_back = sorted(s for s in refetching if s in errors)
+    if fell_back:
+        again: dict[frozenset[str], list[SpotPoint]] = {}
+        for parts, group in groups.items():
+            for p in group:
+                if p.spot_id in fell_back and p.spot_id not in stored_spots:
+                    again.setdefault(parts - refetching[p.spot_id], []).append(p)
+                    errors.pop(p.spot_id, None)
+        for parts, group in sorted(again.items(), key=by_size):
+            if (failure := fetch_group(parts, group)) is not None:
+                group_errors.append((group, failure))
+        for s in fell_back:
+            comps = refetching.pop(s)
+            refetch_failed.update(comps)
+            for c in comps:
+                sources[c][s] = serving[s]
+        refetch_notes.append(
+            f"the horizon refetch of {len(fell_back)} spots did not complete: their carried "
+            "runs are kept with their own end"
+        )
+    warnings[:0] = refetch_notes
+    # A request whose spots all recovered (a failed horizon refetch) makes the run neither
+    # retryable nor late.
+    group_failures = [e for g, e in group_errors if any(p.spot_id in errors for p in g)]
+    refetched = Counter(c for comps in refetching.values() for c in comps)
+    main_source = {
+        c: Counter(sources[c].values()).most_common(1)[0][0] if sources.get(c) else None
+        for c in COMPONENTS
+    }
     acquired = utcnow()
     refreshed = db.get(ForecastRun, run_id)
     assert refreshed is not None
     run = refreshed
+    for c in sorted(COMPONENTS):
+        part = run.details["components"][c]
+        part["carried_from_run_id"] = main_source[c]
+        # Spots that fetched this carried run again to reach the horizon, and those whose
+        # refetch failed (or the provider did not serve that run) and kept its end.
+        if refetched[c]:
+            part["refetched_spots"] = refetched[c]
+        if refetch_failed[c]:
+            part["refetch_failed_spots"] = refetch_failed[c]
     for c in carried:
         carry.carry_component(db, run_id=run_id, component=c, sources=sources[c])
         # An hour the carried run lacks (the runs step differently, or it ends sooner) is
