@@ -94,7 +94,7 @@ one, compose reads the classic stack's `.env` for the `${...}` values.
 | service `web` (Next.js) | `web` | the production build with `API_ROUTING=platform`: Next.js has no `/api` rewrite |
 | service `api` (one Python function) | `api` (docker/api-lean/Dockerfile) | `[project].dependencies` only, from `backend/uv.lock`: no Celery, kombu, pandas, ecCodes, pyarrow, scikit-learn, scipy or joblib. backend/ without what vercel.json's `excludeFiles` leaves out of the function (tests/, ml_models/), no data/ directory, read-only file system except /tmp, one uvicorn process, 2 GB and 1 CPU. `JOB_RUNNER=daemon`: account emails go out inline. |
 | daemon `sync` (Containerfile) | `sync` | the same Containerfile: `python -m app.cli sync daemon`, one instance, 2 GB and 1 CPU; after SIGTERM it finishes its current sync stage, for up to 600 s (vercel.json `terminationGracePeriodSeconds`; compose `stop_grace_period`). Connects directly (`DB_USE_UNPOOLED=true` in the image) and runs init-db at start. |
-| build step `python -m app.cli migrate --on-build` | `migrate` | one-shot `init-db` (migrate, seed the 50 spots, the tide catalog) before `api` and `sync` start |
+| build step `python -m app.cli migrate --on-build` | `migrate` | the same command, one-shot, as a production build (`VERCEL_ENV=production`, `MIGRATE_ON_BUILD=production`): it migrates, then seeds the 50 spots, airports and the tide catalog (idempotent) before `api` and `sync` start, so the stack seeds its database exactly as a deployment without the daemon does |
 | Vercel Cron, `23 7 * * *` | `cron` | calls the watchdog through the edge every day at 07:23 UTC; `vercel-local.sh cron` calls it now |
 | Neon, pooled `DATABASE_URL` | `pgbouncer` | PgBouncer 1.25 in transaction mode, `max_prepared_statements 1000`, `query_wait_timeout 120` (Neon's published values); the API connects with `DB_PREPARED_STATEMENTS=false` |
 | Neon, `DATABASE_URL_UNPOOLED` | `postgres` | PostgreSQL 16; connections are logged with their application_name (`swell-api` through PgBouncer, `swell-sync` for the daemon) |
@@ -126,7 +126,8 @@ changed in `.env.vercel.local`.
   joblib, and has no `/data`;
 * the api service's Vercel build command, `python -m app.cli migrate --on-build` with
   `VERCEL_ENV=production`, runs on the lean image (the database is at head, so it only
-  checks the revision);
+  checks the revision; the lean image has no `data/`, so it skips the seed and says so:
+  the `migrate` service seeded the database from the daemon image);
 * PgBouncer's `SHOW CONFIG` says `pool_mode = transaction`, and `GET /api/health/ready`
   raises its transaction counter (the API's queries go through the pooler). A `note` line
   then shows the counter around `GET /api/spots`, which does not move once the published
@@ -139,6 +140,9 @@ changed in `.env.vercel.local`.
 * the web service itself answers 404 for `/api/health` (no Next.js rewrite);
 * the daemon's heartbeat is in Redis, and a sync was published;
 * the cron endpoint answers 401 without the token and 200 with it;
+* the refresh endpoint an external scheduler calls (`/api/internal/refresh`) answers 401
+  without the token and 200 with it, and `GET /api/forecasts/version` names a published
+  version;
 * not a check: a `note` line with the data-health verdict the API reports
   (`GET /api/health/data`, what the daily watchdog alerts on), as the deployed function
   would report it.

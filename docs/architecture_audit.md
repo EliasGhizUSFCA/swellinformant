@@ -1405,7 +1405,10 @@ removal in 5.3 was made (the flight-discovery timer and `FLIGHT_REFRESH_HOURS`, 
 30-minute matching timer, the map query's 300 s timer, the combined local confidence in the
 API and UI, cross-component coalescing, the clock-based Windy run identity, the map-only
 trigger, pandas in predict, the 5-day detection floor); the stale "10 Active CPU-hours"
-statements were corrected in review r1 (SPEC-6). No module, table or record was deleted.
+statements were corrected in review r1 (SPEC-6) in README, deploy-vercel.md and
+API_SETUP_REQUIRED.md, and in review r2 (SPEC-5) also in the owner checklist of
+UPGRADE_REPORT.md section 44, which r1 had missed; historical Upgrade 4 sections of that
+report keep their own figures. No module, table or record was deleted.
 
 ### 8.2 Files created and modified, per package
 

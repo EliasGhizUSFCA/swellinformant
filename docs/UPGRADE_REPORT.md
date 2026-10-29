@@ -952,9 +952,11 @@ The first production deploy is the test of these:
 
 * **Vercel Daemons and Services are Beta.** The fallbacks are documented
   (docs/deploy-vercel.md section 9): two projects, or the manual GitHub sync.
-* **The daemon quota** (10 Active CPU-hours on Hobby): when used up, the daemons stop until the
-  1st of the next month; the site serves the last data and the watchdog emails the admins.
-  The map layers are more than half of the estimate.
+* **The daemon quota** (10 Active CPU-hours on Hobby as Upgrade 4 read it; Vercel now gives
+  Hobby daemons 5, docs/sync.md "Monthly CPU estimate"): when used up, the daemons stop until
+  the 1st of the next month; the site serves the last data and the watchdog emails the
+  admins. The map layers are more than half of the estimate. (With Swell 2.0 the daemon is
+  optional and refreshes only the map layers.)
 * **Neon Free can still bind**: steady traffic (1,000 views a day) needs about 5.37 GB of
   egress; anything that reaches the database every 5 minutes keeps the compute awake (180
   CU-hours a month). Every signed-in page view reads the database (measured at the final
@@ -966,9 +968,11 @@ The first production deploy is the test of these:
   takes many clients.
 * **Open-Meteo's free limit is per IP**, and the daemon's address may be shared: refusals
   delay a source to the next UTC day; an API key removes the risk.
-* **Freshness on the free database**: spot forecasts change twice a day; a GFS run can read
-  stale for up to about 1.3 h before each sync; if NOAA's map layers fail, no sync runs
-  (estimated, not observed live).
+* **Freshness on the free database** (Upgrade 4 cadence, `SYNC_TRIGGER_SOURCES=map`): spot
+  forecasts changed twice a day; a GFS run could read stale for up to about 1.3 h before
+  each sync; if NOAA's map layers failed, no sync ran (estimated, not observed live). Swell
+  2.0 replaced it: `SYNC_TRIGGER_SOURCES=spots`, and the refresh endpoint follows every GFS
+  and GFS-Wave run.
 * **Tides after a fresh deploy**: fixed at the final review. The daemon runs every overdue
   periodic job once at start (`SYNC_DAEMON_CATCH_UP`), so the tides come within minutes, and
   data health flags tides never acquired 3 h after the catalog was loaded
@@ -984,6 +988,11 @@ The first production deploy is the test of these:
   run time would not survive a restart (design risk, not checked on Vercel).
 
 ## 44. Owner checklist
+
+Updated for Swell 2.0 (the spot forecasts come from the refresh endpoint, the daemon is
+optional and refreshes only the map layers). The step-by-step reference is
+[deploy-vercel.md](deploy-vercel.md) section 4; the costs are in
+[API_SETUP_REQUIRED.md](API_SETUP_REQUIRED.md) section 1.4.
 
 ### Free now (no payments and no ads; donations are allowed on Hobby)
 
@@ -1030,28 +1039,31 @@ The first production deploy is the test of these:
    Resend account's while you use the testing sender; the only alert that still goes out
    when the database is down). Keep `FLIGHT_PROVIDER=demo`
    until you have a flight provider. *(Vercel's website.)*
-9. **Optional head start**: from `backend/` with the dev venv of README E.3 (it works for
-   `init-db` and `make-admin`; `uv sync --locked --no-dev` would strip it to the lean set,
-   so put a lean install in its own venv: `UV_PROJECT_ENVIRONMENT=.venv-lean uv sync
-   --locked --no-dev`), point `DATABASE_URL` and then `DATABASE_URL_UNPOOLED` at Neon's
-   direct URL (two `export` lines, docs/deploy-vercel.md step 6) and run
-   `.venv/bin/python -m app.cli init-db` (checked here against a local PostgreSQL only).
-   The daemon runs it at every start anyway.
+9. **The database**: a production build migrates and seeds it (the api's build command,
+   `migrate --on-build` with `MIGRATE_ON_BUILD=production`: the 50 spots, airports, the tide
+   catalog). Only when that build prints `skipped` (and you do not keep the daemon, whose
+   `init-db` seeds at start), seed it yourself: from `backend/` with the dev venv of README
+   E.3 (it works for `init-db` and `make-admin`; for a lean install use its own venv,
+   `UV_PROJECT_ENVIRONMENT=.venv-lean uv sync --locked --no-dev`), point `DATABASE_URL` and
+   then `DATABASE_URL_UNPOOLED` at Neon's direct URL (two `export` lines,
+   docs/deploy-vercel.md step 6) and run `.venv/bin/python -m app.cli init-db` (idempotent;
+   checked here against a local PostgreSQL only). A database without spots publishes
+   nothing and reports `no_spots_seeded`.
 10. **Deploy**: redeploy production (variables reach new deployments only). The api build
-    migrates the database; Vercel builds the daemon image and starts it. *(Vercel.)*
-11. **Check** (*on the deployment*): `https://<project>.vercel.app/api/health/ready` answers
-    `{"status":"ok","checks":{"database":"ok","redis":"ok"}}`; the Daemons page shows one
-    `sync` instance whose logs show `init-db` and the first check; `/status` shows the
-    daemon's last check and, after the first sync, a published sync (on a fresh database
-    the first sync can wait up to 90 minutes while the map cycle and the GFS spot run of the
-    same cycle wait for each other); the map shows the wave layer; the watchdog answers 200
-    to `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily`.
-    (Swell 2.0 changed this step: the spot forecasts no longer come from the daemon, which
-    is optional and refreshes only the map layers. Run the first refresh by hand,
-    `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh`,
-    which answers `"status": "success"` with a version id, and **schedule it every 5
-    minutes** with Upstash QStash: docs/deploy-vercel.md step 7b. Without the schedule the
-    spot forecasts refresh only once a day.)
+    migrates and seeds the database; if you keep the optional map daemon, Vercel builds its
+    image and starts it. *(Vercel.)*
+11. **Check and schedule the refresh** (*on the deployment*):
+    `https://<project>.vercel.app/api/health/ready` answers
+    `{"status":"ok","checks":{"database":"ok","redis":"ok"}}`. Run the first refresh by hand,
+    `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh`:
+    it answers `"status": "success"` with a version id, and `/api/forecasts/version` names
+    it with `spots_updated` 50. Then do docs/deploy-vercel.md **step 7b**: schedule the
+    refresh every 5 minutes (Upstash QStash on Hobby, a Vercel Cron entry on Pro) and check
+    that `/admin/freshness` shows the refresh scheduler `checking` a few minutes later.
+    Without the schedule the spot forecasts refresh only once a day. The watchdog answers
+    200 to `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily`.
+    With the optional daemon, its logs show `init-db` and the first map check, and the map
+    shows the wave layer after its first map sync.
 12. **Make yourself admin** after registering and verifying your email address (your Resend
     account's address while you use the testing sender, step 6):
     `.venv/bin/python -m app.cli make-admin you@example.com` with the dev venv and the same
@@ -1061,12 +1073,16 @@ The first production deploy is the test of these:
     `/api/health/data?strict=true`, which wake Neon on every hit (every 15 minutes costs
     about 45-60 CU-hours a month, on top of about 20 in the background; hourly at most about
     15): on Neon Free the daily watchdog covers the database. Close `/status` when you are
-    done (an open tab re-reads on focus, and every minute while a sync runs). Watch the
-    `/status` CPU meter (10 Active CPU-hours a month; if it runs high,
-    `MAP_FIELD_PARTITIONS=off` or a shorter map horizon); keep `GEFS_ENABLED=false`; look at
-    Neon's usage page now and then (egress budget 2.01 GB of 5 in the background). Do not
-    add a schedule to `data-sync.yml` (GitHub's terms); add its repository secrets only if
-    you want the manual emergency sync (docs/deploy-vercel.md section 8).
+    done (an open tab re-reads on focus, and every minute while a sync runs). Only if you
+    keep the optional map daemon, watch the `/status` CPU meter (Hobby's 5 Active
+    CPU-hours a month; if it runs high, `MAP_FIELD_PARTITIONS=off` or a shorter map
+    horizon). Keep `GEFS_ENABLED=false`. Look at Neon's usage page now and then: the
+    background budget of API_SETUP_REQUIRED.md 1.4 is about 1.5-2.3 GB of egress a month for
+    8 component refreshes a day (up to about 3.4 GB with a third refresh per cycle) and about
+    20-23 CU-hours with the hourly data-health check; Upstash about 114,000 commands a month
+    for a quiet site, with the version polling and the 5-minute refresh checks. Do not add a
+    schedule to `data-sync.yml` (GitHub's terms); add its repository secrets only if you
+    want the manual emergency sync (docs/deploy-vercel.md section 8).
 
 ### Paywall later (before the site shows any price or checkout)
 
@@ -1078,10 +1094,14 @@ The first production deploy is the test of these:
    to the plan's budget, then `COMMERCIAL_USE=true`. From then on the app refuses the free
    API (`/status` would report `licence` if the key were missing).
 3. **Neon Launch** ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then the
-   full-retention profile: `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`,
-   `RETENTION_JOB_LOG_DAYS=30`, `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`,
-   `SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12` (a sync for every new model
-   run: about 4.32 GB of background egress a month).
+   full-retention profile (`app/core/profiles.py`, docs/API_SETUP_REQUIRED.md section 5):
+   `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`, `RETENTION_JOB_LOG_DAYS=30`,
+   `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`,
+   `SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12` and
+   `PREDICTION_ARCHIVE_ENABLED=true`. The spot refreshes stay as on the free plan (every
+   new GFS and GFS-Wave run through the refresh endpoint); the map layers then follow the
+   00Z and 12Z cycles. (Upgrade 4's estimate of about 4.32 GB of background egress a month
+   for this profile measured its old two-family sync and was not re-measured for 2.0.)
 4. **Upstash** pay-as-you-go ($0.2 per 100K commands, with a budget cap) or a Fixed plan
    (from $10 a month).
 5. **Redeploy** production after changing variables.

@@ -105,7 +105,7 @@ versions, above.)
   breaking height with its likely range, the model's offshore wave systems, wind and the
   tide, with one selected time for every row.
 
-**Surf prediction and scoring** (algorithm 2.1.0, [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md))
+**Surf prediction and scoring** (algorithm 2.2.0, [`docs/SURF_SCORING.md`](docs/SURF_SCORING.md))
 
 * Breaking height from linear wave theory + Komar–Gaughan per swell partition, with
   directional spreading, shore normal, shadowing and a focusing prior; spot physical
@@ -123,7 +123,7 @@ versions, above.)
   (shown as "Excellent Surf — 8.9/10" with a "Why this rating?" breakdown).
 * Daylight-only windows from NOAA sunrise and sunset.
 
-**Three separate confidence assessments** (never merged into one number)
+**Two separate confidence assessments** (never merged into one number, spec 20)
 
 * *Research confidence* per spot and per condition (swell direction, size, period, wind,
   tide, bottom, season, how the wave breaks): High / Moderate / Low from cited sources,
@@ -141,10 +141,12 @@ versions, above.)
   and the app shows that note next to the wind.
 * *Forecast confidence* per forecast step: lead time, ensemble spread, disagreement between
   independent model families only (wave height and wind direction), run-to-run change, data
-  completeness, staleness and source; plus *local confidence* at the break, which can be no
-  better than how well the break is researched
+  completeness, staleness and source
   ([`docs/forecast-confidence.md`](docs/forecast-confidence.md)). Documented classes, not
-  calibrated probabilities. Every assessment is kept with the prediction archive.
+  calibrated probabilities. Research confidence and forecast confidence are shown side by
+  side and never combined: the older combined class ("local confidence", the lower of the
+  two) is no longer served by the API or shown on any page (Swell 2.0); the scoring job still
+  records it in the prediction archive with every other assessment.
 
 **Interactive map** (section H)
 
@@ -520,11 +522,14 @@ only on Vercel's website; steps 4 and 6 run on your machine):
    (`python3.13 -c "import secrets; print(secrets.token_urlsafe(48))"`, or
    `openssl rand -base64 48`), `COOKIE_SECURE=true`, `APP_BASE_URL`, `API_BASE_URL`,
    `CORS_ORIGINS` and the email provider.
-4. Optional head start, from `backend/` with the dev venv of section E.3 (it works for
-   `init-db` and `make-admin`): point `DATABASE_URL` and `DATABASE_URL_UNPOOLED` at Neon's
-   direct URL (two `export` lines, docs/deploy-vercel.md step 6) and run
-   `.venv/bin/python -m app.cli init-db` (the daemon also runs it at every start; this
-   command was checked here against a local PostgreSQL, not against Neon).
+4. The database: a production build migrates and seeds it (the api's build command
+   `python -m app.cli migrate --on-build` with `MIGRATE_ON_BUILD=production`: the 50 spots,
+   airports, the tide catalog). **Required** when that build does not seed (its log says
+   `skipped`) and you do not keep the daemon: from `backend/` with the dev venv of section
+   E.3, point `DATABASE_URL` and `DATABASE_URL_UNPOOLED` at Neon's direct URL (two `export`
+   lines, docs/deploy-vercel.md step 6) and run `.venv/bin/python -m app.cli init-db`
+   (idempotent; checked here against a local PostgreSQL, not against Neon). A database
+   without spots publishes nothing; `/api/health/data` then reports `no_spots_seeded`.
 5. Redeploy production, then check `https://<project>.vercel.app/api/health/ready` and run
    the first refresh by hand:
    `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh`
@@ -681,7 +686,14 @@ calls stale data current. A check that cannot read the metadata leaves that comp
 for a while and the version says so. Admins are emailed for `provider_unavailable` (30
 minutes), `model_run_late`, `refresh_failures` (3 in a row), `forecast_stale_spots`,
 `provider_credentials`, `quota_near` and `refresh_scheduler_silent` (no check for 30
-minutes); the runbooks are in [`docs/operations.md`](docs/operations.md).
+minutes) when the data-health check finds them. That check runs hourly on Vercel: without
+the daemon the refresh endpoint runs it (and at once after a failed or partial refresh), with
+it the daemon. A scheduler that stopped calling the endpoint stops that check too, so
+without the daemon `refresh_scheduler_silent` arrives only with the daily cron (up to about
+25 hours on Hobby; docs/deploy-vercel.md step 7b names an external check). When the email
+provider refuses its own key, the alert goes by SMS to admins with a verified phone number
+(`SMS_PROVIDER`), else it shows on `/admin/freshness` and `/api/health/data` only. The
+runbooks are in [`docs/operations.md`](docs/operations.md).
 
 **Try it locally (demo provider).** With the demo provider, `ENABLE_DEV_ENDPOINTS=true` and
 a `CRON_SECRET` of 16 or more characters in `.env`, and the API on `localhost:8000`: run a
@@ -786,16 +798,24 @@ Open-Meteo itself interpolated are not stored (`OPEN_METEO_NATIVE_STEPS_ONLY=tru
   sync (`SYNC_PRUNE_EACH_PASS=true`); the full-retention profile restores the values above
   after moving to Neon Launch ([`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md),
   section 5).
-* **Database size**: about 0.30 GB of blend rows a day; 10 forecast days hold about 3.3 GB,
-  and the archive grows about 18.5 MB a day, to about 17 GB at 730 days (computed from row
-  sizes measured on 2026-10-16). The default `DATA_HEALTH_DATABASE_MAX_GB` alert (20 GB, an
+* **Database size** (Upgrade 3 measurement, 2026-10-16, with the then-recommended blend of
+  two model families; Swell 2.0 serves one provider, so it writes fewer rows per run, not
+  re-measured as a daily size): about 0.30 GB of blend rows a day; 10 forecast days hold
+  about 3.3 GB, and the archive grows about 18.5 MB a day, to about 17 GB at 730 days
+  (computed from row sizes measured on 2026-10-16). The default `DATA_HEALTH_DATABASE_MAX_GB` alert (20 GB, an
   alert only, nothing is deleted) sits above that two-year steady state, so it means
   unexpected growth; lower it if your disk is smaller ([`docs/operations.md`](docs/operations.md), "Capacity").
 
 ### 4. Download volumes, before and after
 
-Measured live on 2026-10-16 (00Z cycles, 50 spots, fresh database; per day computed with the
-default schedule; the map layers' per-cycle size is extrapolated from 9 measured map hours):
+Swell 2.0 (one provider, Open-Meteo GFS + GFS-Wave): 125 weighted calls for a refresh of both
+components and 75 for a wave-only refresh (measured live, 2026-10-28 and 29), about 500 a
+day at 4 GFS cycles (5 % of Open-Meteo's daily limit; arithmetic); a check with nothing new
+reads only the free `meta.json` files ([`docs/API_SETUP_REQUIRED.md`](docs/API_SETUP_REQUIRED.md),
+section 1.4). The table below is the **Upgrade 3 measurement** (2026-10-16, the then-default
+schedule with the GFS and ECMWF families and GEFS-Wave; 00Z cycles, 50 spots, fresh
+database; per day computed with that schedule; the map layers' per-cycle size is
+extrapolated from 9 measured map hours):
 
 | Stream | Per run (measured) | Per day |
 |---|---|---|
@@ -811,8 +831,9 @@ Before the upgrade the README's recommended setup read NOAA and ECMWF GRIB direc
 MB per NOAA cycle, about 0.85-0.9 GB per ECMWF cycle and 201.6 MB per GEFS-Wave cycle, about
 **10.2 GB a day** (audit, 2026-10-13). The spot forecasts alone went from about 2.8 GB to
 0.5 MB per set of cycles; the map layers are now three quarters of the remaining bandwidth
-(about 0.6 GB a day without the partition layers, `MAP_FIELD_PARTITIONS=off`). The free tier
-use is about 820 weighted calls a day, 8 % of Open-Meteo's daily limit.
+(about 0.6 GB a day without the partition layers, `MAP_FIELD_PARTITIONS=off`). With that
+two-family schedule the free tier use was about 820 weighted calls a day, 8 % of
+Open-Meteo's daily limit (about 500 with Swell 2.0's single provider, above).
 
 ### 5. Real forecast data, step by step
 
@@ -1009,7 +1030,7 @@ another request. Details, contract and tests: [`docs/forecast-charts.md`](docs/f
 
 | Part | What it shows |
 |---|---|
-| Selected-time summary | Day and time of the selected step and its length ("3-hour step"); surf quality (class, x.x/10, a rank glyph); breaking waves (typical–sets, central value, likely range); every wave system with the one that drives the surf first; wind (speed, FROM direction, relation to this break, strength, favourability, gust on its own line); tide (height, rising or falling, datum, next high or low); forecast confidence and confidence at the break as separate badges. "Why this forecast?" expands the scoring engine's own record: the explanation, factor fits, the gates that held the score back and the points lost per factor |
+| Selected-time summary | Day and time of the selected step and its length ("3-hour step"); surf quality (class, x.x/10, a rank glyph); breaking waves (typical–sets, central value, likely range); every wave system with the one that drives the surf first; wind (speed, FROM direction, relation to this break, strength, favourability, gust on its own line); tide (height, rising or falling, datum, next high or low); the forecast confidence badge (research confidence is under "About this break"; the two are never combined). "Why this forecast?" expands the scoring engine's own record: the explanation, factor fits, the gates that held the score back and the points lost per factor |
 | Timeline controls | One button per local day (best daylight class and score, good hours = hours of light under Good-or-better steps), previous / next day, horizontal scroll (about 72 h in view on wide screens, 24 h on phones), click, drag or tap to select, hover tooltip. Keyboard: the chart is a slider, ArrowLeft / ArrowRight move one step, Page Up / Page Down one day later / earlier, Home / End the first / last step of the day. `?t=<UTC ISO>` links to a step. A "Now" marker, night bands from first to last light, day separators in every row. On phones a one-line readout of the selected step stays in view |
 | Surf quality strip | Our spot-specific rating per step (Poor, Fair, Good, Very Good, Excellent, Exceptional) on one ordinal colour ramp, deeper = better, each class written in the strip. Every class has at least 3:1 contrast and the labels 4.5:1. Never derived from wave height in the browser |
 | Surf (breaking waves) | Bar = our central breaking-height estimate, pale band = the likely range (heuristic, "not yet verified", not a probability), dark tick = sets. Toggle "Offshore Hs (model)" adds the wave model's offshore height as a dashed level and buoy measurements as hollow diamonds at their own times |
@@ -1029,11 +1050,11 @@ another request. Details, contract and tests: [`docs/forecast-charts.md`](docs/f
 * Raw offshore model values, our breaking prediction and our quality rating are separate
   objects in the API and separate marks on the page.
 
-**Three confidences, kept apart.** *Forecast confidence* (per step: lead time, ensemble
-spread, agreement between independent model families, run-to-run change, completeness,
-staleness) and *confidence at the break* (local confidence, never better than how well the
-break is researched) are badges in the summary; *research confidence* (how well the break's
-ideal conditions are documented) is under "About this break". All three are documented
+**Two confidences, kept apart (spec 20).** *Forecast confidence* (per step: lead time,
+ensemble spread, agreement between independent model families, run-to-run change,
+completeness, staleness) is the badge in the summary; *research confidence* (how well the
+break's ideal conditions are documented) is under "About this break". They are never
+combined into one class: the page shows no "confidence at the break". Both are documented
 heuristic classes (High / Moderate / Low), not probabilities.
 
 ## H. Map visualizations
@@ -1358,7 +1379,7 @@ searches): 21.28 MB per both-family sync pass. `--help` lists the options.
 | **Map:** ocean layers missing, "Ocean layers are unavailable right now" | Map layers need `MAP_FIELDS_ENABLED` (unset = on with a live spot provider, off with demo only; `GET /api/map/fields` says which). Run `python -m app.cli engine map-fields` once to fetch a cycle. A field whose run or valid time does not match the request is never drawn: the map re-reads the field index (at most every 30 s) and shows what the index lists |
 | **Map:** layers drawn but no particles or crests | Settings → "animated flow" is off (it switches the particles and crests off). With the system's reduced-motion setting they are drawn still (arrows, still crests). A wave system the run lacks is greyed out in the chooser ("Not available for this model run"), and crests are not drawn under 0.2 m |
 | **Wind direction looks wrong:** "offshore" where you expect onshore, or arrows the wrong way | Text and data say where the wind comes FROM; arrows on the charts and the map point where it travels TO (an arrow pointing east is a wind from the west). Offshore means from land to sea at that break: the spot's researched `offshore_wind_direction` (`data/surf_spots/`) decides it, never the compass alone. "Sources disagree about which wind is offshore" means the research is disputed (`python -m app.cli research lint`). "Models disagree on the wind direction" means GFS and ECMWF blow from directions more than 60° apart: the blend takes the direction of the mean wind vector and forecast confidence is at most Moderate. The map's 0.5° wind can differ from the spot's own point wind near coasts |
-| **Stale forecasts:** "Forecast out of date" banner, chip or badge | The run behind the forecast is older than its source's own limit: its cycle interval + publication lag + `FORECAST_REFRESH_MINUTES` + 2 h, about 17.2 h for the GFS family and 24.7 h for the ECMWF family (`FORECAST_STALE_HOURS`, 18 h, applies only to demo, Windy and the blend fallback; `docs/FORECAST_SOURCES.md`, "Staleness"); map layers after `MAP_FIELD_STALE_AFTER_HOURS` (21 h). Usually the provider is unreachable, or the runner is not running (beat and worker in Docker, the sync daemon on Vercel): check `/status` (its sync section shows the last check and each component's state, for example "waiting" while Open-Meteo is still publishing a run) and `docker compose logs worker`, or `python -m app.cli sync check`. With the free-database profile spot forecasts change only twice a day, so a GFS run can read stale for up to about 1.3 h before each sync (docs/map-layers.md, "Free database budget"). Forecast confidence is then at most Moderate; alerts pause only at twice that age (`STALE_ALERT_FACTOR`) |
+| **Stale forecasts:** "Forecast out of date" banner, chip or badge | The run behind the forecast is older than its source's own limit: its cycle interval + publication lag + `FORECAST_REFRESH_MINUTES` + 2 h, about 17.2 h for the GFS family and 24.7 h for the ECMWF family (`FORECAST_STALE_HOURS`, 18 h, applies only to demo, Windy and the blend fallback; `docs/FORECAST_SOURCES.md`, "Staleness"); map layers after `MAP_FIELD_STALE_AFTER_HOURS` (21 h). Usually the provider is unreachable, or nothing calls the refresh: in Docker beat and worker; on Vercel the refresh scheduler of docs/deploy-vercel.md step 7b (QStash on Hobby, a Vercel Cron entry on Pro), with the daily cron as a once-a-day backstop. Check `/admin/freshness` (signed in as an admin: the "Refresh scheduler" row shows the last refresh check and who made it, and each stale spot with its reason) and `/status` (its sync section shows the last check and each component's state, for example "waiting" while Open-Meteo is still publishing a run); in Docker `docker compose logs worker`, or `python -m app.cli sync check`. With the hosted profile (`SYNC_TRIGGER_SOURCES=spots`) every new GFS or GFS-Wave run is refreshed within one scheduler interval of its publication; a spot whose own refresh failed keeps its previous forecast and says so. Forecast confidence is then at most Moderate; alerts pause only at twice that age (`STALE_ALERT_FACTOR`) |
 | **Missing wave data:** "No forecast yet", or no secondary swell / wind-sea row | Check `/status` → *forecast.acquire*; `python -m app.cli pipeline` shows each provider's result synchronously. Partitions exist only where the model has them: the ECMWF family publishes none, so the blend takes them from GFS-Wave; a system the model does not have is left out, never drawn as 0. A spot whose nearest Open-Meteo wave cell is masked reads the nearest neighbouring cell with data (recorded in the run's warnings) |
 | **Broken chart synchronisation:** timeline rows out of step, or a `?t=` link opens the wrong time | Every row draws from one `/api/spots/{slug}/timeline` response on one time axis, and the selected time snaps to the nearest stored step. Check that response (`curl "http://localhost:8000/api/spots/pipeline/timeline?days=10"`) and the browser console. "The forecast timeline could not be loaded" means that request failed (the **Try again** button refetches). `?t=` takes an ISO time in UTC |
 | **API authentication or quota errors** from providers | A failed run shows the provider's reason on `/status` and in `docker compose logs worker`; 401/403 and other 4xx answers are permanent errors and are not retried. Open-Meteo: with `OPEN_METEO_API_KEY` set, requests go to the `customer-*` hosts, and a 4xx answer (for example a wrong key) fails the run with Open-Meteo's own reason (mock-tested only: no paid key here); "Daily API request limit exceeded" on the free tier means the IP address used its 10,000 calls (shared addresses count other users too): wait for the next day or use a key. Flights: fix `DUFFEL_ACCESS_TOKEN` / `AMADEUS_*`, run `check-config`, then **Refresh flights** on the opportunity. Email and SMS: the notification shows `failed`/`rejected` with the provider's reason. Windy without `WINDY_TERMS_ACKNOWLEDGED=true` is refused at start-up |
@@ -1371,7 +1392,7 @@ searches): 21.28 MB per both-family sync pass. `--help` lists the options.
 | `connection refused … 5432` / `/api/health/ready` returns 503 with `"database": "unavailable"` | PostgreSQL isn't running or `DATABASE_URL` is wrong. Run `docker compose up -d postgres` and `docker compose ps` (wait for *healthy*). Outside Docker, `DATABASE_URL` must use `localhost`; inside compose it is set to `postgres` automatically |
 | `extension "btree_gist" is not available` during migration | A PostgreSQL build without contrib modules. Use the `postgres:16-alpine` image or Homebrew `postgresql@16`, which include it |
 | Redis `Connection refused` / readiness shows `"redis": "unavailable"` | Run `docker compose up -d redis`. Rate limiting fails open, but Celery and job locks need Redis |
-| Background jobs not executing | Under `JOB_RUNNER=daemon` (Vercel, the local Vercel-style stack): `scripts/vercel-local.sh status` locally (the daemon's heartbeat and the newest syncs), the Daemons page on Vercel. Under Celery: `docker compose ps` should show `worker` and `beat` healthy, and `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate worker and beat processes, and that a worker started with `-Q celery` alone never runs downloads |
+| Background jobs not executing | Under `JOB_RUNNER=daemon` with the hosted profile (Vercel, the local Vercel-style stack) there is no worker: the refresh endpoint runs the refresh and the pending kicks, a due email retry and the hourly data-health check at each call, and the daily cron (`GET /api/internal/cron/daily`, 07:00-07:59 UTC on Hobby) runs every periodic job whose last run is older than its interval (cleanup, matching housekeeping, tides, alerts, delivery, the staleness check). So check that the refresh scheduler calls (`/admin/freshness`, "Refresh scheduler") and that the daily cron ran (its answer, `jobs` key, and the job list on `/status`); the optional map daemon only refreshes the map layers (`scripts/vercel-local.sh status` locally shows its heartbeat and newest syncs). Under Celery: `docker compose ps` should show `worker` and `beat` healthy, and `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate worker and beat processes, and that a worker started with `-Q celery` alone never runs downloads |
 | `beat` shows *unhealthy* | Its schedule file has not been written for 10 minutes: beat is stuck or cannot reach Redis. `docker compose logs beat`, then `docker compose restart beat` (run exactly one beat) |
 | No verification / alert email | In Docker, open Mailpit (http://localhost:8025). Console mode writes to the outbox file. The dashboard banner and `/notifications` show each email's status: `failed`/`rejected` carry the provider's reason; `accepted` means the provider took it but has not confirmed delivery (check the provider's logs, your domain's SPF/DKIM/DMARC, and spam folders) |
 | No data-health alert email although the status is degraded | Alerts go to active admin accounts with a verified address only (`python -m app.cli make-admin you@example.com`). Each problem is emailed once, then every `DATA_HEALTH_ALERT_REPEAT_HOURS` (12 h); `DATA_HEALTH_ALERTS_ENABLED=false` switches them off |

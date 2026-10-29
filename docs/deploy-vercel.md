@@ -32,7 +32,7 @@ flight searches.
 | daily cron | Vercel Cron, `GET /api/internal/cron/daily` at 07:23 UTC with `Authorization: Bearer $CRON_SECRET`: the data-health check (emails admins when the data, the scheduler or the daemon is stale), then the periodic jobs no daemon ran on time (cleanup, matching housekeeping, tides, alerts, delivery, staleness check; 150 s budget), then one refresh check as a backstop | vercel.json `crons` |
 | database | Neon Postgres (Vercel Marketplace), Free plan now | `DATABASE_URL` (pooled, the API and the refresh) and `DATABASE_URL_UNPOOLED` (direct, the daemon and migrations) |
 | Redis | Upstash Redis (Vercel Marketplace), Free plan now | `KV_URL` (the app reads it when `REDIS_URL` is unset) |
-| migrations | the api service's build command, `python -m app.cli migrate --on-build`; with `MIGRATE_ON_BUILD=production` it migrates production builds only; the daemon also runs `init-db` at every start | vercel.json `services.api.buildCommand` |
+| migrations and seed | the api service's build command, `python -m app.cli migrate --on-build`: with `MIGRATE_ON_BUILD=production`, on production builds only, it migrates and then seeds the reference data as `init-db` does (the 50 spots, airports, the tide catalog; idempotent), so a deployment without the daemon has its spots; the daemon, if you keep it, also runs `init-db` at every start | vercel.json `services.api.buildCommand` |
 
 Same origin for the site and the API, so login cookies, the CSRF check and the
 Content-Security-Policy work exactly as on the classic Docker stack.
@@ -339,9 +339,15 @@ which only writes the messages to the function's log and a temporary outbox file
 
 ### Step 6. Initialise the database (once, from your machine)
 
-The daemon runs `init-db` (migrate, seed the spots, load the tide catalog; safe to repeat)
-every time it starts, so this step is a head start rather than a requirement. Doing it
-yourself means the site has its spots before the daemon's first sync.
+A production build migrates **and seeds** the database (`migrate --on-build`, step 7: the 50
+spots, airports, the tide catalog; safe to repeat), so with `MIGRATE_ON_BUILD=production` and
+Vercel's system variables exposed this step is a head start. **It is required** when the build
+does not seed: its log shows `"status": "skipped"` (no `VERCEL_ENV` in the build, or
+`MIGRATE_ON_BUILD=off`) or `"seed": "skipped"`, and you do not keep the daemon (whose `init-db`
+seeds at start). A database without spots publishes nothing: the refresh answers `failed`
+with "no active surf spot in the database" and backs off, and `/api/health/data` and
+`/admin/freshness` report `no_spots_seeded`. `init-db` below fixes it; step 3 (`make-admin`)
+is needed in every case.
 
 1. Copy the **direct** connection string (`DATABASE_URL_UNPOOLED`) from the database's page
    in Vercel's Storage tab, or from the Neon console.
@@ -379,7 +385,10 @@ variables. The order inside one deployment:
    `MIGRATE_ON_BUILD=production` it migrates through `DATABASE_URL_UNPOOLED`, and a failed
    migration fails the build, so new code never runs against an old schema. It needs
    Vercel's system environment variables (`VERCEL_ENV`) exposed to the build, which is
-   Vercel's default; without them it prints `skipped` and the daemon's `init-db` migrates.
+   Vercel's default; without them it prints `skipped`, and then step 6 (`init-db` from your
+   machine) is what migrates and seeds, unless you keep the daemon, whose `init-db` does it
+   at start. After migrating, the same command seeds the reference data (answer keys `spots`,
+   `airports`, ...; a failed seed fails the build too).
 2. Vercel builds the daemon image from the `Containerfile` (production only).
 3. When the deployment becomes production, Vercel starts the daemon and stops the previous
    one: "Vercel sends `SIGTERM` to the instances from the previous production deployment,
@@ -470,10 +479,20 @@ repository's `vercel.json`.
 | `/status` | the sync section's last check is a few minutes old |
 | QStash console, Logs | a delivery every 5 minutes, HTTP 200 |
 
-Keep `REFRESH_SCHEDULER_EXPECTED_MINUTES` at its default (30): when no refresh check arrives
-for 30 minutes the admins get the `refresh_scheduler_silent` email, so a stopped schedule is
-noticed. Setting it to 0 silences that alert; do it only if you knowingly run on the daily
-cron alone, which refreshes the spots once a day and breaks the freshness goal.
+Keep `REFRESH_SCHEDULER_EXPECTED_MINUTES` at its default (30): once no refresh check has
+arrived for 30 minutes, the next data-health check raises `refresh_scheduler_silent` and
+emails the admins. **When that next check comes depends on what runs it.** Without the daemon
+the data-health check runs from the refresh endpoint itself (every `DATA_HEALTH_CHECK_MINUTES`,
+60 with the hosted profile, and at once after a failed or partial refresh), so it stops with
+the scheduler: a silent scheduler is then noticed only by the daily cron, up to about 25 hours
+later on Hobby (it fires between 07:00 and 07:59 UTC). With the optional daemon it runs on the
+daemon's own hourly timer, so the email follows within about 90 minutes. For faster notice
+without the daemon, watch from outside the app: the QStash console's Logs show every
+delivery, and an external uptime monitor can read `GET /api/forecasts/version` (answered
+from Redis, no database wake) and alert when its `published_at` is more than about 12 hours
+old (each GFS cycle, every 6 hours, publishes a new version). Setting the variable to 0
+silences the alert; do it only if you knowingly run on the daily cron alone, which refreshes
+the spots once a day and breaks the freshness goal.
 
 With the CLI (section 7): `vercel daemons ls`, `vercel daemons inspect sync`,
 `vercel logs --query 'source:daemon'`. Hobby keeps runtime logs for 1 hour only; the
@@ -521,9 +540,22 @@ the same call to the local Vercel-style stack.)
 - **When the daemon is stopped** (quota, crash): only the map layers age (labelled stale);
   the spot forecasts keep refreshing through the endpoint. Run the manual GitHub Actions sync
   (section 8) if the map must not wait.
-- **When the scheduler stops** (QStash paused, deleted, out of messages): the admins get the
-  `refresh_scheduler_silent` email after 30 minutes and the daily cron's backstop still
-  refreshes once a day; recreate the schedule (step 7b).
+- **When the scheduler stops** (QStash paused, deleted, out of messages): the daily cron's
+  backstop still refreshes once a day, and the admins get the `refresh_scheduler_silent`
+  email at the next data-health check after 30 minutes of silence: with the daemon within
+  about 90 minutes, without it only at the daily cron (up to about 25 hours; step 7b names
+  faster external checks). Recreate the schedule (step 7b).
+- **Admin alerts without the daemon.** The refresh endpoint runs the data-health check
+  hourly (`DATA_HEALTH_CHECK_MINUTES=60`) and right after a failed or partial refresh, so a
+  late model run, refresh failures, a provider outage, refused credentials or a quota reach
+  the admins within the hour, not only at the daily cron. Each check wakes the database once
+  (budgeted in API_SETUP_REQUIRED.md 1.4).
+- **When the email provider refuses its own key** (`provider_credentials:email_*`), the alert
+  about it cannot be emailed through that provider. Admins whose phone number is verified and
+  opted in to SMS (Settings) get one SMS a day about it when `SMS_PROVIDER` is configured
+  (Twilio). Without that it shows only on `/admin/freshness` and in `GET /api/health/data`:
+  an external monitor on `/api/health/data` (hourly or less often: each call wakes the
+  database) catches it.
 
 ## 6. Preview deployments
 

@@ -370,6 +370,24 @@ Settings: `DATA_HEALTH_CHECK_MINUTES` (15), `DATA_HEALTH_ALERTS_ENABLED` (true),
 `DATA_HEALTH_ALERT_REPEAT_HOURS` (12), `DATA_HEALTH_HEARTBEAT_MINUTES` (30),
 `DATA_HEALTH_OBSERVATION_STALE_HOURS`, `DATA_HEALTH_DATABASE_MAX_GB`.
 
+**Who runs it.** Celery beat in Docker; the daemon's own timer under `JOB_RUNNER=daemon`;
+on Vercel without the daemon (the hosted profile, no daemon heartbeat in Redis) the refresh
+endpoint runs it at the first call after `DATA_HEALTH_CHECK_MINUTES` (60 there) have passed,
+and at once after a refresh that failed, was partial or met an unreadable component (one
+Redis timestamp, `sync:data-health-at`: a call with nothing due costs two Redis commands and
+no database read), and the daily cron runs it as well. So without the daemon a scheduler
+that stops calling the endpoint stops the hourly check with it: `refresh_scheduler_silent`
+is then raised by the daily cron, up to about 25 hours later on Hobby (docs/deploy-vercel.md
+step 7b names an external check for faster notice).
+
+**When the email provider itself refuses its key** (`provider_credentials:email_<provider>`),
+no alert email can go out through it. The admins whose phone number is verified and opted
+in to SMS (Settings) then get one SMS about it per UTC day when `SMS_PROVIDER` is configured
+(Twilio, `app/services/notifications/ops_alerts.py`, `alert_email_refused_by_sms`). Without
+such a number the problem shows only on `/admin/freshness` and in `GET /api/health/data`:
+watch that endpoint with an external monitor (hourly or less often; each call wakes the
+database), or check the dashboard after any account email fails to arrive.
+
 **Admin-only problems (Swell 2.0, design D12).** The job also checks the problems below
 (`app/services/health.py`, `data_health(admin=True)`). They follow exactly the rules above
 (new, rise in severity, reminder every 12 h, recovery notice, flapping) and go into the same
@@ -384,7 +402,7 @@ already open stay open meanwhile (no recovery notice is sent for a check that di
 | `model_run_late:<atmosphere\|wave>` | degraded | no newer run of that component is known (published, staged, attempted by a refresh, or seen by the daemon's last check) although its expected availability has passed: the newest run's init time + the model's update interval (`update_interval_seconds` from Open-Meteo's meta.json where the version recorded it, else 6 h, said "assumed") + the typical lag measured on the recent versions (median of availability minus init time, over the runs whose domains share one cycle: a run that pairs GFS 0.13 of 06Z with GFS 0.25 of 00Z would add a whole cycle) + a grace of max(90 min, the measured spread of that lag). Without a measured lag (no version with an availability time yet) nothing is judged: never a fixed wall-clock guess. The 90 min cover Open-Meteo's servers disagreeing about the same run (62 min apart, measured 2026-10-26), the 10-minute servable wait and one check interval | the dashboard's model block shows the expected and late times. Check the provider's own update page (Open-Meteo: open-meteo.com/en/docs/model-updates); if the provider has the run, look at `provider_unavailable`, `refresh_failures` and `refresh_scheduler_silent`, then `python -m app.cli sync check` |
 | `forecast_stale_spots` | degraded | active spots of the published version serve a stale forecast: their latest refresh failed while others updated, they have no data, or a component is older than its model's interval + `FORECAST_STALE_THRESHOLD_MINUTES` (360; per model `FORECAST_STALE_THRESHOLD_MINUTES_BY_MODEL`). The email names up to 8 spots and the failed refreshes' errors | the site already labels them "Forecast last updated N hours ago". A retry of the failed spots follows automatically (5, 15, 45 min); if they stay stale, read the errors on the dashboard (stale spots, refresh jobs) |
 | `refresh_failures` | degraded | the newest 3 or more finished spot-refresh syncs in a row failed or were abandoned (skipped checks and map-only syncs do not count; `sync_failed` above already fires at 2 of any kind). The newest error goes to the email only | `python -m app.cli sync status`; then the provider's runbook below ("A forecast provider is down or late", "Open-Meteo refuses requests") or "A deploy killed a sync" |
-| `provider_credentials:<provider>` | failing; degraded while a fallback stands in for that provider | the provider refused the key (HTTP 401/403, Windy's HTTP 400 "Invalid API key") or answered with a Windy TESTING key, in the newest attempt of its source or in the provider health the providers package records; no later success | fix the key in the deployment's environment (`OPEN_METEO_API_KEY`, `WINDY_API_KEY`; docs/API_SETUP_REQUIRED.md, docs/WINDY_API_SETUP.md). A testing key is never stored or published: replace it with the paid Point Forecast key |
+| `provider_credentials:<provider>` | failing; degraded while a fallback stands in for that provider | the provider refused the key (HTTP 401/403, Windy's HTTP 400 "Invalid API key") or answered with a Windy TESTING key, in the newest attempt of its source or in the provider health the providers package records; no later success | fix the key in the deployment's environment (`OPEN_METEO_API_KEY`, `WINDY_API_KEY`, the flight keys, `RESEND_API_KEY` / `SENDGRID_API_KEY`, or `SMTP_USERNAME` / `SMTP_PASSWORD` for `email_smtp` when the SMTP server answers 535; docs/API_SETUP_REQUIRED.md, docs/WINDY_API_SETUP.md). A testing key is never stored or published: replace it with the paid Point Forecast key. For `email_*` the alert cannot be emailed through the refusing provider: see "When the email provider itself refuses its key" above (SMS to admins with a verified phone, else only `/admin/freshness` and `/api/health/data`) |
 | `provider_unavailable:<source>` | degraded | the provider's run metadata could not be read for 30 min (`unknown` components in the daemon's or the refresh endpoint's check, or Windy's consecutive transient failures). When it was first seen unknown is kept in Redis (`ops:metadata-unknown:v1`), so the duration counts across checks; the resolution is the alert job's own interval | the provider's status page; from the server `python -m app.cli forecast provider-check` (one free metadata request) once the providers package is merged; outbound access and DNS of the host |
 | `provider_fallback:<provider>` | degraded | Open-Meteo stands in for Windy: the provider manager holds a fallback after a credential, testing-key, quota or availability failure, or the published version says `fallback_from` | the site keeps updating from Open-Meteo. Fix the cause shown (often `provider_credentials` or `quota_near:windy_day`); Windy is tried again automatically when the hold ends, and a successful Windy refresh ends it at once |
 | `quota_near:<counter>` | degraded | `QUOTA_ALERT_FRACTION` (0.8) of a provider allowance is used: `open_meteo_day`, `open_meteo_month` (weighted calls), `windy_day` (requests), `flights_<provider>_day` (`FLIGHT_DAILY_QUOTA`). Clears when the window resets or the limit is raised | the dashboard's usage group; "Open-Meteo refuses requests" below. A paid plan raises the limits (`OPEN_METEO_CALLS_PER_*`, `WINDY_DAILY_REQUEST_LIMIT`, `FLIGHT_DAILY_QUOTA`) |
@@ -442,7 +460,7 @@ runs in docs/sync.md; monthly figures are arithmetic on them; none was measured 
 | Neon egress (bytes the database sends) | 5 GB a month | Swell 2.0: 6.2-9.5 MB per spot refresh (measured on demo data through the refresh endpoint, docs/sync.md "Measured (2.0)"); at 8 component refreshes a day about 1.5-2.3 GB a month (30-46 %), up to 3.4 GB with a third refresh per GFS cycle (arithmetic); a check with nothing new reads nothing. A quiet site added about 0.40 GB a month in the Upgrade 4 measurement (not re-measured) | Neon console (usage); `scripts/measure_refresh_egress.py` and `scripts/measure_db_egress.py` to re-measure a change |
 | Neon compute | 100 CU-hours a month; scale to zero after 5 idle minutes | Swell 2.0 without the daemon: about 5-8 CU-hours a month for 8-12 wakes a day (the refreshes and the daily cron; assumptions: 0.25 CU, active until 5 min after a wake's last statement; arithmetic). The optional daemon's hourly jobs add about 15 (Upgrade 4). Signed-in visitors are not in that figure: every signed-in page view reads the database (measured below). Anything that reaches the database at least every 5 minutes keeps it awake all month: 720 h × 0.25 CU = 180 CU-hours | Neon console |
 | Neon storage | 1 GB | the map layers of the two retained runs are about 142 MB with partitions (14 %); the free-database retention keeps about 1 day of forecasts and 7 days of archive | `database_size` at `DATA_HEALTH_DATABASE_MAX_GB` (0.85) |
-| Upstash commands | 500K a month | Swell 2.0 without the daemon: refresh checks about 43,000 a month (8,640 checks × 5 commands); version polling up to about 172,800 a month per CDN region with a tab open all month (one origin GET per `FORECAST_VERSION_CDN_SECONDS`, 15), about 21,600 for 3 hours of open tabs a day; public pages about 32,000 (quiet site) to 324,000 (steady visitors, with the miss limit; Upgrade 4 estimate). About 97,000 (19 %) for a quiet site; about 540,000 with steady visitors and one region polled all month, over Free (docs/API_SETUP_REQUIRED.md 1.4: pay-as-you-go, or `FORECAST_VERSION_CDN_SECONDS=30`). The optional daemon adds about 76,000 (kick polls 43,200, checks about 13,000, the hourly batch 19,440). All arithmetic on measured unit costs | Vercel Storage, Upstash console; `scripts/vercel-local.sh status` counts the local stack's commands |
+| Upstash commands | 500K a month | Swell 2.0 without the daemon: refresh checks about 60,500 a month (8,640 checks × 7 commands, the hourly data-health gate included); version polling up to about 172,800 a month per CDN region with a tab open all month (one origin GET per `FORECAST_VERSION_CDN_SECONDS`, 15), about 21,600 for 3 hours of open tabs a day; public pages about 32,000 (quiet site) to 324,000 (steady visitors, with the miss limit; Upgrade 4 estimate). About 114,000 (23 %) for a quiet site; about 557,000 with steady visitors and one region polled all month, over Free (docs/API_SETUP_REQUIRED.md 1.4: pay-as-you-go, or `FORECAST_VERSION_CDN_SECONDS=30`). The optional daemon adds about 76,000 (kick polls 43,200, checks about 13,000, the hourly batch 19,440). All arithmetic on measured unit costs | Vercel Storage, Upstash console; `scripts/vercel-local.sh status` counts the local stack's commands |
 | Upstash data | 250 MB | about 265 kB of cached public payloads an hour, kept 2 hours; no provider response cache (`PROVIDER_RESPONSE_CACHE_ENABLED=false`) | `redis_memory` |
 | Open-Meteo calls | 10,000 a day per IP address | 125 weighted calls per refresh of both components, 75 per wave-only refresh (measured live 2026-10-28/29); about 500 a day at 4 GFS cycles (arithmetic); checks read only the free `meta.json` | `python -m app.cli engine budget`; `/admin/freshness` usage |
 | QStash messages (the refresh scheduler on Hobby) | 1,000 a day | 288 a day for a 5-minute schedule, plus retries of failed deliveries | Upstash console |
@@ -589,19 +607,32 @@ same database and Redis) prints the plan: `current` (stored), `new` (a sync is d
 `waiting` (coalescing, a provider still publishing, or a retry not due yet), `in_progress`,
 `failed` (out of attempts for that run), `unknown` (metadata unreachable), `disabled`.
 
-1. No recent check at all (`sync_heartbeat_stale`): the daemon is not running. On Vercel see
-   "Daemon quota reached"; otherwise restart it (or worker and beat).
+1. No recent check at all. On Vercel with the hosted profile the spot forecasts are
+   refreshed by the refresh endpoint, so look for `refresh_scheduler_silent` and the "Refresh
+   scheduler" row of `/admin/freshness`: the schedule that calls `/api/internal/refresh`
+   (QStash on Hobby, a Vercel Cron entry on Pro, docs/deploy-vercel.md step 7b) is paused,
+   deleted, out of messages or sends an old `CRON_SECRET`; the daily cron still refreshes
+   once a day meanwhile. There `sync_heartbeat_stale` (degraded) concerns only the optional
+   map daemon: the map layers age, the spot data does not stop ("Daemon quota reached").
+   Under Celery, or a daemon whose `SYNC_DAEMON_KINDS` include `spots`,
+   `sync_heartbeat_stale` (failing) means that runner stopped: restart it (or worker and
+   beat).
 2. `waiting` with "not served yet" for `open_meteo_ecmwf`: normal between ECMWF runs
    (Open-Meteo serves its 06Z/18Z run then; this source reads only 00Z and 12Z).
 3. `failed` or repeated `sync_failed`: `python -m app.cli sync status` shows the stages and
    the error of each sync; then the provider's runbook below.
-4. With the free-database profile (`SYNC_TRIGGER_SOURCES=map`, `MAP_FIELD_CYCLES=06,18`) a
-   sync runs only for a new 06Z or 18Z map cycle, so a GFS run can read stale (confidence
-   capped at Moderate, flagged) for up to about 1.3 h before each sync, and longer when
-   Open-Meteo publishes a domain late; if NOAA's map layers cannot be acquired, no sync
-   runs at all (estimated from the measured lags, docs/map-layers.md "Free database
-   budget"). That is the price of the free database, not a fault.
-5. To sync production now, use the manual GitHub workflow "Data sync (manual)"
+4. With the hosted and free-database profiles (`SYNC_TRIGGER_SOURCES=spots`) every new GFS
+   or GFS-Wave run starts a spot refresh at the next scheduler call once Open-Meteo serves
+   it (a component still being published shows `waiting`); the wave and the wind component
+   are refreshed separately when they arrive at different times. The free database keeps
+   only the 06Z and 18Z map cycles (`MAP_FIELD_CYCLES=06,18`), which concerns the optional
+   map overlay, not the spot forecasts. (The Upgrade 4 cadence, `SYNC_TRIGGER_SOURCES=map`,
+   synced only for a new map cycle and let a GFS run read stale for hours; it is not a 2.0
+   profile.)
+5. To refresh the spot forecasts now on Vercel, call the refresh endpoint yourself:
+   `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh`
+   (its answer says `success`, `not_due` with the plan, `busy` or `failed`). For the map
+   layers, use the manual GitHub workflow "Data sync (manual)"
    (docs/deploy-vercel.md section 8): it applies the hosted profile, `APP_ENV=production`
    and `DB_USE_UNPOOLED=true` itself. `force` runs every stage (runs already stored are
    still skipped); a run that reports the lease busy means the daemon is syncing right now:
@@ -653,8 +684,9 @@ its 100 CU-hours or 5 GB of egress are used up; writes fail above 1 GB of storag
 **What to do.** (Vercel, Neon console) Read the usage: compute hours, egress or storage.
 Then either wait for the next billing period or move to Neon Launch (usage-based) and switch
 to the full-retention profile (docs/API_SETUP_REQUIRED.md section 5). To stay on Free: keep
-the free-database profile (`SYNC_TRIGGER_SOURCES=map`, `MAP_FIELD_CYCLES=06,18`, the 1-day
-retention), point an uptime monitor at `/api/health` or `/` only, never at
+the free-database profile (`SYNC_TRIGGER_SOURCES=spots`, `MAP_FIELD_CYCLES=06,18`, the 1-day
+retention) and the hosted profile's hourly data-health check (`DATA_HEALTH_CHECK_MINUTES=60`:
+each check wakes the compute once), point an uptime monitor at `/api/health` or `/` only, never at
 `/api/health/ready` or `/api/health/data?strict=true` (every hit wakes the compute: every 15
 minutes costs about 45-60 CU-hours a month), and expect steady traffic to exceed Free (5.37
 GB of egress a month at 1,000 views a day, computed in docs/map-layers.md). Storage: lower
@@ -979,7 +1011,7 @@ hosting, runner and sync settings of Upgrade 4) and `.env.example`.
 | `OPS_ALERT_EMAILS` | none | addresses the daily watchdog emails when the database cannot be reached (at most once per UTC day) |
 | `JOB_RUNNER` | celery | `daemon` = one `sync daemon` process runs every job (Vercel) |
 | `SYNC_CHECK_MINUTES` | 10 | model-run checks (metadata only) |
-| `SYNC_TRIGGER_SOURCES`, `MAP_FIELD_CYCLES` | `spots,map`, `00,12` (free database: `map`, `06,18`) | which new runs start a sync, and the map cycles read |
+| `SYNC_TRIGGER_SOURCES`, `MAP_FIELD_CYCLES` | `spots,map`, `00,12` (free database: `spots`, `06,18`) | which new runs start a sync, and the map cycles read |
 | `SYNC_LEASE_MINUTES` | 45 (15 under the daemon) | the one-sync-at-a-time lease |
 | `SYNC_RETRY_MINUTES`, `SYNC_MAX_ATTEMPTS` | 15, 6 | retries of a failed acquisition per model run |
 | `SYNC_CPU_BUDGET_HOURS` | none (5 on Vercel) | `sync_cpu_budget` above 80 % of it |
