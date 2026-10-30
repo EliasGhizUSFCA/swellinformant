@@ -316,6 +316,36 @@ class TestWindy:
         assert r0.extra["gust_kind"] == "unknown"
         assert result.stats is not None and result.stats.requests == 2
 
+    def test_every_request_counts_against_the_daily_request_quota(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.redis import QuotaExceeded
+
+        counted: list[tuple[str, int]] = []
+
+        def consume_quota(provider: str, limit: int) -> int:
+            counted.append((provider, limit))
+            if len(counted) > 2:
+                raise QuotaExceeded(f"{provider} daily quota of {limit} requests reached")
+            return len(counted)
+
+        monkeypatch.setattr("app.services.http.consume_quota", consume_quota)
+        sent: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(200, json={"ts": []})
+
+        p = WindyProvider(
+            settings(windy_api_key="k", forecast_daily_request_quota=7),
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            backoff_seconds=0,
+        )
+        result = p.fetch(SPOTS[:2], p.current_run(NOW))
+        # Spot 1 spends the two requests the budget has left; spot 2 is refused unsent.
+        assert counted == [("windy", 7)] * 3 and len(sent) == 2
+        assert "daily quota of 7" in result.errors[SPOTS[1].spot_id]
+
     def test_refused_without_the_terms_acknowledgement(self) -> None:
         from pydantic import ValidationError
 
