@@ -1676,9 +1676,12 @@ Checklist:
   counts, the daily cron invocation, previews, and the GitHub Actions jobs on GitHub.
 * A brand-new hosted deployment gets its NOAA CO-OPS tide predictions at the daemon's start
   (the start-up catch-up runs every periodic job that has not succeeded within its longest
-  gap, `SYNC_DAEMON_CATCH_UP`), not at the next 02:20 UTC; without the daemon (Swell 2.0)
-  at the next daily cron, which runs the overdue `tides.acquire`. Data health flags tides
-  never acquired 3 h after the catalog was loaded (`tides_missing:<provider>`).
+  gap, `SYNC_DAEMON_CATCH_UP`), not at the next 02:20 UTC. Without the daemon (Swell 2.0)
+  the daily cron runs the overdue `tides.acquire`, but on Vercel it fails there: the API
+  function has no `data/` (`data/tide_stations.json`, `data/tides/`), so run
+  `python -m app.cli tides acquire` from a checkout (docs/deploy-vercel.md section 4,
+  "Except the tides"). Data health flags tides never acquired 3 h after the catalog was
+  loaded (`tides_missing:<provider>`) and a failed acquisition (`job_failed:tides.acquire`).
 
 **Demo-only**
 
