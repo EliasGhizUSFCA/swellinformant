@@ -59,11 +59,12 @@ describe("the How to use nav entry", () => {
     expect(within(mainNav()).getByRole("link", { name: "How to use" })).toHaveAttribute("href", "/how-to-use");
   });
 
-  it("signed in, the entries are icons below xl, each still named by its label and a tooltip", () => {
+  it("signed in, the entries are icons below lg, each still named by its label and a tooltip", () => {
     renderShell({ user: SIGNED_IN });
     const link = within(mainNav()).getByRole("link", { name: "How to use" });
     expect(link).toHaveAttribute("title", "How to use");
-    expect(within(link).getByText("How to use")).toHaveClass("sr-only", "xl:not-sr-only", "xl:whitespace-nowrap");
+    // Labels from lg (1024 px), where the six labelled entries fit (e2e/how-to-use.spec.ts measures it).
+    expect(within(link).getByText("How to use")).toHaveClass("sr-only", "lg:not-sr-only", "lg:whitespace-nowrap");
     // Never wraps onto two lines (the labels did at 768-900 px before).
     expect(link).toHaveClass("whitespace-nowrap");
   });

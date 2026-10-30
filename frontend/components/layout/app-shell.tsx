@@ -87,9 +87,10 @@ export function AppShell({
       <header className="sticky top-0 z-40 border-b bg-card/85 backdrop-blur supports-[backdrop-filter]:bg-card/70">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4 sm:px-6">
           <Logo href={user ? "/dashboard" : "/"} />
-          {/* Signed in, the six entries are icons below xl (named by their hidden label and a
-              tooltip): with labels they and the account buttons do not fit (at 768-900 px the labels
-              wrapped onto two lines even with five entries, and six did not fit at 1024 px).
+          {/* Signed in, the six entries are icons between md and lg (named by their hidden label and
+              a tooltip): with labels they and the account buttons do not fit there (at 768-900 px
+              the labels wrapped onto two lines even with five entries). From lg the labels show,
+              with tighter padding up to xl so they fit at 1024 px with room for a scrollbar.
               Signed out, the three entries keep their labels. */}
           <nav className="hidden items-center gap-1 md:flex" aria-label="Main">
             {items.map(({ href, label, icon: Icon }) => {
@@ -102,13 +103,13 @@ export function AppShell({
                   aria-current={active ? "page" : undefined}
                   className={cn(
                     "flex items-center gap-2 rounded-lg py-2 text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40",
-                    user ? "px-2.5 xl:px-3" : "px-3",
+                    user ? "px-2.5 lg:px-2 xl:px-3" : "px-3",
                     active ? "bg-secondary text-ink" : "text-muted-foreground hover:bg-muted hover:text-ink",
                   )}
                 >
                   <Icon className="size-4 shrink-0" aria-hidden="true" />
                   {/* not-sr-only resets white-space: keep the label on one line. */}
-                  <span className={user ? "sr-only xl:not-sr-only xl:whitespace-nowrap" : undefined}>{label}</span>
+                  <span className={user ? "sr-only lg:not-sr-only lg:whitespace-nowrap" : undefined}>{label}</span>
                 </Link>
               );
             })}

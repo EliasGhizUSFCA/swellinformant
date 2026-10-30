@@ -80,6 +80,45 @@ test.describe("How to use · desktop", () => {
     await expect(page.getByRole("contentinfo").getByRole("link", { name: "How to use" })).toHaveAttribute("href", "/how-to-use");
   });
 
+  test("the nav fits the header from md up, signed out and signed in, with signed-in labels from lg", async ({ page }) => {
+    /** At `width`: the header does not overflow, no entry wraps, and the How to use label is drawn or not. */
+    async function expectNavFits(width: number, entries: number, labelled: boolean) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/how-to-use");
+      const nav = page.getByRole("navigation", { name: "Main" });
+      await expect(nav.getByRole("link")).toHaveCount(entries);
+      const link = nav.getByRole("link", { name: "How to use" });
+      await expect(link).toHaveAttribute("aria-current", "page");
+      // Below lg a signed-in entry is its icon, named by a hidden label (and a tooltip).
+      const labelWidth = await link.locator("span").evaluate((s) => s.getBoundingClientRect().width);
+      expect(labelWidth > 1, `label drawn at ${width} px`).toBe(labelled);
+      const overflow = await page.locator("header > div").first().evaluate((d) => d.scrollWidth - d.clientWidth);
+      expect(overflow, `header overflow at ${width} px`).toBeLessThanOrEqual(0);
+      const heights = await nav.getByRole("link").evaluateAll((links) => links.map((a) => a.getBoundingClientRect().height));
+      expect(Math.max(...heights), `an entry wraps at ${width} px`).toBeLessThan(40);
+      await expectNoHorizontalScroll(page);
+    }
+
+    for (const width of [768, 1024]) await expectNavFits(width, 3, true);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/register");
+    await page.fill("#full_name", "Guide Nav Tester");
+    await page.fill("#email", `howto-nav-${Date.now()}@example.com`);
+    await page.fill("#password", "Guide-nav-pass-1!");
+    await page.fill("#confirm_password", "Guide-nav-pass-1!");
+    await page.getByRole("button", { name: "Create account" }).click();
+    await page.waitForURL(/dashboard/);
+    for (const [width, labelled] of [
+      [768, false],
+      [900, false],
+      [1024, true],
+      [1280, true],
+    ] as const) {
+      await expectNavFits(width, 6, labelled);
+    }
+  });
+
   test("the landing page links the guide", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("link", { name: /Read the guide/ }).click();
