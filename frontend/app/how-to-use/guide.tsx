@@ -289,8 +289,8 @@ export function HowToUseGuide() {
             </li>
             <li>
               <Ui>Settings</Ui> (top right) has the units (<Ui>Wave height</Ui> in ft or m, <Ui>Wind</Ui> in km/h, mph, kn or m/s), the{" "}
-              <Ui>Basemap</Ui> (<Ui>Dark</Ui> or <Ui>Streets</Ui>), <Ui>Animated flow</Ui>, <Ui>Wind on wave layers</Ui> and spot filters:{" "}
-              <Ui>Region</Ui>, <Ui>Country</Ui>, <Ui>Break type</Ui>, <Ui>Min. breaking height</Ui>, <Ui>Min. quality</Ui> and{" "}
+              <Ui>Basemap</Ui> (<Ui>Dark</Ui> or <Ui>Streets</Ui>), <Ui>Animated flow</Ui>, <Ui>Wind on wave layers</Ui> and spot filters: a row of regions, then{" "}
+              <Ui>Country</Ui>, <Ui>Break type</Ui>, <Ui>Min. breaking height</Ui>, <Ui>Min. quality</Ui> and{" "}
               <Ui>Swell event at this time</Ui>. It says how many spots match.
             </li>
             <li>
@@ -307,8 +307,8 @@ export function HowToUseGuide() {
 
         <Section id="spot-page">
           <p>
-            Every spot has its own page: open it from the map or from <PageLink href="/spots">Spots</PageLink>. Times on a spot page are the
-            spot&apos;s local time. From the top:
+            Every spot has its own page: open it from the map or from <PageLink href="/spots">Spots</PageLink>. Forecast times on a spot page are
+            in the spot&apos;s local time (model runs are labelled in UTC). From the top:
           </p>
           <List>
             <li>
@@ -644,7 +644,8 @@ export function HowToUseGuide() {
             <div>
               <dt className="font-semibold text-ink">Which time zone are times in?</dt>
               <dd className="mt-1">
-                The map&apos;s timeline uses your own time zone. Spot pages, trips and alert emails use the spot&apos;s local time.
+                The map&apos;s timeline uses your own time zone. Forecast times on spot pages, trips and alert emails use the spot&apos;s local
+                time; flight times are local at each airport.
               </dd>
             </div>
             <div>
