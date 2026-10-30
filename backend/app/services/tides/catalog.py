@@ -27,16 +27,16 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.core import data_files
 from app.models import SpotTideStation, SurfSpot, TideStation
 from app.services.geo import haversine_km
-from app.services.observations.stations import resolve_data_file
 from app.services.tides import coops
 from app.services.tides.harmonic_model import ConstantsError, load_model
 
 logger = logging.getLogger(__name__)
 
 CATALOG_FILENAME = "tide_stations.json"
-DEFAULT_CATALOG = Path(__file__).resolve().parents[4] / "data" / CATALOG_FILENAME
+DEFAULT_CATALOG = data_files.REPO_ROOT / "data" / CATALOG_FILENAME
 PROVIDERS = ("noaa_coops", "harmonic_model")
 RELATIONS = ("primary", "fallback")
 # Catalog distances are rounded to 0.1 km; anything further off is a wrong position.
@@ -50,7 +50,8 @@ class CatalogError(ValueError):
 
 
 def resolve_catalog_path(path: str | Path | None = None) -> Path:
-    return resolve_data_file(CATALOG_FILENAME, DEFAULT_CATALOG, path)
+    """Explicit path, else data/tide_stations.json where app.core.data_files finds it."""
+    return data_files.find(CATALOG_FILENAME, path)
 
 
 @lru_cache(maxsize=4)

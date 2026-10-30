@@ -47,10 +47,10 @@ It checks, with plain reasons:
   must never lose messages; not checked under JOB_RUNNER=daemon, which has no broker and
   whose hosted Redis sets its own policy), or when Redis does not answer.
 * **Tides**: the problems app.services.tides.health.tide_freshness reports. The tide
-  model's constants file is checked where it is deployed (always under JOB_RUNNER=celery);
-  the Vercel API function has no data/ and reports the sync daemon's own check from its
-  heartbeat instead (``file_problems``), so both runs of the alert job see the same
-  problems.
+  model's constants file is checked where it is deployed (always under JOB_RUNNER=celery,
+  and in the Vercel API function, whose build copies data/ into it); a process without the
+  file reports the sync daemon's own check from its heartbeat instead (``file_problems``),
+  so both runs of the alert job see the same problems.
 
 Overall status: ``failing`` when the product cannot serve fresh forecasts (no forecast
 source is fresh), the job runner is down (Celery: no background job has finished for
@@ -1422,8 +1422,9 @@ def _check_tides(
     db: Session, settings: Settings, now: datetime, heartbeat: state.Heartbeat | None
 ) -> list[Problem]:
     """app.services.tides.health.tide_freshness. The constants file is read here when this
-    process has it, and always under JOB_RUNNER=celery (the classic images ship data/);
-    otherwise (the Vercel API function) the daemon's check from its heartbeat stands in."""
+    process has it (the Vercel API function holds the build's copy of data/), and always
+    under JOB_RUNNER=celery (the classic images ship data/); otherwise (a function deployed
+    without the copy) the daemon's check from its heartbeat stands in."""
     local = settings.runs_celery or constants_file_present()
     raw = tide_freshness(db, now, check_constants=local)
     if not local and heartbeat is not None:

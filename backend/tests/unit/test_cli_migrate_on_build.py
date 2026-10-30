@@ -165,8 +165,8 @@ def test_a_build_without_the_data_directory_skips_the_seed_of_a_seeded_database(
     migrations: list[bool],
     seeds: list[bool],
 ) -> None:
-    """An image without data/ (the local stack's lean api image) against a database that is
-    seeded already (50 active spots, SYNTHETIC count): nothing to seed from, the build
+    """A build without data/ (a build command that does not copy it) against a database that
+    is seeded already (50 active spots, SYNTHETIC count): nothing to seed from, the build
     succeeds and says why it did not seed."""
     _no_data_dir(monkeypatch)
     monkeypatch.setattr(cli, "_active_spot_count", lambda: 50)

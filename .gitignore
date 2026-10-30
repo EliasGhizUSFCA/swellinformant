@@ -33,6 +33,9 @@ next-env.d.ts
 # (project id, pulled env files with secrets, build output); `vercel dev` also writes
 # backend/.vercel/python
 .vercel/
+# The api service's build command copies the repository's data/ into backend/data (the
+# function bundle's copy); git keeps only data/ (app/core/data_files.py)
+/backend/data/
 
 # OS / editors
 .DS_Store

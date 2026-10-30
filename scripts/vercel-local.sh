@@ -189,17 +189,26 @@ cmd_smoke() {
 
   if curl_local -fsS --max-time 10 "$base/api/health/ready" >/dev/null; then pass "the API is ready behind the edge"; else fail "GET $base/api/health/ready"; fi
 
-  # The API image is the lean install, like the Vercel function: no heavy dependency, no data/.
+  # The API image is the lean install, like the Vercel function: no heavy dependency. It holds
+  # data/ where the function does, at its root (the api build command's copy; /app/data here,
+  # /var/task/data on Vercel), and no /data: the tide job and the seed find it there.
   local module
   for module in pandas eccodes celery kombu sklearn pyarrow scipy joblib; do
     if compose exec -T api python -c "import $module" >/dev/null 2>&1; then fail "the api image imports $module"; else pass "the api image cannot import $module"; fi
   done
-  if compose exec -T api test -e /data; then fail "the api image has /data"; else pass "the api image has no data/ directory"; fi
+  if compose exec -T api test -e /data; then fail "the api image has /data"; else pass "the api image has no /data (only the daemon's image has)"; fi
+  local found
+  if found="$(compose exec -T api python -c "from app.services.tides import catalog, harmonic_model; from app.services import seed; print(catalog.resolve_catalog_path(), harmonic_model.resolve_constants_path(), seed.resolve_data_dir())" 2>&1)" \
+    && [ "$found" = "/app/data/tide_stations.json /app/data/tides/constants_eot20.json /app/data/surf_spots" ]; then
+    pass "the api image reads data/ at the function's root (/app/data)"
+  else
+    fail "data/ in the api image: $(printf '%s' "$found" | tail -n 1)"
+  fi
 
   # The api service's Vercel build command (vercel.json buildCommand) on the lean install: a
   # production build migrates over the direct URL (DATABASE_URL_UNPOOLED) and seeds the
-  # spots; here the database is already at head and the api image has no data/, so it only
-  # checks the revision (the migrate service ran the same command with data/ before).
+  # spots from data/; here the database is already at head and seeded, so it checks the
+  # revision and seeds again (idempotent; the migrate service ran the same command before).
   local built
   if built="$(compose exec -T -e VERCEL_ENV=production api python -m app.cli migrate --on-build 2>&1)" \
     && printf '%s' "$built" | grep -q '"status": "migrated"'; then

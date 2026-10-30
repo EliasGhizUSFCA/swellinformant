@@ -91,9 +91,11 @@ def migrate_on_build() -> tuple[int, dict[str, Any]]:
     connection (migration_database_url, set by alembic/env.py). Then the reference data
     are seeded as ``init-db`` does (the 50 spots, airports, the tide catalog; idempotent):
     without the optional sync daemon nothing else seeds a new database, and a deployment
-    without spots would publish nothing (review r2-spec-SPEC-2). A failed migration or seed
-    fails the build, and so does a build that finds no data/ while the database has no
-    active spot (review r3-spec-SPEC-6). Returns (exit code, report).
+    without spots would publish nothing (review r2-spec-SPEC-2). On Vercel the build command
+    copies the repository's data/ into backend/data first (vercel.json; app.core.data_files
+    finds either). A failed migration or seed fails the build, and so does a build that finds
+    no data/ while the database has no active spot (review r3-spec-SPEC-6). Returns (exit
+    code, report).
     """
     import os
 
@@ -124,9 +126,9 @@ def migrate_on_build() -> tuple[int, dict[str, Any]]:
     try:
         resolve_data_dir()
     except FileNotFoundError as exc:
-        # No data/ to seed from. A database already seeded (the local stack's smoke runs the
-        # command on the lean api image) is fine; an empty one would deploy a site that
-        # publishes nothing, so the build fails (review r3-spec-SPEC-6).
+        # No data/ to seed from (a build command without the copy of data/). A database
+        # already seeded is fine; an empty one would deploy a site that publishes nothing, so
+        # the build fails (review r3-spec-SPEC-6).
         try:
             spots = _active_spot_count()
         except Exception as count_exc:
@@ -136,7 +138,8 @@ def migrate_on_build() -> tuple[int, dict[str, Any]]:
             error = (
                 f"data/ not found from the api build and the database has no active spot: "
                 f"{exc}. Seed it (python -m app.cli init-db from a checkout) or make the "
-                "repository's data/ visible to the build"
+                "repository's data/ visible to the build (vercel.json's api buildCommand "
+                "copies ../data into backend/data)"
             )
             return 1, {**report, "status": "failed", "stage": "seed", "error": error[:2000]}
         reason = f"{exc} ({spots} active spots already seeded)"

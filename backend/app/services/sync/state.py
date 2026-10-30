@@ -7,8 +7,9 @@ Keys:
 
 * :data:`HEARTBEAT_KEY` ``sync:heartbeat``: JSON written by the daemon at every check
   (expires after 6 h). Data health reads it under JOB_RUNNER=daemon. ``file_problems``
-  are the daemon's checks of files only its image ships (the tide model's constants): the
-  API function, deployed without data/, reports these instead of its own.
+  are the daemon's checks of the files of data/ (the tide model's constants): an API process
+  without that file (a function deployed without its copy of data/) reports these instead of
+  its own.
 * :data:`KNOWN_KEY` ``sync:known``: :meth:`KnownRuns.to_json` (expires after 7 days), so a
   restarted daemon can check without reading the database.
 * :data:`REFRESH_CHECK_KEY` ``sync:refresh-check``: JSON of the last refresh check of the

@@ -2,10 +2,13 @@
 # (https://vercel.com/docs/deployments/vercel-ignore). The CLI already skips .git, .next,
 # .vercel, .venv, node_modules, __pycache__, .env.local and .env.*.local by default; they are
 # listed again so this file is the whole picture. Keep backend/, frontend/, data/ and the
-# Containerfile: the api and web services and the sync daemon are built from them.
+# Containerfile: the api and web services and the sync daemon are built from them (the api's
+# build command copies data/ into its function).
 
-# Dependencies and build output (Vercel installs and builds from scratch)
+# Dependencies and build output (Vercel installs and builds from scratch). backend/data is
+# the copy of data/ that the api service's build command makes: a local one is never uploaded.
 node_modules
+backend/data
 .next
 .next-*
 backend/.venv

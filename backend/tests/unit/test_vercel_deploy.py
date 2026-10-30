@@ -80,8 +80,15 @@ def test_services_and_routing(vercel: dict[str, Any]) -> None:
     ):
         assert pattern in excluded, pattern
     assert not {"app/**", "alembic/**", "alembic.ini", "pyproject.toml"} & set(excluded)
-    # Migrations before promotion; MIGRATE_ON_BUILD decides whether it runs (D9).
-    assert api["buildCommand"] == "python -m app.cli migrate --on-build"
+    # The build command runs in backend/ before the Python builder bundles backend/: it first
+    # copies the repository's data/ into backend/data, so the build-time seed and the function
+    # (the daily cron's tide job) read the same files (app/core/data_files.py; offline build:
+    # docs/deploy-vercel.md). Then migrations before promotion; MIGRATE_ON_BUILD decides
+    # whether they run (D9). Changed deliberately in 2.0 when data/ joined the function.
+    assert api["buildCommand"] == (
+        "rm -rf data && cp -R ../data data && python -m app.cli migrate --on-build"
+    )
+    assert "data/**" not in excluded and not any(p.startswith("data") for p in excluded)
     # First match wins: /api/* to the api (it receives the original path), the rest to web.
     assert vercel["rewrites"] == [
         {"source": "/api/(.*)", "destination": {"service": "api"}},

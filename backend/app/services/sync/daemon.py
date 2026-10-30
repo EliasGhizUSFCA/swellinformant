@@ -428,9 +428,9 @@ class SyncDaemon:
 
 
 def file_problems() -> list[dict[str, Any]]:
-    """Problems with the files this process reads and the API function does not ship (the
-    tide model's constants, data/tides/): data health there reports these from the
-    heartbeat. Cheap after the first success (the constants are cached)."""
+    """Problems with the files of data/ this process reads (the tide model's constants,
+    data/tides/): an API process without the file reports these from the heartbeat. Cheap
+    after the first success (the constants are cached)."""
     from app.services.tides.health import constants_problem
 
     try:

@@ -36,9 +36,10 @@ from typing import Any
 
 import numpy as np
 
+from app.core.data_files import DATA_PARENTS, REPO_ROOT
+
 SOURCE = "eot20"
 DATUM = "model_msl"
-REPO_ROOT = Path(__file__).resolve().parents[4]
 
 # Equilibrium argument V = a*T + b*s + c*h + d*p + e*N + g*p1 + offset (degrees), T the
 # hour angle of the mean Sun at Greenwich (Schureman, Table 2), and the nodal group.
@@ -87,8 +88,10 @@ class SpotConstants:
 
 
 def resolve_constants_path(path: str | Path | None = None) -> Path:
-    """An absolute path as given; a relative one from the working directory, else from the
-    repository root (development) or / (the Docker image keeps data/ in /data)."""
+    """An absolute path as given; a relative one (the default data/tides/constants_eot20.json)
+    from the working directory, else from each parent of data/ in app.core.data_files: the
+    repository root (development), the service root (the Vercel function, whose build copies
+    data/ into backend/) and / (the Docker images keep data/ in /data)."""
     if path is None:
         # Imported here so this module needs only numpy (the extraction script imports it).
         from app.core.config import get_settings
@@ -97,7 +100,7 @@ def resolve_constants_path(path: str | Path | None = None) -> Path:
     raw = Path(path)
     if raw.is_absolute():
         return raw
-    for base in (Path.cwd(), REPO_ROOT, Path("/")):
+    for base in (Path.cwd(), *DATA_PARENTS):
         if (base / raw).is_file():
             return base / raw
     return REPO_ROOT / raw
