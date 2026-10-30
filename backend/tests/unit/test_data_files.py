@@ -71,14 +71,18 @@ def test_nothing_found_names_every_place_tried(
         assert str(tmp_path / place / "data" / "surf_spots" / "spots.json") in message
 
 
-def test_the_function_bundle_layout_reads_the_copied_data(tmp_path: Path) -> None:
+@pytest.mark.parametrize("package_dir", ["", "_vendor"])
+def test_the_function_bundle_layout_reads_the_copied_data(tmp_path: Path, package_dir: str) -> None:
     """The Vercel function's files as the offline build lays them out: app/ and data/ side by
     side at the function root (/var/task), no repository around them, and a working directory
-    without data/. Every reader resolves into the bundle's data/."""
+    without data/. The build also installs the project into _vendor/ (its _vendor/app), which
+    the runtime puts after the function root on sys.path; whichever copy of app is imported,
+    every reader resolves into the bundle's data/."""
     function = tmp_path / "task"
-    shutil.copytree(
-        ROOT / "backend" / "app", function / "app", ignore=shutil.ignore_patterns("__pycache__")
-    )
+    ignore = shutil.ignore_patterns("__pycache__")
+    shutil.copytree(ROOT / "backend" / "app", function / "app", ignore=ignore)
+    if package_dir:
+        shutil.copytree(ROOT / "backend" / "app", function / package_dir / "app", ignore=ignore)
     for relative in READ_FILES:
         (function / "data" / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(DATA / relative, function / "data" / relative)
@@ -100,7 +104,8 @@ def test_the_function_bundle_layout_reads_the_copied_data(tmp_path: Path) -> Non
         "}))\n"
     )
     env = {k: v for k, v in os.environ.items() if k != "TIDE_CONSTANTS_PATH"}
-    env["PYTHONPATH"] = str(function)
+    # Import app from the function root, or from _vendor/app (the vendored copy first).
+    env["PYTHONPATH"] = str(function / package_dir)
     out = subprocess.run(  # noqa: S603 - fixed argument list
         [sys.executable, "-c", probe],
         cwd=elsewhere,
@@ -111,7 +116,7 @@ def test_the_function_bundle_layout_reads_the_copied_data(tmp_path: Path) -> Non
     ).stdout
     found = json.loads(out.strip().splitlines()[-1])
     bundled = function / "data"
-    assert found["service_root"] == str(function)
+    assert found["service_root"] == str(function / package_dir)
     assert found["spots"] == str(bundled / "surf_spots")
     assert found["tides"] == str(bundled / "tide_stations.json")
     assert found["obs"] == str(bundled / "observation_stations.json")
