@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Bell, LayoutDashboard, LogOut, Map as MapIcon, Menu, Search as SearchIcon, Settings, Waves, X } from "lucide-react";
+import { Bell, BookOpen, LayoutDashboard, LogOut, Map as MapIcon, Menu, Search as SearchIcon, Settings, Waves, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
@@ -28,7 +28,13 @@ const NAV = [
   { href: "/map", label: "Surf map", icon: MapIcon, auth: false },
   { href: "/spots", label: "Spots", icon: Waves, auth: false },
   { href: "/notifications", label: "Alerts", icon: Bell, auth: true },
+  { href: "/how-to-use", label: "How to use", icon: BookOpen, auth: false },
 ];
+
+/** The page `href` is (or a page under it): the nav entry shown as current. */
+export function isActivePath(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 function DemoRibbon() {
   const { data } = useSystemStatus();
@@ -81,20 +87,28 @@ export function AppShell({
       <header className="sticky top-0 z-40 border-b bg-card/85 backdrop-blur supports-[backdrop-filter]:bg-card/70">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4 sm:px-6">
           <Logo href={user ? "/dashboard" : "/"} />
+          {/* Signed in, the six entries are icons below xl (named by their hidden label and a
+              tooltip): with labels they and the account buttons do not fit (at 768-900 px the labels
+              wrapped onto two lines even with five entries, and six did not fit at 1024 px).
+              Signed out, the three entries keep their labels. */}
           <nav className="hidden items-center gap-1 md:flex" aria-label="Main">
             {items.map(({ href, label, icon: Icon }) => {
-              const active = pathname === href || pathname.startsWith(`${href}/`);
+              const active = isActivePath(pathname, href);
               return (
                 <Link
                   key={href}
                   href={href}
+                  title={user ? label : undefined}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                    "flex items-center gap-2 rounded-lg py-2 text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40",
+                    user ? "px-2.5 xl:px-3" : "px-3",
                     active ? "bg-secondary text-ink" : "text-muted-foreground hover:bg-muted hover:text-ink",
                   )}
                 >
-                  <Icon className="size-4" />
-                  {label}
+                  <Icon className="size-4 shrink-0" aria-hidden="true" />
+                  {/* not-sr-only resets white-space: keep the label on one line. */}
+                  <span className={user ? "sr-only xl:not-sr-only xl:whitespace-nowrap" : undefined}>{label}</span>
                 </Link>
               );
             })}
@@ -150,11 +164,20 @@ export function AppShell({
         </div>
         {open && (
           <nav className="border-t bg-card px-4 py-2 md:hidden" aria-label="Mobile">
-            {items.map(({ href, label, icon: Icon }) => (
-              <Link key={href} href={href} onClick={() => setOpen(false)} className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium hover:bg-muted">
-                <Icon className="size-4 text-ocean" /> {label}
-              </Link>
-            ))}
+            {items.map(({ href, label, icon: Icon }) => {
+              const active = isActivePath(pathname, href);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={() => setOpen(false)}
+                  aria-current={active ? "page" : undefined}
+                  className={cn("flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium hover:bg-muted", active && "bg-secondary")}
+                >
+                  <Icon className="size-4 text-ocean" /> {label}
+                </Link>
+              );
+            })}
             {user && (
               <Link href="/settings" onClick={() => setOpen(false)} className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium hover:bg-muted">
                 <Settings className="size-4 text-ocean" /> Settings

@@ -64,6 +64,9 @@ export default function LandingPage() {
             <Button asChild variant="ghost" className="hidden text-white hover:bg-white/10 hover:text-white sm:inline-flex">
               <Link href="/map">Surf map</Link>
             </Button>
+            <Button asChild variant="ghost" className="hidden text-white hover:bg-white/10 hover:text-white md:inline-flex">
+              <Link href="/how-to-use">How to use</Link>
+            </Button>
             <Button asChild variant="ghost" className="text-white hover:bg-white/10 hover:text-white">
               <Link href="/login">Sign in</Link>
             </Button>
@@ -140,6 +143,9 @@ export default function LandingPage() {
               </li>
             ))}
           </ol>
+          <Link href="/how-to-use" className="mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-ocean hover:underline">
+            Read the guide: how to use Swell Travel Agent <ArrowRight className="size-4" />
+          </Link>
         </div>
       </section>
 

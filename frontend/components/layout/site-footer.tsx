@@ -12,6 +12,9 @@ export function SiteFooter({ dark = false }: { dark?: boolean }) {
           demo mode), not observations. Breaking heights and quality scores are approximate. Fares are quotes and can change.
         </p>
         <div className="flex gap-4">
+          <Link href="/how-to-use" className="hover:underline">
+            How to use
+          </Link>
           <Link href="/status" className="hover:underline">
             System status
           </Link>
