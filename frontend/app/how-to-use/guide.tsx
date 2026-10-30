@@ -192,7 +192,7 @@ export function TableOfContents({ className }: { className?: string }) {
                   href={`#${s.id}`}
                   className="flex gap-1.5 rounded-lg px-1.5 py-1 text-muted-foreground outline-none hover:bg-muted hover:text-ink focus-visible:ring-[3px] focus-visible:ring-ring/40 sm:gap-2 sm:px-2 sm:py-1.5"
                 >
-                  <span className="w-5 shrink-0 text-right tabular-nums text-ocean/70" aria-hidden="true">
+                  <span className="w-5 shrink-0 text-right tabular-nums text-ocean" aria-hidden="true">
                     {i + 1}
                   </span>
                   {s.title}
@@ -239,7 +239,10 @@ export function HowToUseGuide() {
             <li>
               Select <Ui>Get started</Ui> to create an account, then <Ui>New search</Ui>.
             </li>
-            <li>Check your Dashboard and your email for trips. The servers keep checking while the site is closed.</li>
+            <li>
+              Check your Dashboard for trips. Email alerts start once you have verified your email. The servers keep checking while the site is
+              closed.
+            </li>
           </List>
         </Section>
 
@@ -251,8 +254,8 @@ export function HowToUseGuide() {
           <H3>Markers</H3>
           <List>
             <li>
-              The colour is our predicted surf quality at that break for the selected time. On the dark map a brighter blue is better surf. Open the{" "}
-              <Ui>Legend</Ui> tab on the left edge for the full key.
+              The colour is our predicted surf quality at that break for the selected time. On the dark map (the default) a brighter blue is better
+              surf; on the <Ui>Streets</Ui> map a deeper blue is. Open the <Ui>Legend</Ui> tab on the left edge for the full key.
             </li>
           </List>
           <MarkerKey />
@@ -268,27 +271,27 @@ export function HowToUseGuide() {
           <H3>Time</H3>
           <List>
             <li>
-              Drag along the timeline to change the time. <Ui>Play forecast</Ui> steps through it, <Ui>Now</Ui> goes back to the current time. On
-              wider screens the arrows beside it move one step.
+              Drag along the timeline to change the time. The play button steps through it, <Ui>Now</Ui> goes back to the current time. On wider
+              screens the arrows beside it move one step.
             </li>
             <li>The bubble shows the selected time in your own time zone.</li>
-            <li>With a keyboard: arrow keys move one step, Page Up and Page Down one day, Home and End to either end.</li>
+            <li>With a keyboard, on the timeline: arrow keys move one step, Page Up and Page Down one day, Home and End to either end.</li>
           </List>
           <H3>Ocean layers</H3>
           <p>
-            Where this site has them switched on, the tabs at the top change the colour layer: <Ui>Wind Speed</Ui>, <Ui>Wave Height</Ui>,{" "}
-            <Ui>Wave Energy</Ui> and <Ui>Wave Period</Ui>, and <Ui>Pressure</Ui> adds isobars. These are open-ocean model values, not surf at the
-            beach. Without them the map says <Ui>Spot forecasts only</Ui> or <Ui>Ocean layers are unavailable right now.</Ui> and the spot markers
-            work as usual.
+            The tabs at the top pick the colour layer: <Ui>Wind Speed</Ui>, <Ui>Wave Height</Ui>, <Ui>Wave Energy</Ui> or <Ui>Wave Period</Ui>;{" "}
+            <Ui>Pressure</Ui> adds isobars. They show model values for the open sea and the wind, not surf at the beach. Whether a site has these
+            layers depends on how it is set up: without them the map says <Ui>Spot forecasts only</Ui> (and shows no tabs) or{" "}
+            <Ui>Ocean layers are unavailable right now.</Ui> The spot markers work either way.
           </p>
           <H3>Find a spot</H3>
           <List>
             <li>
-              <Ui>Best spots now</Ui> lists the best spots at the selected time (<Ui>Best spots · 9am Sun PDT</Ui> for another time). Select one to
-              open it.
+              <Ui>Best spots now</Ui> lists the 15 best spots at the selected time (<Ui>Best spots · 9am Sun PDT</Ui> for another time). On a phone,
+              tap it to open the list. Select a spot to open it.
             </li>
             <li>
-              <Ui>Settings</Ui> (top right) has the units (<Ui>Wave height</Ui> in ft or m, <Ui>Wind</Ui> in km/h, mph, kn or m/s), the{" "}
+              <Ui>Settings</Ui> (the gear at the top right) has the units (<Ui>Wave height</Ui> in ft or m, <Ui>Wind</Ui> in km/h, mph, kn or m/s), the{" "}
               <Ui>Basemap</Ui> (<Ui>Dark</Ui> or <Ui>Streets</Ui>), <Ui>Animated flow</Ui>, <Ui>Wind on wave layers</Ui> and spot filters: a row of regions, then{" "}
               <Ui>Country</Ui>, <Ui>Break type</Ui>, <Ui>Min. breaking height</Ui>, <Ui>Min. quality</Ui> and{" "}
               <Ui>Swell event at this time</Ui>. It says how many spots match.
@@ -300,8 +303,9 @@ export function HowToUseGuide() {
           <H3>A selected spot</H3>
           <p>
             Selecting a spot opens its panel (a sheet at the bottom on phones): our prediction at the selected time next to the offshore model data,
-            the spot research confidence, <Ui>Best surf window, next 7 days</Ui>, <Ui>Upcoming swell events</Ui> and, when you are signed in,{" "}
-            <Ui>Your travel opportunities</Ui>. <Ui>Full forecast &amp; charts</Ui> opens the spot page, at the time you picked on the timeline.
+            the spot research confidence, <Ui>Best surf window, next 7 days</Ui>, <Ui>Upcoming swell events</Ui> and{" "}
+            <Ui>Your travel opportunities</Ui> (sign in to see them). <Ui>Full forecast &amp; charts</Ui> opens the spot page, at the time you
+            picked on the timeline.
           </p>
         </Section>
 
@@ -328,8 +332,8 @@ export function HowToUseGuide() {
             </li>
             <li>
               Above the rows: <Ui>Offshore Hs (model)</Ui> adds the model&apos;s offshore wave height to the Surf row, <Ui>ft</Ui> / <Ui>m</Ui>{" "}
-              switches heights and <Ui>km/h</Ui>, <Ui>mph</Ui>, <Ui>kn</Ui>, <Ui>m/s</Ui> the wind. This browser remembers your height unit for the
-              whole site, the map included.
+              switches heights and <Ui>km/h</Ui>, <Ui>mph</Ui>, <Ui>kn</Ui>, <Ui>m/s</Ui> the wind. This browser remembers both units for the whole
+              site, the map included.
             </li>
             <li>
               Tide: the height and whether it is rising or falling. When the tide counts in the rating, the reading says so, for example{" "}
@@ -430,9 +434,10 @@ export function HowToUseGuide() {
               verified.
             </li>
             <li>
-              In <PageLink href="/settings">Settings</PageLink> (in the account menu at the top right; in the menu on phones): your profile (home airport, height units,
-              currency and more, used to pre-fill new searches), <Ui>Saved departure airports</Ui>, <Ui>Alerts</Ui>, <Ui>SMS alerts</Ui>,{" "}
-              <Ui>Change password</Ui> and <Ui>Delete account</Ui>.
+              In <PageLink href="/settings">Settings</PageLink> (in the account menu at the top right; in the menu on phones): your{" "}
+              <Ui>Profile</Ui> (home airport, height units, default currency and more; the home airport and height units pre-fill a new search),{" "}
+              <Ui>Saved departure airports</Ui> (to quick-add in a new search), <Ui>Alerts</Ui>, <Ui>SMS alerts</Ui>, <Ui>Change password</Ui>{" "}
+              and <Ui>Delete account</Ui>.
             </li>
           </List>
           <p>
@@ -443,7 +448,8 @@ export function HowToUseGuide() {
         <Section id="searches">
           <p>
             A search says what waves you want, where and when you can go, and what you will spend. Open <PageLink href="/searches">Searches</PageLink>{" "}
-            and select <Ui>New search</Ui> (also in the header). Six steps; you can change everything later.
+            and select <Ui>New search</Ui> (also on the Dashboard and, on wider screens, in the header). Six steps; you can change everything
+            later.
           </p>
           <List ordered>
             <li>
@@ -555,8 +561,8 @@ export function HowToUseGuide() {
               searches for the same route and dates: fares there may differ.
             </li>
             <li>
-              When no flight fits, the trip says <Ui>Surf matches — no eligible flight yet</Ui> with the reason, and the app keeps checking.{" "}
-              <Ui>Dismiss</Ui> removes a trip you do not want.
+              When no flight fits, the trip says <Ui>Surf matches — no eligible flight yet</Ui> with the reason. Flights are searched again only
+              for the reasons above, for example when you select <Ui>Re-check flights</Ui>. <Ui>Dismiss</Ui> removes a trip you do not want.
             </li>
           </List>
         </Section>
@@ -564,7 +570,8 @@ export function HowToUseGuide() {
         <Section id="alerts">
           <p>
             You get one alert per trip, by the channel your search uses. Follow-ups come only with <Ui>Send updates</Ui> on: when quality improves,
-            the fare drops meaningfully, or dates shift. Email alerts start once your email is verified.
+            the fare drops meaningfully, or dates shift. A trip with no fitting flight alerts you only when the search has{" "}
+            <Ui>Surf-only alerts</Ui> on. Email alerts start once your email is verified.
           </p>
           <H3>What an alert email contains</H3>
           <List>
@@ -601,7 +608,10 @@ export function HowToUseGuide() {
         </Section>
 
         <Section id="demo-mode">
-          <p>Some sites run on test data. A yellow bar at the top of the app&apos;s pages (the map, spots, dashboard and the rest) says so:</p>
+          <p>
+            Some sites run on test data. A yellow bar at the top of the app&apos;s pages (the map, spots, dashboard and the rest) then says which
+            part is test data: the forecasts, the fares or both. With both:
+          </p>
           <Example label="Demo mode bar">
             <span className="block rounded-md bg-amber-100 px-3 py-1.5 text-center text-xs font-medium text-amber-900">
               Demo mode — forecasts are synthetic · flight fares are mock data. Nothing here is a real booking.
@@ -644,8 +654,8 @@ export function HowToUseGuide() {
             <div>
               <dt className="font-semibold text-ink">Which time zone are times in?</dt>
               <dd className="mt-1">
-                The map&apos;s timeline uses your own time zone. Forecast times on spot pages, trips and alert emails use the spot&apos;s local
-                time; flight times are local at each airport.
+                The map&apos;s timeline uses your own time zone; a selected spot&apos;s panel shows the time at that spot. Forecast times on spot
+                pages, trips and alert emails use the spot&apos;s local time; flight times are local at each airport.
               </dd>
             </div>
             <div>
@@ -663,7 +673,8 @@ export function HowToUseGuide() {
               <dt className="font-semibold text-ink">Feet or metres?</dt>
               <dd className="mt-1">
                 Use <Ui>ft</Ui> / <Ui>m</Ui> above a spot&apos;s timeline or <Ui>Wave height</Ui> in the map&apos;s Settings. This browser remembers it
-                for every page; without a choice, the <Ui>Height units</Ui> in your account settings apply.
+                for every page; without a choice, the <Ui>Height units</Ui> in your account settings apply (feet when you are not signed in). The wind
+                unit is remembered the same way.
               </dd>
             </div>
             <div>
@@ -671,7 +682,7 @@ export function HowToUseGuide() {
               <dd className="mt-1">
                 Check that your email is verified, the search is <Ui>Active</Ui>, its channel is not <Ui>Dashboard only</Ui>, the swell starts inside
                 its <Ui>Alert lead time</Ui>, and that <Ui>Pause all notifications</Ui> is off and the <Ui>Maximum alerts per day</Ui> was not reached.
-                Your trips still show on the dashboard.
+                A trip with no fitting flight alerts only with <Ui>Surf-only alerts</Ui> on. Your trips still show on the dashboard.
               </dd>
             </div>
           </dl>
