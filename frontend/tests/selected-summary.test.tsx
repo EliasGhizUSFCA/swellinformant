@@ -39,9 +39,11 @@ describe("selected-time summary", () => {
     expect(screen.getByTestId("summary-wind-relation")).toHaveTextContent("Cross-offshore");
     expect(screen.getByTestId("summary-gust")).toHaveTextContent("gust 39 km/h");
     expect(screen.getByTestId("summary-tide")).toHaveTextContent("Tide data unavailable");
-    // Forecast confidence and confidence at the break, separately; research is not merged in.
+    // Forecast confidence alone: the deprecated combined class (here Moderate) is not shown
+    // (spec 20), and research is not merged in (this fixture carries no research class).
     expect(screen.getByTestId("summary-forecast-confidence")).toHaveTextContent("Forecast confidence: High");
-    expect(screen.getByTestId("summary-local-confidence")).toHaveTextContent("Confidence at the break: Moderate");
+    expect(screen.queryByTestId("summary-local-confidence")).toBeNull();
+    expect(screen.getByTestId("summary-confidence")).not.toHaveTextContent("Confidence at the break");
     expect(screen.getByTestId("summary-confidence")).not.toHaveTextContent(/research/i);
     expect(screen.getByTestId("summary-confidence")).toHaveTextContent("A 1-day forecast.");
   });

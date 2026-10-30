@@ -4,15 +4,18 @@ import { ChevronDown, Loader2, MapPin } from "lucide-react";
 
 import { AttributionLinks } from "@/components/forecast-provenance";
 import { QualityBadge } from "@/components/quality";
+import type { Freshness } from "@/lib/forecast-fields";
+import { updatedAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { AttributionLink, Conditions, SpotSummary } from "@/types/api";
 
 import { FOCUS, GLASS } from "./map-ui";
 
-/** Sort key for the "best at the selected time" list: daylight hours above night ones. */
-function rankKey(c: Conditions | null | undefined): number {
+/** Sort key for the "best at the selected time" list: current forecasts above out-of-date
+ * ones (a stale spot is never listed as one of the best now), daylight hours above night ones. */
+function rankKey(c: Conditions | null | undefined, stale: boolean): number {
   if (!c) return -1;
-  return (c.is_daylight ? 1000 : 0) + c.score;
+  return (stale ? 0 : 10_000) + (c.is_daylight ? 1000 : 0) + c.score;
 }
 
 /**
@@ -23,6 +26,7 @@ export function SpotList({
   spots,
   total,
   conditions,
+  freshness,
   onSelect,
   open,
   onOpenChange,
@@ -35,6 +39,9 @@ export function SpotList({
   spots: SpotSummary[];
   total: number;
   conditions: (slug: string) => Conditions | null | undefined;
+  /** The spot's served-forecast freshness (`freshness` of the map snapshot): an out-of-date
+   * spot is marked and listed after the current ones. */
+  freshness?: (slug: string) => Freshness | null | undefined;
   onSelect: (slug: string) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -47,9 +54,10 @@ export function SpotList({
   className?: string;
 }) {
   const title = timeLabel ? `Best spots · ${timeLabel}` : "Best spots now";
+  const isStale = (slug: string) => freshness?.(slug)?.stale === true;
   const ranked = [...spots]
-    // Daylight first: a high score at night is not surf anyone can ride.
-    .sort((a, b) => rankKey(conditions(b.slug)) - rankKey(conditions(a.slug)))
+    // Current forecasts first, then daylight: a high score at night is not surf anyone can ride.
+    .sort((a, b) => rankKey(conditions(b.slug), isStale(b.slug)) - rankKey(conditions(a.slug), isStale(a.slug)))
     .slice(0, 15);
   return (
     <section aria-label={title} className={cn("flex min-h-0 flex-col overflow-hidden rounded-2xl", GLASS, className)}>
@@ -90,6 +98,7 @@ export function SpotList({
           <ul className="space-y-0.5 pt-1" id="map-top-spots" data-testid="top-spots">
             {ranked.map((s) => {
               const c = conditions(s.slug);
+              const fresh = freshness?.(s.slug);
               return (
                 <li key={s.slug}>
                   <button
@@ -100,6 +109,14 @@ export function SpotList({
                     <span className="min-w-0 truncate">
                       {s.name} <span className="text-white/65">· {s.country}</span>
                     </span>
+                    {fresh?.stale && (
+                      <span className="shrink-0 rounded-full bg-amber-400/20 px-1.5 py-0.5 text-[11px] text-amber-100" data-testid="list-stale">
+                        out of date
+                        <span className="sr-only">
+                          : {fresh.lastUpdatedAt ? `forecast last updated ${updatedAgo(fresh.lastUpdatedAt)}` : "not a current forecast"}
+                        </span>
+                      </span>
+                    )}
                     {c && !c.is_daylight && (
                       <span className="shrink-0 text-xs text-white/65" data-testid="night-tag">
                         night

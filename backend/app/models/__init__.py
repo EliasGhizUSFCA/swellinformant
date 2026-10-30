@@ -51,6 +51,7 @@ from app.models.user import (
     UserSession,
     UserToken,
 )
+from app.models.version import ForecastVersion
 
 __all__ = [
     "Airport",
@@ -65,6 +66,7 @@ __all__ = [
     "ForecastEnsembleStat",
     "ForecastRun",
     "ForecastSource",
+    "ForecastVersion",
     "MLExperiment",
     "MLModelVersion",
     "MapField",

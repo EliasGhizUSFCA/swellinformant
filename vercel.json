@@ -9,10 +9,10 @@
       "root": "backend/",
       "framework": "fastapi",
       "entrypoint": "app.main:app",
-      "buildCommand": "python -m app.cli migrate --on-build",
+      "buildCommand": "rm -rf data && cp -R ../data data && python -m app.cli migrate --on-build",
       "functions": {
         "app/main.py": {
-          "maxDuration": 60,
+          "maxDuration": 300,
           "excludeFiles": "{tests/**,**/*.rdb,swell_travel_agent.egg-info/**,build/**,ml_models/**}"
         }
       }

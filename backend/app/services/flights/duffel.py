@@ -20,6 +20,7 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.models.enums import OfferValidation
+from app.services import service_credentials
 from app.services.flights.base import (
     FlightProvider,
     FlightQuery,
@@ -77,6 +78,8 @@ class DuffelProvider(FlightProvider):
         except ValueError:
             message = resp.text[:200]
         if resp.status_code in (401, 403):
+            # An expired or revoked token: the admins are alerted (spec 16).
+            service_credentials.record_refused("flights", self.name, f"HTTP {resp.status_code}")
             raise PermanentProviderError(f"Duffel authentication failed: {message}")
         if resp.status_code >= 500:
             raise TransientProviderError(f"Duffel HTTP {resp.status_code}: {message}")
@@ -115,6 +118,7 @@ class DuffelProvider(FlightProvider):
         )
         if resp.status_code not in (200, 201):
             self._raise_for(resp)
+        service_credentials.record_accepted("flights", self.name)
         offers_raw = (resp.json().get("data") or {}).get("offers") or []
         offers: list[NormalizedOffer] = []
         for raw in offers_raw[: self.settings.flight_max_offers_per_search]:
@@ -143,6 +147,9 @@ class DuffelProvider(FlightProvider):
                 f"{marketing.get('iata_code', '')}{seg.get('marketing_carrier_flight_number', '')}"
             ),
             operating_carrier=operating.get("iata_code"),
+            # Duffel's display rule: the operating carrier's full name must be shown
+            # prominently wherever the offer is first presented (offer-requests docs).
+            operating_carrier_name=operating.get("name") or None,
         )
 
     @staticmethod

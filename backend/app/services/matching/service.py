@@ -1,8 +1,14 @@
 """Job D — compare swell events with every active saved search.
 
-* New matches are only created for events starting inside the detection lead-time range
-  (DETECTION_LEAD_MIN_DAYS…MAX, default 5–10 days): far enough ahead to book, close
-  enough for a useful forecast. Existing matches keep updating until the swell passes.
+Runs after every forecast publication (the sync's ``match`` stage), when a search is saved
+or resumed (a kick), and once a day as housekeeping (app.jobs.schedule) so windows that
+have passed expire even when no new forecast arrives.
+
+* New matches are only created for events starting inside the search's own alert lead
+  time (saved_searches.alert_lead_min_days…alert_lead_max_days, defaults 2–10 days;
+  spec 28: users choose how far ahead they hear about a swell), within the global
+  detection window DETECTION_LEAD_MIN_DAYS…MAX (1–10 days). Existing matches keep
+  updating until the swell passes.
 * Matches are unique per (search, event), so re-running never duplicates them.
 * When an event stops qualifying (forecast downgraded, search edited, swell passed) its
   matches become EXPIRED; when detection merged two events, matches follow the survivor
@@ -19,9 +25,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session, defer, lazyload
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.models import (
+    FlightOffer,
     OpportunityMatch,
     SavedSearch,
     SpotAirport,
@@ -35,6 +42,7 @@ from app.models.enums import (
     SearchStatus,
     SwellEventStatus,
 )
+from app.services.flights.airports import gateway_fallbacks
 from app.services.flights.windows import InfeasibleWindow, TravelWindow, compute_travel_window
 from app.services.matching.evaluate import (
     SearchCriteria,
@@ -42,7 +50,7 @@ from app.services.matching.evaluate import (
     evaluate_steps,
     search_allows_spot,
 )
-from app.services.matching.scoring import opportunity_scores, surf_component
+from app.services.matching.scoring import match_surf_component, opportunity_scores
 from app.services.surf_quality.confidence import confidence_label
 from app.services.swell_detection.clustering import Step
 from app.services.swell_detection.service import load_steps
@@ -131,16 +139,77 @@ def _apply_window(match: OpportunityMatch, event: SwellEvent, window: UserWindow
     match.is_demo = event.is_demo
 
 
+def lead_window(search: SavedSearch, settings: Settings) -> tuple[timedelta, timedelta]:
+    """How far ahead a swell may start for a NEW match of ``search``: the search's alert
+    lead days, kept inside the global DETECTION_LEAD_MIN_DAYS…MAX_DAYS window."""
+    low = max(float(search.alert_lead_min_days), settings.detection_lead_min_days)
+    high = min(float(search.alert_lead_max_days), settings.detection_lead_max_days)
+    return timedelta(days=low), timedelta(days=high)
+
+
 def _surf_only_scores(match: OpportunityMatch, search: SavedSearch) -> None:
     components, overall = opportunity_scores(
         search.priority,
-        surf=surf_component(match.peak_score, match.avg_score),
+        surf=match_surf_component(
+            match.peak_score,
+            match.avg_score,
+            match.breaking_height_min_ft,
+            match.breaking_height_max_ft,
+            search,
+        ),
         confidence=match.confidence,
         affordability=None,
         convenience=None,
     )
     match.scores = components
     match.overall_score = overall
+
+
+def _itinerary_still_fits(
+    db: Session,
+    match: OpportunityMatch,
+    spot: SurfSpot,
+    destination: SpotAirport,
+    tw: TravelWindow,
+    tw_airport: SpotAirport,
+    search: SavedSearch,
+    now: datetime,
+) -> bool:
+    """Whether the match's best itinerary still lands in time for the surf window (its
+    start less the transfer) and leaves after it ends (plus the transfer). Only these
+    bounds depend on the window's hours; its dates are compared separately. ``tw`` is the
+    travel window for ``tw_airport``; a kept gateway gets its own (its longer transfer)."""
+    if match.best_offer_id is None:
+        return True
+    window = tw
+    if destination is not tw_airport:
+        travel = search.travel
+        try:
+            window = compute_travel_window(
+                surf_start=tw.surf_start,
+                surf_end=tw.surf_end,
+                spot_tz=spot.timezone,
+                destination_iata=destination.airport_iata,
+                destination_tz=destination.airport.timezone,
+                transfer_minutes=destination.transfer_minutes,
+                arrival_buffer_days=travel.arrival_buffer_days,
+                departure_buffer_days=travel.departure_buffer_days,
+                min_days_at_destination=travel.min_days_at_destination,
+                max_trip_days=travel.max_trip_days,
+                now=now,
+            )
+        except InfeasibleWindow:
+            return False
+    # Two columns of the one offer (its segments and provider payload are never read here).
+    times = db.execute(
+        select(FlightOffer.outbound_arrival_at, FlightOffer.inbound_departure_at).where(
+            FlightOffer.id == match.best_offer_id
+        )
+    ).first()
+    if times is None:
+        return True
+    arrival, departure = times
+    return arrival <= window.arrive_by and window.depart_after <= departure <= window.depart_before
 
 
 def _clear_flights(match: OpportunityMatch) -> None:
@@ -251,6 +320,7 @@ def evaluate_match(
         match.recommended_departure_date,
         match.destination_iata,
     )
+    previous_window = (match.window_start, match.window_end)
     _apply_window(match, event, window)
 
     if structural_reason is not None:
@@ -267,15 +337,39 @@ def evaluate_match(
         return match
 
     assert tw is not None and airport is not None
-    match.destination_iata = airport.airport_iata
-    match.transfer_minutes = airport.transfer_minutes
+    # Flights may have landed the trip at the spot's international gateway because the
+    # regional airport returned nothing (flights/airports.py): keep it while the trip is
+    # unchanged, so an unchanged forecast never re-searches; a material change starts again
+    # from the preferred airport.
+    kept_gateway = next(
+        (
+            a
+            for a in gateway_fallbacks(
+                spot.airports, airport.airport_iata, search.max_transfer_minutes
+            )
+            if a.airport_iata == previous[2]
+        ),
+        None,
+    )
+    dates_changed = previous[:2] != (tw.recommended_arrival_date, tw.recommended_departure_date)
+    airport_changed = previous[2] != airport.airport_iata and kept_gateway is None
+    changed = dates_changed or airport_changed
+    destination = kept_gateway if kept_gateway is not None and not changed else airport
+    if (
+        not changed
+        and existing is not None
+        and match.status == MatchStatus.FLIGHT_FOUND
+        and previous_window != (window.start, window.end)
+        and not _itinerary_still_fits(db, match, spot, destination, tw, airport, search, now)
+    ):
+        # The surf window moved within the same travel dates and the stored flights no
+        # longer get there before it starts (or leave before it ends): a material change.
+        changed = True
+        destination = airport
+    match.destination_iata = destination.airport_iata
+    match.transfer_minutes = destination.transfer_minutes
     match.recommended_arrival_date = tw.recommended_arrival_date
     match.recommended_departure_date = tw.recommended_departure_date
-    changed = previous != (
-        tw.recommended_arrival_date,
-        tw.recommended_departure_date,
-        airport.airport_iata,
-    )
     if match.status == MatchStatus.DISMISSED:
         return match
     if (
@@ -349,9 +443,8 @@ def match_all(db: Session, now: datetime | None = None) -> MatchingStats:
         return steps_cache[event.id]
 
     event_ids = {e.id for e in events}
-    lead_min = timedelta(days=settings.detection_lead_min_days)
-    lead_max = timedelta(days=settings.detection_lead_max_days)
     for search in searches:
+        lead_min, lead_max = lead_window(search, settings)
         seen: set[object] = set()
         for event in events:
             current = existing.get((search.id, event.id))

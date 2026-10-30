@@ -340,12 +340,23 @@ def test_a_fields_only_run_never_changes_spot_forecasts(
     assert stages["predictions"]["runs"] == 0  # the fields run is never scored
     after = _snapshot(db, app_client)
 
-    # Re-running detection alone bumps each event's version and last_updated_at; those
-    # fields (and only those) are bookkeeping and ignored. Everything else is identical.
+    # Re-running detection alone bumps each event's version and last_updated_at, and every
+    # run of the stages publishes the run selection again as a new forecast version (Swell
+    # 2.0: each publication is a version, so the version_id every page is served from moves
+    # one up); those fields (and only those) are bookkeeping and ignored. Everything else
+    # is identical.
     bookkeeping = {_generic(path) for path, _, _ in _differences(first, before)}
-    assert {path.rsplit(".", 1)[-1] for path in bookkeeping} <= {"version", "last_updated_at"}
+    assert {path.rsplit(".", 1)[-1] for path in bookkeeping} <= {
+        "version",
+        "last_updated_at",
+        "version_id",
+    }
     changed = [d for d in _differences(before, after) if _generic(d[0]) not in bookkeeping]
     assert changed == []
+    # The fields-only run publishes no forecast version of its own: the served version
+    # moves only with each run of the stages.
+    assert before["map"]["version_id"] == first["map"]["version_id"] + 1
+    assert after["map"]["version_id"] == before["map"]["version_id"] + 1
     assert fields_run.id not in after["candidates"]
     assert "noaa_gfs_fields" not in {s["code"] for s in after["status"]["sources"]}
     assert compute_pending_predictions(db)["runs"] == 0
@@ -716,9 +727,34 @@ def test_the_index_reports_its_age_and_staleness(
     )
 
 
+def test_layers_switched_off_on_purpose_are_not_reported_as_an_outage(
+    app_client: ApiClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r4-spec-R4-SPEC-2: MAP_FIELDS_ENABLED=false (the documented daemon-less
+    setting) is a choice, not a failure: the index says ``enabled: false`` and the map shows
+    no outage notice. Without the setting the same empty index is enabled (the layers are
+    missing or late: the map says they are unavailable; test_an_empty_index_is_not_stale).
+    The setting is made before the first read: the index is a public snapshot of the hour."""
+    monkeypatch.setattr(get_settings(), "map_fields_enabled", False)
+    off = app_client.get("/api/map/fields").json()
+    assert off["available"] is False and off["enabled"] is False
+    assert "MAP_FIELDS_ENABLED=false" in off["message"]
+
+
+def test_stored_fields_are_served_after_the_layers_are_switched_off(
+    db: Session, fields_run: ForecastRun, app_client: ApiClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fields stored before MAP_FIELDS_ENABLED=false are still served until pruned: the
+    index stays available and enabled."""
+    monkeypatch.setattr(get_settings(), "map_fields_enabled", False)
+    body = app_client.get("/api/map/fields").json()
+    assert body["available"] is True and body["enabled"] is True
+
+
 def test_an_empty_index_is_not_stale(app_client: ApiClient) -> None:
     body = app_client.get("/api/map/fields").json()
     assert body["available"] is False and body["stale"] is False
+    assert body["enabled"] is True  # not switched off: missing, so "unavailable" (R4-SPEC-2)
     assert body["age_hours"] is None and body["updated_at"] is None
     assert body["stale_after_hours"] == 21.0
 

@@ -245,14 +245,17 @@ def test_job_failed_overdue_stuck_running_and_never_run(db: Session) -> None:
     job_log(db, "detection.detect", JobStatus.FAILED, 20, error="RuntimeError: boom at host-x")
     job_log(db, "detection.detect", JobStatus.SKIPPED, 10)  # lock held: not a result
     job_log(db, "detection.detect", JobStatus.FAILED, 5, error="RuntimeError: boom at host-x")
-    job_log(db, "matching.match", JobStatus.SUCCESS, 120)  # every 30 min: overdue after 90
+    # Daily housekeeping now (design D15; it also runs in every sync): fine 2 h later.
+    job_log(db, "matching.match", JobStatus.SUCCESS, 120)
     job_log(db, "quality.predict", JobStatus.SUCCESS, 100)
     job_log(db, "quality.predict", JobStatus.RUNNING, 50)  # hard time limit 30 min + 15
     job_log(db, "alerts.generate", JobStatus.SUCCESS, 30)
     job_log(db, "alerts.generate", JobStatus.RUNNING, 1)
-    job_log(db, "flights.discover", JobStatus.SUCCESS, 60 * 5)  # hourly: overdue after 150 min
-    job_log(db, "flights.discover", JobStatus.RUNNING, 2)  # ... but it is running right now
-    job_log(db, "forecasts.check_staleness", JobStatus.SUCCESS, 10)
+    # A sync stage now (no timer, design D15): never overdue, running right now.
+    job_log(db, "flights.discover", JobStatus.SUCCESS, 60 * 5)
+    job_log(db, "flights.discover", JobStatus.RUNNING, 2)
+    # The interval job of this check: hourly, overdue after 2 x 60 + 30 min.
+    job_log(db, "forecasts.check_staleness", JobStatus.SUCCESS, 160)
     job_log(db, DATA_HEALTH_TASK, JobStatus.SUCCESS, 5)  # 15-min job, overdue after 60
     job_log(db, "sync.tick", JobStatus.SUCCESS, 5)  # Celery's sync check (D14), every 10 min
     report = data_health(db)
@@ -260,10 +263,12 @@ def test_job_failed_overdue_stuck_running_and_never_run(db: Session) -> None:
     detect = by_job(jobs, "detection.detect")
     assert detect.status == "failed" and detect.consecutive_failures == 2
     assert detect.last_status == "failed" and detect.last_success_at is not None
-    assert by_job(jobs, "matching.match").status == "overdue"
+    assert by_job(jobs, "matching.match").status == "ok"
+    assert by_job(jobs, "forecasts.check_staleness").status == "overdue"
     assert by_job(jobs, "quality.predict").status == "stuck"
     assert by_job(jobs, "alerts.generate").status == "running"
     assert by_job(jobs, "flights.discover").status == "running"  # started: not overdue
+    assert by_job(jobs, "flights.discover").overdue_after_minutes is None
     assert by_job(jobs, "maintenance.cleanup").status == "never_run"
     # D14: the blend is a sync stage (was "after forecasts.acquire", its chain parent).
     assert by_job(jobs, "forecasts.blend").schedule == "in each sync"
@@ -271,7 +276,7 @@ def test_job_failed_overdue_stuck_running_and_never_run(db: Session) -> None:
     problems = {p.key: p for p in report.problems}
     assert set(problems) == {
         "job_failed:detection.detect",
-        "job_overdue:matching.match",
+        "job_overdue:forecasts.check_staleness",
         "job_stuck:quality.predict",
     }
     failed = problems["job_failed:detection.detect"]

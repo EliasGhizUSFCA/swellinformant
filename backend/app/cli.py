@@ -2,8 +2,9 @@
 
 python -m app.cli init-db          # alembic upgrade head + seed reference data + tide catalog
 python -m app.cli migrate          # alembic upgrade head
-python -m app.cli migrate --on-build   # the same, only where MIGRATE_ON_BUILD and VERCEL_ENV
-                                       # allow it (a build step); prints "skipped" otherwise
+python -m app.cli migrate --on-build   # init-db's migrate + seed, only where MIGRATE_ON_BUILD
+                                       # and VERCEL_ENV allow it (a build step); prints
+                                       # "skipped" otherwise
 python -m app.cli seed             # (re)load airports and surf spots from data/surf_spots, then
                                    # the tide station catalog (data/tide_stations.json)
 python -m app.cli pipeline         # run jobs A→G once, synchronously
@@ -16,6 +17,7 @@ Command groups provided by feature packages (``python -m app.cli GROUP --help``)
   verify    forecast verification and backtests       (app.services.verification.cli)
   ml        ML experiments and the model registry     (app.services.ml.cli)
   engine    ensemble, map fields, Open-Meteo budget   (app.services.forecasts.cli)
+  forecast  weather provider selection, health check  (app.services.forecasts.provider_cli)
   research  research evidence and research confidence (app.services.research.cli)
   tides     tide stations and predictions             (app.services.tides.cli)
   sync      synced data pipeline: check, run, daemon  (app.services.sync.cli)
@@ -69,12 +71,31 @@ def init_database(data_dir: str | None = None) -> dict[str, Any]:
     return {"migrated": True, **seed_database(data_dir)}
 
 
+def _active_spot_count() -> int:
+    """The active surf spots in the database (one count)."""
+    from sqlalchemy import func, select
+
+    from app.core.database import SessionLocal
+    from app.models import SurfSpot
+
+    with SessionLocal() as db:
+        return int(db.scalar(select(func.count()).where(SurfSpot.is_active.is_(True))) or 0)
+
+
 def migrate_on_build() -> tuple[int, dict[str, Any]]:
-    """``migrate --on-build``: migrate when MIGRATE_ON_BUILD allows it for this build.
+    """``migrate --on-build``: migrate and seed when MIGRATE_ON_BUILD allows it for this
+    build.
 
     off: never. production: only when VERCEL_ENV=production (preview builds and Neon
     preview branches are left alone). all: every build. Migrations use the direct
-    connection (migration_database_url, set by alembic/env.py). Returns (exit code, report).
+    connection (migration_database_url, set by alembic/env.py). Then the reference data
+    are seeded as ``init-db`` does (the 50 spots, airports, the tide catalog; idempotent):
+    without the optional sync daemon nothing else seeds a new database, and a deployment
+    without spots would publish nothing (review r2-spec-SPEC-2). On Vercel the build command
+    copies the repository's data/ into backend/data first (vercel.json; app.core.data_files
+    finds either). A failed migration or seed fails the build, and so does a build that finds
+    no data/ while the database has no active spot (review r3-spec-SPEC-6). Returns (exit
+    code, report).
     """
     import os
 
@@ -100,7 +121,35 @@ def migrate_on_build() -> tuple[int, dict[str, Any]]:
     except Exception as exc:  # the build fails rather than deploying against an old schema
         error = redact(f"{type(exc).__name__}: {exc}")[:2000]
         return 1, {**report, "status": "failed", "error": error}
-    return 0, {**report, "status": "migrated"}
+    from app.services.seed import resolve_data_dir
+
+    try:
+        resolve_data_dir()
+    except FileNotFoundError as exc:
+        # No data/ to seed from (a build command without the copy of data/). A database
+        # already seeded is fine; an empty one would deploy a site that publishes nothing, so
+        # the build fails (review r3-spec-SPEC-6).
+        try:
+            spots = _active_spot_count()
+        except Exception as count_exc:
+            error = redact(f"{type(count_exc).__name__}: {count_exc}")[:2000]
+            return 1, {**report, "status": "failed", "stage": "seed", "error": error}
+        if not spots:
+            error = (
+                f"data/ not found from the api build and the database has no active spot: "
+                f"{exc}. Seed it (python -m app.cli init-db from a checkout) or make the "
+                "repository's data/ visible to the build (vercel.json's api buildCommand "
+                "copies ../data into backend/data)"
+            )
+            return 1, {**report, "status": "failed", "stage": "seed", "error": error[:2000]}
+        reason = f"{exc} ({spots} active spots already seeded)"
+        return 0, {**report, "status": "migrated", "seed": "skipped", "seed_reason": reason}
+    try:
+        seeded = seed_database()
+    except Exception as exc:  # nor without the spots the site serves
+        error = redact(f"{type(exc).__name__}: {exc}")[:2000]
+        return 1, {**report, "status": "failed", "stage": "seed", "error": error}
+    return 0, {**report, "status": "migrated", **seeded}
 
 
 # Each module exposes ``register(subparsers) -> None`` (adding one parser named after the
@@ -110,6 +159,7 @@ PLUGIN_GROUPS = {
     "verify": "app.services.verification.cli",
     "ml": "app.services.ml.cli",
     "engine": "app.services.forecasts.cli",
+    "forecast": "app.services.forecasts.provider_cli",
     "research": "app.services.research.cli",
     # Tide stations and predictions.
     "tides": "app.services.tides.cli",
@@ -168,7 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     migrate_p.add_argument(
         "--on-build",
         action="store_true",
-        help="migrate only where MIGRATE_ON_BUILD and VERCEL_ENV allow it (build step)",
+        help="migrate and seed (as init-db) only where MIGRATE_ON_BUILD and VERCEL_ENV allow "
+        "it (build step)",
     )
     seed_p = sub.add_parser("seed")
     seed_p.add_argument("--data-dir", default=None)

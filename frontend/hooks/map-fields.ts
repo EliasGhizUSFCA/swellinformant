@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { fieldIndexPath } from "@/hooks/use-forecast-version";
 import { ApiError, get } from "@/lib/api";
 import { FieldMismatchError, FieldStore, FIELD_STORE_CAPACITY, isFieldVariable, type FieldGrid, type FieldIndex, type FieldVariableName } from "@/lib/map-fields";
 import { layerDef } from "@/lib/map-layers";
@@ -12,6 +13,7 @@ import type { Airport } from "@/types/api";
 
 const UNAVAILABLE: FieldIndex = {
   available: false,
+  enabled: true, // a failed read is an outage, not ocean layers switched off on purpose
   message: "Ocean layers could not be loaded right now.",
   valid_times: [],
   variables: [],
@@ -21,27 +23,26 @@ const UNAVAILABLE: FieldIndex = {
 };
 
 const FIELD_INDEX_KEY = ["map-fields-index"] as const;
-/** The index is re-read this often while the map is open (a new model run every 6-12 h). */
-export const FIELD_INDEX_REFETCH_MS = 5 * 60_000;
 /** After a field mismatch the index is re-read at most this often (no request loop). */
 const MISMATCH_REFETCH_MIN_MS = 30_000;
 
 /** Which ocean-layer fields exist for the current model run. Never throws: a failing
- * endpoint reads as "unavailable" so the rest of the map keeps working. Re-read every 5
- * minutes and when the window regains focus, so a map left open picks up new runs. */
+ * endpoint reads as "unavailable" so the rest of the map keeps working. No timer: a map left
+ * open learns of a new map run from the forecast version poll (its `map_run_id`, which the
+ * publisher also rewrites for a map-only publication), which re-reads the index under a new
+ * URL (use-forecast-version); the window regaining focus re-reads it too. */
 export const useFieldIndex = () =>
   useQuery({
     queryKey: FIELD_INDEX_KEY,
     queryFn: async ({ signal }) => {
       try {
-        return await get<FieldIndex>("/api/map/fields", signal);
+        return await get<FieldIndex>(fieldIndexPath(), signal); // ?v=&m= of the forecast version (a new map run is a new URL)
       } catch (e) {
         if (e instanceof ApiError || e instanceof TypeError) return UNAVAILABLE;
         throw e;
       }
     },
     staleTime: 60_000,
-    refetchInterval: FIELD_INDEX_REFETCH_MS,
     refetchOnWindowFocus: true,
     retry: false,
   });

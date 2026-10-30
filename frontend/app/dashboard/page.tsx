@@ -7,12 +7,13 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { toast } from "sonner";
 
-import { EventCard } from "@/components/event-card";
+import { TopEventCards } from "@/components/event-card";
 import { AttributionLinks, mergeAttributionLinks } from "@/components/forecast-provenance";
 import { AppShell } from "@/components/layout/app-shell";
-import { OpportunityCard } from "@/components/opportunity-card";
+import { OpportunityCard, TripCredits } from "@/components/opportunity-card";
 import { EmptyState, PageHeader, SectionTitle } from "@/components/page-header";
 import { RequireAuth } from "@/components/require-auth";
+import { shortNoticeLabel, useSearchDefaults } from "@/components/search/use-search-defaults";
 import { StaleBanner } from "@/components/stale-banner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +25,8 @@ import { errorMessage, post } from "@/lib/api";
 import { deliveryStatus } from "@/lib/delivery";
 import { formatDate, heightRange, relativeTime, titleCase, type Units } from "@/lib/format";
 import { QUALITY_LABELS, asQuality } from "@/lib/quality";
-import type { User } from "@/types/api";
+import { useHeightUnit } from "@/lib/units";
+import type { MatchSummary, User } from "@/types/api";
 
 function Stat({ icon, label, value, href }: { icon: React.ReactNode; label: string; value: React.ReactNode; href?: string }) {
   const body = (
@@ -112,8 +114,45 @@ function Welcome() {
   );
 }
 
+/**
+ * The trips, short-notice swells first (spec 28: windows about 3–7 days ahead lead; the API
+ * already ranks them with a short-notice boost), then the rest of the forecast horizon.
+ */
+function Trips({ opps, units }: { opps: MatchSummary[]; units: Units }) {
+  const { data: defaults } = useSearchDefaults();
+  const soon = opps.filter((o) => o.short_notice);
+  const later = opps.filter((o) => !o.short_notice);
+  return (
+    <div className="space-y-6">
+      {soon.length > 0 && (
+        <div className="space-y-3" data-testid="short-notice-trips">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Badge variant="info">Short notice</Badge>
+            <span className="text-muted-foreground">
+              Swells {shortNoticeLabel(defaults)}: the trips to book first. Check each one&apos;s forecast confidence.
+            </span>
+          </div>
+          {soon.map((m) => (
+            <OpportunityCard key={m.id} match={m} units={units} />
+          ))}
+        </div>
+      )}
+      {later.length > 0 && (
+        <div className="space-y-3" data-testid="later-trips">
+          {soon.length > 0 && <div className="text-sm text-muted-foreground">Further ahead (forecasts can still shift)</div>}
+          {later.map((m) => (
+            <OpportunityCard key={m.id} match={m} units={units} />
+          ))}
+        </div>
+      )}
+      <TripCredits matches={opps} className="mt-0" />
+    </div>
+  );
+}
+
 function Dashboard({ user }: { user: User }) {
-  const units = (user.profile.units as Units) ?? "ft";
+  // The site-wide height unit: this browser's ft / m choice, else the account's.
+  const [units] = useHeightUnit((user.profile.units as Units | undefined) ?? "ft");
   const queryClient = useQueryClient();
   const searches = useSearches();
   const opportunities = useOpportunities();
@@ -176,7 +215,7 @@ function Dashboard({ user }: { user: User }) {
               description={
                 (searches.data ?? []).length === 0
                   ? "Create a search and we'll start matching swells to your preferences."
-                  : "Your searches are active. Matching swells appear here 5–10 days out."
+                  : "Your searches are active. Matching swells appear here as soon as one fits a search's alert lead time."
               }
               action={
                 (searches.data ?? []).length === 0 ? (
@@ -187,11 +226,7 @@ function Dashboard({ user }: { user: User }) {
               }
             />
           )}
-          <div className="space-y-3">
-            {opps.map((m) => (
-              <OpportunityCard key={m.id} match={m} units={units} />
-            ))}
-          </div>
+          <Trips opps={opps} units={units} />
 
           <div className="mt-10">
             <SectionTitle
@@ -204,13 +239,7 @@ function Dashboard({ user }: { user: User }) {
               Top surf forecasts
             </SectionTitle>
             {events.isLoading && <Skeleton className="h-40" />}
-            <div className="grid gap-3 sm:grid-cols-2" data-testid="top-events">
-              {(events.data ?? []).map((e, i) => (
-                <div key={e.id} className={i === 0 ? "min-w-0 sm:col-span-2" : "min-w-0"}>
-                  <EventCard event={e} units={units} featured={i === 0} />
-                </div>
-              ))}
-            </div>
+            <TopEventCards events={events.data ?? []} units={units} />
             {events.data?.length === 0 && <p className="text-sm text-muted-foreground">No Good-or-better swells in the current forecast.</p>}
             <AttributionLinks links={mergeAttributionLinks(events.data)} className="mt-3" />
           </div>
@@ -292,7 +321,8 @@ function Dashboard({ user }: { user: User }) {
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               <Row k="Home airport" v={user.profile.home_airport ?? "Not set"} />
-              <Row k="Units" v={units === "m" ? "Metres" : "Feet"} />
+              {/* The account's saved setting (this browser's ft / m choice may differ). */}
+              <Row k="Units" v={user.profile.units === "m" ? "Metres" : "Feet"} />
               <Row
                 k="Email alerts"
                 v={

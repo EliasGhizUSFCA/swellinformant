@@ -13,11 +13,14 @@ Two classes (High / Moderate / Low), each with short plain-language reasons
   so a rule can only lower the class. The one conditional is the lead-time rule for
   3-7 days, which allows High only when an ensemble spread exists and is small; it is a
   cap of Moderate otherwise and never lifts the index class.
-* **Local confidence**: how trustworthy our BREAKING-wave prediction at this break is.
-  It can be no better than the forecast and no better than how well the break is
-  understood: ``min(forecast class, research basis)`` with research basis
-  ``min(swell_direction, swell_size, max(bathymetry, local_behavior))`` from the spot's
-  current research assessment (app.services.research); no assessment gives Low.
+* **Local confidence** (DEPRECATED, Swell 2.0 / spec 20: it combines research and forecast
+  confidence, so no alert, email, ranking or other decision uses it; the API keeps the
+  field until the UI no longer reads it): ``min(forecast class, research basis)`` with
+  research basis ``min(swell_direction, swell_size, max(bathymetry, local_behavior))`` from
+  the spot's current research assessment (app.services.research); no assessment gives Low.
+  The API shows the two confidences separately instead (:func:`separate_confidences`):
+  ``forecast_confidence`` (this module's forecast class, labelled heuristic) and
+  ``research_confidence`` (the spot's overall research class).
 * **Disputed wind** (forecast-v1.1, a note that changes no class): when the spot's
   current research assessment fires a conflict rule on wind, or its profile decision
   record says the offshore wind direction is "disputed"
@@ -677,29 +680,20 @@ def local_reason(
 def cap_for_staleness(fields: dict[str, Any]) -> dict[str, Any]:
     """The staleness rule applied at read time to API confidence fields (``api_fields``,
     or an event's stored peak-hour fields): a run that has gone stale since it was scored
-    is shown at most Moderate, local confidence follows (it is a min), the staleness reason
-    comes first and the local reason stays only while local is still the lower class.
+    is shown at most Moderate and the staleness reason comes first.
     ``forecast_confidence_reasons`` (when present) then starts with STALE_REASON as well.
     Fields without a forecast class (scored before forecast-v1) are returned unchanged."""
     fc_cls = fields.get("forecast_confidence_class")
     if fc_cls not in _RANK:
         return fields
     capped = lower(fc_cls, MODERATE)
-    local_cls = fields.get("local_confidence_class")
-    if local_cls in _RANK:
-        local_cls = lower(local_cls, capped)
     reasons = list(fields.get("confidence_reasons") or [])
     if STALE_REASON not in reasons:
         reasons = [STALE_REASON, *reasons]
-    reason = fields.get("local_confidence_reason")
-    if local_cls not in _RANK or _RANK[local_cls] >= _RANK[capped]:
-        reason = None
     out = {
         **fields,
         "forecast_confidence_class": capped,
-        "local_confidence_class": local_cls,
         "confidence_reasons": reasons,
-        "local_confidence_reason": reason,
     }
     if "forecast_confidence_reasons" in fields:
         rest = [r for r in fields["forecast_confidence_reasons"] or [] if r != STALE_REASON]
@@ -707,24 +701,57 @@ def cap_for_staleness(fields: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def api_fields(prediction: Any, *, stale: bool = False) -> dict[str, Any]:
-    """forecast/local class, reasons and lead for the API, from a stored prediction.
+# Forecast confidence is a documented rule set, not calibrated against observations: the
+# API labels it so (spec 20: "if insufficient for calibration, label heuristic").
+FORECAST_CONFIDENCE_KIND = "heuristic"
 
-    ``forecast_confidence_reasons`` holds the forecast rules' reasons only; the research
-    sentence is ``local_confidence_reason`` (when local is the lower class) and the
-    disputed-wind note is ``wind_dispute_note``. ``confidence_reasons`` keeps the deprecated
-    mixed list. ``stale`` applies the staleness rule at read time (:func:`cap_for_staleness`).
+
+def research_class_of(inputs: dict[str, Any] | None) -> str | None:
+    """The spot's overall research class the hour was scored with (stored with the
+    confidence inputs), None when the spot had no research assessment."""
+    value = ((inputs or {}).get("local") or {}).get("research_class")
+    return str(value) if value in _RANK else None
+
+
+def separate_confidences(fields: dict[str, Any], inputs: dict[str, Any] | None) -> dict[str, Any]:
+    """The two confidences of an hour, never combined (spec 20): ``forecast_confidence``
+    ({level, kind "heuristic", method}, from the forecast class after any read-time
+    staleness cap; None for rows scored before forecast-v1) and ``research_confidence`` (the
+    spot's research class). Changing either input never changes the other."""
+    level = fields.get("forecast_confidence_class")
+    method = (inputs or {}).get("method")
+    return {
+        "forecast_confidence": None
+        if level not in _RANK
+        else {
+            "level": level,
+            "kind": FORECAST_CONFIDENCE_KIND,
+            "method": str(method) if method else None,
+        },
+        "research_confidence": research_class_of(inputs),
+    }
+
+
+def api_fields(prediction: Any, *, stale: bool = False) -> dict[str, Any]:
+    """Forecast confidence class, reasons and lead for the API, from a stored prediction.
+
+    ``forecast_confidence_reasons`` holds the forecast rules' reasons only; the
+    disputed-wind note is ``wind_dispute_note``; ``confidence_reasons`` keeps the deprecated
+    mixed list. ``forecast_confidence`` and ``research_confidence`` are the two separate
+    confidences (:func:`separate_confidences`). The combined "local confidence" (the stored
+    ``local_confidence_class``, a min of the two) is not served (spec 20: never combined);
+    it is kept on the row and in the prediction archive as issued. ``stale`` applies the
+    staleness rule at read time (:func:`cap_for_staleness`).
     """
     fc_cls = prediction.forecast_confidence_class
-    local_cls = prediction.local_confidence_class
     inputs = prediction.confidence_inputs
     fields = {
         "forecast_confidence_class": fc_cls,
-        "local_confidence_class": local_cls,
         "confidence_reasons": stored_reasons(inputs),
         "forecast_confidence_reasons": forecast_reasons(inputs),
         "wind_dispute_note": wind_dispute_note(inputs),
         "lead_hours": None if prediction.lead_hours is None else round(prediction.lead_hours, 1),
-        "local_confidence_reason": local_reason(fc_cls, local_cls, inputs),
     }
-    return cap_for_staleness(fields) if stale else fields
+    if stale:
+        fields = cap_for_staleness(fields)
+    return {**fields, **separate_confidences(fields, inputs)}

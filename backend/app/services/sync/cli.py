@@ -3,8 +3,10 @@
   sync check [--json]                 print the SyncPlan (exit 0)
   sync run [--force] [--only spots,ensemble,map] [--if-due] [--trigger cli|github]
                                       run one sync and print the SyncResult: exit 0 for
-                                      success, partial or skipped, 1 for failed, 3 when
-                                      another sync holds the lease (SyncBusy)
+                                      success, partial or skipped (and with the kill
+                                      switch FORECAST_REFRESH_ENABLED=false, status
+                                      "disabled"), 1 for failed, 3 when another sync
+                                      holds the lease (SyncBusy)
   sync daemon [--once] [--no-init-db] the long-running sync daemon
   sync publish                        publish the stored data now
   sync status [--limit N]             the newest sync_runs rows
@@ -130,9 +132,18 @@ def _run(args: argparse.Namespace) -> int:
     from app.core.database import SessionLocal
     from app.services.sync import state
     from app.services.sync.detect import empty_known, plan_sync, promote_pending
-    from app.services.sync.orchestrator import remember, run_sync, tick
+    from app.services.sync.orchestrator import (
+        DISABLED_REASON,
+        refresh_disabled,
+        remember,
+        run_sync,
+        tick,
+    )
     from app.services.sync.types import SyncBusy
 
+    if refresh_disabled():
+        _print({"status": "disabled", "reason": DISABLED_REASON})
+        return EXIT_OK
     if args.if_due:
         out = tick(trigger=args.trigger)
         _print(out)

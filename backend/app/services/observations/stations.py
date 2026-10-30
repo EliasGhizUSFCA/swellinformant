@@ -24,13 +24,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import data_files
 from app.models import BuoyStation, SurfSpot
 from app.services.geo import haversine_km
 
 logger = logging.getLogger(__name__)
 
 CATALOG_FILENAME = "observation_stations.json"
-DEFAULT_CATALOG = Path(__file__).resolve().parents[4] / "data" / CATALOG_FILENAME
+DEFAULT_CATALOG = data_files.REPO_ROOT / "data" / CATALOG_FILENAME
 PROVIDERS = ("aodn", "metoffice", "ndbc")
 RELATIONS = (
     "offshore_reference",
@@ -47,19 +48,9 @@ class CatalogError(ValueError):
     pass
 
 
-def resolve_data_file(filename: str, default: Path, path: str | Path | None = None) -> Path:
-    """Explicit path, else ``default`` (the repository data/ dir, dev) or /data (Docker
-    image), else data/ in the working directory."""
-    candidates = [Path(path)] if path else []
-    candidates += [default, Path("/data") / filename, Path.cwd() / "data" / filename]
-    for c in candidates:
-        if c.is_file():
-            return c
-    raise FileNotFoundError(f"{filename} not found in any of: {[str(c) for c in candidates]}")
-
-
 def resolve_catalog_path(path: str | Path | None = None) -> Path:
-    return resolve_data_file(CATALOG_FILENAME, DEFAULT_CATALOG, path)
+    """Explicit path, else data/observation_stations.json where app.core.data_files finds it."""
+    return data_files.find(CATALOG_FILENAME, path)
 
 
 def load_catalog(path: str | Path | None = None) -> dict[str, Any]:

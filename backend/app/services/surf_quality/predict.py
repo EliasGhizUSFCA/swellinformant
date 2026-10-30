@@ -1,9 +1,12 @@
 """Job B — score every forecast timestep of a model run.
 
-Every prediction also gets its two confidence classes (methodology forecast-v1.2,
-``forecast_confidence``): forecast confidence of the offshore forecast and local
-confidence of the breaking-wave estimate at the break, with the inputs and rules used,
-the run's issue time, the lead time and the research assessment local confidence used.
+Every prediction also gets its confidence (methodology forecast-v1.2,
+``forecast_confidence``): forecast confidence of the offshore forecast, with the inputs and
+rules used, the run's issue time, the lead time and the spot's research assessment (its
+overall research class is the hour's research confidence, kept separate from forecast
+confidence). The combined local confidence is still stored for the deprecated API field;
+no decision uses it (spec 20). Algorithm 2.2.0 also stores the hour's favourable and
+unfavourable conditions and scores with the SCORING_WEIGHTS_JSON weights, if set.
 
 Where sources disagree about which wind is offshore (the spot's research assessment
 fires a conflict rule on wind, or data/surf_spots/profile_decisions.json records the
@@ -27,19 +30,26 @@ are read with the columns and ``extra`` keys scoring uses (:class:`ScoringForeca
 :func:`compute_pending_predictions` reads what every run of the pass shares once
 (:class:`PassReads`: the spots, research inputs, profile decisions and each spot's tide
 predictions, ``tides.stage.shared_tide_reads``). The scores are unchanged.
+
+Lean imports (Swell 2.0, design D8): the job runs in the refresh Function, whose install has
+no pandas, scikit-learn, SciPy, pyarrow, joblib or ecCodes. The demo tide stages are plain
+Python (value for value the pandas rolling window they replaced) and the optional ML
+correction (``ml.hook``) is imported only when ML_CORRECTIONS_ENABLED and an ACTIVE model
+version exist (:func:`run_corrector`); tests/unit/test_lean_imports.py and
+tests/integration/test_lean_predict.py check it.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -49,13 +59,13 @@ from app.models import (
     ForecastEnsembleStat,
     ForecastRun,
     ForecastSource,
+    MLModelVersion,
     SpotResearchAssessment,
     SurfQualityPrediction,
     SurfSpot,
     WaveForecast,
 )
-from app.models.enums import ForecastRunStatus
-from app.services.ml.hook import RunCorrector
+from app.models.enums import ForecastRunStatus, MLModelStatus
 from app.services.research.decisions import (
     DecisionValidationError,
     WindDispute,
@@ -86,9 +96,9 @@ from app.services.surf_quality.forecast_confidence import (
 )
 from app.services.surf_quality.models import EXTRA_GUST_KIND, SeaState, SpotParams
 from app.services.surf_quality.scoring import (
-    ALGORITHM_VERSION,
     disputed_wind_relation,
     evaluate,
+    model_version,
 )
 from app.services.surf_quality.sun import is_daylight
 from app.services.surf_quality.uncertainty import (
@@ -96,32 +106,66 @@ from app.services.surf_quality.uncertainty import (
     breaking_uncertainty,
     confidence_index,
 )
+from app.services.surf_quality.weights import effective_weights
 from app.services.tides.stage import TideStage, shared_tide_reads, tide_stages_for
+
+if TYPE_CHECKING:
+    from app.services.ml.hook import RunCorrector
 
 logger = logging.getLogger(__name__)
 
 INSERT_CHUNK = 2000
 MIN_TIDAL_RANGE_M = 0.15
+# A demo run's tide stage: the level against the lowest and highest level within half this
+# window either side, given at least this many known levels.
+TIDE_WINDOW = timedelta(hours=25)
+TIDE_WINDOW_MIN_LEVELS = 6
 # An ensemble row is used for a forecast hour only if it is this close in time, and only
 # from an ensemble run issued within ENSEMBLE_RUN_WINDOW of the forecast run.
 ENSEMBLE_MAX_GAP = timedelta(hours=3)
 ENSEMBLE_RUN_WINDOW = timedelta(hours=24)
 
 
+def _missing(value: float | None) -> bool:
+    return value is None or math.isnan(value)
+
+
 def tide_stages(times: list[datetime], levels: list[float | None]) -> list[float | None]:
-    """Position in the local tidal cycle: 0 = low, 1 = high (±12.5 h rolling window)."""
-    if not times or all(v is None for v in levels):
+    """Position in the local tidal cycle: 0 = low, 1 = high, against the lowest and highest
+    level within ±12.5 h.
+
+    The window of a time t is ``(t - 12.5 h, t + 12.5 h]`` and needs at least
+    TIDE_WINDOW_MIN_LEVELS known levels; a stage is None without its own level, without
+    enough levels or when the window's range is below MIN_TIDAL_RANGE_M. This is, value for
+    value, the pandas rolling window it replaced (``rolling("25h", center=True,
+    min_periods=6)`` min and max, closed on the right), in plain Python so that scoring
+    imports no data library (tests/unit/test_tide_stages.py compares the two)."""
+    if not times or all(_missing(v) for v in levels):
         return [None] * len(times)
-    series = pd.Series(levels, index=pd.DatetimeIndex(times), dtype="float64").sort_index()
-    window = pd.Timedelta(hours=25)
-    lo = series.rolling(window, center=True, min_periods=6).min()
-    hi = series.rolling(window, center=True, min_periods=6).max()
-    span = hi - lo
-    stage = (series - lo) / span
-    stage[(span < MIN_TIDAL_RANGE_M) | series.isna()] = float("nan")
-    return [
-        None if pd.isna(v) else round(float(v), 3) for v in stage.reindex(pd.DatetimeIndex(times))
-    ]
+    order = sorted(range(len(times)), key=times.__getitem__)
+    at = [times[i] for i in order]
+    known: list[float | None] = []
+    for i in order:
+        v = levels[i]
+        known.append(None if v is None or math.isnan(v) else float(v))
+    half = TIDE_WINDOW / 2
+    stages: list[float | None] = [None] * len(times)
+    first = last = 0
+    for k, t in enumerate(at):
+        while at[first] <= t - half:
+            first += 1
+        while last < len(at) and at[last] <= t + half:
+            last += 1
+        level = known[k]
+        window = [v for v in known[first:last] if v is not None]
+        if level is None or len(window) < TIDE_WINDOW_MIN_LEVELS:
+            continue
+        lo, hi = min(window), max(window)
+        span = hi - lo
+        if span < MIN_TIDAL_RANGE_M:
+            continue
+        stages[order[k]] = round((level - lo) / span, 3)
+    return stages
 
 
 DEMO_TIDE_SOURCE = "demo"
@@ -272,6 +316,24 @@ def _profile_decisions() -> dict[str, list[dict[str, Any]]]:
         return {}
 
 
+def run_corrector(db: Session, run: ForecastRun) -> RunCorrector | None:
+    """The ML correction of offshore Hs for this run (``ml.hook``), or None.
+
+    ML corrections are optional and off by default (ML_CORRECTIONS_ENABLED=false). The ML
+    code (scikit-learn, joblib, pandas) is imported only when the setting is on AND an ACTIVE
+    model version exists, so scoring imports and runs without the data libraries otherwise;
+    ``RunCorrector.for_run`` then decides as before whether that model applies to this run.
+    """
+    if not get_settings().ml_corrections_enabled:
+        return None
+    active = exists().where(MLModelVersion.status == MLModelStatus.ACTIVE)
+    if not db.scalar(select(active)):
+        return None
+    from app.services.ml.hook import RunCorrector
+
+    return RunCorrector.for_run(db, run)
+
+
 def spot_wind_dispute(
     spot: SurfSpot,
     research: ResearchBasisInput | None,
@@ -378,6 +440,22 @@ def _missing_swell(f: ScoringForecast) -> bool:
     return period is None or direction is None
 
 
+def _no_wave_height(f: ScoringForecast) -> bool:
+    """No wave height of any kind at this hour (bulk, swell partitions, wind sea): nothing
+    to rate. Scored, the hour would read as flat water (score 0, "poor") although the
+    waves are unknown, not small."""
+    return all(
+        h is None
+        for h in (
+            f.sig_wave_height_m,
+            f.primary_swell_height_m,
+            f.secondary_swell_height_m,
+            f.tertiary_swell_height_m,
+            f.wind_wave_height_m,
+        )
+    )
+
+
 def compute_predictions_for_run(
     db: Session,
     run_id: int,
@@ -386,8 +464,8 @@ def compute_predictions_for_run(
     *,
     shared: PassReads | None = None,
 ) -> int:
-    """Score every forecast hour of the run. ``shared``: the pass's :class:`PassReads`
-    (read here when not given)."""
+    """Score every forecast hour of the run that has a wave height. ``shared``: the pass's
+    :class:`PassReads` (read here when not given)."""
     run = db.get(ForecastRun, run_id)
     if run is None or run.status not in (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL):
         return 0
@@ -403,13 +481,17 @@ def compute_predictions_for_run(
     ensembles = _ensemble_index(db, run, reads.ensembles)
     # An active ML correction of offshore Hs (ml.hook). A blend's members were already
     # corrected before blending, so a blend run is never corrected again here.
-    corrector = None if run.source.kind == "blend" else RunCorrector.for_run(db, run)
+    corrector = None if run.source.kind == "blend" else run_corrector(db, run)
     spots = reads.spots
     decisions = reads.decisions
     tide_classes = reads.tide_classes
-    gust_scoring = get_settings().wind_gust_scoring == "scored"
+    settings = get_settings()
+    gust_scoring = settings.wind_gust_scoring == "scored"
+    weights = effective_weights(settings.scoring_weights)
     by_spot: dict[int, list[ScoringForecast]] = defaultdict(list)
     for row in scoring_forecasts(db, run.id):
+        if _no_wave_height(row):
+            continue  # unknown waves are never rated (a refresh stores no such hour)
         by_spot[row.spot_id].append(row)
 
     rows: list[dict[str, object]] = []
@@ -442,6 +524,7 @@ def compute_predictions_for_run(
                 alternative_offshore_deg=alternative,
                 gust_scoring=gust_scoring,
                 tide_detail=_tide_detail(tide),
+                weights=weights,
             )
             dispute_entry = (
                 None
@@ -504,6 +587,7 @@ def compute_predictions_for_run(
                     stale_after_hours=ctx.stale_after_hours,
                 )
             )
+            # Deprecated combined class (spec 20): stored for the API only, never decided on.
             local_conf = classify_local(forecast_conf.cls, research)
             rows.append(
                 {
@@ -553,7 +637,7 @@ def compute_predictions_for_run(
                     "confidence": conf,
                     "confidence_label": confidence_label(conf).value,
                     "explanation": result.explanation,
-                    "algorithm_version": ALGORITHM_VERSION,
+                    "algorithm_version": result.model_version,
                     "forecast_confidence_class": forecast_conf.cls,
                     "local_confidence_class": local_conf.cls,
                     "confidence_method": CONFIDENCE_METHOD,
@@ -562,7 +646,7 @@ def compute_predictions_for_run(
                     ),
                     "issued_at": run.issued_at,
                     "lead_hours": round(lead_hours, 2),
-                    "research_assessment_id": local_conf.assessment_id,
+                    "research_assessment_id": None if research is None else research.assessment_id,
                 }
             )
     if rows:
@@ -583,18 +667,27 @@ def compute_predictions_for_run(
     return len(rows)
 
 
+def current_model_version() -> str:
+    """The version new scores are stored with: ALGORITHM_VERSION, tagged when
+    SCORING_WEIGHTS_JSON changes the weights (``scoring.model_version``)."""
+    return model_version(effective_weights(get_settings().scoring_weights))
+
+
 def outdated_authoritative_runs(db: Session, now: datetime | None = None) -> list[int]:
-    """Runs currently shown to users whose predictions predate ALGORITHM_VERSION, the
-    confidence methodology (forecast-v1) or the spot's current research assessment.
+    """Runs currently shown to users whose predictions predate the current model version
+    (ALGORITHM_VERSION and the weights, :func:`current_model_version`), the confidence
+    methodology or the spot's current research assessment.
 
     After an algorithm upgrade the live forecast is rescored at once instead of waiting
     for the next model cycle; likewise after new research evidence (``research load`` or a
-    seed), so local confidence follows the current assessment. Older runs keep the version
-    they were issued with (the prediction archive is the record of what was forecast).
+    seed), so the stored research confidence follows the current assessment. Older runs
+    keep the version they were issued with (the prediction archive, when enabled, is the
+    record of what was forecast). "Shown to users" is the published forecast version's runs
+    (``versions.serving_runs``; before any version, the legacy selection of the public reads).
     """
-    from app.services.forecasts.queries import latest_runs_by_spot
+    from app.services.forecasts.versions import serving_runs
 
-    run_ids = sorted({r.id for r in latest_runs_by_spot(db, now).values()})
+    run_ids = sorted(set(serving_runs(db, now=now).values()))
     if not run_ids:
         return []
     # Each spot's current research assessment; no row = never assessed (NULL on both sides).
@@ -611,7 +704,7 @@ def outdated_authoritative_runs(db: Session, now: datetime | None = None) -> lis
             )
             .where(
                 SurfQualityPrediction.run_id.in_(run_ids),
-                (SurfQualityPrediction.algorithm_version != ALGORITHM_VERSION)
+                (SurfQualityPrediction.algorithm_version != current_model_version())
                 | SurfQualityPrediction.confidence_method.is_distinct_from(CONFIDENCE_METHOD)
                 | SurfQualityPrediction.research_assessment_id.is_distinct_from(
                     current_research.c.id
@@ -657,14 +750,18 @@ def compute_pending_predictions(db: Session, now: datetime | None = None) -> dic
         for run_id in rescored:
             reads = reads or PassReads.load(db)
             total += compute_predictions_for_run(db, run_id, force=True, now=now, shared=reads)
-    from app.services.forecasts.archive import archive_authoritative
+    archived = 0
+    # The prediction archive (verification and ML training data) is optional: off by
+    # default, on in the full-retention profile (PREDICTION_ARCHIVE_ENABLED).
+    if get_settings().prediction_archive_enabled:
+        from app.services.forecasts.archive import archive_authoritative
 
-    archived = archive_authoritative(db, now)
+        archived = archive_authoritative(db, now)["archived"]
     return {
         "runs": len(pending),
         "rescored_runs": len(rescored),
         "predictions": total,
-        "archived": archived["archived"],
+        "archived": archived,
     }
 
 

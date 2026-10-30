@@ -1,11 +1,12 @@
 /**
  * Confidence classes as the API reports them. Two separate assessments use the same three
- * classes and must never be merged into one number:
+ * classes and must never be merged into one number (spec 20):
  *
  * * forecast confidence: how much an upcoming prediction may still change (per forecast
- *   hour; `forecast_confidence_class`, plus `local_confidence_class` for the breaking-wave
- *   estimate at the break), and
+ *   hour; `forecast_confidence_class`), and
  * * research confidence: how well a break's ideal conditions are documented (per spot).
+ *
+ * The combined `local_confidence_*` fields that mixed the two were removed from the API in 2.0.
  *
  * Both are documented heuristic classifications, not calibrated probabilities. A missing or
  * unknown class is "Not assessed yet" — never a default of High.
@@ -27,9 +28,6 @@ export const FORECAST_CONFIDENCE_MEANING =
 
 export const RESEARCH_CONFIDENCE_MEANING =
   "How well this break's ideal conditions (swell direction, size, period, wind, tide, bathymetry and season) are documented by credible sources. It describes the spot, not the forecast, and is not a probability.";
-
-export const LOCAL_CONFIDENCE_MEANING =
-  "How much to trust our breaking-wave estimate at this break. It also depends on how well the break is researched, so it can differ from the offshore forecast confidence. It is not a probability.";
 
 /** A known class, or null for missing / unknown values (rendered as "Not assessed yet"). */
 export function asConfidenceClass(value: string | null | undefined): ConfidenceClass | null {
@@ -133,18 +131,6 @@ export function modelRunText(issuedIso: string | null | undefined, nowMs: number
 export function runAgeHours(issuedIso: string | null | undefined, nowMs: number): number | null {
   const t = issuedIso ? Date.parse(issuedIso) : NaN;
   return Number.isFinite(t) && Number.isFinite(nowMs) ? Math.max(0, (nowMs - t) / HOUR) : null;
-}
-
-/**
- * The reason that explains a local (at-the-break) class, chosen from the API's own reasons:
- * the last one that talks about the break or its research (the API lists the forecast reasons
- * first and the research-based one after them). Words such as "spot" are left out on purpose:
- * forecast reasons use them too ("not yet checked against buoys near this spot"). Null when no
- * reason qualifies, so nothing is invented or misattributed.
- */
-export function pickLocalReason(reasons: readonly string[] | null | undefined): string | null {
-  const r = [...(reasons ?? [])].reverse().find((x) => /\b(break|research|researched|bathymetry|nearshore)\b/i.test(x));
-  return r ?? null;
 }
 
 /**

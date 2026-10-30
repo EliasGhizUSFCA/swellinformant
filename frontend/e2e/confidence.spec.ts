@@ -63,9 +63,10 @@ async function blockTiles(page: Page) {
 
 async function mockSpot(page: Page, sc: Scenario) {
   await blockTiles(page);
-  await page.route(new RegExp(`/api/spots/${SPOT_SLUG}$`), (r) => r.fulfill({ json: spotDetail(sc) }));
+  // (\?|$): the public reads carry ?v=<forecast version> once one is published.
+  await page.route(new RegExp(`/api/spots/${SPOT_SLUG}(\\?|$)`), (r) => r.fulfill({ json: spotDetail(sc) }));
   await page.route(new RegExp(`/api/spots/${SPOT_SLUG}/forecast`), (r) => r.fulfill({ json: spotForecast(sc) }));
-  await page.route(new RegExp(`/api/spots/${SPOT_SLUG}/events$`), (r) =>
+  await page.route(new RegExp(`/api/spots/${SPOT_SLUG}/events(\\?|$)`), (r) =>
     r.fulfill({ json: [swellEvent(sc, { id: "00000000-0000-4000-8000-0000000000e1", name: "Synthetic Point (test fixture)", startH: 150, score: 89 })] }),
   );
 }
@@ -149,14 +150,11 @@ for (const [key, sc] of Object.entries(SCENARIOS) as Array<[keyof typeof SCENARI
         await expect(rc.getByTestId("research-gaps").getByRole("listitem", { includeHidden: true })).toHaveText(sc.research.gaps);
       }
 
-      const local = outlook.getByTestId("local-confidence");
-      if (sc.localClass !== sc.forecastClass) {
-        await expect(local.getByTestId("local-confidence-badge")).toHaveText(`Confidence at the break: ${label(sc.localClass)}`);
-        await expect(local.getByTestId("local-confidence-reason")).toHaveText(sc.localReason!);
-      } else {
-        await expect(local).toHaveCount(0);
-      }
-      // The reason about the break belongs to confidence at the break, never to forecast confidence.
+      // Spec 20: the deprecated combined "confidence at the break" is never shown, whatever the
+      // API sends; research confidence stays its own block (above). The reason about the break
+      // never shows as a forecast-confidence reason either.
+      await expect(page.getByTestId("local-confidence")).toHaveCount(0);
+      await expect(outlook).not.toContainText("Confidence at the break");
       await expectForecastReasonsOnly(fc, [sc.localReason]);
 
       // The hour-by-hour breakdown carries the same per-hour class.
@@ -253,7 +251,11 @@ test.describe("spot detail against the demo backend (no mocks)", () => {
       const block = outlook.getByTestId("forecast-confidence").first();
       await block.getByRole("button", { name: "Confidence details" }).click();
       if (best.forecast_confidence_reasons.length) await expect(block.getByTestId("forecast-confidence-reasons").getByRole("listitem")).toHaveText(best.forecast_confidence_reasons);
-      await expectForecastReasonsOnly(block, [best.local_confidence_reason]);
+      // Spec 20 (2.0): the API no longer serves the combined local class or its reason; the
+      // research sentences (NOT_FORECAST_REASONS) never appear under forecast confidence.
+      expect(best).not.toHaveProperty("local_confidence_class");
+      expect(best).not.toHaveProperty("local_confidence_reason");
+      await expectForecastReasonsOnly(block, []);
       await block.getByRole("button", { name: "Confidence details" }).click();
       await expect(outlook.getByTestId("rating-title")).toHaveText(`${QUALITY[best.label]} Surf — ${(best.score / 10).toFixed(1)}/10`);
       // "Why this rating?" shows the API's own component fits for that hour, word for word.
@@ -382,7 +384,7 @@ for (const [device, viewport] of [
       }
       await expect(cards.first()).toContainText("Best upcoming surf");
       await expect(cards.first().getByTestId("rating-title")).toHaveText("Excellent Surf — 8.9/10");
-      // Forecast and local classes are equal here: one badge per card, and nothing is stale.
+      // Forecast confidence only (spec 20: no combined class), and nothing is stale.
       await expect(page.getByTestId("local-confidence")).toHaveCount(0);
       await expect(page.getByTestId("stale-badge")).toHaveCount(0);
       await expect(page.getByTestId("stale-banner")).toHaveCount(0);
@@ -400,9 +402,10 @@ for (const [device, viewport] of [
       const overview = page.getByTestId("swell-overview");
       await expect(overview.getByTestId("forecast-confidence-badge")).toHaveText("Forecast confidence: High");
       await expect(overview.getByTestId("forecast-confidence-reason")).toHaveText(sc.reasons[0]!);
-      // Lower at the break (Moderate): its own badge and the API's reason, apart from forecast confidence.
-      await expect(overview.getByTestId("local-confidence-badge")).toHaveText("Confidence at the break: Moderate");
-      await expect(overview.getByTestId("local-confidence-reason")).toHaveText(sc.localReason!);
+      // The API still sends a lower combined class (Moderate): spec 20 removed it from the UI, and
+      // its reason never shows as a forecast-confidence reason.
+      await expect(overview.getByTestId("local-confidence-badge")).toHaveCount(0);
+      await expect(overview).not.toContainText("Confidence at the break");
       await expectForecastReasonsOnly(overview.getByTestId("forecast-confidence"), [sc.localReason]);
       const scoring = overview.getByRole("button", { name: "How this trip is scored" });
       // The match's "confidence" component is the legacy index, named for what it is.
@@ -435,7 +438,7 @@ for (const [device, viewport] of [
 test.describe("opportunity, alert and match badges against the demo backend (no mocks)", () => {
   test.use({ viewport: DESKTOP });
 
-  test("the cards show the forecast and local confidence the real API sends", async ({ page }) => {
+  test("the cards show the forecast confidence the real API sends, never a combined class", async ({ page }) => {
     // Needs a simulated swell (about 30 s through the whole pipeline). A spot no other spec
     // simulates, so this swell never merges with another test's event.
     test.setTimeout(240_000);
@@ -474,20 +477,23 @@ test.describe("opportunity, alert and match badges against the demo backend (no 
     const detail = (await apiGet(page.request, `/api/opportunities/${top.id}`)) as MatchDetail;
     // The API's own contract: the opportunity reads exactly like its swell event.
     expect(top.forecast_confidence_class ?? null).toBe(detail.event.forecast_confidence_class ?? null);
-    expect(top.local_confidence_class ?? null).toBe(detail.event.local_confidence_class ?? null);
+    // Spec 20 (2.0): neither serves the combined local class (research and forecast mixed).
+    for (const body of [top, detail.event]) {
+      expect(body).not.toHaveProperty("local_confidence_class");
+      expect(body).not.toHaveProperty("local_confidence_reason");
+    }
 
     await page.goto("/dashboard");
     const card = page.locator(`[data-testid="opportunity-card"][href="/opportunities/${top.id}"]`);
     await expect(card.getByTestId("forecast-confidence-badge")).toHaveText(`Forecast confidence: ${label(top.forecast_confidence_class)}`);
-    const lower = top.local_confidence_class && top.local_confidence_class !== top.forecast_confidence_class;
-    if (lower) await expect(card.getByTestId("local-confidence-badge")).toHaveText(`At the break: ${label(top.local_confidence_class)}`);
-    else await expect(card.getByTestId("local-confidence")).toHaveCount(0);
+    // Spec 20: no combined "at the break" badge, whatever the API sends.
+    await expect(card.getByTestId("local-confidence")).toHaveCount(0);
     await expect(card.getByTestId("stale-badge")).toHaveCount(top.stale ? 1 : 0);
 
     await page.goto(`/opportunities/${top.id}`);
     const overview = page.getByTestId("swell-overview");
     await expect(overview.getByTestId("forecast-confidence-badge")).toHaveText(`Forecast confidence: ${label(detail.event.forecast_confidence_class)}`);
-    await expectForecastReasonsOnly(overview.getByTestId("forecast-confidence"), [detail.event.local_confidence_reason]);
+    await expectForecastReasonsOnly(overview.getByTestId("forecast-confidence"), []);
 
     // The search's matches use the same card.
     await page.goto(`/searches/${search.id}`);

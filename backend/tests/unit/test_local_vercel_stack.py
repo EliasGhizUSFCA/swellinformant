@@ -33,12 +33,13 @@ VERCEL_JSON = ROOT / "vercel.json"
 
 HOSTED_FREE = profile_env("hosted", "free-database")
 # The stack's documented departures from the hosted profile: no forecast or map provider
-# is called until .env.vercel.local chooses live sources, and without map layers a new spot
-# run triggers a sync (the hosted free-database profile syncs for new map cycles only).
+# is called until .env.vercel.local chooses live sources, and the sync daemon refreshes the
+# spots too (the stack has no external scheduler calling the refresh endpoint; the hosted
+# daemon refreshes the map layers only).
 LOCAL_DEFAULTS = {
-    "FORECAST_PROVIDERS": "demo",
+    "WEATHER_PROVIDER": "demo",
     "MAP_FIELDS_ENABLED": "false",
-    "SYNC_TRIGGER_SOURCES": "spots,map",
+    "SYNC_DAEMON_KINDS": "spots,ensemble,map",
 }
 # Read by docker-compose.vercel.yml or the Next.js build, not by Settings.
 STACK_ONLY = {
@@ -53,6 +54,7 @@ STACK_ONLY = {
     "NEXT_PUBLIC_MAP_TILE_URL",
     "NEXT_PUBLIC_MAP_ATTRIBUTION",
     "NEXT_PUBLIC_CARTO_API_KEY",
+    "NEXT_PUBLIC_FORECAST_VERSION_POLL_MS",
     "MAP_TILE_HOSTS",
 }
 # Foundation F9: the stack's host ports.
@@ -157,7 +159,10 @@ def test_env_example_is_a_valid_production_configuration(monkeypatch: pytest.Mon
     assert settings.engine_database_url.startswith("postgresql+psycopg://u:p@ep-test-pooler.")
     assert settings.migration_database_url.startswith("postgresql+psycopg://u:p@ep-test.example")
     assert settings.redis_url == "rediss://default:test-token@test.upstash.io:6379"
-    assert settings.forecast_provider_list == ["open_meteo", "open_meteo_ecmwf"]
+    # Swell 2.0 (design D2/D5): one provider, WEATHER_PROVIDER=auto without Windy, instead of
+    # the two blended Open-Meteo families of Upgrade 4.
+    assert settings.weather_provider == "auto" and settings.forecast_providers is None
+    assert settings.forecast_provider_list == ["open_meteo"]
     assert settings.map_fields_enabled is True
     assert settings.missing_live_credentials() == []
 
@@ -223,11 +228,16 @@ def test_containerfile_is_the_daemon_image_without_build_args() -> None:
     assert "COPY data/ /data/" in text
 
 
-def test_api_image_is_lean_and_has_no_data_directory() -> None:
+def test_api_image_is_lean_and_has_data_where_the_function_has_it() -> None:
     text = API_LEAN.read_text()
     assert "uv sync --locked --no-dev --no-install-project" in text
     assert "--extra" not in text
-    assert "data/" not in "\n".join(line for line in text.splitlines() if line.startswith("COPY"))
+    # Since 2.0's data bundle (a deliberate change): the api build command copies data/ into
+    # the function's root (vercel.json; /var/task/data), so the image holds it at its service
+    # root (/app/data) and nowhere else: no /data, which only the daemon's and classic images
+    # have.
+    copies = [line for line in text.splitlines() if line.startswith("COPY")]
+    assert [line for line in copies if "data/" in line] == ["COPY data/ ./data/"]
     assert "COPY backend/app ./app" in text
     assert "tests" not in "\n".join(line for line in text.splitlines() if line.startswith("COPY"))
     assert '"--no-proxy-headers"' in text
@@ -245,6 +255,12 @@ def test_api_image_holds_what_the_function_bundle_holds() -> None:
     sources = set(re.findall(r"backend/([^/\s]+)", "\n".join(copies)))
     assert sources >= {"app", "alembic", "alembic.ini", "pyproject.toml"}
     assert not sources & excluded, sorted(sources & excluded)
+    # The build command's copy of data/ (vercel.json buildCommand) is in the function as well.
+    assert (
+        "cp -R ../data data"
+        in json.loads(VERCEL_JSON.read_text())["services"]["api"]["buildCommand"]
+    )
+    assert "COPY data/ ./data/" in final
 
 
 @pytest.mark.parametrize(
@@ -268,7 +284,8 @@ def test_edge_routes_like_vercel_services_and_overwrites_client_ip_headers() -> 
     for header in ("X-Vercel-Forwarded-For", "X-Real-IP", "X-Forwarded-For"):
         assert f"header_up {header} {{remote_host}}" in text
     assert "max_size 4500KB" in text
-    assert "response_header_timeout 60s" in text
+    # The api function's maxDuration (vercel.json: 300 s since Swell 2.0's refresh route).
+    assert "response_header_timeout 300s" in text
     # Vercel's responses carry no Via; Caddy's proxy adds one unless it is deleted.
     assert re.search(r"^\theader -Via$", text, flags=re.M)
 

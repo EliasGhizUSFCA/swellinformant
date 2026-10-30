@@ -34,6 +34,15 @@ metadata endpoints are free ("API calls to the metadata API are not counted towa
 or monthly request limits") and are not charged. Counters live in Redis and restart from
 zero when Redis loses its data (docs/operations.md); when Redis is unreachable the call
 goes ahead and a warning is logged, as for the other quota counters.
+
+Windy (design D3) counts plain requests, not weighted calls: the Professional plan allows
+10,000 Point Forecast requests a day, "The reset of counter is at 0:00 UTC" (Windy staff,
+community.windy.com, 2023), and the testing tier 500. :func:`consume_windy_request` charges
+one request to the UTC-day counter before each attempt (WINDY_DAILY_REQUEST_LIMIT) and
+raises :class:`QuotaWindowExhaustedError`, until the next 00:00 UTC, when it is used up.
+
+:func:`usage_snapshot` reads every counter in one Redis round trip, for the admin dashboard
+and the quota alert (design C5 ``api_usage``).
 """
 
 from __future__ import annotations
@@ -41,6 +50,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import redis
 
@@ -51,6 +61,7 @@ from app.services.http import QuotaExhaustedError, TransientProviderError
 logger = logging.getLogger(__name__)
 
 BUDGET_NAME = "open_meteo"
+WINDY_BUDGET_NAME = "windy"
 VARIABLES_PER_CALL = 10
 DAYS_PER_CALL = 14
 
@@ -185,4 +196,91 @@ def open_meteo_budget_usage(
         return {}
     return {
         w.name: {"used": round(u, 2), "limit": w.limit} for w, u in zip(windows, used, strict=True)
+    }
+
+
+# --------------------------------------------------------------------------- Windy
+def windy_day_window(now: datetime | None = None, settings: Settings | None = None) -> BudgetWindow:
+    """Windy's request counter of the current UTC day (WINDY_DAILY_REQUEST_LIMIT)."""
+    s = settings or get_settings()
+    t = (now or datetime.now(UTC)).astimezone(UTC)
+    day = t.replace(hour=0, minute=0, second=0, microsecond=0)
+    return BudgetWindow(
+        "day",
+        f"budget:{WINDY_BUDGET_NAME}:day:{day:%Y%m%d}",
+        s.windy_daily_request_limit,
+        2 * 86400,
+        day + timedelta(days=1),
+    )
+
+
+def consume_windy_request(*, now: datetime | None = None, settings: Settings | None = None) -> None:
+    """Charge one Windy request to today's counter, or raise without charging it.
+
+    Raises :class:`QuotaWindowExhaustedError` (``retry_after_s`` = the time to the next
+    00:00 UTC) when WINDY_DAILY_REQUEST_LIMIT requests were sent today. Redis unreachable:
+    the request goes ahead and a warning is logged (as for the other counters).
+    """
+    when = (now or datetime.now(UTC)).astimezone(UTC)
+    window = windy_day_window(when, settings)
+    try:
+        full = reserve_budget([(window.key, window.limit, window.ttl_s)], 1.0)
+    except redis.RedisError:
+        logger.warning("Windy request counter unavailable (Redis); continuing")
+        return
+    if full:
+        raise QuotaWindowExhaustedError(
+            f"Windy daily limit of {window.limit:g} requests (WINDY_DAILY_REQUEST_LIMIT) reached; "
+            f"it resets at {window.resets_at:%Y-%m-%d %H:%M} UTC",
+            retry_after_s=seconds_until_next_utc_day(when),
+        )
+
+
+def windy_request_usage(
+    now: datetime | None = None, settings: Settings | None = None
+) -> dict[str, Any] | None:
+    """Windy requests sent today, the limit and the reset time (None: Redis unreachable)."""
+    window = windy_day_window(now, settings)
+    try:
+        (used,) = budget_usage([window.key])
+    except redis.RedisError:
+        return None
+    return {"used": int(used), "limit": window.limit, "resets_at": window.resets_at.isoformat()}
+
+
+def usage_snapshot(now: datetime | None = None, settings: Settings | None = None) -> dict[str, Any]:
+    """Every forecast API counter in one Redis round trip (design C5 ``api_usage``).
+
+    ``open_meteo``: weighted calls used in the current minute, hour, day and month window
+    (``limits`` and ``resets_at`` per window); ``windy``: requests sent today, its limit
+    and reset. ``available`` is False when Redis could not be read (the counts are then
+    None, never 0). The flight and e-mail counters live elsewhere (services.usage).
+    """
+    s = settings or get_settings()
+    when = (now or datetime.now(UTC)).astimezone(UTC)
+    windows = budget_windows(when, s)
+    windy = windy_day_window(when, s)
+    try:
+        values: list[float | None] = list(budget_usage([*(w.key for w in windows), windy.key]))
+        available = True
+    except redis.RedisError:
+        values = [None] * (len(windows) + 1)
+        available = False
+    open_meteo: dict[str, Any] = {
+        w.name: None if v is None else round(v, 2)
+        for w, v in zip(windows, values[: len(windows)], strict=True)
+    }
+    open_meteo["limits"] = {w.name: w.limit for w in windows}
+    open_meteo["resets_at"] = {w.name: w.resets_at.isoformat() for w in windows}
+    open_meteo["available"] = available
+    used = values[-1]
+    return {
+        "checked_at": when.isoformat(),
+        "open_meteo": open_meteo,
+        "windy": {
+            "day": None if used is None else int(used),
+            "limit": windy.limit,
+            "resets_at": windy.resets_at.isoformat(),
+            "available": available,
+        },
     }

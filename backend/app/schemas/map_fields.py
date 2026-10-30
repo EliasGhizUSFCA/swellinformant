@@ -65,6 +65,10 @@ class FieldSourceOut(BaseModel):
 
 class FieldIndexOut(BaseModel):
     available: bool
+    # False when the site switched the ocean layers off on purpose (MAP_FIELDS_ENABLED=false,
+    # the daemon-less setting) and no fields are stored: the map then offers no layers and
+    # shows no outage notice. True otherwise, also while fields are missing or late.
+    enabled: bool = True
     # Why no fields are available (e.g. live NOAA data not enabled), in plain language.
     message: str | None = None
     source: FieldSourceOut | None = None

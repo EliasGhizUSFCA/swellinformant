@@ -1,9 +1,14 @@
-"""Read models for spots, forecasts and events (used by the API)."""
+"""Read models for spots, forecasts and events (used by the API).
+
+Every read serves the run the published forecast version maps each spot to
+(``queries.served_runs_by_spot``; before the first publication, the legacy selection) and
+reports that spot's ``freshness`` (``serving.freshness_by_spot``, design D10).
+"""
 
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Hashable, Iterator, Sequence
+from collections.abc import Callable, Hashable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, cast, get_args
@@ -24,6 +29,7 @@ from app.models import (
     WaveForecast,
 )
 from app.models.enums import QualityLabel, SwellEventStatus
+from app.schemas.forecasts import SpotFreshnessOut
 from app.schemas.spots import (
     AirportOut,
     AttributionLinkOut,
@@ -55,15 +61,18 @@ from app.services.forecasts.base import EXTRA_GUST_KIND
 from app.services.forecasts.queries import (
     USABLE,
     is_stale,
-    latest_runs_by_spot,
     run_id_is_stale,
+    served_runs_by_spot,
+    served_version,
     source_attribution_links,
 )
 from app.services.forecasts.registry import configured_source_codes
+from app.services.forecasts.serving import freshness_by_spot
 from app.services.notifications.alerts import STALE_ALERT_FACTOR
 from app.services.research.views import research_classes, research_out
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.forecast_confidence import api_fields
+from app.services.surf_quality.outputs import hour_outputs
 from app.services.surf_quality.scoring import label_for_score, min_score_for_label
 from app.services.surf_quality.sun import daylight_windows
 from app.services.swell_detection.service import peak_confidence, peak_wind
@@ -130,13 +139,24 @@ def event_out(
     include_history: bool = False,
     *,
     links: AttributionMemo | None = None,
+    freshness: Mapping[int, SpotFreshnessOut] | None = None,
+    judged: datetime | None = None,
 ) -> EventOut:
     """``links``: the attribution links already read for the events' runs (a list of events
-    from a few runs then reads each run's once)."""
+    from a few runs then reads each run's once). ``freshness``: {spot_id: freshness} of the
+    served forecast already read for a list of events (else read for the event's spot).
+    ``judged``: the instant the forecast's staleness is judged at, when it is not ``now``
+    (a trip judges it at the hour start, as the public snapshots; ``now`` keeps the lead
+    time)."""
     now = now or utcnow()
+    judged = judged or now
     # The read-time staleness rule, as for the same hour in the forecast (_conditions).
     db = object_session(event)
-    stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
+    stale = db is not None and run_id_is_stale(db, event.latest_run_id, judged)
+    if freshness is not None:
+        spot_freshness = freshness.get(event.spot_id)
+    else:
+        spot_freshness = served_freshness(db, event.spot_id, judged) if db is not None else None
     return EventOut(
         id=event.id,
         spot=spot_mini(event.spot),
@@ -166,6 +186,7 @@ def event_out(
         source_code=event.source_code,
         history=event.history if include_history else [],
         stale=stale,
+        freshness=spot_freshness,
         # The credits its forecast run's sources ask for next to their data (Open-Meteo,
         # ECMWF, NOAA); cards show the swell, wind and our estimate from that run.
         attribution_links=(
@@ -195,6 +216,8 @@ def _conditions(
         source_name=source.name if source else None,
         is_demo=bool(source.is_demo) if source else False,
         run_issued_at=run.issued_at if run is not None else None,
+        wave_run_issued_at=run.wave_model_run_at if run is not None else None,
+        atmosphere_run_issued_at=run.atmosphere_model_run_at if run is not None else None,
         method=p.breaking_height_method,
         algorithm_version=p.algorithm_version,
         explanation=p.explanation,
@@ -219,6 +242,7 @@ def _conditions(
         is_daylight=p.is_daylight,
         **api_fields(p, stale=stale),
         **wind_fields(p.components, f.extra),
+        **hour_outputs(p),
     )
 
 
@@ -425,16 +449,31 @@ def _summary(
     research_class: str | None,
     now: datetime,
     links: AttributionMemo | None = None,
+    freshness: SpotFreshnessOut | None = None,
+    run: ForecastRun | None = None,
 ) -> SpotSummary:
+    """``run``: the run served for the spot, whose sources' credit links go with the values
+    derived from it (the current and best hours; review r4-spec-R4-SPEC-1)."""
     first, counts = events
     upcoming = first.get(spot.id)
+    db = object_session(run) if run is not None else None
     return SpotSummary(
         **_summary_fields(spot),  # type: ignore[arg-type]
         current=current.get(spot.id),
         best_upcoming=best.get(spot.id),
-        next_event=event_out(upcoming, now, links=links) if upcoming is not None else None,
+        next_event=(
+            event_out(
+                upcoming, now, links=links, freshness={spot.id: freshness} if freshness else {}
+            )
+            if upcoming is not None
+            else None
+        ),
         upcoming_event_count=counts.get(spot.id, 0),
         research_class=research_class,
+        freshness=freshness,
+        attribution_links=run_attribution_links(db, run, links)
+        if db is not None and run is not None
+        else [],
     )
 
 
@@ -444,11 +483,26 @@ def spot_summaries(
     """All active spots with current conditions, best upcoming window and next event."""
     now = now or utcnow()
     spots = db.scalars(select(SurfSpot).where(SurfSpot.is_active).order_by(SurfSpot.name)).all()
-    current, best = _current_and_best(db, latest_runs_by_spot(db, now), now, horizon_days)
+    runs = served_runs_by_spot(db, now)
+    current, best = _current_and_best(db, runs, now, horizon_days)
     events = _active_events(db, now)
     research = research_classes(db)  # one query for all spots
-    links: AttributionMemo = {}
-    return [_summary(s, current, best, events, research.get(s.id), now, links) for s in spots]
+    freshness = freshness_by_spot(db, runs, now)
+    links: AttributionMemo = {}  # each run's credit links read once for the list
+    return [
+        _summary(
+            s,
+            current,
+            best,
+            events,
+            research.get(s.id),
+            now,
+            links,
+            freshness.get(s.id),
+            runs.get(s.id),
+        )
+        for s in spots
+    ]
 
 
 def spot_detail(
@@ -457,13 +511,19 @@ def spot_detail(
     """One spot's page data. Only this spot's predictions and events are read; the
     ``current`` and ``best_upcoming`` hours are the ones :func:`spot_summaries` gives it."""
     now = now or utcnow()
-    current, best = _current_and_best(
-        db, latest_runs_by_spot(db, now), now, horizon_days, spot_id=spot.id
-    )
+    runs = _served_runs(db, now)
+    current, best = _current_and_best(db, runs, now, horizon_days, spot_id=spot.id)
     events = _active_events(db, now, spot_id=spot.id)
     research = research_out(db, spot.id)
     summary = _summary(
-        spot, current, best, events, research.research_class if research else None, now
+        spot,
+        current,
+        best,
+        events,
+        research.research_class if research else None,
+        now,
+        freshness=freshness_by_spot(db, runs, now).get(spot.id),
+        run=runs.get(spot.id),
     )
     return SpotDetail(
         **summary.model_dump(),
@@ -564,7 +624,6 @@ def daily_summaries(
                 good_hours=round(timesteps.covered_hours(extents, good_mask, windows, bounds), 2),
                 confidence=round(sum(p.confidence for p in items) / len(items)),
                 forecast_confidence_class=top.forecast_confidence_class,
-                local_confidence_class=top.local_confidence_class,
             )
         )
     return out
@@ -624,6 +683,7 @@ def forecast_points(
             components=p.components,
             **api_fields(p, stale=stale),
             **wind_fields(p.components, f.extra),
+            **hour_outputs(p),
         )
         for p, f in rows
     ]
@@ -813,10 +873,29 @@ def _member_out(
     )
 
 
+def _served_runs(db: Session, now: datetime) -> dict[int, ForecastRun]:
+    """``queries.served_runs_by_spot`` at ``now`` (read once inside :func:`shared_hour_reads`)."""
+    return _shared(db, ("runs", now), lambda: served_runs_by_spot(db, now))
+
+
 def authoritative_run(db: Session, spot_id: int, now: datetime) -> ForecastRun | None:
-    """The spot's authoritative run (``latest_runs_by_spot``, read once per ``now`` inside
-    :func:`shared_hour_reads`)."""
-    return _shared(db, ("runs", now), lambda: latest_runs_by_spot(db, now)).get(spot_id)
+    """The run served for the spot (``queries.served_runs_by_spot``: the published version's
+    run, else the legacy selection; read once per ``now`` inside :func:`shared_hour_reads`)."""
+    return _served_runs(db, now).get(spot_id)
+
+
+def events_freshness(db: Session, now: datetime) -> dict[int, SpotFreshnessOut]:
+    """{spot_id: freshness} of every served spot at ``now`` (read once per ``now`` inside
+    :func:`shared_hour_reads`), for a list of events or matches."""
+    return _shared(
+        db, ("freshness", now), lambda: freshness_by_spot(db, _served_runs(db, now), now)
+    )
+
+
+def served_freshness(db: Session, spot_id: int, now: datetime) -> SpotFreshnessOut | None:
+    """The spot's freshness at ``now`` (``serving.freshness_by_spot``; read once per ``now``
+    inside :func:`shared_hour_reads`); None for a spot nothing is served for."""
+    return events_freshness(db, now).get(spot_id)
 
 
 def forecast_source_out(db: Session, run: ForecastRun) -> ForecastSourceOut:
@@ -845,9 +924,30 @@ def run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
     return _shared(db, ("members", run.id), lambda: _run_members(db, run))
 
 
+def _component_members(run: ForecastRun) -> list[RunMemberOut]:
+    """One entry per component when the run's wave and atmosphere data come from different
+    model runs (a component refreshed alone keeps the other's run, design D6): each with its
+    own init time, run key and fetch time. Empty when both share one run."""
+    wave, atmosphere = run.wave_model_run_at, run.atmosphere_model_run_at
+    if wave is None or atmosphere is None or wave == atmosphere:
+        return []
+    details = run.details or {}
+    keys = details.get("component_keys") or {}
+    parts = details.get("components") or {}
+    out: list[RunMemberOut] = []
+    for component, init in (("wave", wave), ("atmosphere", atmosphere)):
+        part = parts.get(component) if isinstance(parts, dict) else None
+        fetched = part.get("retrieved_at") if isinstance(part, dict) else None
+        member = _member_out(run.source, str(keys.get(component) or run.run_key), init)
+        member.component = component  # type: ignore[assignment]
+        member.retrieved_at = datetime.fromisoformat(str(fetched)) if fetched else None
+        out.append(member)
+    return out
+
+
 def _run_members(db: Session, run: ForecastRun) -> list[RunMemberOut]:
     if run.source.kind != "blend":
-        return [_member_out(run.source, run.run_key, run.issued_at)]
+        return _component_members(run) or [_member_out(run.source, run.run_key, run.issued_at)]
     members = [m for m in (run.details or {}).get("members", []) if m.get("code")]
     codes = [str(m["code"]) for m in members]
     sources = {
@@ -875,12 +975,14 @@ def spot_forecast(
 ) -> SpotForecastOut:
     now = now or utcnow()
     run = authoritative_run(db, spot.id, now)
+    freshness = served_freshness(db, spot.id, now)
     if run is None:
         return SpotForecastOut(
             spot_slug=spot.slug,
             timezone=spot.timezone,
             available=False,
             message="No forecast has been ingested for this spot yet.",
+            freshness=freshness,
         )
     start = now - timedelta(hours=3)
     end = now + timedelta(days=days)
@@ -918,6 +1020,7 @@ def spot_forecast(
         models=model_series(db, spot, run, start, end),
         ensemble=ensemble_series(db, spot, start, end),
         blend=blend_info(db, run, spot),
+        freshness=freshness,
     )
 
 
@@ -936,7 +1039,8 @@ def upcoming_events(
         .limit(limit)
     ).all()
     links: AttributionMemo = {}
-    return [event_out(e, now, links=links) for e in rows]
+    freshness = events_freshness(db, now) if rows else {}
+    return [event_out(e, now, links=links, freshness=freshness) for e in rows]
 
 
 def spot_events(db: Session, spot: SurfSpot, now: datetime | None = None) -> list[EventOut]:
@@ -952,7 +1056,9 @@ def spot_events(db: Session, spot: SurfSpot, now: datetime | None = None) -> lis
         .order_by(SwellEvent.start_time)
     ).all()
     links: AttributionMemo = {}
-    return [event_out(e, now, links=links) for e in rows]
+    fresh = served_freshness(db, spot.id, now) if rows else None
+    freshness = {spot.id: fresh} if fresh is not None else {}
+    return [event_out(e, now, links=links, freshness=freshness) for e in rows]
 
 
 def event_counts(db: Session) -> dict[str, int]:
@@ -969,7 +1075,9 @@ def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) 
     data, so scrubbing the map's time control is cheap."""
     now = now or utcnow()
     spots = db.scalars(select(SurfSpot).where(SurfSpot.is_active).order_by(SurfSpot.name)).all()
-    runs = latest_runs_by_spot(db, now)
+    runs = served_runs_by_spot(db, now)
+    freshness = freshness_by_spot(db, runs, now)
+    version = served_version(db)
     run_ids = {r.id for r in runs.values()}
     range_start = range_end = None
     if run_ids:
@@ -1032,6 +1140,7 @@ def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) 
         for link in source_attribution_links(db, run):
             links.setdefault((link.label, link.href), link)
     return MapSnapshotOut(
+        version_id=version.id if version is not None else None,
         attribution_links=list(links.values()),
         stale=newest is not None and is_stale(newest, now),
         newest_run_issued_at=newest.issued_at if newest is not None else None,
@@ -1047,6 +1156,7 @@ def map_snapshot(db: Session, at: datetime | None, now: datetime | None = None) 
                 conditions=conditions.get(s.id),
                 event_at_time=covering.get(s.id, 0) > 0,
                 upcoming_event_count=upcoming.get(s.id, 0),
+                freshness=freshness.get(s.id),
             )
             for s in spots
         ],

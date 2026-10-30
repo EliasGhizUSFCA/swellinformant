@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Database, LineChart } from "lucide-react";
+import { Activity, Database, Gauge, LineChart } from "lucide-react";
 import Link from "next/link";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -22,9 +22,14 @@ export default function StatusPage() {
     <AppShell>
       <PageHeader eyebrow="System" title="Status & data freshness" description="Background workers keep monitoring whether or not anyone has the site open." />
       {me?.is_admin && (
-        <Link href="/status/accuracy" className="mb-4 inline-flex items-center gap-2 text-sm font-medium text-ocean hover:underline" data-testid="accuracy-link">
-          <LineChart className="size-4" /> Forecast accuracy dashboard (developers)
-        </Link>
+        <div className="mb-4 flex flex-wrap gap-x-6 gap-y-2">
+          <Link href="/admin/freshness" className="inline-flex items-center gap-2 text-sm font-medium text-ocean hover:underline" data-testid="freshness-link">
+            <Gauge className="size-4" /> Forecast freshness and API usage (admins)
+          </Link>
+          <Link href="/status/accuracy" className="inline-flex items-center gap-2 text-sm font-medium text-ocean hover:underline" data-testid="accuracy-link">
+            <LineChart className="size-4" /> Forecast accuracy dashboard (developers)
+          </Link>
+        </div>
       )}
       {health && <DataHealthSummary data={health} />}
       {health && <SyncCard data={health} className="mb-6" />}

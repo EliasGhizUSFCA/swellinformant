@@ -112,6 +112,10 @@ def test_a_sync_acquires_only_the_spot_providers_its_plan_marked_new(
 
     now = datetime(2026, 10, 10, 23, 40, tzinfo=UTC)
     asked: list[frozenset[str] | None] = []
+    # Two providers: the family-level acquisition (acquire_all). With one provider the spot
+    # stage refreshes per component instead (design D6, tests/integration/
+    # test_refresh_components.py).
+    monkeypatch.setattr(get_settings(), "forecast_providers", "open_meteo,open_meteo_ecmwf")
 
     def recorder(_db: object, now: object = None, only: Any = None) -> list[Any]:
         asked.append(frozenset(only) if only is not None else None)

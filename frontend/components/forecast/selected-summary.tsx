@@ -9,7 +9,10 @@ import { datumText, TIDE_UNAVAILABLE } from "@/components/forecast/tide-row";
 import { useTimelineActions, useTimelineSelection } from "@/components/forecast/timeline-selection";
 import { WhyThisForecast } from "@/components/forecast/why-this-forecast";
 import { FAVOURABILITY_LABEL } from "@/components/forecast/wind-row";
+import { tideFit } from "@/lib/best-windows";
 import { arrowRotationDeg } from "@/lib/directions";
+import { forecastConfidenceOf, researchConfidenceOf } from "@/lib/forecast-fields";
+import { componentRuns, hoursAfterWaveRun } from "@/lib/model-runs";
 import { asQuality, QUALITY_COLORS, QUALITY_LABELS, QUALITY_RANK, WIND_RELATION_LABEL } from "@/lib/quality";
 import { score10 } from "@/lib/rating";
 import {
@@ -33,6 +36,8 @@ import { convertHeightFt, formatHeightRange, formatWind, type HeightUnit, type W
 import { cn } from "@/lib/utils";
 import type { SpotTimeline, TimelineStep } from "@/types/api";
 
+const TIDE_FIT_WORD = { favourable: "Favorable tide", workable: "Workable tide", unfavourable: "Unfavorable tide" } as const;
+
 const STRENGTH_LABEL: Record<string, string> = { glassy: "Glassy", light: "Light", moderate: "Moderate", strong: "Strong" };
 
 // Why the gust shown is below the mean wind shown (the API's gust_below_mean_cause).
@@ -43,7 +48,7 @@ const GUST_BELOW_TEXT: Record<string, string> = {
 };
 
 /** A small arrow pointing where something travels (FROM + 180), with the FROM text beside. */
-function ToArrow({ fromDeg, className }: { fromDeg: number; className?: string }) {
+export function ToArrow({ fromDeg, className }: { fromDeg: number; className?: string }) {
   return (
     <svg viewBox="-8 -8 16 16" className={cn("inline-block size-3.5 shrink-0", className)} aria-hidden="true" data-arrow-rotation={arrowRotationDeg(fromDeg)}>
       <path d="M0,-6.5L4.2,-0.8L1.1,-0.8L1.1,6.5L-1.1,6.5L-1.1,-0.8L-4.2,-0.8Z" fill="currentColor" transform={`rotate(${arrowRotationDeg(fromDeg)})`} />
@@ -158,6 +163,10 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
   // The next high or low water after the selected time (the tide block's own event).
   const nextTide = model.tide?.events.find((e) => e.t > info.t);
   const interpolated = interpolationText(step, timeline.provenance?.members);
+  // Waves and wind from different model runs: the lead is the wave run's (the run that
+  // drives the rating), never the older component's.
+  const parts = componentRuns(timeline.provenance?.members);
+  const waveLead = parts ? hoursAfterWaveRun(parts, info.t) : null;
   return (
     <section className="rounded-2xl border bg-gradient-to-br from-secondary/60 via-card to-card p-3.5 sm:p-5" data-testid="selected-summary">
       <div className="flex items-start justify-between gap-3">
@@ -183,7 +192,11 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
                 {interpolated}
               </span>
             )}
-            {step.lead_hours != null && step.lead_hours >= 0 && <span>{Math.round(step.lead_hours)} h after the model run</span>}
+            {waveLead != null ? (
+              waveLead >= 0 && <span data-testid="summary-lead">{waveLead} h after the wave run</span>
+            ) : (
+              step.lead_hours != null && step.lead_hours >= 0 && <span data-testid="summary-lead">{Math.round(step.lead_hours)} h after the model run</span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -272,6 +285,11 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
               <>
                 <span className="font-semibold tabular-nums">{tideHeightText(step.tide.height_m, units)}</span>
                 {step.tide.rising != null && <span className="text-muted-foreground"> · {step.tide.rising ? "rising" : "falling"}</span>}
+                {tideFit(step) && (
+                  <span className="block text-xs text-muted-foreground" data-testid="summary-tide-fit">
+                    {TIDE_FIT_WORD[tideFit(step)!]} for this break (in the rating)
+                  </span>
+                )}
                 <span className="block text-xs text-muted-foreground" data-testid="summary-tide-basis">
                   above {datumText(tide.datum)}
                   {tide.status === "demo" ? " · demo tide (synthetic)" : ""}
@@ -289,12 +307,14 @@ export const SelectedTimeSummary = memo(function SelectedTimeSummary({
             )}
           </Item>
           <Item label="Confidence" className="col-span-2" testId="summary-confidence">
+            {/* Forecast confidence of the step and, apart, how well the break is researched:
+                two assessments, never combined (spec 20). */}
             <span className="flex flex-wrap items-center gap-1.5">
-              <ConfidenceBadge value={step.quality.forecast_confidence_class} kind="forecast" data-testid="summary-forecast-confidence" />
-              {step.quality.local_confidence_class !== step.quality.forecast_confidence_class && (
-                <ConfidenceBadge value={step.quality.local_confidence_class} kind="local" data-testid="summary-local-confidence" />
-              )}
+              <ConfidenceBadge value={forecastConfidenceOf(step.quality)?.level ?? step.quality.forecast_confidence_class} kind="forecast" data-testid="summary-forecast-confidence" />
               <InfoPopover term="forecastConfidence" />
+              {researchConfidenceOf(step.quality) && (
+                <ConfidenceBadge value={researchConfidenceOf(step.quality)} kind="research" data-testid="summary-research-confidence" />
+              )}
             </span>
             {step.quality.forecast_confidence_reasons[0] && <span className="mt-1 block text-xs text-muted-foreground">{step.quality.forecast_confidence_reasons[0]}</span>}
           </Item>

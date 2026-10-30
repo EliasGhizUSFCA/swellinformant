@@ -20,6 +20,7 @@ import { qk, useSearches } from "@/hooks/queries";
 import { del, errorMessage, post } from "@/lib/api";
 import { formatCalendarDate, formatMoney, heightRange, relativeTime, type Units } from "@/lib/format";
 import { asQuality, QUALITY_LABELS } from "@/lib/quality";
+import { useHeightUnit } from "@/lib/units";
 import type { Search, User } from "@/types/api";
 
 function destinationSummary(s: Search): string {
@@ -134,7 +135,8 @@ function SearchRow({ s, units }: { s: Search; units: Units }) {
 
 function Searches({ user }: { user: User }) {
   const { data, isLoading } = useSearches();
-  const units = (user.profile.units as Units) ?? "ft";
+  // The site-wide height unit: this browser's ft / m choice, else the account's.
+  const [units] = useHeightUnit((user.profile.units as Units | undefined) ?? "ft");
   return (
     <>
       <PageHeader

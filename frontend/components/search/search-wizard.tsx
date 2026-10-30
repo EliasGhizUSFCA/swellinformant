@@ -27,8 +27,10 @@ import { GLOSSARY } from "@/lib/glossary";
 import { QUALITY_COLORS, QUALITY_OPTIONS } from "@/lib/quality";
 import { score10 } from "@/lib/rating";
 import { cn } from "@/lib/utils";
-import { toSearchInput, validateStep, WIZARD_STEPS, type StepKey, type WizardState } from "@/lib/validation";
+import { MAX_ALERT_LEAD_DAYS, MAX_ORIGINS, toSearchInput, validateStep, WIZARD_STEPS, type StepKey, type WizardState } from "@/lib/validation";
 import type { Search, User } from "@/types/api";
+
+import { shortNoticeLabel, useSearchDefaults } from "./use-search-defaults";
 
 const BREAK_TYPES = ["reef", "point", "beach", "rivermouth", "slab"];
 const CURRENCIES = ["USD", "EUR", "GBP", "AUD", "CAD", "NZD", "ZAR", "BRL", "JPY"];
@@ -49,7 +51,12 @@ export function SearchWizard({ user, initial, searchId }: { user: User; initial:
   const [serverError, setServerError] = useState<string | null>(null);
   const step = WIZARD_STEPS[stepIndex]!.key;
 
-  const set = <K extends keyof WizardState>(key: K, value: WizardState[K]) => setState((s) => ({ ...s, [key]: value }));
+  const set = <K extends keyof WizardState>(key: K, value: WizardState[K]) => {
+    setState((s) => ({ ...s, [key]: value }));
+    // An edited field drops its stale message (the lead-time pair is checked together).
+    const stale: string[] = key.startsWith("alert_lead_") ? ["alert_lead_min_days", "alert_lead_max_days"] : [key];
+    setErrors((e) => (stale.some((k) => k in e) ? Object.fromEntries(Object.entries(e).filter(([k]) => !stale.includes(k))) : e));
+  };
 
   function go(to: number) {
     if (to > stepIndex) {
@@ -74,7 +81,12 @@ export function SearchWizard({ user, initial, searchId }: { user: User; initial:
     try {
       const body = toSearchInput(state);
       const saved = searchId ? await put<Search>(`/api/searches/${searchId}`, body) : await post<Search>("/api/searches", body);
-      await queryClient.invalidateQueries({ queryKey: qk.searches });
+      // The detail page reads the single search (its own key): show what was just saved.
+      queryClient.setQueryData(qk.search(saved.id), saved);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: qk.searches }),
+        queryClient.invalidateQueries({ queryKey: qk.searchMatches(saved.id) }),
+      ]);
       toast.success(searchId ? "Search updated." : "Search activated — we're watching the swell for you.");
       router.push(`/searches/${saved.id}`);
     } catch (e) {
@@ -490,7 +502,7 @@ function DatesStep({ state, set, errors = {} }: StepProps) {
       </RadioGroup>
 
       {state.date_mode === "flexible" ? (
-        <Field label="Monitoring horizon" htmlFor="horizon_days" error={errors.horizon_days} hint="Alerts target swells ~5–10 days out; the horizon caps how far ahead you'd travel.">
+        <Field label="Monitoring horizon" htmlFor="horizon_days" error={errors.horizon_days} hint="How far ahead you would travel at most. Alerts follow your alert lead time below.">
           <NumberInput id="horizon_days" value={state.horizon_days} onChange={(v) => set("horizon_days", v ?? 30)} min={1} max={365} suffix="days" />
         </Field>
       ) : (
@@ -525,6 +537,64 @@ function DatesStep({ state, set, errors = {} }: StepProps) {
           {13 + state.departure_buffer_days}. We check each itinerary&apos;s real arrival time, time zones and the airport transfer.
         </AlertDescription>
       </Alert>
+      <LeadTimeFields state={state} set={set} errors={errors} />
+    </div>
+  );
+}
+
+/** How far ahead a swell may start for this search to alert (spec 28), with the honest
+ * trade-off: earlier alerts leave more time to plan, later ones rest on firmer forecasts. */
+function LeadTimeFields({ state, set, errors = {} }: StepProps) {
+  const { data: defaults } = useSearchDefaults();
+  const horizon = defaults?.forecast_days ?? 10;
+  const maxLead = Math.min(defaults?.max_alert_lead_days ?? MAX_ALERT_LEAD_DAYS, MAX_ALERT_LEAD_DAYS);
+  // The deployment's global floor (DETECTION_LEAD_MIN_DAYS, 1 day by default): a trip needs time to book.
+  const floor = defaults?.detection_lead_min_days ?? 1;
+  const floorText = floor === 1 ? "a day" : `${floor} days`;
+  return (
+    <div className="space-y-3 rounded-xl border p-4" data-testid="alert-lead-time" role="group" aria-labelledby="alert-lead-time-label">
+      <div>
+        <Label id="alert-lead-time-label">Alert lead time</Label>
+        <p className="mt-1 text-xs text-muted-foreground">Alert me about swells that start within this range of days from now.</p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field
+          label="Earliest (days ahead)"
+          htmlFor="alert_lead_min_days"
+          error={errors.alert_lead_min_days}
+          hint={`Swells less than ${floorText} away are never matched: a trip needs time to book.`}
+        >
+          <NumberInput
+            id="alert_lead_min_days"
+            value={state.alert_lead_min_days}
+            onChange={(v) => set("alert_lead_min_days", v ?? 0)}
+            min={0}
+            max={maxLead}
+            suffix="days"
+            invalid={!!errors.alert_lead_min_days}
+          />
+        </Field>
+        <Field
+          label="Latest (days ahead)"
+          htmlFor="alert_lead_max_days"
+          error={errors.alert_lead_max_days}
+          hint={`The forecast reaches about ${horizon} days ahead.`}
+        >
+          <NumberInput
+            id="alert_lead_max_days"
+            value={state.alert_lead_max_days}
+            onChange={(v) => set("alert_lead_max_days", v ?? 0)}
+            min={0}
+            max={maxLead}
+            suffix="days"
+            invalid={!!errors.alert_lead_max_days}
+          />
+        </Field>
+      </div>
+      <p className="text-xs text-muted-foreground" data-testid="lead-time-uncertainty">
+        Forecasts get less certain the further ahead they look: a swell a week or more out often shifts in size and timing, while 2–5
+        days out is usually firmer. Swells {shortNoticeLabel(defaults)} are listed first.
+      </p>
     </div>
   );
 }
@@ -533,14 +603,19 @@ function FlightsStep({ state, set, errors = {}, user }: StepProps & { user: User
   const saved = user.airports.map((a) => a.airport_iata).filter((c) => !state.origins.includes(c));
   return (
     <div className="space-y-6">
-      <Field label="Departure airports" htmlFor="origins" error={errors.origins} hint="Up to 5. We search each and pick the best itinerary.">
+      <Field
+        label="Departure airports"
+        htmlFor="origins"
+        error={errors.origins}
+        hint={`Up to ${MAX_ORIGINS}. We search each one (its best date first) and pick the best itinerary.`}
+      >
         <AirportPicker id="origins" value={state.origins} onChange={(v) => set("origins", v)} />
       </Field>
       {saved.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">Saved:</span>
           {saved.map((c) => (
-            <button key={c} type="button" className="rounded-full border px-2.5 py-0.5 hover:border-primary" onClick={() => set("origins", [...state.origins, c].slice(0, 5))}>
+            <button key={c} type="button" className="rounded-full border px-2.5 py-0.5 hover:border-primary" onClick={() => set("origins", [...state.origins, c].slice(0, MAX_ORIGINS))}>
               + {c}
             </button>
           ))}
@@ -741,6 +816,7 @@ function ReviewStep({ state, set, errors = {}, goTo }: StepProps & { goTo: (i: n
         state.date_mode === "fixed" ? `${state.date_start} → ${state.date_end}` : `Flexible, next ${state.horizon_days} days`,
         `Arrive ${state.arrival_buffer_days} day(s) early, leave ${state.departure_buffer_days} day(s) after`,
         `${state.min_days_at_destination}–${state.max_trip_days} days at destination`,
+        `Alerts for swells ${state.alert_lead_min_days}–${state.alert_lead_max_days} days ahead`,
       ],
     },
     {
@@ -784,8 +860,8 @@ function ReviewStep({ state, set, errors = {}, goTo }: StepProps & { goTo: (i: n
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
-        Monitoring runs on our servers every few hours, whether or not this page is open.{" "}
-        <Badge variant="muted">{input.origins.length} origin(s)</Badge>
+        We check your search against every new forecast on our servers, whether or not this page is open, and search flights only when a
+        swell matches or the trip changes. <Badge variant="muted">{input.origins.length} origin(s)</Badge>
       </p>
     </div>
   );

@@ -23,6 +23,7 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.models.enums import OfferValidation
+from app.services import service_credentials
 from app.services.flights.base import (
     FlightProvider,
     FlightQuery,
@@ -86,6 +87,11 @@ class AmadeusProvider(FlightProvider):
                 },
             )
             if resp.status_code != 200:
+                if resp.status_code in (400, 401, 403):
+                    # A refused client id or secret: the admins are alerted (spec 16).
+                    service_credentials.record_refused(
+                        "flights", self.name, f"token request HTTP {resp.status_code}"
+                    )
                 raise PermanentProviderError(
                     f"Amadeus authentication failed (HTTP {resp.status_code})"
                 )
@@ -130,8 +136,11 @@ class AmadeusProvider(FlightProvider):
             params=params,
             headers=self._auth_header(),
         )
+        if resp.status_code in (401, 403):
+            service_credentials.record_refused("flights", self.name, f"HTTP {resp.status_code}")
         if resp.status_code != 200:
             raise self._error(resp)
+        service_credentials.record_accepted("flights", self.name)
         body = resp.json()
         carriers = (body.get("dictionaries") or {}).get("carriers") or {}
         offers: list[NormalizedOffer] = []
@@ -147,6 +156,7 @@ class AmadeusProvider(FlightProvider):
         d_tz = require_tz(dep["iataCode"], None, self.tz_lookup)
         a_tz = require_tz(arr["iataCode"], None, self.tz_lookup)
         code = seg["carrierCode"]
+        operating = (seg.get("operating") or {}).get("carrierCode")
         return Segment(
             origin=dep["iataCode"],
             destination=arr["iataCode"],
@@ -157,7 +167,10 @@ class AmadeusProvider(FlightProvider):
             marketing_carrier=code,
             carrier_name=str(carriers.get(code, code)).title(),
             flight_number=f"{code}{seg.get('number', '')}",
-            operating_carrier=(seg.get("operating") or {}).get("carrierCode"),
+            operating_carrier=operating,
+            operating_carrier_name=(
+                str(carriers.get(operating, operating)).title() if operating else None
+            ),
         )
 
     def normalize(self, raw: dict[str, Any], carriers: dict[str, str]) -> NormalizedOffer:

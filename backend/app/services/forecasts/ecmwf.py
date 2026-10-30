@@ -601,7 +601,12 @@ class EcmwfIfsProvider(ForecastProvider):
         sample.bytes = fetcher.bytes_downloaded
         return sample
 
-    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult:
+    def fetch(
+        self,
+        spots: list[SpotPoint],
+        run: RunInfo,
+        components: frozenset[str] | None = None,
+    ) -> FetchResult:
         """Sample every step of the run's cycle at every spot.
 
         Failures are isolated per step and stream: a missing or throttled step leaves a

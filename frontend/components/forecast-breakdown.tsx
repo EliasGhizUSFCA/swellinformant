@@ -3,7 +3,7 @@
 import { Bot, Waves, Wind } from "lucide-react";
 
 import { uncertaintyLabel } from "@/components/charts/forecast-charts";
-import { ForecastConfidence, LocalConfidence } from "@/components/confidence";
+import { ForecastConfidence } from "@/components/confidence";
 import { ForecastProvenance, useNowMs } from "@/components/forecast-provenance";
 import { InfoPopover } from "@/components/info-popover";
 import { DemoBadge } from "@/components/quality";
@@ -13,8 +13,11 @@ import { WindDisputeNote } from "@/components/wind-dispute";
 import { forecastReasonsOf, modelRunText, rangeWords, validInText } from "@/lib/confidence";
 import { compass, formatSpotDateTime, heightRange, seconds, type Units } from "@/lib/format";
 import { cycleLabel } from "@/lib/map-time";
+import { componentRuns, conditionsMembers } from "@/lib/model-runs";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
-import { ratingFactors, ratingReason } from "@/lib/rating";
+import { ratingFactors } from "@/lib/rating";
+import { hourReason } from "@/lib/rating-sentence";
+import { hourOutputs } from "@/lib/forecast-fields";
 import { offshoreHeightText } from "@/lib/timeline";
 import { formatWind, useWindUnit, type WindUnit } from "@/lib/units";
 import type { Conditions, ForecastPoint, ForecastRunInfo, ForecastSourceInfo } from "@/types/api";
@@ -71,9 +74,20 @@ function MoreOffshoreData({ p, units, windUnit }: { p: ForecastPoint; units: Uni
 
 /** "NOAA GFS 18Z + ECMWF 12Z"-style short label of the model runs behind a step. */
 function runsLabel(c: Conditions, run: ForecastRunInfo | null | undefined, nowMs: number): string | null {
+  const parts = componentRuns(run?.members);
+  // Waves and wind from different model runs (one component refreshed alone): both named.
+  if (parts) return `${c.source_name ?? parts.wave.name} · wave run ${cycleLabel(parts.wave.init_time!)} · wind run ${cycleLabel(parts.atmosphere.init_time!)}`;
   const members = (run?.members ?? []).filter((m) => m.init_time);
   if (members.length > 1) return members.map((m) => `${m.name.split(" (")[0]} ${cycleLabel(m.init_time!)}`).join(" + ");
   if (members.length === 1) return `${c.source_name ?? members[0]!.name} ${cycleLabel(members[0]!.init_time!)}`;
+  // No run members (the map's conditions): the hour's own component runs, both named, never
+  // only the older one (`run_issued_at`).
+  const own = componentRuns(conditionsMembers(c));
+  if (own) {
+    const wave = modelRunText(own.wave.init_time, nowMs);
+    const wind = modelRunText(own.atmosphere.init_time, nowMs);
+    if (wave && wind) return `${c.source_name ?? "Forecast source"} · wave ${wave} · wind ${wind}`;
+  }
   if (!c.run_issued_at) return c.source_name ?? null;
   const age = modelRunText(c.run_issued_at, nowMs);
   // A blend's issue time is only its oldest member's.
@@ -82,7 +96,7 @@ function runsLabel(c: Conditions, run: ForecastRunInfo | null | undefined, nowMs
 
 /**
  * One forecast step: our prediction first (rating, breaking-wave estimate and its likely
- * range, the swell and wind behind it, forecast and local confidence), then the raw
+ * range, the swell and wind behind it, forecast confidence), then the raw
  * numerical-model data it is based on, folded under "Offshore model data". They are different
  * physical quantities, so their difference is never shown as an error.
  *
@@ -133,7 +147,11 @@ export function ForecastBreakdown({
     spotMinFt: spotRange?.minFt,
     spotMaxFt: spotRange?.maxFt,
   };
-  const reason = ratingReason(factorInput);
+  // The hour's own favourable / unfavourable conditions (on its forecast point when given),
+  // else the factor wording.
+  const hour = point ?? c;
+  const outputs = hourOutputs(hour);
+  const reason = hourReason(hour, factorInput, units, windUnit);
   const away = validInText(c.valid_time, now);
   const range = rangeWords(c.uncertainty_kind);
   const runs = runsLabel(c, run, now);
@@ -185,12 +203,13 @@ export function ForecastBreakdown({
             notes={c.confidence_reasons}
             validTime={c.valid_time}
             runIssuedAt={c.run_issued_at}
+            waveRunIssuedAt={c.wave_run_issued_at}
+            windRunIssuedAt={c.atmosphere_run_issued_at}
             blend={c.source_code === "blend"}
             nowMs={now}
             showReason={false}
             legacyIndex={c.confidence}
           />
-          <LocalConfidence compact explain value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} reason={c.local_confidence_reason} />
         </div>
         <WhyThisRating
           className="mt-2"
@@ -198,6 +217,8 @@ export function ForecastBreakdown({
           explanation={c.explanation}
           components={components}
           factors={ratingFactors(factorInput)}
+          favourable={outputs.favourable}
+          unfavourable={outputs.unfavourable}
           units={units}
           method={
             <>
@@ -259,9 +280,10 @@ export function ForecastBreakdown({
           source={source ?? (c.source_name ? { name: c.source_name, is_demo: c.is_demo ?? false } : null)}
           // A blend's own issue time is only its oldest member's: not shown as "the" run.
           run={run ?? (c.run_issued_at && c.source_code !== "blend" ? { issued_at: c.run_issued_at } : null)}
-          members={run?.members}
+          members={run?.members ?? conditionsMembers(c)}
           generatedAt={generatedAt}
           links={source?.attribution_links}
+          sourceCode={source?.code ?? c.source_code}
         />
       </Disclosure>
     </div>

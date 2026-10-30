@@ -103,15 +103,46 @@
     ],
     "summary": "System Status",
     "operationId": "system_status_api_system_status_get",
+    "parameters": [
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
          "type": "object",
+         "additionalProperties": true,
          "title": "Response System Status Api System Status Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -885,6 +916,25 @@
        "title": "At"
       },
       "description": "Forecast time (ISO 8601; UTC when it has no offset); default now. Answered for its UTC hour, within 2 days before and 17 days after the current hour"
+     },
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
      }
     ],
     "responses": {
@@ -919,17 +969,48 @@
     "summary": "List Spots",
     "description": "Every active spot with its current conditions (public data, cacheable).",
     "operationId": "list_spots_api_spots_get",
+    "parameters": [
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
       "content": {
        "application/json": {
         "schema": {
+         "type": "array",
          "items": {
           "$ref": "#/components/schemas/SpotSummary"
          },
-         "type": "array",
          "title": "Response List Spots Api Spots Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -954,6 +1035,25 @@
        "type": "string",
        "title": "Slug"
       }
+     },
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
      }
     ],
     "responses": {
@@ -1009,6 +1109,25 @@
        "default": 10,
        "title": "Days"
       }
+     },
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
      }
     ],
     "responses": {
@@ -1052,6 +1171,25 @@
        "type": "string",
        "title": "Slug"
       }
+     },
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
      }
     ],
     "responses": {
@@ -1161,6 +1299,25 @@
        "default": 0,
        "title": "Min Score"
       }
+     },
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
      }
     ],
     "responses": {
@@ -1376,6 +1533,28 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/searches/defaults": {
+   "get": {
+    "tags": [
+     "searches"
+    ],
+    "summary": "Defaults",
+    "description": "The deployment's defaults and limits for a new search (the wizard's starting point).",
+    "operationId": "defaults_api_searches_defaults_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchDefaultsOut"
         }
        }
       }
@@ -1821,6 +2000,7 @@
      "opportunities"
     ],
     "summary": "Refresh Flights",
+    "description": "An explicit flight check (spec 26: one of the few reasons to search). Searches that\nare still cached are reused; one whose first offer expired is not (its cache entry\nends then), so the provider is asked again. It counts against the user's daily\nflight-search budget (FLIGHT_USER_DAILY_QUOTA), refused here once that is used up.",
     "operationId": "refresh_flights_api_opportunities__match_id__refresh_flights_post",
     "parameters": [
      {
@@ -2362,6 +2542,28 @@
     }
    }
   },
+  "/api/admin/freshness": {
+   "get": {
+    "tags": [
+     "admin"
+    ],
+    "summary": "Admin Freshness",
+    "description": "Forecast freshness, provider and API usage, processing times and latencies, refresh\njobs and the admin problems, for the admin dashboard (/admin/freshness).",
+    "operationId": "admin_freshness_api_admin_freshness_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AdminFreshnessOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/map/fields": {
    "get": {
     "tags": [
@@ -2370,6 +2572,27 @@
     "summary": "Fields Index",
     "description": "Which global fields exist for the served model run, and their valid times.",
     "operationId": "fields_index_api_map_fields_get",
+    "parameters": [
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
+     }
+    ],
     "responses": {
      "200": {
       "description": "Successful Response",
@@ -2377,6 +2600,16 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/FieldIndexOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -2615,6 +2848,25 @@
        "default": 10,
        "title": "Days"
       }
+     },
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
      }
     ],
     "responses": {
@@ -2630,6 +2882,135 @@
      },
      "304": {
       "description": "Not modified (If-None-Match matched the ETag)"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/forecasts/version": {
+   "get": {
+    "tags": [
+     "forecasts"
+    ],
+    "summary": "Forecast Version",
+    "description": "The published forecast version (``version_id`` null: none published yet).",
+    "operationId": "forecast_version_api_forecasts_version_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ForecastVersionOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/forecasts/seen": {
+   "post": {
+    "tags": [
+     "forecasts"
+    ],
+    "summary": "Forecast Seen",
+    "description": "A tab rendered ``version_id`` (see the module docstring).",
+    "operationId": "forecast_seen_api_forecasts_seen_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "properties": {
+         "version_id": {
+          "type": "integer",
+          "minimum": 1.0,
+          "title": "Version Id"
+         }
+        },
+        "type": "object",
+        "required": [
+         "version_id"
+        ],
+        "title": "ForecastSeenIn",
+        "description": "A browser rendered this version (sent with navigator.sendBeacon)."
+       }
+      },
+      "text/plain": {
+       "schema": {
+        "properties": {
+         "version_id": {
+          "type": "integer",
+          "minimum": 1.0,
+          "title": "Version Id"
+         }
+        },
+        "type": "object",
+        "required": [
+         "version_id"
+        ],
+        "title": "ForecastSeenIn",
+        "description": "A browser rendered this version (sent with navigator.sendBeacon)."
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     }
+    }
+   }
+  },
+  "/api/forecasts/status": {
+   "get": {
+    "tags": [
+     "forecasts"
+    ],
+    "summary": "Forecast Status",
+    "description": "The published version, the model run of each component and the stale spots.",
+    "operationId": "forecast_status_api_forecasts_status_get",
+    "parameters": [
+     {
+      "name": "v",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "maxLength": 32
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers.",
+       "title": "V"
+      },
+      "description": "Forecast version the client shows (version_id of GET /api/forecasts/version; omit before the first publication). Another version than the one served is answered with the current data and no-store headers."
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ForecastStatusOut"
+        }
+       }
+      }
      },
      "422": {
       "description": "Validation Error",
@@ -2670,6 +3051,59 @@
          "additionalProperties": true,
          "type": "object",
          "title": "Response Simulate Api Dev Simulate Swell Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/dev/simulate-model-run": {
+   "post": {
+    "tags": [
+     "developer tools"
+    ],
+    "summary": "Simulate Model Run",
+    "description": "Advance the demo provider's available run of ``component`` (developer tool, C6).",
+    "operationId": "simulate_model_run_api_dev_simulate_model_run_post",
+    "parameters": [
+     {
+      "name": "component",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "enum": [
+        "wave",
+        "atmosphere",
+        "both"
+       ],
+       "type": "string",
+       "description": "The demo component that gets a new simulated model run",
+       "default": "both",
+       "title": "Component"
+      },
+      "description": "The demo component that gets a new simulated model run"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Simulate Model Run Api Dev Simulate Model Run Post"
         }
        }
       }
@@ -2950,6 +3384,1791 @@
     ],
     "title": "AccuracyOverview"
    },
+   "AdminActiveProviderOut": {
+    "properties": {
+     "primary": {
+      "type": "string",
+      "title": "Primary",
+      "description": "The provider a refresh builds now"
+     },
+     "providers": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Providers"
+     },
+     "configured": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Configured",
+      "description": "What the settings select"
+     },
+     "source": {
+      "type": "string",
+      "title": "Source",
+      "description": "FORECAST_PROVIDERS (advanced override) or WEATHER_PROVIDER"
+     },
+     "weather_provider": {
+      "type": "string",
+      "title": "Weather Provider"
+     },
+     "windy_eligible": {
+      "type": "boolean",
+      "title": "Windy Eligible"
+     },
+     "fallback": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback",
+      "description": "The configured runtime fallback"
+     },
+     "fallback_active": {
+      "type": "boolean",
+      "title": "Fallback Active",
+      "default": false
+     },
+     "fallback_from": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback From",
+      "description": "The provider the fallback stands in for"
+     },
+     "fallback_until": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback Until"
+     },
+     "reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Reasons",
+      "default": []
+     },
+     "health": {
+      "items": {
+       "$ref": "#/components/schemas/AdminProviderHealthOut"
+      },
+      "type": "array",
+      "title": "Health",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "primary",
+     "providers",
+     "configured",
+     "source",
+     "weather_provider",
+     "windy_eligible"
+    ],
+    "title": "AdminActiveProviderOut"
+   },
+   "AdminApiUsageOut": {
+    "properties": {
+     "checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Checked At"
+     },
+     "alert_fraction": {
+      "type": "number",
+      "title": "Alert Fraction",
+      "description": "QUOTA_ALERT_FRACTION"
+     },
+     "open_meteo": {
+      "$ref": "#/components/schemas/AdminOpenMeteoUsageOut"
+     },
+     "windy": {
+      "$ref": "#/components/schemas/AdminWindyUsageOut"
+     },
+     "flights": {
+      "$ref": "#/components/schemas/AdminFlightUsageOut"
+     },
+     "emails": {
+      "$ref": "#/components/schemas/AdminEmailUsageOut"
+     },
+     "requests_24h": {
+      "items": {
+       "$ref": "#/components/schemas/AdminProviderRequestsOut"
+      },
+      "type": "array",
+      "title": "Requests 24H",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "checked_at",
+     "alert_fraction",
+     "open_meteo",
+     "windy",
+     "flights",
+     "emails"
+    ],
+    "title": "AdminApiUsageOut"
+   },
+   "AdminComponentFreshnessOut": {
+    "properties": {
+     "component": {
+      "type": "string",
+      "enum": [
+       "atmosphere",
+       "wave"
+      ],
+      "title": "Component"
+     },
+     "model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model"
+     },
+     "run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Key"
+     },
+     "run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run",
+      "description": "Init time of the served run"
+     },
+     "estimated": {
+      "type": "boolean",
+      "title": "Estimated",
+      "description": "The run time is an estimate (Windy)",
+      "default": false
+     },
+     "available_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available At",
+      "description": "Upstream availability of that run"
+     },
+     "last_detected_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Detected At"
+     },
+     "last_acquired_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Acquired At",
+      "description": "When the served run was fetched (a carried component keeps it)"
+     },
+     "changed": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Changed",
+      "description": "Fetched by the newest refresh (false: carried forward)"
+     },
+     "carried_from_run_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Carried From Run Id"
+     },
+     "newest_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Newest Run",
+      "description": "The newest init time known (published, staged or detected)"
+     },
+     "update_interval_minutes": {
+      "type": "number",
+      "title": "Update Interval Minutes"
+     },
+     "update_interval_recorded": {
+      "type": "boolean",
+      "title": "Update Interval Recorded",
+      "description": "From Open-Meteo meta.json update_interval_seconds (else 6 h assumed)"
+     },
+     "typical_lag_minutes": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Typical Lag Minutes",
+      "description": "Median availability lag after the cycle, measured on recent runs"
+     },
+     "lag_samples": {
+      "type": "integer",
+      "title": "Lag Samples",
+      "default": 0
+     },
+     "expected_next_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Expected Next At"
+     },
+     "late_after": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Late After"
+     },
+     "late": {
+      "type": "boolean",
+      "title": "Late",
+      "default": false
+     },
+     "domains": {
+      "items": {
+       "$ref": "#/components/schemas/AdminDomainOut"
+      },
+      "type": "array",
+      "title": "Domains",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "component",
+     "update_interval_minutes",
+     "update_interval_recorded"
+    ],
+    "title": "AdminComponentFreshnessOut",
+    "description": "The model run the published version serves for one component, and when the next\none is expected."
+   },
+   "AdminDomainOut": {
+    "properties": {
+     "model": {
+      "type": "string",
+      "title": "Model"
+     },
+     "init_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Init Time"
+     },
+     "available_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "model"
+    ],
+    "title": "AdminDomainOut"
+   },
+   "AdminDurationStatsOut": {
+    "properties": {
+     "samples": {
+      "type": "integer",
+      "title": "Samples",
+      "default": 0
+     },
+     "last": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last"
+     },
+     "avg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Avg"
+     },
+     "p50": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P50"
+     },
+     "p95": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P95"
+     },
+     "max": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max"
+     }
+    },
+    "type": "object",
+    "title": "AdminDurationStatsOut"
+   },
+   "AdminEmailUsageOut": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "today": {
+      "type": "integer",
+      "title": "Today"
+     },
+     "account": {
+      "type": "integer",
+      "title": "Account"
+     },
+     "alerts": {
+      "type": "integer",
+      "title": "Alerts"
+     },
+     "failed": {
+      "type": "integer",
+      "title": "Failed"
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider",
+     "today",
+     "account",
+     "alerts",
+     "failed"
+    ],
+    "title": "AdminEmailUsageOut"
+   },
+   "AdminEventOut": {
+    "properties": {
+     "at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "At"
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Detail"
+     },
+     "version_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version Id"
+     }
+    },
+    "type": "object",
+    "title": "AdminEventOut"
+   },
+   "AdminFailedRequestOut": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider",
+      "description": "Forecast source code or flight provider"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status",
+      "description": "HTTP status, or 'failed' for a failed flight search"
+     },
+     "count": {
+      "type": "integer",
+      "title": "Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider",
+     "status",
+     "count"
+    ],
+    "title": "AdminFailedRequestOut"
+   },
+   "AdminFlightUsageOut": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "today": {
+      "type": "integer",
+      "title": "Today",
+      "description": "Provider searches stored today (UTC)"
+     },
+     "per_provider": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Per Provider",
+      "default": {}
+     },
+     "failed_today": {
+      "type": "integer",
+      "title": "Failed Today",
+      "default": 0
+     },
+     "quota": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AdminUsageWindowOut"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "FLIGHT_DAILY_QUOTA counter (None: the demo provider has no quota)"
+     },
+     "user_daily_quota": {
+      "type": "integer",
+      "title": "User Daily Quota"
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider",
+     "today",
+     "user_daily_quota"
+    ],
+    "title": "AdminFlightUsageOut"
+   },
+   "AdminFreshnessOut": {
+    "properties": {
+     "checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Checked At"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "degraded",
+       "failing"
+      ],
+      "title": "Status",
+      "description": "Over the admin and the public problems"
+     },
+     "version_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version Id",
+      "description": "The published forecast version"
+     },
+     "active_provider": {
+      "$ref": "#/components/schemas/AdminActiveProviderOut"
+     },
+     "atmosphere": {
+      "$ref": "#/components/schemas/AdminComponentFreshnessOut"
+     },
+     "wave": {
+      "$ref": "#/components/schemas/AdminComponentFreshnessOut"
+     },
+     "last_detected_model_update": {
+      "$ref": "#/components/schemas/AdminEventOut"
+     },
+     "last_successful_acquisition": {
+      "$ref": "#/components/schemas/AdminEventOut"
+     },
+     "last_successful_scoring": {
+      "$ref": "#/components/schemas/AdminEventOut"
+     },
+     "last_published_version": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AdminPublishedVersionOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "spots_updated": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Spots Updated"
+     },
+     "stale_spots": {
+      "items": {
+       "$ref": "#/components/schemas/AdminStaleSpotOut"
+      },
+      "type": "array",
+      "title": "Stale Spots",
+      "default": []
+     },
+     "failed_requests": {
+      "items": {
+       "$ref": "#/components/schemas/AdminFailedRequestOut"
+      },
+      "type": "array",
+      "title": "Failed Requests",
+      "description": "Last 24 h, by provider and status",
+      "default": []
+     },
+     "api_usage": {
+      "$ref": "#/components/schemas/AdminApiUsageOut"
+     },
+     "processing_time": {
+      "$ref": "#/components/schemas/AdminProcessingTimeOut"
+     },
+     "latency": {
+      "$ref": "#/components/schemas/AdminLatencyOut"
+     },
+     "refresh_jobs": {
+      "items": {
+       "$ref": "#/components/schemas/AdminRefreshJobOut"
+      },
+      "type": "array",
+      "title": "Refresh Jobs",
+      "default": []
+     },
+     "versions": {
+      "items": {
+       "$ref": "#/components/schemas/AdminVersionRowOut"
+      },
+      "type": "array",
+      "title": "Versions",
+      "default": []
+     },
+     "scheduler": {
+      "$ref": "#/components/schemas/AdminSchedulerOut"
+     },
+     "problems": {
+      "items": {
+       "$ref": "#/components/schemas/AdminProblemOut"
+      },
+      "type": "array",
+      "title": "Problems",
+      "description": "The admin-only problems (D12)",
+      "default": []
+     },
+     "health_problems": {
+      "items": {
+       "$ref": "#/components/schemas/AdminProblemOut"
+      },
+      "type": "array",
+      "title": "Health Problems",
+      "description": "The public data-health report's problems",
+      "default": []
+     },
+     "notes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Notes",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "checked_at",
+     "status",
+     "active_provider",
+     "atmosphere",
+     "wave",
+     "last_detected_model_update",
+     "last_successful_acquisition",
+     "last_successful_scoring",
+     "api_usage",
+     "processing_time",
+     "latency",
+     "scheduler"
+    ],
+    "title": "AdminFreshnessOut"
+   },
+   "AdminLatencyOut": {
+    "properties": {
+     "upstream_to_publication_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut",
+      "description": "upstream_available_at -> published_at of the recent refresh versions"
+     },
+     "publication_to_frontend_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut",
+      "description": "Browser 'seen' reports after a version change (newest 200 in Redis)"
+     },
+     "first_served_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut",
+      "description": "published_at -> first served by the version endpoint (newest versions)"
+     }
+    },
+    "type": "object",
+    "required": [
+     "upstream_to_publication_s",
+     "publication_to_frontend_s",
+     "first_served_s"
+    ],
+    "title": "AdminLatencyOut"
+   },
+   "AdminOpenMeteoUsageOut": {
+    "properties": {
+     "minute": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "hour": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "day": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "month": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "available": {
+      "type": "boolean",
+      "title": "Available",
+      "description": "False: Redis could not be read"
+     }
+    },
+    "type": "object",
+    "required": [
+     "minute",
+     "hour",
+     "day",
+     "month",
+     "available"
+    ],
+    "title": "AdminOpenMeteoUsageOut"
+   },
+   "AdminProblemOut": {
+    "properties": {
+     "key": {
+      "type": "string",
+      "title": "Key"
+     },
+     "severity": {
+      "type": "string",
+      "enum": [
+       "degraded",
+       "failing"
+      ],
+      "title": "Severity"
+     },
+     "message": {
+      "type": "string",
+      "title": "Message"
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Detail",
+      "description": "Redacted error text (admins only)"
+     }
+    },
+    "type": "object",
+    "required": [
+     "key",
+     "severity",
+     "message"
+    ],
+    "title": "AdminProblemOut"
+   },
+   "AdminProcessingTimeOut": {
+    "properties": {
+     "refreshes": {
+      "type": "integer",
+      "title": "Refreshes",
+      "description": "Finished refresh syncs in the sample (newest 20 syncs)"
+     },
+     "total_ms": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut"
+     },
+     "stages": {
+      "items": {
+       "$ref": "#/components/schemas/AdminStageTimeOut"
+      },
+      "type": "array",
+      "title": "Stages",
+      "default": []
+     },
+     "detected_to_acquired_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut"
+     },
+     "acquired_to_scored_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut"
+     },
+     "scored_to_published_s": {
+      "$ref": "#/components/schemas/AdminDurationStatsOut"
+     }
+    },
+    "type": "object",
+    "required": [
+     "refreshes",
+     "total_ms",
+     "detected_to_acquired_s",
+     "acquired_to_scored_s",
+     "scored_to_published_s"
+    ],
+    "title": "AdminProcessingTimeOut"
+   },
+   "AdminProviderHealthOut": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "last_success_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Success At"
+     },
+     "last_failure_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Failure At"
+     },
+     "last_failure_kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Failure Kind",
+      "description": "credentials, testing_key, quota or unavailable"
+     },
+     "last_failure_detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Failure Detail"
+     },
+     "consecutive_unavailable": {
+      "type": "integer",
+      "title": "Consecutive Unavailable",
+      "default": 0
+     },
+     "blocked_until": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Blocked Until"
+     },
+     "blocking": {
+      "type": "boolean",
+      "title": "Blocking",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider"
+    ],
+    "title": "AdminProviderHealthOut",
+    "description": "A provider's recorded health (the provider manager, when it records any)."
+   },
+   "AdminProviderRequestsOut": {
+    "properties": {
+     "source": {
+      "type": "string",
+      "title": "Source"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     },
+     "runs": {
+      "type": "integer",
+      "title": "Runs"
+     },
+     "failed_runs": {
+      "type": "integer",
+      "title": "Failed Runs"
+     },
+     "requests": {
+      "type": "integer",
+      "title": "Requests"
+     },
+     "weighted_calls": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weighted Calls"
+     },
+     "bytes_downloaded": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bytes Downloaded"
+     },
+     "http_status_counts": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Http Status Counts",
+      "default": {}
+     },
+     "failed_requests": {
+      "type": "integer",
+      "title": "Failed Requests"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source",
+     "runs",
+     "failed_runs",
+     "requests",
+     "failed_requests"
+    ],
+    "title": "AdminProviderRequestsOut"
+   },
+   "AdminPublishedVersionOut": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "age_minutes": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age Minutes"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     },
+     "source_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Code"
+     },
+     "fallback_from": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback From"
+     },
+     "wind_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Model"
+     },
+     "wind_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Model Run"
+     },
+     "wind_run_estimated": {
+      "type": "boolean",
+      "title": "Wind Run Estimated",
+      "default": false
+     },
+     "wave_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model"
+     },
+     "wave_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model Run"
+     },
+     "wave_run_estimated": {
+      "type": "boolean",
+      "title": "Wave Run Estimated",
+      "default": false
+     },
+     "counts": {
+      "$ref": "#/components/schemas/AdminVersionCountsOut"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "counts"
+    ],
+    "title": "AdminPublishedVersionOut"
+   },
+   "AdminRefreshJobOut": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "trigger": {
+      "type": "string",
+      "title": "Trigger"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "refresh": {
+      "type": "boolean",
+      "title": "Refresh",
+      "description": "A spot forecast refresh (false: map or ensemble only)"
+     },
+     "kinds": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Kinds",
+      "default": []
+     },
+     "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Started At"
+     },
+     "finished_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Finished At"
+     },
+     "duration_ms": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Duration Ms"
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "stages": {
+      "items": {
+       "$ref": "#/components/schemas/AdminStageOut"
+      },
+      "type": "array",
+      "title": "Stages",
+      "default": []
+     },
+     "version_ids": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Version Ids",
+      "default": []
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error",
+      "description": "Redacted, shortened"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "trigger",
+     "status",
+     "refresh",
+     "started_at"
+    ],
+    "title": "AdminRefreshJobOut"
+   },
+   "AdminSchedulerCheckOut": {
+    "properties": {
+     "source": {
+      "type": "string",
+      "title": "Source"
+     },
+     "at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source"
+    ],
+    "title": "AdminSchedulerCheckOut"
+   },
+   "AdminSchedulerOut": {
+    "properties": {
+     "expected_minutes": {
+      "type": "integer",
+      "title": "Expected Minutes",
+      "description": "REFRESH_SCHEDULER_EXPECTED_MINUTES (0: off)"
+     },
+     "limit_minutes": {
+      "type": "integer",
+      "title": "Limit Minutes",
+      "description": "The silence limit applied: REFRESH_SCHEDULER_EXPECTED_MINUTES, at least 3 x SYNC_CHECK_MINUTES when Celery or a daemon checking spots is the runner",
+      "default": 0
+     },
+     "sync_running": {
+      "type": "boolean",
+      "title": "Sync Running",
+      "description": "A sync a scheduler started runs under a valid lease",
+      "default": false
+     },
+     "enabled": {
+      "type": "boolean",
+      "title": "Enabled"
+     },
+     "refresh_enabled": {
+      "type": "boolean",
+      "title": "Refresh Enabled",
+      "description": "FORECAST_REFRESH_ENABLED"
+     },
+     "last_check_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Check At"
+     },
+     "last_check_by": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Check By"
+     },
+     "checks": {
+      "items": {
+       "$ref": "#/components/schemas/AdminSchedulerCheckOut"
+      },
+      "type": "array",
+      "title": "Checks",
+      "default": []
+     },
+     "silent": {
+      "type": "boolean",
+      "title": "Silent"
+     }
+    },
+    "type": "object",
+    "required": [
+     "expected_minutes",
+     "enabled",
+     "refresh_enabled",
+     "silent"
+    ],
+    "title": "AdminSchedulerOut"
+   },
+   "AdminStageOut": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "duration_ms": {
+      "type": "integer",
+      "title": "Duration Ms"
+     },
+     "cpu_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cpu S"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "status",
+     "duration_ms"
+    ],
+    "title": "AdminStageOut"
+   },
+   "AdminStageTimeOut": {
+    "properties": {
+     "stage": {
+      "type": "string",
+      "title": "Stage"
+     },
+     "runs": {
+      "type": "integer",
+      "title": "Runs"
+     },
+     "avg_ms": {
+      "type": "number",
+      "title": "Avg Ms"
+     },
+     "p95_ms": {
+      "type": "number",
+      "title": "P95 Ms"
+     },
+     "max_ms": {
+      "type": "number",
+      "title": "Max Ms"
+     },
+     "avg_cpu_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Avg Cpu S"
+     }
+    },
+    "type": "object",
+    "required": [
+     "stage",
+     "runs",
+     "avg_ms",
+     "p95_ms",
+     "max_ms"
+    ],
+    "title": "AdminStageTimeOut"
+   },
+   "AdminStaleSpotOut": {
+    "properties": {
+     "spot_id": {
+      "type": "integer",
+      "title": "Spot Id"
+     },
+     "slug": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Slug"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "last_updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Updated At"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason",
+      "description": "missing, refresh_failed, atmosphere_age, wave_age or age"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error",
+      "description": "The failed refresh's redacted error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "spot_id"
+    ],
+    "title": "AdminStaleSpotOut"
+   },
+   "AdminUsageWindowOut": {
+    "properties": {
+     "used": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Used",
+      "description": "None: the counter could not be read"
+     },
+     "limit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Limit"
+     },
+     "fraction": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fraction"
+     },
+     "resets_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Resets At"
+     }
+    },
+    "type": "object",
+    "title": "AdminUsageWindowOut"
+   },
+   "AdminVersionCountsOut": {
+    "properties": {
+     "total": {
+      "type": "integer",
+      "title": "Total"
+     },
+     "updated": {
+      "type": "integer",
+      "title": "Updated"
+     },
+     "stale": {
+      "type": "integer",
+      "title": "Stale"
+     },
+     "failed": {
+      "type": "integer",
+      "title": "Failed"
+     }
+    },
+    "type": "object",
+    "required": [
+     "total",
+     "updated",
+     "stale",
+     "failed"
+    ],
+    "title": "AdminVersionCountsOut"
+   },
+   "AdminVersionRowOut": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Kind"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     },
+     "fallback_from": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fallback From"
+     },
+     "detected_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Detected At"
+     },
+     "upstream_available_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Upstream Available At"
+     },
+     "staged_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Staged At"
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "wind_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Model Run"
+     },
+     "wave_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model Run"
+     },
+     "changed": {
+      "items": {
+       "type": "string",
+       "enum": [
+        "atmosphere",
+        "wave"
+       ]
+      },
+      "type": "array",
+      "title": "Changed",
+      "default": []
+     },
+     "spots_updated": {
+      "type": "integer",
+      "title": "Spots Updated"
+     },
+     "spots_stale": {
+      "type": "integer",
+      "title": "Spots Stale"
+     },
+     "spots_failed": {
+      "type": "integer",
+      "title": "Spots Failed"
+     },
+     "upstream_to_publication_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Upstream To Publication S"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "status",
+     "spots_updated",
+     "spots_stale",
+     "spots_failed"
+    ],
+    "title": "AdminVersionRowOut"
+   },
+   "AdminWindyUsageOut": {
+    "properties": {
+     "day": {
+      "$ref": "#/components/schemas/AdminUsageWindowOut"
+     },
+     "available": {
+      "type": "boolean",
+      "title": "Available"
+     },
+     "counted": {
+      "type": "boolean",
+      "title": "Counted",
+      "description": "False: this build does not count Windy requests"
+     }
+    },
+    "type": "object",
+    "required": [
+     "day",
+     "available",
+     "counted"
+    ],
+    "title": "AdminWindyUsageOut"
+   },
    "AirportOut": {
     "properties": {
      "iata": {
@@ -3134,6 +5353,82 @@
    },
    "Conditions": {
     "properties": {
+     "forecast_confidence": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ForecastConfidenceOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "research_confidence": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Confidence"
+     },
+     "favourable": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Favourable"
+     },
+     "unfavourable": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unfavourable"
+     },
+     "offshore_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Offshore Class"
+     },
+     "model_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model Version"
+     },
      "valid_time": {
       "type": "string",
       "format": "date-time",
@@ -3276,6 +5571,30 @@
       ],
       "title": "Run Issued At"
      },
+     "wave_run_issued_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Run Issued At"
+     },
+     "atmosphere_run_issued_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Atmosphere Run Issued At"
+     },
      "method": {
       "anyOf": [
        {
@@ -3375,17 +5694,6 @@
       ],
       "title": "Forecast Confidence Class"
      },
-     "local_confidence_class": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Class"
-     },
      "confidence_reasons": {
       "items": {
        "type": "string"
@@ -3404,17 +5712,6 @@
        }
       ],
       "title": "Lead Hours"
-     },
-     "local_confidence_reason": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Reason"
      },
      "forecast_confidence_reasons": {
       "items": {
@@ -3504,7 +5801,7 @@
      "is_daylight"
     ],
     "title": "Conditions",
-    "description": "One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:\n\n* raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and\n  wind fields), and\n* our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``)."
+    "description": "One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:\n\n* raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and\n  wind fields), and\n* our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``, and the\n  hour outputs of the quality model, as on the hour's ForecastPoint and timeline step,\n  so a summary hour reads the same favourable / unfavourable conditions as its chart)."
    },
    "DailyStat": {
     "properties": {
@@ -3604,17 +5901,6 @@
        }
       ],
       "title": "Forecast Confidence Class"
-     },
-     "local_confidence_class": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Class"
      }
     },
     "type": "object",
@@ -4068,17 +6354,6 @@
       ],
       "title": "Forecast Confidence Class"
      },
-     "local_confidence_class": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Class"
-     },
      "confidence_reasons": {
       "items": {
        "type": "string"
@@ -4086,17 +6361,6 @@
       "type": "array",
       "title": "Confidence Reasons",
       "default": []
-     },
-     "local_confidence_reason": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Reason"
      },
      "forecast_confidence_reasons": {
       "items": {
@@ -4179,6 +6443,16 @@
       "type": "array",
       "title": "Attribution Links",
       "default": []
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SpotFreshnessOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -4269,6 +6543,11 @@
      "available": {
       "type": "boolean",
       "title": "Available"
+     },
+     "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "default": true
      },
      "message": {
       "anyOf": [
@@ -4480,8 +6759,252 @@
     ],
     "title": "FieldVariableOut"
    },
+   "ForecastComponentOut": {
+    "properties": {
+     "component": {
+      "type": "string",
+      "enum": [
+       "atmosphere",
+       "wave"
+      ],
+      "title": "Component"
+     },
+     "model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model"
+     },
+     "run_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Run Key"
+     },
+     "model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model Run"
+     },
+     "estimated": {
+      "type": "boolean",
+      "title": "Estimated",
+      "default": false
+     },
+     "available_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available At"
+     },
+     "retrieved_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Retrieved At"
+     },
+     "changed": {
+      "type": "boolean",
+      "title": "Changed",
+      "default": true
+     },
+     "domains": {
+      "items": {
+       "$ref": "#/components/schemas/ForecastDomainOut"
+      },
+      "type": "array",
+      "title": "Domains",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "component"
+    ],
+    "title": "ForecastComponentOut",
+    "description": "The model run one component of the published version comes from."
+   },
+   "ForecastConfidenceOut": {
+    "properties": {
+     "level": {
+      "type": "string",
+      "enum": [
+       "high",
+       "moderate",
+       "low"
+      ],
+      "title": "Level"
+     },
+     "kind": {
+      "type": "string",
+      "const": "heuristic",
+      "title": "Kind",
+      "default": "heuristic"
+     },
+     "method": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Method"
+     }
+    },
+    "type": "object",
+    "required": [
+     "level"
+    ],
+    "title": "ForecastConfidenceOut",
+    "description": "Forecast confidence of one hour: how dependable the offshore forecast is (lead time,\nfreshness, ensemble spread and model agreement where available; methodology\ndocs/forecast-confidence.md). A heuristic class from documented rules, not a calibrated\nprobability: ``kind`` says so. Its reasons are ``forecast_confidence_reasons``. Never\ncombined with research confidence."
+   },
+   "ForecastDomainOut": {
+    "properties": {
+     "model": {
+      "type": "string",
+      "title": "Model"
+     },
+     "model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model Run"
+     },
+     "available_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Available At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "model"
+    ],
+    "title": "ForecastDomainOut",
+    "description": "One model domain behind a component (e.g. GFS 0.13 and GFS 0.25)."
+   },
    "ForecastPoint": {
     "properties": {
+     "forecast_confidence": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ForecastConfidenceOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "research_confidence": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Confidence"
+     },
+     "favourable": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Favourable"
+     },
+     "unfavourable": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unfavourable"
+     },
+     "offshore_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Offshore Class"
+     },
+     "model_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model Version"
+     },
      "valid_time": {
       "type": "string",
       "format": "date-time",
@@ -4858,17 +7381,6 @@
       ],
       "title": "Forecast Confidence Class"
      },
-     "local_confidence_class": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Class"
-     },
      "confidence_reasons": {
       "items": {
        "type": "string"
@@ -4887,17 +7399,6 @@
        }
       ],
       "title": "Lead Hours"
-     },
-     "local_confidence_reason": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Reason"
      },
      "forecast_confidence_reasons": {
       "items": {
@@ -4998,7 +7499,8 @@
      "explanation",
      "components"
     ],
-    "title": "ForecastPoint"
+    "title": "ForecastPoint",
+    "description": "One stored forecast hour of the spot forecast: raw model values, our breaking-height\nestimate (``breaking_height_*``, the nearshore model's typical-to-sets range and\ncentral value, an estimate that is not calibrated against observed surf), the score\nand its per-hour outputs (``HourOutputs``) and the two separate confidences."
    },
    "ForecastRunOut": {
     "properties": {
@@ -5130,6 +7632,212 @@
      "atmosphere_model"
     ],
     "title": "ForecastSourceOut"
+   },
+   "ForecastStatusOut": {
+    "properties": {
+     "version": {
+      "$ref": "#/components/schemas/ForecastVersionOut"
+     },
+     "components": {
+      "items": {
+       "$ref": "#/components/schemas/ForecastComponentOut"
+      },
+      "type": "array",
+      "title": "Components",
+      "default": []
+     },
+     "spots_served": {
+      "type": "integer",
+      "title": "Spots Served",
+      "default": 0
+     },
+     "stale_spots": {
+      "items": {
+       "$ref": "#/components/schemas/StaleSpotOut"
+      },
+      "type": "array",
+      "title": "Stale Spots",
+      "default": []
+     },
+     "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Generated At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "version",
+     "generated_at"
+    ],
+    "title": "ForecastStatusOut",
+    "description": "The public freshness summary: the published version, the model run behind each\ncomponent, and the active spots whose forecast is stale."
+   },
+   "ForecastVersionOut": {
+    "properties": {
+     "version_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version Id"
+     },
+     "published_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Published At"
+     },
+     "provider": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Provider"
+     },
+     "source_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source Code"
+     },
+     "wind_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Model"
+     },
+     "wind_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wind Model Run"
+     },
+     "wind_run_estimated": {
+      "type": "boolean",
+      "title": "Wind Run Estimated"
+     },
+     "wave_model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model"
+     },
+     "wave_model_run": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Wave Model Run"
+     },
+     "wave_run_estimated": {
+      "type": "boolean",
+      "title": "Wave Run Estimated"
+     },
+     "spots_total": {
+      "type": "integer",
+      "title": "Spots Total"
+     },
+     "spots_updated": {
+      "type": "integer",
+      "title": "Spots Updated"
+     },
+     "spots_stale": {
+      "type": "integer",
+      "title": "Spots Stale"
+     },
+     "map_run_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Map Run Id"
+     },
+     "map_cycle": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Map Cycle"
+     },
+     "attribution": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Attribution"
+     }
+    },
+    "type": "object",
+    "required": [
+     "version_id",
+     "published_at",
+     "provider",
+     "source_code",
+     "wind_model",
+     "wind_model_run",
+     "wind_run_estimated",
+     "wave_model",
+     "wave_model_run",
+     "wave_run_estimated",
+     "spots_total",
+     "spots_updated",
+     "spots_stale",
+     "map_run_id",
+     "map_cycle",
+     "attribution"
+    ],
+    "title": "ForecastVersionOut",
+    "description": "The published forecast version (C4). Every field is always present."
    },
    "ForgotPasswordIn": {
     "properties": {
@@ -5360,6 +8068,26 @@
      "url": {
       "type": "string",
       "title": "Url"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "booking",
+       "route_search"
+      ],
+      "title": "Kind",
+      "default": "route_search"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
      }
     },
     "type": "object",
@@ -5578,6 +8306,17 @@
       "type": "array",
       "title": "Attribution Links",
       "default": []
+     },
+     "version_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version Id"
      }
     },
     "type": "object",
@@ -5615,6 +8354,16 @@
      "upcoming_event_count": {
       "type": "integer",
       "title": "Upcoming Event Count"
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SpotFreshnessOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -5888,23 +8637,32 @@
       ],
       "title": "Forecast Confidence Class"
      },
-     "local_confidence_class": {
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
+     },
+     "freshness": {
       "anyOf": [
        {
-        "type": "string",
-        "enum": [
-         "high",
-         "moderate",
-         "low"
-        ]
+        "$ref": "#/components/schemas/SpotFreshnessOut"
        },
        {
         "type": "null"
        }
-      ],
-      "title": "Local Confidence Class"
+      ]
      },
-     "local_confidence_reason": {
+     "short_notice": {
+      "type": "boolean",
+      "title": "Short Notice",
+      "default": false
+     },
+     "best_offer_expired": {
+      "type": "boolean",
+      "title": "Best Offer Expired",
+      "default": false
+     },
+     "quoted_currency": {
       "anyOf": [
        {
         "type": "string"
@@ -5913,12 +8671,15 @@
         "type": "null"
        }
       ],
-      "title": "Local Confidence Reason"
+      "title": "Quoted Currency"
      },
-     "stale": {
-      "type": "boolean",
-      "title": "Stale",
-      "default": false
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      },
      "event": {
       "$ref": "#/components/schemas/EventOut"
@@ -6275,23 +9036,32 @@
       ],
       "title": "Forecast Confidence Class"
      },
-     "local_confidence_class": {
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
+     },
+     "freshness": {
       "anyOf": [
        {
-        "type": "string",
-        "enum": [
-         "high",
-         "moderate",
-         "low"
-        ]
+        "$ref": "#/components/schemas/SpotFreshnessOut"
        },
        {
         "type": "null"
        }
-      ],
-      "title": "Local Confidence Class"
+      ]
      },
-     "local_confidence_reason": {
+     "short_notice": {
+      "type": "boolean",
+      "title": "Short Notice",
+      "default": false
+     },
+     "best_offer_expired": {
+      "type": "boolean",
+      "title": "Best Offer Expired",
+      "default": false
+     },
+     "quoted_currency": {
       "anyOf": [
        {
         "type": "string"
@@ -6300,12 +9070,15 @@
         "type": "null"
        }
       ],
-      "title": "Local Confidence Reason"
+      "title": "Quoted Currency"
      },
-     "stale": {
-      "type": "boolean",
-      "title": "Stale",
-      "default": false
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",
@@ -6997,33 +9770,6 @@
        }
       ],
       "title": "Forecast Confidence Class"
-     },
-     "local_confidence_class": {
-      "anyOf": [
-       {
-        "type": "string",
-        "enum": [
-         "high",
-         "moderate",
-         "low"
-        ]
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Class"
-     },
-     "local_confidence_reason": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -7619,6 +10365,30 @@
       },
       "type": "array",
       "title": "Links"
+     },
+     "operating_carriers": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Operating Carriers",
+      "default": []
+     },
+     "expired": {
+      "type": "boolean",
+      "title": "Expired",
+      "default": false
+     },
+     "converted_currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Converted Currency"
      }
     },
     "type": "object",
@@ -8602,6 +11372,33 @@
        }
       ],
       "title": "Atmosphere Model"
+     },
+     "component": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "wave",
+         "atmosphere"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Component"
+     },
+     "retrieved_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Retrieved At"
      }
     },
     "type": "object",
@@ -8615,7 +11412,7 @@
      "atmosphere_model"
     ],
     "title": "RunMemberOut",
-    "description": "One model run behind a forecast (a blend member, or the single source itself)."
+    "description": "One model run behind a forecast: a blend member, the single source itself, or, for a\nrun whose wave and atmosphere components come from different model runs (a refresh of\none component carries the other forward), one entry per component."
    },
    "ScatterPoint": {
     "properties": {
@@ -8655,6 +11452,70 @@
      "error"
     ],
     "title": "ScatterPoint"
+   },
+   "SearchDefaultsOut": {
+    "properties": {
+     "alert_lead_min_days": {
+      "type": "integer",
+      "title": "Alert Lead Min Days"
+     },
+     "alert_lead_max_days": {
+      "type": "integer",
+      "title": "Alert Lead Max Days"
+     },
+     "forecast_days": {
+      "type": "integer",
+      "title": "Forecast Days"
+     },
+     "detection_lead_min_days": {
+      "type": "number",
+      "title": "Detection Lead Min Days"
+     },
+     "detection_lead_max_days": {
+      "type": "number",
+      "title": "Detection Lead Max Days"
+     },
+     "short_notice_min_days": {
+      "type": "number",
+      "title": "Short Notice Min Days"
+     },
+     "short_notice_max_days": {
+      "type": "number",
+      "title": "Short Notice Max Days"
+     },
+     "max_origins": {
+      "type": "integer",
+      "title": "Max Origins"
+     },
+     "max_layovers": {
+      "type": "integer",
+      "title": "Max Layovers"
+     },
+     "max_alert_lead_days": {
+      "type": "integer",
+      "title": "Max Alert Lead Days"
+     },
+     "flight_searches_per_day": {
+      "type": "integer",
+      "title": "Flight Searches Per Day"
+     }
+    },
+    "type": "object",
+    "required": [
+     "alert_lead_min_days",
+     "alert_lead_max_days",
+     "forecast_days",
+     "detection_lead_min_days",
+     "detection_lead_max_days",
+     "short_notice_min_days",
+     "short_notice_max_days",
+     "max_origins",
+     "max_layovers",
+     "max_alert_lead_days",
+     "flight_searches_per_day"
+    ],
+    "title": "SearchDefaultsOut",
+    "description": "What the search wizard needs to know about this deployment's limits."
    },
    "SearchIn": {
     "properties": {
@@ -8867,6 +11728,32 @@
       "title": "Notify On Updates",
       "default": true
      },
+     "alert_lead_min_days": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 16.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Alert Lead Min Days"
+     },
+     "alert_lead_max_days": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 16.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Alert Lead Max Days"
+     },
      "priority": {
       "$ref": "#/components/schemas/RankingPriority",
       "default": "balanced"
@@ -9072,6 +11959,14 @@
       "type": "boolean",
       "title": "Notify On Updates"
      },
+     "alert_lead_min_days": {
+      "type": "integer",
+      "title": "Alert Lead Min Days"
+     },
+     "alert_lead_max_days": {
+      "type": "integer",
+      "title": "Alert Lead Max Days"
+     },
      "priority": {
       "$ref": "#/components/schemas/RankingPriority"
      },
@@ -9148,6 +12043,8 @@
      "notification_channel",
      "notify_surf_only",
      "notify_on_updates",
+     "alert_lead_min_days",
+     "alert_lead_max_days",
      "priority",
      "travel",
      "created_at",
@@ -9209,6 +12106,28 @@
      "duration_minutes": {
       "type": "integer",
       "title": "Duration Minutes"
+     },
+     "operating_carrier": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Operating Carrier"
+     },
+     "operating_carrier_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Operating Carrier Name"
      }
     },
     "type": "object",
@@ -9625,6 +12544,24 @@
       ],
       "title": "Research Class"
      },
+     "freshness": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SpotFreshnessOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
+     },
      "forecast_latitude": {
       "type": "number",
       "title": "Forecast Latitude"
@@ -9899,6 +12836,16 @@
        }
       ],
       "title": "Generated At"
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SpotFreshnessOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -9908,6 +12855,59 @@
      "available"
     ],
     "title": "SpotForecastOut"
+   },
+   "SpotFreshnessOut": {
+    "properties": {
+     "version_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version Id"
+     },
+     "last_updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Updated At"
+     },
+     "stale": {
+      "type": "boolean",
+      "title": "Stale",
+      "default": false
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "missing",
+         "refresh_failed",
+         "atmosphere_age",
+         "wave_age",
+         "age"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     }
+    },
+    "type": "object",
+    "title": "SpotFreshnessOut",
+    "description": "How fresh one spot's served forecast is (design D10).\n\n``version_id``: the published version the spot is served from (None before the first\npublication: then the freshness of the run the legacy selection serves, ``stale`` by\nthat run's own staleness rule). ``last_updated_at``: the spot's last successful update\n(\"Forecast last updated 7 hours ago\"). ``stale`` data is never labelled current."
    },
    "SpotMini": {
     "properties": {
@@ -10101,6 +13101,24 @@
        }
       ],
       "title": "Research Class"
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SpotFreshnessOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "attribution_links": {
+      "items": {
+       "$ref": "#/components/schemas/AttributionLinkOut"
+      },
+      "type": "array",
+      "title": "Attribution Links",
+      "default": []
      }
     },
     "type": "object",
@@ -10195,6 +13213,16 @@
      },
      "observations": {
       "$ref": "#/components/schemas/ObservationsBlockOut"
+     },
+     "freshness": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SpotFreshnessOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -10212,6 +13240,59 @@
      "observations"
     ],
     "title": "SpotTimelineOut"
+   },
+   "StaleSpotOut": {
+    "properties": {
+     "spot_id": {
+      "type": "integer",
+      "title": "Spot Id"
+     },
+     "slug": {
+      "type": "string",
+      "title": "Slug"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "last_updated_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Updated At"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "missing",
+         "refresh_failed",
+         "atmosphere_age",
+         "wave_age",
+         "age"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     }
+    },
+    "type": "object",
+    "required": [
+     "spot_id",
+     "slug",
+     "name"
+    ],
+    "title": "StaleSpotOut"
    },
    "StationSummary": {
     "properties": {
@@ -10408,6 +13489,82 @@
    },
    "StepQualityOut": {
     "properties": {
+     "forecast_confidence": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ForecastConfidenceOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "research_confidence": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "high",
+         "moderate",
+         "low"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Research Confidence"
+     },
+     "favourable": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Favourable"
+     },
+     "unfavourable": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unfavourable"
+     },
+     "offshore_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Offshore Class"
+     },
+     "model_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Model Version"
+     },
      "score": {
       "type": "integer",
       "title": "Score"
@@ -10427,34 +13584,12 @@
       ],
       "title": "Forecast Confidence Class"
      },
-     "local_confidence_class": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Class"
-     },
      "forecast_confidence_reasons": {
       "items": {
        "type": "string"
       },
       "type": "array",
       "title": "Forecast Confidence Reasons"
-     },
-     "local_confidence_reason": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Local Confidence Reason"
      }
     },
     "type": "object",
@@ -10462,11 +13597,10 @@
      "score",
      "label",
      "forecast_confidence_class",
-     "local_confidence_class",
-     "forecast_confidence_reasons",
-     "local_confidence_reason"
+     "forecast_confidence_reasons"
     ],
-    "title": "StepQualityOut"
+    "title": "StepQualityOut",
+    "description": "Our rating of the step, its per-hour outputs (``HourOutputs``) and its two separate\nconfidences (``SeparateConfidences``)."
    },
    "StepSegmentOut": {
     "properties": {

@@ -228,13 +228,17 @@ class TestLabels:
         assert wind_favourability(0.7499) == wind_favourability(0.4) == "workable"
         assert wind_favourability(0.3999) == wind_favourability(0.0) == "unfavourable"
 
-    def test_light_onshore_breeze_is_light_and_favourable(self) -> None:
-        """The Ocean Beach 2026-10-13 09Z case: 5.8 km/h onshore next to an Exceptional score."""
+    def test_light_onshore_breeze_is_light_and_at_best_workable(self) -> None:
+        """The Ocean Beach 2026-10-13 09Z case: 5.8 km/h onshore next to an Exceptional score.
+        Algorithm 2.2.0 (spec 19, light onshore is often marginal): its Q is still above the
+        favourable cut-off, so the score is unchanged, but the class is capped at workable."""
         ob = params("ocean-beach-sf")
         fit = wind_fit(5.8, 271.0, ob)
         assert wind_relation(5.8, 271.0, ob.offshore_wind_direction) == "onshore"
         assert fit.strength == "light"
-        assert fit.favourability == "favourable"
+        assert fit.q >= wind.FAVOURABLE_MIN_Q
+        assert fit.favourability == "workable"
+        assert fit.onshore_capped is True
 
     def test_glassy_and_unknown(self) -> None:
         assert wind_relation(0.0, None, 90) == "glassy"  # calm: no direction
@@ -338,10 +342,12 @@ class TestSpotWindProfile:
             "v_cross_kmh",
             "strength",
             "favourability",
+            "onshore_capped",
             "gust_used",
             "params",
         }
         assert d["gust_used"] is False
+        assert d["onshore_capped"] is False  # a north wind on a west-facing beach
         assert {p["provenance"] for p in d["params"].values()} <= {
             "research",
             "beaufort",

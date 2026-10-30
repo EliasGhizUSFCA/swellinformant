@@ -2,28 +2,108 @@
 
 Every source below is an official, documented API. Nothing in this project scrapes
 websites, bypasses anti-bot systems or calls private endpoints. Licences, keys, free tiers
-and costs of every service: [API_SETUP_REQUIRED.md](API_SETUP_REQUIRED.md). Windy is the
-exception to "used within its terms" unless a licence allows storage: its token is
-refused by default (below).
+and costs of every service: [API_SETUP_REQUIRED.md](API_SETUP_REQUIRED.md). Windy is used
+only under a licence that allows storing, scoring and publishing its data
+(`WINDY_STORAGE_AUTHORIZED=true`, [WINDY_API_SETUP.md](WINDY_API_SETUP.md)); without it
+the app never builds the Windy provider.
 
 ## Forecasts
 
-**Recommended setup (API-first):** `FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf`. Spot
-forecasts come from Open-Meteo as two independent model families, the map layers from
-NOAA NODD byte ranges, the ensemble spread from GEFS-Wave (HTSGW and PERPW only). The
-direct GRIB ingesters stay as tested, key-free fallbacks, off by default.
+**Default (Swell 2.0): one provider at a time.** `WEATHER_PROVIDER=auto` (the hosted
+default) uses the **Windy** Point Forecast API (`gfs` + `gfsWave`) once it is eligible
+(`WINDY_API_KEY` set and `WINDY_STORAGE_AUTHORIZED=true`), and **Open-Meteo**'s NOAA GFS
+and GFS-Wave family until then and as Windy's runtime fallback. Both return the same
+normalized records (UTC times, km/h, m, s, hPa, directions FROM), so scoring and the
+frontend do not depend on the provider. The ECMWF family, the blend, the GEFS-Wave ensemble
+and the direct GRIB ingesters stay available through the advanced `FORECAST_PROVIDERS`
+override (for example `open_meteo,open_meteo_ecmwf` with `FORECAST_BLEND_ENABLED=true`), off
+by default. The map layers come from NOAA NODD byte ranges in every setup.
 
 | Source (`FORECAST_PROVIDERS` token → source code, family) | Status | Data | Access |
 |--------|---------------------|------|--------|
-| **Open-Meteo, NOAA GFS + GFS-Wave** (`open_meteo` → `open_meteo_noaa`, `ncep_gfs`) | Recommended. `forecasts/open_meteo.py`; mock tests on recorded responses; live runs below | Waves from `ncep_gfswave016` (0.16°, about 15°S-52.5°N) or `ncep_gfswave025` elsewhere: Hs, peak period, direction, primary/secondary/tertiary swell and wind sea. Wind, gust (GFS instantaneous), MSL pressure from `gfs_global`. Hourly to 120 h, then 3-hourly (the model's own steps) | Free for non-commercial use; `OPEN_METEO_API_KEY` for the commercial hosts |
-| **Open-Meteo, ECMWF IFS + ecWAM** (`open_meteo_ecmwf` → `open_meteo_ecmwf`, `ecmwf_ifs`) | Recommended. `forecasts/open_meteo_ecmwf.py`; mock tests; live runs below | `ecmwf_wam025`: Hs, peak period (`wave_peak_period`; the mean period only in `extra`), mean direction; no swell partitions. `ecmwf_ifs025`: wind, gust (3-hour maximum), MSL pressure. 3-hourly to 144 h, then 6-hourly, 00Z and 12Z runs only | same |
+| **Open-Meteo, NOAA GFS + GFS-Wave** (`open_meteo` → `open_meteo_noaa`, `ncep_gfs`) | Default (`WEATHER_PROVIDER=auto` without Windy, or `open_meteo`) and Windy's fallback. `forecasts/open_meteo.py`; mock tests on recorded responses; live runs below | Waves from `ncep_gfswave016` (0.16°, about 15°S-52.5°N) or `ncep_gfswave025` elsewhere: Hs, peak period, direction, primary/secondary/tertiary swell and wind sea. Wind, gust (GFS instantaneous), MSL pressure from `gfs_global`. Hourly to 120 h, then 3-hourly (the model's own steps) | Free for non-commercial use; `OPEN_METEO_API_KEY` for the commercial `customer-*` hosts (below) |
+| **Open-Meteo, ECMWF IFS + ecWAM** (`open_meteo_ecmwf` → `open_meteo_ecmwf`, `ecmwf_ifs`) | Optional (`FORECAST_PROVIDERS`, with the blend). `forecasts/open_meteo_ecmwf.py`; mock tests; live runs below | `ecmwf_wam025`: Hs, peak period (`wave_peak_period`; the mean period only in `extra`), mean direction; no swell partitions. `ecmwf_ifs025`: wind, gust (3-hour maximum), MSL pressure. 3-hourly to 144 h, then 6-hourly, 00Z and 12Z runs only | same |
 | **NOAA GFS-Wave + GFS, direct** (`noaa_gfs` → `noaa_gfs_direct`, `ncep_gfs`) | Optional fallback, off by default. `forecasts/noaa.py`. Verified live 2026-10-11: 4,050 records, 811 requests, 1.91 GB | as above, 3-hourly, from the native WW3 grids, sampled at our nearest valid sea cell | NOAA NODD on AWS, GRIB2 by HTTP Range. No key. [noaa-direct-ingestion.md](noaa-direct-ingestion.md) |
 | **ECMWF IFS open data, direct** (`ecmwf_ifs` → `ecmwf_ifs_open`, `ecmwf_ifs`) | Optional fallback, off by default. `forecasts/ecmwf.py`. Now reads only `ECMWF_WAVE_PARAMS` (default `swh,mwd,pp1d,mwp`: 3.69 MB per step instead of 10.06 MB; `wmb` once per run) and records its bytes | Hs, Tp (`pp1d`), mean direction, Tm-1,0, wind, gust, pressure | ECMWF open-data bucket, HTTP Range. CC BY 4.0, "Copyright ECMWF" |
 | **NOAA GEFS-Wave ensemble statistics** (`GEFS_ENABLED=true` → `noaa_gefs_wave`, `ncep_gefs`) | `forecasts/ensemble.py`. Now reads only `GEFS_STAT_FIELDS` (default HTSGW, PERPW: 4 records, 1.60 MB per step instead of 10 records, about 4.9 MB) for the cycles in `GEFS_CYCLES` | Mean and spread of Hs and Tp, used only for uncertainty ranges and forecast confidence | NOAA bucket, no key |
-| **Windy Point Forecast API v2** (`windy` → `windy_gfswave`, `ncep_gfs`) | Refused unless `WINDY_TERMS_ACKNOWLEDGED=true`: Windy's terms forbid storing the data and derived databases. Wind-sea keys fixed to `wwaves_*`. Mock-tested only | `gfsWave` waves, `gfs` wind | Paid key, `WINDY_API_KEY` |
-| **Demo provider** (`demo`) | Default | Synthetic but physically plausible swells, winds and tides | None. Labelled DEMO everywhere |
+| **Windy Point Forecast API v2** (`windy` → `windy_gfswave`, `ncep_gfs`) | Preferred once licensed: `WEATHER_PROVIDER=auto` uses it when `WINDY_API_KEY` is set and `WINDY_STORAGE_AUTHORIZED=true`. `forecasts/windy.py`; tested with synthetic responses written from the documented format only (no key here) | `gfsWave` waves, wind waves, swell 1 and 2; `gfs` wind (u/v), gust, surface pressure; 3-hourly steps; run times estimated from data fingerprints | Paid Professional key (990 EUR a year, 10,000 requests a day) plus a written licence for storage, derived scoring and publication: [WINDY_API_SETUP.md](WINDY_API_SETUP.md) |
+| **Demo provider** (`demo`) | Local development, tests and e2e (`WEATHER_PROVIDER=demo` in `.env.example` and the compose files) | Synthetic but physically plausible swells, winds and tides | None. Labelled DEMO everywhere |
 | Copernicus Marine (MFWAM) | Not implemented (family `mfwam` reserved) | | Free account |
 | Surfline, Windy website | **Not integrated** | — | No authorised access; scraping would violate their terms |
+
+### Provider selection, fallback and health check (Swell 2.0)
+
+* **Selection** (`Settings.provider_selection()`, design D2): `FORECAST_PROVIDERS`, when set,
+  is the list (advanced override, first = primary). Otherwise `WEATHER_PROVIDER`: `demo`,
+  `open_meteo`, `windy` (production refuses to start until Windy is eligible; elsewhere
+  Open-Meteo runs meanwhile) or `auto` (Windy when eligible, else Open-Meteo). A Windy
+  key alone never selects Windy.
+* **Runtime fallback** (`forecasts/provider_manager.py`, design D4): while Windy is the
+  primary, a recorded Windy failure makes Open-Meteo the primary for the next refreshes:
+  an invalid key (`credentials`) or testing-key data (`testing_key`) for 60 minutes, a
+  daily limit (`quota`) until 00:00 UTC, three transient failures in a row (`unavailable`)
+  for 60 minutes; a successful Windy check or fetch ends it at once. The Windy adapter
+  records the failure in Redis (`provider-health:v1:windy`) before it raises. The registry
+  (`forecasts/registry.py`) builds the fallback for the token `windy` and marks it with
+  `fallback_from = "windy"`, so the planner and the acquisition always use the active
+  provider and the published version can say it stood in. One primary at a time; the two
+  providers are never cross-referenced.
+* **Health check**: `python -m app.cli forecast provider-check [--provider open_meteo|windy]`
+  prints the selection and its reasons, Windy's eligibility, the recorded provider health
+  (fallback and until when) and a live check: Open-Meteo reads one `meta.json`, Windy sends
+  one sentinel request and detects a testing key, an invalid key or a used-up quota. It
+  stores no forecast data, records no health and never prints a key. On 2026-10-27 15:39
+  UTC it answered, from this sandbox with no keys: selection `open_meteo` ("Windy is not
+  eligible (WINDY_API_KEY and WINDY_STORAGE_AUTHORIZED=true missing)"), and the
+  `ncep_gfswave016` 06Z run published, available since 11:15:05 UTC, 1 request.
+* **Request counters** (`forecasts/quota.py`): Open-Meteo's weighted calls per minute,
+  hour, day and month, and Windy's requests per UTC day (`WINDY_DAILY_REQUEST_LIMIT`,
+  10,000 by default, counted before every attempt); `quota.usage_snapshot()` reads them all
+  in one Redis round trip for the admin dashboard.
+
+### Open-Meteo: free and commercial use
+
+* **Free API** (default): `api.open-meteo.com` and `marine-api.open-meteo.com`, no key,
+  "only for non-commercial purposes", counted per IP address: 600 calls a minute, 5,000 an
+  hour, 10,000 a day and 300,000 a month (`OPEN_METEO_CALLS_PER_*`). One spot refresh of
+  the GFS family cost 142.9 weighted calls with 16 days (measured below); with
+  `FORECAST_DAYS=10` the same rule gives 125 (computed: the day factor is then 1).
+* **Commercial use**: set `OPEN_METEO_COMMERCIAL=true` (old name `COMMERCIAL_USE`) and
+  `OPEN_METEO_API_KEY` from an Open-Meteo API subscription. The key switches every request,
+  the metadata included, to the customer hosts `customer-api.open-meteo.com` and
+  `customer-marine-api.open-meteo.com` with `apikey=...`; raise `OPEN_METEO_CALLS_PER_DAY`
+  and `OPEN_METEO_CALLS_PER_MONTH` to the plan's budget. With `OPEN_METEO_COMMERCIAL=true`
+  and no key, production refuses to start and the providers refuse to send any request
+  (the commercial-use guard below). Prices: docs/API_SETUP_REQUIRED.md (confirm at checkout).
+* **Attribution**: Open-Meteo data are CC BY 4.0: "You must include a link next to any
+  location Open-Meteo data are displayed". Every value derived from it is shown with the
+  credit "Weather data by Open-Meteo.com (CC BY 4.0)" and its link, and the model
+  credit "NOAA NCEP GFS and GFS-Wave (modified)" (the version's `attribution`).
+
+### Windy Point Forecast (gated)
+
+* **Requests**: one `POST https://api.windy.com/api/point-forecast/v2` per point and model:
+  `gfs` with `wind`, `windGust`, `pressure` at the break and `gfsWave` with `waves`,
+  `windWaves`, `swell1`, `swell2` at the offshore forecast point, `levels: ["surface"]`,
+  coordinates rounded to 2 decimals as Windy does: 100 requests for a full refresh of 50
+  spots, 50 for a one-component refresh.
+* **Normalization**: `ts` (ms since 1970) to UTC; `wind_u`/`wind_v` (m/s, u > 0 towards the
+  east, v > 0 towards the north) to km/h and the direction the wind blows FROM; gust to km/h;
+  pressure Pa to hPa (stored as `pressure_msl_hpa`, labelled `extra.pressure_kind =
+  "surface_unspecified"` because Windy does not say whether it is reduced to sea level);
+  wave and swell directions are already FROM. A null or missing series is None, never 0;
+  there is no third swell and no sea level. Windy's 3-hourly steps are stored as they come
+  (`extra.native_step_seconds = 10800`), never interpolated.
+* **Run identity**: no run field, no metadata endpoint, no webhook. One sentinel point per
+  model is checked every `WINDY_CHECK_MINUTES` inside the expected availability window of
+  each GFS cycle; a changed data fingerprint is a new run of that component, and its cycle
+  is labelled estimated (WINDY_API_SETUP.md, section 8).
+* **Licence and keys**: the standard terms forbid storing the data, derived databases and
+  redistribution, so `WINDY_STORAGE_AUTHORIZED=true` is required and means a written
+  licence; testing keys ("randomly shuffled and slightly modified data") are detected on
+  every response and never stored or published (`windy_testing_key`); an invalid key, a
+  daily limit or repeated unavailability fall back to Open-Meteo. Attribution: "Contains
+  data from the Windy database" plus the Windy logo (owner step).
 
 ### Families, the blend and what "our prediction" is built from
 
@@ -139,7 +219,8 @@ gigabytes, without losing accuracy. What the adapters do (`forecasts/open_meteo.
 * **Retries and bookkeeping** (`forecasts/ingestion.py`, `services/sync/`): providers
   run one after another; each run records its own `started_at`, its cost in
   `details.stats` (bytes on the wire, HTTP responses by status, weighted calls; also for a
-  FAILED run) and its model runs. Any exception ends only that provider's run, FAILED,
+  FAILED run, and for a request that failed while the run's other requests succeeded, such
+  as a failed horizon refetch) and its model runs. Any exception ends only that provider's run, FAILED,
   never RUNNING. Since Upgrade 4 the acquisition runs as the `spots` stage of a sync: a
   failed component is retried `SYNC_RETRY_MINUTES` (15) later, or after the provider's own
   wait, at most `SYNC_MAX_ATTEMPTS` (6) times per model run (docs/sync.md). The provider
@@ -243,25 +324,28 @@ are not generated once a run is twice its stale-after age.
 ### Switching to live forecasts
 
 ```env
-FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf   # first = primary; two families -> blend
-GEFS_ENABLED=true                                # ensemble spread for the uncertainty ranges
-FORECAST_BLEND_ENABLED=true
-OPEN_METEO_API_KEY=                              # only for commercial use
+WEATHER_PROVIDER=auto          # Open-Meteo now; Windy once WINDY_API_KEY + WINDY_STORAGE_AUTHORIZED
+FORECAST_PROVIDERS=            # leave empty (advanced override)
+OPEN_METEO_COMMERCIAL=false    # true + OPEN_METEO_API_KEY for commercial use
+OPEN_METEO_API_KEY=
 ```
 
 `demo` cannot be combined with a live provider (the settings validator rejects it), so
-synthetic and real data never mix. To try it once from the command line:
+synthetic and real data never mix. To check the choice and try one acquisition from the
+command line:
 
 ```bash
 cd backend
-FORECAST_PROVIDERS=open_meteo,open_meteo_ecmwf python -m app.cli pipeline
-python -m app.cli engine budget                    # weighted calls used
-GEFS_ENABLED=true python -m app.cli engine ensemble # GEFS-Wave mean/spread
+WEATHER_PROVIDER=auto python -m app.cli forecast provider-check   # selection + health
+WEATHER_PROVIDER=auto python -m app.cli pipeline
+python -m app.cli engine budget                                    # weighted calls used
 ```
 
-The direct GRIB ingesters (`noaa_gfs`, `ecmwf_ifs`) remain available as key-free
-fallbacks, for example if Open-Meteo is unavailable or its terms change; they download
-about 1.9 GB (NOAA) and 0.48 GB (ECMWF, trimmed; computed) per run.
+The two-family setup of Upgrade 4 stays available: `FORECAST_PROVIDERS=open_meteo,
+open_meteo_ecmwf`, `FORECAST_BLEND_ENABLED=true`, `GEFS_ENABLED=true` (ensemble spread for
+the uncertainty ranges). The direct GRIB ingesters (`noaa_gfs`, `ecmwf_ifs`) remain
+available as key-free fallbacks, for example if Open-Meteo is unavailable or its terms
+change; they download about 1.9 GB (NOAA) and 0.48 GB (ECMWF, trimmed; computed) per run.
 
 ### Limitations
 

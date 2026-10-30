@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import (
     ForecastComparison,
     ForecastRun,
@@ -137,7 +138,12 @@ def test_weights_and_interpolation_helpers() -> None:
     assert min(w) >= 0 and sum(w) == pytest.approx(1.0)
 
 
-def test_blend_combines_independent_families(db: Session, two_families: list[str]) -> None:
+def test_blend_combines_independent_families(
+    db: Session, two_families: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The prediction archive is optional and off by default since Swell 2.0
+    # (PREDICTION_ARCHIVE_ENABLED); this test checks what it archives.
+    monkeypatch.setattr(get_settings(), "prediction_archive_enabled", True)
     gfs = FakeProvider("t_gfs", "ncep_gfs", 2.0, issued=NOW - timedelta(hours=6))
     ec = FakeProvider(
         "t_ecmwf", "ecmwf_ifs", 3.0, issued=NOW - timedelta(hours=6), step_hours=3, partitions=False

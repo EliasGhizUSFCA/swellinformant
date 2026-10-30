@@ -11,8 +11,10 @@ deployment, which would otherwise wait for 02:20 UTC), and loops until ``stop`` 
   matching.match and the stages after it (flights, alerts, delivery), "refresh flights"
   runs flights.discover for those matches and the stages after it;
 * every SYNC_CHECK_MINUTES: :func:`plan_sync` from the known runs (provider metadata only,
-  no database access) and the heartbeat in Redis; when a sync is due, one
-  :func:`run_sync` and a reload of the known runs;
+  no database access) and the heartbeat in Redis; when a sync of the component kinds in
+  SYNC_DAEMON_KINDS is due (hosted on Vercel Hobby: ``map``, the spot forecasts are
+  refreshed by the refresh endpoint), one :func:`run_sync` of those kinds and a reload of
+  the known runs; nothing while FORECAST_REFRESH_ENABLED=false (the kill switch);
 * the periodic jobs of app.jobs.schedule.build_schedule (all but the sync's own jobs),
   each at least JOB_INTERVAL_FLOOR_MINUTES apart. ``Every`` jobs are due by in-memory
   timers that start one interval after the daemon (no database read for scheduling), so
@@ -37,9 +39,9 @@ import signal
 import threading
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -52,14 +54,22 @@ from app.jobs.schedule import DailyAt, Every, JobEntry, build_schedule, max_inte
 from app.models import BackgroundJobLog
 from app.models.enums import JobStatus
 from app.services.sync import state
-from app.services.sync.detect import plan_sync, refresh_known, settle_plan
-from app.services.sync.orchestrator import remember, run_sync
-from app.services.sync.types import SYNC_OWNED_TASKS, KnownRuns, SyncBusy, SyncPlan
+from app.services.sync.detect import limit_plan, plan_sync, refresh_known, settle_plan
+from app.services.sync.orchestrator import DISABLED_REASON, refresh_disabled, remember, run_sync
+from app.services.sync.types import (
+    SYNC_OWNED_TASKS,
+    ComponentKind,
+    KnownRuns,
+    SyncBusy,
+    SyncPlan,
+)
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["SYNC_OWNED_TASKS", "SyncDaemon", "periodic_entries", "run_daemon"]
 
+# Every component kind (SYNC_DAEMON_KINDS default): the daemon syncs whatever is due.
+ALL_KINDS = frozenset(("spots", "ensemble", "map"))
 START_RETRY_SECONDS = 60
 MIN_WAIT_SECONDS = 1.0
 ERROR_WAIT_SECONDS = 60.0
@@ -302,17 +312,23 @@ class SyncDaemon:
         cached = state.read_known()  # e.g. written by `sync run` from the command line
         if cached is not None and cached.loaded_at > self.known.loaded_at:
             self.known = cached
-        plan = plan_sync(None, settings=self.settings, known=self.known)
+        kinds = self.settings.sync_daemon_kind_list
+        plan = limit_plan(
+            plan_sync(None, settings=self.settings, known=self.known), kinds, self.settings
+        )
+        if refresh_disabled(self.settings):
+            plan = replace(plan, due=False, reasons=(*plan.reasons, DISABLED_REASON))
         self.last_plan = plan
         state.write_known(self.known)
-        self._heartbeat(plan, None)
+        self._heartbeat(plan, "refreshes disabled" if refresh_disabled(self.settings) else None)
         if not plan.due:
             logger.debug("Sync check: not due (%s)", "; ".join(plan.reasons))
             return plan
         logger.info("Sync due: %s", "; ".join(plan.reasons))
         cpu0 = cpu_seconds()
         try:
-            result = run_sync(trigger="daemon", plan=plan, stop=self.stop)
+            only = cast("frozenset[ComponentKind]", kinds) if kinds != ALL_KINDS else None
+            result = run_sync(trigger="daemon", plan=plan, stop=self.stop, only=only)
         except SyncBusy as exc:
             release_connections()
             self._heartbeat(plan, f"busy: {exc}")
@@ -412,9 +428,9 @@ class SyncDaemon:
 
 
 def file_problems() -> list[dict[str, Any]]:
-    """Problems with the files this process reads and the API function does not ship (the
-    tide model's constants, data/tides/): data health there reports these from the
-    heartbeat. Cheap after the first success (the constants are cached)."""
+    """Problems with the files of data/ this process reads (the tide model's constants,
+    data/tides/): an API process without the file reports these from the heartbeat. Cheap
+    after the first success (the constants are cached)."""
     from app.services.tides.health import constants_problem
 
     try:

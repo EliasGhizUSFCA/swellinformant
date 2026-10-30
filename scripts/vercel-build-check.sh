@@ -19,13 +19,17 @@
 #    64.5.0, through npx). CLI 64.5.0 refuses `daemons` (DAEMONS_NOT_SUPPORTED): the script
 #    then builds again with `daemons` removed from the copy's vercel.json and checks the
 #    daemon's files instead. Vercel builds daemon images only in its own production builds.
-#    Off Linux x86_64 (macOS, ARM) the api's build command (`migrate --on-build`) is left
-#    out: the builder installs Linux x86_64 wheels that the local Python cannot import.
+#    Off Linux x86_64 (macOS, ARM) the Python step of the api's build command (`python -m
+#    app.cli migrate --on-build`) is left out: the builder installs Linux x86_64 wheels that
+#    the local Python cannot import. Its copy of data/ into backend/data still runs.
 # 4. Report every function in .vercel/output: runtime, files and size, counting the files a
 #    function maps in from outside its directory. Python: warn above 225 MiB (above it the
 #    Python builder leaves dependencies out of the bundle and installs them at cold start, an
 #    undocumented builder detail) and fail above 500 MiB (Vercel's limit for Python
-#    functions). Other runtimes: fail above 250 MiB.
+#    functions). Other runtimes: fail above 250 MiB. A Python function must hold the reference
+#    data the app reads (data/surf_spots/spots.json, data/tide_stations.json,
+#    data/tides/constants_eot20.json, data/observation_stations.json at its root, copied by
+#    the api's build command; app/core/data_files.py), or the check fails.
 # 5. Report whether the crons and the daemons from vercel.json are in .vercel/output/config.json.
 #
 # The check never migrates a database: the build runs with MIGRATE_ON_BUILD=off, which wins
@@ -109,7 +113,8 @@ JS
 
 cat >"$WORK/edit-config.cjs" <<'JS'
 // Edits the copy's vercel.json: "daemons" drops the daemons; "python-build-commands" drops
-// the build commands of the Python services. Prints what it removed.
+// the steps of the Python services' build commands that run Python (the other steps, such as
+// the api's copy of data/, stay). Prints what it removed.
 "use strict";
 const fs = require("node:fs");
 const [file, what] = process.argv.slice(2);
@@ -121,8 +126,11 @@ if (what === "daemons") {
 } else if (what === "python-build-commands") {
   for (const [name, service] of Object.entries(config.services ?? {})) {
     if (["fastapi", "flask", "django"].includes(service.framework) && service.buildCommand) {
-      removed.push(`${name}: ${service.buildCommand}`);
-      delete service.buildCommand;
+      const steps = service.buildCommand.split(" && ");
+      const kept = steps.filter((step) => !/^python3?\s/.test(step.trim()));
+      removed.push(...steps.filter((step) => !kept.includes(step)).map((step) => `${name}: ${step}`));
+      if (kept.length) service.buildCommand = kept.join(" && ");
+      else delete service.buildCommand;
     }
   }
 }
@@ -137,6 +145,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 const [project, vercelJsonPath, daemonsBuilt, cliVersion] = process.argv.slice(2);
 const MiB = 1024 * 1024;
+// The reference data a Python function (the api) reads from its root's data/: the api build
+// command copies the repository's data/ there (app/core/data_files.py).
+const PYTHON_DATA_FILES = [
+  "data/surf_spots/spots.json",
+  "data/tide_stations.json",
+  "data/tides/constants_eot20.json",
+  "data/observation_stations.json",
+];
 const output = path.join(project, ".vercel", "output");
 const problems = [];
 const warnings = [];
@@ -177,9 +193,11 @@ for (const fn of byReal.values()) {
   let bytes = 0;
   let files = 0;
   const groups = new Map();
+  const paths = new Set();
   const add = (dest, size) => {
     bytes += size;
     files += 1;
+    paths.add(dest.split(path.sep).join("/"));
     const parts = dest.split("/");
     const key = parts[0] === "_vendor" && parts.length > 2 ? `_vendor/${parts[1]}` : parts[0];
     groups.set(key, (groups.get(key) ?? 0) + size);
@@ -189,7 +207,7 @@ for (const fn of byReal.values()) {
     const st = fs.statSync(path.resolve(project, src), { throwIfNoEntry: false });
     if (st && st.isFile()) add(dest, st.size);
   }
-  functions.push({ ...fn, vc, bytes, files, groups });
+  functions.push({ ...fn, vc, bytes, files, groups, paths });
 }
 functions.sort((a, b) => b.bytes - a.bytes);
 
@@ -214,6 +232,15 @@ for (const fn of functions) {
   if (python) {
     const top = [...fn.groups.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
     console.log(`    largest parts: ${top.map(([k, v]) => `${k} ${mib(v)}`).join(", ")}`);
+    const data = [...fn.paths].filter((p) => p.startsWith("data/"));
+    const missing = PYTHON_DATA_FILES.filter((p) => !fn.paths.has(p));
+    const dataBytes = fn.groups.get("data") ?? 0;
+    if (missing.length) {
+      console.log(`    data/: ${data.length} files; MISSING ${missing.join(", ")}`);
+      problems.push(`${fn.names[0]} lacks ${missing.join(", ")} (the api build command copies data/)`);
+    } else {
+      console.log(`    data/: ${data.length} files, ${mib(dataBytes)} (${PYTHON_DATA_FILES.join(", ")} present)`);
+    }
   }
 }
 
@@ -289,10 +316,11 @@ else
   (cd "$SRC" && vercel_cli pull --yes --environment=preview) || setup_error "vercel pull failed (log in with 'npx vercel@$VERCEL_CLI_VERSION login')"
 fi
 # Outside Vercel's build image the Python builder installs Linux x86_64 wheels (its default
-# target), which this machine's Python cannot import on macOS or ARM: a Python build command
-# would fail here although it works on Vercel, so it is left out of the local build.
+# target), which this machine's Python cannot import on macOS or ARM: a Python step of a build
+# command would fail here although it works on Vercel, so it is left out of the local build
+# (the api's copy of data/ still runs).
 if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
-  say "⚠ $(uname -s) $(uname -m): the Python dependencies are Linux x86_64 wheels; skipping the build command: $(node "$WORK/edit-config.cjs" "$SRC/vercel.json" python-build-commands)"
+  say "⚠ $(uname -s) $(uname -m): the Python dependencies are Linux x86_64 wheels; skipping the build command's Python steps: $(node "$WORK/edit-config.cjs" "$SRC/vercel.json" python-build-commands)"
 fi
 
 # --- 3. the build ----------------------------------------------------------------------------

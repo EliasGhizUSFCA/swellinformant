@@ -3,7 +3,17 @@
 Each component maps measurable inputs to [0, 1]; the score is their weighted mean
 (weights renormalised over the components whose inputs exist) multiplied by three gates
 that stop flat, weak or blown-out conditions from scoring well. The weights are a reasoned
-starting point, NOT statistically calibrated values. See docs/SURF_SCORING.md.
+starting point, NOT statistically calibrated values, and may be overridden with
+SCORING_WEIGHTS_JSON (``weights.py``). See docs/SURF_SCORING.md.
+
+Algorithm 2.2.0 (scores equal 2.1.0's with the default weights):
+
+* every hour also stores its main ``favourable`` and ``unfavourable`` conditions, short
+  plain phrases from the component fits (``reasons.py``);
+* an onshore or cross-onshore wind is at best "workable" in the wind's favourability class
+  (a light onshore breeze below about 8.6 km/h was "favourable"); the score is unchanged;
+* the component weights come from SCORING_WEIGHTS_JSON when it is set; the stored version
+  then carries a tag of them (``weights.tagged_version``).
 
 Algorithm 2.1.0 (this module and ``wind.py``):
 
@@ -27,6 +37,7 @@ Algorithm 2.1.0 (this module and ``wind.py``):
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -42,22 +53,27 @@ from app.services.surf_quality.models import (
     SpotParams,
 )
 from app.services.surf_quality.nearshore import taper_transmission
+from app.services.surf_quality.reasons import GOOD_FIT, POOR_FIT, condition_reasons
+from app.services.surf_quality.weights import DEFAULT_WEIGHTS, tagged_version
 
 # 2.0.0: breaking heights from the linear_wave_v2 nearshore model (energy-flux
 # combination, directional spreading, shore normal); typical-to-sets ranges.
 # 2.1.0: continuous offshore-wind fit (wind.py), partition-weighted direction and period,
 # swell-window taper, flux-based consistency, gated tide, continuous spreading, stored
 # contributions.
-ALGORITHM_VERSION = "2.1.0"
+# 2.2.0: favourable / unfavourable conditions per hour, light onshore wind at best
+# "workable", configurable weights (SCORING_WEIGHTS_JSON); scores unchanged by default.
+ALGORITHM_VERSION = "2.2.0"
 
-WEIGHTS: dict[str, float] = {
-    "swell_direction": 0.20,
-    "swell_period": 0.20,
-    "wave_size": 0.20,
-    "wind": 0.30,
-    "tide": 0.05,
-    "consistency": 0.05,
-}
+# The default component weights (weights.DEFAULT_WEIGHTS, the 2.1.0 constants).
+WEIGHTS: dict[str, float] = dict(DEFAULT_WEIGHTS)
+
+
+def model_version(weights: Mapping[str, float] | None = None) -> str:
+    """The version stored with a score: ALGORITHM_VERSION, tagged when ``weights`` are not
+    the defaults (``2.2.0+w1a2b3c4d``, weights.tagged_version)."""
+    return tagged_version(ALGORITHM_VERSION, weights or DEFAULT_WEIGHTS)
+
 
 # Lower bound (inclusive) of each label. Documented; not calibrated against observations.
 LABEL_THRESHOLDS: list[tuple[int, QualityLabel]] = [
@@ -359,6 +375,7 @@ def evaluate(
     *,
     gust_scoring: bool = False,
     tide_detail: dict[str, Any] | None = None,
+    weights: Mapping[str, float] | None = None,
 ) -> QualityResult:
     """Score one hour. ``alternative_offshore_deg`` (sources disagree about which wind is
     offshore) only changes the explanation, which then names both wind relations when
@@ -366,8 +383,10 @@ def evaluate(
 
     ``gust_scoring`` is WIND_GUST_SCORING == "scored"; ``tide_detail`` describes the tide
     stage in ``sea.tide_stage`` (stage, rising, range_m, source) and is stored when the tide
-    is scored.
+    is scored. ``weights``: the component weights (``weights.effective_weights`` of
+    SCORING_WEIGHTS_JSON; None = the defaults).
     """
+    weight_of = DEFAULT_WEIGHTS if weights is None else weights
     breaking = estimate_breaking_height(sea, spot)
     fits = partition_fits(breaking, spot)
     direction_c = _weighted(fits, "direction_fit") if fits else None
@@ -390,17 +409,19 @@ def evaluate(
         "consistency": score_consistency(sea, breaking.flux),
     }
     components = {k: round(v, 3) for k, v in raw.items() if v is not None}
-    weights = {k: WEIGHTS[k] for k in components}
-    total_w = sum(weights.values())
-    used = {k: v / total_w for k, v in weights.items()} if total_w else {}
+    present = {k: weight_of[k] for k in components}
+    total_w = sum(present.values())
+    used = {k: v / total_w for k, v in present.items()} if total_w else {}
     base = sum(components[k] * used[k] for k in components)
 
     # Limiting-factor gates: a weighted mean alone lets clean wind compensate for flat,
     # short-period surf. Gates stop tiny, weak or blown-out conditions from scoring well.
+    # A component weighted 0 (SCORING_WEIGHTS_JSON) is out of the score, its gate included;
+    # wave_size always keeps a weight above 0 (weights.validate_weights).
     size_gate = _clamp(components["wave_size"] / 0.6)
-    period_fit = components.get("swell_period")
+    period_fit = components.get("swell_period") if used.get("swell_period") else None
     period_gate = 1.0 if period_fit is None else 0.5 + 0.5 * _clamp(period_fit / 0.5)
-    wind_c = components.get("wind")
+    wind_c = components.get("wind") if used.get("wind") else None
     wind_gate = 1.0 if wind_c is None else 0.5 + 0.5 * _clamp(wind_c / WIND_GATE_FULL_Q)
     score = int(round(100 * base * size_gate * period_gate * wind_gate))
     score = max(0, min(100, score))
@@ -431,6 +452,7 @@ def evaluate(
         sea.wind_speed_kmh, sea.wind_direction_deg, spot, alternative_offshore_deg
     )
     label = label_for_score(score)
+    driver = max(fits, key=lambda f: f.weight) if fits else None
     explanation = build_explanation(
         sea,
         spot,
@@ -439,9 +461,12 @@ def evaluate(
         relation,
         raw,
         alternative_relation=alternative,
-        driver=max(fits, key=lambda f: f.weight) if fits else None,
+        driver=driver,
         strength=None if wfit is None else wfit.strength,
         tide_not_scored=excluded if sea.tide_stage is not None and tide_c is None else None,
+    )
+    details["favourable"], details["unfavourable"] = hour_reasons(
+        sea, spot, breaking, raw, used, details["contributions"], gates, fits, wfit
     )
     return QualityResult(
         score=score,
@@ -451,6 +476,90 @@ def evaluate(
         wind_relation=relation,
         explanation=explanation,
         details=details,
+        model_version=model_version(weights),
+    )
+
+
+def named_partition(fits: list[PartitionFit], attr: str, *, good: bool) -> PartitionFit | None:
+    """The partition a direction or period phrase names (``attr`` "direction_fit" or
+    "period_fit"); None when no partition has that fit (the bulk sea is described then).
+
+    A favourable phrase names the heaviest partition whose own fit is good (at least
+    reasons.GOOD_FIT; one exists whenever the weighted fit is), else the one adding most to
+    the weighted fit (largest weight x fit). An unfavourable phrase names the heaviest
+    partition whose own fit is poor (below reasons.POOR_FIT), else the one costing the
+    weighted fit most (largest weight x (1 - fit)), whose fit is below 1: its period is
+    shorter than the ideal, its direction outside the optimal range.
+
+    The partition that drives the surf (the largest share) is not always the one: with
+    shares 0.37 / 0.34 / 0.29 a 16 s swell can drive the surf while a 6 s swell and a 5 s
+    wind sea make the weighted period fit poor, and the phrase must then name a short
+    period, not the 16 s one."""
+    known = [(f, v) for f in fits if (v := getattr(f, attr)) is not None]
+    if not known:
+        return None
+    if good:
+        clear = [(f, v) for f, v in known if v >= GOOD_FIT]
+        if clear:
+            return max(clear, key=lambda fv: fv[0].weight)[0]
+        return max(known, key=lambda fv: fv[0].weight * fv[1])[0]
+    clear = [(f, v) for f, v in known if v < POOR_FIT]
+    if clear:
+        return max(clear, key=lambda fv: fv[0].weight)[0]
+    return max(known, key=lambda fv: fv[0].weight * (1.0 - fv[1]))[0]
+
+
+def hour_reasons(
+    sea: SeaState,
+    spot: SpotParams,
+    breaking: BreakingEstimate,
+    raw: dict[str, float | None],
+    used: dict[str, float],
+    points_lost: dict[str, float],
+    gates: dict[str, float],
+    fits: list[PartitionFit],
+    wfit: windmod.WindFit | None,
+) -> tuple[list[str], list[str]]:
+    """The hour's main favourable and unfavourable conditions (reasons.condition_reasons).
+
+    Each swell phrase names the partition behind its claim (:func:`named_partition`; the
+    primary or bulk sea without partition fits), so "well-aligned secondary swell" or "period
+    too short for this reef (8 s)" describe the partition that made the fit good or poor;
+    the wind relation is the one against the offshore direction the wind fit used."""
+
+    def kind(part: PartitionFit | None) -> str:
+        return "swell" if part is None else PARTITION_WORDS.get(part.kind, "swell")
+
+    def period(part: PartitionFit | None) -> float | None:
+        return _bulk_period(sea) if part is None else part.period_s
+
+    aligned = named_partition(fits, "direction_fit", good=True)
+    misaligned = named_partition(fits, "direction_fit", good=False)
+    off_direction = _bulk_direction(sea) if misaligned is None else misaligned.direction_deg
+    blocked = (
+        off_direction is not None
+        and window_distance(off_direction, spot.swell_window_min, spot.swell_window_max) > 0
+    )
+    return condition_reasons(
+        raw,
+        used_weights=used,
+        points_lost=points_lost,
+        gates=gates,
+        swell_kind=kind(aligned),
+        misaligned_kind=kind(misaligned),
+        swell_period_s=period(named_partition(fits, "period_fit", good=True)),
+        short_period_s=period(named_partition(fits, "period_fit", good=False)),
+        swell_blocked=blocked,
+        break_type=spot.break_type,
+        face_min_ft=breaking.min_ft,
+        face_max_ft=breaking.max_ft,
+        face_mid_ft=breaking.mid_ft,
+        size_min_ft=spot.wave_height_min_ft,
+        size_max_ft=spot.wave_height_max_ft,
+        wind_relation="unknown" if wfit is None else wfit.relation,
+        wind_strength=None if wfit is None else wfit.strength,
+        wind_favourability=None if wfit is None else wfit.favourability,
+        wind_speed_kmh=sea.wind_speed_kmh,
     )
 
 

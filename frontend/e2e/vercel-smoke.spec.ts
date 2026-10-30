@@ -92,6 +92,7 @@ test.describe("local Vercel-style stack", () => {
 
     const index = (await getJson(request, "/api/map/fields")) as {
       available: boolean;
+      enabled?: boolean;
       run_key: string | null;
       valid_times: string[];
       message: string | null;
@@ -117,6 +118,11 @@ test.describe("local Vercel-style stack", () => {
       await expect.poll(async () => Number((await field.getAttribute("data-painted")) ?? 0), { message: "ocean pixels painted", timeout: 60_000 }).toBeGreaterThan(10_000);
       // The model-run label carries the publication the map shows (status-ui).
       await expect(page.getByTestId("map-lead-time")).toHaveAttribute("data-published-at", index.published_at!);
+    } else if (index.enabled === false) {
+      // MAP_FIELDS_ENABLED=false (the stack's default) is a choice, not an outage: no layer
+      // tabs and no "unavailable" notice (review r4-spec-R4-SPEC-2; it showed the notice before).
+      await expect(page.getByTestId("fields-off")).toBeVisible();
+      await expect(page.getByTestId("fields-notice")).toHaveCount(0);
     } else {
       await expect(page.getByTestId("fields-notice")).toBeVisible();
     }
@@ -221,6 +227,12 @@ test.describe("local Vercel-style stack", () => {
     expect(ok.status).toBe(200);
     expect(ok.headers.get("cache-control")).toContain("no-store");
     const body = (await ok.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["alerts_sent", "heartbeat_age_minutes", "problems", "status"]);
+    // "refresh": the daily cron also runs one forecast refresh check, the backstop for a
+    // scheduler that stopped calling /api/internal/refresh (backend/app/api/internal.py).
+    // "jobs" (review r1-spec-SPEC-2): the periodic jobs no daemon ran on time, run by the
+    // cron itself; the stack runs JOB_RUNNER=daemon, so it is the summary, never null.
+    expect(Object.keys(body).sort()).toEqual(["alerts_sent", "heartbeat_age_minutes", "jobs", "problems", "refresh", "status"]);
+    expect(typeof (body.refresh as { status?: unknown }).status).toBe("string");
+    expect(body.jobs).toEqual({ overdue: expect.any(Array), jobs: expect.any(Array), deferred: expect.any(Array) });
   });
 });

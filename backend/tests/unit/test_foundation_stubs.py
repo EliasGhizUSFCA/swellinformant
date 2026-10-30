@@ -43,6 +43,8 @@ def test_sync_core_signatures() -> None:
         ("now", KW, None),
         ("known", KW, None),
         ("force", KW, False),
+        # Swell 2.0: check only the component kinds a runner syncs (the refresh endpoint).
+        ("kinds", KW, None),
     ]
     assert params(orchestrator.run_sync) == [
         ("trigger", KW, EMPTY),
@@ -59,6 +61,10 @@ def test_sync_core_signatures() -> None:
         ("sync_run", KW, None),
         ("trigger", KW, "pipeline"),
         ("now", KW, None),
+        # Swell 2.0: also publish the run selection as a forecast version (design D7).
+        ("selection", KW, None),
+        # Swell 2.0: write the version marker (a sync writes it after its "match" stage).
+        ("marker", KW, None),
     ]
     assert params(daemon.run_daemon) == [
         ("stop", KW, None),

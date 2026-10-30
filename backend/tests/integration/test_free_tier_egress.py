@@ -107,6 +107,14 @@ from tests.sync_fixtures import MapWorld, install_synthetic_map
 
 pytestmark = pytest.mark.integration
 
+
+@pytest.fixture(autouse=True)
+def _prediction_archive_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The prediction archive is optional and off by default since Swell 2.0
+    (PREDICTION_ARCHIVE_ENABLED); these tests check what it archives, so it is on."""
+    monkeypatch.setattr(get_settings(), "prediction_archive_enabled", True)
+
+
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -544,7 +552,15 @@ def _reference_reads(m: pytest.MonkeyPatch) -> None:
         ),
     )
     m.setattr(registry.AirportDirectory, "__init__", reference_directory_init)
-    m.setattr(alerts, "_alert_candidates", reference_alert_candidates)
+    # The whole-row query in the order production decides alerts in (alerts.candidate_order):
+    # that order, not the columns read, decides which of two overlapping searches an alert is
+    # told from, so both runs must use it (with the database's row order the comparison
+    # failed intermittently).
+    m.setattr(
+        alerts,
+        "_alert_candidates",
+        lambda db, now: sorted(reference_alert_candidates(db, now), key=alerts.candidate_order),
+    )
     m.setattr(alerts, "_peak_prediction", reference_peak_prediction)
     m.setattr(alerts, "_model_runs_once", lambda db, run, memo: alerts._model_runs(db, run))
     m.setattr(delivery, "_search_status", reference_search_status)
@@ -676,6 +692,33 @@ def test_matching_flights_alerts_and_delivery_are_unchanged_by_their_narrow_read
     assert reference["stats"]["deliver"]["sent"] > 0
     assert reference["stats"]["flights"]["cache_hits"] > 0
     assert new == reference
+
+
+@pytest.mark.usefixtures("dataset", "frozen_clock")
+def test_alerts_do_not_depend_on_the_database_row_order(
+    db: Session, frozen_flights: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Root cause of the intermittent narrow-reads failure above: the candidate query has no
+    ORDER BY, and when two overlapping searches of one user surface the same swell the one
+    alert (keyed by user and event) was told from whichever match the database returned
+    first: a different window end and confidence in the email. The rows of a re-run land
+    elsewhere on disk and the reference query's plan differs, so the order (and the email)
+    changed between runs. Here the database answers the candidate rows in the opposite
+    order: the alerts must not change."""
+    from sqlalchemy.engine import Result
+
+    reference = _run_chain(db)
+    assert len(reference["notifications"]) >= 2
+    _reset_chain(db)
+    real_candidates, real_all = alerts._alert_candidates, Result.all
+
+    def reversed_rows(db: Session, now: datetime) -> Any:
+        with monkeypatch.context() as m:
+            m.setattr(Result, "all", lambda self: list(reversed(real_all(self))))
+            return real_candidates(db, now)
+
+    monkeypatch.setattr(alerts, "_alert_candidates", reversed_rows)
+    assert _run_chain(db) == reference
 
 
 @pytest.mark.usefixtures("dataset", "frozen_clock")

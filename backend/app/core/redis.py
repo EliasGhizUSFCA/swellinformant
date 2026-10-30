@@ -14,10 +14,12 @@ a blackholed address with a 1.5 s connect timeout and under 10 ms for a refused 
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import secrets
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -34,6 +36,23 @@ HEALTH_CHECK_INTERVAL_SECONDS = 30
 
 _client: redis.Redis | None = None
 _bytes_client: redis.Redis | None = None
+
+
+def deployment_scope(environ: Mapping[str, str] | None = None) -> str:
+    """The part a deployment adds to its own Redis key namespaces: ``""`` for production
+    (VERCEL_ENV production or unset: the production functions, the sync daemon, the GitHub
+    runner and the local stacks share their keys) and ``:<env>:<digest of the deployment>``
+    for a preview or ``vercel dev`` deployment (VERCEL_DEPLOYMENT_ID, else VERCEL_URL), whose
+    code, database or credentials may differ, so it never overwrites production's state
+    when both use one Redis (app.services.public_cache, the provider health, Windy's run
+    state)."""
+    env = os.environ if environ is None else environ
+    target = (env.get("VERCEL_ENV") or "production").strip().lower()
+    if target == "production":
+        return ""
+    deployment = env.get("VERCEL_DEPLOYMENT_ID") or env.get("VERCEL_URL") or "local"
+    digest = hashlib.sha256(deployment.encode()).hexdigest()[:12]
+    return f":{target}:{digest}"
 
 
 def retry_policy() -> Retry:

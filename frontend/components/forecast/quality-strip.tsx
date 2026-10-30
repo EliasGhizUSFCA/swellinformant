@@ -3,6 +3,7 @@
 import { memo, useMemo } from "react";
 
 import { QUALITY_H, RowBackground, TimelineRow, type RowProps } from "@/components/forecast/timeline-header";
+import { bestWindows } from "@/lib/best-windows";
 import { asQuality, QUALITY_COLORS, QUALITY_LABELS, QUALITY_SHORT, QUALITY_TEXT } from "@/lib/quality";
 import { qualityRuns } from "@/lib/timeline";
 
@@ -12,6 +13,9 @@ const BAR_H = 22;
 // would make a night "Exceptional" read lighter than a daylight "Poor") and are drawn as an
 // inset, shorter bar over the night band instead.
 const NIGHT_INSET = 5;
+// The best-window bracket, in the strip's bottom margin (under the bars).
+const BRACKET_TOP = BAR_Y + BAR_H + 1;
+const BRACKET_BOTTOM = QUALITY_H - 1.5;
 
 /** Rough text width at 11px Inter semibold (to decide whether a label fits). */
 const textWidth = (s: string) => s.length * 6.4 + 8;
@@ -22,10 +26,12 @@ const textWidth = (s: string) => s.length * 6.4 + 8;
  * (the full name, or its short form in narrow runs), so the meaning never rests on colour
  * alone. Night steps keep their colour and are drawn as a shorter, inset bar (never faded,
  * which would break the ramp's order). The rating is the API's spot-specific score, never
- * derived from wave height here.
+ * derived from wave height here. A bracket under the bars marks each best window: consecutive
+ * daylight steps the API rated Good or better (lib/best-windows).
  */
 export const QualityStrip = memo(function QualityStrip({ model, scale, width }: RowProps) {
   const runs = useMemo(() => qualityRuns(model.steps), [model]);
+  const windows = useMemo(() => bestWindows(model.steps), [model]);
   return (
     <TimelineRow
       testId="quality-strip"
@@ -78,6 +84,25 @@ export const QualityStrip = memo(function QualityStrip({ model, scale, width }: 
             >
               {text}
             </text>
+          );
+        })}
+        {windows.map((w) => {
+          const x0 = scale(w.from) + 1;
+          const x1 = Math.max(x0 + 2, scale(w.to) - 1);
+          return (
+            <path
+              key={w.first}
+              className="pointer-events-none"
+              d={`M${x0},${BRACKET_TOP}V${BRACKET_BOTTOM}H${x1}V${BRACKET_TOP}`}
+              fill="none"
+              stroke="var(--ink)"
+              strokeWidth={1.5}
+              strokeLinejoin="round"
+              data-best-window={w.peak}
+              data-first={w.first}
+              data-last={w.last}
+              data-testid="best-window"
+            />
           );
         })}
       </svg>

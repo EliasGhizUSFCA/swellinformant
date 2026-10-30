@@ -11,7 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     accuracy,
+    admin,
     auth,
+    forecasts,
     internal,
     map_fields,
     notifications,
@@ -85,9 +87,11 @@ def create_app() -> FastAPI:
         notifications,
         webhooks,
         accuracy,
+        admin,
         map_fields,
         tides,
         timeline,
+        forecasts,
         internal,
     ):
         app.include_router(module.router)

@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import functools
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from app.services.forecasts.fields import EncodedField
@@ -55,6 +57,30 @@ FORECAST_FIELDS = (
     "sea_level_m",
 )
 
+# The two independent components of a spot forecast source (design D6): each has its own
+# model run, availability time and detection state, and a refresh fetches only the due ones.
+ATMOSPHERE = "atmosphere"
+WAVE = "wave"
+COMPONENTS: frozenset[str] = frozenset({ATMOSPHERE, WAVE})
+_ATMOSPHERE_FIELDS = ("wind_speed_kmh", "wind_direction_deg", "wind_gust_kmh", "pressure_msl_hpa")
+# Which FORECAST_FIELDS each component provides; together they partition FORECAST_FIELDS
+# (a unit test checks it). The wave component holds the sea state, the swell partitions,
+# the wind sea and the sea level when a provider has one.
+COMPONENT_FIELDS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        ATMOSPHERE: _ATMOSPHERE_FIELDS,
+        WAVE: tuple(f for f in FORECAST_FIELDS if f not in _ATMOSPHERE_FIELDS),
+    }
+)
+
+
+def component_of(field_name: str) -> str:
+    """The component (``"atmosphere"`` or ``"wave"``) a FORECAST_FIELDS name belongs to."""
+    for component, names in COMPONENT_FIELDS.items():
+        if field_name in names:
+            return component
+    raise KeyError(f"{field_name!r} is not a forecast field")
+
 
 @dataclass(frozen=True)
 class SpotPoint:
@@ -84,6 +110,9 @@ class ModelRunRef:
     init_time: datetime
     # When the provider published the run, if it says (e.g. Open-Meteo meta.json).
     available_at: datetime | None = None
+    # The component this model run feeds ("wave" | "atmosphere"); None = not said (older
+    # providers, or a model that feeds both).
+    component: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +124,25 @@ class RunInfo:
     metadata_source: str = "provider"
     # Every model run behind the data, stored as run.details["model_runs"].
     model_runs: tuple[ModelRunRef, ...] = ()
+    # The run key of each component ("wave", "atmosphere") built from its own model domains;
+    # empty = the provider has the whole-source run_key only.
+    component_keys: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    # The run time is an estimate, not a provider field (Windy: no model-run field; a changed
+    # data fingerprint marks a new run, labelled "estimated" wherever it is shown).
+    estimated: bool = False
+    # The data come from a TESTING key (Windy's trial API): never stored or published.
+    testing: bool = False
+
+
+@dataclass(frozen=True)
+class PartlyReadRun(RunInfo):
+    """A run of which some components could not be read (``current_run(..., partial=True)``
+    of Open-Meteo, whose meta.json host timed out, or Windy, whose sentinel request failed):
+    ``unread`` holds why, by component; ``component_keys`` and ``model_runs`` name the
+    readable components only (design D6: one unreadable component does not hold a new run
+    of the other back)."""
+
+    unread: Mapping[str, Exception] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass
@@ -137,6 +185,9 @@ class FetchResult:
     fields: list[EncodedField] = field(default_factory=list)
     field_warnings: list[str] = field(default_factory=list)
     stats: FetchStats | None = None
+    # The components the records hold (a component-aware provider that was asked for one
+    # reports just that one; the others always fetch both).
+    components: frozenset[str] = COMPONENTS
 
 
 @dataclass(frozen=True)
@@ -166,7 +217,26 @@ class ForecastProvider(ABC):
         """Identify the newest upstream model run available (cheap metadata call)."""
 
     @abstractmethod
-    def fetch(self, spots: list[SpotPoint], run: RunInfo) -> FetchResult: ...
+    def fetch(
+        self,
+        spots: list[SpotPoint],
+        run: RunInfo,
+        components: frozenset[str] | None = None,
+    ) -> FetchResult:
+        """Fetch ``run`` for ``spots``. ``components``: the components wanted ("wave",
+        "atmosphere"); None = all. A provider that cannot fetch them separately ignores it
+        and reports what it fetched in :attr:`FetchResult.components`."""
+
+    def horizon_end(self, component: str, init: datetime, now: datetime) -> datetime | None:
+        """The last valid time a fetch made at ``now`` of ``component``'s run initialised at
+        ``init`` reaches (an upper bound; None = unknown). Default: FORECAST_DAYS after the
+        run, as the Windy and NOAA adapters cut it. A refresh fetches a carried component
+        again, from the same run, when the published forecast would otherwise end well
+        before this (ingestion.refresh_source): a component-only refresh never shortens the
+        rolling horizon."""
+        from app.core.config import get_settings
+
+        return init + timedelta(days=get_settings().forecast_days)
 
 
 @functools.cache

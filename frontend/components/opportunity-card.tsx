@@ -1,20 +1,24 @@
 import { ArrowRight, CalendarDays, Plane } from "lucide-react";
 import Link from "next/link";
 
-import { ConfidenceBadge, LocalConfidence } from "@/components/confidence";
+import { ConfidenceBadge } from "@/components/confidence";
+import { AttributionLinks, mergeAttributionLinks } from "@/components/forecast-provenance";
 import { DemoBadge, MatchStatusBadge, QualityBadge, ScoreRing } from "@/components/quality";
-import { StaleBadge } from "@/components/stale-banner";
+import { StaleBadge, StaleLine } from "@/components/stale-banner";
+import { freshnessOf, freshnessTitle } from "@/lib/forecast-fields";
 import { formatCalendarDate, formatMoney, formatRange, heightRange, leadLabel, type Units } from "@/lib/format";
 import type { MatchSummary } from "@/types/api";
 
 /**
  * A matched trip: overall match, our breaking-wave estimate and rating at the peak, the surf
  * window and the best flight, with the swell's forecast confidence from the API ("Not
- * assessed yet" when it has none), confidence at the break when that is lower, and an "Out of
- * date" tag when the forecast run behind the match is stale.
+ * assessed yet" when it has none), and an "Out of date" tag when the forecast run behind the
+ * match is stale or the published version marks its spot stale (`freshness`, with the
+ * spot's last update; spec 14).
  */
 export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; units?: Units }) {
   const tz = match.spot.timezone;
+  const fresh = freshnessOf(match);
   return (
     <Link
       href={`/opportunities/${match.id}`}
@@ -46,6 +50,7 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
             <span className="flex flex-wrap items-center gap-x-1.5 font-medium text-ink">
               <Plane className="size-3.5 text-ocean" />
               {match.origin_iata} → {match.destination_iata} · {formatMoney(match.best_price, match.currency)}
+              {match.best_offer_expired && <span className="font-normal text-amber-700">(quote expired)</span>}
               <span className="font-normal text-muted-foreground">
                 · arrive {formatCalendarDate(match.recommended_arrival_date)}, leave {formatCalendarDate(match.recommended_departure_date)}
               </span>
@@ -54,11 +59,14 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
             <span>{match.status_reason ?? "No eligible flight found yet."}</span>
           )}
         </div>
+        <StaleLine freshness={fresh} className="mt-2" data-testid="opportunity-card-stale" />
         <div className="mt-2 flex items-center justify-between gap-2">
           <span className="flex flex-wrap items-center gap-1.5">
             <ConfidenceBadge value={match.forecast_confidence_class} />
-            <LocalConfidence compact value={match.local_confidence_class} forecastValue={match.forecast_confidence_class} reason={match.local_confidence_reason} />
-            <StaleBadge stale={match.stale} />
+            <StaleBadge
+              stale={match.stale || fresh?.stale}
+              title={match.stale ? undefined : freshnessTitle(fresh)}
+            />
           </span>
           <span className="flex items-center gap-1 text-xs font-medium text-ocean opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
             Details <ArrowRight className="size-3.5" />
@@ -67,4 +75,23 @@ export function OpportunityCard({ match, units = "ft" }: { match: MatchSummary; 
       </div>
     </Link>
   );
+}
+
+/** The data credit under a list of trips: each trip shows values derived from its swell's
+ * forecast (our breaking height, rating and surf window), so the sources' credit and licence
+ * links go with the list (Open-Meteo: "Weather data by Open-Meteo.com", on paid plans too;
+ * review r3-frontend-N4). Nothing when no trip's source asks for one (the demo source). */
+export function TripCredits({
+  matches,
+  except,
+  className,
+}: {
+  matches: readonly MatchSummary[] | null | undefined;
+  /** Trips whose credit is already shown above on the page: their links are not repeated. */
+  except?: readonly MatchSummary[] | null;
+  className?: string;
+}) {
+  const shown = new Set(mergeAttributionLinks(except).map((l) => `${l.label}|${l.href}`));
+  const links = mergeAttributionLinks(matches).filter((l) => !shown.has(`${l.label}|${l.href}`));
+  return <AttributionLinks links={links} className={className ?? "mt-3"} />;
 }

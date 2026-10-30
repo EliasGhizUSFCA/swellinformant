@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { Toaster } from "sonner";
 
+import { ForecastVersionProvider } from "@/hooks/use-forecast-version";
 import { ApiError } from "@/lib/api";
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -21,7 +22,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
   );
   return (
     <QueryClientProvider client={client}>
-      {children}
+      {/* Open pages follow new forecast versions without a reload (hooks/use-forecast-version.ts). */}
+      <ForecastVersionProvider>{children}</ForecastVersionProvider>
       <Toaster position="top-right" richColors closeButton />
     </QueryClientProvider>
   );

@@ -15,12 +15,12 @@ const STEPS = [
   {
     icon: Radar,
     title: "We watch 50 breaks around the clock",
-    body: "NOAA GFS and ECMWF wind and wave forecasts are scored for every break at each forecast time step, by background workers.",
+    body: "Wind and wave forecasts are scored for every break at each forecast time step, and refreshed as soon as a new model run is published.",
   },
   {
     icon: Plane,
     title: "A swell lines up, we price the trip",
-    body: "When a qualifying swell is ~5–10 days out we search flights that land before it and leave after it.",
+    body: "When a qualifying swell falls inside your alert lead time (2–10 days out by default, swells 3–7 days ahead first) we search flights that land before it and leave after it.",
   },
   {
     icon: BellRing,
@@ -104,8 +104,8 @@ export default function LandingPage() {
               </div>
               <ForecastHorizon />
               <div>
-                <dt className="font-display text-2xl font-semibold">5–10 days</dt>
-                <dd className="text-xs text-white/65">alert lead time</dd>
+                <dt className="font-display text-2xl font-semibold">2–10 days</dt>
+                <dd className="text-xs text-white/65">default alert lead time</dd>
               </div>
             </dl>
           </div>

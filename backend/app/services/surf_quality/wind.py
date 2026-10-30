@@ -1,4 +1,4 @@
-"""Offshore wind physics and the wind fit of the quality score (algorithm 2.1.0).
+"""Offshore wind physics and the wind fit of the quality score (algorithm 2.2.0).
 
 Conventions (the same everywhere in the app):
 
@@ -28,7 +28,12 @@ The wind fit, continuous in speed and direction, with no floor:
     Q_strong= 1 / (1 + (max(0, V_off - tolerance) / soft)^2)   strong offshore
     Q       = Q_chop * Q_strong
 
-Calm and light offshore wind score 1. Spot shelter scales the wind the fit uses
+Calm and light offshore wind score 1. The favourability class follows Q (favourable from
+0.75, workable from 0.4), except that an onshore or cross-onshore wind above the glassy limit
+is at best "workable" (2.2.0): a light onshore breeze below about 8.6 km/h keeps Q >= 0.75,
+but light onshore wind is often marginal for surf (spec 19), so it is no longer called
+favourable. The cap changes the class only, never Q or the score. Spot shelter scales the
+wind the fit uses
 (``V`` -> ``(1 - s(theta)) V``) and a researched tolerance replaces the default; the reported
 components (``WindFit.v_offshore_kmh``, ``v_cross_kmh``) stay those of the forecast wind.
 Every number in :class:`WindParams` is a HEURISTIC default (not fitted to observations: none
@@ -63,6 +68,9 @@ MODERATE_BELOW_KMH = 29.0
 # Favourability classes of the wind fit (heuristic; the cut-offs the explanation text uses).
 FAVOURABLE_MIN_Q = 0.75
 WORKABLE_MIN_Q = 0.4
+# Relations whose wind has a clear onshore component (more than 105 deg from straight
+# offshore): their favourability is at best "workable" (2.2.0, see the module docstring).
+ONSHORE_RELATIONS = frozenset({"cross-onshore", "onshore"})
 # Relation sectors: psi = the angle between the wind and straight offshore, arccos(V_off / V).
 # Upper bounds (inclusive), symmetric about cross-shore (90 deg): offshore up to 45,
 # cross-offshore up to 75, cross-shore up to 105, cross-onshore up to 135, onshore beyond
@@ -157,6 +165,12 @@ class WindFit:
     gust_used: bool
     shelter_factor: float
     params: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # The favourability Q alone would give was "favourable" but the wind is onshore or
+    # cross-onshore, so it is "workable" (2.2.0).
+    onshore_capped: bool = False
+    # The wind relation against the offshore direction that gave Q (the profile's, unless a
+    # further wave face of ``WindProfile.extra_offshore_deg`` suits the wind better).
+    relation: str = "unknown"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -167,6 +181,7 @@ class WindFit:
             "v_cross_kmh": None if self.v_cross_kmh is None else round(self.v_cross_kmh, 1),
             "strength": self.strength,
             "favourability": self.favourability,
+            "onshore_capped": self.onshore_capped,
             "gust_used": self.gust_used,
             "params": self.params,
         }
@@ -232,10 +247,11 @@ def wind_strength(speed_kmh: float) -> WindStrength:
     return "strong"
 
 
-def wind_favourability(q: float) -> WindFavourability:
-    """Heuristic class of the wind fit: favourable >= 0.75, workable >= 0.4."""
+def wind_favourability(q: float, relation: str | None = None) -> WindFavourability:
+    """Heuristic class of the wind fit: favourable >= 0.75, workable >= 0.4, otherwise
+    unfavourable; an onshore or cross-onshore ``relation`` is at best workable."""
     if q >= FAVOURABLE_MIN_Q:
-        return "favourable"
+        return "workable" if relation in ONSHORE_RELATIONS else "favourable"
     if q >= WORKABLE_MIN_Q:
         return "workable"
     return "unfavourable"
@@ -339,6 +355,9 @@ def wind_fit(
             "value": params.gust_weight,
             "provenance": PARAM_PROVENANCE["gust_weight"],
         }
+    # The relation against the offshore direction that gave Q (a break with several wave
+    # faces: the face the wind suits best), for the onshore cap of the class.
+    relation = wind_relation(speed_kmh, from_deg, used_offshore)
     if s > 0.0 and profile is not None:
         detail["shelter_factor"] = {
             # The direction of the sheltered sector comes from research; its strength is a
@@ -352,10 +371,12 @@ def wind_fit(
         v_offshore_kmh=v_off,
         v_cross_kmh=v_cross,
         strength=wind_strength(speed_kmh),
-        favourability=wind_favourability(q),
+        favourability=wind_favourability(q, relation),
         gust_used=gust_kmh is not None,
         shelter_factor=s,
         params=detail,
+        onshore_capped=wind_favourability(q) != wind_favourability(q, relation),
+        relation=relation,
     )
 
 

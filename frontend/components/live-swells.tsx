@@ -5,8 +5,11 @@ import Link from "next/link";
 import { EventCard } from "@/components/event-card";
 import { AttributionLinks, mergeAttributionLinks, useNowMs } from "@/components/forecast-provenance";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useEvents, useMapConditions, useSystemStatus } from "@/hooks/queries";
+import { useEvents, useMapConditions, useMe, useSystemStatus } from "@/hooks/queries";
 import { modelRunText } from "@/lib/confidence";
+import { currentFirst } from "@/lib/forecast-fields";
+import type { Units } from "@/lib/format";
+import { useHeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { MapSnapshot, SwellEvent, SystemStatus } from "@/types/api";
 
@@ -40,8 +43,12 @@ function freshnessText(f: ForecastFreshness): string {
 
 /** Upcoming swell events from the forecast (public), shown on the landing page. */
 export function LiveSwells() {
-  const { data, isLoading, isError } = useEvents(4, 57);
+  // A failed background re-read keeps the cards: the notice is for a first load that failed.
+  const { data, isLoading, isLoadingError: isError } = useEvents(4, 57);
   const { data: status } = useSystemStatus();
+  // The site-wide height unit (this browser's ft / m choice, else the account's, else feet).
+  const { data: user } = useMe();
+  const [units] = useHeightUnit((user?.profile.units as Units | undefined) ?? "ft");
   // The landing page has no demo ribbon: never call synthetic forecasts real, and never
   // call model output "live".
   const now = useNowMs();
@@ -75,8 +82,9 @@ export function LiveSwells() {
       {data && data.length > 0 && (
         <>
           <div className="grid gap-3 sm:grid-cols-2">
-            {data.map((e) => (
-              <EventCard key={e.id} event={e} dark />
+            {/* A stale spot's swell is listed after the current ones. */}
+            {currentFirst(data).map((e) => (
+              <EventCard key={e.id} event={e} units={units} dark />
             ))}
           </div>
           {/* The cards show these sources' model swell and wind: credited next to them. */}
