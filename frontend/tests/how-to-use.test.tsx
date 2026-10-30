@@ -2,7 +2,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { QUALITY_THRESHOLDS } from "@/lib/quality";
+import { LAYERS } from "@/lib/map-layers";
+import { MATCH_STATUS, QUALITY_THRESHOLDS, WIND_RELATION_LABEL } from "@/lib/quality";
+import { WIZARD_STEPS } from "@/lib/validation";
 
 // The "How to use" tab (app/how-to-use) and its nav entry (components/layout/app-shell.tsx).
 // SYNTHETIC test data: an invented account; nothing here describes a real user.
@@ -184,6 +186,16 @@ describe("the How to use page", () => {
       "below 4.0/10",
     ]);
     expect(rows.map((r) => within(r).getByRole("rowheader").textContent)).toEqual(["Exceptional", "Excellent", "Very Good", "Good", "Fair", "Poor"]);
+  });
+
+  it("names the wizard's steps, the map's layers and the wind classes as the app does", () => {
+    render(<HowToUseGuide />);
+    const text = (name: string) => screen.getByRole("region", { name }).textContent ?? "";
+    // A renamed step, layer or class fails here: the guide is updated with it.
+    for (const s of WIZARD_STEPS) expect(text("Save a search")).toContain(`${s.title}:`);
+    for (const l of LAYERS) expect(text("Read the surf map")).toContain(l.label);
+    for (const label of Object.values(WIND_RELATION_LABEL).filter((l) => l !== "Unknown")) expect(text("Ratings and confidence")).toContain(label);
+    for (const { label } of Object.values(MATCH_STATUS)) expect(text("How matching works")).toContain(label);
   });
 
   it("links only to pages that exist in the app", () => {
