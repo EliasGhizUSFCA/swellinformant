@@ -31,7 +31,7 @@ flight searches.
 | forecast refresh | `GET\|POST /api/internal/refresh` with `Authorization: Bearer $CRON_SECRET`: a free metadata check of the spot model runs and, when a new wave or wind run is servable, a spot-only refresh (fetch, score, publish a new forecast version, detection, matching, flights, alerts). It also runs the API's pending "Re-check flights" and "match my search" requests and a due email retry | the `api` service; **called every 5 minutes by a scheduler you set up in step 7b** (Upstash QStash on Hobby, a Vercel Cron entry on Pro) |
 | routing | `/api/(.*)` goes to `api`, everything else to `web` (vercel.json `rewrites`) | Vercel's router; Next.js adds no `/api` rewrite on Vercel (`API_ROUTING=platform`) |
 | `sync` daemon (optional) | `python -m app.cli sync daemon` with `SYNC_DAEMON_KINDS=map`: refreshes only the optional GRIB map layers (the wave and wind colour fields of the map). Without it the map overlay ages and is labelled stale; the spot forecasts, alerts and flight searches keep running through the refresh endpoint and the daily cron | the repo-root `Containerfile`, 1 instance in `iad1`, 2 GiB / 1 vCPU, within Hobby's 5 Active CPU-hours a month; after `SIGTERM` it finishes its current sync stage, for up to 600 s (`terminationGracePeriodSeconds`) |
-| daily cron | Vercel Cron, `GET /api/internal/cron/daily` at 07:23 UTC with `Authorization: Bearer $CRON_SECRET`: the data-health check (emails admins when the data, the scheduler or the daemon is stale), then the periodic jobs no daemon ran on time (cleanup, matching housekeeping, tides, alerts, delivery, staleness check; 150 s budget), then one refresh check as a backstop | vercel.json `crons` |
+| daily cron | Vercel Cron, `GET /api/internal/cron/daily` at 07:23 UTC with `Authorization: Bearer $CRON_SECRET`: the data-health check (emails admins when the data, the scheduler or the daemon is stale), then the periodic jobs no daemon ran on time (cleanup, matching housekeeping, tides, alerts, delivery, staleness check; 150 s budget; the tides need `data/`, which the function lacks: section 4, "Except the tides"), then one refresh check as a backstop | vercel.json `crons` |
 | database | Neon Postgres (Vercel Marketplace), Free plan now | `DATABASE_URL` (pooled, the API and the refresh) and `DATABASE_URL_UNPOOLED` (direct, the daemon and migrations) |
 | Redis | Upstash Redis (Vercel Marketplace), Free plan now | `KV_URL` (the app reads it when `REDIS_URL` is unset) |
 | migrations and seed | the api service's build command, `python -m app.cli migrate --on-build`: with `MIGRATE_ON_BUILD=production`, on production builds only, it migrates and then seeds the reference data as `init-db` does (the 50 spots, airports, the tide catalog; idempotent), so a deployment without the daemon has its spots; the daemon, if you keep it, also runs `init-db` at every start | vercel.json `services.api.buildCommand` |
@@ -296,7 +296,8 @@ run in the API function, called every 5 minutes by the scheduler of step 7b; the
 sync daemon only refreshes the GRIB map layers (`SYNC_DAEMON_KINDS=map`) within Hobby's 5
 Active CPU-hours a month. Without the daemon the refresh endpoint also runs the API's
 "Re-check flights" and "match my search" requests and due email retries, and the daily cron
-runs the periodic jobs (cleanup, matching housekeeping, tides, alerts, delivery); only the
+runs the periodic jobs (cleanup, matching housekeeping, tides, alerts, delivery; not the
+tides in the function, which has no `data/`: see "Except the tides" in section 4); only the
 map overlay ages (it is then labelled stale).
 **Without the daemon** (you scale it to 0, or never deploy it), also set
 `MAP_FIELDS_ENABLED=false`: the map then shows the spot markers only (a "Spot forecasts only"
@@ -541,7 +542,16 @@ silent or (when the daemon is meant to refresh the map layers) its heartbeat is 
 it runs every periodic job whose last run is older than its own interval (maintenance
 cleanup, the matching housekeeping, tide acquisition, alerts, delivery, the staleness check;
 within 150 s, answer key `jobs`), so these run daily with no daemon, and last one refresh
-check (answer key `refresh`), the backstop for a scheduler that stopped calling. Try it by
+check (answer key `refresh`), the backstop for a scheduler that stopped calling.
+**Except the tides:** tide acquisition reads the tide catalog and the EOT20 constants from
+the repository's `data/` (`data/tide_stations.json`, `data/tides/`), outside the api
+service's root `backend/`, so the API function does not have them. In the local Vercel-style
+stack, whose api image has no `data/` as the function, the cron's `tides.acquire` failed with
+`FileNotFoundError: tide_stations.json not found` (2026-10-30, daemon stopped); the other
+jobs succeeded. Without the daemon, run `python -m app.cli tides acquire` from a checkout
+(with `DATABASE_URL_UNPOOLED`, as `init-db` in step 6) every few days, or keep the daemon,
+which runs it daily: otherwise data health reports `job_failed:tides.acquire` and, once the
+stored predictions run out, `tides_stale` (the spot pages then show no tide row). Try it by
 hand:
 
 ```bash
