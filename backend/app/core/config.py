@@ -245,6 +245,9 @@ class Settings(BaseSettings):
     # seeded spot in one request per model, fewer round trips).
     forecast_batch_size: int = Field(default=50, ge=1, le=50)
     forecast_http_timeout_seconds: float = 30.0
+    # Read by no code since 2.0, kept so old env files load: Windy's daily request cap is
+    # WINDY_DAILY_REQUEST_LIMIT (every attempt counts) and Open-Meteo has its own weighted
+    # budgets, OPEN_METEO_CALLS_PER_* below.
     forecast_daily_request_quota: int = 5000
     open_meteo_api_key: str | None = None
     # Deprecated aliases, read only by the single-model Open-Meteo adapter: when set
