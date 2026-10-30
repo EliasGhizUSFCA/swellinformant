@@ -315,10 +315,10 @@ constants; the credentials are used only by that script, never by the running ap
 | Variables | Waves, swell and wind sea (height, period, direction; e.g. the wind-sea keys `wwaves_height-surface`, `wwaves_period-surface`, `wwaves_direction-surface`), wind and gusts |
 | Docs | <https://api.windy.com/point-forecast/docs> |
 | Account / key | Paid key, `WINDY_API_KEY` |
-| Free tier / limits | None used by this app (paid plan, see Cost) |
+| Free tier / limits | None used by this app (paid plan, see Cost); the app's own budget is `FORECAST_DAILY_REQUEST_QUOTA` HTTP requests per UTC day (two per spot per run, retries included) |
 | Terms | "Redistribution of any part of the API or the included data to any third party is forbidden." ([terms](https://account.windy.com/agreements/windy-api-map-and-point-forecast-terms-of-use)); the same terms forbid storing the data and building derived databases. This app stores runs, blends them and archives predictions, so the token `windy` is refused unless `WINDY_TERMS_ACKNOWLEDGED=true`, which should be set only with a written licence that allows this use |
 | Cost | 990 EUR per year for the professional plan ([pricing](https://api.windy.com/point-forecast/pricing)) |
-| Env vars | `WINDY_API_KEY`, `WINDY_TERMS_ACKNOWLEDGED` |
+| Env vars | `WINDY_API_KEY`, `WINDY_TERMS_ACKNOWLEDGED`, `FORECAST_DAILY_REQUEST_QUOTA` |
 | Setup | Only with a written licence that allows storing and deriving: set `WINDY_API_KEY`, `WINDY_TERMS_ACKNOWLEDGED=true` and add `windy` to `FORECAST_PROVIDERS` |
 | Test | Mock only: `pytest tests/unit/test_forecast_providers.py -k windy` |
 
