@@ -177,8 +177,25 @@ def migrated_db() -> Iterator[None]:
     yield
 
 
+def _forget_process_state() -> None:
+    """Forget what this process remembers about Redis and the published version between
+    tests, as a new serverless instance starts: the forecast versions' Redis fail-open
+    window (after a Redis error the version marker is neither read nor written for 30 s,
+    whatever client a later test builds), the version endpoint's 5 s memo and the public
+    snapshot memo. Without this a test that ran within 30 s of one that made Redis fail
+    (tests/integration/test_jobs_redis_down.py) published versions whose marker was never
+    written, so the public pages kept serving the version they saw first."""
+    from app.services import public_cache
+    from app.services.forecasts import serving, versions
+
+    versions.reset_fail_open()
+    serving.clear_memo()
+    public_cache.clear_memo()
+
+
 @pytest.fixture
 def db(migrated_db: None) -> Iterator[Session]:
+    _forget_process_state()
     get_redis().flushdb()
     session = SessionLocal()
     try:
@@ -192,6 +209,7 @@ def db(migrated_db: None) -> Iterator[Session]:
                 conn.execute(text(f"TRUNCATE {', '.join(dirty)} RESTART IDENTITY CASCADE"))
             conn.execute(text("UPDATE surf_spots SET is_active = true, calibration = NULL"))
         get_redis().flushdb()
+        _forget_process_state()
         outbox = Path(get_settings().outbox_dir) / "outbox.jsonl"
         if outbox.exists():
             outbox.unlink()

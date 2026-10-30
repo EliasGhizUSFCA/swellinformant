@@ -340,12 +340,23 @@ def test_a_fields_only_run_never_changes_spot_forecasts(
     assert stages["predictions"]["runs"] == 0  # the fields run is never scored
     after = _snapshot(db, app_client)
 
-    # Re-running detection alone bumps each event's version and last_updated_at; those
-    # fields (and only those) are bookkeeping and ignored. Everything else is identical.
+    # Re-running detection alone bumps each event's version and last_updated_at, and every
+    # run of the stages publishes the run selection again as a new forecast version (Swell
+    # 2.0: each publication is a version, so the version_id every page is served from moves
+    # one up); those fields (and only those) are bookkeeping and ignored. Everything else
+    # is identical.
     bookkeeping = {_generic(path) for path, _, _ in _differences(first, before)}
-    assert {path.rsplit(".", 1)[-1] for path in bookkeeping} <= {"version", "last_updated_at"}
+    assert {path.rsplit(".", 1)[-1] for path in bookkeeping} <= {
+        "version",
+        "last_updated_at",
+        "version_id",
+    }
     changed = [d for d in _differences(before, after) if _generic(d[0]) not in bookkeeping]
     assert changed == []
+    # The fields-only run publishes no forecast version of its own: the served version
+    # moves only with each run of the stages.
+    assert before["map"]["version_id"] == first["map"]["version_id"] + 1
+    assert after["map"]["version_id"] == before["map"]["version_id"] + 1
     assert fields_run.id not in after["candidates"]
     assert "noaa_gfs_fields" not in {s["code"] for s in after["status"]["sources"]}
     assert compute_pending_predictions(db)["runs"] == 0
