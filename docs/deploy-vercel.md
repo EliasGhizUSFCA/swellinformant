@@ -45,7 +45,7 @@ Content-Security-Policy work exactly as on the classic Docker stack.
 |---|---|---|
 | Vercel | **Hobby**: "restricted to non-commercial personal use only". Free. | **Pro** ($20/month platform fee, $20 monthly usage credit) **before** the site asks for any payment: a paywall is "Any method of requesting or processing payment from visitors of the site", and ads count too. Donations do not. |
 | Open-Meteo (spot forecasts) | free API, non-commercial only | `COMMERCIAL_USE=true` plus `OPEN_METEO_API_KEY` (a paid plan). With the flag set and no key, the app refuses the free hosts. |
-| Neon | Free: 100 CU-hours, 1 GB storage and 5 GB egress per project. The free-database profile keeps about 1 day of forecast history and 1 week of verification archive, and refreshes the spots for every new GFS and GFS-Wave run (`SYNC_TRIGGER_SOURCES=spots`). A spot refresh sends 6.2-9.5 MB from the database to the app (measured on demo data, docs/sync.md "Measured (2.0)"); at about 8 component refreshes a day that is about 1.5-2.3 GB a month (arithmetic; up to 3.4 GB when GFS 0.25's late domain adds a third refresh per cycle), and a refresh check with nothing new reads nothing. Every signed-in page view also reads the database (`/api/auth/me`: 5 statements, measured), so signed-in traffic adds compute for the hours it spans. Details: docs/API_SETUP_REQUIRED.md, 1.4. | Launch ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then restore full retention (section 4, step 5). |
+| Neon | Free: 100 CU-hours, 1 GB storage and 5 GB egress per project. The free-database profile keeps about 1 day of forecast history and 1 week of verification archive, and refreshes the spots for every new GFS and GFS-Wave run (`SYNC_TRIGGER_SOURCES=spots`). A spot refresh sends 6.3-9.5 MB from the database to the app (measured on demo data, docs/sync.md "Measured (2.0)"); at about 8 component refreshes a day that is about 1.5-2.3 GB a month (arithmetic; up to 3.4 GB when GFS 0.25's late domain adds a third refresh per cycle), and a refresh check with nothing new reads nothing. Every signed-in page view also reads the database (`/api/auth/me`: 5 statements, measured), so signed-in traffic adds compute for the hours it spans. Details: docs/API_SETUP_REQUIRED.md, 1.4. | Launch ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then restore full retention (section 4, step 5). |
 | Upstash | Free: 250 MB and 500K commands a month. A quiet site fits; steady traffic all month, with the version polling of open pages, can pass 500K (docs/API_SETUP_REQUIRED.md, 1.4) | pay-as-you-go ($0.2 per 100K commands, with a budget cap) or a Fixed plan (from $10/month) |
 | Upstash QStash (the 5-minute scheduler) | Free: 1,000 messages a day; a 5-minute schedule uses 288 | pay-as-you-go |
 | Daemon (optional) | Hobby quota: 5 Active CPU-hours a month (https://vercel.com/docs/daemons/limits). It only refreshes the map layers (`SYNC_DAEMON_KINDS=map`); not measured on Vercel | Pro: billed for Active CPU and memory; optional `JOB_INTERVAL_FLOOR_MINUTES=0`, `SYNC_CHECK_MINUTES=5`, a 4Gi daemon |
@@ -448,7 +448,7 @@ says why for each component), `busy` (another refresh holds the lease), `skipped
 Measured outside Vercel: a live Open-Meteo refresh of both components took 38.7 s (12.1 s of
 it the refresh itself; the rest TLS handshake timeouts of the test machine's proxy) and a
 wave-only refresh 47.1 s (20.3 s refresh), well inside `maxDuration` 300 s; a check with
-nothing new 1.2-1.7 s (docs/sync.md, "Measured (2.0)"). Not measured on Vercel itself.
+nothing new 1.2-1.8 s (docs/sync.md, "Measured (2.0)"). Not measured on Vercel itself.
 
 ### Step 7b. Schedule the forecast refresh (every 5 minutes)
 
@@ -487,7 +487,7 @@ errors (503) are retried.
 hour", custom headers allowed, so `Authorization: Bearer <CRON_SECRET>` can be sent;
 https://cron-job.org/en/faq/, read 2026-10-27). Its limit: "If your URL/script does not finish
 after 30 seconds, it will timeout and we will close the connection". A check with nothing new
-answered in 1.2-1.7 s here, but a refresh that fetches and scores took 12-20 s plus its
+answered in 1.2-1.8 s here, but a refresh that fetches and scores took 12-20 s plus its
 metadata check (up to 47 s with this machine's proxy timeouts), and whether the Vercel
 function finishes a refresh after the caller has hung up was **not tested**. It also
 disables a job "when it subsequently fails more than 25 times". Use it only if QStash is not
@@ -816,7 +816,14 @@ Docker 29.8.2 with Compose 5.6.0. Results of 2026-10-23 unless a date is given.
   visitors through the edge got one body per route with 0 errors. A live Open-Meteo refresh
   of both components and a natural wave-only refresh ran through the endpoint on a scratch
   database (docs/sync.md, "Measured (2.0)"). The QStash schedule and cron-job.org were not
-  set up (no account); a 5-minute POST loop stood in for them.
+  set up (no account); a 5-minute POST loop stood in for them. The final gate (2026-10-30)
+  built and ran the stack again on the final code: the offline build again `RESULT: ok`
+  (128.3 MiB); the migrate service's `migrate --on-build` migrated and seeded an empty
+  database; the refresh endpoint answered 401 without and with a wrong token, and two
+  concurrent calls one `busy` and one success; six simulated model runs published versions
+  2-7 and open pages followed each without a reload (12 of 12, p50 16.5 s); `smoke` 22 of 22
+  and 6 of 6; with the daemon stopped the daily cron's `tides.acquire` failed for want of
+  `data/` (section 4, "Except the tides"; docs/local-vercel-stack.md).
 - **Not checked here**: a real deployment (no Vercel account was used), the daemon image
   build and start on Vercel, Neon and Upstash themselves, the cron invocation, QStash,
   previews, the CDN's caching of the versioned reads.

@@ -872,7 +872,7 @@ overdue periodic jobs; set `MAP_FIELDS_ENABLED=false`. The api build command mig
 seeds the reference data.
 **Consequences.** Measured outside Vercel: 401 without or with a wrong token, two concurrent
 calls gave one `busy` (71 ms) and one success; a live refresh of both components 38.7 s wall
-(12.1 s of refresh); a check with nothing new 1.2-1.7 s. Not verified: the QStash schedule,
+(12.1 s of refresh); a check with nothing new 1.2-1.8 s. Not verified: the QStash schedule,
 cron-job.org (it closes the connection after 30 s), whether Vercel's api build can read
 `../data` (a build that cannot fails on an empty database), and a silent scheduler is
 noticed without the daemon only by the daily cron (up to about 25 hours).

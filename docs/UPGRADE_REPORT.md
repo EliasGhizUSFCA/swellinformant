@@ -1441,7 +1441,7 @@ on Vercel, Neon or Upstash). The main figures:
 * A live Open-Meteo refresh of both components: 125 weighted calls, 12.1 s of refresh (38.7 s
   wall with proxy timeouts in the metadata check); a natural wave-only refresh of the 00Z
   GFS-Wave run: 75 weighted calls, 20.3 s of refresh, the wind carried with its 18Z time.
-* A check with nothing new: four `meta.json` requests, 1.2-1.7 s, no data request, no
+* A check with nothing new: four `meta.json` requests, 1.2-1.8 s, no data request, no
   database query.
 * From publication to the new data on an open page: p50 13.8 s (16 samples, 9.7-22.9 s,
   20 s poll, local Vercel-style stack without a CDN); on the final code p50 16.5 s (12
@@ -1492,7 +1492,7 @@ on Vercel, Neon or Upstash). The main figures:
   responses), **no Duffel or Amadeus credentials** (demo fares, labelled "Mock fares").
 * **Budgets are arithmetic** on unit costs measured here (docs/API_SETUP_REQUIRED.md 1.4):
   Upstash Free fits a quiet site; steady traffic with a tab open in a CDN region all month
-  can pass 500K commands (pay-as-you-go about $1 a month at 540K).
+  can pass 500K commands (pay-as-you-go about $1.11 a month at about 557K, docs/API_SETUP_REQUIRED.md 1.4).
 * **The 60 s freshness target** depends on the scheduler's 5-minute interval and Open-Meteo's
   publication (the refresh waits 10 minutes after a run's availability time); from
   publication, open pages measured p50 13.8 s without a CDN.

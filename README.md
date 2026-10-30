@@ -501,10 +501,12 @@ first test, add `MAP_FIELD_STEPS=0-24:3` and `MAP_FIELD_MAX_LEAD_HOURS=24` to
 `.env.vercel.local` (9 map hours instead of 61; 73.3 MB downloaded for them on 2026-10-23).
 Measured on 2026-10-23: `up` 216 s from scratch (with this sandbox's proxy overrides),
 `smoke` 19 of 19 and 6 of 6 with demo data and again with live data; again for Swell 2.0 on
-2026-10-29 (demo data): 19 of 19 and 6 of 6. The three shell checks added since (the
-refresh endpoint 401 and 200, the version endpoint) have not been run against the stack.
-The stack's daemon refreshes the spots itself (no scheduler), so it does not test the
-daemon-less hosted path ([`docs/local-vercel-stack.md`](docs/local-vercel-stack.md)). If Open-Meteo
+2026-10-29 (demo data): 19 of 19 and 6 of 6; on the final 2.0 code on 2026-10-30 (demo
+data): 22 of 22 (the refresh endpoint's 401 and 200 and the version endpoint included) and
+6 of 6. The stack's daemon refreshes the spots itself (no scheduler), so it tests the
+daemon-less hosted path only when you stop the daemon and call the daily cron
+(`scripts/vercel-local.sh cron`), as the final run did
+([`docs/local-vercel-stack.md`](docs/local-vercel-stack.md)). If Open-Meteo
 answers "Daily API request limit exceeded" (its free limit is per IP address), set `FORECAST_PROVIDERS=demo` in `.env.vercel.local`, run
 `scripts/vercel-local.sh up --no-build` and `sync --force` again, and try live data later.
 
@@ -690,8 +692,8 @@ keep their previous forecast, are marked stale and are retried (5, 15, 45 minute
 version is never published with incomplete records as complete. Superseded versions are kept
 `RETENTION_FORECAST_DAYS` (1 on Neon Free, 10 by default). Measured on this machine: a live
 Open-Meteo refresh of both components 125 weighted calls, a wave-only refresh 75 and 20.3 s;
-a demo refresh 12-15 s and 8.5-11.3 CPU s; a check with nothing new under 2 s
-([`docs/sync.md`](docs/sync.md), "Measured (2.0)").
+a demo refresh 12-16 s and 8.5-11.8 CPU s; a check with nothing new 1.2-1.8 s (longer
+when this sandbox's proxy timed out) ([`docs/sync.md`](docs/sync.md), "Measured (2.0)").
 
 **Cache invalidation.** The published version id lives in Redis (the version marker). Every
 public read (`/api/spots`, `/api/map/conditions`, a spot's forecast and timeline, events) is
@@ -710,7 +712,8 @@ shows when the forecast on screen was published (on a spot page: when that spot 
 updated, in the spot's zone), is highlighted briefly, and screen readers hear "New forecast
 loaded". Once an hour the tab also re-reads the public data, so a spot that went out of date
 by age is shown as such. Measured in the local Vercel-style stack (no CDN): from publication
-to the new data on screen p50 13.8 s (16 samples, 9.7-22.9 s).
+to the new data on screen p50 13.8 s (16 samples, 9.7-22.9 s); on the final code p50 16.5 s
+(12 samples, 7.1-24.4 s, 2026-10-30).
 
 **Status checks.**
 
@@ -767,7 +770,12 @@ against a local API (demo provider, `JOB_RUNNER=daemon`): the first refresh publ
 1, the wave-only refresh version 2 in 15.2 s (10.1 CPU s), and `/api/forecasts/version` then
 named version 2. Re-run after review r2 (same day, with the test suites running beside it):
 version 1, then version 2 with the wave `new` and the atmosphere `current` in the plan, and
-401 for a wrong token. Without a valid token the endpoint answers 401 (404 when
+401 for a wrong token. Re-run on the final code on 2026-10-30 (the `.env.example` settings
+with `ENABLE_DEV_ENDPOINTS=true` and a `CRON_SECRET`, `JOB_RUNNER=celery` with no worker;
+the account registered first through `POST /api/auth/register`): version 1 with both
+components new, then version 2 with the wave `new` and the atmosphere `current` in 16.0 s
+(10.9 CPU s), `/api/forecasts/version` naming version 2, 401 for a wrong and for a missing
+token. Without a valid token the endpoint answers 401 (404 when
 `CRON_SECRET` is not set). The whole flow, including the browser, is tested by `frontend/e2e/live-update.spec.ts`.
 
 **What still runs on a timer**, and why: `tides.acquire` daily at 02:20 UTC (tide predictions
@@ -937,7 +945,11 @@ tides (56 stations, 140,624 B from CO-OPS), GEFS-Wave (2,050 rows, 69.4 MB), the
 Open-Meteo answered this sandbox's shared address with "Daily API request limit exceeded.
 Please try again tomorrow."; the run was recorded as failed with that message, nothing was
 stored for it, and the pipeline went on. The same Open-Meteo runs had succeeded earlier that
-day and on 2026-10-14 (section M).
+day and on 2026-10-14 (section M). Run again as written on 2026-10-30 (the documentation
+verification, on a scratch database, Redis db 12): `init-db`, `tides acquire` (56 stations,
+0 failed), the map fields (9 of 9 hours, 135 fields, 70.5 MB downloaded) and the budget
+succeeded; `pipeline` exited 0, but Open-Meteo again answered the sandbox's shared address
+with its daily-limit message, so that run was recorded as failed and nothing was stored.
 
 Upgrading an older `.env`: delete `OPEN_METEO_WAVE_MODEL` and `OPEN_METEO_ATMOS_MODEL` if
 present. They are deprecated single-model aliases and, when set, override the per-latitude
@@ -1641,7 +1653,7 @@ Checklist:
 
 **Swell 2.0: verified here, and what is not verified yet**
 
-* Verified on this development machine (2026-10-27 to 29; docs/UPGRADE_REPORT.md, "Swell
+* Verified on this development machine (2026-10-27 to 30; docs/UPGRADE_REPORT.md, "Swell
   2.0"): the refresh endpoint with live Open-Meteo data (a refresh of both components, 125
   weighted calls; a natural wave-only refresh of the 00Z GFS-Wave run, 75 weighted calls,
   the wind carried forward with its 18Z model time); demo refreshes through the local
