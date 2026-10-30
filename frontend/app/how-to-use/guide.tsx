@@ -44,6 +44,11 @@ function Ui({ children }: { children: ReactNode }) {
   return <span className="rounded-md border bg-card px-1.5 py-px text-[0.9em] font-medium text-ink [box-decoration-break:clone]">{children}</span>;
 }
 
+/** A step of the search wizard, by its name in the wizard's step list. */
+function Step({ children }: { children: ReactNode }) {
+  return <strong className="font-semibold text-ink">{children}</strong>;
+}
+
 /** An app page, linked. */
 function PageLink({ href, children }: { href: string; children: ReactNode }) {
   return (
@@ -442,34 +447,34 @@ export function HowToUseGuide() {
           </p>
           <List ordered>
             <li>
-              <Ui>Surf preferences</Ui>: <Ui>Desired wave height</Ui> (<Ui>Minimum</Ui>, <Ui>Maximum</Ui>, <Ui>Preferred (optional)</Ui>) as breaking
+              <Step>Surf preferences</Step>: <Ui>Desired wave height</Ui> (<Ui>Minimum</Ui>, <Ui>Maximum</Ui>, <Ui>Preferred (optional)</Ui>) as breaking
               faces in ft or m, and <Ui>Minimum surf quality</Ui> (Fair to Exceptional). Under <Ui>Wave characteristics (optional)</Ui>: minimum swell
               period, <Ui>Wind</Ui> (<Ui>Any wind (score decides)</Ui>, <Ui>No onshore wind</Ui> or <Ui>Offshore, cross-offshore or glassy</Ui>),
               maximum wind speed, <Ui>Minimum surf window</Ui> (daylight hours that must meet all your criteria), swell direction, consistency and
               break types.
             </li>
             <li>
-              <Ui>Destinations</Ui>: <Ui>All 50 spots</Ui>, <Ui>Regions or countries</Ui> or <Ui>Specific spots</Ui>, and optionally a{" "}
+              <Step>Destinations</Step>: <Ui>All 50 spots</Ui>, <Ui>Regions or countries</Ui> or <Ui>Specific spots</Ui>, and optionally a{" "}
               <Ui>Maximum airport-to-spot transfer</Ui>.
             </li>
             <li>
-              <Ui>Travel availability</Ui>: <Ui>Flexible — keep watching</Ui> with a <Ui>Monitoring horizon</Ui>, or <Ui>Fixed dates</Ui> (
+              <Step>Travel availability</Step>: <Ui>Flexible — keep watching</Ui> with a <Ui>Monitoring horizon</Ui>, or <Ui>Fixed dates</Ui> (
               <Ui>Earliest day I can leave home</Ui>, <Ui>Latest day I must be back</Ui>). The travel buffers <Ui>Arrive before the swell</Ui> and{" "}
               <Ui>Leave after the swell</Ui> (days), <Ui>Minimum days at destination</Ui> and <Ui>Maximum trip length</Ui>. Then the{" "}
               <Ui>Alert lead time</Ui>: <Ui>Earliest (days ahead)</Ui> and <Ui>Latest (days ahead)</Ui> a swell may start for this search to alert you.
             </li>
             <li>
-              <Ui>Flight budget</Ui>: <Ui>Departure airports</Ui> (up to 5), <Ui>Also consider airports within</Ui>,{" "}
+              <Step>Flight budget</Step>: <Ui>Departure airports</Ui> (up to 5), <Ui>Also consider airports within</Ui>,{" "}
               <Ui>Max round-trip fare per traveller</Ui> and <Ui>Currency</Ui>, <Ui>Travellers</Ui>, <Ui>Cabin</Ui>,{" "}
               <Ui>Max flight time (each way)</Ui>, <Ui>Maximum layovers (each way)</Ui>, <Ui>Preferred airlines (optional)</Ui>, and what to
               prioritise when several trips qualify: <Ui>Balanced</Ui>, <Ui>Best waves</Ui>, <Ui>Cheapest</Ui> or <Ui>Shortest</Ui>.
             </li>
             <li>
-              <Ui>Notifications</Ui>: <Ui>Email</Ui>, <Ui>SMS</Ui>, <Ui>Email + SMS</Ui> or <Ui>Dashboard only</Ui>; <Ui>Send updates</Ui> and{" "}
+              <Step>Notifications</Step>: <Ui>Email</Ui>, <Ui>SMS</Ui>, <Ui>Email + SMS</Ui> or <Ui>Dashboard only</Ui>; <Ui>Send updates</Ui> and{" "}
               <Ui>Surf-only alerts</Ui> (also tell me when no flight fits my budget). SMS needs a verified phone number in Settings.
             </li>
             <li>
-              <Ui>Review &amp; activate</Ui>: name the search, check the summary (<Ui>Edit</Ui> goes back to a step), then <Ui>Activate search</Ui>.
+              <Step>Review &amp; activate</Step>: name the search, check the summary (<Ui>Edit</Ui> goes back to a step), then <Ui>Activate search</Ui>.
             </li>
           </List>
           <Example label="Travel buffers">
