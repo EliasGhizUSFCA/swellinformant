@@ -1433,11 +1433,12 @@ delivery or real fares.
 **Latest full run** (Swell 2.0, the final gate; the Upgrade 4 run is in
 docs/UPGRADE_REPORT.md section 40). Run on 2026-10-30 by the final gate on `wf6/int`, on
 this development machine, on commit c1490b3: the code and tests of 0899b83 (the last commit that changes code or
-tests) plus documentation. The two commits after it change only documentation: two
+tests) plus documentation. The commits after it change only documentation: two
 places that still said the daily cron acquires the tides without the daemon (ffca5d3),
 then these results (this one, docs/UPGRADE_REPORT.md section 49 and docs/architecture_audit.md 8.4), the file list of docs/architecture_audit.md 8.2,
 the limitations (docs/UPGRADE_REPORT.md section 51, docs/architecture_audit.md 8.5)
-and docs/local-vercel-stack.md. Each check ran once on that code (the map-performance
+and docs/local-vercel-stack.md (4eff5b1), then the documentation verification below.
+Each check ran once on that code (the map-performance
 spec once more, as its timing bound allows); the backend's unit and integration suites
 as separate runs, every exit code read directly. The e2e suite was started a second time
 because the machine rebooted during the first run (76 tests had passed and none had
@@ -1486,6 +1487,31 @@ the 117 doc-reading unit tests, `docker compose config -q` with `.env.example` a
 `scripts/measure_refresh_egress.py` (docs/sync.md, "Measured (2.0)"). The integration
 suite, Vitest, the e2e suite and the offline Vercel build were not re-run: none of them reads
 a file this pass changed.
+
+**The documentation verification** (2026-10-30, after the final gate; documentation only)
+ran the commands of README.md, docs/API_SETUP_REQUIRED.md, docs/WINDY_API_SETUP.md,
+docs/deploy-vercel.md and docs/operations.md that need no Docker, Vercel CLI or account,
+on scratch databases: `--help` of every `python -m app.cli` sub-command; `init-db` (also with
+the lean install and a `postgresql://` URL), `check-config` (exit 1 with the missing keys
+listed), `pipeline` and `simulate-swell` (demo), `sync check`, `run`, `run --force`,
+`publish`, `status`, `daemon --once`, `migrate`, `migrate --on-build`, `tides seed`,
+`acquire`, `list`, `prune`, `engine budget`, `research lint`, `ml list`,
+`obs seed-stations`, `make-admin`, `forecast provider-check` (Open-Meteo live; Windy
+without a key `not_configured`, also without Redis); the refresh block of README F.2 with
+`curl` against a local API (401 without or with a wrong token; 404 for both routes without
+`CRON_SECRET`, checked in process); the real-data block of README F.5 (Open-Meteo answered with its daily limit,
+the rest succeeded); a Celery worker and beat; `scripts/check-health.sh`, `backup-db.sh`,
+`restore-db.sh --create --target-db`, `restore-drill.sh` (passed, 47 tables),
+`measure_db_egress.py pipeline` (6.18 MB a pass), `generate_spot_research_docs.py --check`
+and the other scripts' `--help`; `uv lock --check`; the lean install from the lock into a
+venv of its own (132 MB); `npm run typecheck`, `npm run lint`, `npm test` (628 passed);
+`ruff format --check .`, `ruff check .`, `mypy app`, `alembic upgrade head`,
+`alembic check`; `pytest tests/unit` with `LEAN_PYTHON` (2,917 passed, 0 skipped, 134 s).
+It corrected the documentation where a number did not match its record (the live idle
+checks: 20 checks and 1.2-1.8 s, not 98 checks and 1.2-1.7 s; the egress per refresh from
+6.3 MB; the demo refresh CPU up to 11.8 s; the Upstash pay-as-you-go example; the per-area
+diff table of docs/UPGRADE_REPORT.md section 48) or was out of date (the local stack's run
+on the final code in README E.6 and docs/deploy-vercel.md section 10).
 
 **Continuous integration** (`.github/workflows/ci.yml`, GitHub Actions) runs on every
 push and pull request: a backend job (PostgreSQL 16 and Redis 7 services, Python 3.13, uv

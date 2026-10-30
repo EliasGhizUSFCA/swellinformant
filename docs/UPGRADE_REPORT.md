@@ -1236,22 +1236,22 @@ reasons and consequences in docs/decisions.md ADR-038 to ADR-053 and
 docs/architecture_audit.md 8.1.
 
 **2. Files created and modified.** `git diff --stat 18a5bee` on the final tree
-(the final gate's commits included): <!-- diffstat -->359 files changed (150 added, 209 modified), 90,350 insertions, 3,834 deletions<!-- /diffstat -->. By area:
+(the final gate's and the documentation verification's commits included): <!-- diffstat -->359 files changed (150 added, 209 modified), 90,453 insertions, 3,835 deletions<!-- /diffstat -->. By area:
 
 <!-- diffarea -->
 | Area | Added | Modified | Lines added | Lines removed |
 |---|---|---|---|---|
 | `backend/app` | 20 | 71 | 13,451 | 1,040 |
 | `backend/alembic` | 1 | 0 | 162 | 0 |
-| `backend/tests` | 36 | 44 | 13,541 | 232 |
+| `backend/tests` | 36 | 44 | 13,573 | 235 |
 | frontend (app, components, hooks, lib) | 19 | 45 | 4,483 | 421 |
-| frontend/tests and frontend/e2e | 17 | 20 | 4,411 | 133 |
+| frontend/tests and frontend/e2e | 17 | 20 | 4,414 | 133 |
 | frontend/types (generated OpenAPI types) | 0 | 3 | 5,598 | 1,139 |
 | `data` | 1 | 1 | 28,332 | 0 |
 | `docs/surf_spot_research` | 51 | 0 | 12,762 | 0 |
-| docs (other) | 2 | 14 | 4,954 | 630 |
+| docs (other) | 2 | 14 | 5,094 | 630 |
 | `scripts` | 3 | 2 | 1,742 | 6 |
-| configuration and CI | 0 | 9 | 787 | 229 |
+| configuration and CI | 0 | 9 | 842 | 231 |
 <!-- /diffarea -->
 
 The per-package lists of every file (foundation, the ten packages, the integration and each
@@ -1379,11 +1379,12 @@ docs/architecture_audit.md 8.5; README M.
 
 Run on 2026-10-30 by the final gate on `wf6/int`, on this development machine, on
 commit c1490b3: the code and tests of 0899b83 (the last commit that changes code or
-tests) plus documentation. The two commits after it change only documentation: two
+tests) plus documentation. The commits after it change only documentation: two
 places that still said the daily cron acquires the tides without the daemon (ffca5d3),
 then these results (this table, README "Latest full run" and docs/architecture_audit.md 8.4), the file list of docs/architecture_audit.md 8.2,
 the limitations (docs/UPGRADE_REPORT.md section 51, docs/architecture_audit.md 8.5)
-and docs/local-vercel-stack.md. Each check ran once on that code (the map-performance
+and docs/local-vercel-stack.md (4eff5b1), then the documentation verification below.
+Each check ran once on that code (the map-performance
 spec once more, as its timing bound allows); the backend's unit and integration suites
 as separate runs, every exit code read directly. The e2e suite was started a second time
 because the machine rebooted during the first run (76 tests had passed and none had
@@ -1432,6 +1433,31 @@ the 117 doc-reading unit tests, `docker compose config -q` with `.env.example` a
 `scripts/measure_refresh_egress.py` (docs/sync.md, "Measured (2.0)"). The integration
 suite, Vitest, the e2e suite and the offline Vercel build were not re-run: none of them reads
 a file this pass changed.
+
+**The documentation verification** (2026-10-30, after the final gate; documentation only)
+ran the commands of README.md, docs/API_SETUP_REQUIRED.md, docs/WINDY_API_SETUP.md,
+docs/deploy-vercel.md and docs/operations.md that need no Docker, Vercel CLI or account,
+on scratch databases: `--help` of every `python -m app.cli` sub-command; `init-db` (also with
+the lean install and a `postgresql://` URL), `check-config` (exit 1 with the missing keys
+listed), `pipeline` and `simulate-swell` (demo), `sync check`, `run`, `run --force`,
+`publish`, `status`, `daemon --once`, `migrate`, `migrate --on-build`, `tides seed`,
+`acquire`, `list`, `prune`, `engine budget`, `research lint`, `ml list`,
+`obs seed-stations`, `make-admin`, `forecast provider-check` (Open-Meteo live; Windy
+without a key `not_configured`, also without Redis); the refresh block of README F.2 with
+`curl` against a local API (401 without or with a wrong token; 404 for both routes without
+`CRON_SECRET`, checked in process); the real-data block of README F.5 (Open-Meteo answered with its daily limit,
+the rest succeeded); a Celery worker and beat; `scripts/check-health.sh`, `backup-db.sh`,
+`restore-db.sh --create --target-db`, `restore-drill.sh` (passed, 47 tables),
+`measure_db_egress.py pipeline` (6.18 MB a pass), `generate_spot_research_docs.py --check`
+and the other scripts' `--help`; `uv lock --check`; the lean install from the lock into a
+venv of its own (132 MB); `npm run typecheck`, `npm run lint`, `npm test` (628 passed);
+`ruff format --check .`, `ruff check .`, `mypy app`, `alembic upgrade head`,
+`alembic check`; `pytest tests/unit` with `LEAN_PYTHON` (2,917 passed, 0 skipped, 134 s).
+It corrected the documentation where a number did not match its record (the live idle
+checks: 20 checks and 1.2-1.8 s, not 98 checks and 1.2-1.7 s; the egress per refresh from
+6.3 MB; the demo refresh CPU up to 11.8 s; the Upstash pay-as-you-go example; the per-area
+diff table of docs/UPGRADE_REPORT.md section 48) or was out of date (the local stack's run
+on the final code in README E.6 and docs/deploy-vercel.md section 10).
 
 ## 50. Measurements
 
