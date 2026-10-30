@@ -602,6 +602,14 @@ dependencies are installed, migrated an empty database ("status": "migrated") an
 build on a non-zero exit. The schema now has 8 migrations; 0008 is data only (ADR-026).
 **Consequences.** Without Vercel's system variables exposed to the build it prints
 `skipped`, and the daemon's `init-db` migrates.
+**Amended (2026-10-30, after the final gate).** The build command first copies the
+repository's `data/` into the service root: `rm -rf data && cp -R ../data data && python -m
+app.cli migrate --on-build`. The Python builder bundles `backend/` after the build command, so
+the API function holds `data/` (the daily cron's tide job needs the tide catalog and the EOT20
+constants; it failed with `FileNotFoundError` without them) and the seed reads the same files.
+`functions.includeFiles` was rejected: "../data/**" lands outside the function root and
+"data/**" matches nothing. git keeps one copy; `backend/data` is build output.
+`app/core/data_files.py` resolves `data/` for every reader (docs/deploy-vercel.md section 1).
 
 ## ADR-030 (D10) Monitoring without logs
 

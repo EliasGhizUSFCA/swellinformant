@@ -102,8 +102,8 @@ docs/deploy-vercel.md):
 
 `docker-compose.vercel.yml`, driven by `scripts/vercel-local.sh` (docs/local-vercel-stack.md),
 runs the hosted topology on one machine: a Caddy `edge` on :3100 does Vercel's routing and
-sets its client-IP headers, `api` is the lean install (no Celery, no data libraries, no
-`data/`), `web` is the Next.js production build with `API_ROUTING=platform`, `pgbouncer` in
+sets its client-IP headers, `api` is the lean install (no Celery, no data libraries; the
+reference `data/` at `/app/data`, where the api build command puts it in the function), `web` is the Next.js production build with `API_ROUTING=platform`, `pgbouncer` in
 transaction mode stands in for Neon's pooler in front of `postgres`, `redis` for Upstash,
 `sync` is the daemon built from the same `Containerfile`, `mailpit` captures every email,
 and `cron` calls the watchdog. Not emulated: the function runtime (cold starts), the CDN,
