@@ -1440,7 +1440,37 @@ delivery or real fares.
 **Latest full run** (Swell 2.0; the Upgrade 4 run is in docs/UPGRADE_REPORT.md section
 40).
 
-**The data bundle's run** (the latest; 2026-10-30, on `wf6/int` after the documentation
+**The data bundle's review** (the latest; 2026-10-30, on `wf6/int`, on this development
+machine). An independent review re-ran the data bundle's proofs and every check. It found one
+defect, fixed in 246873c: the tide constants' resolver searched the working directory before
+the parents of `data/`, so in a checkout where the api build command had run (its copy
+`backend/data` stays, ignored by git) a process started from `backend/` read the EOT20
+constants from that copy and the catalog, the spots and the stations from `data/`; it now
+searches in the order of `app/core/data_files.py` (repository root, service root, `/`, then
+the working directory), and a new unit test with a stale copy fails with the old order. Every
+check below ran on 246873c (the commits after it are documentation), once each; the unit and
+integration suites as separate runs, every exit code read directly. No expectation changed.
+
+| Check | Result |
+|---|---|
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (428 files formatted, 220 files type-checked) |
+| `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
+| Upgrade of a copy of the real database (at 0006) to 0008, then from 0008 to head | pass: 50 spots, 5 runs, 25,000 forecast rows, 25,000 predictions, 3 users, 69 events and the md5 of the forecast rows identical at 0006, 0008 and head; `alembic check` clean; no version until the first refresh |
+| `pytest tests/unit` with `LEAN_PYTHON` | 2,933 passed, 0 skipped, 92 s (the new data-files case included) |
+| `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` | 32 passed, the demo spot-only refresh in the lean install included |
+| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 18.3 min |
+| `npm ci`, `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run`, `npm run build` | pass; Vitest 628 passed (53 files) |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 155 passed, 0 failed (12.7 min; load 0.8 before it). `e2e/live-update.spec.ts` (Chromium; the mobile project runs the `@mobile` tests) and `live-update-mocked.spec.ts` (Chromium and Pixel 7) passed. `e2e/map-performance.spec.ts` passed this time, its crest-dash draw p95 4.6 ms within the 5 ms bound, every frame cost it records lower than in the A/B runs of section 51 (the bound unchanged) |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`; the API function python3.13, `maxDuration` 300 s, 3,481 files, 130.5 MiB (limit 500 MiB), its `data/` 10 files, 2.2 MiB (the four required files present); its file map holds nothing from outside the project and no env file; removing a required file from the map makes the check fail |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 166.1 of 200 MB (the reference data 2.24 MB of it) |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass, each with `.env.example`, `.env.vercel.example` and no env file |
+| shellcheck 0.11, the CI's two commands | clean |
+| `npm audit --omit=dev` | 1 moderate advisory (fast-uri, unchanged) |
+| The build-time seed with the real CLI (`vercel build`, CLI 64.5.0, `MIGRATE_ON_BUILD=all`, an empty scratch database; on 49fae2f, the same build command) | the build command ran in `backend/`, copied `../data`, migrated to 0009 and seeded 50 spots, 153 airports, 468 research sources and 56 tide stations |
+| The tide job from the function's own files (the build's file map materialised with no `data/` around it, the lean venv, an empty environment; on 49fae2f) | `python -m app.cli tides acquire`: exit 0, 56 of 56 stations, 17 s; every reader resolved into the function's `data/` |
+| The local Vercel-style stack (docs/local-vercel-stack.md) | the daemon's image from the `Containerfile` reads `data/` at `/data`, the api image at `/app/data` and has no `/data`; the migrate service seeded an empty database (50 spots, 153 airports, 468 research sources, 56 tide stations); after `sync --force`, `smoke` 23 shell checks passed (0 failed, 2 notes) and 6 of 6 browser checks; with the sync daemon stopped and the job logs deleted, the daily cron answered 200 and every job succeeded, `tides.acquire` in 33.9 s (50 stations of the tide model from `/app/data`; the 6 CO-OPS stations failed only for the containers' missing DNS, so its result is `partial`); images, volumes and build cache removed afterwards |
+
+**The data bundle's run** (2026-10-30, on `wf6/int` after the documentation
 verification, on this development machine). The backend, frontend, build and stack checks
 ran on the code and tests of a22e55d: the data bundle (5857d27: the api build command copies
 `data/` into the function, `app/core/data_files.py` finds it) and `run-e2e.sh --help`

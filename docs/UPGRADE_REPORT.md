@@ -1225,7 +1225,7 @@ The two systems of spec section 2, as built:
 | Email verification works; notifications work | done (Mailpit in the local stack: 23 messages on 2026-10-29) | `tests/integration/test_auth_api.py`, `test_email_delivery.py`, `test_service_credentials.py` (SMTP reply codes) |
 | API usage monitorable | done | `/admin/freshness` usage group, `quota_near` alerts; `tests/integration/test_admin_freshness.py`; `python -m app.cli engine budget` |
 | Frontend simple and responsive | done | the always-visible summary and "Why this rating?" (`e2e/spot-summary.spec.ts`), the Pixel 7 project of the e2e suite |
-| Tests pass | yes, except one timing bound | section 49: every suite passed but one e2e test, `map-performance.spec.ts`, whose crest-dash draw time p95 (6.6 ms, 5.2 ms in its re-run; 6.7 ms in the data bundle's run) exceeded its 5 ms bound on this machine, with map code unchanged since it measured 4 ms; an alternating A/B measured the base 18a5bee above the bound as well (section 51) |
+| Tests pass | yes (one timing bound failed in earlier runs) | section 49: every suite passed but one e2e test, `map-performance.spec.ts`, whose crest-dash draw time p95 (6.6 ms, 5.2 ms in its re-run; 6.7 ms in the data bundle's run) exceeded its 5 ms bound on this machine, with map code unchanged since it measured 4 ms; an alternating A/B measured the base 18a5bee above the bound as well (section 51); in the data bundle's review on 246873c every suite passed, that test included (4.6 ms) |
 | README updated | done | README A, B, E (local development and Vercel), F.2 (weather setup and automatic updates), I (flight API, email), J, K, L, M; every CLI command and script it names is checked by `tests/unit/test_readme_commands.py` |
 | Unverified integrations and limitations documented | done | section 51, README M, docs/architecture_audit.md 8.5 |
 
@@ -1377,7 +1377,37 @@ docs/architecture_audit.md 8.5; README M.
 
 ## 49. Test results
 
-**The data bundle's run** (the latest; 2026-10-30, on `wf6/int` after the documentation
+**The data bundle's review** (the latest; 2026-10-30, on `wf6/int`, on this development
+machine). An independent review re-ran the data bundle's proofs and every check. It found one
+defect, fixed in 246873c: the tide constants' resolver searched the working directory before
+the parents of `data/`, so in a checkout where the api build command had run (its copy
+`backend/data` stays, ignored by git) a process started from `backend/` read the EOT20
+constants from that copy and the catalog, the spots and the stations from `data/`; it now
+searches in the order of `app/core/data_files.py` (repository root, service root, `/`, then
+the working directory), and a new unit test with a stale copy fails with the old order. Every
+check below ran on 246873c (the commits after it are documentation), once each; the unit and
+integration suites as separate runs, every exit code read directly. No expectation changed.
+
+| Check | Result |
+|---|---|
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (428 files formatted, 220 files type-checked) |
+| `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
+| Upgrade of a copy of the real database (at 0006) to 0008, then from 0008 to head | pass: 50 spots, 5 runs, 25,000 forecast rows, 25,000 predictions, 3 users, 69 events and the md5 of the forecast rows identical at 0006, 0008 and head; `alembic check` clean; no version until the first refresh |
+| `pytest tests/unit` with `LEAN_PYTHON` | 2,933 passed, 0 skipped, 92 s (the new data-files case included) |
+| `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` | 32 passed, the demo spot-only refresh in the lean install included |
+| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 18.3 min |
+| `npm ci`, `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run`, `npm run build` | pass; Vitest 628 passed (53 files) |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 155 passed, 0 failed (12.7 min; load 0.8 before it). `e2e/live-update.spec.ts` (Chromium; the mobile project runs the `@mobile` tests) and `live-update-mocked.spec.ts` (Chromium and Pixel 7) passed. `e2e/map-performance.spec.ts` passed this time, its crest-dash draw p95 4.6 ms within the 5 ms bound, every frame cost it records lower than in the A/B runs of section 51 (the bound unchanged) |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`; the API function python3.13, `maxDuration` 300 s, 3,481 files, 130.5 MiB (limit 500 MiB), its `data/` 10 files, 2.2 MiB (the four required files present); its file map holds nothing from outside the project and no env file; removing a required file from the map makes the check fail |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 166.1 of 200 MB (the reference data 2.24 MB of it) |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass, each with `.env.example`, `.env.vercel.example` and no env file |
+| shellcheck 0.11, the CI's two commands | clean |
+| `npm audit --omit=dev` | 1 moderate advisory (fast-uri, unchanged) |
+| The build-time seed with the real CLI (`vercel build`, CLI 64.5.0, `MIGRATE_ON_BUILD=all`, an empty scratch database; on 49fae2f, the same build command) | the build command ran in `backend/`, copied `../data`, migrated to 0009 and seeded 50 spots, 153 airports, 468 research sources and 56 tide stations |
+| The tide job from the function's own files (the build's file map materialised with no `data/` around it, the lean venv, an empty environment; on 49fae2f) | `python -m app.cli tides acquire`: exit 0, 56 of 56 stations, 17 s; every reader resolved into the function's `data/` |
+| The local Vercel-style stack (docs/local-vercel-stack.md) | the daemon's image from the `Containerfile` reads `data/` at `/data`, the api image at `/app/data` and has no `/data`; the migrate service seeded an empty database (50 spots, 153 airports, 468 research sources, 56 tide stations); after `sync --force`, `smoke` 23 shell checks passed (0 failed, 2 notes) and 6 of 6 browser checks; with the sync daemon stopped and the job logs deleted, the daily cron answered 200 and every job succeeded, `tides.acquire` in 33.9 s (50 stations of the tide model from `/app/data`; the 6 CO-OPS stations failed only for the containers' missing DNS, so its result is `partial`); images, volumes and build cache removed afterwards |
+
+**The data bundle's run** (2026-10-30, on `wf6/int` after the documentation
 verification, on this development machine). The backend, frontend, build and stack checks
 ran on the code and tests of a22e55d: the data bundle (5857d27: the api build command copies
 `data/` into the function, `app/core/data_files.py` finds it) and `run-e2e.sh --help`
@@ -1581,7 +1611,10 @@ on Vercel, Neon or Upstash). The main figures:
   does (5 of 7 runs above 5 ms), so the failure is the environment's timing, not a 2.0
   regression; the bound was not changed and the test not skipped. To close: run it on a
   quiet machine of known speed, or decide whether a 5 ms p95 should hold on a 4-vCPU shared
-  host.
+  host. In the data bundle's review (2026-10-30 18:32-18:45 UTC, 246873c, the same frontend
+  code) the full suite passed it: draw p95 4.6 ms, every frame cost it records lower than in
+  the A/B runs (crest dashes 1.20 ms of script per frame against 1.86-3.77 ms there), which
+  again points at the machine's speed.
 * **A setting nothing reads**: `FORECAST_DAILY_REQUEST_QUOTA` (5000) is still declared in
   `Settings` but no code reads it since the per-provider budgets (`OPEN_METEO_CALLS_*`,
   `WINDY_DAILY_REQUEST_LIMIT`) replaced it (found in the documentation pass; documented in
