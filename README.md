@@ -1418,41 +1418,51 @@ instead of the console capture file. The e2e suite uses the demo forecast, synth
 fields and tides from route mocks, and mock flights only; it never claims real email
 delivery or real fares.
 
-**Latest full run** (Swell 2.0, after review round 4; the Upgrade 4 run is in
-docs/UPGRADE_REPORT.md section 40). Run on 2026-10-29 by the review-round-4 fixer on
-`wf6/int`, on this development machine, on commit c85474f: the code of 27ccda0 (the last
-commit that changes code or tests) plus the round's documentation. The commit after it
-changes only the results tables (this one, docs/UPGRADE_REPORT.md section 49 and
-docs/architecture_audit.md 8.4), the file list of docs/architecture_audit.md 8.2 and the
-API function's size in the docs.
+**Latest full run** (Swell 2.0, the final gate; the Upgrade 4 run is in
+docs/UPGRADE_REPORT.md section 40). Run on 2026-10-30 by the final gate on `wf6/int`, on
+this development machine, on commit c1490b3: the code and tests of 0899b83 (the last commit that changes code or
+tests) plus documentation. The two commits after it change only documentation: two
+places that still said the daily cron acquires the tides without the daemon (ffca5d3),
+then these results (this one, docs/UPGRADE_REPORT.md section 49 and docs/architecture_audit.md 8.4), the file list of docs/architecture_audit.md 8.2,
+the limitations (docs/UPGRADE_REPORT.md section 51, docs/architecture_audit.md 8.5)
+and docs/local-vercel-stack.md. Each check ran once on that code (the map-performance
+spec once more, as its timing bound allows); the backend's unit and integration suites
+as separate runs, every exit code read directly. The e2e suite was started a second time
+because the machine rebooted during the first run (76 tests had passed and none had
+failed); the complete second run is counted.
 
 | Check | Result |
 |---|---|
-| `ruff format --check .`, `ruff check .`, `mypy app` | pass (424 files formatted, 219 files type-checked) |
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (425 files formatted, 219 files type-checked) |
 | `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
 | Upgrade of a copy of a real database (at 0006: 50 spots, 25,000 forecast rows and predictions) to 0008, then from 0008 to head | pass: row counts and a checksum (md5) of the forecast rows identical before and after; `alembic check` clean; no version until the first refresh |
-| `pytest tests/unit` | 2,894 passed, 6 skipped (the lean-install tests) |
+| `pytest tests/unit` | 2,911 passed, 6 skipped (the lean-install tests), 84 s |
 | `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` (a lean install from `uv.lock`) | 32 passed, a demo spot-only refresh in the lean install included |
-| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 22.4 min. `test_map_fields.py::test_a_fields_only_run_never_changes_spot_forecasts` passes in this run but fails when run alone, also on the round-3 code (each pipeline re-run publishes a new forecast version, so its `freshness.version_id` differs): a test-order dependence, not changed here and listed in docs/UPGRADE_REPORT.md section 51 |
+| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 19.0 min. `test_map_fields.py::test_a_fields_only_run_never_changes_spot_forecasts`, order-dependent until 24d114e, passed in it, and also alone, first, right after the Redis-down tests, with its own file, and last (after the 72 other integration files: 631 passed, 3 skipped) |
 | `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 628 passed (53 files) |
 | `npm ci`, `npm run build` | pass |
-| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 155 passed (14.2 min), `e2e/live-update.spec.ts` and `live-update-mocked.spec.ts` included (the live-update spec through the real refresh: publication to the open map 3.9 s and the spot page 3.4 s with the e2e build's 2 s poll), and the new map case with the ocean layers switched off |
-| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29); the daily cron is in the output config |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 154 passed, 1 failed (18.7 min). `e2e/live-update.spec.ts` (through the real refresh, in Chromium: publication to the open map 4.3 s and to the spot page 4.7 s with the e2e build's 2 s poll) and `live-update-mocked.spec.ts` (Chromium and Pixel 7) passed. Failed: `e2e/map-performance.spec.ts`, the crest-dash frame draw time p95 6.6 ms against its 5 ms bound; re-run once, alone, on the idle machine (load 0.7): 5.2 ms, failed again. No frontend code changed since review round 4, where it measured 4 ms, and every frame cost the test records rose alike (crest dashes 1.28 to 2.17 ms of script per frame, wind particles 22.3 to 28.8-32.1 ms of task time per frame), which points to this machine's speed after its reboot rather than the code; the bound was not changed (docs/UPGRADE_REPORT.md section 51) |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-30); the daily cron is in the output config; the function's files hold no `data/` (docs/UPGRADE_REPORT.md section 51, the tides) |
 | `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.7 of 200 MB |
-| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass |
-| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh`, `scripts/export-openapi.sh` | clean (no shell script changed in review round 4) |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass, each with `.env.example`, `.env.vercel.example` and no env file |
+| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh`, `scripts/export-openapi.sh` and (`-s sh`) the operations scripts | clean (the CI's two commands; `run-e2e.sh` and `vercel-local.sh` are the shell scripts 2.0 changed) |
 | `npm audit --omit=dev` | 1 moderate advisory (fast-uri below 3.1.9, under @hookform/resolvers and ajv; docs/decisions.md ADR-037). Dev-only: Vitest 3's tinypool (2 critical) and @vitest/mocker (moderate), not upgraded |
-| The local Vercel-style stack | not run in review rounds 2 to 4 (last run 2026-10-29 01:35 UTC, before them: smoke 19 of 19 and 6 of 6); docs/UPGRADE_REPORT.md section 51 |
+| The local Vercel-style stack (2026-10-30, demo data, docs/local-vercel-stack.md) | built and run on this code: the build command migrated and seeded an empty database; `/api/internal/refresh` 401 without or with a wrong token; six simulated model runs refreshed through the edge, versions 2 to 7, an open map and spot page updated without a reload 12 of 12 times; register and verify through Mailpit; the daily cron 200 with its `jobs` summary; `smoke` 22 of 22 shell checks and 6 of 6 browser checks after one fix (0899b83); with the daemon stopped the cron's `tides.acquire` failed (docs/UPGRADE_REPORT.md section 51) |
 
 Earlier rounds on the same branch: review round 1 (the code of 5b9ce29) 2,882 unit, 638
 integration, 604 Vitest and 154 e2e tests passed; review round 2 (a4560d6) 2,889, 650, 614
-and 154; review round 3 (1775c67) 2,894, 657, 622 and 154. Every test added since is
-counted above; none was removed or weakened. Expectations changed on purpose: the build
-seed without `data/` now fails on an empty database and skips only when spots exist, so
-its unit test is split into those two cases (review r3-spec-SPEC-6); the Vercel smoke's
-map check with the ocean layers off (`MAP_FIELDS_ENABLED=false`, the stack's default)
-expects the "Spot forecasts only" note instead of the outage notice (review
-r4-spec-R4-SPEC-2; the smoke was not run in review round 4).
+and 154; review round 3 (1775c67) 2,894, 657, 622 and 154; review round 4 (c85474f) 2,894,
+671, 628 and 155. Every test added since is counted above; none was removed or weakened.
+Expectations changed on purpose: the build seed without `data/` now fails on an empty
+database and skips only when spots exist, so its unit test is split into those two cases
+(review r3-spec-SPEC-6); the Vercel smoke's map check with the ocean layers off
+(`MAP_FIELDS_ENABLED=false`, the stack's default) expects the "Spot forecasts only" note
+instead of the outage notice (review r4-spec-R4-SPEC-2); at the final gate, the fields-only
+map test counts the served `version_id` as bookkeeping and asserts that it moves exactly one
+per run of the stages (every publication is a version since 2.0; the test passed in full
+runs only because an earlier test's Redis fail-open window left the version marker
+unwritten, and the test fixture now forgets that window, 24d114e), and the Vercel smoke
+expects the daily cron's `jobs` key, answered since review round 1 (0899b83).
 
 **The final documentation pass** (2026-10-30, on top of e29141a; documentation, the two env
 examples, one new and one extended unit test, no application code) re-ran: `ruff format
@@ -1636,7 +1646,8 @@ Checklist:
   weighted calls; a natural wave-only refresh of the 00Z GFS-Wave run, 75 weighted calls,
   the wind carried forward with its 18Z model time); demo refreshes through the local
   Vercel-style stack with open browsers updating without a reload (publication to new data
-  on screen p50 13.8 s, 16 samples, no CDN); a load test through the local edge (4,000
+  on screen p50 13.8 s, 16 samples, no CDN; on the final code, 2026-10-30, p50 16.5 s, 12
+  samples, smoke 22 of 22 and 6 of 6); a load test through the local edge (4,000
   requests, 64 at a time, 0 errors; a new version reached every route 3.2 s after
   publication);
   the daemon-less hosted path (kicks, delivery retries and overdue periodic jobs run by the
@@ -1648,9 +1659,10 @@ Checklist:
   QStash schedule (never deployed); the Vercel daemon (the Vercel CLI 64.5.0 refuses a
   `vercel.json` with `daemons` in `vercel build`); the build-time seed on Vercel (whether the
   api service's build, rooted at `backend/`, can read the repository's `data/`: a build that
-  cannot fails on an empty database, docs/deploy-vercel.md step 6); the local Vercel-style
-  stack since the review rounds (last run on 2026-10-29 before them; the daemon-less hosted
-  path is covered by tests only); a live **atmosphere-only** refresh (never
+  cannot fails on an empty database, docs/deploy-vercel.md step 6); the daemon-less hosted
+  path on Vercel itself (covered by tests; on the local Vercel-style stack only the daily
+  cron ran with the daemon stopped, and its tide acquisition failed for want of `data/`);
+  a live **atmosphere-only** refresh (never
   observed: when GFS 0.13 moved to 00Z on 2026-10-29, Open-Meteo's servers answered 00Z and
   18Z alternately for over 36 minutes, so three checks saw the run and three syncs skipped
   it safely without fetching; the refresh is covered by tests with the demo provider); Windy

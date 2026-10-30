@@ -299,8 +299,22 @@ written sent the unset shell variable).
 Swell 2.0 (2026-10-29 01:35 UTC, the integration branch before the review rounds, demo
 data): `smoke` 19 of 19 shell checks (0 failed, 12 s) and 6 of 6 Playwright; data health
 `failing` only for `tides_stale:noaa_coops` (CO-OPS was not reachable from the sandbox).
-The review rounds since changed the stack (the migrate service runs the api's build command
-`migrate --on-build`, which now seeds; three smoke checks) without running it again.
+
+Swell 2.0, final code (2026-10-30 05:04-05:28 UTC, the final gate; `.env.vercel.local` with
+only `CRON_SECRET`, `SECRET_KEY`, `WEATHER_PROVIDER` and `SYNC_DAEMON_KINDS`, so demo data
+and the map layers off):
+
+| Step | Result |
+|---|---|
+| build, `up --no-build` | images sync 1.22 GB, api 409 MB, pgbouncer 15 MB, web 344 MB; `up` 55 s; `printenv DATABASE_URL` in the migrate, api and sync containers named the stack's own PgBouncer and PostgreSQL |
+| migrate service (`migrate --on-build`, `VERCEL_ENV=production`) | migrated an empty database 0001 to 0009 and seeded it: 50 spots, 153 airports, 56 tide stations |
+| `/api/internal/refresh` | 401 for GET and POST without a token or with a wrong one; two concurrent POSTs with the token: one `busy` (660 ms), one `success` publishing version 1 (21.9 s) |
+| six simulated model runs (the demo provider's next run of the wave, the atmosphere or both, 0-20 s apart), each followed by the scheduler's POST through the edge | versions 2 to 7, each run changing only the component that advanced (refresh 23.2-26.3 s, 11.2-11.5 CPU s on 1 vCPU); an open map and spot page showed every version without a reload (12 of 12, publication to page p50 16.5 s, 7.1-24.4 s, 20 s poll, no CDN); the call after them answered `not_due` in 9 ms |
+| register, verify, saved search | verified through Mailpit; a saved search created (201); the admin's `/api/admin/freshness` named version 7 and each component's run |
+| `GET /api/internal/cron/daily` | 200 with the `jobs` and `refresh` keys; data health `failing` for `tides_stale:noaa_coops` (CO-OPS not reachable from the sandbox), emailed to the admin in Mailpit |
+| `smoke` | 22 of 22 shell checks; Playwright 5 of 6 first: the spec still expected the daily cron's keys of before review round 1 (no `jobs`), fixed in 0899b83, then 6 of 6 (the map with the layers off shows "Spot forecasts only") |
+| daemon stopped, its job logs deleted, `cron/daily` | the cron ran the overdue periodic jobs in the api container: cleanup, matching, flights, alerts, delivery and the staleness check succeeded; `tides.acquire` failed with `FileNotFoundError` (`tide_stations.json not found`: the api image, as the API function, has no `data/`; docs/deploy-vercel.md section 4, "Except the tides") |
+| teardown | `down --volumes`, the four images removed, build cache pruned |
 
 Run by the integration verifier with the steps above (`cp .env.vercel.example
 .env.vercel.local`, plus `MAP_FIELD_STEPS=0-24:3` and `MAP_FIELD_MAX_LEAD_HOURS=24`; this
