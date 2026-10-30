@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ConditionsSummary } from "@/components/conditions";
-import { ForecastConfidence, LocalConfidence, ResearchConfidence } from "@/components/confidence";
+import { ForecastConfidence, ResearchConfidence } from "@/components/confidence";
 import { EventCard } from "@/components/event-card";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
 import { OpportunityCard } from "@/components/opportunity-card";
@@ -46,6 +46,9 @@ function visibleWords(root: Element): string[] {
 // Reasons as long as the backend writes them (forecast-v1 wording, <= 90 characters).
 const FORECAST_REASON = "A 6-day forecast, and the ensemble members spread widely on the swell's size.";
 const LOCAL_REASON = "How this break responds to swell is only partly documented.";
+/** The combined "local confidence" the API sent before 2.0 removed it (spec 20); a response
+ * cached before the upgrade can still carry it, and the UI must not show it. */
+const LEGACY_LOCAL = { local_confidence_class: "low", local_confidence_reason: LOCAL_REASON };
 
 function conditions(overrides: Partial<Conditions> = {}): Conditions {
   return {
@@ -77,10 +80,9 @@ function conditions(overrides: Partial<Conditions> = {}): Conditions {
     explanation:
       "2.2 m @ 16 s SW swell, well aligned with the break; offshore wind 9 km/h from NE; approx. 6–8 ft faces vs. a working range of 3–12 ft (synthetic).",
     forecast_confidence_class: "moderate",
-    local_confidence_class: "low",
+    ...LEGACY_LOCAL,
     confidence_reasons: [FORECAST_REASON, "Not yet checked against buoys near this spot.", LOCAL_REASON],
     forecast_confidence_reasons: [FORECAST_REASON],
-    local_confidence_reason: LOCAL_REASON,
     lead_hours: 18,
     wind_strength: "light",
     wind_favourability: "favourable",
@@ -132,10 +134,9 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
     source_code: "blend",
     history: [],
     forecast_confidence_class: "moderate",
-    local_confidence_class: "low",
+    ...LEGACY_LOCAL,
     confidence_reasons: [FORECAST_REASON, LOCAL_REASON],
     forecast_confidence_reasons: [FORECAST_REASON],
-    local_confidence_reason: LOCAL_REASON,
     wind_dispute_note: null,
     wind_strength: "light",
     wind_favourability: "favourable",
@@ -183,9 +184,12 @@ function match(overrides: Partial<MatchSummary> = {}): MatchSummary {
     created_at: at(-30),
     updated_at: at(-2),
     forecast_confidence_class: "moderate",
-    local_confidence_class: "low",
-    local_confidence_reason: LOCAL_REASON,
+    ...LEGACY_LOCAL,
     stale: false,
+    short_notice: true,
+    best_offer_expired: false,
+    quoted_currency: null,
+    attribution_links: [],
     ...overrides,
   };
 }
@@ -215,14 +219,14 @@ const FOUR_GAPS = [
   "Synthetic gap: the bathymetry near the break is not surveyed.",
 ];
 
-/** The spot page's summary block: the headline and its reason, then forecast confidence and
- * confidence at the break, each with its first reason, as the page lays them out. */
+/** The spot page's summary block: the one-sentence headline, then forecast confidence with
+ * its first reason, as the page lays them out (spec 20: no combined "confidence at the break";
+ * research confidence is its own block, measured below). */
 function SpotSummary({ c }: { c: Conditions }) {
   return (
     <div data-testid="spot-summary">
-      <RatingHeadline label={c.label} score={c.score} reason={ratingReason({ periodS: c.swell_period_s, windRelation: c.wind_relation, windStrength: c.wind_strength, explanation: c.explanation })} size="lg" />
+      <RatingHeadline label={c.label} score={c.score} reason={ratingReason({ periodS: c.swell_period_s, windRelation: c.wind_relation, windStrength: c.wind_strength, explanation: c.explanation })} size="lg" inline />
       <ForecastConfidence value={c.forecast_confidence_class} reasons={forecastReasonsOf(c)} notes={c.confidence_reasons} validTime={c.valid_time} runIssuedAt={c.run_issued_at} nowMs={NOW} legacyIndex={c.confidence} />
-      <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reason={c.local_confidence_reason} />
     </div>
   );
 }
@@ -232,7 +236,7 @@ function count(testId: string): string[] {
 }
 
 describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
-  it("the spot page summary: rating, reason, forecast confidence and confidence at the break", () => {
+  it("the spot page summary: rating, reason and forecast confidence (never a combined class)", () => {
     render(<SpotSummary c={conditions()} />);
     const words = count("spot-summary");
     expect(words.length, words.join(" ")).toBeLessThanOrEqual(BUDGET);
@@ -240,7 +244,9 @@ describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
     const root = screen.getByTestId("spot-summary");
     expect(root).toHaveTextContent("Excellent Surf — 9.2/10");
     expect(root).toHaveTextContent(`Forecast confidence: Moderate${FORECAST_REASON}`);
-    expect(root).toHaveTextContent(`Confidence at the break: Low${LOCAL_REASON}`);
+    // Spec 20: the combined class that mixed research and forecast confidence is gone.
+    expect(root).not.toHaveTextContent("Confidence at the break");
+    expect(root).not.toHaveTextContent(LOCAL_REASON);
   });
 
   it("the spot page research block: class, first gap and the gap count", () => {
@@ -278,7 +284,8 @@ describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
     // It also names the swell and wind behind the rating: five words more than a card.
     expect(words.length, words.join(" ")).toBeLessThanOrEqual(BUDGET + 5);
     expect(screen.getByTestId("our-prediction")).toHaveTextContent("Forecast confidence: Moderate");
-    expect(screen.getByTestId("local-confidence-badge")).toHaveTextContent("At the break: Low");
+    // Spec 20: no combined "at the break" class next to it.
+    expect(screen.queryByTestId("local-confidence-badge")).toBeNull();
     // The raw model data is one header line until opened.
     expect(screen.getByTestId("raw-model").querySelector("dl")).not.toBeVisible();
   });
@@ -287,7 +294,7 @@ describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
     const { unmount } = render(<EventCard event={event()} featured />);
     let words = count("event-card");
     expect(words.length, words.join(" ")).toBeLessThanOrEqual(BUDGET);
-    expect(screen.getByTestId("local-confidence-badge")).toHaveTextContent("At the break: Low");
+    expect(screen.queryByTestId("local-confidence-badge")).toBeNull();
     unmount();
     render(<EventCard event={event(NOTES)} featured />);
     words = count("event-card");
@@ -304,6 +311,17 @@ describe(`first-screen word budget (≤ ${BUDGET} visible words)`, () => {
     unmount();
     render(<OpportunityCard match={match({ stale: true })} />);
     words = count("opportunity-card");
+    expect(words.length, words.join(" ")).toBeLessThanOrEqual(BUDGET + NOTES_ALLOWANCE);
+  });
+
+  it("opportunity cards of a spot whose refresh failed (review r2 FE-2)", () => {
+    // SYNTHETIC: the version marks the spot stale; the match's run is current.
+    const freshness = { version_id: 4, last_updated_at: new Date(Date.now() - 9 * 3_600_000).toISOString(), stale: true, reason: "refresh_failed" as const };
+    render(<OpportunityCard match={match({ stale: false, freshness })} />);
+    const card = screen.getByTestId("opportunity-card");
+    expect(within(card).getByTestId("stale-badge")).toHaveTextContent("Out of date");
+    expect(within(card).getByTestId("opportunity-card-stale")).toHaveTextContent("Forecast last updated 9 hours ago. Not a current forecast.");
+    const words = count("opportunity-card");
     expect(words.length, words.join(" ")).toBeLessThanOrEqual(BUDGET + NOTES_ALLOWANCE);
   });
 });

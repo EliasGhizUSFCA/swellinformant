@@ -8,7 +8,7 @@
 #   does the same with the address of the TCP peer, so a spoofed header never reaches the
 #   app (the API reads CLIENT_IP_HEADER=x-vercel-forwarded-for).
 # * Function limits of the API: a 4.5 MB request body (Vercel answers 413
-#   FUNCTION_PAYLOAD_TOO_LARGE) and maxDuration 60 s (vercel.json; Vercel answers 504).
+#   FUNCTION_PAYLOAD_TOO_LARGE) and maxDuration 300 s (vercel.json; Vercel answers 504).
 #
 # Not emulated: TLS, Vercel's CDN cache (Cache-Control / CDN-Cache-Control are passed through
 # and nothing is cached here), the Firewall and Deployment Protection.
@@ -39,7 +39,7 @@
 		reverse_proxy api:8000 {
 			import vercel_request_headers
 			transport http {
-				response_header_timeout 60s
+				response_header_timeout 300s
 			}
 		}
 	}

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from app.schemas.common import ORMModel
+from app.schemas.forecasts import SpotFreshnessOut
 
 # Wind regime (Beaufort-based km/h thresholds) and favourability at the spot, from the
 # stored wind_detail of a prediction (docs/SURF_SCORING.md, "Stored components contract").
@@ -17,6 +18,45 @@ WindFavourability = Literal["favourable", "workable", "unfavourable"]
 # Gust definitions: GFS instantaneous gust, ECMWF maximum over the last 3 h or since the
 # previous post-processing step, or not documented by the source.
 GustKind = Literal["gfs_instantaneous", "ecmwf_max_3h", "ecmwf_max_since_pp", "unknown"]
+ConfidenceClass = Literal["high", "moderate", "low"]
+
+
+class ForecastConfidenceOut(BaseModel):
+    """Forecast confidence of one hour: how dependable the offshore forecast is (lead time,
+    freshness, ensemble spread and model agreement where available; methodology
+    docs/forecast-confidence.md). A heuristic class from documented rules, not a calibrated
+    probability: ``kind`` says so. Its reasons are ``forecast_confidence_reasons``. Never
+    combined with research confidence."""
+
+    level: ConfidenceClass
+    kind: Literal["heuristic"] = "heuristic"
+    method: str | None = None  # e.g. "forecast-v1.2"
+
+
+class HourOutputs(BaseModel):
+    """Per-hour outputs of the quality model (algorithm 2.2.0; docs/SURF_SCORING.md 3a)."""
+
+    # Main favourable and unfavourable conditions, short plain phrases from the score's
+    # component fits ("well-aligned swell", "light offshore wind", "onshore wind 25 km/h"):
+    # at most three each, [] when none; None for hours scored before 2.2.0.
+    favourable: list[str] | None = None
+    unfavourable: list[str] | None = None
+    # Offshore-wind classification: strength + relation ("light offshore", "strong
+    # onshore", "glassy"); offshore = wind from the land to the sea at this break.
+    offshore_class: str | None = None
+    # The scoring model version of this hour (algorithm_version; "+w..." when
+    # SCORING_WEIGHTS_JSON changed the weights).
+    model_version: str | None = None
+
+
+class SeparateConfidences(BaseModel):
+    """Forecast confidence and research confidence of one hour, kept apart (spec 20)."""
+
+    # The forecast class at read time (capped at Moderate once the run is stale).
+    forecast_confidence: ForecastConfidenceOut | None = None
+    # The spot's overall research class the hour was scored with ("high" | "moderate" |
+    # "low"; None = not assessed): how well its ideal conditions are documented.
+    research_confidence: ConfidenceClass | None = None
 
 
 class AirportOut(ORMModel):
@@ -38,12 +78,14 @@ class SpotAirportOut(BaseModel):
     notes: str
 
 
-class Conditions(BaseModel):
+class Conditions(HourOutputs, SeparateConfidences):
     """One forecast hour at a spot. Two kinds of numbers live here, kept apart on purpose:
 
     * raw model data from the forecast source (offshore ``sig_wave_height_m``, swell and
       wind fields), and
-    * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``).
+    * our predictions (``breaking_height_*``, ``score``/``label``, ``confidence``, and the
+      hour outputs of the quality model, as on the hour's ForecastPoint and timeline step,
+      so a summary hour reads the same favourable / unfavourable conditions as its chart).
     """
 
     valid_time: datetime
@@ -67,6 +109,10 @@ class Conditions(BaseModel):
     source_name: str | None = None
     is_demo: bool = False
     run_issued_at: datetime | None = None
+    # The wave and atmosphere (wind) model runs behind this hour. A refresh of one component
+    # keeps the other's original run, so they can differ; run_issued_at is the older one.
+    wave_run_issued_at: datetime | None = None
+    atmosphere_run_issued_at: datetime | None = None
     method: str | None = None
     algorithm_version: str | None = None
     explanation: str | None = None
@@ -78,19 +124,14 @@ class Conditions(BaseModel):
     breaking_p90_ft: float | None = None
     uncertainty_kind: str | None = None
     ml_model_version: str | None = None
-    # Forecast confidence (the offshore forecast) and local confidence (the breaking
-    # prediction at this break, which also depends on how well the spot is researched):
-    # separate classes "high" | "moderate" | "low", plus short plain-language reasons.
-    # These are documented classifications, not calibrated probabilities.
+    # Forecast confidence class (the offshore forecast: "high" | "moderate" | "low"), a
+    # documented heuristic classification, not a calibrated probability; also in
+    # forecast_confidence with its label.
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = None
     # Deprecated: forecast, research and wind-dispute reasons mixed in one list. Use
-    # forecast_confidence_reasons, local_confidence_reason and wind_dispute_note.
+    # forecast_confidence_reasons and wind_dispute_note.
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
-    # The one reason local confidence is lower than forecast confidence (how well the
-    # break is understood); None when the two classes are equal.
-    local_confidence_reason: str | None = None
     # Forecast-confidence reasons only (lead time, model agreement, freshness ...), with the
     # stale reason first when staleness capped the class.
     forecast_confidence_reasons: list[str] = []
@@ -109,6 +150,8 @@ class MapSpotOut(BaseModel):
     conditions: Conditions | None
     event_at_time: bool  # an active swell event covers the selected time
     upcoming_event_count: int
+    # How fresh the spot's served forecast is (published version, last update, stale).
+    freshness: SpotFreshnessOut | None = None
 
 
 class AttributionLinkOut(BaseModel):
@@ -137,6 +180,8 @@ class MapSnapshotOut(BaseModel):
     # Credit and licence links of the sources behind the snapshot's runs (e.g. Open-Meteo's
     # CC BY 4.0 link, ECMWF's notice): shown next to the model data in the spot panel.
     attribution_links: list[AttributionLinkOut] = []
+    # The published forecast version the snapshot serves (None before the first one).
+    version_id: int | None = None
 
 
 class SpotMini(BaseModel):
@@ -181,13 +226,11 @@ class EventOut(BaseModel):
     is_demo: bool
     source_code: str
     history: list[dict[str, Any]] = []
-    # Forecast and local confidence at the event's peak hour (forecast-v1; see
-    # Conditions). None for events last updated before these classes existed.
+    # Forecast confidence at the event's peak hour (forecast-v1; see Conditions). None for
+    # events last updated before these classes existed.
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = None
     # Deprecated: mixed reasons (see Conditions.confidence_reasons).
     confidence_reasons: list[str] = []
-    local_confidence_reason: str | None = None
     forecast_confidence_reasons: list[str] = []
     wind_dispute_note: str | None = None
     wind_strength: WindStrength | None = None
@@ -198,6 +241,9 @@ class EventOut(BaseModel):
     # Credit and licence links of the sources behind the event's forecast run (every
     # member's for a blend), shown next to the event's model values.
     attribution_links: list[AttributionLinkOut] = []
+    # How fresh the spot's served forecast is (the published version's spot status: a spot
+    # whose refresh failed is stale although its run is not), as on SpotSummary (spec 14).
+    freshness: SpotFreshnessOut | None = None
 
 
 class SpotSummary(SpotMini):
@@ -215,6 +261,11 @@ class SpotSummary(SpotMini):
     # Overall research confidence of the spot ("high" | "moderate" | "low"); None when no
     # assessment exists yet.
     research_class: str | None = None
+    # How fresh the spot's served forecast is (published version, last update, stale).
+    freshness: SpotFreshnessOut | None = None
+    # Credit and licence links of the sources behind the spot's served run, shown with the
+    # values derived from it (its ratings, breaking heights and next swell).
+    attribution_links: list[AttributionLinkOut] = []
 
 
 class PhysicalProfileOut(BaseModel):
@@ -284,7 +335,12 @@ class SpotDetail(SpotSummary):
     research: ResearchOut | None = None
 
 
-class ForecastPoint(BaseModel):
+class ForecastPoint(HourOutputs, SeparateConfidences):
+    """One stored forecast hour of the spot forecast: raw model values, our breaking-height
+    estimate (``breaking_height_*``, the nearshore model's typical-to-sets range and
+    central value, an estimate that is not calibrated against observed surf), the score
+    and its per-hour outputs (``HourOutputs``) and the two separate confidences."""
+
     valid_time: datetime
     is_daylight: bool
     sig_wave_height_m: float | None
@@ -325,19 +381,12 @@ class ForecastPoint(BaseModel):
     wind_relation: str
     explanation: str
     components: dict[str, Any]
-    # Forecast confidence (the offshore forecast) and local confidence (the breaking
-    # prediction at this break, which also depends on how well the spot is researched):
-    # separate classes "high" | "moderate" | "low", plus short plain-language reasons.
-    # These are documented classifications, not calibrated probabilities.
+    # Forecast confidence class (see Conditions.forecast_confidence_class).
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = None
     # Deprecated: forecast, research and wind-dispute reasons mixed in one list. Use
-    # forecast_confidence_reasons, local_confidence_reason and wind_dispute_note.
+    # forecast_confidence_reasons and wind_dispute_note.
     confidence_reasons: list[str] = []
     lead_hours: float | None = None
-    # The one reason local confidence is lower than forecast confidence (how well the
-    # break is understood); None when the two classes are equal.
-    local_confidence_reason: str | None = None
     # Forecast-confidence reasons only (lead time, model agreement, freshness ...), with the
     # stale reason first when staleness capped the class.
     forecast_confidence_reasons: list[str] = []
@@ -362,9 +411,8 @@ class DailySummary(BaseModel):
     # Hours of Good or better daylight surf, weighted by each forecast step's duration.
     good_hours: float
     confidence: int
-    # Forecast and local confidence at the day's best hour (``best_time``).
+    # Forecast confidence at the day's best hour (``best_time``).
     forecast_confidence_class: str | None = None
-    local_confidence_class: str | None = None
 
 
 class ForecastSourceOut(BaseModel):
@@ -378,7 +426,9 @@ class ForecastSourceOut(BaseModel):
 
 
 class RunMemberOut(BaseModel):
-    """One model run behind a forecast (a blend member, or the single source itself)."""
+    """One model run behind a forecast: a blend member, the single source itself, or, for a
+    run whose wave and atmosphere components come from different model runs (a refresh of
+    one component carries the other forward), one entry per component."""
 
     code: str
     name: str
@@ -388,6 +438,9 @@ class RunMemberOut(BaseModel):
     init_time: datetime | None
     wave_model: str | None
     atmosphere_model: str | None
+    # Set on the per-component entries: which component, and when its data were fetched.
+    component: Literal["wave", "atmosphere"] | None = None
+    retrieved_at: datetime | None = None
 
 
 class ForecastRunOut(BaseModel):
@@ -461,6 +514,8 @@ class SpotForecastOut(BaseModel):
     alerts_paused: bool = False
     # Server time when this response was built (UTC).
     generated_at: datetime | None = None
+    # How fresh the spot's served forecast is (published version, last update, stale).
+    freshness: SpotFreshnessOut | None = None
 
 
 class RegionOut(BaseModel):

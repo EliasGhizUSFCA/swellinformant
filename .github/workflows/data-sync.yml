@@ -106,6 +106,8 @@ jobs:
           VARIABLE_SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
           VARIABLE_SMS_PROVIDER: ${{ vars.SMS_PROVIDER }}
           VARIABLE_FLIGHT_PROVIDER: ${{ vars.FLIGHT_PROVIDER }}
+          VARIABLE_WEATHER_PROVIDER: ${{ vars.WEATHER_PROVIDER }}
+          VARIABLE_WINDY_STORAGE_AUTHORIZED: ${{ vars.WINDY_STORAGE_AUTHORIZED }}
           VARIABLE_FORECAST_PROVIDERS: ${{ vars.FORECAST_PROVIDERS }}
           VARIABLE_GEFS_ENABLED: ${{ vars.GEFS_ENABLED }}
           VARIABLE_COMMERCIAL_USE: ${{ vars.COMMERCIAL_USE }}
@@ -208,6 +210,7 @@ jobs:
           REDIS_URL: ${{ secrets.REDIS_URL || secrets.KV_URL }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           OPEN_METEO_API_KEY: ${{ secrets.OPEN_METEO_API_KEY }}
+          WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -227,7 +230,7 @@ jobs:
             fi
           done
           # Unset secrets are empty strings here; drop them so the settings keep their defaults.
-          for name in OPEN_METEO_API_KEY RESEND_API_KEY SENDGRID_API_KEY SMTP_USERNAME \
+          for name in OPEN_METEO_API_KEY WINDY_API_KEY RESEND_API_KEY SENDGRID_API_KEY SMTP_USERNAME \
             SMTP_PASSWORD TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_FROM_NUMBER \
             TWILIO_MESSAGING_SERVICE_SID DUFFEL_ACCESS_TOKEN AMADEUS_CLIENT_ID \
             AMADEUS_CLIENT_SECRET; do

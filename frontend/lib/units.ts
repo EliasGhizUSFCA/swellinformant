@@ -3,8 +3,9 @@
  * in metres; the UI converts here, never on the server. Exact factors: 1 kn = 1.852 km/h,
  * 1 mph = 1.609344 km/h, 1 m/s = 3.6 km/h, 1 ft = 0.3048 m.
  *
- * Also the one site-wide wind-unit preference (the spot charts and the map settings), kept in
- * the browser under WIND_UNIT_KEY.
+ * Also the site-wide wind-unit and height-unit preferences (the spot charts and the map
+ * settings), kept in the browser under WIND_UNIT_KEY and HEIGHT_UNIT_KEY, so they work for
+ * visitors who are not signed in.
  */
 import { useSyncExternalStore } from "react";
 
@@ -106,6 +107,77 @@ function subscribeWindUnit(cb: () => void): () => void {
 export function useWindUnit(): [WindUnit, (u: WindUnit) => void] {
   const unit = useSyncExternalStore(subscribeWindUnit, readWindUnit, () => DEFAULT_WIND_UNIT);
   return [unit, writeWindUnit];
+}
+
+// --- the site-wide height-unit preference -------------------------------------------------
+//
+// Feet or metres for every surf and swell height (spot charts, spot summary, map). The choice
+// made on this browser wins; without one the account's units apply (signed in), else feet.
+// Stored like the wind unit, so it works for visitors who are not signed in.
+
+export const HEIGHT_UNITS: readonly HeightUnit[] = ["ft", "m"];
+/** localStorage key of the height preference: "ft" or "m". */
+export const HEIGHT_UNIT_KEY = "swell.heightUnit";
+/** Dispatched on window when the height preference changes in this tab. */
+export const HEIGHT_UNIT_EVENT = "swell:height-unit";
+
+export function isHeightUnit(v: unknown): v is HeightUnit {
+  return v === "ft" || v === "m";
+}
+
+// The choice for this page when storage refuses the write (private mode, blocked storage).
+let memoryHeightUnit: HeightUnit | null = null;
+
+/** The height unit chosen on this browser, or null when none (or an unknown value) is
+ * stored. Never throws. */
+export function storedHeightUnit(): HeightUnit | null {
+  if (memoryHeightUnit) return memoryHeightUnit;
+  try {
+    const v = window.localStorage.getItem(HEIGHT_UNIT_KEY);
+    return isHeightUnit(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Stores the height preference and, when it changed, tells this page (HEIGHT_UNIT_EVENT).
+ * With storage unavailable the choice lasts for this page only. */
+export function writeHeightUnit(unit: HeightUnit): void {
+  const before = storedHeightUnit();
+  try {
+    window.localStorage.setItem(HEIGHT_UNIT_KEY, unit);
+    memoryHeightUnit = null;
+  } catch {
+    memoryHeightUnit = unit;
+  }
+  if (before !== unit) window.dispatchEvent(new Event(HEIGHT_UNIT_EVENT));
+}
+
+function subscribeHeightUnit(cb: () => void): () => void {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === HEIGHT_UNIT_KEY || e.key === null) cb();
+  };
+  window.addEventListener("storage", onStorage);
+  window.addEventListener(HEIGHT_UNIT_EVENT, cb);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener(HEIGHT_UNIT_EVENT, cb);
+  };
+}
+
+/**
+ * [unit, setUnit]: the height unit to display. The browser's stored choice wins; otherwise
+ * `fallback` (pass the signed-in account's units; feet when signed out). Server render: the
+ * fallback.
+ */
+export function useHeightUnit(fallback: HeightUnit = "ft"): [HeightUnit, (u: HeightUnit) => void] {
+  const stored = useSyncExternalStore(subscribeHeightUnit, storedHeightUnit, () => null);
+  return [stored ?? fallback, writeHeightUnit];
+}
+
+/** Test hook: forget the in-memory fallback choice. */
+export function resetHeightUnitMemory(): void {
+  memoryHeightUnit = null;
 }
 
 /**

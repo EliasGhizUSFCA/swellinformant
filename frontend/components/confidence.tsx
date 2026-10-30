@@ -12,10 +12,8 @@ import {
   forecastOnlyReasons,
   LEGACY_INDEX_LABEL,
   legacyIndexText,
-  LOCAL_CONFIDENCE_MEANING,
   modelRunText,
   NOT_VERIFIED_TEXT,
-  pickLocalReason,
   RESEARCH_CONFIDENCE_MEANING,
   safeExternalUrl,
   SOURCE_TYPE_LABEL,
@@ -28,24 +26,17 @@ import type { Research } from "@/types/api";
 
 /**
  * Forecast confidence (per forecast hour) and research confidence (per spot) are separate
- * assessments: separate components, separate labels, never combined into one number.
+ * assessments: separate components, separate labels, never combined into one number (spec
+ * 20: the former combined "confidence at the break" is no longer shown).
  * Colour always comes with text: high = green, moderate = amber, low = red-orange and
  * "Not assessed yet" = neutral grey.
  */
 
-type ConfidenceKind = "forecast" | "local" | "research";
+type ConfidenceKind = "forecast" | "research";
 
 const KIND_LABEL: Record<ConfidenceKind, string> = {
   forecast: "Forecast confidence",
-  local: "Confidence at the break",
   research: "Spot research confidence",
-};
-
-/** Shorter prefixes for cards (the full name stays in the tooltip and for screen readers). */
-const SHORT_KIND_LABEL: Record<ConfidenceKind, string> = {
-  forecast: "Forecast confidence",
-  local: "At the break",
-  research: "Spot research",
 };
 
 const STYLE: Record<ConfidenceClass | "none", { badge: string; dot: string }> = {
@@ -113,6 +104,8 @@ export function ForecastConfidence({
   notes,
   validTime,
   runIssuedAt,
+  waveRunIssuedAt,
+  windRunIssuedAt,
   blend = false,
   nowMs,
   legacyIndex,
@@ -125,6 +118,10 @@ export function ForecastConfidence({
   notes?: readonly string[] | null;
   validTime?: string | null;
   runIssuedAt?: string | null;
+  /** The wave and wind model runs, when they differ (a component refreshed alone keeps the
+   * other's run): both ages are named instead of the older run's alone. */
+  waveRunIssuedAt?: string | null;
+  windRunIssuedAt?: string | null;
   /** The run is a blend: its issue time is only its oldest member's, and is named so. */
   blend?: boolean;
   nowMs?: number;
@@ -140,7 +137,12 @@ export function ForecastConfidence({
   const notVerified = [...(reasons ?? []), ...(notes ?? [])].some((r) => r.trim() === NOT_VERIFIED_TEXT);
   const clock = useNowMs();
   const now = nowMs ?? clock;
-  const run = runIssuedAt ? modelRunText(runIssuedAt, now) : null;
+  const split = !blend && !!waveRunIssuedAt && !!windRunIssuedAt && Date.parse(waveRunIssuedAt) !== Date.parse(windRunIssuedAt);
+  const run = split
+    ? `wave ${modelRunText(waveRunIssuedAt, now)} · wind ${modelRunText(windRunIssuedAt, now)}`
+    : runIssuedAt
+      ? modelRunText(runIssuedAt, now)
+      : null;
   const valid = validTime ? validInText(validTime, now) : null;
   const index = legacyIndexText(legacyIndex);
   const timing = [valid ? `valid ${valid}` : null, run && blend ? `oldest ${run}` : run].filter((t): t is string => !!t).join(" · ");
@@ -176,74 +178,6 @@ export function ForecastConfidence({
           {FORECAST_CONFIDENCE_MEANING}
         </p>
       </Disclosure>
-    </div>
-  );
-}
-
-/**
- * Confidence in the breaking-wave estimate at the break. Shown only when it differs from the
- * forecast class; the reason is the API's own (`local_confidence_reason`, passed in), or when
- * the response has none, the last reason about the break (pickLocalReason). `compact` shows a
- * short "At the break: Low" badge with the reason as its tooltip and for screen readers; inside
- * a card link that is all, while `explain` (outside links) adds a "Learn more" popover with the
- * reason, so it can be read on touch screens too.
- */
-export function LocalConfidence({
-  value,
-  forecastValue,
-  reasons,
-  reason,
-  compact = false,
-  explain = false,
-  dark = false,
-  className,
-}: {
-  value: string | null | undefined;
-  forecastValue: string | null | undefined;
-  reasons?: readonly string[] | null;
-  reason?: string | null;
-  compact?: boolean;
-  /** Compact only, never inside a link: add a popover with the reason. */
-  explain?: boolean;
-  dark?: boolean;
-  className?: string;
-}) {
-  const local = asConfidenceClass(value);
-  const fc = asConfidenceClass(forecastValue);
-  if (local === fc) return null;
-  const why = reason ?? pickLocalReason(reasons);
-  if (compact) {
-    return (
-      <span className={cn("inline-flex items-center gap-0.5", className)} data-testid="local-confidence" data-confidence={local ?? "none"} title={why ?? LOCAL_CONFIDENCE_MEANING}>
-        <ConfidenceBadge value={value} kind="local" label={SHORT_KIND_LABEL.local} className={dark ? "border-white/20" : undefined} />
-        {why && (
-          <span className="sr-only" data-testid="local-confidence-reason">
-            {" "}
-            {why}
-          </span>
-        )}
-        {explain && (
-          <InfoPopover title={KIND_LABEL.local} tone={dark ? "dark" : "default"}>
-            {why && <p className="text-ink">{why}</p>}
-            <p>{LOCAL_CONFIDENCE_MEANING}</p>
-          </InfoPopover>
-        )}
-      </span>
-    );
-  }
-  return (
-    <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1", className)} data-testid="local-confidence" data-confidence={local ?? "none"}>
-      <span className="inline-flex items-center gap-1">
-        <ConfidenceBadge value={value} kind="local" />
-        <InfoPopover term="localConfidence">
-          <p>{LOCAL_CONFIDENCE_MEANING}</p>
-        </InfoPopover>
-      </span>
-      {why && (
-        <span className="min-w-0 text-xs text-muted-foreground" data-testid="local-confidence-reason">
-          {why}
-        </span>
-      )}
     </div>
   );
 }

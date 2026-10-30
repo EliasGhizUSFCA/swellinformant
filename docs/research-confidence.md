@@ -482,3 +482,16 @@ orientation). Of the 19 spots over 60°, 12 have wind decision records and 6 hav
 (Rincon, Punta de Lobos, Padang Padang, Burleigh Heads, Safi: `wave_face`; Bells Beach:
 `stated_orientation`); **Restaurants** remains listed, because no source describes the
 reef's orientation or the wave wrapping.
+
+## 11. Per-spot research documents
+
+[`docs/surf_spot_research/`](surf_spot_research/README.md) has one generated file per spot
+(spec section 17): the ideal conditions the evidence supports (from
+`data/surf_spots/research_conditions.json`, each value citing the exact excerpts of this
+file's claims, unsupported fields marked *not documented*), the conflicting and missing
+information, the model settings the evidence does not support (a research field that is not
+documented or conflicting, or a variable whose assessment above has no support or an
+unresolved conflict), the research-confidence class of this methodology, the sources and the
+last review date (newest `accessed_at`). Forecast confidence is not part of these files.
+Regenerate them with `backend/.venv/bin/python scripts/generate_spot_research_docs.py`; the
+unit test `test_spot_research_docs.py` fails when one is out of date.

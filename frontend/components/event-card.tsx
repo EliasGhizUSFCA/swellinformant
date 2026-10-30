@@ -3,11 +3,12 @@
 import { CalendarDays, Waves, Wind } from "lucide-react";
 import Link from "next/link";
 
-import { ConfidenceBadge, LocalConfidence } from "@/components/confidence";
+import { ConfidenceBadge } from "@/components/confidence";
 import { DemoBadge } from "@/components/quality";
 import { RatingHeadline } from "@/components/rating";
-import { StaleBadge } from "@/components/stale-banner";
+import { StaleBadge, StaleLine } from "@/components/stale-banner";
 import { WindDisputeNote } from "@/components/wind-dispute";
+import { currentFirst, freshnessOf, freshnessTitle, outOfDate } from "@/lib/forecast-fields";
 import { compass, formatRange, heightRange, leadLabel, seconds, type Units } from "@/lib/format";
 import { colorForScore, WIND_RELATION_LABEL } from "@/lib/quality";
 import { ratingReason } from "@/lib/rating";
@@ -19,8 +20,10 @@ import type { SwellEvent } from "@/types/api";
 /**
  * One upcoming swell event: rating at its peak, our breaking-wave estimate, the surf window,
  * the offshore swell and wind behind it, and its forecast confidence ("Not assessed yet"
- * until the API provides a class). Confidence at the break gets its own badge when it is
- * lower than forecast confidence, and a stale forecast run is tagged "Out of date".
+ * until the API provides a class; never combined with research confidence, spec 20). An
+ * out-of-date forecast is tagged "Out of date": a stale run (`stale`) or a spot the published
+ * version marks stale (`freshness`, e.g. its refresh failed), which also says when the spot
+ * was last updated (spec 14).
  * ``featured`` gives the best event more room.
  */
 export function EventCard({
@@ -44,6 +47,7 @@ export function EventCard({
     windFavourability: event.wind_favourability,
   });
   const muted = dark ? "text-white/70" : "text-muted-foreground";
+  const fresh = freshnessOf(event);
   return (
     <Link
       href={`/spots/${event.spot.slug}`}
@@ -90,19 +94,36 @@ export function EventCard({
         </div>
       </div>
       <WindDisputeNote note={event.wind_dispute_note} reasons={event.confidence_reasons} className="mt-1.5" />
+      {/* The rating above is from the spot's last update, not a current forecast. */}
+      <StaleLine freshness={fresh} className={cn("mt-2", dark && "text-amber-200")} data-testid="event-card-stale" />
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {/* Forecast confidence only: the combined "confidence at the break" mixed research
+            and forecast confidence (spec 20) and is no longer shown. */}
         <ConfidenceBadge value={event.forecast_confidence_class} />
-        <LocalConfidence
-          compact
+        <StaleBadge
+          stale={event.stale || fresh?.stale}
           dark={dark}
-          value={event.local_confidence_class}
-          forecastValue={event.forecast_confidence_class}
-          reason={event.local_confidence_reason}
-          reasons={event.confidence_reasons}
+          title={event.stale ? undefined : freshnessTitle(fresh)}
         />
-        <StaleBadge stale={event.stale} dark={dark} />
         {event.is_demo && <DemoBadge />}
       </div>
     </Link>
+  );
+}
+
+/** The dashboard's top swells: the current spots' first, then the out-of-date ones; the
+ * first current one is featured ("Best upcoming surf"), never a stale spot's (spec 14). */
+export function TopEventCards({ events, units = "ft" }: { events: readonly SwellEvent[]; units?: Units }) {
+  return (
+    <div className="grid gap-3 sm:grid-cols-2" data-testid="top-events">
+      {currentFirst(events).map((e, i) => {
+        const featured = i === 0 && !outOfDate(e);
+        return (
+          <div key={e.id} className={featured ? "min-w-0 sm:col-span-2" : "min-w-0"}>
+            <EventCard event={e} units={units} featured={featured} />
+          </div>
+        );
+      })}
+    </div>
   );
 }

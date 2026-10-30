@@ -1,9 +1,20 @@
 # Surf quality, breaking height, uncertainty, confidence and swell events
 
 Source: `backend/app/services/surf_quality/` and `backend/app/services/swell_detection/`.
-Algorithm version: `ALGORITHM_VERSION = "2.1.0"` (stored on every prediction row, so a
-changed algorithm never silently mixes with old scores; the live run is rescored after an
-upgrade while the prediction archive keeps what was originally issued).
+Algorithm version: `ALGORITHM_VERSION = "2.2.0"` (stored on every prediction row, so a
+changed algorithm never silently mixes with old scores; the served runs are rescored after
+an upgrade while the prediction archive, when enabled, keeps what was originally issued).
+With `SCORING_WEIGHTS_JSON` set to other weights the stored version carries a tag of them,
+e.g. `2.2.0+w1a2b3c4d` (section 3f).
+
+**2.2.0 in short** (Swell 2.0, spec sections 18-20). Scores are the same as 2.1.0's with the
+default weights (measured, section 3h). New: every hour stores its main favourable and
+unfavourable conditions as short plain phrases (section 3g); an onshore or cross-onshore wind
+is at best "workable" in the wind's favourability class (section 3b); the component weights
+can be set with `SCORING_WEIGHTS_JSON` (section 3f); the API gives forecast confidence and
+research confidence as two separate fields and the combined "local confidence" is deprecated
+(section 5). The scoring path imports no data library, and the optional ML correction and
+prediction archive are off by default (section 8).
 
 > **Calibration status.** The nearshore model, the uncertainty model, the score weights, the
 > wind model and every per-spot parameter are a reasoned, documented first version. None has
@@ -144,7 +155,9 @@ shown: under an unverified error model they would look more precise than they ar
 ## 3. Quality score (0–100)
 
 Each component maps to [0, 1]. The base score is the weighted mean over the components
-whose inputs exist; weights are renormalised so missing data does not count as zero.
+whose inputs exist; weights are renormalised so missing data does not count as zero. The
+weights below are the defaults (`weights.DEFAULT_WEIGHTS`); `SCORING_WEIGHTS_JSON` can
+change them (section 3f).
 
 | Component | Weight | Mapping |
 |-----------|-------:|---------|
@@ -199,7 +212,7 @@ and `wind_relation` keep the profile's direction. When a tide stage exists but t
 not scored, the explanation ends with *"tide not scored (tide preference not well
 established: research confidence is low)"* or similar.
 
-## 3a. Stored components contract (algorithm 2.1.0)
+## 3a. Stored components contract (algorithms 2.1.0 and 2.2.0)
 
 `surf_quality_predictions.components` (JSONB) is read by the spot timeline API ("Why this
 forecast?") and by the confidence and text layer. Algorithm 2.0.0 stores the factor fits
@@ -218,6 +231,8 @@ writes `QualityResult.stored_components()`).
 | `direction_partitions` | `[{kind, weight, direction_fit, period_fit}]` | Swell direction and period scored per wave partition (`primary_swell`, `secondary_swell`, `tertiary_swell`, `wind_sea` or `combined`), with weight `Hb_i^2.5 / sum(Hb_j^2.5)`; absent when no partition breaks |
 | `tide_detail` | `{stage, rising, range_m, source}` | Present only when the tide is scored |
 | `tide_excluded_reason` | string | Present only when the tide is not scored, saying why: "No tide prediction for this time." or "Tide preference not well established: …" (research confidence is low, not assessed for this break, sources disagree, or no preference recorded) |
+| `favourable` | `[string]` | 2.2.0: the hour's main favourable conditions, at most three short phrases (section 3g) |
+| `unfavourable` | `[string]` | 2.2.0: the hour's main unfavourable conditions, at most three (section 3g) |
 
 Contributions: factor k with weight `w_k` and fit `c_k` costs `100·w_k·(1 − c_k)` of the
 base; the gates then remove `100·base·(1 − G)` with G the product of the gates, shared
@@ -232,7 +247,8 @@ the unrounded score are exactly 100.
 | `v_offshore_kmh` | float | `V . n`, with `V` the forecast mean wind velocity (where the air goes) and `n` the seaward unit normal (bearing `offshore_wind_direction + 180`): positive = offshore component, negative = onshore. Shelter and scored gusts change only the speed the fit uses, not these components (section 3b); None for an unknown direction |
 | `v_cross_kmh` | float | Size of the cross-shore component of the same wind, `abs(V x n)` |
 | `strength` | `glassy` \| `light` \| `moderate` \| `strong` | Speed class (Beaufort-based, km/h): glassy at most 5.0; light below 12.0; moderate below 29.0; strong from 29.0 |
-| `favourability` | `favourable` \| `workable` \| `unfavourable` | From `q`: favourable at 0.75 or more, workable at 0.4 or more, otherwise unfavourable |
+| `favourability` | `favourable` \| `workable` \| `unfavourable` | From `q`: favourable at 0.75 or more, workable at 0.4 or more, otherwise unfavourable; an onshore or cross-onshore wind is at best workable (2.2.0, section 3b) |
+| `onshore_capped` | bool | 2.2.0: `q` alone would make the wind favourable, but it is onshore or cross-onshore, so it is workable |
 | `gust_used` | bool | Whether gusts entered `q` (only with `WIND_GUST_SCORING=scored` and a documented gust definition) |
 | `params` | `{name: {value, provenance[, sources]}}` | Every wind-model parameter used, with `provenance` `research`, `beaufort` or `heuristic`; research-based spot values also list their evidence keys (`sources`) |
 
@@ -376,8 +392,26 @@ read 2026-10-14) gives the same forces in knots: force 2 4–6 kt, forces 3–4 
 form used here.
 
 **Favourability** (`wind_detail.favourability`): favourable when `q ≥ 0.75`, workable when
-`q ≥ 0.4`, otherwise unfavourable. A 5.8 km/h onshore breeze is "light", "onshore" and
-"favourable" (q 0.91); a 45 km/h offshore wind is "strong", "offshore" and "workable".
+`q ≥ 0.4`, otherwise unfavourable, with one cap (2.2.0): an **onshore or cross-onshore** wind
+(more than 105° from straight offshore, above the 5 km/h glassy limit) is at best
+**workable**. Straight onshore wind keeps `q ≥ 0.75` up to about 8.6 km/h
+(`v_half·3^(−1/3)` = 8.67 km/h), and a cross-onshore one, whose onshore part is smaller, up to
+about 15–21 km/h; under 2.1.0 those winds were called favourable, but light onshore wind is
+often marginal for surf (spec 19). The cap changes the class only: `q`, the wind gate and the
+score are unchanged (`wind_detail.onshore_capped` marks the hours it changed). The relation
+used is the one against the offshore direction that gave `q` (the profile's, unless a further
+wave face of `extra_offshore_deg` suits the wind better; no spot has one yet). A 5.8 km/h
+onshore breeze is "light", "onshore" and now "workable" (q 0.91); a 45 km/h offshore wind is
+"strong", "offshore" and "workable". Measured on the real run (section 3h): 1,857 of 25,000
+hours at 45 of 50 spots change from favourable to workable.
+
+**Direction conventions on the map and the charts.** Directions are FROM bearings
+everywhere (data, API and text: "offshore wind" blows from the land, "a W wind" comes from
+the west). Map and chart arrows point where the wind or waves GO, the FROM bearing + 180°
+(`frontend/lib/directions.ts` `arrowRotationDeg`, the same vector `wind.wind_vector` scores:
+u = −V·sin θ, v = −V·cos θ, so a west wind has u > 0 and its arrow points east). Tests:
+`tests/unit/test_scoring_conditions.py` (the vector points TO, `geo.wind_from_uv` inverts it;
+opposing coastlines) and `frontend/tests/directions.test.ts`.
 
 **Spot wind profiles** (`spot_physical_profiles.wind_profile`, from
 `data/surf_spots/physical_profiles.json`). Optional per-spot knowledge, filled only from
@@ -461,7 +495,7 @@ and Thurso East at high, 14 at moderate; 8 of the 18 prefer "all" tides, which a
 1); 21 are excluded because sources disagree, 6 for a low research class and 5 without a
 preference.
 
-## 3e. Multiple swell systems and the effect on the real run
+## 3e. Multiple swell systems and the effect on the real run (2.1.0)
 
 **Partition weighting.** WAVEWATCH III ranks swell partitions by offshore height, so the
 "primary" swell can come from a blocked direction while a smaller, well-aligned groundswell
@@ -532,6 +566,117 @@ Cloudbreak 2026-10-20 03Z, 36 km/h from 133° (offshore 135°), a 2.6 m 9.6 s wi
 in 2.0.0) and now also the direction and period fits, which usually lowers the score. 2.1.0 does not correct this;
 it needs a decision on how wind sea is transmitted at such breaks.
 
+## 3f. Configurable weights (`SCORING_WEIGHTS_JSON`, `weights.py`)
+
+`SCORING_WEIGHTS_JSON` (optional; empty = the defaults of section 3) is a JSON object of
+component weights, e.g. `{"wind": 0.35, "tide": 0}`:
+
+* keys must be component names: `swell_direction`, `swell_period`, `wave_size`, `wind`,
+  `tide`, `consistency`; components it does not name keep their default;
+* values are finite numbers ≥ 0; 0 leaves that component out of the score, its
+  limiting-factor gate included (a `wind` or `swell_period` weighted 0 no longer gates the
+  score, and no phrase names it); `wave_size`, the one component every hour has, must stay
+  above 0, and its size gate always applies;
+* weights are renormalised over the components an hour has, so they need not sum to 1.
+
+An invalid value is a start-up error: the settings refuse to load and name
+`SCORING_WEIGHTS_JSON` and the key (the foundation's validator checks the JSON and the
+numbers, `weights.validate_weights` the names; `tests/unit/test_scoring_weights.py`). When
+the effective weights differ from the defaults, the stored version is
+`ALGORITHM_VERSION + "+w" + 8 hex digits` of their SHA-256 (`weights.tagged_version`, at most
+15 characters), so scores made with other weights never mix with default ones and a
+weights change rescores the served runs at the next prediction pass
+(`predict.outdated_authoritative_runs` compares with `predict.current_model_version()`).
+The defaults are exactly the 2.1.0 constants: `tests/unit/test_scoring_weights.py` checks
+that 160 SYNTHETIC hours at the 50 spots score, to the last digit (score, label, fits,
+gates, weights used, points lost and explanation), what the 2.1.0 code gave them
+(`tests/fixtures/scoring/scores_2_1_0.json`, produced by commit a00da14), with no weights,
+the defaults given explicitly and `SCORING_WEIGHTS_JSON` naming every default. The weights
+are reasoned, not calibrated: no observation dataset exists to fit them.
+
+## 3g. Per-hour outputs (spec 18)
+
+Every forecast hour has, in `GET /api/spots/{slug}/forecast` (`points[]`) and
+`GET /api/spots/{slug}/timeline` (`steps[].quality`), besides the score and its class (the
+summary hours, `current` and `best_upcoming` of `GET /api/spots` and `/api/spots/{slug}` and
+the `conditions` of `GET /api/map/conditions`, carry the same `favourable`, `unfavourable`,
+`offshore_class` and `model_version` as that hour's point, so a summary reads the same
+conditions as its chart):
+
+| Field | Meaning |
+|---|---|
+| `score`, `label` | 0–100 score and quality class (section 3) |
+| `breaking_height_min_ft` / `_max_ft` / `_mid_ft` (timeline: `breaking.typical_ft` / `sets_ft` / `central_ft`) | Estimated breaking face height from the `linear_wave_v2` nearshore model (section 2), with its heuristic `p10`/`p90` range; an estimate, not calibrated against observed surf |
+| `offshore_class` | Offshore-wind classification: strength + relation, e.g. "light offshore", "moderate cross-shore", "strong onshore", "glassy"; None without wind data |
+| `favourable`, `unfavourable` | The main favourable and unfavourable conditions (below) |
+| `forecast_confidence` | `{level, kind: "heuristic", method}`: the forecast-confidence class (section 5) at read time (capped at Moderate once the run is stale), labelled heuristic; its reasons are `forecast_confidence_reasons` |
+| `research_confidence` | The spot's overall research class the hour was scored with ("high" / "moderate" / "low"; None = never assessed): how well its ideal conditions are documented (docs/research-confidence.md) |
+| `model_version` | The scoring model version of the hour (`algorithm_version`, tagged when the weights differ) |
+
+**Favourable and unfavourable conditions** (`reasons.py`, stored in the prediction's
+components): short plain phrases built only from the component fits the score used:
+
+* a factor whose fit is at least 0.75 (the explanation's "good" cut-off) can be favourable,
+  one below 0.4 unfavourable, and so is a size or period whose gate is below 1 (it holds the
+  whole score down); fits in between are not a main condition;
+* swell: "well-aligned swell" (or "secondary swell", "wind sea"), "swell poorly aligned
+  with the break", "swell mostly blocked at this break" (outside the swell window); period:
+  "good swell period (14 s)", "period too short for this reef (8 s)" (the spot's break type).
+  Direction and period are scored over every partition (section 3e), so each phrase names
+  the partition behind its claim (`scoring.named_partition`): a favourable one the heaviest
+  partition whose own fit is at least 0.75 (one exists whenever the weighted fit is), an
+  unfavourable one the heaviest whose own fit is below 0.4; without such a partition, the
+  one that adds most to the weighted fit (largest weight × fit) or costs it most (largest
+  weight × (1 − fit), a fit below 1). That is not always the partition that drives the
+  surf: a small 16 s swell can carry the largest share while a 6 s swell and
+  a 5 s wind sea make the period fit poor, and the phrase is then "period too short for this
+  reef (6 s)", never "(16 s)" (the explanation sentence still describes the driving
+  partition, as in 2.1.0); size: "good size for this break (4–6 ft)", "too small
+  (1.5–2 ft)", "too big for this break (13–16.5 ft)"; consistency: "mostly wind sea, little
+  organised swell";
+* wind: favourable "glassy, near-calm wind" or strength + relation ("light offshore wind",
+  "moderate cross-offshore wind"), never for a strong wind (strong offshore may be less
+  favourable); unfavourable "onshore wind 25 km/h", "strong offshore wind 60 km/h", and also
+  every merely workable onshore or cross-onshore wind ("light onshore wind 6 km/h");
+* tide: "favourable tide stage" / "unfavourable tide stage" only when the tide was scored
+  (section 3d); a spot without an established preference gets no tide phrase, so no
+  preference is ever implied;
+* at most three phrases per list, ordered by the points the factor added to the score
+  (favourable) or cost it, its gate included (unfavourable).
+
+Measured on the real run (section 3h), most frequent favourable phrases: good size (19,056 of
+25,000 hours), well-aligned swell (16,658), moderate offshore wind (4,401); unfavourable:
+period too short for this reef (7,116) or point (4,346), too small (3,648), onshore wind
+(2,244). 668 hours had no favourable phrase and 6,738 no unfavourable one. Every direction
+and period phrase names a partition whose own fit supports it (at least 0.75 for a
+favourable phrase, below 1 for an unfavourable one: 0 exceptions among 37,525 such phrases);
+naming the driving partition instead, as a first version did, contradicted the partition's
+own fit in 356 of them (e.g. "period too short for this reef (16 s)"). Rows scored before
+2.2.0 have no lists (`null` in the API) until they are rescored (the served runs are
+rescored after the upgrade).
+
+## 3h. 2.2.0 on the real run
+
+Measured on a copy of `swell_u3i_live_run` (the 2026-10-16 00Z runs: Open-Meteo NOAA GFS,
+Open-Meteo ECMWF and the blend; 25,000 predictions at the 50 spots, migrated to 0009) by
+rescoring every run at a fixed clock (2026-10-16 06:00 UTC) with 2.1.0 and with 2.2.0 and
+comparing every row (scratch tools, not committed):
+
+* scores, labels, breaking heights, confidence and every component other than the new keys:
+  identical in all 25,000 rows (0 differences);
+* wind favourability class: 1,857 hours (7.4 %) at 45 of 50 spots change from favourable to
+  workable (759 onshore, 1,098 cross-onshore; onshore ones 5.0–11.8 km/h, median 7.7;
+  cross-onshore ones 5.0–21.4 km/h, median 9.7); nothing else changes class:
+
+| Class | 2.1.0 | 2.2.0 |
+|---|---:|---:|
+| favourable | 14,748 | 12,891 |
+| workable | 5,332 | 7,189 |
+| unfavourable | 4,920 | 4,920 |
+
+On the demo data (12,000 SYNTHETIC hours) 1,238 hours at all 50 spots change the same way
+(favourable 8,163 → 6,925, workable 2,237 → 3,475), scores again identical.
+
 ## 4. Daylight
 
 Sunrise and sunset come from the NOAA solar position approximation (±2 min), extended by
@@ -557,8 +702,10 @@ High for about two days, Moderate to about day six and Low beyond — matching t
 of wave-forecast skill between days 4 and 10. With GEFS-Wave the index varies with the
 situation (spread varies about fivefold at a fixed lead).
 
-**Forecast confidence** (`forecast_confidence_class`, methodology `forecast-v1.1`: forecast-v1
-plus a disputed-wind note that changes no class): starts from
+**Forecast confidence** (`forecast_confidence_class`, and in the API `forecast_confidence`
+`{level, kind: "heuristic", method}`; methodology `forecast-v1.2`: forecast-v1 plus a
+disputed-wind note that changes no class and the blend's wind-direction disagreement cap):
+starts from
 the index class and applies documented caps and downgrades — lead time (beyond 7 days at most
 Moderate, beyond 10 days Low, 3–7 days High only with a small ensemble spread), large GEFS-Wave
 spread, disagreement between *independent* model families only (GFS vs ECMWF; GFS-Wave and
@@ -568,16 +715,29 @@ single model beyond 3 days. A rule can only lower the class. Each hour stores th
 reasons ("An 8-day forecast — forecasts this far out often change.", "GFS and ECMWF disagree on
 swell size.") and every input and rule (`confidence_inputs`).
 
-**Local confidence** (`local_confidence_class`): confidence in the *breaking-wave* prediction
-at this break = min(forecast confidence, research basis), research basis = min(swell
-direction, swell size, max(bathymetry, local behaviour)) from the spot's research assessment;
-no assessment gives Low ("How this break responds to swell is not well documented yet.").
-When it is lower than forecast confidence, that one research sentence is also returned as
-`local_confidence_reason`, so the UI never has to pick it out of `confidence_reasons`.
+**Research confidence** (`research_confidence` in the API): how well the spot's ideal
+conditions are documented, the overall class of its research assessment
+([research-confidence.md](research-confidence.md)), stored with each hour when it is scored
+(the served runs are rescored when the assessment changes). It is a property of the spot's
+research, not of the forecast: a 10-day swell at a well-researched break is still a 10-day
+forecast, and a fresh forecast at a poorly documented break is still poorly documented.
+
+**The two are never combined** (spec 20). Forecast confidence takes no research input
+(`classify_forecast` has none) and research confidence no forecast input;
+`tests/unit/test_scoring_conditions.py` and `tests/integration/test_scoring_outputs.py` check
+that changing one never changes the other (a research class flip leaves every forecast class
+of a rescored run unchanged; a stale run changes forecast classes and no research class).
+
+**Local confidence (deprecated)** (`local_confidence_class`, `local_confidence_reason`):
+min(forecast confidence, research basis), research basis = min(swell direction, swell size,
+max(bathymetry, local behaviour)); no assessment gives Low. It combines the two, so since
+Swell 2.0 no decision uses it (no alert rule, ranking, matching or detection threshold reads
+it); it is still stored and returned, marked deprecated in the OpenAPI schema, until the UI
+no longer reads it, and is then to be removed. The alert email still prints it as
+"Confidence at this break" (`notifications/templates.py`, outside this package): to be
+dropped with the field.
 
 Rules, thresholds and the evidence behind them: [forecast-confidence.md](forecast-confidence.md).
-Research confidence (how well the break is documented) is a separate assessment
-([research-confidence.md](research-confidence.md)); the three are never merged into one number.
 
 Run-to-run change is stored as a diagnostic (`components.run_agreement`) and is not an index
 factor: it predicted error much more weakly than ensemble spread in the research analysis. It
@@ -632,5 +792,33 @@ exponents (b = 0.8, c = 0.4, d = 0.4) and store `{"a", "b", "c", "d", "sigma_ln"
 pass a coverage check on held-out observations. Offshore-Hs post-processing with ML is a
 separate, buoy-verified step (`docs/ml-pipeline.md`).
 
-The scoring weights live in one place (`WEIGHTS`, `LABEL_THRESHOLDS`, `WIND_GATE_FULL_Q` in
-`scoring.py`), the wind model's defaults in `WindParams` (`wind.py`).
+The default scoring weights live in `weights.DEFAULT_WEIGHTS` (overridable with
+`SCORING_WEIGHTS_JSON`, section 3f), the label thresholds and the wind gate in `scoring.py`
+(`LABEL_THRESHOLDS`, `WIND_GATE_FULL_Q`), the wind model's defaults in `WindParams`
+(`wind.py`).
+
+## 8. Optional parts and the lean scoring path
+
+The prediction job (`surf_quality/predict.py`) runs in the refresh Function, whose install
+has no pandas, scikit-learn, SciPy, pyarrow, joblib or ecCodes (design D8):
+
+* the demo tide stages are plain Python, value for value the pandas rolling window they
+  replaced (`tests/unit/test_tide_stages.py` compares the two on 400 SYNTHETIC series);
+  rescoring the demo data (12,000 hours, every one with a demo tide stage) and the real run
+  (25,000 hours, whose tide stages come from tide predictions, not the demo stages) with the
+  pandas code and the plain one gave identical rows (0 differences, maximum absolute
+  difference 0);
+* the **ML correction** of offshore Hs is optional and off by default
+  (`ML_CORRECTIONS_ENABLED=false`, spec 2: no ML in the default path). The ML code stays
+  (docs/ml-pipeline.md) and is imported only when the setting is on and an ACTIVE model
+  version exists (`predict.run_corrector` for the prediction job,
+  `ml.hook.RunCorrector.for_run` for each blend member; `ml/hook.py` imports its ML modules
+  inside the functions that use them);
+* the **prediction archive** (`forecasts/archive.py`) is optional and off by default
+  (`PREDICTION_ARCHIVE_ENABLED=false`; the full-retention profile turns it on). When on, it
+  archives the served runs of the published forecast version.
+
+`tests/unit/test_lean_imports.py` imports the prediction path and scores a SYNTHETIC run with
+every extra missing (and in the lean install when `LEAN_PYTHON` is set);
+`tests/integration/test_lean_predict.py` runs the whole prediction job on a demo run that
+way.

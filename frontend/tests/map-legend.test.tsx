@@ -11,6 +11,7 @@ import { BLOB_PROFILE, dashAlpha, dashTint } from "@/lib/map-waves";
 // The index below is SYNTHETIC test data.
 const INDEX: FieldIndex = {
   available: true,
+  enabled: true,
   message: null,
   source: { code: "synthetic", name: "Synthetic test fields", attribution: "Synthetic test data, not a forecast", is_demo: true },
   run_key: "run-1",
@@ -23,9 +24,10 @@ const INDEX: FieldIndex = {
   stale: false,
 };
 
-const legend = (index: FieldIndex, layer: "hs" | "wind" = "hs", windOverlay = false) =>
+const legend = (index: FieldIndex, layer: "hs" | "wind" = "hs", windOverlay = false, fieldsOff = false) =>
   render(
     <LegendDrawer
+      fieldsOff={fieldsOff}
       settings={{ ...DEFAULT_SETTINGS, layer, windOverlay }}
       scale={LAYER_SCALES[layer]}
       units={{ height: "m", wind: "mph" }}
@@ -40,6 +42,22 @@ afterEach(() => {
 });
 
 describe("map legend", () => {
+  it("has no layer colour scale when the site switched the ocean layers off (review r4-spec-R4-SPEC-2)", () => {
+    const off: FieldIndex = { available: false, enabled: false, message: "Ocean layers are switched off (MAP_FIELDS_ENABLED=false).", valid_times: [], variables: [], stale_after_hours: 12, stale: false };
+    legend(off, "hs", false, true);
+    expect(screen.queryByTestId("legend-scale")).toBeNull();
+    expect(screen.queryByTestId("legend-title")).toBeNull();
+    expect(screen.getByTestId("legend-source")).toHaveTextContent("switched off");
+    // The spot markers are still explained.
+    expect(screen.getByTestId("map-legend")).toBeInTheDocument();
+  });
+
+  it("keeps the colour scale while the layers are only unavailable", () => {
+    const missing: FieldIndex = { available: false, enabled: true, message: "No ocean-layer fields are stored yet.", valid_times: [], variables: [], stale_after_hours: 12, stale: false };
+    legend(missing);
+    expect(screen.getByTestId("legend-scale")).toBeInTheDocument();
+  });
+
   it("keys the crest systems drawn, primary first, with the stated scales and conventions", () => {
     act(() => publishMapFlowStatus({ systems: ["secondary", "primary"], validTime: "2026-10-14T12:00:00Z", zoom: 2, centreLat: 0 }));
     legend(INDEX);

@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { ConfidenceBadge, ForecastConfidence, LocalConfidence, ResearchConfidence } from "@/components/confidence";
+import * as confidenceComponents from "@/components/confidence";
+import { ConfidenceBadge, ForecastConfidence, ResearchConfidence } from "@/components/confidence";
 import { EventCard } from "@/components/event-card";
 import {
   asConfidenceClass,
@@ -12,7 +13,6 @@ import {
   legacyIndexText,
   modelRunText,
   NOT_VERIFIED_TEXT,
-  pickLocalReason,
   RESEARCH_REASON_TEXTS,
   safeExternalUrl,
   validInText,
@@ -193,41 +193,9 @@ describe("ForecastConfidence", () => {
   });
 });
 
-describe("LocalConfidence", () => {
-  it("is hidden when it matches the forecast class", () => {
-    const { container } = render(<LocalConfidence value="moderate" forecastValue="moderate" reasons={["x"]} />);
-    expect(container).toBeEmptyDOMElement();
-    const both = render(<LocalConfidence value={null} forecastValue={null} />);
-    expect(both.container).toBeEmptyDOMElement();
-  });
-
-  it("shows the at-the-break class and the API's reason about the break when it differs", () => {
-    render(
-      <LocalConfidence
-        value="low"
-        forecastValue="high"
-        reasons={["Synthetic: the models agree.", "Synthetic: this break's preferred tide is not documented in the research."]}
-      />,
-    );
-    expect(screen.getByTestId("local-confidence-badge")).toHaveTextContent("Confidence at the break: Low");
-    expect(screen.getByTestId("local-confidence-reason")).toHaveTextContent("Synthetic: this break's preferred tide is not documented in the research.");
-  });
-
-  it("does not take a forecast reason that merely mentions the spot", () => {
-    render(
-      <LocalConfidence
-        value="low"
-        forecastValue="moderate"
-        reasons={["Synthetic: not yet checked against buoys near this spot.", "Synthetic: how this break responds to swell is not well documented yet."]}
-      />,
-    );
-    expect(screen.getByTestId("local-confidence-reason")).toHaveTextContent("Synthetic: how this break responds to swell is not well documented yet.");
-    expect(pickLocalReason(["Synthetic: not yet checked against buoys near this spot."])).toBeNull();
-  });
-
-  it("does not invent a reason when none is about the break", () => {
-    render(<LocalConfidence value="moderate" forecastValue="high" reasons={["Synthetic: models agree."]} />);
-    expect(screen.queryByTestId("local-confidence-reason")).toBeNull();
+describe("no combined confidence (spec 20)", () => {
+  it("the module offers forecast and research confidence only", () => {
+    expect(Object.keys(confidenceComponents).sort()).toEqual(["ConfidenceBadge", "ForecastConfidence", "ResearchConfidence"]);
   });
 });
 
@@ -368,7 +336,6 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
     source_code: "synthetic",
     history: [],
     forecast_confidence_class: "high",
-    local_confidence_class: "high",
     confidence_reasons: [],
     forecast_confidence_reasons: [],
     stale: false,
@@ -378,11 +345,15 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
 }
 
 describe("EventCard confidence", () => {
-  it("adds an at-the-break badge only when local confidence is lower", () => {
-    const { unmount } = render(<EventCard event={event({ local_confidence_class: "low", local_confidence_reason: RESEARCH_REASON_TEXTS[0] })} />);
+  it("shows forecast confidence only, even when the deprecated combined class is lower (spec 20)", () => {
+    // The combined class the API sent before 2.0 removed it (spec 20), as a response cached
+    // before the upgrade could still carry it.
+    const legacy = { local_confidence_class: "low", local_confidence_reason: RESEARCH_REASON_TEXTS[0] };
+    const { unmount } = render(<EventCard event={{ ...event(), ...legacy }} />);
     expect(screen.getByTestId("forecast-confidence-badge")).toHaveTextContent("Forecast confidence: High");
-    expect(screen.getByTestId("local-confidence-badge")).toHaveTextContent("At the break: Low");
-    expect(screen.getByTestId("local-confidence")).toHaveAttribute("title", RESEARCH_REASON_TEXTS[0]);
+    expect(screen.queryByTestId("local-confidence-badge")).toBeNull();
+    expect(screen.queryByTestId("local-confidence")).toBeNull();
+    expect(screen.getByTestId("event-card")).not.toHaveTextContent(RESEARCH_REASON_TEXTS[0]);
     unmount();
     render(<EventCard event={event()} />);
     expect(screen.getAllByTestId(/confidence-badge$/)).toHaveLength(1);

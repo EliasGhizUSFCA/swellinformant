@@ -8,15 +8,19 @@ import { useEffect } from "react";
 
 import { uncertaintyLabel } from "@/components/charts/forecast-charts";
 import { ConditionsSummary } from "@/components/conditions";
-import { ForecastConfidence, LocalConfidence, ResearchConfidence } from "@/components/confidence";
+import { ForecastConfidence, ResearchConfidence } from "@/components/confidence";
 import { EventCard } from "@/components/event-card";
 import { ForecastBreakdown, methodLabel } from "@/components/forecast-breakdown";
-import { AttributionLinks, ForecastProvenance, useNowMs } from "@/components/forecast-provenance";
+import { ForecastProvenance, useNowMs } from "@/components/forecast-provenance";
+import { ForecastUpdated } from "@/components/forecast-updated";
 import { SpotForecastTimeline } from "@/components/forecast/forecast-timeline";
+import { ProviderCredit } from "@/components/forecast/provider-credit";
+import { RatingDetails } from "@/components/forecast/rating-details";
+import { ToArrow } from "@/components/forecast/selected-summary";
 import { TimelineSelectionProvider, useTimelineActions, useTimelineSelection, useTimelineStore } from "@/components/forecast/timeline-selection";
 import { InfoPopover } from "@/components/info-popover";
 import { AppShell } from "@/components/layout/app-shell";
-import { OpportunityCard } from "@/components/opportunity-card";
+import { OpportunityCard, TripCredits } from "@/components/opportunity-card";
 import { PageHeader, SectionTitle } from "@/components/page-header";
 import { DemoBadge } from "@/components/quality";
 import { RatingHeadline, WhyThisRating } from "@/components/rating";
@@ -27,14 +31,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StaleBanner } from "@/components/stale-banner";
 import { WindDisputeNote } from "@/components/wind-dispute";
 import { useForecast, useMe, useSpot, useSpotEvents, useSpotOpportunities, useSpotTimeline } from "@/hooks/queries";
+import { useForecastVersion } from "@/hooks/use-forecast-version";
 import { forecastReasonsOf, rangeWords, runAgeHours } from "@/lib/confidence";
 import { nearestPointIndex, pointToConditions } from "@/lib/forecast";
-import { compass, formatDateTime, formatSpotDateTime, heightRange, relativeTime, seconds, titleCase, type Units } from "@/lib/format";
+import { combinedFreshness, FRESHNESS_REASON_TEXT, hourOutputs, type Freshness } from "@/lib/forecast-fields";
+import { compass, formatDateTime, formatSpotDateTime, heightRange, relativeTime, seconds, titleCase, updatedAgo, type Units } from "@/lib/format";
+import { runTimeEstimated } from "@/lib/provider";
 import { WIND_RELATION_LABEL } from "@/lib/quality";
-import { ratingFactors, ratingReason } from "@/lib/rating";
+import { ratingFactors } from "@/lib/rating";
+import { hourReason } from "@/lib/rating-sentence";
 import { offshoreHeightText, openingStepIndex, parseTimeParam } from "@/lib/timeline";
-import { formatWind, useWindUnit } from "@/lib/units";
-import type { ForecastPoint, SpotDetail, SpotForecast, SpotTimeline } from "@/types/api";
+import { formatWind, useHeightUnit, useWindUnit } from "@/lib/units";
+import type { SpotDetail, SpotForecast, SpotTimeline } from "@/types/api";
 
 const SurfMap = dynamic(() => import("@/components/map/surf-map"), { ssr: false, loading: () => <Skeleton className="h-56" /> });
 // Recharts loads only when someone opens "Compare forecast models" (a lazy, collapsed disclosure).
@@ -62,22 +70,76 @@ const FLAG_LABEL: Record<string, string> = {
   same_family_mismatch: "two copies of the same model disagree (possible data problem)",
 };
 
+/** "light cross-offshore" -> "Light cross-offshore". */
+const sentenceCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 /**
- * The page's summary: the best surf in the next week (rating, our breaking-wave estimate,
- * swell, wind, forecast confidence) and, separately, how well the break itself is researched.
- * ``points`` (the spot forecast, when loaded) supplies the score components of the best hour,
- * which the summary itself does not carry, so "Why this rating?" can show the API's own fits.
+ * "Forecast last updated 7 hours ago. Not a current forecast." on the summary of a spot whose
+ * served forecast is out of date (its `freshness`); nothing for a current forecast, so stale
+ * data is never shown as current. The reason is the page's banner's to give (it sits just
+ * above), so this label stays short. `withReason` adds it where no banner is shown (the
+ * forecast itself has not loaded).
  */
-function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points: readonly ForecastPoint[] }) {
+function StaleNote({ freshness, withReason = false, className }: { freshness: Freshness | null; withReason?: boolean; className?: string }) {
+  const now = useNowMs();
+  if (!freshness?.stale) return null;
+  const reason = withReason && freshness.reason ? FRESHNESS_REASON_TEXT[freshness.reason] : null;
+  return (
+    <p className={className} data-testid="outlook-stale" role="status">
+      <span className="font-semibold">{freshness.lastUpdatedAt ? `Forecast last updated ${updatedAgo(freshness.lastUpdatedAt, now)}.` : "Forecast out of date."}</span>
+      {reason ? ` ${reason}` : ""} Not a current forecast.
+    </p>
+  );
+}
+
+/**
+ * The page's summary (spec 25), always visible: the best surf in the next week with its time,
+ * the rating as one sentence ("Excellent Surf — 8.9/10 — Well-aligned swell and light
+ * offshore wind.", from the API's own favourable / unfavourable conditions of that hour, or
+ * today's factor wording for hours scored before they existed), our breaking-wave estimate,
+ * the swell (height, period, direction) and the wind (speed, direction, offshore / onshore
+ * class) with arrows pointing where they go, and the forecast confidence. "Why this rating?"
+ * opens the score breakdown, every variable, the tide preference, the models and runs, and
+ * the method and research. How well the break itself is researched is a separate assessment,
+ * shown apart. ``fc`` and ``timeline`` (when loaded) supply that hour's forecast point and
+ * step; the summary itself does not carry them.
+ */
+function SurfOutlook({
+  s,
+  units,
+  fc,
+  timeline,
+  freshness,
+}: {
+  s: SpotDetail;
+  units: Units;
+  fc: SpotForecast | undefined;
+  timeline: SpotTimeline | undefined;
+  freshness: Freshness | null;
+}) {
   const [windUnit] = useWindUnit();
+  const { shown } = useForecastVersion();
   const c = s.best_upcoming;
+  // The estimated run-time flags of the published version whose data is on screen (contract
+  // C4), only when the hour comes from that version's source (a stale spot can be served
+  // from an older run of another source); otherwise the source rule applies.
+  const sourceCode = fc?.source?.code ?? c?.source_code ?? null;
+  const runFlags = shown && sourceCode && shown.source_code === sourceCode ? shown : null;
   const at = c ? new Date(c.valid_time).getTime() : NaN;
-  const components = points.find((p) => new Date(p.valid_time).getTime() === at)?.components ?? null;
+  const point = fc?.points.find((p) => new Date(p.valid_time).getTime() === at) ?? null;
+  const step = timeline?.steps.find((st) => Date.parse(st.t) === at) ?? null;
+  const components = point?.components ?? null;
+  // The hour's outputs (favourable / unfavourable, offshore class) are on its forecast point
+  // and timeline step, not on the summary's Conditions.
+  const hour = point ?? step?.quality ?? c;
+  const outputs = hourOutputs(hour);
   const factorInput = c && {
     components,
     periodS: c.swell_period_s,
     windRelation: c.wind_relation,
     windSpeedKmh: c.wind_speed_kmh,
+    windStrength: c.wind_strength,
+    windFavourability: c.wind_favourability,
     explanation: c.explanation,
     breakingMinFt: c.breaking_height_min_ft,
     breakingMaxFt: c.breaking_height_max_ft,
@@ -85,6 +147,14 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
     spotMinFt: s.wave_height_min_ft,
     spotMaxFt: s.wave_height_max_ft,
   };
+  const method = c ? (
+    <>
+      Method: {methodLabel(c.method)}
+      {c.algorithm_version ? ` (v${c.algorithm_version})` : ""}
+      {outputs.modelVersion && outputs.modelVersion !== c.algorithm_version ? ` · scoring ${outputs.modelVersion}` : ""}
+    </>
+  ) : null;
+  const windClass = outputs.offshoreClass ? sentenceCase(outputs.offshoreClass) : (WIND_RELATION_LABEL[c?.wind_relation ?? ""] ?? c?.wind_relation);
   return (
     <Card className="mb-6" data-testid="surf-outlook">
       <CardContent className="grid gap-5 p-5 md:grid-cols-[1.25fr_1fr] md:gap-8">
@@ -92,18 +162,21 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs">
             <h2 className="font-semibold tracking-wide text-muted-foreground uppercase">Best surf, next 7 days</h2>
             {c && (
-              <span className="flex items-center gap-2 text-muted-foreground">
+              <span className="flex items-center gap-2 text-muted-foreground" data-testid="best-time">
                 {formatSpotDateTime(c.valid_time, s.timezone, { zone: true })}
                 {c.is_daylight ? "" : " · night"}
                 <ShowInTimeline iso={c.valid_time} />
               </span>
             )}
           </div>
+          <StaleNote freshness={freshness} withReason={!fc} className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900" />
           {c && factorInput ? (
             <>
-              <RatingHeadline className="mt-2" size="lg" label={c.label} score={c.score} reason={ratingReason(factorInput)} />
+              <RatingHeadline className="mt-2" size="lg" inline label={c.label} score={c.score} reason={hourReason(hour, factorInput, units, windUnit)} />
               <div className="mt-3 flex flex-wrap items-baseline gap-x-2">
-                <span className="font-display text-3xl font-semibold">{heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, units)}</span>
+                <span className="font-display text-3xl font-semibold" data-testid="best-height">
+                  {heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, units)}
+                </span>
                 <span className="text-xs text-muted-foreground">
                   est. breaking faces <InfoPopover term="breakingHeight" />
                 </span>
@@ -115,12 +188,13 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
                 </div>
               )}
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
-                <span className="flex items-center gap-1.5">
+                <span className="flex items-center gap-1.5" data-testid="best-swell">
                   <Waves className="size-3.5" /> Offshore swell {offshoreHeightText(c.swell_height_m, units)} @ {seconds(c.swell_period_s)} from {compass(c.swell_direction_deg)}
+                  {c.swell_direction_deg != null && <ToArrow fromDeg={c.swell_direction_deg} className="text-[var(--chart-swell)]" />}
                 </span>
-                <span className="flex items-center gap-1.5">
-                  <Wind className="size-3.5" /> {formatWind(c.wind_speed_kmh, windUnit)} from {compass(c.wind_direction_deg)} ·{" "}
-                  {WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation}
+                <span className="flex items-center gap-1.5" data-testid="best-wind">
+                  <Wind className="size-3.5" /> {formatWind(c.wind_speed_kmh, windUnit)} from {compass(c.wind_direction_deg)}
+                  {c.wind_direction_deg != null && <ToArrow fromDeg={c.wind_direction_deg} className="text-ink/70" />}· {windClass}
                   <InfoPopover term="windRelation" />
                 </span>
               </div>
@@ -131,21 +205,27 @@ function SurfOutlook({ s, units, points }: { s: SpotDetail; units: Units; points
                 explanation={c.explanation}
                 components={components}
                 factors={ratingFactors(factorInput)}
+                favourable={outputs.favourable}
+                unfavourable={outputs.unfavourable}
                 units={units}
-                method={<>Method: {methodLabel(c.method)}{c.algorithm_version ? ` (v${c.algorithm_version})` : ""}</>}
-              />
+                method={method}
+              >
+                <RatingDetails spot={s} c={c} point={point} step={step} fc={fc} tide={timeline?.tide} units={units} windUnit={windUnit} version={runFlags} />
+              </WhyThisRating>
               <div className="mt-3 space-y-1.5 border-t pt-3">
-                {/* Forecast reasons only: research and the not-yet-verified note are not about the forecast. */}
+                {/* Forecast reasons only: research and the not-yet-verified note are not about the
+                    forecast. Research confidence is shown apart (About this break), never combined. */}
                 <ForecastConfidence
                   value={c.forecast_confidence_class}
                   reasons={forecastReasonsOf(c)}
                   notes={c.confidence_reasons}
                   validTime={c.valid_time}
                   runIssuedAt={c.run_issued_at}
+                  waveRunIssuedAt={c.wave_run_issued_at}
+                  windRunIssuedAt={c.atmosphere_run_issued_at}
                   blend={c.source_code === "blend"}
                   legacyIndex={c.confidence}
                 />
-                <LocalConfidence value={c.local_confidence_class} forecastValue={c.forecast_confidence_class} reasons={c.confidence_reasons} reason={c.local_confidence_reason} />
               </div>
             </>
           ) : (
@@ -204,11 +284,15 @@ function InitialSelection({ timeline }: { timeline: SpotTimeline | undefined }) 
 function ForecastSection({
   query,
   units,
+  freshness,
 }: {
   query: ReturnType<typeof useSpotTimeline>;
   units: Units;
+  freshness: Freshness | null;
 }) {
   const tl = query.data;
+  const now = useNowMs();
+  const stale = !!tl?.stale || !!freshness?.stale;
   const p = tl?.provenance;
   const method = p ? (
     <>
@@ -234,17 +318,31 @@ function ForecastSection({
                 members={p.members}
                 generatedAt={tl?.generated_at}
                 links={p.source.attribution_links}
+                sourceCode={p.source.code}
               />
             </div>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          {tl?.stale && <Badge variant="warn">Stale data</Badge>}
+          {/* The version label defers to the spot's own staleness (run or freshness): a spot whose
+              refresh failed keeps older data, so "updated just now" would call it current. */}
+          <ForecastUpdated stale={stale} updatedAt={freshness?.lastUpdatedAt ?? null} timeZone={tl?.timezone ?? undefined} />
+          {stale && (
+            <Badge
+              variant="warn"
+              data-testid="timeline-stale"
+              // Only the run's own staleness caps the confidence classes (the API's `stale`).
+              title={tl?.stale ? "This spot's forecast run is out of date; confidence is capped at Moderate." : "This spot's forecast was not updated with the latest run; it is not a current forecast."}
+            >
+              {freshness?.stale && freshness.lastUpdatedAt ? `Forecast last updated ${updatedAgo(freshness.lastUpdatedAt, now)}` : "Stale data"}
+            </Badge>
+          )}
         </div>
       </CardHeader>
       <CardContent className="px-3 pb-4 sm:px-5 sm:pb-5">
         {query.isLoading && <Skeleton className="h-[34rem]" />}
-        {query.isError && (
+        {/* Only a first load that failed: a failed background re-read keeps the timeline. */}
+        {query.isLoadingError && (
           <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-10 text-center text-sm text-muted-foreground" data-testid="timeline-error">
             <p>The forecast timeline could not be loaded.</p>
             <button type="button" onClick={() => query.refetch()} className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 font-medium text-ink hover:bg-muted">
@@ -297,9 +395,19 @@ function SelectedStepDetails({ fc, s, units }: { fc: SpotForecast; s: SpotDetail
 
 /** Says only what is true of a stale forecast: confidence capped, alerts paused only once the
  * alert job withholds them (`alerts_paused`), and the run's age (a blend's oldest member's). */
-function ForecastStaleBanner({ fc }: { fc: SpotForecast }) {
+function ForecastStaleBanner({ fc, freshness }: { fc: SpotForecast; freshness: Freshness | null }) {
   const now = useNowMs();
-  return <StaleBanner stale={fc.stale} alertsPaused={fc.alerts_paused} runAgeHours={runAgeHours(fc.run?.issued_at ?? null, now)} blend={fc.source?.code === "blend"} />;
+  return (
+    <StaleBanner
+      stale={fc.stale}
+      freshnessStale={!!freshness?.stale}
+      alertsPaused={fc.alerts_paused}
+      runAgeHours={runAgeHours(fc.run?.issued_at ?? null, now)}
+      blend={fc.source?.code === "blend"}
+      lastUpdated={freshness?.stale && freshness.lastUpdatedAt ? updatedAgo(freshness.lastUpdatedAt, now) : null}
+      reason={freshness?.stale && freshness.reason ? (FRESHNESS_REASON_TEXT[freshness.reason] ?? null) : null}
+    />
+  );
 }
 
 function Fact({ k, v }: { k: React.ReactNode; v: React.ReactNode }) {
@@ -314,6 +422,7 @@ function Fact({ k, v }: { k: React.ReactNode; v: React.ReactNode }) {
 /** Where the forecast comes from: models, runs, the blend and the breaking-height method. */
 function ForecastSource({ fc }: { fc: SpotForecast }) {
   if (!fc.run || !fc.source) return null;
+  const estimated = runTimeEstimated(fc.source.code);
   return (
     <Disclosure
       variant="card"
@@ -329,11 +438,11 @@ function ForecastSource({ fc }: { fc: SpotForecast }) {
       <div className="text-sm font-medium text-ink">{fc.source.name}</div>
       <div>
         Wave model {fc.source.wave_model}
-        {fc.run.wave_model_run_at && ` · run ${formatDateTime(fc.run.wave_model_run_at, "UTC")} UTC`}
+        {fc.run.wave_model_run_at && ` · run ${formatDateTime(fc.run.wave_model_run_at, "UTC")} UTC${estimated ? " (estimated)" : ""}`}
       </div>
       <div>
         Wind model {fc.source.atmosphere_model}
-        {fc.run.atmosphere_model_run_at && ` · run ${formatDateTime(fc.run.atmosphere_model_run_at, "UTC")} UTC`}
+        {fc.run.atmosphere_model_run_at && ` · run ${formatDateTime(fc.run.atmosphere_model_run_at, "UTC")} UTC${estimated ? " (estimated)" : ""}`}
       </div>
       <div className="flex items-center gap-1.5">
         <Clock className="size-3.5" /> Ingested {fc.run.completed_at ? relativeTime(fc.run.completed_at) : "—"}
@@ -363,7 +472,7 @@ function ForecastSource({ fc }: { fc: SpotForecast }) {
           {uncertaintyLabel(fc.points[0]?.uncertainty_kind)}. {fc.source.attribution}
         </span>
       </div>
-      <AttributionLinks links={fc.source.attribution_links} />
+      <ProviderCredit sourceCode={fc.source.code} links={fc.source.attribution_links} />
     </Disclosure>
   );
 }
@@ -390,7 +499,9 @@ function SpotDescription({ text }: { text: string }) {
 export default function SpotPage() {
   const { slug } = useParams<{ slug: string }>();
   const { data: user } = useMe();
-  const units = (user?.profile.units as Units) ?? "ft";
+  // One height unit for the whole site, signed in or not: this browser's choice (the charts'
+  // ft / m toggle, the map settings), else the account's units, else feet.
+  const [units] = useHeightUnit((user?.profile.units as Units | undefined) ?? "ft");
   const spot = useSpot(slug);
   const forecast = useForecast(slug, 10);
   const timeline = useSpotTimeline(slug, 10);
@@ -416,6 +527,8 @@ export default function SpotPage() {
   const fc = forecast.data;
   const points = fc?.points ?? [];
   const profile = s.physical_profile;
+  // Read defensively from every payload: stale if any of them says so.
+  const freshness = combinedFreshness(fc, timeline.data, s);
 
   return (
     <AppShell>
@@ -437,14 +550,14 @@ export default function SpotPage() {
         }
       />
 
-      {fc && <ForecastStaleBanner fc={fc} />}
+      {fc && <ForecastStaleBanner fc={fc} freshness={freshness} />}
 
       {/* One selection per spot: a new spot starts from its own default (or ?t=). */}
       <TimelineSelectionProvider key={slug} initialT={null}>
         <InitialSelection timeline={timeline.data} />
-        <SurfOutlook s={s} units={units} points={points} />
+        <SurfOutlook s={s} units={units} fc={fc} timeline={timeline.data} freshness={freshness} />
 
-        <ForecastSection query={timeline} units={units} />
+        <ForecastSection query={timeline} units={units} freshness={freshness} />
         <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
           <div className="min-w-0 space-y-6">
             {fc && points.length > 0 && <SelectedStepDetails fc={fc} s={s} units={units} />}
@@ -489,6 +602,7 @@ export default function SpotPage() {
                     {(opps.data ?? []).map((m) => (
                       <OpportunityCard key={m.id} match={m} units={units} />
                     ))}
+                    <TripCredits matches={opps.data} className="mt-0" />
                   </div>
                 )}
               </section>

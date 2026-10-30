@@ -3,8 +3,11 @@
 * Claiming uses ``SELECT … FOR UPDATE SKIP LOCKED`` so concurrent workers never send the
   same notification twice.
 * A notification stuck in SENDING (worker crashed mid-send) is re-queued after
-  NOTIFICATION_SENDING_TIMEOUT_MINUTES. Providers are idempotent enough for this rare
-  case; a duplicate is preferable to a silently lost alert.
+  NOTIFICATION_SENDING_TIMEOUT_MINUTES. Every email carries the idempotency key
+  ``notification-<id>``: Resend does not send a request with a key it has seen in the
+  last 24 hours again, so neither this reclaim nor an HTTP retry after a timeout sends a
+  duplicate there. Other providers have no such key: a duplicate is still preferable to
+  a silently lost alert.
 * Preferences are re-checked at send time: opting out after an alert was queued is
   honoured.
 """
@@ -165,6 +168,7 @@ def send_one(
                     text=n.body_text,
                     html=n.body_html,
                     headers=headers,
+                    idempotency_key=f"notification-{n.id}",
                 )
             )
         else:
@@ -242,4 +246,10 @@ def deliver_pending(db: Session, now: datetime | None = None, limit: int = 100) 
         db.commit()
     if stats.claimed:
         logger.info("Notification delivery: %s", stats.as_dict())
+    if get_settings().job_runner == "daemon":
+        # Without a daemon timer, the refresh endpoint retries a delivery once its backoff
+        # passed: it reads the earliest retry time from Redis (app.services.sync.standin).
+        from app.services.sync.standin import note_next_delivery
+
+        note_next_delivery(db)
     return stats

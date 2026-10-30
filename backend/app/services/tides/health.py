@@ -16,11 +16,11 @@ once, so only a job that cannot run, or a runner that does not catch up, gets th
 harmonic_model configured, an unreadable constants file is "failing" on its own
 (``tides_constants:harmonic_model``, :func:`constants_problem`).
 
-The constants file (data/tides/, TIDE_CONSTANTS_PATH) ships with the processes that run
-the tide jobs: the classic images and the sync daemon's (/data). The Vercel API function
-(root backend/) has no data/, so there the data-health report takes the daemon's own
-result from its heartbeat instead of reading a file that is not deployed
-(app.services.health; :func:`constants_file_present`).
+The constants file (data/tides/, TIDE_CONSTANTS_PATH) ships with every process that runs
+the tide jobs: the classic images and the sync daemon's (/data), and the Vercel API function,
+whose build command copies data/ into it (app.core.data_files). A process without the file
+(a deployment built before that copy) takes the daemon's own result from its heartbeat instead
+of reading a file it does not have (app.services.health; :func:`constants_file_present`).
 """
 
 from __future__ import annotations
@@ -70,8 +70,8 @@ def constants_problem() -> dict[str, Any] | None:
 
 
 def constants_file_present() -> bool:
-    """Whether the configured constants file exists for this process (a file the API
-    function, deployed without data/, does not have)."""
+    """Whether the configured constants file exists for this process (an API function
+    deployed without its copy of data/ does not have it)."""
     return harmonic_model.resolve_constants_path().is_file()
 
 

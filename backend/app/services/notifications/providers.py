@@ -26,6 +26,7 @@ from pathlib import Path
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.services import service_credentials
 from app.services.http import (
     PermanentProviderError,
     TransientProviderError,
@@ -33,6 +34,10 @@ from app.services.http import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Resend's 409 error name when a request with the same Idempotency-Key is still in progress
+# (https://resend.com/docs/dashboard/emails/idempotency-keys, "Possible responses").
+RESEND_CONCURRENT_KEY = "concurrent_idempotent_requests"
 
 
 @dataclass
@@ -43,6 +48,10 @@ class EmailMessageData:
     html: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
     tag: str = "alert"
+    # One key per message we record ("notification-<id>", "account-email-<id>"): a retry
+    # of the same message (after a timeout, or a reclaimed SENDING row) is not sent twice
+    # by providers that honour it (Resend: the Idempotency-Key request header, 24 h).
+    idempotency_key: str | None = None
 
 
 @dataclass
@@ -104,6 +113,17 @@ class ConsoleEmailProvider(EmailProvider):
         return SendResult(self.name, mid, captured=True)
 
 
+def _smtp_refusal(code: int, exc: Exception) -> TransientProviderError | PermanentProviderError:
+    """The error for a refused MAIL FROM, RCPT TO or DATA, by its reply code (review
+    r4-backend-R4-1). RFC 5321 section 4.2.1: a 4yz reply is a transient failure (a relay's
+    sending-rate limit 454/421, greylisting 450/451), retried like a network error; a 5yz
+    reply is permanent. smtplib raises the same exception class for both. Any other code is
+    not a refusal the RFC defines and is retried (NOTIFICATION_MAX_ATTEMPTS bounds it)."""
+    if 500 <= code < 600:
+        return PermanentProviderError(f"SMTP rejected message: {exc}")
+    return TransientProviderError(f"SMTP temporarily refused ({code}): {exc}")
+
+
 class SmtpEmailProvider(EmailProvider):
     name = "smtp"
     captures = False
@@ -137,14 +157,30 @@ class SmtpEmailProvider(EmailProvider):
                 if s.smtp_username and s.smtp_password:
                     server.login(s.smtp_username, s.smtp_password)
                 server.send_message(msg)
-        except (
-            smtplib.SMTPRecipientsRefused,
-            smtplib.SMTPSenderRefused,
-            smtplib.SMTPAuthenticationError,
-        ) as exc:
+        except smtplib.SMTPAuthenticationError as exc:
+            code = int(exc.smtp_code or 0)
+            if 400 <= code < 500:
+                # smtplib raises this for any refused AUTH: a 4xx (RFC 4954 section 6: 454
+                # Temporary authentication failure) is the server's temporary failure, not
+                # a refused password: retried, no credentials problem (review r3-backend-R3-3).
+                raise TransientProviderError(f"SMTP auth temporarily unavailable ({code})") from exc
+            # Expired or revoked SMTP credentials (535, 534, 530): the admins are alerted
+            # (spec 16; review r2-backend-N3), as for an HTTP provider's refused key.
+            if not self.captures:
+                service_credentials.record_refused(
+                    "email", self.name, f"SMTP auth refused ({exc.smtp_code})"
+                )
             raise PermanentProviderError(f"SMTP rejected message: {exc}") from exc
+        except smtplib.SMTPRecipientsRefused as exc:
+            # Every RCPT refused; the most temporary code decides (one recipient here).
+            codes = [int(code or 0) for code, _ in exc.recipients.values()]
+            raise _smtp_refusal(min(codes) if codes else 0, exc) from exc
+        except (smtplib.SMTPSenderRefused, smtplib.SMTPDataError) as exc:
+            raise _smtp_refusal(int(exc.smtp_code or 0), exc) from exc
         except (OSError, smtplib.SMTPException) as exc:
             raise TransientProviderError(f"SMTP unavailable: {exc}") from exc
+        if not self.captures:
+            service_credentials.record_accepted("email", self.name)
         return SendResult(self.name, str(msg["Message-ID"]), captured=self.captures)
 
 
@@ -166,6 +202,8 @@ class _HttpEmailProvider(EmailProvider):
 
     def _check(self, resp: httpx.Response) -> None:
         if resp.status_code in (401, 403):
+            # An expired or revoked API key: the admins are alerted (spec 16).
+            service_credentials.record_refused("email", self.name, f"HTTP {resp.status_code}")
             raise PermanentProviderError(
                 f"{self.name} authentication failed (HTTP {resp.status_code})"
             )
@@ -173,6 +211,7 @@ class _HttpEmailProvider(EmailProvider):
             raise PermanentProviderError(
                 f"{self.name} rejected message: HTTP {resp.status_code} {resp.text[:200]}"
             )
+        service_credentials.record_accepted("email", self.name)
 
 
 class ResendEmailProvider(_HttpEmailProvider):
@@ -192,15 +231,27 @@ class ResendEmailProvider(_HttpEmailProvider):
             body["html"] = message.html
         if message.headers:
             body["headers"] = message.headers
+        headers = {"Authorization": f"Bearer {self.settings.resend_api_key}"}
+        if message.idempotency_key:
+            # https://resend.com/docs/dashboard/emails/idempotency-keys: a repeated request
+            # with the same key within 24 hours is not sent again.
+            headers["Idempotency-Key"] = message.idempotency_key[:256]
         resp = request_with_retries(
             self.client,
             "POST",
             "https://api.resend.com/emails",
             provider="resend",
             backoff_seconds=self.backoff_seconds,
-            headers={"Authorization": f"Bearer {self.settings.resend_api_key}"},
+            headers=headers,
             json=body,
         )
+        if resp.status_code == 409 and RESEND_CONCURRENT_KEY in resp.text:
+            # The first request with this key (e.g. one that timed out here) is still being
+            # processed: "it is safe to retry this request later" (Resend). It may well be
+            # delivering, so this is never a permanent failure.
+            raise TransientProviderError(
+                "resend: an earlier request with this idempotency key is still in progress"
+            )
         self._check(resp)
         return SendResult(self.name, resp.json().get("id"))
 

@@ -1,7 +1,8 @@
 # Upgrade report: debugging, research and forecasting
 
 > Chronological record: each section describes the state on its date. Current setup:
-> README.md and docs/deploy-vercel.md; the owner checklist is section 44.
+> README.md and docs/deploy-vercel.md; the owner checklist is section 44 (with the refresh
+> schedule of docs/deploy-vercel.md step 7b added by Swell 2.0, section 46).
 
 Branch `claude/funny-hamilton-49k2m3`, 2026-10-11. Details live in the linked documents;
 everything stated as verified below was run, with the results shown.
@@ -9,9 +10,11 @@ everything stated as verified below was run, with the results shown.
 Contents: sections 1-8 (debugging, research, forecasting, 2026-10-11), Phase 2 (sections
 9-13: map redesign, simplified frontend, confidence), Phase 3 (sections 14-18:
 evidence-based spot profiles, validation, operations), **Upgrade 3 (2026-10, sections
-19-37: forecasting, map, weather visualisation and UI)** and **Upgrade 4 (2026-10, sections
+19-37: forecasting, map, weather visualisation and UI)**, **Upgrade 4 (2026-10, sections
 38-45: a website on Vercel, data synced to model runs, the wave look; the owner checklist is
-section 44)** at the end.
+section 44)** and **Swell 2.0 (2026-10, sections 46-51: automatic model-run detection,
+per-component refreshes, versioned publication, live page updates, researched spots,
+targeted flights, freshness monitoring)** at the end.
 
 ## 1. Bugs fixed
 
@@ -949,9 +952,11 @@ The first production deploy is the test of these:
 
 * **Vercel Daemons and Services are Beta.** The fallbacks are documented
   (docs/deploy-vercel.md section 9): two projects, or the manual GitHub sync.
-* **The daemon quota** (10 Active CPU-hours on Hobby): when used up, the daemons stop until the
-  1st of the next month; the site serves the last data and the watchdog emails the admins.
-  The map layers are more than half of the estimate.
+* **The daemon quota** (10 Active CPU-hours on Hobby as Upgrade 4 read it; Vercel now gives
+  Hobby daemons 5, docs/sync.md "Monthly CPU estimate"): when used up, the daemons stop until
+  the 1st of the next month; the site serves the last data and the watchdog emails the
+  admins. The map layers are more than half of the estimate. (With Swell 2.0 the daemon is
+  optional and refreshes only the map layers.)
 * **Neon Free can still bind**: steady traffic (1,000 views a day) needs about 5.37 GB of
   egress; anything that reaches the database every 5 minutes keeps the compute awake (180
   CU-hours a month). Every signed-in page view reads the database (measured at the final
@@ -963,9 +968,11 @@ The first production deploy is the test of these:
   takes many clients.
 * **Open-Meteo's free limit is per IP**, and the daemon's address may be shared: refusals
   delay a source to the next UTC day; an API key removes the risk.
-* **Freshness on the free database**: spot forecasts change twice a day; a GFS run can read
-  stale for up to about 1.3 h before each sync; if NOAA's map layers fail, no sync runs
-  (estimated, not observed live).
+* **Freshness on the free database** (Upgrade 4 cadence, `SYNC_TRIGGER_SOURCES=map`): spot
+  forecasts changed twice a day; a GFS run could read stale for up to about 1.3 h before
+  each sync; if NOAA's map layers failed, no sync ran (estimated, not observed live). Swell
+  2.0 replaced it: `SYNC_TRIGGER_SOURCES=spots`, and the refresh endpoint follows every GFS
+  and GFS-Wave run.
 * **Tides after a fresh deploy**: fixed at the final review. The daemon runs every overdue
   periodic job once at start (`SYNC_DAEMON_CATCH_UP`), so the tides come within minutes, and
   data health flags tides never acquired 3 h after the catalog was loaded
@@ -981,6 +988,11 @@ The first production deploy is the test of these:
   run time would not survive a restart (design risk, not checked on Vercel).
 
 ## 44. Owner checklist
+
+Updated for Swell 2.0 (the spot forecasts come from the refresh endpoint, the daemon is
+optional and refreshes only the map layers). The step-by-step reference is
+[deploy-vercel.md](deploy-vercel.md) section 4; the costs are in
+[API_SETUP_REQUIRED.md](API_SETUP_REQUIRED.md) section 1.4.
 
 ### Free now (no payments and no ads; donations are allowed on Hobby)
 
@@ -1027,22 +1039,31 @@ The first production deploy is the test of these:
    Resend account's while you use the testing sender; the only alert that still goes out
    when the database is down). Keep `FLIGHT_PROVIDER=demo`
    until you have a flight provider. *(Vercel's website.)*
-9. **Optional head start**: from `backend/` with the dev venv of README E.3 (it works for
-   `init-db` and `make-admin`; `uv sync --locked --no-dev` would strip it to the lean set,
-   so put a lean install in its own venv: `UV_PROJECT_ENVIRONMENT=.venv-lean uv sync
-   --locked --no-dev`), point `DATABASE_URL` and then `DATABASE_URL_UNPOOLED` at Neon's
-   direct URL (two `export` lines, docs/deploy-vercel.md step 6) and run
-   `.venv/bin/python -m app.cli init-db` (checked here against a local PostgreSQL only).
-   The daemon runs it at every start anyway.
+9. **The database**: a production build migrates and seeds it (the api's build command,
+   `migrate --on-build` with `MIGRATE_ON_BUILD=production`: the 50 spots, airports, the tide
+   catalog). Only when that build prints `skipped` (and you do not keep the daemon, whose
+   `init-db` seeds at start), seed it yourself: from `backend/` with the dev venv of README
+   E.3 (it works for `init-db` and `make-admin`; for a lean install use its own venv,
+   `UV_PROJECT_ENVIRONMENT=.venv-lean uv sync --locked --no-dev`), point `DATABASE_URL` and
+   then `DATABASE_URL_UNPOOLED` at Neon's direct URL (two `export` lines,
+   docs/deploy-vercel.md step 6) and run `.venv/bin/python -m app.cli init-db` (idempotent;
+   checked here against a local PostgreSQL only). A database without spots publishes
+   nothing and reports `no_spots_seeded`.
 10. **Deploy**: redeploy production (variables reach new deployments only). The api build
-    migrates the database; Vercel builds the daemon image and starts it. *(Vercel.)*
-11. **Check** (*on the deployment*): `https://<project>.vercel.app/api/health/ready` answers
-    `{"status":"ok","checks":{"database":"ok","redis":"ok"}}`; the Daemons page shows one
-    `sync` instance whose logs show `init-db` and the first check; `/status` shows the
-    daemon's last check and, after the first sync, a published sync (on a fresh database
-    the first sync can wait up to 90 minutes while the map cycle and the GFS spot run of the
-    same cycle wait for each other); the map shows the wave layer; the watchdog answers 200
-    to `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily`.
+    migrates and seeds the database; if you keep the optional map daemon, Vercel builds its
+    image and starts it. *(Vercel.)*
+11. **Check and schedule the refresh** (*on the deployment*):
+    `https://<project>.vercel.app/api/health/ready` answers
+    `{"status":"ok","checks":{"database":"ok","redis":"ok"}}`. Run the first refresh by hand,
+    `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/refresh`:
+    it answers `"status": "success"` with a version id, and `/api/forecasts/version` names
+    it with `spots_updated` 50. Then do docs/deploy-vercel.md **step 7b**: schedule the
+    refresh every 5 minutes (Upstash QStash on Hobby, a Vercel Cron entry on Pro) and check
+    that `/admin/freshness` shows the refresh scheduler `checking` a few minutes later.
+    Without the schedule the spot forecasts refresh only once a day. The watchdog answers
+    200 to `curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily`.
+    With the optional daemon, its logs show `init-db` and the first map check, and the map
+    shows the wave layer after its first map sync.
 12. **Make yourself admin** after registering and verifying your email address (your Resend
     account's address while you use the testing sender, step 6):
     `.venv/bin/python -m app.cli make-admin you@example.com` with the dev venv and the same
@@ -1052,12 +1073,16 @@ The first production deploy is the test of these:
     `/api/health/data?strict=true`, which wake Neon on every hit (every 15 minutes costs
     about 45-60 CU-hours a month, on top of about 20 in the background; hourly at most about
     15): on Neon Free the daily watchdog covers the database. Close `/status` when you are
-    done (an open tab re-reads on focus, and every minute while a sync runs). Watch the
-    `/status` CPU meter (10 Active CPU-hours a month; if it runs high,
-    `MAP_FIELD_PARTITIONS=off` or a shorter map horizon); keep `GEFS_ENABLED=false`; look at
-    Neon's usage page now and then (egress budget 2.01 GB of 5 in the background). Do not
-    add a schedule to `data-sync.yml` (GitHub's terms); add its repository secrets only if
-    you want the manual emergency sync (docs/deploy-vercel.md section 8).
+    done (an open tab re-reads on focus, and every minute while a sync runs). Only if you
+    keep the optional map daemon, watch the `/status` CPU meter (Hobby's 5 Active
+    CPU-hours a month; if it runs high, `MAP_FIELD_PARTITIONS=off` or a shorter map
+    horizon). Keep `GEFS_ENABLED=false`. Look at Neon's usage page now and then: the
+    background budget of API_SETUP_REQUIRED.md 1.4 is about 1.5-2.3 GB of egress a month for
+    8 component refreshes a day (up to about 3.4 GB with a third refresh per cycle) and about
+    20-23 CU-hours with the hourly data-health check; Upstash about 114,000 commands a month
+    for a quiet site, with the version polling and the 5-minute refresh checks. Do not add a
+    schedule to `data-sync.yml` (GitHub's terms); add its repository secrets only if you
+    want the manual emergency sync (docs/deploy-vercel.md section 8).
 
 ### Paywall later (before the site shows any price or checkout)
 
@@ -1069,10 +1094,14 @@ The first production deploy is the test of these:
    to the plan's budget, then `COMMERCIAL_USE=true`. From then on the app refuses the free
    API (`/status` would report `licence` if the key were missing).
 3. **Neon Launch** ($0.106 per CU-hour, $0.35 per GB-month, 500 GB egress), then the
-   full-retention profile: `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`,
-   `RETENTION_JOB_LOG_DAYS=30`, `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`,
-   `SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12` (a sync for every new model
-   run: about 4.32 GB of background egress a month).
+   full-retention profile (`app/core/profiles.py`, docs/API_SETUP_REQUIRED.md section 5):
+   `RETENTION_FORECAST_DAYS=10`, `RETENTION_ARCHIVE_DAYS=730`, `RETENTION_JOB_LOG_DAYS=30`,
+   `SYNC_PRUNE_EACH_PASS=false`, `DATA_HEALTH_DATABASE_MAX_GB=20`,
+   `SYNC_TRIGGER_SOURCES=spots,map`, `MAP_FIELD_CYCLES=00,12` and
+   `PREDICTION_ARCHIVE_ENABLED=true`. The spot refreshes stay as on the free plan (every
+   new GFS and GFS-Wave run through the refresh endpoint); the map layers then follow the
+   00Z and 12Z cycles. (Upgrade 4's estimate of about 4.32 GB of background egress a month
+   for this profile measured its old two-family sync and was not re-measured for 2.0.)
 4. **Upstash** pay-as-you-go ($0.2 per 100K commands, with a budget cap) or a Fixed plan
    (from $10 a month).
 5. **Redeploy** production after changing variables.
@@ -1117,3 +1146,480 @@ Left open:
 * **Vitest 3 → 5** for the dev-only advisories; Next.js 16.4.2 once it is two weeks old.
 * **Commit message 41572a4** says one mutation set the publication time to now; it actually
   set it to now() minus 1 day (history is not rewritten).
+
+---
+
+# Swell Travel Agent 2.0 (2026-10, sections 46-51)
+
+The owner's master prompt of 2026-10-26 (spec sections 1-37): the forecasts follow the
+weather models automatically, one provider (Open-Meteo now, Windy once licensed), researched
+spot conditions, versioned publication that open pages pick up without a reload, targeted
+flight searches, admin freshness monitoring, all deployable on Vercel. The audit, the plan
+and the implementation status with the per-package file lists:
+[`docs/architecture_audit.md`](architecture_audit.md) (sections 1-7, and 8 for what was
+built and what remains); the decisions as records:
+[`docs/decisions.md`](decisions.md), ADR-038 to ADR-053. How to run, set up and deploy it:
+README sections E, F.2, I and L, [`docs/deploy-vercel.md`](deploy-vercel.md),
+[`docs/API_SETUP_REQUIRED.md`](API_SETUP_REQUIRED.md) and
+[`docs/WINDY_API_SETUP.md`](WINDY_API_SETUP.md). Built on branch `wf6/int` from 18a5bee:
+a foundation, ten packages, an integration, a deployment verification, four review rounds
+with their fixes, this documentation pass and a final gate (section 49).
+
+## 46. Architecture changes
+
+The two systems of spec section 2, as built:
+
+* **System A, the global surf forecast (user-independent).** A **refresh check** reads only
+  the providers' run metadata (Open-Meteo `meta.json` per model domain, used 10 minutes after
+  its availability time; Windy's sentinel fingerprint). The wave and the atmosphere are
+  separate components; a component is new only when each of its model domains is at or past
+  the stored run. On a new run, `GET|POST /api/internal/refresh` (Bearer `CRON_SECRET`) runs
+  in the API function, called every 5 minutes by Upstash QStash on Hobby or Vercel Cron on
+  Pro: it fetches only the changed component for the 50 spots, carries the other forward
+  with its own model time, validates every spot, scores every hour (scoring 2.2.0), stages
+  and publishes a **forecast version** (`forecast_versions`) in one transaction, and
+  re-evaluates the swell events. Failed spots keep their previous forecast, labelled stale,
+  and are retried alone. No visitor ever triggers a provider request.
+* **Serving and the website.** Every public read is cached per version and requested with
+  `?v=<version_id>`; `GET /api/forecasts/version` is the small endpoint open tabs poll every
+  20 s while visible; a new version is swapped in without a reload, keeping the selected spot
+  and time, with a "Forecast updated hh:mm" label and an announcement for screen readers.
+* **System B, personalised flights.** After each publication the saved searches are
+  matched (each with its own alert lead time, 2-10 days by default; 3-7 days ranked first);
+  flights are searched only for a new or materially changed match, on request, and right
+  before an alert; alerts are de-duplicated and sent only on a new match or a material
+  change.
+* **Provider**: `WEATHER_PROVIDER=auto` (Windy when licensed and authorised to store, else
+  Open-Meteo GFS + GFS-Wave; Open-Meteo is the fallback); the blend, ECMWF and GEFS are kept
+  but off.
+* **Monitoring**: `/admin/freshness` and admin-only email alerts (model run late, refresh
+  failures, stale spots, provider credentials including flight and email keys, quotas,
+  silent scheduler).
+* **Hosting**: the daemon is optional (map layers only); without it the refresh endpoint and
+  the daily cron run its other work.
+
+## 47. Definition of Done (spec section 36)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Vercel production build succeeds | offline build verified; no real deployment | `scripts/vercel-build-check.sh --offline`: `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29, again on the final gate's code 2026-10-30); with the API function's `data/` (the data bundle, 2026-10-30) 130.5 MiB (3,481 files); CI runs it on every push |
+| Hosted database works | locally verified through PgBouncer in transaction mode (as Neon's pooler); Neon itself not tried | `tests/integration/test_pgbouncer_mode.py` (3 passed against a local PgBouncer on 2026-10-29; skipped in CI without a PgBouncer URL); a lean demo refresh through PgBouncer succeeded (202 transactions) |
+| Open-Meteo acquisition works | verified live | refreshes of 2026-10-28 and 29 through the endpoint: both components 125 weighted calls, a natural wave-only 00Z refresh 75 (section 50) |
+| Windy adapter implemented | implemented, tested with recorded and synthetic responses; no key | `tests/unit/test_windy_provider.py`, `tests/integration/test_windy_acquisition.py`, `tests/integration/test_refresh_fallback.py` |
+| Windy activation instructions complete | done | `docs/WINDY_API_SETUP.md` (every step of spec 6 checked by `tests/unit/test_windy_setup_doc.py`) |
+| Windy storage disabled without authorisation | done | `WINDY_STORAGE_AUTHORIZED`; `tests/unit/test_provider_manager.py`, `test_windy_provider.py`; the provider check reported `not_configured` with 0 requests |
+| All 50 spots configured | done | `data/surf_spots/`, seeded by `init-db` and the build (50 spots) |
+| Profiles contain sourced research | done (quoted claims only; "not documented" where no source says it) | `data/surf_spots/research_conditions.json`, `docs/surf_spot_research/` (50 + an index), `tests/unit/test_spot_research_docs.py`, `scripts/generate_spot_research_docs.py --check` exit 0 |
+| Scores generated; offshore scoring works | done | scoring 2.2.0; opposing-coastline tests in `tests/unit/test_scoring_conditions.py`; `test_surf_quality.py`, `test_wind.py`, `tests/integration/test_scoring_outputs.py` |
+| Central acquisition | done: one refresh for all users, no per-visitor fetching | the refresh endpoint; 1,000 simulated visitors caused no provider call and 9-12 database commits (section 50) |
+| Shared storage under the provider's licence | Open-Meteo CC BY 4.0 with the credit next to the data on every page and email (also /spots and the trip lists since review rounds 3-4); Windy only with written authorisation | `docs/API_SETUP_REQUIRED.md` 2.1, 2.9; `tests/integration/test_public_and_opportunity_api.py` (credits) |
+| Model update detection works | verified live (a natural wave-only refresh) and in tests | section 50; `tests/unit/test_sync_detect.py`, `test_open_meteo_components.py` |
+| Automatic processing works | the endpoint and its stand-ins are tested and ran through a 5-minute loop; the QStash schedule is documented, not deployed | `tests/integration/test_refresh_components.py`, `test_daemonless_hosted.py`, `test_internal_cron.py`; docs/deploy-vercel.md step 7b |
+| Versioning works; reliable publication | done | `tests/integration/test_forecast_versions.py`, `test_refresh_components.py` (marker self-heal); the local stack published 17 versions, always exactly one published |
+| Cache invalidation works | done in the app; the real CDN not verified | `tests/integration/test_forecast_serving.py`, `test_public_snapshot_cache.py`, `test_public_load.py`; under load a new version reached every route 3.2 s after publication |
+| Active sessions detect updates; markers and charts update | done | `frontend/e2e/live-update.spec.ts` (spec 32 steps 1-12 through the real backend, Chromium), `live-update-mocked.spec.ts` (Chromium and Pixel 7), `tests/forecast-version.test.tsx`; 16 of 16 page updates on the local stack, 12 of 12 on the final code |
+| Stale forecasts identified; partial failures handled | done | `tests/integration/test_forecast_versions.py` (stale spots served from their previous run), `test_refresh_components.py` (retries back off); `frontend/e2e/map-markers.spec.ts`, `tests/freshness.test.tsx`, `tests/trip-freshness.test.tsx` |
+| New swell events detected; searches matched | done | `tests/integration/test_pipeline.py`, `frontend/e2e/full-flow.spec.ts` |
+| Flight API with real credentials or a clearly labelled test adapter | test adapter ("Mock fares"); Duffel and Amadeus adapters tested with recorded responses, no credentials | `tests/unit/test_flight_providers.py`, the UI's mock labels |
+| Flight requests targeted and deduplicated | done | `tests/integration/test_flight_targeting.py`, `tests/unit/test_flight_targeting.py` |
+| Email verification works; notifications work | done (Mailpit in the local stack: 23 messages on 2026-10-29) | `tests/integration/test_auth_api.py`, `test_email_delivery.py`, `test_service_credentials.py` (SMTP reply codes) |
+| API usage monitorable | done | `/admin/freshness` usage group, `quota_near` alerts; `tests/integration/test_admin_freshness.py`; `python -m app.cli engine budget` |
+| Frontend simple and responsive | done | the always-visible summary and "Why this rating?" (`e2e/spot-summary.spec.ts`), the Pixel 7 project of the e2e suite |
+| Tests pass | yes (one timing bound failed in earlier runs) | section 49: every suite passed but one e2e test, `map-performance.spec.ts`, whose crest-dash draw time p95 (6.6 ms, 5.2 ms in its re-run; 6.7 ms in the data bundle's run) exceeded its 5 ms bound on this machine, with map code unchanged since it measured 4 ms; an alternating A/B measured the base 18a5bee above the bound as well (section 51); in the data bundle's review on 246873c every suite passed, that test included (4.6 ms) |
+| README updated | done | README A, B, E (local development and Vercel), F.2 (weather setup and automatic updates), I (flight API, email), J, K, L, M; every CLI command and script it names is checked by `tests/unit/test_readme_commands.py` |
+| Unverified integrations and limitations documented | done | section 51, README M, docs/architecture_audit.md 8.5 |
+
+## 48. Final deliverables (spec section 37)
+
+**1. Summary of architecture changes.** Section 46; the decisions as built with their
+reasons and consequences in docs/decisions.md ADR-038 to ADR-053 and
+docs/architecture_audit.md 8.1.
+
+**2. Files created and modified.** `git diff --stat 18a5bee` on the final tree
+(the final gate's and the documentation verification's commits included): <!-- diffstat -->359 files changed (150 added, 209 modified), 90,453 insertions, 3,835 deletions<!-- /diffstat -->. By area:
+
+<!-- diffarea -->
+| Area | Added | Modified | Lines added | Lines removed |
+|---|---|---|---|---|
+| `backend/app` | 20 | 71 | 13,451 | 1,040 |
+| `backend/alembic` | 1 | 0 | 162 | 0 |
+| `backend/tests` | 36 | 44 | 13,573 | 235 |
+| frontend (app, components, hooks, lib) | 19 | 45 | 4,483 | 421 |
+| frontend/tests and frontend/e2e | 17 | 20 | 4,414 | 133 |
+| frontend/types (generated OpenAPI types) | 0 | 3 | 5,598 | 1,139 |
+| `data` | 1 | 1 | 28,332 | 0 |
+| `docs/surf_spot_research` | 51 | 0 | 12,762 | 0 |
+| docs (other) | 2 | 14 | 5,094 | 630 |
+| `scripts` | 3 | 2 | 1,742 | 6 |
+| configuration and CI | 0 | 9 | 842 | 231 |
+<!-- /diffarea -->
+
+The per-package lists of every file (foundation, the ten packages, the integration and each
+review round) are in docs/architecture_audit.md 8.2.
+
+**3. Vercel configuration.** `vercel.json`: services `web` (`frontend/`, Next.js) and `api`
+(`backend/`, FastAPI, entrypoint `app.main:app`, build command
+`python -m app.cli migrate --on-build`, `maxDuration` 300 s, tests and ML models left out of
+the bundle), `/api/(.*)` routed to `api`, the optional daemon `sync` (the repo-root
+`Containerfile`, 1 instance in `iad1`, 2Gi, 600 s shutdown grace) and the daily cron
+`/api/internal/cron/daily` at `23 7 * * *`. The 5-minute refresh schedule lives in QStash on
+Hobby (a sub-daily Vercel Cron fails a Hobby deploy) or as a second cron entry on Pro.
+`.vercelignore`; the hosted profile (`backend/app/core/profiles.py`, `profile_env("hosted",
+"free-database")`), equal to `.env.vercel.example` and the block of docs/deploy-vercel.md
+step 5 (tests enforce it). Verified by the offline `vercel build` (`RESULT: ok`).
+
+**4. Open-Meteo integration.** `backend/app/services/forecasts/open_meteo.py`: the Marine API
+(`ncep_gfswave016`, else `ncep_gfswave025`) and the Forecast API (`gfs_global`) for all 50
+spots in one batched request per model; run detection from `meta.json` per domain
+(availability time + 10 minutes, monotonic, per component, `unknown` on a timeout);
+component-only fetches; only the models' native steps stored; the nearest sea cell
+(`cell_selection=sea`); a weighted-call budget charged in Redis before each request
+(`quota.py`); the commercial `customer-*` hosts with `OPEN_METEO_API_KEY`; the CC BY 4.0
+credit and links with the data. Verified live (section 50); unit and integration tests with
+recorded responses.
+
+**5. Windy ready for credentials.** `backend/app/services/forecasts/windy.py` (gfs + gfsWave,
+u/v to speed and direction FROM, testing-key refusal, invalid-key detection, sentinel
+fingerprint detection, a daily counter), `provider_manager.py` (selection, health,
+fallback), `python -m app.cli forecast provider-check`. Activation is configuration only:
+`WINDY_API_KEY`, `WINDY_STORAGE_AUTHORIZED=true` after a written licence, `WEATHER_PROVIDER`
+`auto` or `windy`, redeploy, health check, test refresh, verify the version
+(docs/WINDY_API_SETUP.md).
+
+**6. Source and licensing configuration.** `WEATHER_PROVIDER`, `FORECAST_PROVIDERS`
+(advanced), `WINDY_STORAGE_AUTHORIZED` (a key is not a licence), `OPEN_METEO_COMMERCIAL`
+(alias `COMMERCIAL_USE`; production refuses `true` without a key); the credits per provider
+in every forecast payload (`attribution_links`, the version's `attribution`) and on every
+page and email that shows derived values. Every setting with its default:
+docs/API_SETUP_REQUIRED.md section 6.
+
+**7. Schema and migrations.** Alembic `0009_forecast_versions`: the `forecast_versions`
+table (status, provider, components and per-spot runs as JSONB, counts, the detection to
+publication times, a unique partial index for one published version) and
+`saved_searches.alert_lead_min_days` / `alert_lead_max_days` with a CHECK; the model in
+`backend/app/models/version.py`. Verified: upgrade, downgrade and `alembic check` on an
+empty database; an upgrade of a copy of a real database kept every row count and the
+forecast rows' checksum.
+
+**8. Fifty spot research profiles.** `data/surf_spots/research_conditions.json` (the
+section 17 fields, each value citing claims of the existing evidence: 468 sources, 1,730
+claims) and `docs/surf_spot_research/<slug>.md` for the 50 spots plus an index, generated by
+`scripts/generate_spot_research_docs.py`; "not documented" where no source says it; research
+confidence 35 Moderate and 15 Low, none High.
+
+**9. Scoring engine.** `backend/app/services/surf_quality/` at version 2.2.0: deterministic,
+per-spot, 0-100 with components for direction, height, period, wind and tide; per hour the
+favourable and unfavourable reasons, the offshore class, the breaking height, research
+confidence and forecast confidence (a labelled heuristic) kept apart; weights configurable
+(`SCORING_WEIGHTS_JSON`); docs/SURF_SCORING.md. No ML in the default path.
+
+**10. Model-update detection.** `backend/app/services/sync/detect.py` (per-component plans:
+new, waiting, current, failed, unknown), `forecasts/open_meteo.py` (`meta.json`),
+`forecasts/windy.py` (fingerprints). A check with nothing new reads no forecast and makes no
+database query.
+
+**11. Centralised refresh.** `backend/app/api/internal.py` (the refresh endpoint and the
+daily cron), `services/sync/orchestrator.py` (`refresh_check`, the lease, the stages),
+`refresh.py`, `forecasts/carry.py` (carry-forward, validation), `forecasts/ingestion.py`,
+`sync/standin.py` (the daemon's work without a daemon). Partial failures publish the good
+spots and retry the rest (5, 15, 45 minutes).
+
+**12. Versioning and publication.** `backend/app/services/forecasts/versions.py` (stage,
+publish in one transaction, serving runs, staleness, the version payload and Redis marker),
+`serving.py` (published-version reads), `services/sync/publish.py`,
+`services/public_cache.py` (snapshots per version).
+
+**13. Frontend live updates.** `frontend/hooks/use-forecast-version.ts` (poll while visible,
+versioned query keys, the hourly re-read, the seen beacon), `components/forecast-updated.tsx`
+(the label and the announcement), `hooks/queries.ts`, `lib/api.ts`. The critical live-update
+test, `frontend/e2e/live-update.spec.ts`, runs spec 32 steps 1-12 through the real backend.
+
+**14. Map and chart integration.** `frontend/app/map/page.tsx` and `components/map/`
+(quality-coloured markers with wind and swell arrows and height labels, consistent FROM/TO
+conventions, bounded navigation and date-line wrapping, "Spot forecasts only" when the
+ocean layers are off), `components/forecast/` and `app/spots/[slug]/` (the always-visible
+summary, "Why this rating?", best windows, tide suitability, metres or feet, separate
+confidences, stale labels with the last update and the reason).
+
+**15. Personalised flights.** `backend/app/services/flights/` (`service.py`, `budget.py`,
+`airports.py`), `services/matching/`; per-search lead times in the wizard
+(`frontend/components/search/`); docs/MATCHING_AND_FLIGHTS.md. Searches only when justified,
+one shared cache per trip, per-user and per-provider daily budgets, all origins, up to 3
+layovers, operating carriers shown, gateway fallback for small regional airports.
+
+**16. Email notifications.** `backend/app/services/notifications/`: verification, password
+reset and alert emails with the fields of spec 29, de-duplication per user, swell, channel,
+kind and fingerprint, follow-ups only on material changes, an idempotency key per message,
+retries of temporary failures (SMTP reply codes classified), one-click unsubscribe,
+preferences re-checked at send time; admin alerts only to verified admins.
+
+**17. Freshness monitoring.** `backend/app/services/admin_freshness.py`, `api/admin.py`,
+`frontend/app/admin/freshness/` (every spec 16 metric), the admin problems in
+`services/health.py` and their emails in `notifications/ops_alerts.py`; the public `/status`
+and `/api/health/data` stay. docs/operations.md section 3.
+
+**18. API usage reporting.** `backend/app/services/usage.py` and `forecasts/quota.py`
+(`usage_snapshot`): Open-Meteo weighted calls per minute, hour, day and month against their
+limits, Windy requests today, flight searches today per provider and per user, emails
+today; on `/admin/freshness` and through `quota_near`; `python -m app.cli engine budget`
+prints the Open-Meteo budget.
+
+**19. Test results.** Section 49.
+
+**20. Deployment and setup instructions.** README E (local development), E.7 and L
+(Vercel), F.2 (weather setup and automatic updates), I (flight API, email);
+docs/deploy-vercel.md (step by step, the scheduler, production checks);
+docs/API_SETUP_REQUIRED.md (every external service, the database and Vercel sections, every
+setting); docs/WINDY_API_SETUP.md; docs/local-vercel-stack.md; docs/operations.md.
+
+**21. Known limitations and unresolved external dependencies.** Section 51 and
+docs/architecture_audit.md 8.5; README M.
+
+## 49. Test results
+
+**The data bundle's review** (the latest; 2026-10-30, on `wf6/int`, on this development
+machine). An independent review re-ran the data bundle's proofs and every check. It found one
+defect, fixed in 246873c: the tide constants' resolver searched the working directory before
+the parents of `data/`, so in a checkout where the api build command had run (its copy
+`backend/data` stays, ignored by git) a process started from `backend/` read the EOT20
+constants from that copy and the catalog, the spots and the stations from `data/`; it now
+searches in the order of `app/core/data_files.py` (repository root, service root, `/`, then
+the working directory), and a new unit test with a stale copy fails with the old order. Every
+check below ran on 246873c (the commits after it are documentation), once each; the unit and
+integration suites as separate runs, every exit code read directly. No expectation changed.
+
+| Check | Result |
+|---|---|
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (428 files formatted, 220 files type-checked) |
+| `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
+| Upgrade of a copy of the real database (at 0006) to 0008, then from 0008 to head | pass: 50 spots, 5 runs, 25,000 forecast rows, 25,000 predictions, 3 users, 69 events and the md5 of the forecast rows identical at 0006, 0008 and head; `alembic check` clean; no version until the first refresh |
+| `pytest tests/unit` with `LEAN_PYTHON` | 2,933 passed, 0 skipped, 92 s (the new data-files case included) |
+| `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` | 32 passed, the demo spot-only refresh in the lean install included |
+| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 18.3 min |
+| `npm ci`, `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run`, `npm run build` | pass; Vitest 628 passed (53 files) |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 155 passed, 0 failed (12.7 min; load 0.8 before it). `e2e/live-update.spec.ts` (Chromium; the mobile project runs the `@mobile` tests) and `live-update-mocked.spec.ts` (Chromium and Pixel 7) passed. `e2e/map-performance.spec.ts` passed this time, its crest-dash draw p95 4.6 ms within the 5 ms bound, every frame cost it records lower than in the A/B runs of section 51 (the bound unchanged) |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`; the API function python3.13, `maxDuration` 300 s, 3,481 files, 130.5 MiB (limit 500 MiB), its `data/` 10 files, 2.2 MiB (the four required files present); its file map holds nothing from outside the project and no env file; removing a required file from the map makes the check fail |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 166.1 of 200 MB (the reference data 2.24 MB of it) |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass, each with `.env.example`, `.env.vercel.example` and no env file |
+| shellcheck 0.11, the CI's two commands | clean |
+| `npm audit --omit=dev` | 1 moderate advisory (fast-uri, unchanged) |
+| The build-time seed with the real CLI (`vercel build`, CLI 64.5.0, `MIGRATE_ON_BUILD=all`, an empty scratch database; on 49fae2f, the same build command) | the build command ran in `backend/`, copied `../data`, migrated to 0009 and seeded 50 spots, 153 airports, 468 research sources and 56 tide stations |
+| The tide job from the function's own files (the build's file map materialised with no `data/` around it, the lean venv, an empty environment; on 49fae2f) | `python -m app.cli tides acquire`: exit 0, 56 of 56 stations, 17 s; every reader resolved into the function's `data/` |
+| The local Vercel-style stack (docs/local-vercel-stack.md) | the daemon's image from the `Containerfile` reads `data/` at `/data`, the api image at `/app/data` and has no `/data`; the migrate service seeded an empty database (50 spots, 153 airports, 468 research sources, 56 tide stations); after `sync --force`, `smoke` 23 shell checks passed (0 failed, 2 notes) and 6 of 6 browser checks; with the sync daemon stopped and the job logs deleted, the daily cron answered 200 and every job succeeded, `tides.acquire` in 33.9 s (50 stations of the tide model from `/app/data`; the 6 CO-OPS stations failed only for the containers' missing DNS, so its result is `partial`); images, volumes and build cache removed afterwards |
+
+**The data bundle's run** (2026-10-30, on `wf6/int` after the documentation
+verification, on this development machine). The backend, frontend, build and stack checks
+ran on the code and tests of a22e55d: the data bundle (5857d27: the api build command copies
+`data/` into the function, `app/core/data_files.py` finds it) and `run-e2e.sh --help`
+(a1bfdc7); the stack, the build-time seed and the tide job on 5857d27, the same application
+code. The commits after it add one case to a unit test (f5e7367) and documentation
+(e3f30ee and these results); the e2e suite, the linters and shellcheck ran on e3f30ee, the
+unit suite once more on the final tree. Each check ran once; the unit and integration suites
+as separate runs, every exit code read directly. Expectations changed on purpose, for the new
+build command and the api image's `data/`: `test_vercel_deploy.py` (the build command) and
+`test_local_vercel_stack.py` (the lean api image holds `data/` at its root); none was removed
+or weakened. The final gate's run, before the data bundle, follows the table.
+
+| Check | Result |
+|---|---|
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (428 files formatted, 220 files type-checked); again on e3f30ee |
+| `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
+| Upgrade of a copy of the real database (at 0006) to 0008, then from 0008 to head | pass: 50 spots, 5 runs, 25,000 forecast rows, 25,000 predictions, 3 users, 69 events and a checksum (md5) of the forecast rows identical at 0006, 0008 and head; `alembic check` clean; no version until the first refresh |
+| `pytest tests/unit` with `LEAN_PYTHON` (a lean install from `uv.lock`) | 2,931 passed, 0 skipped, 143.8 s; on the final tree (these results included) 2,932 passed, 0 skipped, 180.0 s (the case f5e7367 adds included) |
+| `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` | 32 passed, a demo spot-only refresh in the lean install included |
+| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 27.2 min (alongside the frontend checks and the offline build) |
+| `npm ci`, `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run`, `npm run build` | pass; Vitest 628 passed (53 files) |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7), on e3f30ee | 154 passed, 1 failed (18.0 min; load 0.7 before it). `e2e/live-update.spec.ts` and `live-update-mocked.spec.ts` (Chromium and Pixel 7) passed. Failed: `e2e/map-performance.spec.ts`, the crest-dash frame draw time p95 6.7 ms against its 5 ms bound: the machine's timing, not the code (the alternating A/B with the base 18a5bee in docs/UPGRADE_REPORT.md section 51); the bound was not changed and the test not skipped |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`; the API function python3.13, `maxDuration` 300 s, 3,481 files, 130.5 MiB (limit 500 MiB), its `data/` 10 files, 2.2 MiB (the four files the check requires present); the daily cron in the output config; the web functions 4.6, 3.7 and 1.7 MiB |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 165.9 of 200 MB (the reference data 2.24 MB of it) |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass, each with `.env.example`, `.env.vercel.example` and no env file |
+| shellcheck 0.11, the CI's two commands (`run-e2e.sh`, `vercel-local.sh` and `vercel-build-check.sh` changed) | clean, again on e3f30ee |
+| `npm audit --omit=dev` | 1 moderate advisory (fast-uri, as in the final gate's run) |
+| `tests/unit/test_run_e2e_script.py` (new: `--help`, the dry run and an unknown option touch no database) | 9 passed; against the previous `run-e2e.sh` all 9 fail |
+| The local Vercel-style stack (docs/local-vercel-stack.md), on the code of 5857d27 | built: the daemon's image from the `Containerfile` finds `data/` at `/data`, the api image at `/app/data` (the function's layout, no `/data`); the migrate service seeded an empty database (50 spots, 153 airports, 468 research sources, 56 tide stations); after `sync --force`, `smoke` 23 shell checks passed (0 failed, 2 notes) and 6 of 6 browser checks; with the sync daemon stopped and the job logs cleared, the daily cron answered 200 and `tides.acquire` succeeded in the api container (50 stations of the tide model from `/app/data`; 6 CO-OPS stations failed only for the containers' missing DNS) |
+| The build-time seed with the real CLI, on 5857d27 (`vercel build`, CLI 64.5.0, `MIGRATE_ON_BUILD=all`, an empty scratch database) | the api build command ran in `backend/`, copied `../data` and migrated to 0009 and seeded 50 spots, 153 airports, 468 research sources and 56 tide stations |
+| The tide job from the function's own files, on 5857d27 (the build's file map materialised with no repository around it, the lean venv) | `python -m app.cli tides acquire`: exit 0, 56 of 56 stations, 24 s |
+
+**The final gate's run** (before the data bundle). Run on 2026-10-30 by the final gate on `wf6/int`, on this development machine, on
+commit c1490b3: the code and tests of 0899b83 (the last commit that changes code or
+tests) plus documentation. The commits after it change only documentation: two
+places that still said the daily cron acquires the tides without the daemon (ffca5d3),
+then these results (this table, README "Latest full run" and docs/architecture_audit.md 8.4), the file list of docs/architecture_audit.md 8.2,
+the limitations (docs/UPGRADE_REPORT.md section 51, docs/architecture_audit.md 8.5)
+and docs/local-vercel-stack.md (4eff5b1), then the documentation verification below.
+Each check ran once on that code (the map-performance
+spec once more, as its timing bound allows); the backend's unit and integration suites
+as separate runs, every exit code read directly. The e2e suite was started a second time
+because the machine rebooted during the first run (76 tests had passed and none had
+failed); the complete second run is counted.
+
+| Check | Result |
+|---|---|
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (425 files formatted, 219 files type-checked) |
+| `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
+| Upgrade of a copy of a real database (at 0006: 50 spots, 25,000 forecast rows and predictions) to 0008, then from 0008 to head | pass: row counts and a checksum (md5) of the forecast rows identical before and after; `alembic check` clean; no version until the first refresh |
+| `pytest tests/unit` | 2,911 passed, 6 skipped (the lean-install tests), 84 s |
+| `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` (a lean install from `uv.lock`) | 32 passed, a demo spot-only refresh in the lean install included |
+| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 19.0 min. `test_map_fields.py::test_a_fields_only_run_never_changes_spot_forecasts`, order-dependent until 24d114e, passed in it, and also alone, first, right after the Redis-down tests, with its own file, and last (after the 72 other integration files: 631 passed, 3 skipped) |
+| `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run` | pass; Vitest 628 passed (53 files) |
+| `npm ci`, `npm run build` | pass |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7) | 154 passed, 1 failed (18.7 min). `e2e/live-update.spec.ts` (through the real refresh, in Chromium: publication to the open map 4.3 s and to the spot page 4.7 s with the e2e build's 2 s poll) and `live-update-mocked.spec.ts` (Chromium and Pixel 7) passed. Failed: `e2e/map-performance.spec.ts`, the crest-dash frame draw time p95 6.6 ms against its 5 ms bound; re-run once, alone, on the idle machine (load 0.7): 5.2 ms, failed again. No frontend code changed since review round 4, where it measured 4 ms, and every frame cost the test records rose alike (crest dashes 1.28 to 2.17 ms of script per frame, wind particles 22.3 to 28.8-32.1 ms of task time per frame), which points to this machine's speed after its reboot rather than the code; the bound was not changed (docs/UPGRADE_REPORT.md section 51) |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-30); the daily cron is in the output config; the function's files hold no `data/` (docs/UPGRADE_REPORT.md section 51, the tides) |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 163.7 of 200 MB |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass, each with `.env.example`, `.env.vercel.example` and no env file |
+| shellcheck 0.11 on `scripts/run-e2e.sh`, `scripts/vercel-local.sh`, `scripts/vercel-build-check.sh`, `scripts/export-openapi.sh` and (`-s sh`) the operations scripts | clean (the CI's two commands; `run-e2e.sh` and `vercel-local.sh` are the shell scripts 2.0 changed) |
+| `npm audit --omit=dev` | 1 moderate advisory (fast-uri below 3.1.9, under @hookform/resolvers and ajv; docs/decisions.md ADR-037). Dev-only: Vitest 3's tinypool (2 critical) and @vitest/mocker (moderate), not upgraded |
+| The local Vercel-style stack (2026-10-30, demo data, docs/local-vercel-stack.md) | built and run on this code: the build command migrated and seeded an empty database; `/api/internal/refresh` 401 without or with a wrong token; six simulated model runs refreshed through the edge, versions 2 to 7, an open map and spot page updated without a reload 12 of 12 times; register and verify through Mailpit; the daily cron 200 with its `jobs` summary; `smoke` 22 of 22 shell checks and 6 of 6 browser checks after one fix (0899b83); with the daemon stopped the cron's `tides.acquire` failed (docs/UPGRADE_REPORT.md section 51) |
+
+Earlier rounds on the same branch: review round 1 (the code of 5b9ce29) 2,882 unit, 638
+integration, 604 Vitest and 154 e2e tests passed; review round 2 (a4560d6) 2,889, 650, 614
+and 154; review round 3 (1775c67) 2,894, 657, 622 and 154; review round 4 (c85474f) 2,894,
+671, 628 and 155. Every test added since is counted above; none was removed or weakened.
+Expectations changed on purpose: the build seed without `data/` now fails on an empty
+database and skips only when spots exist, so its unit test is split into those two cases
+(review r3-spec-SPEC-6); the Vercel smoke's map check with the ocean layers off
+(`MAP_FIELDS_ENABLED=false`, the stack's default) expects the "Spot forecasts only" note
+instead of the outage notice (review r4-spec-R4-SPEC-2); at the final gate, the fields-only
+map test counts the served `version_id` as bookkeeping and asserts that it moves exactly one
+per run of the stages (every publication is a version since 2.0; the test passed in full
+runs only because an earlier test's Redis fail-open window left the version marker
+unwritten, and the test fixture now forgets that window, 24d114e), and the Vercel smoke
+expects the daily cron's `jobs` key, answered since review round 1 (0899b83).
+
+**The final documentation pass** (2026-10-30, on top of e29141a; documentation, the two env
+examples, one new and one extended unit test, no application code) re-ran: `ruff format
+--check .` and `ruff check .` (425 files), `mypy app` (219 files, no issues), `pytest
+tests/unit` with `LEAN_PYTHON` (2,917 passed, 0 skipped, 93.5 s: the 15 tests of the new
+`tests/unit/test_readme_commands.py` and 2 new ones in `test_api_setup_doc.py` included),
+the 117 doc-reading unit tests, `docker compose config -q` with `.env.example` and with
+`.env.vercel.example`, `scripts/generate_spot_research_docs.py --check` (exit 0) and
+`scripts/measure_refresh_egress.py` (docs/sync.md, "Measured (2.0)"). The integration
+suite, Vitest, the e2e suite and the offline Vercel build were not re-run: none of them reads
+a file this pass changed.
+
+**The documentation verification** (2026-10-30, after the final gate; documentation only)
+ran the commands of README.md, docs/API_SETUP_REQUIRED.md, docs/WINDY_API_SETUP.md,
+docs/deploy-vercel.md and docs/operations.md that need no Docker, Vercel CLI or account,
+on scratch databases: `--help` of every `python -m app.cli` sub-command; `init-db` (also with
+the lean install and a `postgresql://` URL), `check-config` (exit 1 with the missing keys
+listed), `pipeline` and `simulate-swell` (demo), `sync check`, `run`, `run --force`,
+`publish`, `status`, `daemon --once`, `migrate`, `migrate --on-build`, `tides seed`,
+`acquire`, `list`, `prune`, `engine budget`, `research lint`, `ml list`,
+`obs seed-stations`, `make-admin`, `forecast provider-check` (Open-Meteo live; Windy
+without a key `not_configured`, also without Redis); the refresh block of README F.2 with
+`curl` against a local API (401 without or with a wrong token; 404 for both routes without
+`CRON_SECRET`, checked in process); the real-data block of README F.5 (Open-Meteo answered with its daily limit,
+the rest succeeded); a Celery worker and beat; `scripts/check-health.sh`, `backup-db.sh`,
+`restore-db.sh --create --target-db`, `restore-drill.sh` (passed, 47 tables),
+`measure_db_egress.py pipeline` (6.18 MB a pass), `generate_spot_research_docs.py --check`
+and the other scripts' `--help`; `uv lock --check`; the lean install from the lock into a
+venv of its own (132 MB); `npm run typecheck`, `npm run lint`, `npm test` (628 passed);
+`ruff format --check .`, `ruff check .`, `mypy app`, `alembic upgrade head`,
+`alembic check`; `pytest tests/unit` with `LEAN_PYTHON` (2,917 passed, 0 skipped, 134 s).
+It corrected the documentation where a number did not match its record (the live idle
+checks: 20 checks and 1.2-1.8 s, not 98 checks and 1.2-1.7 s; the egress per refresh from
+6.3 MB; the demo refresh CPU up to 11.8 s; the Upstash pay-as-you-go example; the per-area
+diff table of docs/UPGRADE_REPORT.md section 48) or was out of date (the local stack's run
+on the final code in README E.6 and docs/deploy-vercel.md section 10).
+
+## 50. Measurements
+
+The full table is in docs/architecture_audit.md, 8.3 (all on this development machine, none
+on Vercel, Neon or Upstash). The main figures:
+
+* A live Open-Meteo refresh of both components: 125 weighted calls, 12.1 s of refresh (38.7 s
+  wall with proxy timeouts in the metadata check); a natural wave-only refresh of the 00Z
+  GFS-Wave run: 75 weighted calls, 20.3 s of refresh, the wind carried with its 18Z time.
+* A check with nothing new: four `meta.json` requests, 1.2-1.8 s, no data request, no
+  database query.
+* From publication to the new data on an open page: p50 13.8 s (16 samples, 9.7-22.9 s,
+  20 s poll, local Vercel-style stack without a CDN); on the final code p50 16.5 s (12
+  samples, 7.1-24.4 s, same setup, 2026-10-30).
+* Database egress of a spot refresh: 6.3-9.5 MB from the database to the app (demo data).
+* The API function: `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29 and on the final gate's code, 2026-10-30); with its `data/` (2.2 MiB, the data bundle) 130.5 MiB (3,481 files) on the final code (2026-10-30); the lean API imports in 1.5-1.8 s cold.
+* 4,000 requests through the local edge, 64 at a time: 0 errors, p50 222-314 ms.
+
+## 51. Not verified, limitations and external dependencies
+
+* **Not deployed**: no real Vercel deployment was made. Unverified until the first one:
+  Vercel's CDN caching of the versioned reads and of `/api/forecasts/version` (the
+  publication-to-page latency was measured without a CDN), Neon (only PgBouncer in
+  transaction mode was tested, locally), the QStash schedule, the Vercel daemon (the Vercel
+  CLI 64.5.0 refuses a `vercel.json` with `daemons` in `vercel build`), Neon's suspend and
+  wake, and real Upstash command counts.
+* **The build-time seed on Vercel**: the reference data live in the repository's `data/`,
+  outside the api service's root `backend/`. The api build command now copies `../data` into
+  `backend/data` before `migrate --on-build`. Vercel CLI 64.5.0's own build runs that command
+  in `backend/` with the repository around it: with `MIGRATE_ON_BUILD=all` against an empty
+  scratch database it copied `data/` and seeded 50 spots, 153 airports and 56 tide stations
+  (2026-10-30). A real Vercel build is not verified; one that cannot see `../data` fails at
+  the copy (`cp: cannot stat`) instead of deploying a function without its data
+  (docs/deploy-vercel.md step 6).
+* **The local Vercel-style stack** was run on the final code on 2026-10-30 (05:04-05:28
+  UTC, demo data; docs/local-vercel-stack.md): the migrate service's build command migrated
+  and seeded an empty database, smoke 22 of 22 shell checks (the refresh and version
+  endpoints included) and 6 of 6 browser checks (the "Spot forecasts only" map with the
+  ocean layers off included), six simulated model runs refreshed through the edge and shown
+  on an open map and spot page without a reload. Its daemon refreshes the spots itself; the
+  daemon-less hosted path is covered by `tests/integration/test_daemonless_hosted.py` and
+  `test_hosted_first_deploy.py`, and on the stack only by the daily cron run with the daemon
+  stopped (next item). The stack was rebuilt and run again the same day after the data
+  bundle (smoke 23 of 23 and 6 of 6).
+* **The tides on Vercel without the daemon (fixed)**: tide acquisition reads the catalog and
+  the EOT20 constants from `data/` (`data/tide_stations.json`, `data/tides/`), which the API
+  function did not have (the final gate's stack run: `tides.acquire` failed with
+  `FileNotFoundError`, `job_failed:tides.acquire`). The api build command now copies the
+  repository's `data/` into `backend/data`, which Vercel's Python builder bundles after the
+  build command, and `app/core/data_files.py` is the one resolver every reader uses (the
+  repository's `data/`, the service root's, `/data` in the images, the working directory).
+  `functions.includeFiles` was tried first: "../data/**" maps the files to `../data/...`,
+  outside the function root, and "data/**" matches nothing. Proved on 2026-10-30: the offline
+  build lists the 10 files of `data/` (2.2 MiB) in the api function (3,481 files, 130.5 MiB;
+  the check now fails without them); the tide job, run with the lean venv from the
+  function's own files and no repository around them, acquired 56 of 56 stations; on the
+  stack with the daemon stopped the cron's `tides.acquire` succeeded in the api container
+  (its 6 CO-OPS stations failed only for the containers' missing DNS; docs/local-vercel-stack.md).
+  Not verified: a real Vercel deployment.
+* **Atmosphere-only live refresh never observed**: on 2026-10-29 Open-Meteo's servers
+  answered GFS 0.13 00Z and 18Z alternately for over 36 minutes; three checks saw the new run
+  and three syncs skipped it safely without fetching (no charge, no version). The path is
+  covered by tests with the demo provider and by the wave-only live refresh.
+* **No Windy key** (the activation is configuration only, tested with recorded and synthetic
+  responses), **no Duffel or Amadeus credentials** (demo fares, labelled "Mock fares").
+* **Budgets are arithmetic** on unit costs measured here (docs/API_SETUP_REQUIRED.md 1.4):
+  Upstash Free fits a quiet site; steady traffic with a tab open in a CDN region all month
+  can pass 500K commands (pay-as-you-go about $1.11 a month at about 557K, docs/API_SETUP_REQUIRED.md 1.4).
+* **The 60 s freshness target** depends on the scheduler's 5-minute interval and Open-Meteo's
+  publication (the refresh waits 10 minutes after a run's availability time); from
+  publication, open pages measured p50 13.8 s without a CDN.
+* **Hobby is non-commercial** (Vercel and the free Open-Meteo API); a paywall needs Vercel
+  Pro and an Open-Meteo plan first (section 44).
+* **A timing bound on a shared machine**: `frontend/e2e/map-performance.spec.ts` failed once
+  in review round 3 (a frame-time p95 of 6.5 ms against its 5 ms bound) and passed in the
+  re-run on the same commit; no map code had changed. At the final gate it failed in the
+  full run (6.6 ms) and in its one re-run on the idle machine (5.2 ms), with the frontend
+  code of review round 4, which measured 4 ms; every frame cost the test records was 1.2 to
+  2 times round 4's (this machine had just rebooted). An alternating A/B on the idle machine
+  (2026-10-30 07:22-07:46 UTC; only this spec, Chromium, `run-e2e.sh` with the same scratch
+  database, Redis and ports; base 18a5bee, then HEAD 2293748, in turn) measured the
+  crest-dash draw p95 at **base 5.8, 5.6, 4.8, 5.8, 6.2, 5.6, 5.0 ms** (7 runs, median
+  5.6 ms; one more base run stopped at its database reset, before the test) and **HEAD 7.6,
+  5.4, 5.9, 5.1, 6.6, 5.2, 6.0, 4.6 ms** (8 runs, median 5.65 ms); a one-sided permutation
+  test of HEAD over base gives p = 0.34. HEAD with the production 20 s version poll instead
+  of the e2e build's 2 s measured 4.5, 4.7, 5.5 and 6.4 ms. The base, which has none of 2.0's
+  frontend changes and the same renderer files, fails the bound on this machine as HEAD
+  does (5 of 7 runs above 5 ms), so the failure is the environment's timing, not a 2.0
+  regression; the bound was not changed and the test not skipped. To close: run it on a
+  quiet machine of known speed, or decide whether a 5 ms p95 should hold on a 4-vCPU shared
+  host. In the data bundle's review (2026-10-30 18:32-18:45 UTC, 246873c, the same frontend
+  code) the full suite passed it: draw p95 4.6 ms, every frame cost it records lower than in
+  the A/B runs (crest dashes 1.20 ms of script per frame against 1.86-3.77 ms there), which
+  again points at the machine's speed.
+* **A setting nothing reads**: `FORECAST_DAILY_REQUEST_QUOTA` (5000) is still declared in
+  `Settings` but no code reads it since the per-provider budgets (`OPEN_METEO_CALLS_*`,
+  `WINDY_DAILY_REQUEST_LIMIT`) replaced it (found in the documentation pass; documented in
+  docs/API_SETUP_REQUIRED.md section 6, not removed).
+* **Owner steps** before production: the refresh schedule (docs/deploy-vercel.md step 7b),
+  `MAP_FIELDS_ENABLED=false` without the daemon, a verified email domain, Duffel's written
+  confirmation before real fares, Windy's written licence and logo before Windy data; the
+  full list is in docs/architecture_audit.md 8.5.

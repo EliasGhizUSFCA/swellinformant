@@ -169,34 +169,29 @@ def test_nothing_new_is_not_due(world: World) -> None:
     assert sorted(world.calls) == sorted([GFS, ECMWF, MAP])  # metadata only, one call each
 
 
-def test_a_new_gfs_run_waits_for_the_map_then_syncs_the_spots_alone(world: World) -> None:
+def test_a_new_gfs_run_does_not_wait_for_the_map(world: World) -> None:
+    """SYNC_COALESCE_MINUTES applies within a component only (design D6): the GFS spot run
+    of a map cycle is due at once, whether or not the map layers of that cycle are out."""
     everything_current(world)
     world.runs[GFS] = gfs_run(C12)  # the map of 12Z is not out yet
     k = stored_06()
-    first = plan_sync(None, settings=settings(), now=T0, known=k)
-    assert not first.due
-    spot = comp(first, GFS)
-    assert spot.state == "waiting" and spot.first_seen_at == T0
-    assert f"{MAP} 2026-10-19 12Z" in (spot.detail or "")
-    assert first.waiting_until == T0 + timedelta(minutes=90)
+    plan = plan_sync(None, settings=settings(), now=T0, known=k)
+    assert plan.due and plan.due_kinds() == frozenset({"spots"})
+    spot = comp(plan, GFS)
+    assert spot.state == "new" and spot.first_seen_at == T0 and spot.detail is None
+    assert state(plan, MAP) == "current"
+    assert plan.waiting_until is None
     assert k.first_seen == {known_key(GFS, gfs_run(C12).run_key): T0}
-
-    still = plan_sync(None, settings=settings(), now=T0 + timedelta(minutes=89), known=k)
-    assert not still.due and state(still, GFS) == "waiting"
-
-    later = plan_sync(None, settings=settings(), now=T0 + timedelta(minutes=90), known=k)
-    assert later.due and later.due_kinds() == frozenset({"spots"})
-    assert state(later, GFS) == "new" and state(later, MAP) == "current"
-    assert comp(later, GFS).first_seen_at == T0  # the first sighting is kept
-    assert later.anchor_cycle == C12
+    assert plan.anchor_cycle == C12
 
 
-def test_spots_and_map_of_one_cycle_make_one_due_plan(world: World) -> None:
+def test_spots_and_map_of_one_cycle_are_each_due_on_their_own(world: World) -> None:
     everything_current(world)
     world.runs[MAP] = map_run(C12)
     k = stored_06()
     early = plan_sync(None, settings=settings(), now=T0 - timedelta(minutes=30), known=k)
-    assert not early.due and state(early, MAP) == "waiting"  # the map waits for the spots
+    assert early.due and state(early, MAP) == "new"  # the map does not wait for the spots
+    assert early.due_kinds() == frozenset({"map"}) and early.anchor_cycle == C12
 
     world.runs[GFS] = gfs_run(C12)
     plan = plan_sync(None, settings=settings(), now=T0, known=k)
@@ -206,19 +201,24 @@ def test_spots_and_map_of_one_cycle_make_one_due_plan(world: World) -> None:
     assert state(plan, ECMWF) == "current"
 
 
-def test_the_coalescing_window_starts_at_the_first_sighting_of_either(world: World) -> None:
+def test_the_coalescing_window_is_the_components_own(world: World) -> None:
+    """A run whose model domains disagree waits from its own first sighting; a new map of
+    the same cycle seen earlier neither starts nor shares that window."""
     everything_current(world)
     world.runs[MAP] = map_run(C12)
     k = stored_06()
     plan_sync(None, settings=settings(), now=T0, known=k)  # the map seen at T0
     world.runs[GFS] = gfs_run(C12, atmos=C06)  # waves of 12Z, GFS atmosphere still 06Z
     plan = plan_sync(None, settings=settings(), now=T0 + timedelta(minutes=30), known=k)
-    assert not plan.due
-    assert state(plan, GFS) == state(plan, MAP) == "waiting"
+    assert plan.due and state(plan, MAP) == "new"
+    assert state(plan, GFS) == "waiting"
     assert "model domains still on an older cycle" in (comp(plan, GFS).detail or "")
-    assert plan.waiting_until == T0 + timedelta(minutes=90)  # both wait until the same time
-    late = plan_sync(None, settings=settings(), now=T0 + timedelta(minutes=90), known=k)
-    assert late.due and late.due_kinds() == frozenset({"spots", "map"})
+    assert comp(plan, GFS).first_seen_at == T0 + timedelta(minutes=30)
+    still = plan_sync(None, settings=settings(), now=T0 + timedelta(minutes=119), known=k)
+    assert state(still, GFS) == "waiting"
+    late = plan_sync(None, settings=settings(), now=T0 + timedelta(minutes=120), known=k)
+    assert late.due and state(late, GFS) == "new"
+    assert "waited 90 min" in (comp(late, GFS).detail or "")
 
 
 def test_a_run_whose_domains_disagree_waits_and_keeps_its_first_sighting(world: World) -> None:
@@ -247,7 +247,7 @@ def test_a_new_ecmwf_run_is_due_at_once(world: World) -> None:
 
 def test_ecmwf_does_not_wait_for_a_waiting_gfs_run(world: World) -> None:
     everything_current(world)
-    world.runs[GFS] = gfs_run(C12)  # waits for the map
+    world.runs[GFS] = gfs_run(C12, atmos=C06)  # waits for its late atmosphere domain
     world.runs[ECMWF] = ecmwf_run(C12)
     plan = plan_sync(None, settings=settings(), now=T0, known=stored_06())
     assert plan.due
@@ -465,7 +465,10 @@ def test_a_run_with_a_model_domain_behind_the_stored_run_is_never_new(world: Wor
     [
         ("w:2026101906|a:2026101912", "w:2026101912|a:2026101912", True),
         ("w:2026101912|a:2026101912", "w:2026101906|a:2026101912", False),  # ahead
-        ("w:2026101912|a:2026101906", "w:2026101906|a:2026101912", False),  # mixed
+        # Mixed (one domain ahead, one behind): behind. Detection is monotonic per domain
+        # (review r1-backend-F1): a run built from it would name the older cycle, so it
+        # waits until every domain is at or past its stored cycle. (Was False before.)
+        ("w:2026101912|a:2026101906", "w:2026101906|a:2026101912", True),
         ("w:2026101906|a:2026101912", "w:2026101906|a:2026101912", False),  # the same
         ("w:2026101906|b:2026101912", "w:2026101912|a:2026101912", False),  # other domains
         ("demo:2026101906", "demo:2026101912", True),
@@ -504,7 +507,7 @@ def test_without_coalescing_a_gfs_run_is_due_at_once(world: World) -> None:
 
 def test_promote_pending_runs_held_components_now(world: World) -> None:
     everything_current(world)
-    world.runs[GFS] = gfs_run(C12)  # waiting for the map
+    world.runs[GFS] = gfs_run(C12, atmos=C06)  # waiting for its late atmosphere domain
     plan = plan_sync(None, settings=settings(), now=T0, known=stored_06())
     assert not plan.due
     now = promote_pending(plan)
@@ -517,7 +520,7 @@ def test_the_plan_is_json_safe(world: World) -> None:
     import json
 
     everything_current(world)
-    world.runs[GFS] = gfs_run(C12)
+    world.runs[GFS] = gfs_run(C12, atmos=C06)
     plan = plan_sync(None, settings=settings(), now=T0, known=stored_06())
     data = json.loads(json.dumps(plan.as_dict()))
     assert data["due"] is False and data["waiting_until"] == "2026-10-19T18:50:00+00:00"

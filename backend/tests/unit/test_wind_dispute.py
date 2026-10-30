@@ -123,8 +123,10 @@ def test_api_fields_carry_the_reason_and_the_staleness_cap_keeps_it() -> None:
     stale = fc.api_fields(pred, stale=True)
     assert stale["confidence_reasons"][0] == fc.STALE_REASON
     assert fc.WIND_DISPUTE_REASON in stale["confidence_reasons"]
-    # The local reason is still the research sentence, never the wind note.
-    assert fresh["local_confidence_reason"] in (None, local.reason)
+    # The local reason is still the research sentence, never the wind note (it is no longer
+    # served, spec 20: the stored inputs keep it for the archive).
+    assert fc.local_reason(forecast.cls, local.cls, inputs) in (None, local.reason)
+    assert "local_confidence_reason" not in fresh and "local_confidence_reason" not in stale
 
 
 def test_research_input_keeps_the_wind_entry_for_the_dispute_only() -> None:

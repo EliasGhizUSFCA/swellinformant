@@ -6,12 +6,13 @@ import Link from "next/link";
 import { ConditionsSummary } from "@/components/conditions";
 import { ConfidenceBadge } from "@/components/confidence";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
-import { AttributionLinks } from "@/components/forecast-provenance";
+import { AttributionLinks, useNowMs } from "@/components/forecast-provenance";
 import { DemoBadge, MatchStatusBadge, QualityBadge } from "@/components/quality";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSpotEvents, useSpotOpportunities } from "@/hooks/queries";
-import { formatMoney, formatRange, formatSpotDateTime, heightRange, leadLabel, type Units } from "@/lib/format";
+import { combinedFreshness, type Freshness } from "@/lib/forecast-fields";
+import { formatMoney, formatRange, formatSpotDateTime, heightRange, leadLabel, updatedAgo, type Units } from "@/lib/format";
 import { timeParam } from "@/lib/map-time";
 import { cn } from "@/lib/utils";
 import type { AttributionLink, Conditions, SpotSummary } from "@/types/api";
@@ -25,7 +26,8 @@ import { DARK_TOKENS, GLASS } from "./map-ui";
  * viewer's). `linkTime`, a time the user picked on the timeline, opens the full forecast there
  * (`?t=`); without one it opens on its own default step. `links` are the credit and licence
  * links of the sources behind the map's predictions (the snapshot's `attribution_links`),
- * shown under the model data.
+ * shown under the model data. A spot whose served forecast is out of date (`freshness`, else
+ * the spot's own) says when it was last updated, so stale data is never shown as current.
  */
 export function SpotPanel({
   spot,
@@ -36,6 +38,7 @@ export function SpotPanel({
   signedIn,
   onClose,
   links,
+  freshness,
   className,
 }: {
   spot: SpotSummary;
@@ -46,9 +49,13 @@ export function SpotPanel({
   signedIn: boolean;
   onClose: () => void;
   links?: readonly AttributionLink[] | null;
+  /** The spot's freshness on the map snapshot (MapSpotOut.freshness), when known. */
+  freshness?: Freshness | null;
   className?: string;
 }) {
   const events = useSpotEvents(spot.slug);
+  const now = useNowMs();
+  const fresh = freshness ?? combinedFreshness(spot);
   // The time of the prediction shown (within the map step), else the step itself.
   const shownTime = at?.valid_time ?? time;
   const opps = useSpotOpportunities(spot.slug, signedIn);
@@ -86,10 +93,15 @@ export function SpotPanel({
           </Button>
         </div>
 
+        {fresh?.stale && (
+          <p className="rounded-lg border border-amber-300/40 bg-amber-400/15 px-2.5 py-1.5 text-xs text-amber-100" role="status" data-testid="panel-stale">
+            <span className="font-semibold">{fresh.lastUpdatedAt ? `Forecast last updated ${updatedAgo(fresh.lastUpdatedAt, now)}.` : "Forecast out of date."}</span> Not a current forecast.
+          </p>
+        )}
         {at ? (
           <>
             <ForecastBreakdown c={at} tz={spot.timezone} units={units} />
-            <AttributionLinks links={links} dark className="-mt-2" />
+            <AttributionLinks links={links} sourceCode={at.source_code} dark className="-mt-2" />
           </>
         ) : (
           <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground" data-testid="no-forecast">
@@ -98,9 +110,9 @@ export function SpotPanel({
         )}
 
         {/*
-          Forecast and local confidence for the selected hour are part of ForecastBreakdown
-          above. Research confidence is a separate, per-spot assessment (how well the break's
-          ideal conditions are documented): shown on its own line, never merged with either.
+          Forecast confidence for the selected hour is part of ForecastBreakdown above. Research
+          confidence is a separate, per-spot assessment (how well the break's ideal conditions
+          are documented): shown on its own line, never merged with it (spec 20).
         */}
         <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="forecast-confidence-slot">
           <ConfidenceBadge value={spot.research_class} kind="research" data-testid="panel-research-confidence" />

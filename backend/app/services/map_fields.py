@@ -400,7 +400,11 @@ def field_index(db: Session, now: datetime | None = None) -> FieldIndexOut:
     )
     if current is None or run is None:
         return FieldIndexOut(
-            available=False, message=_unavailable_message(settings), stale_after_hours=limit
+            available=False,
+            # Switched off on purpose, not an outage (review r4-spec-R4-SPEC-2).
+            enabled=settings.map_fields_enabled is not False,
+            message=_unavailable_message(settings),
+            stale_after_hours=limit,
         )
     now = as_utc(now) if now is not None else utcnow()
     age = (now - current.cycle_time).total_seconds() / 3600.0

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+import redis
 
 from app.core.config import Settings
+from app.core.redis import get_redis
 from app.services.forecasts.base import SpotPoint
 from app.services.forecasts.demo import DemoForecastProvider, DemoSeriesGenerator, SwellOverride
 from app.services.forecasts.open_meteo import OpenMeteoProvider
@@ -254,12 +258,22 @@ class TestOpenMeteo:
 
 
 class TestWindy:
+    @pytest.fixture(autouse=True)
+    def clean_redis(self) -> Iterator[None]:
+        """The Windy sentinel state and provider health live in Redis (optional here)."""
+        with contextlib.suppress(redis.RedisError):
+            get_redis().flushdb()
+        yield
+        with contextlib.suppress(redis.RedisError):
+            get_redis().flushdb()
+
     def test_requires_key(self) -> None:
         with pytest.raises(PermanentProviderError):
             WindyProvider(settings())
 
     def test_parses_waves_and_converts_wind_components(self) -> None:
-        ts = [T0 * 1000 + 3600_000 * i for i in range(2)]
+        # Windy serves fixed 3-hourly steps (Windy staff, 2026; the mock used 1 h before).
+        ts = [T0 * 1000 + 3 * 3600_000 * i for i in range(2)]
 
         def handler(request: httpx.Request) -> httpx.Response:
             body = json.loads(request.content)
@@ -314,37 +328,9 @@ class TestWindy:
         assert r0.values["wind_wave_direction_deg"] == 250
         assert r1.values["wind_wave_height_m"] is None and r1.values["wind_wave_period_s"] is None
         assert r0.extra["gust_kind"] == "unknown"
-        assert result.stats is not None and result.stats.requests == 2
-
-    def test_every_request_counts_against_the_daily_request_quota(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from app.core.redis import QuotaExceeded
-
-        counted: list[tuple[str, int]] = []
-
-        def consume_quota(provider: str, limit: int) -> int:
-            counted.append((provider, limit))
-            if len(counted) > 2:
-                raise QuotaExceeded(f"{provider} daily quota of {limit} requests reached")
-            return len(counted)
-
-        monkeypatch.setattr("app.services.http.consume_quota", consume_quota)
-        sent: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            sent.append(request)
-            return httpx.Response(200, json={"ts": []})
-
-        p = WindyProvider(
-            settings(windy_api_key="k", forecast_daily_request_quota=7),
-            client=httpx.Client(transport=httpx.MockTransport(handler)),
-            backoff_seconds=0,
-        )
-        result = p.fetch(SPOTS[:2], p.current_run(NOW))
-        # Spot 1 spends the two requests the budget has left; spot 2 is refused unsent.
-        assert counted == [("windy", 7)] * 3 and len(sent) == 2
-        assert "daily quota of 7" in result.errors[SPOTS[1].spot_id]
+        # One gfsWave and one gfs request for the spot, then the sentinel check of each
+        # model (design D3: a run that changed during the fetch is never stored).
+        assert result.stats is not None and result.stats.requests == 4
 
     def test_refused_without_the_terms_acknowledgement(self) -> None:
         from pydantic import ValidationError

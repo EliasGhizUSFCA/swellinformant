@@ -1,10 +1,13 @@
 """GET /api/internal/cron/daily, the daily watchdog. Owned by the api-serverless package.
 
 404 without CRON_SECRET (the body of an unknown route), 401 for a wrong token, otherwise
-200 ``{status, problems, alerts_sent, heartbeat_age_minutes}`` with ``Cache-Control:
-private, no-store``. The watchdog runs the ``ops.data_health`` job, so admins are emailed
-about problems and the alert state persists between runs; it works with Redis refusing
-connections. The admin account and the stale-forecast state here are synthetic test data.
+200 ``{status, problems, alerts_sent, heartbeat_age_minutes, jobs, refresh}`` with
+``Cache-Control: private, no-store`` (``refresh``: the summary of the refresh check the
+watchdog runs as the backstop of the refresh scheduler, Swell 2.0 design D8; tested in
+test_refresh_components.py). The watchdog runs the ``ops.data_health`` job, so admins are
+emailed about problems and the alert state persists between runs; it works with Redis
+refusing connections. The admin account and the stale-forecast state here are synthetic
+test data.
 """
 
 from __future__ import annotations
@@ -31,7 +34,9 @@ pytestmark = pytest.mark.integration
 
 SECRET = "s3cret-token-for-the-watchdog"
 AUTH = {"Authorization": f"Bearer {SECRET}"}
-BODY_KEYS = {"status", "problems", "alerts_sent", "heartbeat_age_minutes"}
+# "jobs" (review r1-spec-SPEC-2): the periodic jobs no daemon ran on time, run by the cron
+# under JOB_RUNNER=daemon (None under Celery); tested in test_daemonless_hosted.py.
+BODY_KEYS = {"status", "problems", "alerts_sent", "heartbeat_age_minutes", "jobs", "refresh"}
 
 
 @pytest.fixture
@@ -122,9 +127,13 @@ def test_cron_route_checks_the_bearer_token(db: Session, client: TestClient, sec
 
 
 def test_admins_are_alerted_once_when_health_is_degraded(
-    db: Session, client: TestClient, secret: str
+    db: Session, client: TestClient, secret: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The test database has no forecast run, so health reports problems (not ok)."""
+    # The daily route's refresh backstop would store a demo run after the first call and so
+    # change the health the duplicate delivery reports: keep the premise (no forecast run)
+    # with the kill switch. The backstop itself: test_refresh_components.py.
+    monkeypatch.setattr(get_settings(), "forecast_refresh_enabled", False)
     make_admin(db)
     first = client.get(CRON_DAILY_PATH, headers=AUTH)
     assert first.status_code == 200

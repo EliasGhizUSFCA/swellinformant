@@ -7,6 +7,7 @@ prominently so test data can never be mistaken for a real opportunity.
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -50,13 +51,15 @@ def fmt_range(start: str, end: str, tz: str) -> str:
     return f"{fmt_date(a)} – {fmt_date(b)}"
 
 
-def fmt_money(amount: str | float | None, currency: str | None) -> str:
+def fmt_money(amount: str | float | Decimal | None, currency: str | None) -> str:
     if amount is None or currency is None:
         return "—"
-    value = float(amount)
+    # Whole units rounded half up, as the app shows them (Intl.NumberFormat): 350.50 is $351
+    # in both, never $350 in the email (float formatting rounds half to even).
+    value = Decimal(str(amount)).quantize(Decimal(1), rounding=ROUND_HALF_UP)
     symbols = {"USD": "$", "EUR": "€", "GBP": "£", "AUD": "A$", "CAD": "C$", "NZD": "NZ$"}
     symbol = symbols.get(currency, "")
-    text = f"{value:,.0f}"
+    text = f"{value:,}"
     return f"{symbol}{text}" if symbol else f"{text} {currency}"
 
 
@@ -164,15 +167,86 @@ def _forecast_confidence(s: dict[str, Any]) -> str:
     return f"{text} — {lead}" if lead else text
 
 
-def _local_confidence(s: dict[str, Any]) -> str | None:
-    """'Low — How this break responds ...': the reason only when local confidence is
-    lower than forecast confidence (``local_confidence_reason``, as in the API)."""
-    cls = s.get("local_confidence_class")
+RESEARCH_NOTE = "how well this break's ideal conditions are documented; separate from the forecast"
+
+
+def _research_confidence(s: dict[str, Any]) -> str | None:
+    """'Moderate (how well this break's ideal conditions are documented; ...)': the spot's
+    research class, never merged with the forecast confidence (spec 20)."""
+    cls = s.get("research_confidence_class")
     if not cls:
         return None
-    text = CONFIDENCE_WORDS.get(str(cls), str(cls).title())
-    reason = s.get("local_confidence_reason")
-    return f"{text} — {reason}" if reason else text
+    return f"{CONFIDENCE_WORDS.get(str(cls), str(cls).title())} ({RESEARCH_NOTE})"
+
+
+def _swell_dates(s: dict[str, Any]) -> str:
+    """'Nov 10–13 (starts in about 4 days, short notice)': the window plus how far ahead
+    it is when the alert was built."""
+    text = str(s["window_label"])
+    lead = s.get("lead_days")
+    if lead is None:
+        return text
+    days = int(float(lead) + 0.5)  # conventional rounding (4.5 -> 5), as lead_phrase does
+    if lead < 1:
+        ahead = "starts within a day"
+    else:
+        ahead = f"starts in about {days} day{'s' if days != 1 else ''}"
+    return f"{text} ({ahead}{', short notice' if s.get('short_notice') else ''})"
+
+
+def _airport(s: dict[str, Any], code_key: str, info_key: str) -> str:
+    """'DPS — Ngurah Rai International Airport, Denpasar' (the code alone when unknown)."""
+    code = s.get(code_key) or "—"
+    info = s.get(info_key) or {}
+    name, city = info.get("name"), info.get("city")
+    if not name:
+        return str(code)
+    place = f", {city}" if city and city not in name else ""
+    return f"{code} — {name}{place}"
+
+
+def _transfer(s: dict[str, Any]) -> str | None:
+    minutes, mode = s.get("transfer_minutes"), s.get("transfer_mode")
+    if minutes is None:
+        return None
+    how = f" by {str(mode).replace('_', ' ').replace('+', ' + ')}" if mode else ""
+    hours = round(float(minutes) / 60.0, 1)
+    return f"about {hours:g} h{how} from the airport to the break"
+
+
+def _local(value: str | None) -> str:
+    """'Sat, Nov 8 06:15' from a provider's local wall-clock time."""
+    if not value:
+        return "—"
+    moment = datetime.fromisoformat(str(value))
+    return f"{moment:%a}, {fmt_date(moment.date())} {moment:%H:%M}"
+
+
+def _flight_dates(s: dict[str, Any]) -> str | None:
+    """The itinerary's own times (local at each airport), when the alert has one."""
+    if not s.get("outbound_departure_local"):
+        return None
+    return (
+        f"leave {s.get('origin')} {_local(s.get('outbound_departure_local'))}, land "
+        f"{s.get('destination')} {_local(s.get('outbound_arrival_local'))}; fly home "
+        f"{_local(s.get('inbound_departure_local'))}, land "
+        f"{_local(s.get('inbound_arrival_local'))} (local times)"
+    )
+
+
+def _fare(s: dict[str, Any]) -> str:
+    """The per-traveller fare in the search currency; a converted fare says so and names
+    the provider's own fare (FX_RATES_USD_JSON rates are configured, never guessed)."""
+    text = f"{fmt_money(s['price'], s['currency'])} per traveller"
+    if s.get("quoted_currency"):
+        text += (
+            f" (converted from {fmt_money(s.get('quoted_price'), s['quoted_currency'])} "
+            "with a configured exchange rate; the provider charges in "
+            f"{s['quoted_currency']})"
+        )
+    if s.get("is_mock_flight"):
+        text += " (MOCK FARE — not a real price)"
+    return text
 
 
 def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
@@ -181,16 +255,15 @@ def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
         if s.get("swell_height_m") is not None
         else "—"
     )
-    # Forecast confidence (the offshore forecast) and confidence at this break (the
-    # breaking-wave estimate, which also depends on spot research) are separate rows and
-    # are never merged into one number.
-    local = _local_confidence(s)
+    # Forecast confidence (the offshore forecast) and research confidence (how well the
+    # break is documented) are separate rows and are never merged into one number.
+    research = _research_confidence(s)
     confidence = [("Forecast confidence", _forecast_confidence(s))]
-    if local:
-        confidence.append(("Confidence at this break", local))
+    if research:
+        confidence.append(("Research confidence", research))
     rows = [
         ("Destination", f"{s['spot_name']}, {s['country']}"),
-        ("Swell dates", s["window_label"]),
+        ("Swell dates", _swell_dates(s)),
         ("Predicted breaking waves (our estimate)", _height(s)),
         ("Main offshore waves (raw model forecast)", swell),
         (
@@ -211,14 +284,20 @@ def _rows(s: dict[str, Any]) -> list[tuple[str, str]]:
                 f"{fmt_date(s.get('arrival_date'))} – {fmt_date(s.get('departure_date'))}",
             ),
             ("Travel buffers", _buffers(s)),
-            (
-                "Round-trip flight",
-                f"{fmt_money(s['price'], s['currency'])} per traveller"
-                + (" (MOCK FARE — not a real price)" if s.get("is_mock_flight") else ""),
-            ),
-            ("Departure airport", s.get("origin") or "—"),
-            ("Destination airport", s.get("destination") or "—"),
-            ("Airline", s.get("airline") or "—"),
+            ("Round-trip flight", _fare(s)),
+        ]
+        if flights := _flight_dates(s):
+            rows.append(("Flight dates", flights))
+        rows += [
+            ("Departure airport", _airport(s, "origin", "origin_airport")),
+            ("Destination airport", _airport(s, "destination", "destination_airport")),
+        ]
+        if transfer := _transfer(s):
+            rows.append(("Ground transfer", transfer))
+        rows.append(("Airline", s.get("airline") or "—"))
+        if s.get("operating_carriers"):
+            rows.append(("Operated by", ", ".join(s["operating_carriers"])))
+        rows += [
             (
                 "Flight time",
                 f"{s.get('outbound_hours', '—')} h out / {s.get('inbound_hours', '—')} h back",
@@ -254,10 +333,25 @@ def _intro(s: dict[str, Any]) -> str:
 
 
 DISCLAIMER = (
-    "Forecasts are model estimates and can change significantly, especially more than "
-    "5 days ahead; breaking wave heights are approximate. Fares are quotes at search time "
-    "and are subject to change until booked."
+    "Forecasts are model estimates and become less certain the further ahead they look: "
+    "size and timing often shift for swells a week or more away, and even a few days out "
+    "they can change. Breaking wave heights are approximate. Fares are quotes at search "
+    "time and are subject to change until booked."
 )
+
+
+def _link_lines(links: dict[str, str]) -> list[str]:
+    """The booking link (the provider's own, when the offer has one), then the route
+    searches, labelled as such: their fares may differ from the quote above."""
+    lines: list[str] = []
+    if links.get("booking"):
+        lines.append(f"Book this fare: {links['booking']}")
+    note = links.get("flights_note") or "route search — fares may differ"
+    if links.get("flights"):
+        lines.append(f"Google Flights ({note}): {links['flights']}")
+    if links.get("flights_alt"):
+        lines.append(f"Skyscanner ({note}): {links['flights_alt']}")
+    return lines
 
 
 def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, str, str]:
@@ -276,8 +370,7 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
         f"Opportunity details: {links['opportunity']}",
         f"Detailed surf forecast: {links['forecast']}",
     ]
-    if links.get("flights"):
-        lines.append(f"Flight offers: {links['flights']}")
+    lines += _link_lines(links)
     if links.get("dashboard"):
         lines.append(f"Your dashboard: {links['dashboard']}")
     credits = _credits(s)
@@ -306,12 +399,19 @@ def render_alert_email(s: dict[str, Any], links: dict[str, str]) -> tuple[str, s
         if demo_note
         else ""
     )
-    flights_btn = (
-        f'<a href="{escape(links["flights"])}" style="display:inline-block;margin:4px 8px 4px 0;'
-        f"padding:10px 16px;border-radius:8px;border:1px solid #0e7490;color:#0e7490;"
-        f'text-decoration:none">Flight offers</a>'
-        if links.get("flights")
-        else ""
+    button = (
+        'style="display:inline-block;margin:4px 8px 4px 0;padding:10px 16px;'
+        'border-radius:8px;border:1px solid #0e7490;color:#0e7490;text-decoration:none"'
+    )
+    note = links.get("flights_note") or "route search — fares may differ"
+    flights_btn = "".join(
+        f'<a href="{escape(links[key])}" {button}>{escape(label)}</a>'
+        for key, label in (
+            ("booking", "Book this fare"),
+            ("flights", f"Google Flights ({note})"),
+            ("flights_alt", f"Skyscanner ({note})"),
+        )
+        if links.get(key)
     )
     credits_html = (
         '<p style="font-size:12px;color:#6b7f8c;margin-top:16px">Forecast data: '

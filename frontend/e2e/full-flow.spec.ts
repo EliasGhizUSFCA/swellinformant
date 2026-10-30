@@ -108,10 +108,11 @@ test.describe.serial("swell → flight → alert lifecycle", () => {
     const second = await apiPost(page, "/api/dev/simulate-swell", {
       spot_slug: "jeffreys-bay",
       // A separate event needs ≥ 9 consecutive non-qualifying daylight hours between swells.
-      // Simulated swells have ~8 h Gaussian tails, so start this one 3 days after the first
-      // ends (5.8 d + 48 h): a full clean daylight period lies between them at any time of
-      // day. 30 h duration guarantees it covers daylight wherever it starts.
-      days_ahead: 10.8,
+      // Simulated swells have ~8 h Gaussian tails. The forecast horizon is FORECAST_DAYS (10
+      // days), so this one comes BEFORE the first (5.8 d): it ends at 3.25 d, leaving about
+      // 45 clean hours (a full daylight period at any time of day) before the first swell's
+      // ramp-up. 30 h duration guarantees it covers daylight wherever it starts.
+      days_ahead: 2,
       duration_hours: 30,
     });
     expect(second.pipeline.detection.created).toBeGreaterThan(0); // a separate, new swell event

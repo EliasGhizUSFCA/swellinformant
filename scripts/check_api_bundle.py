@@ -12,8 +12,9 @@ Usage (needs uv on PATH, or --uv, and access to PyPI):
    target outside Vercel's build image. Wheels only, hashes checked, bytecode compiled (the
    builder adds bytecode while the bundle has room).
 3. Prints each distribution's installed size, the project files (backend/ without tests and
-   local state, as vercel.json excludeFiles and .vercelignore leave it) and the total, then
-   deletes the directory.
+   local state, as vercel.json excludeFiles and .vercelignore leave it), the reference data
+   (the repository's data/, which the api build command copies into backend/data) and the
+   total, then deletes the directory.
 
 Exit status: 0 within the limit, 1 above it, 2 when the size could not be measured.
 MB is 1024 x 1024 bytes, the unit of the builder's 225 MB in-zip threshold
@@ -149,9 +150,9 @@ def _mb(size: int) -> str:
     return f"{size / MB:8.2f} MB"
 
 
-def report(sizes: TargetSizes, project: int, max_mb: float) -> tuple[str, bool]:
+def report(sizes: TargetSizes, project: int, max_mb: float, data: int = 0) -> tuple[str, bool]:
     """The printed table and whether the total is within ``max_mb``."""
-    total = sizes.total + project
+    total = sizes.total + project + data
     width = max([len(f"{d.name} {d.version}") for d in sizes.distributions] + [40])
     lines = [
         "API function dependencies: backend/uv.lock, no extras, "
@@ -164,6 +165,7 @@ def report(sizes: TargetSizes, project: int, max_mb: float) -> tuple[str, bool]:
     lines += [
         f"  {f'{len(sizes.distributions)} distributions':<{width}} {_mb(sizes.total)}",
         f"  {'project files (backend/ without tests)':<{width}} {_mb(project)}",
+        f"  {'reference data (data/, copied by the build)':<{width}} {_mb(data)}",
         f"  {'total':<{width}} {_mb(total)}   limit {max_mb:g} MB",
         ("OK: within the limit" if within else "FAIL: above the limit")
         + f" ({total / MB:.1f} of {max_mb:g} MB)",
@@ -241,7 +243,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    text, within = report(sizes, project_files_size(BACKEND), args.max_mb)
+    project = project_files_size(BACKEND)
+    if (BACKEND / "data").is_dir():  # a local copy left by running the build command
+        project -= project_files_size(BACKEND / "data")
+    text, within = report(sizes, project, args.max_mb, project_files_size(ROOT / "data"))
     print(text)
     return 0 if within else 1
 

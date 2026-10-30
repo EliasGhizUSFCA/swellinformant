@@ -87,12 +87,14 @@ interface HarnessProps {
   cover?: (size: { x: number; y: number }) => MapCover;
   onCommit?: () => void;
   surface?: "light" | "dark";
+  /** Phones: the selected marker's tooltip stays closed (SpotMarker quietWhenSelected). */
+  quiet?: boolean;
 }
 
 const noop = () => undefined;
 
 /** The forecast map's marker layer without its canvas layers. */
-function Markers({ spots, markers, selected = null, cover, onCommit, surface }: HarnessProps) {
+function Markers({ spots, markers, selected = null, cover, onCommit, surface, quiet = false }: HarnessProps) {
   const lons = useMemo(() => spots.map((s) => s.longitude), [spots]);
   const { centreLng, onMove, onRecentre } = useWrapCentre(lons, 10);
   const sel = spots.find((s) => s.slug === selected);
@@ -110,6 +112,7 @@ function Markers({ spots, markers, selected = null, cover, onCommit, surface }: 
             highlight={!!markers[s.slug]?.highlight}
             onSelect={noop}
             surface={surface}
+            quietWhenSelected={quiet}
           />
         ))}
       </Profiler>
@@ -165,6 +168,49 @@ const markerLng = (map: LeafletMap, slug: string) => {
   });
   return lng;
 };
+
+const markerLayer = (map: LeafletMap, slug: string) => {
+  let found: LeafletCircleMarker | null = null;
+  map.eachLayer((l) => {
+    if (l instanceof LeafletCircleMarker && (l.options.className ?? "").split(" ").includes(`spot-${slug}`)) found = l;
+  });
+  return found as LeafletCircleMarker | null;
+};
+
+describe("selected marker tooltip on phones (review r1-frontend-FE-3)", () => {
+  const one = SPOTS.slice(0, 1);
+  const slug = one[0]!.slug;
+
+  it("closes the tooltip the selecting tap opened, and again on a later tap; desktops keep it", async () => {
+    vi.useFakeTimers();
+    try {
+      const { map, rerender } = setup({ spots: one, markers: states(60), quiet: true });
+      const layer = () => markerLayer(map(), slug)!;
+      // The tap: Leaflet opens the tooltip on click, then the page selects the spot.
+      act(() => layer().fire("click"));
+      expect(layer().isTooltipOpen()).toBe(true);
+      rerender({ spots: one, markers: states(60), quiet: true, selected: slug });
+      expect(layer().isTooltipOpen()).toBe(false);
+      // Tapping the selected marker again: Leaflet reopens it; closed right after.
+      act(() => layer().fire("click"));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(layer().isTooltipOpen()).toBe(false);
+      // Keyboard focus (or a desktop hover) still opens it.
+      act(() => layer().openTooltip());
+      expect(layer().isTooltipOpen()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the selected marker's tooltip on desktops", () => {
+    const { map, rerender } = setup({ spots: one, markers: states(60) });
+    const layer = () => markerLayer(map(), slug)!;
+    act(() => layer().fire("click"));
+    rerender({ spots: one, markers: states(60), selected: slug });
+    expect(layer().isTooltipOpen()).toBe(true);
+  });
+});
 
 describe("spot markers", () => {
   it("draws every marker in the world copy nearest the view, re-placing only those that change copy", () => {

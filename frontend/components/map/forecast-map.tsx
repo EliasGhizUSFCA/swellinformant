@@ -2,7 +2,7 @@
 
 import "leaflet/dist/leaflet.css";
 
-import { svg, type Map as LeafletMap, type PathOptions } from "leaflet";
+import { svg, type CircleMarker as LeafletCircleMarker, type Map as LeafletMap, type PathOptions } from "leaflet";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CircleMarker, MapContainer, Tooltip, useMap, useMapEvents, ZoomControl } from "react-leaflet";
 
@@ -18,6 +18,7 @@ import type { SpotSummary } from "@/types/api";
 
 import type { CityLabel, IsobarPath } from "./basemap-draw";
 import { fieldSampler, MapDataLayers, type ParticleMode } from "./map-canvas-layers";
+import { markerRadius, SpotGlyphs } from "./spot-glyphs";
 import { BOUNDED_MAP_OPTIONS, CentreWatcher, flyOrJump, FlyToSpot, MapBounds, TileErrors, TILES, useWrapCentre, type MapCover, type MarkerState } from "./surf-map";
 
 /** The map's sea colour under the dark basemap (and under the layers while they load). */
@@ -202,38 +203,60 @@ function ZoomWatcher({ onZoom }: { onZoom?: (z: number) => void }) {
 }
 
 /**
- * One spot marker, an SVG path `path.spot-<slug>` coloured by our surf-quality prediction.
+ * One spot marker, an SVG path `path.spot-<slug>` coloured by our surf-quality prediction
+ * (its arrows and height label are drawn above it by SpotGlyphs).
  * Memoised with stable props, so a new forecast hour restyles only the markers whose colour
  * changed and a zoom or pan touches none; `lng` is the spot's world copy nearest the view.
  * `surface` "dark" (the dark basemap) uses the brighter-is-better ramp made for dark
  * backgrounds (at least 3:1 against them); "light" (the Streets tiles) the default ramp.
+ * `quietWhenSelected` (phones, where the spot's sheet covers most of the map): the selected
+ * marker's tooltip is closed when it is selected or tapped again. The sheet shows the same
+ * numbers, and the tooltip would open under the top controls or past the screen's edges
+ * (review r1-frontend-FE-3). Keyboard focus still opens it.
  */
 export const SpotMarker = memo(function SpotMarker({
   spot,
   lng,
   score,
   tooltip,
+  detail,
   selected,
   highlight,
   onSelect,
   surface = "light",
+  quietWhenSelected = false,
 }: {
   spot: SpotSummary;
   lng: number;
   score: number | null;
   tooltip: string;
+  detail?: string | null;
   selected: boolean;
   highlight: boolean;
   onSelect: (slug: string) => void;
   surface?: "light" | "dark";
+  quietWhenSelected?: boolean;
 }) {
+  const ref = useRef<LeafletCircleMarker>(null);
+  const quiet = quietWhenSelected && selected;
+  const quietRef = useRef(quiet);
+  useEffect(() => {
+    quietRef.current = quiet;
+    // The tap that selected the spot opened the tooltip (Leaflet opens it on click).
+    if (quiet) ref.current?.closeTooltip();
+  }, [quiet]);
   const center = useMemo<[number, number]>(() => [spot.latitude, lng], [spot.latitude, lng]);
   const fill = colorForScore(score, surface);
   const pathOptions = useMemo(() => ({ color: "#ffffff", weight: selected ? 3 : 1.5, fillColor: fill, fillOpacity: 0.95 }), [selected, fill]);
   const slug = spot.slug;
   const eventHandlers = useMemo(
     () => ({
-      click: () => onSelect(slug),
+      click: (e: { target: LeafletCircleMarker }) => {
+        onSelect(slug);
+        // A tap on the selected marker: Leaflet's own click handler (bound with the tooltip,
+        // after this one) opens the tooltip again; closed once it ran.
+        if (quietRef.current) window.setTimeout(() => e.target.closeTooltip(), 0);
+      },
       // Leaflet makes markers focusable (their tooltip opens on focus): Enter or Space opens
       // the spot, as a click does.
       keydown: (e: { originalEvent: KeyboardEvent }) => {
@@ -247,8 +270,9 @@ export const SpotMarker = memo(function SpotMarker({
   );
   return (
     <CircleMarker
+      ref={ref}
       center={center}
-      radius={selected ? 11 : highlight ? 8 : 6}
+      radius={markerRadius(selected, highlight)}
       pathOptions={pathOptions}
       // Set at creation (Leaflet ignores className changes in later setStyle calls).
       className={`spot-marker spot-${slug}`}
@@ -258,6 +282,12 @@ export const SpotMarker = memo(function SpotMarker({
         <strong>{spot.name}</strong>
         <br />
         {tooltip}
+        {detail && (
+          <>
+            <br />
+            <span className="text-white/80">{detail}</span>
+          </>
+        )}
       </Tooltip>
     </CircleMarker>
   );
@@ -273,7 +303,9 @@ function initialView(el: HTMLElement): { zoom: number; minZoom: number } {
 /**
  * Full-screen forecast map: ocean colour field, flow particles, dark Natural Earth basemap
  * (or OpenStreetMap tiles), isobars, labels and the spot markers on top. Markers stay SVG
- * paths (`path.spot-<slug>`) coloured by our surf-quality prediction and always clickable.
+ * paths (`path.spot-<slug>`) coloured by our surf-quality prediction and always clickable,
+ * with the spot's swell and wind arrows (pointing where they go) and its predicted surf height
+ * drawn beside them where there is room (SpotGlyphs).
  *
  * Navigation (lib/map-bounds.ts): the latitude band 84°N to 78.5°S with a hard edge, a minimum
  * zoom of one world width for the container's size, endless east-west panning with markers,
@@ -369,13 +401,18 @@ function ForecastMap(props: ForecastMapProps) {
                 lng={nearestCopy(s.longitude, centreLng)}
                 score={m?.score ?? null}
                 tooltip={m?.tooltip ?? "No usable forecast"}
+                detail={m?.detail}
                 selected={s.slug === selected}
                 highlight={!!m?.highlight}
                 onSelect={onSelect}
                 surface={basemap === "dark" ? "dark" : "light"}
+                quietWhenSelected={!!cover}
               />
             );
           })}
+          {/* Arrows and height labels over the circles (not interactive: clicks, focus and
+              tooltips stay with the circles). */}
+          <SpotGlyphs spots={spots} markers={markers} selected={selected} centreLng={centreLng} />
           {userCentre && <CircleMarker center={userCentre} radius={7} pathOptions={USER_PATH} className="user-location-marker" interactive={false} />}
           <Readout sample={sample} layer={layer} units={units} />
           <FlyToSpot slug={selected} lat={selectedSpot?.latitude} lon={selectedSpot?.longitude} minZoom={SPOT_ZOOM} cover={cover} />

@@ -41,7 +41,7 @@ from app.core.database import utcnow
 from app.models import ForecastRun, SurfQualityPrediction, SurfSpot, SwellEvent, WaveForecast
 from app.models.enums import QualityLabel, SwellEventStatus
 from app.services import timesteps
-from app.services.forecasts.queries import latest_runs_by_spot
+from app.services.forecasts.queries import served_runs_by_spot
 from app.services.surf_quality.breaking import dominant_component
 from app.services.surf_quality.confidence import confidence_label
 from app.services.surf_quality.forecast_confidence import (
@@ -207,12 +207,11 @@ def load_steps(db: Session, spot_id: int, run_id: int, since: datetime) -> list[
     ]
 
 
-# Peak-hour confidence fields of EventOut, and what each history snapshot stores.
+# Peak-hour confidence fields of EventOut, and what each history snapshot stores (spec 20:
+# the combined "local confidence" that snapshots taken before 2.0 also hold is not read).
 EVENT_CONFIDENCE_KEYS = (
     "forecast_confidence_class",
-    "local_confidence_class",
     "confidence_reasons",
-    "local_confidence_reason",
     "forecast_confidence_reasons",
     "wind_dispute_note",
 )
@@ -472,7 +471,7 @@ def expire_passed_events(db: Session, now: datetime) -> int:
 def detect_events(db: Session, now: datetime | None = None) -> DetectionStats:
     now = now or utcnow()
     stats = DetectionStats()
-    runs = latest_runs_by_spot(db, now)
+    runs = served_runs_by_spot(db, now)
     spots = db.scalars(select(SurfSpot).where(SurfSpot.is_active)).all()
     for spot in spots:
         run = runs.get(spot.id)

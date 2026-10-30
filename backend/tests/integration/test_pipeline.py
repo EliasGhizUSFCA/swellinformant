@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.database import utcnow
 from app.models import (
     FlightOffer,
+    FlightSearch,
     ForecastRun,
     Notification,
     NotificationPreference,
@@ -398,22 +399,37 @@ def test_expired_offer_is_never_alerted_and_triggers_research(
     # Stop after flight discovery: expire every offer before alerts are generated.
     from app.services.flights.service import discover_flights
     from app.services.surf_quality.predict import compute_pending_predictions
+    from app.services.sync.publish import publish
 
     db.execute(delete(Notification))
     compute_pending_predictions(db)
+    # The pipeline's own order (services/pipeline.py): the simulated run is published as
+    # the forecast version first, since detection reads the published runs (design D7).
+    publish(db, trigger="pipeline")
     detect_events(db)
     match_all(db)
     discover_flights(db)
     db.execute(update(FlightOffer).values(offer_expires_at=utcnow() - timedelta(minutes=1)))
     db.commit()
+    expired = set(db.scalars(select(FlightOffer.id)).all())
+    searches_before = db.scalar(select(func.count()).select_from(FlightSearch))
     stats = generate_alerts(db)
-    assert stats.invalidated >= 1 and stats.queued == 0
+    # Design D15 / spec 27: the fare is re-checked only right before the alert is sent. The
+    # expired quote is invalidated, the trip is searched once more right there (its cached
+    # search was expired, so the provider is asked again) and the alert goes out with the
+    # fresh fare: an expired offer is never alerted, and nothing waits for a timer.
+    assert stats.invalidated >= 1 and stats.researched >= 1
+    assert db.scalar(select(func.count()).select_from(FlightSearch)) > searches_before  # type: ignore[operator]
     db.expire_all()
     match = sim_match(db, start, start + timedelta(hours=60))
-    assert match.status == MatchStatus.PENDING_FLIGHTS
-    discover_flights(db)  # cache was invalidated → fresh offers
-    db.expire_all()
-    assert db.get(OpportunityMatch, match.id).status == MatchStatus.FLIGHT_FOUND  # type: ignore[union-attr]
+    assert match.status == MatchStatus.FLIGHT_FOUND
+    assert match.best_offer is not None and match.best_offer.id not in expired
+    assert match.best_offer.offer_expires_at is not None
+    assert match.best_offer.offer_expires_at > utcnow()
+    sent = db.scalars(select(Notification).where(Notification.match_id == match.id)).all()
+    assert stats.queued >= 1 and sent
+    assert all(n.snapshot.get("offer_id") not in {str(i) for i in expired} for n in sent)
+    assert all(n.snapshot.get("offer_id") == str(match.best_offer.id) for n in sent)
 
 
 # ---------------------------------------------------------------- notification preferences
@@ -749,8 +765,13 @@ def test_the_pipeline_publishes_what_it_stored(db: Session, few_spots: list[str]
     assert result["publish"]["sync_run_id"] == row.id
     assert row.published_at is not None and row.map_run_id is None  # map fields are off
     assert db.scalar(select(func.count(SyncRun.id))) == 1
-    # Once published, the demo run counts as stored for the sync checks.
+    # Once published, the demo run counts as stored for the sync checks, with the run key
+    # of each of its components (design D6).
     run = db.scalar(select(ForecastRun))
-    assert run is not None and load_known(db).stored == {"demo": run.run_key}
+    assert run is not None and load_known(db).stored == {
+        "demo": run.run_key,
+        "demo:wave": run.run_key,
+        "demo:atmosphere": run.run_key,
+    }
     run_pipeline(db, acquire=False)
     assert db.scalar(select(func.count(SyncRun.id))) == 2  # every pipeline run publishes

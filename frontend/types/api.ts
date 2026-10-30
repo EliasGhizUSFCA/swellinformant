@@ -53,9 +53,9 @@ export type SearchInput = S["SearchIn"];
 export type Search = S["SearchOut"];
 export type TravelInput = S["TravelIn"];
 
-// Opportunities, matches and alerts carry the event's peak-hour forecast and local confidence
-// (forecast_confidence_class, local_confidence_class, local_confidence_reason; null = not
-// assessed yet) and, for matches, whether the forecast run behind them is stale.
+// Opportunities, matches and alerts carry the event's peak-hour forecast confidence
+// (forecast_confidence_class; null = not assessed yet; the combined local confidence was
+// removed in 2.0, spec 20) and, for matches, whether the forecast run behind them is stale.
 export type MatchSummary = S["MatchSummary"];
 export type MatchDetail = Omit<S["MatchDetail"], "event" | "daily"> & { event: SwellEvent; daily: DailySummary[] };
 export type Offer = S["OfferOut"];
@@ -103,3 +103,8 @@ export type AccuracyOverview = S["AccuracyOverview"];
 export type AccuracyMetric = S["MetricRow"];
 export type AccuracyPairs = S["PairsOut"];
 export type ModelVersionSummary = S["ModelVersionSummary"];
+
+// Swell 2.0 forecast versions and freshness (design D7, D10, D11; contract C4).
+export type ForecastVersionOut = S["ForecastVersionOut"];
+export type ForecastStatus = S["ForecastStatusOut"];
+export type SpotFreshness = S["SpotFreshnessOut"];

@@ -14,7 +14,9 @@ image), dev = all plus the tools.
 (d) pyproject.toml and uv.lock keep that split;
 (e) scripts/check_api_bundle.py attributes installed bytes to distributions correctly;
 (f) with LEAN_PYTHON set to the interpreter of a real lean install (CI makes one from uv.lock),
-    (a) and (c) again with nothing blocked, and `uvicorn app.main:app` serves /api/health;
+    (a) and (c) again with nothing blocked, a demo spot-only refresh (the refresh Function's
+    path, on the test database) publishes a version, and `uvicorn app.main:app` serves
+    /api/health;
 (g) the classic image's entrypoint (backend/docker-entrypoint.sh) starts each role's command,
     the sync role as the job runner, and names an invalid setting without its value.
 
@@ -87,6 +89,11 @@ LIGHT_JOB_MODULES = [
     "app.services.notifications.ops_alerts",
     "app.services.swell_detection.service",
 ]
+# Forecast versions (Swell 2.0, contract C3): staged, published and served by the refresh
+# Function and the API, so lean like them.
+VERSIONS_MODULE = "app.services.forecasts.versions"
+# The prediction job (Swell 2.0, design D8): it scores every refresh, so lean as well.
+PREDICT_MODULE = "app.services.surf_quality.predict"
 # Distributions that must never be in the lean closure of uv.lock.
 NOT_LEAN = {
     "celery",
@@ -107,30 +114,40 @@ NOT_LEAN = {
 }
 
 
-def import_without(modules: list[str], missing: Iterable[str]) -> subprocess.CompletedProcess[str]:
-    """Import ``modules`` in a fresh interpreter in which the ``missing`` packages are absent."""
-    code = textwrap.dedent(
-        f"""
-        import importlib
-        import sys
+def import_without(
+    modules: list[str], missing: Iterable[str], then: str = ""
+) -> subprocess.CompletedProcess[str]:
+    """Import ``modules`` in a fresh interpreter in which the ``missing`` packages are absent,
+    then run the code ``then`` there (no missing package may be loaded by either)."""
+    code = (
+        textwrap.dedent(
+            f"""
+            import importlib
+            import sys
 
-        MISSING = {tuple(missing)!r}
-        attempts = []
+            MISSING = {tuple(missing)!r}
+            attempts = []
 
-        class Missing:
-            def find_spec(self, name, path=None, target=None):
-                if name.split(".")[0] in MISSING:
-                    attempts.append(name)
-                    raise ModuleNotFoundError(f"No module named {{name!r}}", name=name)
-                return None
+            class Missing:
+                def find_spec(self, name, path=None, target=None):
+                    if name.split(".")[0] in MISSING:
+                        attempts.append(name)
+                        raise ModuleNotFoundError(f"No module named {{name!r}}", name=name)
+                    return None
 
-        sys.meta_path.insert(0, Missing())
-        for module in {modules!r}:
-            importlib.import_module(module)
-        loaded = sorted(m for m in sys.modules if m.split(".")[0] in MISSING)
-        assert not attempts and not loaded, (attempts, loaded)
-        print("ok")
-        """
+            sys.meta_path.insert(0, Missing())
+            for module in {modules!r}:
+                importlib.import_module(module)
+            """
+        )
+        + textwrap.dedent(then)
+        + textwrap.dedent(
+            """
+            loaded = sorted(m for m in sys.modules if m.split(".")[0] in MISSING)
+            assert not attempts and not loaded, (attempts, loaded)
+            print("ok")
+            """
+        )
     )
     return subprocess.run(  # noqa: S603 - fixed interpreter and code
         [sys.executable, "-c", code], cwd=BACKEND, capture_output=True, text=True, timeout=180
@@ -236,9 +253,108 @@ def test_the_light_jobs_import_without_celery_or_the_data_libraries() -> None:
     assert_imported(import_without(LIGHT_JOB_MODULES, CELERY + DATA_LIBRARIES))
 
 
+def test_the_forecast_versions_module_imports_lean() -> None:
+    """versions.py and the modules its functions import when called (the legacy run
+    selection, the public cache namespace) load with every extra missing."""
+    path = BACKEND.joinpath(*VERSIONS_MODULE.split(".")).with_suffix(".py")
+    deferred = deferred_app_imports([path])
+    assert {"app.services.forecasts.queries", "app.services.public_cache"} <= set(deferred)
+    missing = CELERY + DATA_LIBRARIES + SERVER_EXTRAS
+    assert_imported(import_without([VERSIONS_MODULE, *deferred], missing))
+
+
+# A tiny SYNTHETIC run (made-up values) scored the way the prediction job scores an hour:
+# demo tide stages, the quality score with its partitions, wind fit and tide, the forecast
+# confidence class and the uncertainty of the breaking height.
+SYNTHETIC_SCORING = """
+from datetime import UTC, datetime, timedelta
+
+from app.services.surf_quality.forecast_confidence import ForecastInputs, classify_forecast
+from app.services.surf_quality.models import SeaState, SpotParams
+from app.services.surf_quality.predict import demo_tide_stages
+from app.services.surf_quality.scoring import evaluate
+from app.services.surf_quality.uncertainty import breaking_uncertainty, confidence_index
+
+spot = SpotParams(
+    slug="synthetic", latitude=-34.0, longitude=25.0, swell_window_min=180.0,
+    swell_window_max=270.0, optimal_swell_direction_min=200.0,
+    optimal_swell_direction_max=240.0, offshore_wind_direction=300.0,
+    min_swell_period_s=10.0, ideal_swell_period_s=14.0, wave_height_min_ft=3.0,
+    wave_height_max_ft=12.0, tide_preference="mid", tide_research_class="moderate",
+)
+t0 = datetime(2026, 10, 16, tzinfo=UTC)
+times = [t0 + timedelta(hours=h) for h in range(30)]
+levels = [0.8 * ((h % 12) - 6) / 6 for h in range(30)]
+stages = demo_tide_stages(times, levels)
+assert stages, "no tide stage"
+scores = []
+for h, t in enumerate(times):
+    stage = stages.get(t)
+    sea = SeaState(
+        sig_wave_height_m=2.0, wave_period_s=13.0, wave_direction_deg=225.0,
+        primary_swell_height_m=1.8, primary_swell_period_s=14.0,
+        primary_swell_direction_deg=225.0, secondary_swell_height_m=0.4,
+        secondary_swell_period_s=8.0, secondary_swell_direction_deg=180.0,
+        wind_wave_height_m=0.3, wind_wave_period_s=4.0, wind_wave_direction_deg=120.0,
+        wind_speed_kmh=4.0 + h, wind_direction_deg=(300.0 + 12 * h) % 360,
+        tide_stage=None if stage is None else stage.stage,
+    )
+    result = evaluate(sea, spot)
+    unc = breaking_uncertainty(result.breaking.mid_ft, float(h))
+    index = confidence_index(unc.sigma_forecast, 1.0, False)
+    fc = classify_forecast(
+        ForecastInputs(index=index, sigma_source=unc.source, lead_hours=float(h),
+                       source_code="synthetic")
+    )
+    scores.append((result.score, fc.cls))
+assert len(scores) == 30 and all(0 <= s <= 100 for s, _ in scores)
+"""
+
+
+def test_the_prediction_path_imports_and_scores_lean() -> None:
+    """The prediction job runs in the refresh Function (design D8): surf_quality.predict, the
+    modules its functions import when they run (the ML hook, the archive, the forecast
+    versions and queries) load, and a synthetic run is scored, with every extra missing. The
+    ML code itself is imported only when ML_CORRECTIONS_ENABLED and an ACTIVE model exist;
+    tests/integration/test_lean_predict.py runs the whole job on a database the same way."""
+    path = BACKEND.joinpath(*PREDICT_MODULE.split(".")).with_suffix(".py")
+    deferred = deferred_app_imports([path])
+    assert {"app.services.ml.hook", "app.services.forecasts.archive"} <= set(deferred), deferred
+    missing = CELERY + DATA_LIBRARIES + SERVER_EXTRAS
+    done = import_without([PREDICT_MODULE, *deferred], missing, then=SYNTHETIC_SCORING)
+    assert_imported(done)
+
+
+ML_OFF_CORRECTOR = """
+import os
+
+os.environ["ML_CORRECTIONS_ENABLED"] = "false"
+from app.core.config import get_settings
+
+get_settings.cache_clear()
+from app.services.ml.hook import RunCorrector
+
+# The blend asks for a corrector per member run: with ML corrections off it gets None
+# before any ML module (pandas, scikit-learn, joblib) is imported or the database is read.
+assert RunCorrector.for_run(None, None) is None
+"""
+
+
+def test_the_ml_hook_with_corrections_off_runs_lean() -> None:
+    """forecasts.blend calls ml.hook.RunCorrector.for_run for every member run; with
+    ML_CORRECTIONS_ENABLED off (the default) that imports no data library."""
+    done = import_without(["app.services.ml.hook"], DATA_LIBRARIES, then=ML_OFF_CORRECTOR)
+    assert_imported(done)
+
+
 def test_the_blocker_catches_a_heavy_import() -> None:
-    """The check above is not vacuous: a module that imports pandas fails it."""
-    done = import_without(["app.services.surf_quality.predict"], DATA_LIBRARIES)
+    """The check above is not vacuous: a module that imports pandas fails it (the ML
+    correction; surf_quality.predict no longer imports pandas, algorithm 2.2.0)."""
+    done = import_without(["app.services.ml.apply"], DATA_LIBRARIES)
+    assert done.returncode != 0
+    assert "No module named" in done.stderr
+    # And code run after the imports is checked too.
+    done = import_without([], DATA_LIBRARIES, then="import app.services.ml.registry")
     assert done.returncode != 0
     assert "No module named" in done.stderr
 
@@ -485,12 +601,57 @@ def test_the_lean_install_imports_the_api_and_the_light_jobs() -> None:
     done = _lean(
         f"""
         import importlib
-        for module in {["app.main", *API_MODULES, *LIGHT_JOB_MODULES]!r}:
+        for module in {["app.main", *API_MODULES, *LIGHT_JOB_MODULES, VERSIONS_MODULE]!r}:
             importlib.import_module(module)
         print("ok")
         """
     )
     assert_imported(done)
+
+
+@needs_lean_install
+def test_the_lean_install_scores_a_synthetic_run() -> None:
+    """The prediction job's imports and its scoring of one synthetic run in the lean install
+    (the refresh Function's), with nothing blocked."""
+    imports = f"import importlib\nimportlib.import_module({PREDICT_MODULE!r})\n"
+    done = _lean(imports + SYNTHETIC_SCORING + 'print("ok")\n')
+    assert_imported(done)
+
+
+@needs_lean_install
+def test_the_lean_install_runs_a_demo_spot_only_refresh(few_spots: list[str], db: Any) -> None:
+    """The refresh Function's whole path in the lean install (what POST /api/internal/refresh
+    runs on Vercel): the free check, a spot-only sync of the demo provider (acquisition,
+    scoring, staging and publishing a forecast version, the version marker) on the test
+    database, with none of the extras installed. The demo data are synthetic by design."""
+    from sqlalchemy import select
+
+    from app.models.version import ForecastVersion
+
+    done = _lean(
+        """
+        import json, sys
+        from app.services.sync import orchestrator
+        out = orchestrator.refresh_check(trigger="http")
+        heavy = sorted(m for m in ("pandas", "sklearn", "scipy", "pyarrow", "joblib", "eccodes")
+                       if m in sys.modules)
+        print(json.dumps({"status": out.get("status"), "version_ids": out.get("version_ids"),
+                          "stages": {s.get("name"): s.get("status") for s in out.get("stages") or []},
+                          "heavy": heavy}, default=str))
+        """
+    )
+    assert done.returncode == 0, done.stderr[-4000:]
+    out = json.loads(done.stdout.strip().splitlines()[-1])
+    assert out["status"] == "success", out
+    assert out["heavy"] == []
+    # Spot-only: the map/GRIB stage never runs here; the spots are acquired and published.
+    assert out["stages"].get("map") in (None, "skipped"), out["stages"]
+    assert out["stages"]["spots"] == "success" and out["stages"]["publish"] == "success"
+    assert out["version_ids"], out
+    db.expire_all()
+    published = db.scalar(select(ForecastVersion).where(ForecastVersion.status == "published"))
+    assert published is not None and published.id in out["version_ids"]
+    assert published.provider == "demo" and published.spots_updated == len(few_spots)
 
 
 @needs_lean_install

@@ -7,6 +7,8 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { toast } from "sonner";
 
+import { useNowMs } from "@/components/forecast-provenance";
+import { ForecastUpdated } from "@/components/forecast-updated";
 import { AppShell } from "@/components/layout/app-shell";
 import { LayerTabs } from "@/components/map/layer-tabs";
 import { LegendDrawer, LegendTab } from "@/components/map/legend-drawer";
@@ -23,12 +25,14 @@ import { useCityAirports, useFieldIndex, useMapLayerFields } from "@/hooks/map-f
 import { useMediaQuery, usePageVisible, usePrefersReducedMotion } from "@/hooks/map-media";
 import { useMapSettings } from "@/hooks/map-settings";
 import { useMapConditions, useMe, useSpots } from "@/hooks/queries";
-import { formatDateTime, heightRange, type Units } from "@/lib/format";
+import { freshnessOf } from "@/lib/forecast-fields";
+import { compass, formatDateTime, heightRange, updatedAgo, type Units } from "@/lib/format";
 import { isobarsFor } from "@/lib/map-geo";
 import { layerDef, layerScale, type DisplayUnits } from "@/lib/map-layers";
 import { bubbleLabel, longTimeLabel, nearestStepIndex, timelineSteps } from "@/lib/map-time";
-import { QUALITY_LABELS } from "@/lib/quality";
+import { QUALITY_LABELS, WIND_RELATION_LABEL } from "@/lib/quality";
 import { score10 } from "@/lib/rating";
+import { formatWind, useHeightUnit } from "@/lib/units";
 import { cn } from "@/lib/utils";
 import type { QualityLabel } from "@/types/api";
 
@@ -45,14 +49,28 @@ const CITY_ZOOM = 4;
 const SHEET_FRACTION = 0.72;
 /** Short, wide screens (phones in landscape): the spot panel is a side sheet this wide (px). */
 const SIDE_SHEET_WIDTH = 360;
-/** Phones: CSS pixels under the layer tabs at the top of the map. */
+/** Phones: CSS pixels under the layer tabs at the top of the map, until the top controls (the
+ * tabs, the "Forecast updated" pill and any notices) are measured. */
 const TABS_INSET = 64;
+/** Room left between the top controls and a selected spot (CSS pixels). */
+const TOP_MARGIN = 8;
 
 export default function MapPage() {
-  const { data: spots = [], isLoading, isError } = useSpots();
+  // A failed background re-read (a new hour, a refocus) keeps the spots on screen: the
+  // notice is for a first load that failed.
+  const { data: spots = [], isLoading, isLoadingError: isError } = useSpots();
   const { data: user } = useMe();
-  const [settings, updateSettings] = useMapSettings();
-  const heightUnits: Units = settings.heightUnits ?? (user?.profile.units as Units | undefined) ?? "ft";
+  const [settings, updateMapSettings] = useMapSettings();
+  // One height unit for the whole site (the spot charts too): this browser's choice, else the
+  // map's older own setting, else the account's units, else feet.
+  const [heightUnits, setHeightUnits] = useHeightUnit(settings.heightUnits ?? (user?.profile.units as Units | undefined) ?? "ft");
+  const updateSettings = useCallback(
+    (patch: Partial<typeof settings>) => {
+      if (patch.heightUnits) setHeightUnits(patch.heightUnits);
+      updateMapSettings(patch);
+    },
+    [setHeightUnits, updateMapSettings],
+  );
   const units: DisplayUnits = useMemo(() => ({ height: heightUnits, wind: settings.windUnits }), [heightUnits, settings.windUnits]);
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
   const reducedMotion = usePrefersReducedMotion();
@@ -78,6 +96,10 @@ export default function MapPage() {
   const fieldIndex = useFieldIndex();
   const index = fieldIndex.data;
   const fieldsAvailable = !!index?.available && index.valid_times.length > 0;
+  // MAP_FIELDS_ENABLED=false: the site switched the ocean layers off on purpose (the daemon-less
+  // setting). That is not an outage: no layer tabs, no "unavailable" notice, the spot markers and
+  // their arrows as always (review r4-spec-R4-SPEC-2). A missing `enabled` reads as enabled.
+  const fieldsOff = !!index && !index.available && index.enabled === false;
   // The "now" snapshot (cached) defines the spot range and the server's current hour.
   const nowSnapshot = useMapConditions(null);
   const range = useMemo(() => {
@@ -145,20 +167,39 @@ export default function MapPage() {
 
   // --- spots ----------------------------------------------------------------------------
   const visible = useMemo(() => spots.filter((s) => passes(s, bySlug.get(s.slug), filters, heightUnits)), [spots, bySlug, filters, heightUnits]);
+  const now = useNowMs();
   const markers = useMemo(() => {
     const out: Record<string, MarkerState> = {};
     for (const s of spots) {
-      const c = bySlug.get(s.slug)?.conditions;
-      out[s.slug] = c
-        ? {
-            score: c.score,
-            tooltip: `${QUALITY_LABELS[c.label as QualityLabel] ?? c.label} ${score10(c.score)}/10 · ${heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, heightUnits)} surf (our prediction)`,
-            highlight: !!bySlug.get(s.slug)?.event_at_time,
-          }
-        : { score: null, tooltip: predictionsCover ? "No usable forecast at this time" : "No surf prediction this far ahead" };
+      const m = bySlug.get(s.slug);
+      const c = m?.conditions;
+      // A spot whose served forecast is out of date says so, and when it was last updated.
+      const fresh = freshnessOf(m);
+      const staleText = fresh?.stale ? (fresh.lastUpdatedAt ? `Forecast last updated ${updatedAgo(fresh.lastUpdatedAt, now)}` : "Forecast out of date") : null;
+      if (!c) {
+        out[s.slug] = { score: null, tooltip: predictionsCover ? "No usable forecast at this time" : "No surf prediction this far ahead", detail: staleText, stale: !!fresh?.stale };
+        continue;
+      }
+      const surf = heightRange(c.breaking_height_min_ft, c.breaking_height_max_ft, heightUnits);
+      const swell = c.swell_direction_deg != null ? `Swell from ${compass(c.swell_direction_deg)}` : null;
+      const wind =
+        c.wind_speed_kmh != null
+          ? `wind ${formatWind(c.wind_speed_kmh, settings.windUnits)}${c.wind_direction_deg != null ? ` from ${compass(c.wind_direction_deg)}` : ""}${c.wind_relation && c.wind_relation !== "unknown" ? `, ${(WIND_RELATION_LABEL[c.wind_relation] ?? c.wind_relation).toLowerCase()}` : ""}`
+          : null;
+      const detail = [swell, wind].filter(Boolean).join(" · ");
+      out[s.slug] = {
+        score: c.score,
+        tooltip: `${QUALITY_LABELS[c.label as QualityLabel] ?? c.label} ${score10(c.score)}/10 · ${surf} surf (our prediction)`,
+        detail: [detail ? detail.charAt(0).toUpperCase() + detail.slice(1) : null, staleText].filter(Boolean).join(" · ") || null,
+        highlight: !!m?.event_at_time,
+        swellFromDeg: c.swell_direction_deg,
+        windFromDeg: c.wind_direction_deg,
+        label: surf,
+        stale: !!fresh?.stale,
+      };
     }
     return out;
-  }, [spots, bySlug, heightUnits, predictionsCover]);
+  }, [spots, bySlug, heightUnits, predictionsCover, settings.windUnits, now]);
   const selectedSpot = spots.find((s) => s.slug === selected);
   const noForecastAnywhere = nowSnapshot.data && !nowSnapshot.data.valid_time;
   const predictionNote = predictionsCover
@@ -196,6 +237,21 @@ export default function MapPage() {
   const [bottomInset, setBottomInset] = useState(96);
   // The timeline alone (without the locate row above it), from the bottom of the map.
   const [timelineInset, setTimelineInset] = useState(76);
+  // The top controls' bottom edge in the map (the tabs, the pill drawn under them once a
+  // version is known, and the notices): a selected spot lands below it (review r1-frontend-FE-3).
+  const topRef = useRef<HTMLDivElement>(null);
+  const [topInset, setTopInset] = useState(TABS_INSET);
+  useEffect(() => {
+    const el = topRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const root = el.parentElement?.getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      if (root) setTopInset(Math.max(TABS_INSET, Math.round(box.bottom - root.top) + TOP_MARGIN));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   useEffect(() => {
     const el = bottomRef.current;
     if (!el) return;
@@ -217,16 +273,16 @@ export default function MapPage() {
   const cover = useCallback(
     (size: { y: number }) =>
       sideSheet
-        ? { top: TABS_INSET, right: SIDE_SHEET_WIDTH, bottom: timelineInset, left: 0 }
-        : { top: TABS_INSET, right: 0, bottom: size.y * SHEET_FRACTION, left: 0 },
-    [sideSheet, timelineInset],
+        ? { top: topInset, right: SIDE_SHEET_WIDTH, bottom: timelineInset, left: 0 }
+        : { top: topInset, right: 0, bottom: size.y * SHEET_FRACTION, left: 0 },
+    [sideSheet, timelineInset, topInset],
   );
   // The canvas keeps the previous step's field until the next one arrives: describe what it shows.
   const fieldTime = layerFields.servedValidTime ?? at;
   const fieldTimeText = fieldTime ? longTimeLabel(fieldTime, tz) : "";
   // One short line for everyone; the backend's setup message (for whoever runs the site) is in
   // the legend. Its full text covered a block of the map on phones and ran under the spot list.
-  const notice = !fieldIndex.isLoading && !fieldsAvailable ? "Ocean layers are unavailable right now." : null;
+  const notice = !fieldIndex.isLoading && !fieldsAvailable && !fieldsOff ? "Ocean layers are unavailable right now." : null;
   const stale = mapStaleness(index, nowSnapshot.data, nowSnapshot.dataUpdatedAt).stale;
 
   const spotList = (
@@ -234,6 +290,7 @@ export default function MapPage() {
       spots={visible}
       total={spots.length}
       conditions={(slug) => bySlug.get(slug)?.conditions}
+      freshness={(slug) => freshnessOf(bySlug.get(slug))}
       onSelect={setSelected}
       open={listIsOpen}
       onOpenChange={setListOpen}
@@ -254,10 +311,19 @@ export default function MapPage() {
       >
         {/* Top: layer tabs + pressure on the left, settings on the right. */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[1100] flex items-start gap-2 p-2 sm:p-3">
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="pointer-events-auto w-fit max-w-full">
-              <LayerTabs layer={layer} onLayer={(l) => updateSettings({ layer: l })} pressure={settings.pressure} onPressure={(p) => updateSettings({ pressure: p })} />
-            </div>
+          <div ref={topRef} className="min-w-0 flex-1 space-y-2" data-testid="map-top-controls">
+            {/* Layers switched off: no tabs offering what can never load. */}
+            {fieldsOff ? (
+              <p role="status" data-testid="fields-off" className={cn("pointer-events-auto w-fit rounded-full px-3 py-1.5 text-xs", GLASS)}>
+                Spot forecasts only
+              </p>
+            ) : (
+              <div className="pointer-events-auto w-fit max-w-full">
+                <LayerTabs layer={layer} onLayer={(l) => updateSettings({ layer: l })} pressure={settings.pressure} onPressure={(p) => updateSettings({ pressure: p })} />
+              </div>
+            )}
+            {/* Beside a selected out-of-date spot "updated just now" would call it current. */}
+            <ForecastUpdated tone="map" stale={!!selected && !!freshnessOf(bySlug.get(selected))?.stale} className="pointer-events-auto ml-1" />
             {(notice || stale || isError || noForecastAnywhere || layerFields.error) && (
               <div className="pointer-events-auto flex w-fit max-w-full flex-col gap-1.5 pl-1">
                 {/* The newest model run is out of date: the layers and markers still show it. */}
@@ -306,6 +372,7 @@ export default function MapPage() {
         {legendOpen && (
           <div className="absolute top-16 left-9 z-[1150]" style={{ bottom: bottomInset + 12 }}>
             <LegendDrawer
+              fieldsOff={fieldsOff}
               settings={settings}
               scale={scale}
               units={units}
@@ -331,6 +398,7 @@ export default function MapPage() {
                 signedIn={!!user}
                 onClose={() => setSelected(null)}
                 links={(snapshot.data ?? nowSnapshot.data)?.attribution_links}
+                freshness={freshnessOf(bySlug.get(selectedSpot.slug))}
                 className="w-full"
               />
             </div>
@@ -397,6 +465,7 @@ export default function MapPage() {
               signedIn={!!user}
               onClose={() => setSelected(null)}
               links={(snapshot.data ?? nowSnapshot.data)?.attribution_links}
+              freshness={freshnessOf(bySlug.get(selectedSpot.slug))}
               className="w-full rounded-b-xl"
             />
           </div>
@@ -423,7 +492,9 @@ export default function MapPage() {
             onZoom={onZoom}
             userLocation={userLocation}
             cover={isDesktop ? undefined : cover}
-            fieldLabel={fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : `Ocean layers unavailable, ${timeText}`}
+            fieldLabel={
+              fieldsAvailable ? `${def.longName} (${def.label} layer), ${fieldTimeText}` : fieldsOff ? `Spot forecasts only, ${timeText}` : `Ocean layers unavailable, ${timeText}`
+            }
             // The map's credit strip names the source; its full attribution sentence is in the
             // legend (on a phone the sentence alone covered three lines of the map, and markers).
             fieldAttribution={index?.source?.name ?? index?.source?.attribution}

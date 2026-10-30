@@ -1,26 +1,31 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConditionsSummary } from "@/components/conditions";
+import { EventCard, TopEventCards } from "@/components/event-card";
 import { ForecastBreakdown } from "@/components/forecast-breakdown";
 import { AttributionLinks, ForecastProvenance } from "@/components/forecast-provenance";
-import { ageText, StaleBanner, StaleBadge } from "@/components/stale-banner";
+import { ageText, StaleBanner, StaleBadge, StaleLine } from "@/components/stale-banner";
+import { currentFirst, outOfDate } from "@/lib/forecast-fields";
 import { cycleLabel } from "@/lib/map-time";
+import { HEIGHT_UNIT_KEY, resetHeightUnitMemory } from "@/lib/units";
 import type { Conditions, RunMember, SwellEvent, SystemStatus } from "@/types/api";
 
 // SYNTHETIC test data: invented forecast hours, runs and swells that exist only to exercise
 // the freshness labels. Nothing here describes a real forecast, model run or surf spot.
 
 const hooks = vi.hoisted(() => ({
-  events: { data: undefined as SwellEvent[] | undefined, isLoading: false, isError: false },
+  events: { data: undefined as SwellEvent[] | undefined, isLoading: false, isError: false, isLoadingError: false },
   status: { data: undefined as SystemStatus | undefined },
   map: { data: undefined as { range_end: string | null } | undefined },
+  me: { data: undefined as { profile: { units: string } } | undefined },
 }));
 
 vi.mock("@/hooks/queries", () => ({
   useEvents: () => hooks.events,
   useSystemStatus: () => hooks.status,
   useMapConditions: () => hooks.map,
+  useMe: () => hooks.me,
 }));
 
 // Imported after the mock is registered (vi.mock is hoisted above imports).
@@ -58,7 +63,6 @@ function conditions(overrides: Partial<Conditions> = {}): Conditions {
     algorithm_version: "2.1.0",
     explanation: "Synthetic explanation (test fixture).",
     forecast_confidence_class: "moderate",
-    local_confidence_class: "low",
     confidence_reasons: ["Synthetic: a 2-day forecast and the models agree."],
     forecast_confidence_reasons: ["Synthetic: a 2-day forecast and the models agree."],
     lead_hours: 18,
@@ -110,7 +114,6 @@ function event(overrides: Partial<SwellEvent> = {}): SwellEvent {
     source_code: "synthetic",
     history: [],
     forecast_confidence_class: "moderate",
-    local_confidence_class: "moderate",
     confidence_reasons: [],
     forecast_confidence_reasons: [],
     stale: false,
@@ -153,9 +156,64 @@ function status(opts: { demo?: boolean; stale?: boolean; issuedH?: number } = {}
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
-  hooks.events = { data: [event()], isLoading: false, isError: false };
+  hooks.events = { data: [event()], isLoading: false, isError: false, isLoadingError: false };
   hooks.status = { data: status() };
   hooks.map = { data: undefined };
+  hooks.me = { data: undefined };
+  window.localStorage.removeItem(HEIGHT_UNIT_KEY);
+  resetHeightUnitMemory();
+});
+
+describe("event cards of a spot whose forecast is out of date (review r2 FE-2, spec 14)", () => {
+  // SYNTHETIC: the published version marks the spot stale (its latest refresh failed; last
+  // updated 9 hours ago); the event's own run is not stale by age.
+  const staleSpot = {
+    version_id: 4,
+    last_updated_at: hoursFromNow(-9),
+    stale: true,
+    reason: "refresh_failed",
+  } as const;
+  const current = { ...staleSpot, last_updated_at: hoursFromNow(-1), stale: false, reason: null };
+  const named = (slug: string, name: string) => ({ ...event().spot, slug, name });
+
+  it("tags the card out of date and says when the spot was last updated", () => {
+    render(<EventCard event={event({ stale: false, freshness: staleSpot })} featured />);
+    expect(screen.getByTestId("stale-badge")).toHaveTextContent("Out of date");
+    expect(screen.getByTestId("event-card-stale")).toHaveTextContent("Forecast last updated 9 hours ago. Not a current forecast.");
+    cleanup();
+    render(<EventCard event={event({ stale: false, freshness: current })} featured />);
+    expect(screen.queryByTestId("stale-badge")).toBeNull();
+    expect(screen.queryByTestId("event-card-stale")).toBeNull();
+  });
+
+  it("orders current swells first and never features a stale spot's as the best", () => {
+    const a = event({ id: "00000000-0000-4000-8000-0000000000a1", spot: named("stale-reef", "Stale Reef"), peak_score: 95, freshness: staleSpot });
+    const b = event({ id: "00000000-0000-4000-8000-0000000000a2", spot: named("fresh-point", "Fresh Point"), peak_score: 70, freshness: current });
+    expect(outOfDate(a)).toBe(true);
+    expect(outOfDate(b)).toBe(false);
+    expect(outOfDate(event({ stale: true }))).toBe(true);
+    expect(currentFirst([a, b]).map((e) => e.spot.slug)).toEqual(["fresh-point", "stale-reef"]);
+    render(<TopEventCards events={[a, b]} />);
+    const cards = screen.getAllByTestId("event-card");
+    expect(cards.map((c) => c.getAttribute("href"))).toEqual(["/spots/fresh-point", "/spots/stale-reef"]);
+    expect(cards[0]).toHaveTextContent("Best upcoming surf");
+    expect(cards[1]).not.toHaveTextContent("Best upcoming surf");
+    cleanup();
+    // Every swell out of date: none is "Best upcoming surf".
+    render(<TopEventCards events={[a]} />);
+    expect(screen.getByTestId("event-card")).not.toHaveTextContent("Best upcoming surf");
+    expect(screen.getByTestId("event-card-stale")).toBeVisible();
+  });
+
+  it("lists a stale spot's swell after the current ones on the landing page", () => {
+    const a = event({ id: "00000000-0000-4000-8000-0000000000a1", spot: named("stale-reef", "Stale Reef"), freshness: staleSpot });
+    const b = event({ id: "00000000-0000-4000-8000-0000000000a2", spot: named("fresh-point", "Fresh Point"), freshness: current });
+    hooks.events = { data: [a, b], isLoading: false, isError: false, isLoadingError: false };
+    render(<LiveSwells />);
+    const cards = screen.getAllByTestId("event-card");
+    expect(cards.map((c) => c.getAttribute("href"))).toEqual(["/spots/fresh-point", "/spots/stale-reef"]);
+    expect(within(cards[1]!).getByTestId("event-card-stale")).toHaveTextContent("Not a current forecast.");
+  });
 });
 
 describe("landing page freshness (LiveSwells)", () => {
@@ -169,7 +227,7 @@ describe("landing page freshness (LiveSwells)", () => {
 
   it("renders a stale run as out of date (and never live)", () => {
     hooks.status = { data: status({ stale: true, issuedH: 40 }) };
-    hooks.events = { data: [event({ stale: true })], isLoading: false, isError: false };
+    hooks.events = { data: [event({ stale: true })], isLoading: false, isError: false, isLoadingError: false };
     render(<LiveSwells />);
     const label = screen.getByTestId("forecast-freshness");
     expect(label).toHaveAttribute("data-freshness", "stale");
@@ -178,10 +236,38 @@ describe("landing page freshness (LiveSwells)", () => {
     expect(document.body.textContent).not.toMatch(/\blive\b/i);
   });
 
+  it("keeps the cards when a background re-read failed; the notice is for a failed first load (review r2 FE-3)", () => {
+    hooks.events = { data: [event()], isLoading: false, isError: true, isLoadingError: false };
+    render(<LiveSwells />);
+    expect(document.body.textContent).not.toContain("The forecast service is unavailable right now.");
+    expect(document.body.textContent).toContain("5–7 ft");
+    cleanup();
+    hooks.events = { data: undefined, isLoading: false, isError: true, isLoadingError: true };
+    render(<LiveSwells />);
+    expect(document.body.textContent).toContain("The forecast service is unavailable right now.");
+  });
+
   it("an event whose run went stale marks the panel out of date even before every source is stale", () => {
-    hooks.events = { data: [event({ stale: true })], isLoading: false, isError: false };
+    hooks.events = { data: [event({ stale: true })], isLoading: false, isError: false, isLoadingError: false };
     render(<LiveSwells />);
     expect(screen.getByTestId("forecast-freshness")).toHaveAttribute("data-freshness", "stale");
+  });
+
+  it("shows the swells in the site-wide height unit, signed out too (review r1-frontend-FE-8)", () => {
+    render(<LiveSwells />);
+    expect(document.body.textContent).toContain("5–7 ft");
+    cleanup();
+    // The visitor chose metres on a spot page or the map (this browser's choice).
+    window.localStorage.setItem(HEIGHT_UNIT_KEY, "m");
+    render(<LiveSwells />);
+    expect(document.body.textContent).toContain("1.5–2.1 m");
+    expect(document.body.textContent).not.toContain("5–7 ft");
+    cleanup();
+    // Signed in without a browser choice: the account's unit.
+    window.localStorage.removeItem(HEIGHT_UNIT_KEY);
+    hooks.me = { data: { profile: { units: "m" } } };
+    render(<LiveSwells />);
+    expect(document.body.textContent).toContain("1.5–2.1 m");
   });
 
   it("says demo for synthetic forecasts", () => {
@@ -238,6 +324,34 @@ describe("ConditionsSummary (model output, never 'Now')", () => {
     // The raw model data names its run's age, never "now" or "live".
     expect(screen.getByTestId("raw-model-runs")).toHaveTextContent("Synthetic test source (not real data) · model run 16 h ago");
     expect(document.body.textContent).not.toMatch(/\blive\b/i);
+  });
+
+  it("names both component runs of a composed hour without run members (the map's panel)", () => {
+    // Review r2-frontend-R2-FE-1: a wave-only refresh left the waves on a newer run than the
+    // wind; the map's conditions carry the two runs but no `run`.
+    const c = conditions({
+      run_issued_at: hoursFromNow(-11),
+      wave_run_issued_at: hoursFromNow(-5),
+      atmosphere_run_issued_at: hoursFromNow(-11),
+    });
+    render(<ForecastBreakdown c={c} tz="UTC" units="ft" nowMs={NOW} />);
+    expect(screen.getByTestId("raw-model-runs")).toHaveTextContent(
+      "Synthetic test source (not real data) · wave model run 5 h ago · wind model run 11 h ago",
+    );
+    const provenance = screen.getByTestId("forecast-provenance");
+    expect(within(provenance).getByTestId("provenance-members")).toHaveTextContent(
+      `Wave run ${cycleLabel(hoursFromNow(-5))} · Wind run ${cycleLabel(hoursFromNow(-11))}`,
+    );
+    // The older run is never shown alone as "the" model run.
+    expect(provenance).not.toHaveTextContent(/Model run:/);
+    expect(screen.getByTestId("raw-model-runs")).not.toHaveTextContent(/· model run 11 h ago$/);
+  });
+
+  it("keeps one model run when both components share it", () => {
+    const c = conditions({ wave_run_issued_at: hoursFromNow(-16), atmosphere_run_issued_at: hoursFromNow(-16) });
+    render(<ForecastBreakdown c={c} tz="UTC" units="ft" nowMs={NOW} />);
+    expect(screen.getByTestId("raw-model-runs")).toHaveTextContent("Synthetic test source (not real data) · model run 16 h ago");
+    expect(screen.getByTestId("provenance-members")).toHaveTextContent(`Model run: ${cycleLabel(hoursFromNow(-16))}`);
   });
 
   it("writes wind and swell directions as where they come FROM (WINDVIZ-12)", () => {
@@ -337,5 +451,17 @@ describe("forecast provenance", () => {
     expect(cycleLabel("2026-12-31T00:00:00Z")).toBe("00Z Dec 31");
     render(<ForecastProvenance source={{ name: "Synthetic source", is_demo: false }} run={{ issued_at: "2026-10-11T06:00:00Z" }} />);
     expect(screen.getByTestId("provenance-members")).toHaveTextContent("Model run: 06Z Oct 11");
+  });
+});
+
+describe("StaleLine (review r1-frontend-FE-2)", () => {
+  it("says when a stale spot was last updated and that it is not current", () => {
+    const nowMs = Date.parse("2026-10-29T12:00:00Z");
+    const { rerender } = render(
+      <StaleLine freshness={{ versionId: 4, lastUpdatedAt: "2026-10-29T03:00:00Z", stale: true, reason: "refresh_failed" }} nowMs={nowMs} />,
+    );
+    expect(screen.getByTestId("stale-line")).toHaveTextContent("Forecast last updated 9 hours ago. Not a current forecast.");
+    rerender(<StaleLine freshness={{ versionId: 4, lastUpdatedAt: "2026-10-29T11:00:00Z", stale: false, reason: null }} nowMs={nowMs} />);
+    expect(screen.queryByTestId("stale-line")).toBeNull();
   });
 });

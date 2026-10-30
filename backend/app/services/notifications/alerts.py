@@ -10,6 +10,12 @@ only generated when (and if the search opts into updates):
 * predicted quality improved by ≥ 1 label or ≥ ALERT_SCORE_IMPROVEMENT points, or
 * the fare dropped by ≥ ALERT_PRICE_DROP_PCT % and ≥ ALERT_PRICE_DROP_MIN_AMOUNT, or
 * the swell timing shifted so recommended travel dates moved by ≥ 2 days.
+
+Fares are re-checked only right before an alert is actually sent (after the alert kind,
+the channels and the daily cap are decided): a match whose forecast did not change is
+never re-priced or re-searched on a timer. When the fare is no longer usable (expired, sold
+out, above the budget) the match's trip is searched once more right there and the alert
+goes out with the fresh fare, or not at all (app.services.flights.service.research_match).
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from sqlalchemy.orm import Session, lazyload, object_session, selectinload
 from app.core.config import get_settings
 from app.core.database import utcnow
 from app.models import (
+    Airport,
     ForecastRun,
     Notification,
     NotificationPreference,
@@ -51,14 +58,15 @@ from app.models.enums import (
     SearchStatus,
     SwellEventStatus,
 )
-from app.services.flights.base import FlightProvider
+from app.services.flights.base import FlightProvider, operating_carrier_names
 from app.services.flights.filtering import convert
-from app.services.flights.links import google_flights_url
-from app.services.flights.registry import build_flight_provider
-from app.services.flights.service import revalidate_offer
+from app.services.flights.links import ROUTE_SEARCH_NOTE, google_flights_url, skyscanner_url
+from app.services.flights.registry import build_flight_provider, provider_label
+from app.services.flights.service import research_match, revalidate_offer
 from app.services.forecasts.queries import is_stale, run_id_is_stale
 from app.services.geo import compass_label
 from app.services.http import ProviderError
+from app.services.matching.scoring import is_short_notice
 from app.services.notifications.templates import fmt_range, render_alert_email, render_alert_sms
 from app.services.surf_quality.forecast_confidence import api_fields
 
@@ -79,6 +87,8 @@ class AlertStats:
     no_channel: int = 0
     revalidated: int = 0
     invalidated: int = 0
+    # Targeted re-searches right before an alert (the fare was no longer usable).
+    researched: int = 0
     stale_forecast: int = 0
     suppressed: int = 0
 
@@ -103,7 +113,6 @@ class PeakPrediction:
     breaking_p90_ft: float | None
     uncertainty_kind: str | None
     forecast_confidence_class: str | None
-    local_confidence_class: str | None
     confidence_inputs: dict[str, Any] | None
     lead_hours: float | None
 
@@ -139,24 +148,95 @@ def _peak_range(pred: PeakPrediction | None) -> dict[str, Any]:
     }
 
 
+RESEARCH_CLASSES = ("high", "moderate", "low")
+
+
 def _peak_confidence(
     pred: PeakPrediction | None, now: datetime, *, stale: bool = False
 ) -> dict[str, Any]:
-    """Forecast and local confidence at the event's peak hour, as the API shows them
-    (EventOut uses the same peak hour, including the read-time staleness cap when the run
-    has gone stale since it was scored), and how far ahead the peak is when the alert is
-    built. Absent for predictions scored before forecast-v1."""
+    """Forecast confidence at the event's peak hour, as the API shows it (EventOut uses
+    the same peak hour, including the read-time staleness cap when the run has gone stale
+    since it was scored), how far ahead the peak is when the alert is built, and,
+    separately, the research confidence of the break (how well its ideal conditions are
+    documented; spec 20: never merged with the forecast confidence). Absent for
+    predictions scored before forecast-v1."""
     if pred is None or pred.forecast_confidence_class is None:
         return {}
     fields = api_fields(pred, stale=stale)
+    local = (pred.confidence_inputs or {}).get("local") or {}
+    research = local.get("research_class")
     return {
         "forecast_confidence_class": fields["forecast_confidence_class"],
-        "local_confidence_class": fields["local_confidence_class"],
         "confidence_reasons": fields["confidence_reasons"],
         "confidence_lead_hours": fields["lead_hours"],
         "peak_in_hours": round((pred.valid_time - now).total_seconds() / 3600.0, 1),
-        # Only when local confidence is lower than forecast confidence (as in the API).
-        "local_confidence_reason": fields["local_confidence_reason"],
+        "research_confidence_class": research if research in RESEARCH_CLASSES else None,
+    }
+
+
+def _airport_info(db: Session | None, iata: str | None) -> dict[str, Any] | None:
+    """Name, city and country of an airport for the email (None when unknown)."""
+    if db is None or not iata:
+        return None
+    airport = db.get(Airport, iata)
+    if airport is None:
+        return None
+    return {"name": airport.name, "city": airport.city, "country": airport.country}
+
+
+def _offer_fields(db: Session | None, match: OpportunityMatch, now: datetime) -> dict[str, Any]:
+    """What the alert says about the best offer: the fare (and the provider's own fare when
+    it was converted into the search currency), the itinerary's dates and airports, the
+    operating airlines and the provider's booking link when it has one."""
+    offer = match.best_offer
+    if offer is None or match.best_price is None:
+        return {}
+    segments = offer.segments or []
+    outbound = [s for s in segments if s.get("direction") == "outbound"]
+    inbound = [s for s in segments if s.get("direction") == "inbound"]
+    converted = offer.currency != match.currency
+    destination = next(
+        (a for a in match.spot.airports if a.airport_iata == offer.destination_iata), None
+    )
+    return {
+        "price": str(match.best_price),
+        "currency": match.currency,
+        # The provider's own per-traveller fare when it quotes another currency (the
+        # converted price above uses the configured FX_RATES_USD_JSON rates).
+        "quoted_price": str(offer.price_per_traveler) if converted else None,
+        "quoted_currency": offer.currency if converted else None,
+        "origin": offer.origin_iata,
+        "destination": offer.destination_iata,
+        "origin_airport": _airport_info(db, offer.origin_iata),
+        "destination_airport": _airport_info(db, offer.destination_iata),
+        "transfer_minutes": destination.transfer_minutes if destination else None,
+        "transfer_mode": destination.transfer_mode if destination else None,
+        "airline": ", ".join(offer.airline_names[:2]),
+        "operating_carriers": operating_carrier_names(segments),
+        "outbound_departure_local": outbound[0]["departure_local"] if outbound else None,
+        "outbound_arrival_local": outbound[-1]["arrival_local"] if outbound else None,
+        "inbound_departure_local": inbound[0]["departure_local"] if inbound else None,
+        "inbound_arrival_local": inbound[-1]["arrival_local"] if inbound else None,
+        "outbound_stops": offer.outbound_stops,
+        "inbound_stops": offer.inbound_stops,
+        "outbound_hours": round(offer.outbound_duration_minutes / 60, 1),
+        "inbound_hours": round(offer.inbound_duration_minutes / 60, 1),
+        "offer_id": str(offer.id),
+        "provider": offer.provider,
+        "provider_label": provider_label(offer.provider),
+        "booking_url": offer.booking_url
+        if offer.offer_expires_at is None or offer.offer_expires_at > now
+        else None,
+        "offer_expires_at": offer.offer_expires_at.isoformat() if offer.offer_expires_at else None,
+        "travelers": match.search.travel.travelers if match.search.travel else 1,
+        "is_mock_flight": offer.is_mock,
+        "validation": offer.validation_status.value,
+        "price_checked_label": (
+            f"re-validated {offer.last_validated_at:%Y-%m-%d %H:%M} UTC"
+            if offer.last_validated_at
+            and offer.validation_status in (OfferValidation.VALID, OfferValidation.PRICE_CHANGED)
+            else f"quoted {offer.quoted_at:%Y-%m-%d %H:%M} UTC (not re-validated)"
+        ),
     }
 
 
@@ -256,33 +336,14 @@ def build_snapshot(
         else None,
         "price": None,
         "currency": match.currency,
+        "lead_days": round((match.window_start - now).total_seconds() / 86400.0, 1),
+        "short_notice": is_short_notice(match.window_start, now),
         **_peak_range(peak),
         **_peak_confidence(peak, now, stale=stale),
         **_model_runs_once(db, event.latest_run, model_runs_memo),
     }
-    if offer is not None and match.best_price is not None:
-        snap.update(
-            {
-                "price": str(match.best_price),
-                "currency": match.currency,
-                "origin": offer.origin_iata,
-                "destination": offer.destination_iata,
-                "airline": ", ".join(offer.airline_names[:2]),
-                "outbound_hours": round(offer.outbound_duration_minutes / 60, 1),
-                "inbound_hours": round(offer.inbound_duration_minutes / 60, 1),
-                "offer_id": str(offer.id),
-                "provider": offer.provider,
-                "is_mock_flight": offer.is_mock,
-                "validation": offer.validation_status.value,
-                "price_checked_label": (
-                    f"re-validated {offer.last_validated_at:%Y-%m-%d %H:%M} UTC"
-                    if offer.last_validated_at
-                    and offer.validation_status
-                    in (OfferValidation.VALID, OfferValidation.PRICE_CHANGED)
-                    else f"quoted {offer.quoted_at:%Y-%m-%d %H:%M} UTC (not re-validated)"
-                ),
-            }
-        )
+    if offer is not None:
+        snap.update(_offer_fields(db, match, now))
     return snap
 
 
@@ -409,18 +470,38 @@ def links_for(snapshot: dict[str, Any], prefs: NotificationPreference) -> dict[s
         "manage": f"{base}/settings#alerts",
         "unsubscribe": f"{base}/unsubscribe?token={prefs.unsubscribe_token}",
     }
+    if snapshot.get("booking_url"):
+        links["booking"] = str(snapshot["booking_url"])
     if (
         snapshot.get("price") is not None
         and snapshot.get("arrival_date")
         and snapshot.get("origin")
     ):
+        # Route searches on third-party sites (no scraping): their fares may differ from the
+        # quote in the alert, and the email says so (ROUTE_SEARCH_NOTE).
+        depart, ret = _route_dates(snapshot)
+        travelers = int(snapshot.get("travelers") or 1)
         links["flights"] = google_flights_url(
-            snapshot["origin"],
-            snapshot["destination"],
-            datetime.fromisoformat(snapshot["arrival_date"]).date(),
-            datetime.fromisoformat(snapshot["departure_date"]).date(),
+            snapshot["origin"], snapshot["destination"], depart, ret, travelers
         )
+        links["flights_alt"] = skyscanner_url(
+            snapshot["origin"], snapshot["destination"], depart, ret, travelers
+        )
+        links["flights_note"] = ROUTE_SEARCH_NOTE
     return links
+
+
+def _route_dates(snapshot: dict[str, Any]) -> tuple[date, date]:
+    """The itinerary's own departure dates (origin-local out, destination-local back) for
+    the route-search links; the recommended trip dates when the alert has no itinerary."""
+    out = snapshot.get("outbound_departure_local")
+    back = snapshot.get("inbound_departure_local")
+    if out and back:
+        return date.fromisoformat(str(out)[:10]), date.fromisoformat(str(back)[:10])
+    return (
+        datetime.fromisoformat(snapshot["arrival_date"]).date(),
+        datetime.fromisoformat(snapshot["departure_date"]).date(),
+    )
 
 
 def _alerts_today(db: Session, user_id: object, now: datetime) -> int:
@@ -466,7 +547,7 @@ def _revalidate_best(
     stats.revalidated += 1
     if status == OfferValidation.UNAVAILABLE:
         stats.invalidated += 1
-        # Drop the cached search too, so the re-search asks the provider for fresh offers.
+        # Drop the cached search too, so the re-check asks the provider for fresh offers.
         offer.flight_search.expires_at = now
         match.status = MatchStatus.PENDING_FLIGHTS
         match.status_reason = "best offer expired or sold out; searching again"
@@ -487,6 +568,29 @@ def _revalidate_best(
             match.status_reason = "fare increased above your budget; searching again"
             return False
     return True
+
+
+def _checked_kind(
+    db: Session,
+    match: OpportunityMatch,
+    search: SavedSearch,
+    kind: NotificationKind,
+    now: datetime,
+    stats: AlertStats,
+    provider_for: Callable[[], FlightProvider],
+) -> NotificationKind | None:
+    """The alert kind once the best fare was re-checked: the fare is re-validated with the
+    provider, and when it is no longer usable the trip is searched once more
+    (research_match). None when, with the current fare, nothing is due any more."""
+    if _revalidate_best(db, match, now, stats, provider_for):
+        return decide_kind(match, search, True)
+    db.commit()  # keep the invalidated offer and its expired cache entry
+    stats.researched += 1
+    research_match(db, match, now, provider=provider_for())
+    has_price = match.status == MatchStatus.FLIGHT_FOUND and match.best_offer is not None
+    if match.status == MatchStatus.PENDING_FLIGHTS:
+        return None  # the re-check could not run (provider error, budget): not now
+    return decide_kind(match, search, has_price)
 
 
 def _record_suppressed(
@@ -541,10 +645,31 @@ def _record_suppressed(
     return recorded
 
 
+def candidate_order(row: tuple[OpportunityMatch, Any]) -> tuple[Any, ...]:
+    """The order alerts are decided in: the best opportunity first (``overall_score``), then
+    the soonest window, then the saved search and the spot (stable ids), the match id last.
+
+    Never the database's row order, which follows the plan and where rows happen to lie on
+    disk: when overlapping searches of one user surface the same swell, the one alert (keyed
+    by user and event, :func:`dedup_key`) is told from whichever match comes first, and under
+    the daily cap the first matches are the ones alerted. Without a fixed order both changed
+    from run to run (the intermittent failure of
+    tests/integration/test_free_tier_egress.py's narrow-reads chain)."""
+    match = row[0]
+    return (
+        -match.overall_score,
+        match.window_start,
+        str(match.search_id),
+        match.spot_id,
+        str(match.id),
+    )
+
+
 def _alert_candidates(
     db: Session, now: datetime
 ) -> list[tuple[OpportunityMatch, ForecastRun | None]]:
-    """The matches an alert may be due for, each with its event's forecast run.
+    """The matches an alert may be due for, each with its event's forecast run, in
+    :func:`candidate_order`.
 
     Database egress: a match's event (and its spot) and its best offer are read once each
     for all candidates (``selectinload``: 19 events and 15 offers for 57 matches of three
@@ -576,7 +701,10 @@ def _alert_candidates(
         if run_ids
         else {}
     )
-    return [(match, runs.get(run_id) if run_id is not None else None) for match, run_id in rows]
+    return sorted(
+        ((match, runs.get(run_id) if run_id is not None else None) for match, run_id in rows),
+        key=candidate_order,
+    )
 
 
 def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
@@ -608,9 +736,7 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
         ):
             continue  # flights not searched yet
         has_price = match.status == MatchStatus.FLIGHT_FOUND
-        if has_price and not _revalidate_best(db, match, now, stats, provider_for):
-            db.commit()
-            continue
+        # Nothing new to tell (no new match, no material change): no fare check either.
         kind = decide_kind(match, search, has_price)
         if kind is None:
             continue
@@ -647,6 +773,13 @@ def generate_alerts(db: Session, now: datetime | None = None) -> AlertStats:
             )
             db.commit()
             continue
+        if has_price:
+            # Right before sending: re-check the fare (and search the trip once more when
+            # it is no longer usable), then decide again with what is true now.
+            kind = _checked_kind(db, match, search, kind, now, stats, provider_for)
+            if kind is None:
+                db.commit()
+                continue
         snapshot = build_snapshot(match, kind, now, model_runs_memo=model_runs_memo)
         links = links_for(snapshot, prefs)
         subject, text, html = render_alert_email(snapshot, links)

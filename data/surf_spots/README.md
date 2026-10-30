@@ -9,6 +9,7 @@ Curated seed data for Swell Travel Agent: 50 well-known surf breaks and a table 
 | `research_evidence.json` | Published sources consulted per spot and what each says about the spot's ideal conditions; drives research confidence (see "Research evidence" below). Optional for the app; the committed file covers all 50 spots. |
 | `physical_profiles.json` | Measured physical parameters for the nearshore model, currently from NOAA BlueTopo bathymetry for Mavericks, Ocean Beach, Trestles and Rincon (see "Measured bathymetry" below). Optional; spots without an entry use profiles derived from the swell windows. |
 | `profile_decisions.json` | One decision record per spot and profile field whose evidence contradicts the profile (changed / kept / disputed, with sources and rationale), plus geometry notes (see "Profile decisions" below). Optional for the app; read by the prediction job (disputed winds) and `research lint`. |
+| `research_conditions.json` | The spec-17 ideal conditions of every spot (swell height, period and direction, wind, tide, season, geography: 29 fields each), extracted only from the excerpts of `research_evidence.json`; every value cites the claims it rests on, unsupported fields are `not_documented` and disagreeing ones `conflicting` (see "Research conditions" below). Not read by the app at runtime; it drives the generated [`docs/surf_spot_research/`](../../docs/surf_spot_research/README.md). |
 
 **This is a hand-picked list of famous, travel-worthy waves. It is not an objective "best 50" ranking.** Inclusion and order say nothing about quality.
 
@@ -77,6 +78,17 @@ Pipeline, Mavericks, Jaws (Wikipedia figure used; mondo.surf lists a point about
 - A claim's normalised `value` uses the conventions of this file: directions in degrees the swell or wind comes **from**, windows clockwise and possibly wrapping through north; sizes as **breaking face height in feet** (never offshore significant wave height or Hawaiian scale); periods in seconds; months 1-12. The app re-checks agreement with the profile in code.
 - Load it with `python -m app.cli research load` (also part of `seed` / `init-db`). The loader lists every problem at once and writes nothing while there is one; reloading an unchanged file changes nothing. `python -m app.cli research show <slug>` prints a spot's result.
 
+
+## Research conditions
+
+`research_conditions.json` holds, per spot, the ideal-condition fields of the owner's spec section 17: swell height (minimum suitable, ideal range, maximum suitable), swell period (ideal, acceptable, short- and long-period behaviour), swell direction (ideal bearing, acceptable range, blocked directions, exposure), wind (offshore, cross-offshore, onshore, ideal speed, strong-wind limit, sheltering), tide (preferred stage, rising or falling, size-dependent preference, local tide data), seasonality (prime months, secondary season, swell sources, wind patterns) and geography (break type, orientation, exposure, bathymetry). Each field is `{"value", "unit", "status", "citations", "note"}`:
+
+- `status` is `documented`, `conflicting` (the excerpts state different values; `value` then lists each stated value with the `sources` stating it) or `not_documented` (`value` null, no citations). Nothing is filled in from general knowledge.
+- `citations` are `{"source_key", "claim_index", "excerpt"}`: a source of the spot in `research_evidence.json`, the index of the claim in its `claims`, and that claim's excerpt copied exactly.
+- `tide.local_tide_data` is app data, not research: the tide source of [`data/tide_stations.json`](../tide_stations.json) (CO-OPS station or EOT20 model cell, distance, datum, caveat), with no citations.
+- Each spot also records its extractor and, for the 15 spots whose excerpts were re-read in the judgement check of 2026-10-27, the changes made (`judgement_check`).
+
+[`scripts/generate_spot_research_docs.py`](../../scripts/generate_spot_research_docs.py) checks every citation mechanically (source key, claim index, exact excerpt; at least one citation per documented or conflicting field, none for not documented ones; the tide field against the tide catalog) and writes [`docs/surf_spot_research/`](../../docs/surf_spot_research/README.md): one file per spot with the supported ideal conditions next to the app's model settings, the conflicting and missing information, the model settings the evidence does not support, research confidence (computed by `app.services.research.assess`) and the sources. `backend/tests/unit/test_spot_research_docs.py` fails when a committed doc is out of date or a citation does not match the evidence.
 
 ## Profile decisions
 

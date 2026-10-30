@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from app.core.config import Settings, normalize_database_url
 from app.core.profiles import (
     FREE_DATABASE_PROFILE,
+    FULL_RETENTION_OVER_DEFAULTS,
     FULL_RETENTION_PROFILE,
     HOSTED_PROFILE,
     PROFILES,
@@ -118,8 +119,10 @@ def test_new_defaults_keep_the_classic_behaviour(clean_env: pytest.MonkeyPatch) 
         s.sync_max_attempts,
         s.sync_retry_minutes,
         s.sync_daemon_poll_seconds,
-    ) == (10, 90, 45, 6, 15, 60)
+    ) == (10, 0, 45, 6, 15, 60)  # SYNC_COALESCE_MINUTES: 90 until Swell 2.0 (design B, D6)
     assert s.sync_trigger_sources == "spots,map"
+    assert s.sync_daemon_kinds == "spots,ensemble,map"
+    assert s.sync_daemon_kind_list == frozenset({"spots", "ensemble", "map"})
     assert s.sync_trigger_list == frozenset({"spots", "map"})
     assert s.sync_prune_each_pass is False and s.sync_publish_gate is True
     assert s.sync_daemon_init_db is True and s.sync_cpu_budget_hours is None
@@ -289,13 +292,18 @@ def test_every_profile_entry_is_a_setting_that_validates(
 def test_profiles_are_declared_not_default(clean_env: pytest.MonkeyPatch) -> None:
     defaults = make()
     fields = _env_names()
-    # The full-retention profile is exactly today's defaults (restored after upgrading).
+    # The full-retention profile is today's defaults (restored after upgrading), except the
+    # settings whose default became the lean value in Swell 2.0 (the prediction archive,
+    # design D5): the profile turns those back on.
     for key, value in FULL_RETENTION_PROFILE.items():
-        assert _same(getattr(defaults, fields[key]), value), key
+        same = _same(getattr(defaults, fields[key]), value)
+        assert same is (key not in FULL_RETENTION_OVER_DEFAULTS), key
     assert set(FULL_RETENTION_PROFILE) == set(FREE_DATABASE_PROFILE)
-    # The free-database values differ from the defaults: declared, not applied.
+    # The free-database values differ from the defaults: declared, not applied (the lean
+    # defaults above are the free-database values themselves).
     for key, value in FREE_DATABASE_PROFILE.items():
-        assert not _same(getattr(defaults, fields[key]), value), key
+        same = _same(getattr(defaults, fields[key]), value)
+        assert same is (key in FULL_RETENTION_OVER_DEFAULTS), key
     assert HOSTED_PROFILE["JOB_RUNNER"] == "daemon" and defaults.job_runner == "celery"
     # Lead decision: GEFS stays off in the hosted profile.
     assert HOSTED_PROFILE["GEFS_ENABLED"] == "false"

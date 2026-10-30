@@ -48,7 +48,16 @@ export type WizardState = {
   notification_channel: "email" | "sms" | "both" | "dashboard";
   notify_surf_only: boolean;
   notify_on_updates: boolean;
+  /** Alert me about swells starting this many whole days ahead (spec 28). */
+  alert_lead_min_days: number;
+  alert_lead_max_days: number;
 };
+
+/** Saved-search limits mirrored from the backend (schemas/searches.py, flights/service.py). */
+export const MAX_ALERT_LEAD_DAYS = 16;
+export const MAX_ORIGINS = 5;
+/** Alert lead days of a new search when the deployment's defaults are not known yet. */
+export const DEFAULT_ALERT_LEAD_DAYS = { min: 2, max: 10 } as const;
 
 export const WIZARD_STEPS = [
   { key: "surf", title: "Surf preferences" },
@@ -61,7 +70,11 @@ export const WIZARD_STEPS = [
 
 export type StepKey = (typeof WIZARD_STEPS)[number]["key"];
 
-export function defaultWizardState(homeAirport?: string | null, units: "ft" | "m" = "ft"): WizardState {
+export function defaultWizardState(
+  homeAirport?: string | null,
+  units: "ft" | "m" = "ft",
+  lead: { min: number; max: number } = DEFAULT_ALERT_LEAD_DAYS,
+): WizardState {
   return {
     name: "",
     units,
@@ -104,6 +117,8 @@ export function defaultWizardState(homeAirport?: string | null, units: "ft" | "m
     notification_channel: "email",
     notify_surf_only: false,
     notify_on_updates: true,
+    alert_lead_min_days: lead.min,
+    alert_lead_max_days: lead.max,
   };
 }
 
@@ -150,6 +165,8 @@ export function fromSearch(s: Search): WizardState {
     notification_channel: s.notification_channel,
     notify_surf_only: s.notify_surf_only,
     notify_on_updates: s.notify_on_updates,
+    alert_lead_min_days: s.alert_lead_min_days,
+    alert_lead_max_days: s.alert_lead_max_days,
   };
 }
 
@@ -185,6 +202,8 @@ export function toSearchInput(w: WizardState): SearchInput {
     notification_channel: w.notification_channel,
     notify_surf_only: w.notify_surf_only,
     notify_on_updates: w.notify_on_updates,
+    alert_lead_min_days: w.alert_lead_min_days,
+    alert_lead_max_days: w.alert_lead_max_days,
     priority: w.priority,
     travel: {
       max_price: w.max_price.toFixed(2),
@@ -233,9 +252,15 @@ export function validateStep(step: StepKey, w: WizardState, today: Date = new Da
       }
     } else if (w.horizon_days < 1 || w.horizon_days > 365) e.horizon_days = "Between 1 and 365 days.";
     if (w.max_trip_days < w.min_days_at_destination) e.max_trip_days = "Must be at least the minimum days at destination.";
+    const lo = w.alert_lead_min_days;
+    const hi = w.alert_lead_max_days;
+    if (!Number.isInteger(lo) || lo < 0 || lo > MAX_ALERT_LEAD_DAYS) e.alert_lead_min_days = `Whole days from 0 to ${MAX_ALERT_LEAD_DAYS}.`;
+    if (!Number.isInteger(hi) || hi < 0 || hi > MAX_ALERT_LEAD_DAYS) e.alert_lead_max_days = `Whole days from 0 to ${MAX_ALERT_LEAD_DAYS}.`;
+    else if (Number.isInteger(lo) && hi < lo) e.alert_lead_max_days = "Must be at least the earliest lead time.";
   }
   if (step === "flights" || step === "review") {
     if (w.origins.length === 0) e.origins = "Add at least one departure airport.";
+    else if (w.origins.length > MAX_ORIGINS) e.origins = `Up to ${MAX_ORIGINS} departure airports.`;
     if (!(w.max_price > 0)) e.max_price = "Enter a budget greater than zero.";
     if (w.travelers < 1 || w.travelers > 9) e.travelers = "Between 1 and 9 travellers.";
     const bad = w.preferred_airlines

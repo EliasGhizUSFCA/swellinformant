@@ -17,7 +17,17 @@ import type { SpotSummary } from "@/types/api";
 export interface MarkerState {
   score: number | null;
   tooltip: string;
+  /** A second tooltip line (swell and wind in words). */
+  detail?: string | null;
   highlight?: boolean;
+  /** Directions FROM (degrees) of the swell that drives the surf and of the wind, for the
+   * marker's arrows (components/map/spot-glyphs); null or absent = no arrow. */
+  swellFromDeg?: number | null;
+  windFromDeg?: number | null;
+  /** The marker's height label, e.g. "4–6 ft" (our predicted surf); null = none. */
+  label?: string | null;
+  /** The spot's served forecast is out of date (its `freshness.stale`). */
+  stale?: boolean;
 }
 
 /**

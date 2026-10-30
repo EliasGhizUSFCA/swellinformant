@@ -44,8 +44,19 @@ def test_stale_after_hours_per_source_with_default_settings() -> None:
     assert queries.stale_after_hours(OPEN_METEO_ECMWF_CODE, s) == pytest.approx(
         12 + 7.5 + 1 / 6 + 5
     )
-    for other in ("demo", "windy_gfswave", "blend"):
+    # Windy (design D10: GFS's 6 h interval): cycle + the adapter's expected lag + 3 + 2.
+    assert queries.stale_after_hours("windy_gfswave", s) == pytest.approx(6 + 4 + 3 + 2)
+    for other in ("demo", "blend"):
         assert queries.stale_after_hours(other, s) == s.forecast_stale_hours == 18
+
+
+def test_windy_staleness_follows_the_adapter() -> None:
+    from app.services.forecasts import windy
+
+    assert queries.SOURCE_CYCLE_HOURS["windy_gfswave"] == windy.CYCLE.total_seconds() / 3600
+    assert queries.stale_after_hours("windy_gfswave", Settings()) == pytest.approx(
+        6 + windy.EXPECTED_LAG_HOURS + Settings().forecast_refresh_minutes / 60 + 2
+    )
 
 
 def test_gefs_staleness_follows_gefs_cycles() -> None:

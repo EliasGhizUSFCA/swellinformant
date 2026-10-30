@@ -189,16 +189,26 @@ cmd_smoke() {
 
   if curl_local -fsS --max-time 10 "$base/api/health/ready" >/dev/null; then pass "the API is ready behind the edge"; else fail "GET $base/api/health/ready"; fi
 
-  # The API image is the lean install, like the Vercel function: no heavy dependency, no data/.
+  # The API image is the lean install, like the Vercel function: no heavy dependency. It holds
+  # data/ where the function does, at its root (the api build command's copy; /app/data here,
+  # /var/task/data on Vercel), and no /data: the tide job and the seed find it there.
   local module
   for module in pandas eccodes celery kombu sklearn pyarrow scipy joblib; do
     if compose exec -T api python -c "import $module" >/dev/null 2>&1; then fail "the api image imports $module"; else pass "the api image cannot import $module"; fi
   done
-  if compose exec -T api test -e /data; then fail "the api image has /data"; else pass "the api image has no data/ directory"; fi
+  if compose exec -T api test -e /data; then fail "the api image has /data"; else pass "the api image has no /data (only the daemon's image has)"; fi
+  local found
+  if found="$(compose exec -T api python -c "from app.services.tides import catalog, harmonic_model; from app.services import seed; print(catalog.resolve_catalog_path(), harmonic_model.resolve_constants_path(), seed.resolve_data_dir())" 2>&1)" \
+    && [ "$found" = "/app/data/tide_stations.json /app/data/tides/constants_eot20.json /app/data/surf_spots" ]; then
+    pass "the api image reads data/ at the function's root (/app/data)"
+  else
+    fail "data/ in the api image: $(printf '%s' "$found" | tail -n 1)"
+  fi
 
   # The api service's Vercel build command (vercel.json buildCommand) on the lean install: a
-  # production build migrates over the direct URL (DATABASE_URL_UNPOOLED); here the database
-  # is already at head, so it only checks the revision.
+  # production build migrates over the direct URL (DATABASE_URL_UNPOOLED) and seeds the
+  # spots from data/; here the database is already at head and seeded, so it checks the
+  # revision and seeds again (idempotent; the migrate service ran the same command before).
   local built
   if built="$(compose exec -T -e VERCEL_ENV=production api python -m app.cli migrate --on-build 2>&1)" \
     && printf '%s' "$built" | grep -q '"status": "migrated"'; then
@@ -207,18 +217,25 @@ cmd_smoke() {
     fail "migrate --on-build on the api image: $(printf '%s' "$built" | tail -n 1)"
   fi
 
-  # PgBouncer in transaction mode, and the API's queries go through it.
+  # PgBouncer in transaction mode, and the API's queries go through it. GET /api/health/ready
+  # always asks the database (SELECT 1 on the API's pooled engine); a public read such as
+  # GET /api/spots may not: once a version's snapshot is in Redis it is answered from there
+  # without a transaction (app.services.public_cache), so it only gets a note.
   local mode before after
   mode="$(pgbouncer_admin "SHOW CONFIG" | awk -F'|' '$1 == "pool_mode" { print $2 }' || true)"
   if [ "$mode" = "transaction" ]; then pass "PgBouncer pool_mode = transaction"; else fail "PgBouncer pool_mode is '$mode'"; fi
   before="$(pgbouncer_xacts || true)"
-  curl_local -fsS --max-time 20 "$base/api/spots" >/dev/null || fail "GET /api/spots"
+  curl_local -fsS --max-time 20 "$base/api/health/ready" >/dev/null || fail "GET /api/health/ready"
   after="$(pgbouncer_xacts || true)"
   if [ -n "$before" ] && [ -n "$after" ] && [ "$after" -gt "$before" ]; then
-    pass "GET /api/spots ran its transactions through PgBouncer ($before -> $after)"
+    pass "GET /api/health/ready ran its database check through PgBouncer ($before -> $after)"
   else
     fail "PgBouncer saw no API transaction (total_xact_count '$before' -> '$after')"
   fi
+  before="$(pgbouncer_xacts || true)"
+  curl_local -fsS --max-time 20 "$base/api/spots" >/dev/null || fail "GET /api/spots"
+  after="$(pgbouncer_xacts || true)"
+  printf '  note  GET /api/spots: PgBouncer total_xact_count %s -> %s (unchanged when the snapshot came from Redis)\n' "${before:-?}" "${after:-?}"
 
   # The client IP: a client's own X-Vercel-Forwarded-For, X-Forwarded-For and X-Real-IP never
   # reach the API. The rate-limit counter of GET /api/health/data (bucket health-data) must
@@ -290,6 +307,19 @@ with SessionLocal() as db:
   if [ "$code" = "401" ]; then pass "cron without a token: 401"; else fail "cron without a token: $code"; fi
   code="$(status_with_token "$base/api/internal/cron/daily" "$secret")"
   if [ "$code" = "200" ]; then pass "cron with the token: 200"; else fail "cron with the token: $code"; fi
+
+  # The refresh endpoint an external scheduler calls every 5 minutes: 401 without the
+  # token, 200 with it (a check, and a sync when a run is due; the daemon may hold the lease:
+  # "busy" is an answer too). The version endpoint the browsers poll names a version.
+  code="$(curl_local -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$base/api/internal/refresh")"
+  if [ "$code" = "401" ]; then pass "refresh without a token: 401"; else fail "refresh without a token: $code"; fi
+  code="$(status_with_token "$base/api/internal/refresh" "$secret")"
+  if [ "$code" = "200" ]; then pass "refresh with the token: 200"; else fail "refresh with the token: $code"; fi
+  if curl_local -fsS --max-time 20 "$base/api/forecasts/version" | grep -Eq '"version_id": ?[0-9]+'; then
+    pass "GET /api/forecasts/version names the published version"
+  else
+    fail "GET /api/forecasts/version names no version"
+  fi
 
   # Not a check of the stack: the data-health verdict of the API (GET /api/health/data), the
   # one the daily watchdog alerts on, as the deployed function would report it.

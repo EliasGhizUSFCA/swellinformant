@@ -47,6 +47,7 @@ describe("colour scales", () => {
   it("takes the hs / tp display range from the field index when given", () => {
     const index = {
       available: true,
+      enabled: true,
       valid_times: [],
       variables: [{ name: "hs", label: "Hs", unit: "m", display_min: 0, display_max: 12, group: "core" }],
       stale_after_hours: 12,

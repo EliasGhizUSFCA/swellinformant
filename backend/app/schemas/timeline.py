@@ -20,7 +20,11 @@ selected-time summary. Rules of the contract:
 * Units are fixed (``units``): breaking heights in feet, offshore heights and tide in
   metres, wind in km/h. The client converts for display.
 * Directions are degrees FROM (nautical). Confidence classes are documented heuristic
-  classes, not probabilities.
+  classes, not probabilities. Forecast confidence and research confidence are separate
+  (``quality.forecast_confidence``, ``quality.research_confidence``) and never combined
+  (spec 20: the combined "local confidence" of earlier versions is gone).
+* ``quality`` also carries the hour's main favourable and unfavourable conditions, its
+  offshore-wind class and the scoring model version (algorithm 2.2.0).
 * ``days`` are local calendar days in ``timezone``, from local midnight to local midnight
   (23 or 25 hours on daylight-saving change days).
 * ``available`` false: ``message`` says why, ``steps`` and ``days`` are empty and
@@ -34,7 +38,13 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.schemas.spots import ForecastSourceOut, RunMemberOut
+from app.schemas.forecasts import SpotFreshnessOut
+from app.schemas.spots import (
+    ForecastSourceOut,
+    HourOutputs,
+    RunMemberOut,
+    SeparateConfidences,
+)
 from app.schemas.tides import ObservationsBlockOut, TideBlockOut
 
 PartitionKind = Literal["primary_swell", "secondary_swell", "tertiary_swell", "wind_sea"]
@@ -102,13 +112,14 @@ class TimelineDayOut(BaseModel):
     forecast_confidence_class: str | None
 
 
-class StepQualityOut(BaseModel):
+class StepQualityOut(HourOutputs, SeparateConfidences):
+    """Our rating of the step, its per-hour outputs (``HourOutputs``) and its two separate
+    confidences (``SeparateConfidences``)."""
+
     score: int
     label: str
     forecast_confidence_class: str | None
-    local_confidence_class: str | None
     forecast_confidence_reasons: list[str]
-    local_confidence_reason: str | None
 
 
 class StepBreakingOut(BaseModel):
@@ -219,3 +230,5 @@ class SpotTimelineOut(BaseModel):
     steps: list[TimelineStepOut]
     tide: TideBlockOut
     observations: ObservationsBlockOut
+    # How fresh the spot's served forecast is (published version, last update, stale).
+    freshness: SpotFreshnessOut | None = None

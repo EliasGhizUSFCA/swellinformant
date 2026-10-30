@@ -2,7 +2,7 @@
  * Plain-language explanations of technical terms, shown in "Learn more" popovers. Each entry
  * restates what the app actually computes (docs/SURF_SCORING.md); keep them in sync.
  */
-import { FORECAST_CONFIDENCE_MEANING, LOCAL_CONFIDENCE_MEANING, RESEARCH_CONFIDENCE_MEANING } from "@/lib/confidence";
+import { FORECAST_CONFIDENCE_MEANING, RESEARCH_CONFIDENCE_MEANING } from "@/lib/confidence";
 import { GROUNDSWELL_PERIOD_S } from "@/lib/rating";
 
 /** What the likely range is: an intended 80% range that has not been verified at the break
@@ -50,7 +50,6 @@ export const GLOSSARY = {
     body: "Offshore wind blows from the land towards the sea and grooms the waves; onshore wind blows in from the sea and makes them choppy. Cross-shore is in between. Judged against this break's offshore direction.",
   },
   forecastConfidence: { title: "Forecast confidence", body: FORECAST_CONFIDENCE_MEANING },
-  localConfidence: { title: "Confidence at the break", body: LOCAL_CONFIDENCE_MEANING },
   researchConfidence: { title: "Spot research confidence", body: RESEARCH_CONFIDENCE_MEANING },
   swellWindow: {
     title: "Swell window",

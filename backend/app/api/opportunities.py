@@ -8,12 +8,14 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.auth.deps import get_current_user
+from app.core.config import get_settings
 from app.core.database import get_db, utcnow
 from app.core.errors import AppError
 from app.core.ratelimit import hit
 from app.models import User
 from app.models.enums import MatchStatus
 from app.schemas.opportunities import MatchDetail, MatchSummary
+from app.services.flights.budget import searches_left
 from app.services.opportunity_views import (
     get_owned_match,
     list_matches,
@@ -52,13 +54,27 @@ def get_opportunity(
 def refresh_flights(
     match_id: uuid.UUID, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> MatchDetail:
+    """An explicit flight check (spec 26: one of the few reasons to search). Searches that
+    are still cached are reused; one whose first offer expired is not (its cache entry
+    ends then), so the provider is asked again. It counts against the user's daily
+    flight-search budget (FLIGHT_USER_DAILY_QUOTA), refused here once that is used up."""
     hit("refresh-flights", str(user.id), 6, 3600)
     match = get_owned_match(db, user, match_id)
     if match.status in (MatchStatus.EXPIRED, MatchStatus.DISMISSED):
         raise AppError("This opportunity is no longer active.", code="inactive")
-    match.flights_requested_at = utcnow()
+    now = utcnow()
+    limit = get_settings().flight_user_daily_quota
+    if searches_left(user.id, limit, now) <= 0:
+        raise AppError(
+            f"You have used today's {limit} flight searches for your account. You can "
+            "check again after 00:00 UTC.",
+            code="flight_budget_reached",
+            status_code=429,
+        )
+    match.flights_requested_at = now
     db.commit()
-    # Never raises: if the request cannot be recorded, the scheduled run handles it.
+    # Never raises: if the request cannot be recorded, the next flight run (each forecast
+    # publication) handles it.
     kick("flights.discover", match_ids=[str(match.id)])
     return match_detail(db, match)
 

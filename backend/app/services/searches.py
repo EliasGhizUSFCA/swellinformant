@@ -11,6 +11,7 @@ from decimal import Decimal
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.database import utcnow
 from app.core.errors import AppError, NotFound
 from app.models import (
@@ -71,8 +72,30 @@ def _validate_refs(db: Session, data: SearchIn) -> dict[str, int]:
     return slugs
 
 
-def _apply(db: Session, search: SavedSearch, data: SearchIn) -> None:
+def _lead_days(search: SavedSearch, data: SearchIn, creating: bool) -> tuple[int, int]:
+    """The alert lead days to store: as given, else the deployment default (new search) or
+    the current value (existing search); refused when the earliest is after the latest."""
+    settings = get_settings()
+    if creating:
+        low_default = settings.alert_lead_default_min_days
+        high_default = settings.alert_lead_default_max_days
+    else:
+        low_default, high_default = search.alert_lead_min_days, search.alert_lead_max_days
+    low = data.alert_lead_min_days if data.alert_lead_min_days is not None else low_default
+    high = data.alert_lead_max_days if data.alert_lead_max_days is not None else high_default
+    if low > high:
+        raise AppError(
+            f"Alert lead time: the earliest ({low} days) must not be later than the latest "
+            f"({high} days).",
+            code="invalid_lead_time",
+            status_code=422,
+        )
+    return low, high
+
+
+def _apply(db: Session, search: SavedSearch, data: SearchIn, *, creating: bool = False) -> None:
     slugs = _validate_refs(db, data)
+    search.alert_lead_min_days, search.alert_lead_max_days = _lead_days(search, data, creating)
     search.name = data.name
     search.date_mode = data.date_mode
     search.date_start = data.date_start if data.date_mode == "fixed" else None
@@ -144,7 +167,7 @@ def create_search(db: Session, user: User, data: SearchIn) -> SavedSearch:
         user_id=user.id, status=SearchStatus.ACTIVE, wave_min_ft=0, wave_max_ft=1, name=data.name
     )
     db.add(search)
-    _apply(db, search, data)
+    _apply(db, search, data, creating=True)
     db.commit()
     return search
 
@@ -260,6 +283,8 @@ def search_out_fields(search: SavedSearch, spot_slugs: list[str]) -> dict[str, o
         "notification_channel": search.notification_channel,
         "notify_surf_only": search.notify_surf_only,
         "notify_on_updates": search.notify_on_updates,
+        "alert_lead_min_days": search.alert_lead_min_days,
+        "alert_lead_max_days": search.alert_lead_max_days,
         "priority": search.priority,
         "travel": TravelOut(
             max_price=Decimal(t.max_price),

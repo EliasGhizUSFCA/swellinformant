@@ -42,7 +42,14 @@
     line-height: 1.35;
   }
 }
+/* A long tooltip (the spot's detail line, "Forecast last updated ...") wraps inside the screen
+   instead of running past both edges of a phone: its natural width, at most the screen's less a
+   margin (Leaflet's tooltip pane has no width, so a plain white-space: normal would wrap every
+   word). */
 .forecast-map .leaflet-tooltip {
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  white-space: normal;
   background: rgba(21, 25, 29, 0.94);
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -62,4 +69,72 @@
   .forecast-map .leaflet-control-zoom {
     display: none;
   }
+}
+/* Spot marker arrows and height labels (components/map/spot-glyphs.tsx): drawn above the
+   circles and never in the way of clicks, focus or the tooltips, which stay with the circles. */
+.forecast-map .spot-glyph-icon,
+.forecast-map .spot-glyph,
+.forecast-map .spot-glyph * {
+  pointer-events: none;
+}
+.forecast-map .spot-glyph-icon {
+  background: none;
+  border: 0;
+}
+.forecast-map .spot-glyph {
+  position: relative;
+  width: 64px;
+  height: 64px;
+}
+.forecast-map .spot-glyph svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+/* The swell that drives the surf: a filled arrow; the wind: a white line arrow. Both carry a
+   dark edge so they read on the dark basemap, the colour layers and the street tiles. */
+.forecast-map .sg-swell {
+  fill: #c4ec4a;
+  stroke: #0b1620;
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+.forecast-map .sg-wind-halo {
+  fill: none;
+  stroke: #0b1620;
+  stroke-width: 3.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+.forecast-map .sg-wind {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* A forecast that is out of date: a dashed amber ring around the marker. */
+.forecast-map .sg-stale {
+  fill: none;
+  stroke: #fbbf24;
+  stroke-width: 1.6;
+  stroke-dasharray: 2.5 2;
+}
+.forecast-map .sg-label {
+  position: absolute;
+  height: 15px;
+  border-radius: 4px;
+  background: rgba(16, 20, 24, 0.82);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.forecast-map .sg-label-stale {
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.75);
 }

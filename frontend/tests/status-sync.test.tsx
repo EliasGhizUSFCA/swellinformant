@@ -203,6 +203,13 @@ describe("sync section", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("describes the 2.0 refresh: per component for spots, map layers on their own runs (review r1-frontend-FE-10)", () => {
+    render(<SyncStatus sync={sync()} now={NOW} />);
+    const about = screen.getByTestId("sync-status-about");
+    expect(about).toHaveTextContent("Spot forecasts refresh per model component (waves, wind) as soon as a new run is available; map layers follow their own runs.");
+    expect(about).not.toHaveTextContent("one sync");
+  });
+
   it("shows the published run, the runner's last check, and the stages with durations", () => {
     render(<SyncStatus sync={sync()} now={NOW} sourceNames={new Map([["synthetic_gfs", "Synthetic GFS source"]])} />);
     expect(screen.getByTestId("sync-published")).toHaveTextContent("Updated with the 12Z Oct 18 model run · published 14:32 UTC");

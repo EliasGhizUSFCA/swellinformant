@@ -24,6 +24,14 @@ SYNC_CPU_BUDGET_HOURS; ``licence``: COMMERCIAL_USE with the free Open-Meteo API)
 problems like any other and follow the same rules; a failed sync's error text goes into
 the email (``detail``), never into the public report.
 
+The admin-only problems of design D12 (``model_run_late``, ``forecast_stale_spots``,
+``refresh_failures``, ``provider_credentials``, ``provider_unavailable``,
+``provider_fallback``, ``quota_near``, ``refresh_scheduler_silent``; app.services.health,
+``data_health(admin=True)``) join the report's problems here: they are planned,
+de-duplicated, repeated and recovered exactly like them, and only ever emailed to the
+admin recipients below. They are never part of the public report (GET /api/health/data);
+the admin dashboard (/admin/freshness, GET /api/admin/freshness) lists them.
+
 All due items of one run go into one email per recipient. The alert state lives in the
 job's own log rows (``background_job_logs.details["alert_state"]`` of the newest
 successful ``ops.data_health`` run), so it survives restarts without a table of its own;
@@ -33,6 +41,12 @@ cleared problem's entry is kept until the repeat interval since its last alert h
 An item is only marked as alerted when at least one recipient's provider accepted (or
 the development inbox captured) the email; otherwise it stays due and the next run tries
 again. Logs carry counts only, never addresses.
+
+When the email provider refuses its own credentials (``provider_credentials:email_*``),
+no alert email can go out through it: the admins whose phone number is verified and opted
+in to SMS then get one SMS about it per UTC day (:func:`alert_email_refused_by_sms`,
+SMS_PROVIDER). Without such a number it shows only on /admin/freshness and in GET
+/api/health/data (docs/operations.md).
 
 When the database itself cannot be reached (e.g. Neon's compute suspended after its
 monthly quota), the report cannot be built and the admin addresses cannot be read: the
@@ -55,10 +69,21 @@ from app.core.config import Settings, get_settings
 from app.core.database import utcnow
 from app.core.redis import get_redis
 from app.jobs.schedule import DATA_HEALTH_TASK
-from app.models import BackgroundJobLog, User
+from app.models import BackgroundJobLog, NotificationPreference, User
 from app.models.enums import JobStatus
-from app.services.health import HealthReport, Problem, data_health, stamp
-from app.services.notifications.providers import EmailMessageData, build_email_provider
+from app.services.health import (
+    ADMIN_CHECKS_FAILED,
+    HealthReport,
+    Problem,
+    data_health,
+    is_admin_problem_key,
+    stamp,
+)
+from app.services.notifications.providers import (
+    EmailMessageData,
+    build_email_provider,
+    build_sms_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +287,7 @@ def render_alert(
     report: HealthReport, plan: AlertPlan, settings: Settings, repeat: timedelta
 ) -> tuple[str, str]:
     """(subject, plain-text body) of one alert email."""
-    status = report.status
+    status = report.alert_status
     if plan.problems:
         n = len(plan.problems)
         subject = f"[{settings.app_name}] Data health {status.upper()}: {n} problem" + (
@@ -297,7 +322,7 @@ def render_alert(
             lines.append(f"- {item.message} (first seen {stamp(item.first_seen)})")
         lines.append("")
     alerted = {i.key for i in plan.problems}
-    others = [p for p in report.problems if p.key not in alerted]
+    others = [p for p in report.all_problems if p.key not in alerted]
     if others:
         lines.append("Other current problems (already reported):")
         lines.extend(f"- [{p.severity}] {p.message}" for p in others)
@@ -307,6 +332,7 @@ def render_alert(
         f"Each problem is reported once, then again every {hours:g} h while it lasts; you get a "
         "notice when it clears.",
         f"Status page: {settings.app_base_url}/status",
+        f"Freshness dashboard (admins): {settings.app_base_url}/admin/freshness",
         f"Report (JSON): {settings.api_base_url}/api/health/data",
         "Playbook: docs/operations.md, section 'Incident playbook'.",
     ]
@@ -314,7 +340,8 @@ def render_alert(
 
 
 def admin_recipients(db: Session) -> list[str]:
-    """Addresses of active admin accounts with a verified email address."""
+    """Addresses of active admin accounts with a verified email address: the only
+    recipients of these alerts (users never get them)."""
     return list(
         db.scalars(
             select(User.email)
@@ -340,6 +367,77 @@ def send_alert(recipients: list[str], subject: str, text: str) -> dict[str, int]
             failed += 1
             logger.warning("Data-health alert not sent to one admin: %s", type(exc).__name__)
     return {"sent": sent, "failed": failed}
+
+
+# --------------------------------------------------------------------------- refused email
+# Set (NX) for the UTC day an SMS about the email provider's refused key went out.
+EMAIL_REFUSED_SMS_KEY = "ops:email_refused_sms:{day}"
+EMAIL_REFUSED_SMS_TTL_SECONDS = 26 * 3600
+EMAIL_CREDENTIALS_PREFIX = "provider_credentials:email_"
+
+
+def admin_phones(db: Session) -> list[str]:
+    """The phone numbers of active admin accounts that may get SMS: verified and opted in,
+    not opted out since (``NotificationPreference.sms_ready``)."""
+    prefs = db.scalars(
+        select(NotificationPreference)
+        .join(User, User.id == NotificationPreference.user_id)
+        .where(
+            User.is_admin.is_(True),
+            User.is_active.is_(True),
+            NotificationPreference.phone_number.is_not(None),
+        )
+        .order_by(User.created_at)
+    ).all()
+    return [str(p.phone_number) for p in prefs if p.sms_ready]
+
+
+def alert_email_refused_by_sms(
+    db: Session, problems: list[Any], now: datetime, settings: Settings
+) -> dict[str, Any]:
+    """The email provider refused its own credentials (``provider_credentials:email_*``),
+    so the alert about it cannot be emailed through that provider (review r2-spec-SPEC-6):
+    tell the admins with a verified phone number by SMS (SMS_PROVIDER), at most once per
+    UTC day while it lasts. Returns counts, or the reason nothing was sent."""
+    refused = next((p for p in problems if p.key.startswith(EMAIL_CREDENTIALS_PREFIX)), None)
+    if refused is None:
+        return {"sent": 0, "skipped": "no refused email credentials"}
+    if settings.sms_provider == "disabled":
+        return {"sent": 0, "skipped": "SMS_PROVIDER=disabled"}
+    phones = admin_phones(db)
+    if not phones:
+        return {"sent": 0, "skipped": "no admin account with a verified phone number"}
+    key = EMAIL_REFUSED_SMS_KEY.format(day=now.astimezone(UTC).strftime("%Y%m%d"))
+    try:
+        if not get_redis().set(key, now.isoformat(), nx=True, ex=EMAIL_REFUSED_SMS_TTL_SECONDS):
+            return {"sent": 0, "skipped": "already sent today"}
+    except redis.RedisError as exc:
+        logger.warning("Refused-email SMS sent without its daily flag: %s", type(exc).__name__)
+    service = refused.key.removeprefix("provider_credentials:")
+    body = (
+        f"[{settings.app_name}] Admin alerts cannot be emailed: the email provider "
+        f"({service.removeprefix('email_')}) refused its credentials. Renew them; details on "
+        f"{settings.app_base_url}/admin/freshness"
+    )
+    sent = failed = 0
+    try:
+        provider = build_sms_provider(settings)
+    except Exception as exc:  # Twilio not configured
+        logger.warning("Refused-email SMS not sent: %s", type(exc).__name__)
+        return {"sent": 0, "failed": len(phones), "skipped": type(exc).__name__}
+    for phone in phones:
+        try:
+            provider.send(phone, body)
+            sent += 1
+        except Exception as exc:  # one failing number must not stop the rest
+            failed += 1
+            logger.warning("Refused-email SMS not sent to one admin: %s", type(exc).__name__)
+    if not sent:
+        try:  # nothing went out: the next check tries again
+            get_redis().delete(key)
+        except redis.RedisError:
+            logger.debug("refused-email SMS flag not cleared", exc_info=True)
+    return {"sent": sent, "failed": failed, "channel": provider.name}
 
 
 # --------------------------------------------------------------------------- no database
@@ -420,13 +518,31 @@ def previous_state(db: Session) -> dict[str, ProblemState]:
     return {str(k): ProblemState.from_dict(v) for k, v in raw.items() if isinstance(v, dict)}
 
 
+def held_admin_problems(
+    previous: dict[str, ProblemState], problems: list[Problem]
+) -> list[Problem]:
+    """The admin problems the previous runs knew as present and this run could not check
+    (``admin_checks_failed``): kept as they were, so a crash of the checks is not
+    announced to the admins as their recovery."""
+    current = {p.key for p in problems}
+    return [
+        Problem(key, "failing" if old.severity == "failing" else "degraded", old.message)
+        for key, old in sorted(previous.items())
+        if old.present and is_admin_problem_key(key) and key not in current
+    ]
+
+
 def run_data_health_check(db: Session, now: datetime | None = None) -> dict[str, Any]:
     """Build the report, send what is due, and return the job-log details (incl. state)."""
     settings = get_settings()
     now = now or utcnow()
-    report = data_health(db, now=now, settings=settings)
+    report = data_health(db, now=now, settings=settings, admin=True)
     repeat = timedelta(hours=settings.data_health_alert_repeat_hours)
-    plan = plan_alerts(previous_state(db), report.problems, now, repeat)
+    previous = previous_state(db)
+    problems = report.all_problems
+    if any(p.key == ADMIN_CHECKS_FAILED for p in report.admin_problems):
+        problems = [*problems, *held_admin_problems(previous, problems)]
+    plan = plan_alerts(previous, problems, now, repeat)
     email: dict[str, Any] = {"due": plan.due}
     state = plan.state
     if plan.due and not settings.data_health_alerts_enabled:
@@ -435,24 +551,30 @@ def run_data_health_check(db: Session, now: datetime | None = None) -> dict[str,
         recipients = admin_recipients(db)
         if not recipients:
             email["skipped"] = "no active admin account with a verified email address"
-            logger.warning("Data health is %s but no admin can be alerted", report.status)
+            logger.warning("Data health is %s but no admin can be alerted", report.alert_status)
         else:
             subject, text = render_alert(report, plan, settings, repeat)
             counts = send_alert(recipients, subject, text)
             email.update(counts, subject=subject)
             if counts["sent"]:
                 state = mark_sent(plan, now, repeat)
+            else:
+                # The email provider may be what refuses (its own key expired): another
+                # channel then carries that one problem.
+                email["sms"] = alert_email_refused_by_sms(db, problems, now, settings)
             logger.info(
                 "Data-health alert (%s): %d sent, %d failed",
-                report.status,
+                report.alert_status,
                 counts["sent"],
                 counts["failed"],
             )
-    if report.status != "ok":
-        logger.warning("Data health %s: %s", report.status, "; ".join(report.out.reasons))
+    if report.alert_status != "ok":
+        logger.warning(
+            "Data health %s: %s", report.alert_status, "; ".join(p.message for p in problems)
+        )
     return {
-        "status": report.status,
-        "problems": [p.key for p in report.problems],
+        "status": report.alert_status,
+        "problems": [p.key for p in problems],
         "alerts": [f"{i.reason}:{i.key}" for i in (*plan.problems, *plan.recoveries)],
         "email": email,
         "alert_state": {k: v.as_dict() for k, v in sorted(state.items())},

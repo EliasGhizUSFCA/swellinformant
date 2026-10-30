@@ -347,7 +347,9 @@ if corr and corr.applies_to(spot.slug, lead_hours):
   range.
 * With a missing required feature the raw value is returned unchanged, and the reason is
   given in `info`.
-* `ML_CORRECTIONS_ENABLED=false` disables every correction.
+* `ML_CORRECTIONS_ENABLED=false` (the default since Swell 2.0: ML is optional, not part of
+  the default scoring path) disables every correction; with it off, or with no ACTIVE
+  model, the prediction job never imports the ML code (`surf_quality.predict.run_corrector`).
 
 ## Scheduled verification (`verification/jobs.py`)
 

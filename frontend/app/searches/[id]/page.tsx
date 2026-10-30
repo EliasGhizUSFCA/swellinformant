@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 
 import { ConfidenceBadge } from "@/components/confidence";
 import { AppShell } from "@/components/layout/app-shell";
-import { OpportunityCard } from "@/components/opportunity-card";
+import { OpportunityCard, TripCredits } from "@/components/opportunity-card";
 import { EmptyState, PageHeader, SectionTitle } from "@/components/page-header";
 import { MatchStatusBadge, QualityBadge } from "@/components/quality";
 import { RequireAuth } from "@/components/require-auth";
@@ -17,10 +17,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useSearch, useSearchMatches } from "@/hooks/queries";
 import { formatCalendarDate, formatMoney, formatRange, heightRange, titleCase, type Units } from "@/lib/format";
 import { asQuality, QUALITY_LABELS } from "@/lib/quality";
+import { useHeightUnit } from "@/lib/units";
 import type { User } from "@/types/api";
 
 function Detail({ user, id }: { user: User; id: string }) {
-  const units = (user.profile.units as Units) ?? "ft";
+  // The site-wide height unit: this browser's ft / m choice, else the account's.
+  const [units] = useHeightUnit((user.profile.units as Units | undefined) ?? "ft");
   const search = useSearch(id);
   const matches = useSearchMatches(id);
   if (search.isLoading) return <Skeleton className="h-96" />;
@@ -34,7 +36,13 @@ function Detail({ user, id }: { user: User; id: string }) {
     ["Destinations", s.destination_mode === "all" ? "All spots" : s.destination_mode === "regions" ? [...(s.destinations.region_groups ?? []), ...(s.destinations.countries ?? [])].join(", ") : (s.destinations.spot_slugs ?? []).join(", ")],
     ["Dates", s.date_mode === "fixed" ? `${formatCalendarDate(s.date_start)} – ${formatCalendarDate(s.date_end)}` : `Flexible, next ${s.horizon_days} days`],
     ["Buffers", `Arrive ${s.travel.arrival_buffer_days}d early · leave ${s.travel.departure_buffer_days}d after`],
-    ["Flights", `From ${s.origins.join(", ")} · ≤ ${formatMoney(s.travel.max_price, s.travel.currency)} pp · ${s.travel.travelers} traveller(s)`],
+    ["Alert lead time", `Swells starting ${s.alert_lead_min_days}–${s.alert_lead_max_days} days ahead`],
+    [
+      "Flights",
+      `From ${s.origins.join(", ")} · ≤ ${formatMoney(s.travel.max_price, s.travel.currency)} pp · ${s.travel.travelers} traveller(s) · ${
+        s.travel.direct_only ? "direct only" : `≤ ${s.travel.max_layovers} stop${s.travel.max_layovers === 1 ? "" : "s"}`
+      }`,
+    ],
     ["Alerts", `${titleCase(s.notification_channel)}${s.notify_on_updates ? " · updates" : ""}${s.notify_surf_only ? " · surf-only" : ""}`],
   ];
   return (
@@ -56,13 +64,17 @@ function Detail({ user, id }: { user: User; id: string }) {
           <SectionTitle>Current matches</SectionTitle>
           {matches.isLoading && <Skeleton className="h-32" />}
           {!matches.isLoading && current.length === 0 && (
-            <EmptyState title="No current matches" description="Matching swells appear here 5–10 days out." />
+            <EmptyState
+              title="No current matches"
+              description={`Matching swells appear here once one starts ${s.alert_lead_min_days}–${s.alert_lead_max_days} days ahead.`}
+            />
           )}
           <div className="space-y-3">
             {current.map((m) => (
               <OpportunityCard key={m.id} match={m} units={units} />
             ))}
           </div>
+          <TripCredits matches={current} />
           <div className="mt-10">
             <SectionTitle>Matching history</SectionTitle>
             {history.length === 0 ? (
@@ -103,6 +115,8 @@ function Detail({ user, id }: { user: User; id: string }) {
                 </table>
               </div>
             )}
+            {/* Its ratings and confidence come from the forecast too (review r4-frontend-F2). */}
+            <TripCredits matches={history} except={current} className="mt-2" />
           </div>
         </section>
         <Card className="h-fit">
@@ -111,7 +125,7 @@ function Detail({ user, id }: { user: User; id: string }) {
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             {rows.map(([k, v]) => (
-              <div key={k}>
+              <div key={k} data-testid={k === "Alert lead time" ? "search-lead-time" : undefined}>
                 <div className="text-xs text-muted-foreground">{k}</div>
                 <div className="font-medium">{v}</div>
               </div>

@@ -269,8 +269,8 @@ export async function mockFields(
 }
 
 /** The index as the backend reports it when no ocean layers exist. */
-export async function mockFieldsUnavailable(page: Page, message = "Ocean layers need live NOAA data"): Promise<void> {
+export async function mockFieldsUnavailable(page: Page, message = "Ocean layers need live NOAA data", enabled = true): Promise<void> {
   await page.route(/\/api\/map\/fields(\?.*)?$/, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ available: false, message, valid_times: [], variables: [] }) }),
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ available: false, enabled, message, valid_times: [], variables: [] }) }),
   );
 }

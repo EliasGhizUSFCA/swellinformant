@@ -322,7 +322,7 @@ def test_no_research_assessment_gives_low_local_confidence() -> None:
     assert out.reason == "How this break responds to swell is not well documented yet."
 
 
-def test_read_time_staleness_caps_both_classes() -> None:
+def test_read_time_staleness_caps_the_forecast_class() -> None:
     class Stored:
         forecast_confidence_class = HIGH
         local_confidence_class = HIGH
@@ -332,8 +332,10 @@ def test_read_time_staleness_caps_both_classes() -> None:
     fresh = fc.api_fields(Stored())
     assert fresh["forecast_confidence_class"] == HIGH and fresh["lead_hours"] == 30.0
     stale = fc.api_fields(Stored(), stale=True)
-    assert stale["forecast_confidence_class"] == stale["local_confidence_class"] == MODERATE
+    assert stale["forecast_confidence_class"] == MODERATE
     assert stale["confidence_reasons"][0] == fc.STALE_REASON
+    # Spec 20 (2.0): the combined local class is no longer served, fresh or stale.
+    assert not {"local_confidence_class", "local_confidence_reason"} & (fresh.keys() | stale.keys())
 
 
 def test_local_confidence_reason_only_when_local_is_lower() -> None:
@@ -349,19 +351,29 @@ def test_local_confidence_reason_only_when_local_is_lower() -> None:
 
         return Stored()
 
-    lower = fc.api_fields(stored(HIGH, LOW, None))
-    assert lower["local_confidence_reason"] == fc.NO_RESEARCH_REASON
-    partial = fc.api_fields(stored(HIGH, MODERATE, high_research(swell_size=MODERATE)))
-    assert partial["local_confidence_reason"] == (
-        "How this break responds to swell is only partly documented."
-    )
+    def reason(row: object) -> str | None:
+        r = vars(type(row))
+        return fc.local_reason(
+            r["forecast_confidence_class"], r["local_confidence_class"], r["confidence_inputs"]
+        )
+
+    lower = stored(HIGH, LOW, None)
+    assert reason(lower) == fc.NO_RESEARCH_REASON
+    partial = stored(HIGH, MODERATE, high_research(swell_size=MODERATE))
+    assert reason(partial) == "How this break responds to swell is only partly documented."
     # Equal classes: the forecast explains both, so there is no separate local reason.
-    assert fc.api_fields(stored(LOW, LOW, None))["local_confidence_reason"] is None
-    assert fc.api_fields(stored(HIGH, HIGH, high_research()))["local_confidence_reason"] is None
-    # Read-time staleness can make the classes equal (High/Moderate -> Moderate/Moderate).
-    capped = fc.api_fields(stored(HIGH, MODERATE, high_research(swell_size=MODERATE)), stale=True)
-    assert capped["forecast_confidence_class"] == capped["local_confidence_class"] == MODERATE
-    assert capped["local_confidence_reason"] is None
+    assert reason(stored(LOW, LOW, None)) is None
+    assert reason(stored(HIGH, HIGH, high_research())) is None
+    # Spec 20 (2.0): the API serves neither the combined class nor its reason. The research
+    # side is its own field (the spot's overall research class: High here, though the
+    # swell-size basis is Moderate), and its sentence never enters the forecast reasons.
+    for row, research_cls in ((lower, None), (partial, HIGH)):
+        for stale in (False, True):
+            fields = fc.api_fields(row, stale=stale)
+            assert "local_confidence_class" not in fields
+            assert "local_confidence_reason" not in fields
+            assert fields["research_confidence"] == research_cls
+            assert reason(row) not in fields["forecast_confidence_reasons"]
     # Older rows without stored inputs: no reason is guessed.
     assert fc.local_reason(HIGH, LOW, None) is None
     assert fc.local_reason(None, None, None) is None
@@ -397,6 +409,9 @@ def test_event_peak_fields_get_the_same_read_time_staleness_cap_as_the_forecast(
         assert peak_confidence(event, stale=True) == expected, (forecast, local)
         assert peak_confidence(event) == snapshot
         assert fc.cap_for_staleness(snapshot) == expected
+    # A snapshot taken before 2.0 also holds the combined local class: it is not read.
+    old = {**snapshot, "local_confidence_class": LOW, "local_confidence_reason": "x"}
+    assert peak_confidence(SimpleNamespace(history=[old])) == snapshot
     # Events last updated before forecast-v1 have no classes: nothing is invented.
     assert peak_confidence(SimpleNamespace(history=[{"peak_score": 70}]), stale=True) == {}
     assert peak_confidence(SimpleNamespace(history=[]), stale=True) == {}

@@ -2,7 +2,8 @@
 
 Everything the spot page's synchronised chart rows draw, read from stored data only:
 
-* the authoritative run is the one ``/forecast`` uses (``latest_runs_by_spot``), over the
+* the authoritative run is the one ``/forecast`` uses (``queries.served_runs_by_spot``: the
+  published forecast version's run for the spot), and ``freshness`` is the same, over the
   same window (from 3 hours ago to ``days`` ahead), so every step's score and label equal
   the forecast's for the same valid time;
 * steps are the stored valid times at the model's native spacing; the timeline adds
@@ -22,6 +23,9 @@ Everything the spot page's synchronised chart rows draw, read from stored data o
   the partition with the largest predicted breaking height (``breaking.dominant_component``);
 * wind strength and favourability come from the stored ``wind_detail`` (algorithm 2.1.0);
   rows scored before it carry the wind fit and relation only, and the rest stays None;
+* each step's quality carries the per-hour outputs of algorithm 2.2.0
+  (``surf_quality.outputs``: favourable and unfavourable conditions, offshore-wind class,
+  model version) and forecast and research confidence as two separate fields;
 * the tide and observation blocks are app.services.tides.api's; a step's tide height is
   read from that block's curve, never from model sea level.
 """
@@ -74,10 +78,12 @@ from app.services.spot_views import (
     authoritative_run,
     forecast_source_out,
     run_members,
+    served_freshness,
     spot_hours,
 )
 from app.services.surf_quality import breaking
 from app.services.surf_quality.forecast_confidence import api_fields
+from app.services.surf_quality.outputs import hour_outputs
 from app.services.surf_quality.scoring import min_score_for_label
 from app.services.surf_quality.sun import TWILIGHT_MARGIN, daylight_windows, sun_times
 from app.services.tides.api import spot_observations_block, spot_tide_block
@@ -215,9 +221,21 @@ def _why(pred: SurfQualityPrediction) -> StepWhyOut:
             if isinstance(contributions, dict)
             else None
         ),
-        tide_included=components.get("tide") is not None or "tide_detail" in components,
+        tide_included=_tide_included(components),
         explanation=pred.explanation,
     )
+
+
+def _tide_included(components: dict[str, Any]) -> bool:
+    """Whether the tide was part of the rating: it was scored (a tide fit or its detail)
+    and, when the row records its weights (algorithm 2.2.0), with a weight above 0 (a
+    component weighted 0 by SCORING_WEIGHTS_JSON is out of the score)."""
+    if components.get("tide") is None and "tide_detail" not in components:
+        return False
+    used = components.get("weights_used")
+    if isinstance(used, dict) and "tide" in used:
+        return float(used["tide"] or 0) > 0
+    return True
 
 
 def _quality(pred: SurfQualityPrediction, stale: bool) -> StepQualityOut:
@@ -226,9 +244,10 @@ def _quality(pred: SurfQualityPrediction, stale: bool) -> StepQualityOut:
         score=pred.score,
         label=pred.label.value,
         forecast_confidence_class=fields["forecast_confidence_class"],
-        local_confidence_class=fields["local_confidence_class"],
         forecast_confidence_reasons=list(fields["forecast_confidence_reasons"]),
-        local_confidence_reason=fields["local_confidence_reason"],
+        forecast_confidence=fields["forecast_confidence"],
+        research_confidence=fields["research_confidence"],
+        **hour_outputs(pred),
     )
 
 
@@ -397,8 +416,15 @@ def _unavailable(
 def spot_timeline(
     db: Session, spot: SurfSpot, days: int = 10, now: datetime | None = None
 ) -> SpotTimelineOut:
-    """The timeline of ``spot`` for the next ``days`` days (see the module docstring)."""
+    """The timeline of ``spot`` for the next ``days`` days (see the module docstring), with
+    the served forecast's ``freshness``."""
     now = now or utcnow()
+    timeline = _spot_timeline(db, spot, days, now)
+    timeline.freshness = served_freshness(db, spot.id, now)
+    return timeline
+
+
+def _spot_timeline(db: Session, spot: SurfSpot, days: int, now: datetime) -> SpotTimelineOut:
     run = authoritative_run(db, spot.id, now)
     if run is None:
         return _unavailable(db, spot, days, now, NO_FORECAST)
@@ -579,6 +605,17 @@ def timeline_etag(timeline: SpotTimelineOut, days: int) -> str:
         timeline.steps[0].t.isoformat() if timeline.steps else "",
         timeline.steps[-1].t.isoformat() if timeline.steps else "",
         timeline.stale,
+        # The served forecast's freshness (a spot whose refresh failed keeps its run but is
+        # now stale; its age turns it stale too): never a 304 for an outdated label.
+        *(
+            (
+                timeline.freshness.last_updated_at,
+                timeline.freshness.stale,
+                timeline.freshness.reason,
+            )
+            if timeline.freshness
+            else ()
+        ),
         timeline.available,
         days,
         max((o.t for o in timeline.observations.items), default=None),
@@ -588,7 +625,9 @@ def timeline_etag(timeline: SpotTimelineOut, days: int) -> str:
                 s.quality.score,
                 s.quality.label,
                 s.quality.forecast_confidence_class,
-                s.quality.local_confidence_class,
+                s.quality.research_confidence,
+                tuple(s.quality.favourable or ()),
+                tuple(s.quality.unfavourable or ()),
                 s.breaking.central_ft,
                 s.breaking.sets_ft,
                 s.wind.favourability if s.wind else None,

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from collections.abc import Mapping
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, object_session
 
+from app.core.config import get_settings
 from app.core.database import utcnow
 from app.core.errors import NotFound
 from app.models import (
@@ -20,6 +22,7 @@ from app.models import (
     User,
 )
 from app.models.enums import MatchStatus
+from app.schemas.forecasts import SpotFreshnessOut
 from app.schemas.opportunities import (
     LinkOut,
     MatchDetail,
@@ -30,12 +33,22 @@ from app.schemas.opportunities import (
     SliceOut,
     TravelWindowOut,
 )
-from app.schemas.spots import AirportOut, SpotAirportOut
+from app.schemas.spots import AirportOut, AttributionLinkOut, SpotAirportOut
+from app.services.flights.base import operating_carrier_names
 from app.services.flights.links import inspection_links
 from app.services.flights.registry import provider_label
 from app.services.flights.windows import InfeasibleWindow, compute_travel_window
-from app.services.forecasts.queries import run_id_is_stale
-from app.services.spot_views import daily_summaries, event_out, forecast_points, spot_mini
+from app.services.forecasts.queries import attribution_links_by_run, run_id_is_stale
+from app.services.matching.scoring import SHORT_NOTICE_BOOST, is_short_notice
+from app.services.public_cache import public_now
+from app.services.spot_views import (
+    daily_summaries,
+    event_out,
+    events_freshness,
+    forecast_points,
+    served_freshness,
+    spot_mini,
+)
 from app.services.surf_quality.breaking import (
     METHOD_APPROX_V1,
     METHOD_CALIBRATED,
@@ -60,9 +73,19 @@ def get_owned_match(db: Session, user: User, match_id: uuid.UUID) -> Opportunity
     return match
 
 
+def judged_at(now: datetime) -> datetime:
+    """The instant a trip's forecast is judged current or out of date (freshness, the run's
+    staleness and the confidence cap it sets): the start of the UTC hour, the instant every
+    public snapshot (the spot page, its event cards, the map) is computed for
+    (public_cache.public_now). A trip card and the event card of the same swell beside it
+    then never disagree (spec 14; review r4-frontend-F1). Lead times use the real time."""
+    return public_now(now)
+
+
 def event_confidence(event: SwellEvent, now: datetime) -> dict[str, object]:
-    """Forecast and local confidence at the event's peak hour, exactly as EventOut shows
-    them (``peak_confidence`` with the read-time staleness cap), plus ``stale``."""
+    """Forecast confidence at the event's peak hour, exactly as EventOut shows it
+    (``peak_confidence`` with the read-time staleness cap), plus ``stale``. ``now``: the
+    instant the forecast is judged at (:func:`judged_at`)."""
     db = object_session(event)
     stale = db is not None and run_id_is_stale(db, event.latest_run_id, now)
     fields = peak_confidence(event, stale=stale)
@@ -73,14 +96,31 @@ def event_confidence(event: SwellEvent, now: datetime) -> dict[str, object]:
 
     return {
         "forecast_confidence_class": cls("forecast_confidence_class"),
-        "local_confidence_class": cls("local_confidence_class"),
-        "local_confidence_reason": fields.get("local_confidence_reason"),
         "stale": stale,
     }
 
 
-def match_summary(m: OpportunityMatch, now: datetime | None = None) -> MatchSummary:
+def match_summary(
+    m: OpportunityMatch,
+    now: datetime | None = None,
+    freshness: Mapping[int, SpotFreshnessOut] | None = None,
+    links: Mapping[int, list[AttributionLinkOut]] | None = None,
+) -> MatchSummary:
+    """``freshness``: {spot_id: freshness} of the served forecast already read for a list
+    of matches (else read for the match's spot, at :func:`judged_at`); ``links``: {run id:
+    attribution links} of the swells' runs already read for the list (else read for the
+    match's run)."""
     now = now or utcnow()
+    judged = judged_at(now)
+    db = object_session(m)
+    if freshness is not None:
+        spot_freshness = freshness.get(m.spot_id)
+    else:
+        spot_freshness = served_freshness(db, m.spot_id, judged) if db is not None else None
+    run_id = m.swell_event.latest_run_id
+    if links is None:
+        links = attribution_links_by_run(db, [run_id]) if db is not None else {}
+    offer = m.best_offer if m.status == MatchStatus.FLIGHT_FOUND else None
     return MatchSummary(
         id=m.id,
         search_id=m.search_id,
@@ -117,7 +157,16 @@ def match_summary(m: OpportunityMatch, now: datetime | None = None) -> MatchSumm
         lead_days=round((m.window_start - now).total_seconds() / 86400, 1),
         created_at=m.created_at,
         updated_at=m.updated_at,
-        **event_confidence(m.swell_event, now),  # type: ignore[arg-type]
+        short_notice=is_short_notice(m.window_start, now),
+        best_offer_expired=bool(
+            offer and offer.offer_expires_at is not None and offer.offer_expires_at <= now
+        ),
+        quoted_currency=offer.currency
+        if offer is not None and m.currency and offer.currency != m.currency
+        else None,
+        freshness=spot_freshness,
+        attribution_links=list(links.get(run_id, [])) if run_id is not None else [],
+        **event_confidence(m.swell_event, judged),  # type: ignore[arg-type]
     )
 
 
@@ -141,12 +190,24 @@ def list_matches(
         stmt = stmt.where(OpportunityMatch.spot_id == spot_id)
     if not include_past:
         stmt = stmt.where(OpportunityMatch.window_end >= now)
+    # Trips with flights first; within them short-notice swells get SHORT_NOTICE_BOOST
+    # points (ranking only, matching/scoring.py), so a good swell 3-7 days out leads while
+    # the whole forecast horizon is still listed.
+    settings = get_settings()
+    short = OpportunityMatch.window_start.between(
+        now + timedelta(days=settings.short_notice_min_days),
+        now + timedelta(days=settings.short_notice_max_days),
+    )
+    boosted = OpportunityMatch.overall_score + case((short, SHORT_NOTICE_BOOST), else_=0)
     stmt = stmt.order_by(
         (OpportunityMatch.status != MatchStatus.FLIGHT_FOUND),
-        OpportunityMatch.overall_score.desc(),
+        boosted.desc(),
         OpportunityMatch.window_start,
     ).limit(limit)
-    return [match_summary(m, now) for m in db.scalars(stmt).unique().all()]
+    rows = db.scalars(stmt).unique().all()
+    freshness = events_freshness(db, judged_at(now)) if rows else {}
+    links = attribution_links_by_run(db, [m.swell_event.latest_run_id for m in rows])
+    return [match_summary(m, now, freshness, links) for m in rows]
 
 
 def _slice(offer: FlightOffer, direction: str) -> SliceOut:
@@ -162,25 +223,47 @@ def _slice(offer: FlightOffer, direction: str) -> SliceOut:
         if direction == "outbound"
         else offer.inbound_duration_minutes,
         stops=offer.outbound_stops if direction == "outbound" else offer.inbound_stops,
-        segments=[SegmentOut(**{k: s[k] for k in SegmentOut.model_fields}) for s in segs],
+        # Offers stored before a field existed (operating carrier name) leave it empty.
+        segments=[SegmentOut(**{k: s[k] for k in SegmentOut.model_fields if k in s}) for s in segs],
     )
 
 
+def route_links(
+    origin: str, destination: str, depart: date, ret: date, adults: int
+) -> list[LinkOut]:
+    """Route searches for the same trip on third-party sites (fares there may differ)."""
+    return [
+        LinkOut(label=link["label"], url=link["url"], kind="route_search", note=link["note"])
+        for link in inspection_links(origin, destination, depart, ret, adults)
+    ]
+
+
 def offer_out(
-    offer: FlightOffer, rank: int | None = None, price_converted: object | None = None
+    offer: FlightOffer,
+    rank: int | None = None,
+    price_converted: object | None = None,
+    *,
+    search_currency: str | None = None,
+    now: datetime | None = None,
 ) -> OfferOut:
+    now = now or utcnow()
     depart = offer.outbound_departure_at.astimezone(ZoneInfo(offer.origin_timezone)).date()
     ret = offer.inbound_departure_at.astimezone(ZoneInfo(offer.destination_timezone)).date()
-    links = [
-        LinkOut(**link)
-        for link in inspection_links(
-            offer.origin_iata, offer.destination_iata, depart, ret, offer.flight_search.adults
-        )
-    ]
-    if offer.booking_url:
+    links = route_links(
+        offer.origin_iata, offer.destination_iata, depart, ret, offer.flight_search.adults
+    )
+    expired = offer.offer_expires_at is not None and offer.offer_expires_at <= now
+    if offer.booking_url and not expired:
+        # An expired quote is never offered as bookable: only the route searches remain.
         links.insert(
-            0, LinkOut(label=f"Book with {provider_label(offer.provider)}", url=offer.booking_url)
+            0,
+            LinkOut(
+                label=f"Book with {provider_label(offer.provider)}",
+                url=offer.booking_url,
+                kind="booking",
+            ),
         )
+    converted = search_currency if search_currency and search_currency != offer.currency else None
     return OfferOut(
         id=offer.id,
         rank=rank,
@@ -206,6 +289,9 @@ def offer_out(
         validation_status=offer.validation_status.value,
         offer_expires_at=offer.offer_expires_at,
         links=links,
+        operating_carriers=operating_carrier_names(offer.segments or []),
+        expired=expired,
+        converted_currency=converted if price_converted is not None else None,
     )
 
 
@@ -256,7 +342,10 @@ def limitations(
 
 def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
     now = utcnow()
-    summary = match_summary(m, now)
+    judged = judged_at(now)
+    fresh = served_freshness(db, m.spot_id, judged)
+    freshness = {m.spot_id: fresh} if fresh is not None else {}
+    summary = match_summary(m, now, freshness)
     event: SwellEvent = m.swell_event
     travel = m.search.travel
     daily = []
@@ -271,7 +360,10 @@ def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
             m.spot.latitude,
             m.spot.longitude,
         )
-    offers = [offer_out(o.offer, o.rank, o.price_converted) for o in m.offers]
+    offers = [
+        offer_out(o.offer, o.rank, o.price_converted, search_currency=travel.currency, now=now)
+        for o in m.offers
+    ]
     window_out = None
     links: list[LinkOut] = []
     if m.destination_iata:
@@ -306,19 +398,16 @@ def match_detail(db: Session, m: OpportunityMatch) -> MatchDetail:
                 m.search.origins[0].airport_iata if m.search.origins else None
             )
             if origin:
-                links = [
-                    LinkOut(**link)
-                    for link in inspection_links(
-                        origin,
-                        m.destination_iata,
-                        m.recommended_arrival_date - timedelta(days=1),
-                        m.recommended_departure_date,
-                        travel.travelers,
-                    )
-                ]
+                links = route_links(
+                    origin,
+                    m.destination_iata,
+                    m.recommended_arrival_date - timedelta(days=1),
+                    m.recommended_departure_date,
+                    travel.travelers,
+                )
     return MatchDetail(
         **summary.model_dump(),
-        event=event_out(event, now, include_history=True),
+        event=event_out(event, now, include_history=True, freshness=freshness, judged=judged),
         spot_airports=[
             SpotAirportOut(
                 airport=AirportOut.model_validate(a.airport),
@@ -360,7 +449,7 @@ def notification_out(n: Notification, now: datetime | None = None) -> Notificati
     match = n.match
     confidence: dict[str, object] = {}
     if match is not None:
-        confidence = event_confidence(match.swell_event, now or utcnow())
+        confidence = event_confidence(match.swell_event, judged_at(now or utcnow()))
         confidence.pop("stale")
     return NotificationOut(
         id=n.id,

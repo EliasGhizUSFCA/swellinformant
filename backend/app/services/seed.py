@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.core import data_files
 from app.models import Airport, SpotAirport, SpotPhysicalProfile, SurfSpot
 from app.models.enums import BreakType, SkillLevel, TidePreference
 from app.models.forecast_engine import PROVENANCE_VALUES
@@ -26,7 +27,9 @@ from app.services.surf_quality.wind import validate_wind_profile
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "surf_spots"
+# The repository's data/surf_spots (development and tests); app.core.data_files finds the
+# directory wherever else data/ is deployed.
+DEFAULT_DATA_DIR = data_files.REPO_ROOT / "data" / "surf_spots"
 
 SPOT_FIELDS = (
     "name",
@@ -93,12 +96,10 @@ class SeedValidationError(ValueError):
 
 
 def resolve_data_dir(data_dir: str | Path | None = None) -> Path:
-    candidates = [Path(data_dir)] if data_dir else []
-    candidates += [DEFAULT_DATA_DIR, Path("/data/surf_spots"), Path.cwd() / "data" / "surf_spots"]
-    for c in candidates:
-        if (c / "spots.json").exists():
-            return c
-    raise FileNotFoundError(f"spots.json not found in any of: {[str(c) for c in candidates]}")
+    """The directory holding spots.json: ``data_dir`` when it has one, else data/surf_spots
+    where app.core.data_files finds it."""
+    explicit = Path(data_dir) / "spots.json" if data_dir else None
+    return data_files.find("surf_spots/spots.json", explicit).parent
 
 
 def validate_spot(raw: dict[str, Any], airports: set[str]) -> list[str]:

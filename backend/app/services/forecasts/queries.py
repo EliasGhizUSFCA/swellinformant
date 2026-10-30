@@ -15,13 +15,25 @@ The Open-Meteo families follow the same rule with Open-Meteo's own publication l
 time between a run's initialisation and its ``last_run_availability_time`` in meta.json,
 read on 2026-10-14: GFS 5.3-6.0 h, ECMWF 7.0-7.2 h) plus OPEN_METEO_AVAILABILITY_WAIT_MINUTES:
 6 + 6 + 0.17 + 3 + 2 = 17.2 h for ``open_meteo_noaa`` and 12 + 7.5 + 0.17 + 3 + 2 = 24.7 h for
-``open_meteo_ecmwf`` (it reads the 00Z and 12Z runs only). Sources without a known cycle
-(demo, Windy) keep FORECAST_STALE_HOURS. A blend is stale when any of its members is stale
-by its own source's rule.
+``open_meteo_ecmwf`` (it reads the 00Z and 12Z runs only). Windy (``windy_gfswave``) follows
+it with GFS's 6 h cycle and the adapter's expected availability lag (windy.EXPECTED_LAG_HOURS,
+an estimate, as its cycle labels are): 6 + 4 + 3 + 2 = 15 h. Sources without a known cycle
+(demo) keep FORECAST_STALE_HOURS. A blend is stale when any of its members is stale by its
+own source's rule.
+
+Which run the public reads serve per spot (:func:`served_runs_by_spot`): the runs of the
+published forecast version (``versions.serving_runs``: a spot whose latest refresh failed is
+served from its previous run and flagged stale), and before any version exists the legacy
+selection of :func:`latest_runs_by_spot`. The public snapshot cache pins the version a
+payload is computed for (:func:`serving_version`), so a payload stored under a version's key
+holds that version's data.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -30,9 +42,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.database import utcnow
-from app.models import ForecastRun, ForecastSource
+from app.models import ForecastRun, ForecastSource, ForecastVersion
 from app.models.enums import ForecastRunStatus
 from app.schemas.spots import AttributionLinkOut
+from app.services.forecasts import versions
 from app.services.forecasts.base import EXTRA_GUST_KIND
 from app.services.forecasts.registry import (
     ECMWF_IFS_CODE,
@@ -40,8 +53,11 @@ from app.services.forecasts.registry import (
     NOAA_GFS_CODE,
     OPEN_METEO_ECMWF_CODE,
     OPEN_METEO_NOAA_CODE,
+    WINDY_CODE,
     configured_source_codes,
 )
+from app.services.forecasts.windy import CYCLE as WINDY_CYCLE
+from app.services.forecasts.windy import EXPECTED_LAG_HOURS as WINDY_LAG_HOURS
 
 USABLE = (ForecastRunStatus.SUCCESS, ForecastRunStatus.PARTIAL)
 BLEND_CODE = "blend"  # app.services.forecasts.blend.BLEND_CODE (not imported: cycle)
@@ -58,6 +74,7 @@ SOURCE_CYCLE_HOURS: dict[str, float] = {
     ECMWF_IFS_CODE: 12.0,
     OPEN_METEO_NOAA_CODE: 6.0,
     OPEN_METEO_ECMWF_CODE: 12.0,  # open_meteo_ecmwf.OpenMeteoEcmwfProvider.cycle_hours
+    WINDY_CODE: WINDY_CYCLE.total_seconds() / 3600.0,  # GFS / GFS-Wave: 6-hourly (D10)
 }
 # Open-Meteo's publication lag (hours from initialisation to availability; meta.json of
 # 2026-10-14, rounded up to the slowest domain of each family).
@@ -83,6 +100,9 @@ def _availability_lag_hours(source_code: str, settings: Settings) -> float:
     if source_code in OPEN_METEO_LAG_HOURS:
         wait = settings.open_meteo_availability_wait_minutes / 60.0
         return OPEN_METEO_LAG_HOURS[source_code] + wait
+    if source_code == WINDY_CODE:
+        # The expected delay after a cycle before Windy serves it (an estimate, windy.py).
+        return WINDY_LAG_HOURS
     return {
         NOAA_GFS_CODE: settings.noaa_availability_lag_hours,
         GEFS_WAVE_CODE: settings.gefs_availability_lag_hours,
@@ -212,7 +232,15 @@ SOURCE_ATTRIBUTION_LINKS: dict[str, tuple[AttributionLinkOut, ...]] = {
             href="https://registry.opendata.aws/noaa-gefs/",
         ),
     ),
-    "windy_gfswave": (AttributionLinkOut(label="Windy.com", href="https://www.windy.com/"),),
+    # Windy's API terms: the text "Contains data from the Windy database" states the source,
+    # and the weather data's own source must be credited too (GFS and GFS-Wave). The logo
+    # the terms also ask for is the frontend's (docs/WINDY_API_SETUP.md).
+    "windy_gfswave": (
+        AttributionLinkOut(
+            label="Contains data from the Windy database", href="https://www.windy.com/"
+        ),
+        _NOAA_GFS_LINK,
+    ),
 }
 
 
@@ -245,6 +273,39 @@ def source_attribution_links(db: Session, run: ForecastRun) -> list[AttributionL
         for link in attribution_links_for(source):
             links.setdefault((link.label, link.href), link)
     return list(links.values())
+
+
+def attribution_links_by_run(
+    db: Session, run_ids: Iterable[int | None]
+) -> dict[int, list[AttributionLinkOut]]:
+    """:func:`source_attribution_links` of several runs at once (a list of trips): their
+    source ids and blend members in one statement (no run row is loaded whole), the sources
+    in one more. ``run_ids``: None is skipped; a run not found has no entry."""
+    ids = sorted({int(i) for i in run_ids if i is not None})
+    if not ids:
+        return {}
+    members = ForecastRun.details["members"]
+    rows = db.execute(
+        select(ForecastRun.id, ForecastRun.source_id, members).where(ForecastRun.id.in_(ids))
+    ).all()
+    sources = list(db.scalars(select(ForecastSource)))
+    by_id = {s.id: s for s in sources}
+    by_code = {s.code: s for s in sources}
+    out: dict[int, list[AttributionLinkOut]] = {}
+    for run_id, source_id, blend_members in rows:
+        source = by_id.get(source_id)
+        if source is None:
+            continue
+        of_run = [source]
+        if source.code == BLEND_CODE:
+            codes = [str(m["code"]) for m in blend_members or [] if m.get("code")]
+            of_run = [by_code[c] for c in codes if c in by_code]
+        links: dict[tuple[str, str], AttributionLinkOut] = {}
+        for src in of_run:
+            for link in attribution_links_for(src):
+                links.setdefault((link.label, link.href), link)
+        out[int(run_id)] = list(links.values())
+    return out
 
 
 def candidate_runs(db: Session, require_predictions: bool = True) -> list[ForecastRun]:
@@ -305,6 +366,86 @@ def latest_runs_by_spot(
         for spot_id in run.details.get("spot_ids", []):
             chosen.setdefault(int(spot_id), run)
     return chosen
+
+
+# --------------------------------------------------------------------------- serving
+_SERVED = "forecasts.served_version"
+
+
+@dataclass
+class _Pin:
+    """The version the public reads of one session serve inside :func:`serving_version`
+    (``version_id`` None: the published one), resolved once."""
+
+    version_id: int | None
+    resolved: ForecastVersion | None = None
+    done: bool = False
+
+
+@contextmanager
+def serving_version(db: Session, version_id: int | None) -> Iterator[None]:
+    """Within the block, the public reads of ``db`` serve forecast version ``version_id``
+    (the published version a public snapshot is keyed on; it is served even if a newer one
+    was published meanwhile, so a payload stored under a version's key holds that
+    version's data) or, with None, the published version; either is read at most once in
+    the block. A version that is no longer retained (or was never published) falls back to
+    the published one. Nested blocks for the same version share the outer one."""
+    outer = db.info.get(_SERVED)
+    if isinstance(outer, _Pin) and outer.version_id == version_id:
+        yield
+        return
+    db.info[_SERVED] = _Pin(version_id)
+    try:
+        yield
+    finally:
+        if outer is None:
+            db.info.pop(_SERVED, None)
+        else:
+            db.info[_SERVED] = outer
+
+
+def _resolve(db: Session, version_id: int | None) -> ForecastVersion | None:
+    if version_id is not None:
+        found = db.get(ForecastVersion, version_id)
+        if found is not None and found.status in (versions.PUBLISHED, versions.SUPERSEDED):
+            return found
+    return versions.current_version(db)
+
+
+def served_version(db: Session) -> ForecastVersion | None:
+    """The forecast version the public reads serve: the one :func:`serving_version` pins,
+    else the published one; None before the first publication (the legacy selection)."""
+    pin = db.info.get(_SERVED)
+    if not isinstance(pin, _Pin):
+        return versions.current_version(db)
+    if not pin.done:
+        pin.resolved, pin.done = _resolve(db, pin.version_id), True
+    return pin.resolved
+
+
+def served_runs_by_spot(
+    db: Session, now: datetime | None = None, *, version: ForecastVersion | None = None
+) -> dict[int, ForecastRun]:
+    """The run every public read serves per spot (design D7): the runs ``version`` maps the
+    spots to (default: :func:`served_version`; a stale spot keeps its previous run, a
+    missing one is left out, as is a run no longer stored), else, before any version is
+    published, :func:`latest_runs_by_spot` at ``now`` (the selection of the public reads
+    before forecast versions existed). The spot list, a spot's page (detail, forecast,
+    timeline, demo tide curve), the map conditions and swell detection (whose events feed
+    the opportunities) all read through it."""
+    chosen = version if version is not None else served_version(db)
+    if chosen is None:
+        return latest_runs_by_spot(db, now)
+    by_spot = versions.serving_runs(db, chosen)
+    if not by_spot:
+        return {}
+    runs = {
+        run.id: run
+        for run in db.scalars(
+            select(ForecastRun).where(ForecastRun.id.in_(sorted(set(by_spot.values()))))
+        )
+    }
+    return {spot: runs[run_id] for spot, run_id in by_spot.items() if run_id in runs}
 
 
 def forecast_status(db: Session, now: datetime | None = None) -> dict[str, Any]:

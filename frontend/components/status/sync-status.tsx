@@ -207,7 +207,11 @@ export function SyncStatus({
         <CardTitle className="flex items-center gap-2">
           <RefreshCw className="size-4 text-ocean" aria-hidden /> Forecast sync
         </CardTitle>
-        <p className="text-xs text-muted-foreground">Each new model run is fetched and published in one sync: spots and map together.</p>
+        {/* 2.0: spot forecasts refresh per model component; map layers have their own runs
+            (review r1-frontend-FE-10: the old copy described the pre-2.0 single sync). */}
+        <p className="text-xs text-muted-foreground" data-testid="sync-status-about">
+          Spot forecasts refresh per model component (waves, wind) as soon as a new run is available; map layers follow their own runs.
+        </p>
       </CardHeader>
       <CardContent className="grid gap-5 lg:grid-cols-2">
         <div className="min-w-0 space-y-4">
