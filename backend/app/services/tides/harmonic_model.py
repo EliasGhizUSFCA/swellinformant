@@ -36,7 +36,7 @@ from typing import Any
 
 import numpy as np
 
-from app.core.data_files import DATA_PARENTS, REPO_ROOT
+from app.core import data_files
 
 SOURCE = "eot20"
 DATUM = "model_msl"
@@ -89,9 +89,12 @@ class SpotConstants:
 
 def resolve_constants_path(path: str | Path | None = None) -> Path:
     """An absolute path as given; a relative one (the default data/tides/constants_eot20.json)
-    from the working directory, else from each parent of data/ in app.core.data_files: the
-    repository root (development), the service root (the Vercel function, whose build copies
-    data/ into backend/) and / (the Docker images keep data/ in /data)."""
+    from each parent of data/ in app.core.data_files, in its order: the repository root
+    (development), the service root (the Vercel function, whose build copies data/ into
+    backend/) and / (the Docker images keep data/ in /data), then the working directory. The
+    order is the other readers' (app.core.data_files.candidates), so a copy of data/ that a
+    local run of the api build command left in backend/data never shadows the repository's
+    data/ for the constants alone."""
     if path is None:
         # Imported here so this module needs only numpy (the extraction script imports it).
         from app.core.config import get_settings
@@ -100,10 +103,10 @@ def resolve_constants_path(path: str | Path | None = None) -> Path:
     raw = Path(path)
     if raw.is_absolute():
         return raw
-    for base in (Path.cwd(), *DATA_PARENTS):
+    for base in (*data_files.DATA_PARENTS, Path.cwd()):
         if (base / raw).is_file():
             return base / raw
-    return REPO_ROOT / raw
+    return data_files.REPO_ROOT / raw
 
 
 def _read(path: Path) -> dict[str, Any]:

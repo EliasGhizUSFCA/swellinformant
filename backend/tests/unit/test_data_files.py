@@ -122,3 +122,50 @@ def test_the_function_bundle_layout_reads_the_copied_data(tmp_path: Path, packag
     assert found["obs"] == str(bundled / "observation_stations.json")
     assert found["constants"] == str(bundled / "tides" / "constants_eot20.json")
     assert found["points"] > 0
+
+
+def test_a_copy_left_in_backend_data_never_shadows_the_repositorys_data(tmp_path: Path) -> None:
+    """A checkout where the api build command ran (``vercel build`` in it, or the command by
+    hand) keeps its output, backend/data, until the next build replaces it; .gitignore hides
+    it. Run from backend/ (the development working directory), every reader still reads the
+    repository's data/, the constants as well: a stale copy (here an empty constants file)
+    is never mixed with the current catalog."""
+    repo = tmp_path / "repo"
+    ignore = shutil.ignore_patterns("__pycache__")
+    shutil.copytree(ROOT / "backend" / "app", repo / "backend" / "app", ignore=ignore)
+    for relative in READ_FILES:
+        for copy in (repo / "data", repo / "backend" / "data"):
+            (copy / relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(DATA / relative, copy / relative)
+    stale = repo / "backend" / "data"
+    (stale / "tides" / "constants_eot20.json").write_text('{"points": []}')
+    probe = (
+        "import json\n"
+        "from app.services import seed\n"
+        "from app.services.observations import stations\n"
+        "from app.services.tides import catalog, harmonic_model\n"
+        "print(json.dumps({\n"
+        "  'spots': str(seed.resolve_data_dir()),\n"
+        "  'tides': str(catalog.resolve_catalog_path()),\n"
+        "  'obs': str(stations.resolve_catalog_path()),\n"
+        "  'constants': str(harmonic_model.resolve_constants_path()),\n"
+        "  'points': len(harmonic_model.load_constants()),\n"
+        "}))\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "TIDE_CONSTANTS_PATH"}
+    env["PYTHONPATH"] = str(repo / "backend")
+    out = subprocess.run(  # noqa: S603 - fixed argument list
+        [sys.executable, "-c", probe],
+        cwd=repo / "backend",
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    found = json.loads(out.strip().splitlines()[-1])
+    current = repo / "data"
+    assert found["spots"] == str(current / "surf_spots")
+    assert found["tides"] == str(current / "tide_stations.json")
+    assert found["obs"] == str(current / "observation_stations.json")
+    assert found["constants"] == str(current / "tides" / "constants_eot20.json")
+    assert found["points"] > 0

@@ -861,7 +861,7 @@ that every default and hosted value below is the code's, and that every name is 
 | `NOAA_COOPS_BASE_URL` | `https://api.tidesandcurrents.noaa.gov` |  | NOAA CO-OPS API host |
 | `NOAA_COOPS_APPLICATION` | empty |  | The `application` name sent to CO-OPS (an app name and URL, never a personal address); empty = `APP_NAME` |
 | `TIDE_MODEL` | `eot20` |  | `eot20` or `fes2022`: the harmonic constants used by `harmonic_model` |
-| `TIDE_CONSTANTS_PATH` | `data/tides/constants_eot20.json` |  | Their file (relative to the backend directory or absolute) |
+| `TIDE_CONSTANTS_PATH` | `data/tides/constants_eot20.json` |  | Their file: absolute, or relative to the parents of `data/` that `app/core/data_files.py` searches (the repository root, the service root `backend/`, `/`), then the working directory |
 | `TIDE_HORIZON_DAYS` | `16` |  | Days of tide predictions computed ahead |
 | `TIDE_RETENTION_PAST_DAYS` | `2` |  | Past tide predictions kept (days) |
 
