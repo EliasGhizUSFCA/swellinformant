@@ -1626,9 +1626,9 @@ Nothing below blocks a first deployment; each item says what would close it.
   the versioned reads and of `/api/forecasts/version` (the publication-to-page latency was
   measured without a CDN), Neon (only PgBouncer in transaction mode was tested), Neon's
   suspend and wake and its CU-hour accounting, real Upstash command counts, the daemon's
-  build and start, and whether the api build (rooted at `backend/`) can read the
-  repository's `data/` for the build-time seed (a build that cannot fails on an empty
-  database, docs/deploy-vercel.md step 6).
+  build and start, and whether Vercel's own build of the api service sees `../data` as
+  Vercel CLI 64.5.0's local build does (its build command copies it into the function and
+  seeds from it; a build that cannot fails at the copy, docs/deploy-vercel.md step 6).
 * The scheduler: the QStash schedule was never created (a 5-minute POST loop stood in for it);
   cron-job.org is documented as unverified for refreshes longer than its 30 s.
 * Windy: no key. The activation, the testing-key refusal and the fallback are tested with
@@ -1643,8 +1643,9 @@ Nothing below blocks a first deployment; each item says what would close it.
 * The local Vercel-style stack ran on the final code (2026-10-30: smoke 22 of 22 and 6 of 6,
   six simulated model runs shown on open pages without a reload, 8.4). Its daemon refreshes
   the spots itself, so it tests the daemon-less hosted path only through the daily cron with
-  the daemon stopped (the tides failed there, below); that path is covered by
-  `tests/integration/test_daemonless_hosted.py` and `test_hosted_first_deploy.py`.
+  the daemon stopped (the tides failed there until the data bundle, below; after it they
+  succeeded); that path is covered by `tests/integration/test_daemonless_hosted.py` and
+  `test_hosted_first_deploy.py`.
 * A live atmosphere-only refresh was never observed (Open-Meteo's servers answered GFS 0.13
   00Z and 18Z alternately for over 36 minutes; three syncs skipped it safely). Each such flap
   costs a sync row, a lease and up to 13 s; waiting for a stable metadata answer (seen twice)
@@ -1658,18 +1659,25 @@ Nothing below blocks a first deployment; each item says what would close it.
 
 **Known gaps in the code and the tests**
 
-* The tides on Vercel without the daemon: tide acquisition reads `data/tide_stations.json`
-  and `data/tides/`, outside the api service's root `backend/`, which the API function does
-  not include; on the local stack with the daemon stopped the daily cron's `tides.acquire`
-  failed with `FileNotFoundError` (`job_failed:tides.acquire`). Documented (docs/deploy-vercel.md
-  section 4: run `python -m app.cli tides acquire` from a checkout, or keep the daemon);
-  bundling `data/` into the function would close it and the build seed's `../data` question.
+* Closed after the final gate: the tides on Vercel without the daemon. Tide acquisition
+  reads `data/tide_stations.json` and `data/tides/`, which the API function did not include
+  (the gate's stack run: `FileNotFoundError`, `job_failed:tides.acquire`). The api build
+  command now copies the repository's `data/` into `backend/data`, which the Python builder
+  bundles after the build command; `app/core/data_files.py` is the one resolver for every
+  reader. The offline build lists `data/` (10 files, 2.2 MiB) in the api function and fails
+  without it; the lean tide job from the function's own files acquired 56 of 56 stations;
+  the stack's daemon-less cron ran `tides.acquire` successfully (UPGRADE_REPORT section 51;
+  docs/local-vercel-stack.md).
 * `frontend/e2e/map-performance.spec.ts` failed once on a shared machine in review round 3
   (a frame-time p95 of 6.5 ms against its 5 ms bound) and passed in the re-run; at the final
   gate it failed in the full run (6.6 ms) and in its one re-run on the idle machine (5.2 ms)
   with the map code of review round 4 (4 ms then), every frame cost it records 1.2 to 2
-  times round 4's. The bound was not changed; it needs a run on a quiet machine of known
-  speed, or a decision on what the bound should be on a 4-vCPU shared host.
+  times round 4's. An alternating A/B on the idle machine (only this spec, Chromium) measured
+  the draw p95 at base 18a5bee 5.8, 5.6, 4.8, 5.8, 6.2, 5.6, 5.0 ms (median 5.6) and HEAD
+  2293748 7.6, 5.4, 5.9, 5.1, 6.6, 5.2, 6.0, 4.6 ms (median 5.65; permutation p = 0.34 for
+  HEAD slower): the pre-2.0 base fails the bound here too, so this is an environment-level
+  timing result, not a 2.0 regression. The bound was not changed; it needs a run on a quiet
+  machine of known speed, or a decision on what the bound should be on a 4-vCPU shared host.
 * `FORECAST_DAILY_REQUEST_QUOTA` is declared in `Settings` but read by no code (the
   per-provider budgets replaced it); documented as such in docs/API_SETUP_REQUIRED.md
   section 6.

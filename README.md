@@ -814,7 +814,9 @@ runs every background job in one process until stopped (`--once` for one iterati
 `sync publish` publishes what is stored; `sync status` lists the newest syncs;
 `migrate --on-build` is the Vercel build step (it migrates and seeds where
 `MIGRATE_ON_BUILD` allows, and fails the build when it finds no `data/` and the database
-has no spot). The full rules: [`docs/sync.md`](docs/sync.md).
+has no spot; on Vercel the build command first copies the repository's `data/` into
+`backend/data`, which the API function then holds, docs/deploy-vercel.md section 1). The
+full rules: [`docs/sync.md`](docs/sync.md).
 
 The spot timeline shows the model's own steps: GFS hourly to 120 h, then 3-hourly. Hours
 Open-Meteo itself interpolated are not stored (`OPEN_METEO_NATIVE_STEPS_ONLY=true`).
@@ -1419,9 +1421,13 @@ cd ..
 ./scripts/run-e2e.sh
 ./scripts/run-e2e.sh e2e/scenario.spec.ts
 E2E_MAILPIT=1 ./scripts/run-e2e.sh
+./scripts/run-e2e.sh --help            # what it resets and every E2E_* default; runs nothing
+E2E_DRY_RUN=1 ./scripts/run-e2e.sh --project=chromium   # checks the arguments, prints the plan
 ```
 
-`npx playwright install chromium` is needed once. The script expects the backend
+`npx playwright install chromium` is needed once. Every run drops and recreates the
+database of `E2E_DATABASE_URL` and flushes the Redis database of `E2E_REDIS_URL`; options
+that are not `playwright test` options stop the script (exit 64) before anything is reset. The script expects the backend
 virtualenv at `backend/.venv` and the frontend dependencies installed; set
 `PLAYWRIGHT_CHROMIUM_PATH=/path/to/chrome` for a Chromium installed elsewhere, and
 `E2E_BACKEND_PORT`, `E2E_FRONTEND_PORT`, `E2E_DATABASE_URL`, `E2E_REDIS_URL` to run beside
@@ -1593,7 +1599,7 @@ date (a unit test runs the same check).
 | `connection refused … 5432` / `/api/health/ready` returns 503 with `"database": "unavailable"` | PostgreSQL isn't running or `DATABASE_URL` is wrong. Run `docker compose up -d postgres` and `docker compose ps` (wait for *healthy*). Outside Docker, `DATABASE_URL` must use `localhost`; inside compose it is set to `postgres` automatically |
 | `extension "btree_gist" is not available` during migration | A PostgreSQL build without contrib modules. Use the `postgres:16-alpine` image or Homebrew `postgresql@16`, which include it |
 | Redis `Connection refused` / readiness shows `"redis": "unavailable"` | Run `docker compose up -d redis`. Rate limiting fails open, but Celery and job locks need Redis |
-| Background jobs not executing | Under `JOB_RUNNER=daemon` with the hosted profile there is no worker. On Vercel without the optional daemon the refresh endpoint runs the refresh and the pending kicks, a due email retry and the hourly data-health check at each call, and the daily cron (`GET /api/internal/cron/daily`, 07:00-07:59 UTC on Hobby) runs every periodic job whose last run is older than its interval (cleanup, matching housekeeping, tides, alerts, delivery, the staleness check; the tides fail in the function, which has no `data/`: run `python -m app.cli tides acquire` from a checkout, docs/deploy-vercel.md section 4). So check that the refresh scheduler calls (`/admin/freshness`, "Refresh scheduler") and that the daily cron ran (its answer, `jobs` key, and the job list on `/status`); the optional map daemon only refreshes the map layers. The local Vercel-style stack has no external scheduler: its daemon refreshes the spots, the ensemble and the map (`SYNC_DAEMON_KINDS=spots,ensemble,map`) and runs the periodic jobs, so there check the daemon (`scripts/vercel-local.sh status` shows its heartbeat and newest syncs). Under Celery: `docker compose ps` should show `worker` and `beat` healthy, and `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate worker and beat processes, and that a worker started with `-Q celery` alone never runs downloads |
+| Background jobs not executing | Under `JOB_RUNNER=daemon` with the hosted profile there is no worker. On Vercel without the optional daemon the refresh endpoint runs the refresh and the pending kicks, a due email retry and the hourly data-health check at each call, and the daily cron (`GET /api/internal/cron/daily`, 07:00-07:59 UTC on Hobby) runs every periodic job whose last run is older than its interval (cleanup, matching housekeeping, tides, alerts, delivery, the staleness check; the tides read the function's copy of `data/`, which its build command makes). So check that the refresh scheduler calls (`/admin/freshness`, "Refresh scheduler") and that the daily cron ran (its answer, `jobs` key, and the job list on `/status`); the optional map daemon only refreshes the map layers. The local Vercel-style stack has no external scheduler: its daemon refreshes the spots, the ensemble and the map (`SYNC_DAEMON_KINDS=spots,ensemble,map`) and runs the periodic jobs, so there check the daemon (`scripts/vercel-local.sh status` shows its heartbeat and newest syncs). Under Celery: `docker compose ps` should show `worker` and `beat` healthy, and `docker compose logs beat` should list "Sending due task". `/status` shows each job's last run. A job stuck "running" holds its Redis lock until the lock TTL expires; restart the worker if it crashed. Outside Docker, remember the separate worker and beat processes, and that a worker started with `-Q celery` alone never runs downloads |
 | `beat` shows *unhealthy* | Its schedule file has not been written for 10 minutes: beat is stuck or cannot reach Redis. `docker compose logs beat`, then `docker compose restart beat` (run exactly one beat) |
 | No verification / alert email | In Docker, open Mailpit (http://localhost:8025). Console mode writes to the outbox file. The dashboard banner and `/notifications` show each email's status: `failed`/`rejected` carry the provider's reason; `accepted` means the provider took it but has not confirmed delivery (check the provider's logs, your domain's SPF/DKIM/DMARC, and spam folders) |
 | No data-health alert email although the status is degraded | Alerts go to active admin accounts with a verified address only (`python -m app.cli make-admin you@example.com`). Each problem is emailed once, then every `DATA_HEALTH_ALERT_REPEAT_HOURS` (12 h); `DATA_HEALTH_ALERTS_ENABLED=false` switches them off |
@@ -1727,11 +1733,11 @@ Checklist:
 * A brand-new hosted deployment gets its NOAA CO-OPS tide predictions at the daemon's start
   (the start-up catch-up runs every periodic job that has not succeeded within its longest
   gap, `SYNC_DAEMON_CATCH_UP`), not at the next 02:20 UTC. Without the daemon (Swell 2.0)
-  the daily cron runs the overdue `tides.acquire`, but on Vercel it fails there: the API
-  function has no `data/` (`data/tide_stations.json`, `data/tides/`), so run
-  `python -m app.cli tides acquire` from a checkout (docs/deploy-vercel.md section 4,
-  "Except the tides"). Data health flags tides never acquired 3 h after the catalog was
-  loaded (`tides_missing:<provider>`) and a failed acquisition (`job_failed:tides.acquire`).
+  the daily cron runs the overdue `tides.acquire` in the API function, which holds the
+  tide catalog and the EOT20 constants (the build command copies `data/` into it,
+  docs/deploy-vercel.md section 4). Data health flags tides never acquired 3 h after the
+  catalog was loaded (`tides_missing:<provider>`) and a failed acquisition
+  (`job_failed:tides.acquire`).
 
 **Demo-only**
 

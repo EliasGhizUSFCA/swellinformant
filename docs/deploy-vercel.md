@@ -31,10 +31,11 @@ flight searches.
 | forecast refresh | `GET\|POST /api/internal/refresh` with `Authorization: Bearer $CRON_SECRET`: a free metadata check of the spot model runs and, when a new wave or wind run is servable, a spot-only refresh (fetch, score, publish a new forecast version, detection, matching, flights, alerts). It also runs the API's pending "Re-check flights" and "match my search" requests and a due email retry | the `api` service; **called every 5 minutes by a scheduler you set up in step 7b** (Upstash QStash on Hobby, a Vercel Cron entry on Pro) |
 | routing | `/api/(.*)` goes to `api`, everything else to `web` (vercel.json `rewrites`) | Vercel's router; Next.js adds no `/api` rewrite on Vercel (`API_ROUTING=platform`) |
 | `sync` daemon (optional) | `python -m app.cli sync daemon` with `SYNC_DAEMON_KINDS=map`: refreshes only the optional GRIB map layers (the wave and wind colour fields of the map). Without it the map overlay ages and is labelled stale; the spot forecasts, alerts and flight searches keep running through the refresh endpoint and the daily cron | the repo-root `Containerfile`, 1 instance in `iad1`, 2 GiB / 1 vCPU, within Hobby's 5 Active CPU-hours a month; after `SIGTERM` it finishes its current sync stage, for up to 600 s (`terminationGracePeriodSeconds`) |
-| daily cron | Vercel Cron, `GET /api/internal/cron/daily` at 07:23 UTC with `Authorization: Bearer $CRON_SECRET`: the data-health check (emails admins when the data, the scheduler or the daemon is stale), then the periodic jobs no daemon ran on time (cleanup, matching housekeeping, tides, alerts, delivery, staleness check; 150 s budget; the tides need `data/`, which the function lacks: section 4, "Except the tides"), then one refresh check as a backstop | vercel.json `crons` |
+| daily cron | Vercel Cron, `GET /api/internal/cron/daily` at 07:23 UTC with `Authorization: Bearer $CRON_SECRET`: the data-health check (emails admins when the data, the scheduler or the daemon is stale), then the periodic jobs no daemon ran on time (cleanup, matching housekeeping, tides, alerts, delivery, staleness check; 150 s budget; the tides read the function's copy of `data/`, section 4), then one refresh check as a backstop | vercel.json `crons` |
 | database | Neon Postgres (Vercel Marketplace), Free plan now | `DATABASE_URL` (pooled, the API and the refresh) and `DATABASE_URL_UNPOOLED` (direct, the daemon and migrations) |
 | Redis | Upstash Redis (Vercel Marketplace), Free plan now | `KV_URL` (the app reads it when `REDIS_URL` is unset) |
-| migrations and seed | the api service's build command, `python -m app.cli migrate --on-build`: with `MIGRATE_ON_BUILD=production`, on production builds only, it migrates and then seeds the reference data as `init-db` does (the 50 spots, airports, the tide catalog; idempotent), so a deployment without the daemon has its spots; the daemon, if you keep it, also runs `init-db` at every start | vercel.json `services.api.buildCommand` |
+| reference data | the repository's `data/` (the spots, airports, research, the tide catalog and the EOT20 tide constants, the observation stations; 2.2 MiB) is outside the api service's root `backend/`, so the api's build command first copies it into `backend/data` (`rm -rf data && cp -R ../data data`); Vercel's Python builder bundles `backend/` after the build command, so the function has it at its root (`/var/task/data`) and the build-time seed reads the same files. git keeps the one copy in `data/`; `backend/data` is build output (ignored by git and `.vercelignore`). `app/core/data_files.py` finds `data/` in a checkout, the function and the images | vercel.json `services.api.buildCommand` |
+| migrations and seed | the rest of the api service's build command, `python -m app.cli migrate --on-build`: with `MIGRATE_ON_BUILD=production`, on production builds only, it migrates and then seeds the reference data as `init-db` does (the 50 spots, airports, the tide catalog; idempotent), so a deployment without the daemon has its spots; the daemon, if you keep it, also runs `init-db` at every start | vercel.json `services.api.buildCommand` |
 
 Same origin for the site and the API, so login cookies, the CSRF check and the
 Content-Security-Policy work exactly as on the classic Docker stack.
@@ -123,12 +124,17 @@ deployment does.
   (above it Vercel's Python builder leaves the dependencies out of the bundle and installs
   them at cold start, an undocumented builder detail) and over 500 MiB a failure (Vercel's
   limit for Python functions); other functions fail over 250 MiB.
+- It checks that the Python function holds the reference data at its root
+  (`data/surf_spots/spots.json`, `data/tide_stations.json`, `data/tides/constants_eot20.json`,
+  `data/observation_stations.json`, copied in by the api's build command) and fails
+  otherwise; it prints the number of `data/` files and their size.
 - It reports whether the daily cron and the routes are in `.vercel/output/config.json`.
 - It never migrates: the build runs with `MIGRATE_ON_BUILD=off`, and the api's build
-  command prints `"status": "skipped"`.
-- On macOS or an ARM machine it leaves the api's build command out: outside Vercel's build
-  image the Python builder installs Linux x86_64 wheels, which a local Python on macOS
-  cannot import.
+  command prints `"status": "skipped"` (after copying `data/`).
+- On macOS or an ARM machine it leaves the Python step of the api's build command out
+  (`python -m app.cli migrate --on-build`; the copy of `data/` still runs): outside
+  Vercel's build image the Python builder installs Linux x86_64 wheels, which a local
+  Python on macOS cannot import.
 - Linked checkouts (after `vercel link`): run it without `--offline`; it copies
   `.vercel/project.json` and runs `vercel pull --environment=preview` first. The pulled
   file holds the Preview environment variables, secrets included; it lives only in the
@@ -296,9 +302,9 @@ run in the API function, called every 5 minutes by the scheduler of step 7b; the
 sync daemon only refreshes the GRIB map layers (`SYNC_DAEMON_KINDS=map`) within Hobby's 5
 Active CPU-hours a month. Without the daemon the refresh endpoint also runs the API's
 "Re-check flights" and "match my search" requests and due email retries, and the daily cron
-runs the periodic jobs (cleanup, matching housekeeping, tides, alerts, delivery; not the
-tides in the function, which has no `data/`: see "Except the tides" in section 4); only the
-map overlay ages (it is then labelled stale).
+runs the periodic jobs (cleanup, matching housekeeping, tides, alerts, delivery; the tide
+job reads the function's copy of `data/`, section 4); only the map overlay ages (it is then
+labelled stale).
 **Without the daemon** (you scale it to 0, or never deploy it), also set
 `MAP_FIELDS_ENABLED=false`: the map then shows the spot markers only (a "Spot forecasts only"
 note, no layer tabs and no outage notice) and data health stays `ok`. With
@@ -356,13 +362,15 @@ spots, airports, the tide catalog; safe to repeat), so with `MIGRATE_ON_BUILD=pr
 Vercel's system variables exposed this step is a head start. **It is required** when the build
 does not seed:
 
-* **The build failed at `"stage": "seed"`** with "data/ not found from the api build" (the
-  reference data live in the repository's `data/`, outside the api service's root
-  `backend/`; whether Vercel's build of that service can read it is **not verified**: a
-  build that cannot fails on an empty database rather than deploying a site without spots,
-  and skips the seed, saying so, when the database is seeded already). Run `init-db` below
-  **whether or not you keep the daemon**: a failed build deploys nothing, the daemon
-  included, so its `init-db` never runs. Then redeploy: the next build finds the spots and
+* **The build failed at `"stage": "seed"`** with "data/ not found from the api build", or
+  earlier with `cp: cannot stat '../data'` (the reference data live in the repository's
+  `data/`, outside the api service's root `backend/`; the build command copies them in
+  from `../data`, which Vercel CLI 64.5.0's build of the service reads, section 10, but a
+  real Vercel build of it is not verified here: a build that cannot see them fails on an
+  empty database rather than deploying a site without spots, and skips the seed, saying
+  so, when the database is seeded already). Run `init-db` below **whether or not you keep
+  the daemon**: a failed build deploys nothing, the daemon included, so its `init-db`
+  never runs. Then redeploy: the next build finds the spots and
   skips the seed. Alternatively set `MIGRATE_ON_BUILD=off` and keep the daemon, whose
   `init-db` seeds at start (section 9).
 * **The build's log shows `"status": "skipped"`** (no `VERCEL_ENV` in the build, or
@@ -543,16 +551,21 @@ it runs every periodic job whose last run is older than its own interval (mainte
 cleanup, the matching housekeeping, tide acquisition, alerts, delivery, the staleness check;
 within 150 s, answer key `jobs`), so these run daily with no daemon, and last one refresh
 check (answer key `refresh`), the backstop for a scheduler that stopped calling.
-**Except the tides:** tide acquisition reads the tide catalog and the EOT20 constants from
-the repository's `data/` (`data/tide_stations.json`, `data/tides/`), outside the api
-service's root `backend/`, so the API function does not have them. In the local Vercel-style
-stack, whose api image has no `data/` as the function, the cron's `tides.acquire` failed with
-`FileNotFoundError: tide_stations.json not found` (2026-10-30, daemon stopped); the other
-jobs succeeded. Without the daemon, run `python -m app.cli tides acquire` from a checkout
-(with `DATABASE_URL_UNPOOLED`, as `init-db` in step 6) every few days, or keep the daemon,
-which runs it daily: otherwise data health reports `job_failed:tides.acquire` and, once the
-stored predictions run out, `tides_stale` (the spot pages then show no tide row). Try it by
-hand:
+**The tides** need the tide catalog and the EOT20 constants (`data/tide_stations.json`,
+`data/tides/constants_eot20.json`): the api's build command copies the repository's `data/`
+into the function (section 1, "reference data"), where the job finds them
+(`app/core/data_files.py`). Checked on 2026-10-30: Vercel CLI 64.5.0's offline build put the
+10 files of `data/` (2.2 MiB) at the api function's root; the tide job run with the lean
+dependencies from the function's own files acquired all 56 stations (CO-OPS and EOT20); in
+the local Vercel-style stack with the daemon stopped, the cron's `tides.acquire` in the api
+container (which holds `data/` where the function does) succeeded: the 50 EOT20 stations
+from the bundled constants, the 6 CO-OPS stations failing only because that sandbox's
+containers had no DNS for NOAA. Before this (commit c1490b3 to 2293748) the function had no
+`data/`, the same cron run failed with `FileNotFoundError: tide_stations.json not found`, and
+these docs said to run the tide job from a checkout. If it ever fails, data health reports
+`job_failed:tides.acquire` and, once the stored predictions run out, `tides_stale` (the spot
+pages then show no tide row); `python -m app.cli tides acquire` from a checkout (with
+`DATABASE_URL_UNPOOLED`, as `init-db` in step 6) fills them in. Try the cron by hand:
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/api/internal/cron/daily
@@ -823,7 +836,15 @@ Docker 29.8.2 with Compose 5.6.0. Results of 2026-10-23 unless a date is given.
   concurrent calls one `busy` and one success; six simulated model runs published versions
   2-7 and open pages followed each without a reload (12 of 12, p50 16.5 s); `smoke` 22 of 22
   and 6 of 6; with the daemon stopped the daily cron's `tides.acquire` failed for want of
-  `data/` (section 4, "Except the tides"; docs/local-vercel-stack.md).
+  `data/`. Fixed the same day (the api build command copies `data/` into the function):
+  the offline build then showed `data/` (10 files, 2.2 MiB) in the api function (3,481
+  files, 130.5 MiB, `maxDuration` 300 s, `RESULT: ok`); the same CLI's build with
+  `MIGRATE_ON_BUILD=all` against an empty scratch database ran the copy and
+  `migrate --on-build` in `backend/` and seeded 50 spots, 153 airports and 56 tide
+  stations; and the stack rebuilt on that code passed `smoke` (23 shell checks and 6 of 6,
+  the api image reading `data/` at its root) and, with the daemon stopped and its job logs
+  deleted, ran the daily cron's `tides.acquire` in the api container successfully
+  (section 4, "The tides"; docs/local-vercel-stack.md).
 - **Not checked here**: a real deployment (no Vercel account was used), the daemon image
   build and start on Vercel, Neon and Upstash themselves, the cron invocation, QStash,
   previews, the CDN's caching of the versioned reads.

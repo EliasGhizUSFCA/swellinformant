@@ -1485,12 +1485,13 @@ on Vercel, Neon or Upstash). The main figures:
   CLI 64.5.0 refuses a `vercel.json` with `daemons` in `vercel build`), Neon's suspend and
   wake, and real Upstash command counts.
 * **The build-time seed on Vercel**: the reference data live in the repository's `data/`,
-  outside the api service's root `backend/`. Whether Vercel's build of that service can read
-  `../data` is not verified (`scripts/vercel-build-check.sh` builds with
-  `MIGRATE_ON_BUILD=off`, so it stops before the seed). A build that cannot read it fails on
-  an empty database (`"stage": "seed"`) instead of deploying a site without spots, and skips
-  the seed, saying so, when the database is seeded already; then `init-db` from a checkout
-  seeds it (docs/deploy-vercel.md step 6).
+  outside the api service's root `backend/`. The api build command now copies `../data` into
+  `backend/data` before `migrate --on-build`. Vercel CLI 64.5.0's own build runs that command
+  in `backend/` with the repository around it: with `MIGRATE_ON_BUILD=all` against an empty
+  scratch database it copied `data/` and seeded 50 spots, 153 airports and 56 tide stations
+  (2026-10-30). A real Vercel build is not verified; one that cannot see `../data` fails at
+  the copy (`cp: cannot stat`) instead of deploying a function without its data
+  (docs/deploy-vercel.md step 6).
 * **The local Vercel-style stack** was run on the final code on 2026-10-30 (05:04-05:28
   UTC, demo data; docs/local-vercel-stack.md): the migrate service's build command migrated
   and seeded an empty database, smoke 22 of 22 shell checks (the refresh and version
@@ -1499,17 +1500,23 @@ on Vercel, Neon or Upstash). The main figures:
   on an open map and spot page without a reload. Its daemon refreshes the spots itself; the
   daemon-less hosted path is covered by `tests/integration/test_daemonless_hosted.py` and
   `test_hosted_first_deploy.py`, and on the stack only by the daily cron run with the daemon
-  stopped (next item).
-* **The tides on Vercel without the daemon**: tide acquisition reads the catalog and the
-  EOT20 constants from the repository's `data/` (`data/tide_stations.json`, `data/tides/`),
-  outside the api service's root `backend/`, so the API function does not have them. With
-  the stack's daemon stopped, the daily cron ran the overdue periodic jobs in the api
-  container (its image has no `data/`, as the function): `tides.acquire` failed with
-  `FileNotFoundError` and data health reported `job_failed:tides.acquire`; the others
-  succeeded. Not changed in code: without the daemon, run `python -m app.cli tides acquire`
-  from a checkout every few days, or keep the daemon, which runs it daily (docs/deploy-vercel.md
-  section 4, "Except the tides"). Bundling `data/` into the API function, which would also
-  free the build-time seed above from `../data`, is a follow-up.
+  stopped (next item). The stack was rebuilt and run again the same day after the data
+  bundle (smoke 23 of 23 and 6 of 6).
+* **The tides on Vercel without the daemon (fixed)**: tide acquisition reads the catalog and
+  the EOT20 constants from `data/` (`data/tide_stations.json`, `data/tides/`), which the API
+  function did not have (the final gate's stack run: `tides.acquire` failed with
+  `FileNotFoundError`, `job_failed:tides.acquire`). The api build command now copies the
+  repository's `data/` into `backend/data`, which Vercel's Python builder bundles after the
+  build command, and `app/core/data_files.py` is the one resolver every reader uses (the
+  repository's `data/`, the service root's, `/data` in the images, the working directory).
+  `functions.includeFiles` was tried first: "../data/**" maps the files to `../data/...`,
+  outside the function root, and "data/**" matches nothing. Proved on 2026-10-30: the offline
+  build lists the 10 files of `data/` (2.2 MiB) in the api function (3,481 files, 130.5 MiB;
+  the check now fails without them); the tide job, run with the lean venv from the
+  function's own files and no repository around them, acquired 56 of 56 stations; on the
+  stack with the daemon stopped the cron's `tides.acquire` succeeded in the api container
+  (its 6 CO-OPS stations failed only for the containers' missing DNS; docs/local-vercel-stack.md).
+  Not verified: a real Vercel deployment.
 * **Atmosphere-only live refresh never observed**: on 2026-10-29 Open-Meteo's servers
   answered GFS 0.13 00Z and 18Z alternately for over 36 minutes; three checks saw the new run
   and three syncs skipped it safely without fetching (no charge, no version). The path is
@@ -1529,9 +1536,19 @@ on Vercel, Neon or Upstash). The main figures:
   re-run on the same commit; no map code had changed. At the final gate it failed in the
   full run (6.6 ms) and in its one re-run on the idle machine (5.2 ms), with the frontend
   code of review round 4, which measured 4 ms; every frame cost the test records was 1.2 to
-  2 times round 4's (this machine had just rebooted). It is the one failing test of
-  section 49; its bound was not changed. To close: run it on a quiet machine of known speed,
-  or decide whether a 5 ms p95 should hold on a 4-vCPU shared host.
+  2 times round 4's (this machine had just rebooted). An alternating A/B on the idle machine
+  (2026-10-30 07:22-07:46 UTC; only this spec, Chromium, `run-e2e.sh` with the same scratch
+  database, Redis and ports; base 18a5bee, then HEAD 2293748, in turn) measured the
+  crest-dash draw p95 at **base 5.8, 5.6, 4.8, 5.8, 6.2, 5.6, 5.0 ms** (7 runs, median
+  5.6 ms; one more base run stopped at its database reset, before the test) and **HEAD 7.6,
+  5.4, 5.9, 5.1, 6.6, 5.2, 6.0, 4.6 ms** (8 runs, median 5.65 ms); a one-sided permutation
+  test of HEAD over base gives p = 0.34. HEAD with the production 20 s version poll instead
+  of the e2e build's 2 s measured 4.5, 4.7, 5.5 and 6.4 ms. The base, which has none of 2.0's
+  frontend changes and the same renderer files, fails the bound on this machine as HEAD
+  does (5 of 7 runs above 5 ms), so the failure is the environment's timing, not a 2.0
+  regression; the bound was not changed and the test not skipped. To close: run it on a
+  quiet machine of known speed, or decide whether a 5 ms p95 should hold on a 4-vCPU shared
+  host.
 * **A setting nothing reads**: `FORECAST_DAILY_REQUEST_QUOTA` (5000) is still declared in
   `Settings` but no code reads it since the per-provider budgets (`OPEN_METEO_CALLS_*`,
   `WINDY_DAILY_REQUEST_LIMIT`) replaced it (found in the documentation pass; documented in

@@ -392,9 +392,8 @@ from the pages linked):
   notification retry (one Redis GET), and the daily cron runs every periodic job whose
   newest run is older than its own interval (maintenance cleanup, matching housekeeping,
   tides, alerts, delivery, the staleness check; within 150 s, before its refresh backstop).
-  The tides need the repository's `data/`, which the API function does not include: on
-  Vercel without the daemon they fail there and are run from a checkout instead
-  (docs/deploy-vercel.md, section 4).
+  The tide job reads the repository's `data/`, which the api build command copies into the
+  API function (docs/deploy-vercel.md, section 1).
   Data health then reports a missing daemon heartbeat only as degraded, for the map layers
   (`tests/integration/test_daemonless_hosted.py`). That problem, and `map_fields_missing`,
   last for as long as no daemon runs and the admins are reminded of them every 12 h: without

@@ -448,11 +448,9 @@ stopped daemon (`sync_heartbeat_stale`) is still noticed. Then, under `JOB_RUNNE
 runs every periodic job whose newest run is older than its own interval (maintenance cleanup,
 the matching housekeeping, tide acquisition, alerts, delivery, the staleness check; at most
 150 s, `app/services/sync/standin.py`), so these run at least daily without a daemon, and
-last one refresh check as a backstop. The tide acquisition is the exception on Vercel: it
-reads `data/tide_stations.json` and `data/tides/`, which the API function does not include,
-so there it fails (`job_failed:tides.acquire`; seen in the local Vercel-style stack on
-2026-10-30). Without the daemon run `python -m app.cli tides acquire` from a checkout, or keep
-the daemon (docs/deploy-vercel.md, section 4). It answers 404 when `CRON_SECRET` is not set, 401 on a
+last one refresh check as a backstop. The tide acquisition reads `data/tide_stations.json`
+and `data/tides/`, which the API function holds: the api build command copies the
+repository's `data/` into it (docs/deploy-vercel.md, section 1; `app/core/data_files.py`). It answers 404 when `CRON_SECRET` is not set, 401 on a
 wrong or missing token, and 200 `{status, problems, alerts_sent, heartbeat_age_minutes,
 jobs, refresh}` otherwise. When the database itself
 cannot be reached (for example Neon's compute suspended after its quota) the admins cannot

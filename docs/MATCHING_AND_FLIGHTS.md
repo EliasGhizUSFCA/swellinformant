@@ -32,8 +32,8 @@ The timers above are the daemon's and Celery beat's. Without a daemon:
   Redis);
 * the daily cron (`/api/internal/cron/daily`, 07:00-07:59 UTC on Hobby) runs every periodic
   job whose newest run is older than its own interval: the matching housekeeping, alerts
-  (held alerts), delivery, maintenance cleanup, tides (which fail in the API function, as it
-  has no `data/`: docs/deploy-vercel.md section 4) and the staleness check.
+  (held alerts), delivery, maintenance cleanup, tides (from the function's copy of `data/`,
+  docs/deploy-vercel.md section 1) and the staleness check.
 
 So "Re-check flights" and a new saved search are handled within about 5 minutes, failed
 emails are retried on time, and held alerts (an email verified later, a daily cap reset)

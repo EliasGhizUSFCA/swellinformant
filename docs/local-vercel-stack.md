@@ -92,7 +92,7 @@ one, compose reads the classic stack's `.env` for the `${...}` values.
 |---|---|---|
 | routing: the Services rewrites of vercel.json | `edge` (Caddy, docker/edge/Caddyfile) | `/api/*` to `api` with the original path, the rest to `web`. Sets `X-Vercel-Forwarded-For`, `X-Real-IP` and `X-Forwarded-For` to the TCP peer, overwriting whatever the client sent, and removes the `Via` header Caddy's proxy would add (Vercel sends none). A request body over 4.5 MB is refused with 413 (a 5 MB login body was; a 4 MB one reached the API), and a response that has not started after 300 s fails at the edge (maxDuration of vercel.json; configured, not exercised here). |
 | service `web` (Next.js) | `web` | the production build with `API_ROUTING=platform`: Next.js has no `/api` rewrite |
-| service `api` (one Python function) | `api` (docker/api-lean/Dockerfile) | `[project].dependencies` only, from `backend/uv.lock`: no Celery, kombu, pandas, ecCodes, pyarrow, scikit-learn, scipy or joblib. backend/ without what vercel.json's `excludeFiles` leaves out of the function (tests/, ml_models/), no data/ directory, read-only file system except /tmp, one uvicorn process, 2 GB and 1 CPU. `JOB_RUNNER=daemon`: account emails go out inline. |
+| service `api` (one Python function) | `api` (docker/api-lean/Dockerfile) | `[project].dependencies` only, from `backend/uv.lock`: no Celery, kombu, pandas, ecCodes, pyarrow, scikit-learn, scipy or joblib. backend/ without what vercel.json's `excludeFiles` leaves out of the function (tests/, ml_models/), plus the repository's `data/` at /app/data, where the api build command puts it in the function (`backend/data`, /var/task/data on Vercel), and no /data; read-only file system except /tmp, one uvicorn process, 2 GB and 1 CPU. `JOB_RUNNER=daemon`: account emails go out inline. |
 | daemon `sync` (Containerfile) | `sync` | the same Containerfile: `python -m app.cli sync daemon`, one instance, 2 GB and 1 CPU; after SIGTERM it finishes its current sync stage, for up to 600 s (vercel.json `terminationGracePeriodSeconds`; compose `stop_grace_period`). Connects directly (`DB_USE_UNPOOLED=true` in the image) and runs init-db at start. |
 | build step `python -m app.cli migrate --on-build` | `migrate` | the same command, one-shot, as a production build (`VERCEL_ENV=production`, `MIGRATE_ON_BUILD=production`): it migrates, then seeds the 50 spots, airports and the tide catalog (idempotent) before `api` and `sync` start, so the stack seeds its database exactly as a deployment without the daemon does |
 | Vercel Cron, `23 7 * * *` | `cron` | calls the watchdog through the edge every day at 07:23 UTC; `vercel-local.sh cron` calls it now |
@@ -124,10 +124,12 @@ changed in `.env.vercel.local`.
 * the API answers behind the edge;
 * the api image cannot import pandas, eccodes, celery, kombu, sklearn, pyarrow, scipy or
   joblib, and has no `/data`;
-* the api service's Vercel build command, `python -m app.cli migrate --on-build` with
-  `VERCEL_ENV=production`, runs on the lean image (the database is at head, so it only
-  checks the revision; the lean image has no `data/`, so it skips the seed and says so:
-  the `migrate` service seeded the database from the daemon image);
+* the api image's readers find the tide catalog, the EOT20 constants and the spots in
+  `/app/data`, the function's copy of `data/`;
+* the Python step of the api service's Vercel build command, `python -m app.cli migrate
+  --on-build` with `VERCEL_ENV=production`, runs on the lean image (the database is at
+  head, so it checks the revision and seeds again, idempotent; the `migrate` service seeded
+  it first);
 * PgBouncer's `SHOW CONFIG` says `pool_mode = transaction`, and `GET /api/health/ready`
   raises its transaction counter (the API's queries go through the pooler). A `note` line
   then shows the counter around `GET /api/spots`, which does not move once the published
@@ -313,8 +315,21 @@ and the map layers off):
 | register, verify, saved search | verified through Mailpit; a saved search created (201); the admin's `/api/admin/freshness` named version 7 and each component's run |
 | `GET /api/internal/cron/daily` | 200 with the `jobs` and `refresh` keys; data health `failing` for `tides_stale:noaa_coops` (CO-OPS not reachable from the sandbox), emailed to the admin in Mailpit |
 | `smoke` | 22 of 22 shell checks; Playwright 5 of 6 first: the spec still expected the daily cron's keys of before review round 1 (no `jobs`), fixed in 0899b83, then 6 of 6 (the map with the layers off shows "Spot forecasts only") |
-| daemon stopped, its job logs deleted, `cron/daily` | the cron ran the overdue periodic jobs in the api container: cleanup, matching, flights, alerts, delivery and the staleness check succeeded; `tides.acquire` failed with `FileNotFoundError` (`tide_stations.json not found`: the api image, as the API function, has no `data/`; docs/deploy-vercel.md section 4, "Except the tides") |
+| daemon stopped, its job logs deleted, `cron/daily` | the cron ran the overdue periodic jobs in the api container: cleanup, matching, flights, alerts, delivery and the staleness check succeeded; `tides.acquire` failed with `FileNotFoundError` (`tide_stations.json not found`: the api image, as the API function then, had no `data/`); fixed the same day, next table |
 | teardown | `down --volumes`, the four images removed, build cache pruned |
+
+The same day, after the API function got its copy of `data/` (the api build command copies
+it into `backend/data`; the api image holds it at `/app/data`, docs/deploy-vercel.md section
+1), 08:07-08:20 UTC, same settings:
+
+| Step | Result |
+|---|---|
+| build, `up --no-build` | images sync 1.22 GB, api 412 MB (409 MB before, plus `data/`), pgbouncer 15.1 MB, web; `printenv` in the migrate, api and sync containers named the stack's own PgBouncer (`DATABASE_URL`) and PostgreSQL (`DATABASE_URL_UNPOOLED`); `up` 48 s |
+| `data/` in the images | the api image's readers resolve to `/app/data/tide_stations.json`, `/app/data/tides/constants_eot20.json` (50 points) and `/app/data/surf_spots`, and it has no `/data`; the daemon's image (Containerfile) resolves to `/data/...` |
+| migrate service (`migrate --on-build`, `VERCEL_ENV=production`) | migrated an empty database and seeded 50 spots, 153 airports, 468 research sources and 56 tide stations; the same command on the lean api image then updated the 50 spots (idempotent) |
+| `smoke` | right after `up`, 2 shell checks failed (no daemon heartbeat and no published sync yet: run `sync --force` first, as `up` prints); after `sync --force`: 23 of 23 shell checks (the new one: the api image reads `data/` at the function's root) and 6 of 6 Playwright |
+| daemon stopped, its job logs deleted, `cron/daily` | 200; the cron ran cleanup, matching, flights, alerts, delivery, the staleness check and **`tides.acquire`, all `success`** in the api container (42.5 s for the tides: the 50 EOT20 stations from the bundled constants; the 6 CO-OPS stations failed only for DNS, as these containers cannot resolve NOAA's host, so the job's result is `partial`); data health `failing` for `tides_stale:noaa_coops` alone, no `job_failed` |
+| teardown | `down --volumes`, the four images removed, build cache pruned, the image list as before the run |
 
 Run by the integration verifier with the steps above (`cp .env.vercel.example
 .env.vercel.local`, plus `MAP_FIELD_STEPS=0-24:3` and `MAP_FIELD_MAX_LEAD_HOURS=24`; this
@@ -448,8 +463,9 @@ A 5 MB login body got 413 from the edge; a 4 MB one reached the API.
 ### Findings for the other packages, seen only in this stack
 
 * (Fixed at integration round 1: the API now takes the daemon's own constants check from
-  its heartbeat, and the 2026-10-23 run above no longer shows it.) The API image has no
-  `data/` (as the Vercel function, whose root is `backend/`). The data
+  its heartbeat, and the 2026-10-23 run above no longer shows it. Since 2026-10-30 the API
+  image and the function hold `data/` themselves, so the API checks the file directly.) The
+  API image had no `data/` (as the Vercel function then, whose root is `backend/`). The data
   health report the API computes, and with it `/status` and the daily watchdog, was
   `failing` there with `tides_constants:harmonic_model` ("The tide model's constants file
   cannot be read; model tides are unavailable."), although the daemon (which has `data/`)
