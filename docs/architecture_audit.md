@@ -1519,11 +1519,44 @@ Redis 7, outbound HTTPS through a proxy); none on Vercel, Neon or Upstash.
 | Database egress per spot refresh (demo) | 6.29-7.45 MB DB → app (2026-10-29), 8.30-9.45 MB (2026-10-27); a check reads nothing | docs/sync.md, `scripts/measure_refresh_egress.py` |
 | Load through the local edge | 4,000 requests, 64 concurrent, 0 errors, p50 222-314 ms, p95 705-956 ms (1 vCPU API); a new version reached all routes 3.2 s after publication | integration deploy notes |
 | Lean API | cold `import app.main` 1.47-1.79 s; the refresh path adds 22-29 ms of imports | same |
-| Vercel build (offline) | `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29; the same on the final code, 2026-10-30) | `scripts/vercel-build-check.sh --offline` |
+| Vercel build (offline) | `RESULT: ok`, API function 128.3 MiB (3,469 files; limit 500 MiB), `maxDuration` 300 s (2026-10-29; the same on the final gate's code, 2026-10-30); with its `data/` (10 files, 2.2 MiB; the data bundle) 130.5 MiB (3,481 files), `maxDuration` 300 s (2026-10-30) | `scripts/vercel-build-check.sh --offline` |
 
 ### 8.4 Test results
 
-Run on 2026-10-30 by the final gate on `wf6/int`, on this development machine, on
+**The data bundle's run** (the latest; 2026-10-30, on `wf6/int` after the documentation
+verification, on this development machine). The backend, frontend, build and stack checks
+ran on the code and tests of a22e55d: the data bundle (5857d27: the api build command copies
+`data/` into the function, `app/core/data_files.py` finds it) and `run-e2e.sh --help`
+(a1bfdc7); the stack, the build-time seed and the tide job on 5857d27, the same application
+code. The commits after it add one case to a unit test (f5e7367) and documentation
+(e3f30ee and these results); the e2e suite, the linters and shellcheck ran on e3f30ee, the
+unit suite once more on the final tree. Each check ran once; the unit and integration suites
+as separate runs, every exit code read directly. Expectations changed on purpose, for the new
+build command and the api image's `data/`: `test_vercel_deploy.py` (the build command) and
+`test_local_vercel_stack.py` (the lean api image holds `data/` at its root); none was removed
+or weakened. The final gate's run, before the data bundle, follows the table.
+
+| Check | Result |
+|---|---|
+| `ruff format --check .`, `ruff check .`, `mypy app` | pass (428 files formatted, 220 files type-checked); again on e3f30ee |
+| `alembic upgrade head`, `downgrade -1`, `upgrade head`, `alembic check` on an empty database | pass: 0001 to 0009, no new operations |
+| Upgrade of a copy of the real database (at 0006) to 0008, then from 0008 to head | pass: 50 spots, 5 runs, 25,000 forecast rows, 25,000 predictions, 3 users, 69 events and a checksum (md5) of the forecast rows identical at 0006, 0008 and head; `alembic check` clean; no version until the first refresh |
+| `pytest tests/unit` with `LEAN_PYTHON` (a lean install from `uv.lock`) | 2,931 passed, 0 skipped, 143.8 s; on the final tree (these results included) 2,932 passed, 0 skipped, 180.0 s (the case f5e7367 adds included) |
+| `pytest tests/unit/test_lean_imports.py` with `LEAN_PYTHON` | 32 passed, a demo spot-only refresh in the lean install included |
+| `pytest tests/integration` | 671 passed, 3 skipped (the PgBouncer tests, without `TEST_PGBOUNCER_URL`), 27.2 min (alongside the frontend checks and the offline build) |
+| `npm ci`, `npx tsc --noEmit`, `npx eslint . --max-warnings=0`, `npx vitest run`, `npm run build` | pass; Vitest 628 passed (53 files) |
+| `./scripts/run-e2e.sh` (Chromium and Pixel 7), on e3f30ee | 154 passed, 1 failed (18.0 min; load 0.7 before it). `e2e/live-update.spec.ts` and `live-update-mocked.spec.ts` (Chromium and Pixel 7) passed. Failed: `e2e/map-performance.spec.ts`, the crest-dash frame draw time p95 6.7 ms against its 5 ms bound: the machine's timing, not the code (the alternating A/B with the base 18a5bee in docs/UPGRADE_REPORT.md section 51); the bound was not changed and the test not skipped |
+| `scripts/vercel-build-check.sh --offline` | `RESULT: ok`; the API function python3.13, `maxDuration` 300 s, 3,481 files, 130.5 MiB (limit 500 MiB), its `data/` 10 files, 2.2 MiB (the four files the check requires present); the daily cron in the output config; the web functions 4.6, 3.7 and 1.7 MiB |
+| `backend/.venv/bin/python scripts/check_api_bundle.py --max-mb 200` | 165.9 of 200 MB (the reference data 2.24 MB of it) |
+| `docker compose config -q` (`docker-compose.yml`, `docker-compose.vercel.yml`) | pass, each with `.env.example`, `.env.vercel.example` and no env file |
+| shellcheck 0.11, the CI's two commands (`run-e2e.sh`, `vercel-local.sh` and `vercel-build-check.sh` changed) | clean, again on e3f30ee |
+| `npm audit --omit=dev` | 1 moderate advisory (fast-uri, as in the final gate's run) |
+| `tests/unit/test_run_e2e_script.py` (new: `--help`, the dry run and an unknown option touch no database) | 9 passed; against the previous `run-e2e.sh` all 9 fail |
+| The local Vercel-style stack (docs/local-vercel-stack.md), on the code of 5857d27 | built: the daemon's image from the `Containerfile` finds `data/` at `/data`, the api image at `/app/data` (the function's layout, no `/data`); the migrate service seeded an empty database (50 spots, 153 airports, 468 research sources, 56 tide stations); after `sync --force`, `smoke` 23 shell checks passed (0 failed, 2 notes) and 6 of 6 browser checks; with the sync daemon stopped and the job logs cleared, the daily cron answered 200 and `tides.acquire` succeeded in the api container (50 stations of the tide model from `/app/data`; 6 CO-OPS stations failed only for the containers' missing DNS) |
+| The build-time seed with the real CLI, on 5857d27 (`vercel build`, CLI 64.5.0, `MIGRATE_ON_BUILD=all`, an empty scratch database) | the api build command ran in `backend/`, copied `../data` and migrated to 0009 and seeded 50 spots, 153 airports, 468 research sources and 56 tide stations |
+| The tide job from the function's own files, on 5857d27 (the build's file map materialised with no repository around it, the lean venv) | `python -m app.cli tides acquire`: exit 0, 56 of 56 stations, 24 s |
+
+**The final gate's run** (before the data bundle). Run on 2026-10-30 by the final gate on `wf6/int`, on this development machine, on
 commit c1490b3: the code and tests of 0899b83 (the last commit that changes code or
 tests) plus documentation. The commits after it change only documentation: two
 places that still said the daily cron acquires the tides without the daemon (ffca5d3),

@@ -754,7 +754,7 @@ to `backend/app/services/forecasts/*` (docs/architecture_audit.md, 4.11). Anythi
 or the refresh path imports stays lean (no pandas, scikit-learn, scipy, pyarrow, joblib or
 ecCodes at module level).
 **Consequences.** The API function measured 128.3 MiB of Vercel's 500 MB Python limit in the
-offline build, with `maxDuration` 300 s; a cold `import app.main` took 1.47-1.80 s in a lean
+offline build (130.5 MiB since it holds `data/`, 2026-10-30), with `maxDuration` 300 s; a cold `import app.main` took 1.47-1.80 s in a lean
 install; `tests/unit/test_lean_imports.py` (32 tests with `LEAN_PYTHON`) runs a demo
 spot-only refresh in the lean install. Vercel Services is still a Beta.
 

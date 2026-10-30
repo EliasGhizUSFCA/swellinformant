@@ -9,10 +9,10 @@ optional). Quotes from Vercel, Neon, Upstash, QStash, cron-job.org and GitHub ar
 
 What was checked here, and how, is in section 10. In short: the configuration validates
 against Vercel's published schema; an offline `vercel build` of the repository succeeds
-(`RESULT: ok`; on 2026-10-29 a 128.3 MiB API function with `maxDuration` 300 s; CI runs the
-same check on every push); the sync
-daemon's image builds from the `Containerfile` Vercel uses; `vercel dev -L` serves the site
-and the API; and the manual GitHub runner's steps run end to end on a development machine.
+(`RESULT: ok`; on 2026-10-30 a 130.5 MiB API function, its `data/` included, with
+`maxDuration` 300 s; CI runs the same check on every push); the sync daemon's image
+builds from the `Containerfile` Vercel uses; `vercel dev -L` serves the site and the API;
+and the manual GitHub runner's steps run end to end on a development machine.
 No real deployment was made while this was written: the first production deploy is the step
 that proves the daemon builds and starts on Vercel (daemons cannot be previewed).
 
